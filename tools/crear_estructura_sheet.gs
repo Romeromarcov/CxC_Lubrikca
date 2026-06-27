@@ -38,6 +38,8 @@ function crearEstructuraCxC() {
       'porcentaje', 'vigencia_desde', 'vigencia_hasta', 'activo'],
     'DescuentoBCVCompleto': ['vigencia_desde', 'porcentaje', 'vigencia_hasta',
       'activo'],
+    'PromocionPrimeraCompra': ['producto', 'vigencia_desde', 'vigencia_hasta',
+      'activo'],
     'ReglasRecurrencia': ['condicion', 'tipo_beneficio', 'valor', 'vigencia_desde',
       'vigencia_hasta', 'activo'],
     'Feriados': ['fecha', 'descripcion', 'tipo'],
@@ -79,16 +81,17 @@ function asegurarHoja(ss, nombre, headers) {
 /** Carga semillas SOLO si la tabla está vacía (no pisa datos existentes). */
 function sembrarConfig(ss) {
   sembrarSiVacia(ss, 'MetodosPago', [
-    // metodo_id = id del DIARIO (journal) de Odoo. moneda informativa.
-    // tipo_tasa: para pagos en VES indica si la ruta es BCV o Binance.
-    // es_contado: habilita el descuento por contado. REVISAR con negocio.
+    // metodo_id = id del DIARIO (journal) de Odoo. Catalogo informativo:
+    // el metodo NO determina contado ni ruta de tasa. El contado lo decide la
+    // fecha del pago (ventana) y la ruta BCV/Binance se estampa por abono en la
+    // Vinculacion. Las columnas moneda/tipo_tasa/es_contado quedan de referencia.
     ['29', 'Efectivo moneda extranjera (USD)', 'USD', 'N_A', 'TRUE'],
     ['15', 'Cash (efectivo Bs)', 'VES', 'BCV', 'TRUE'],
-    ['14', 'Bank', 'VES', 'BCV', 'FALSE'],
-    ['30', 'Banco Bancamiga 7806', 'VES', 'BCV', 'FALSE'],
-    ['31', 'Banco Nacional de Credito', 'VES', 'BCV', 'FALSE'],
-    ['32', 'Banco Banesco', 'VES', 'BCV', 'FALSE'],
-    ['33', 'Banco Provincial', 'VES', 'BCV', 'FALSE']
+    ['14', 'Bank', 'VES', 'BCV', 'TRUE'],
+    ['30', 'Banco Bancamiga 7806', 'VES', 'BCV', 'TRUE'],
+    ['31', 'Banco Nacional de Credito', 'VES', 'BCV', 'TRUE'],
+    ['32', 'Banco Banesco', 'VES', 'BCV', 'TRUE'],
+    ['33', 'Banco Provincial', 'VES', 'BCV', 'TRUE']
   ]);
 
   sembrarSiVacia(ss, 'DescuentosMarcaCategoria', [
@@ -107,10 +110,17 @@ function sembrarConfig(ss) {
     ['2026-01-01', '0.10', '', 'TRUE']
   ]);
 
+  // Recurrencia: solo recompra (porcentaje configurable). La primera compra
+  // ya NO va aqui: su NC = precio del producto-promo (ver PromocionPrimeraCompra).
   sembrarSiVacia(ss, 'ReglasRecurrencia', [
-    ['recompra', 'porcentaje', '0.03', '2026-01-01', '', 'TRUE'],
-    // Primera compra: NC por caja de liga de frenos. Ajusta el monto fijo.
-    ['primera_compra', 'nota_credito', '50', '2026-01-01', '', 'TRUE']
+    ['recompra', 'porcentaje', '0.03', '2026-01-01', '', 'TRUE']
+  ]);
+
+  // Producto de regalo por primera compra (ej. caja de liga de frenos). Pon el
+  // ID/codigo del producto en Odoo y su periodo de vigencia. La NC toma el
+  // precio de ese producto en la lista de nacimiento de la SO.
+  sembrarSiVacia(ss, 'PromocionPrimeraCompra', [
+    ['PONER_ID_PRODUCTO_LIGA', '2026-01-01', '', 'TRUE']
   ]);
 
   sembrarSiVacia(ss, 'Feriados', [

@@ -21,6 +21,7 @@ from ..models import (
     MetodoPago,
     OrdenVenta,
     Pago,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     SerieTasa,
     Vinculacion,
@@ -149,6 +150,12 @@ class SheetsRepository(Repository):
         return [
             serde.bcv_completo_from_row(r)
             for r in self._g.read_rows(g.T_BCV_COMPLETO)
+        ]
+
+    def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
+        return [
+            serde.promocion_from_row(r)
+            for r in self._g.read_rows(g.T_PROMO_PRIMERA)
         ]
 
     def feriados(self) -> list[Feriado]:

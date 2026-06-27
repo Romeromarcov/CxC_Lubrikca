@@ -14,6 +14,7 @@ from ..models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoDescuento,
 )
@@ -74,6 +75,22 @@ def descuento_vigente(
         candidatas,
         key=lambda r: (-_especificidad(r), r.porcentaje, r.regla_id),
     )
+
+
+def promocion_primera_compra_vigente(
+    promos: list[PromocionPrimeraCompra],
+    *,
+    fecha: date,
+) -> PromocionPrimeraCompra | None:
+    """Promoción de primera compra vigente a ``fecha`` (la más reciente)."""
+    candidatas = [
+        p
+        for p in promos
+        if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha)
+    ]
+    if not candidatas:
+        return None
+    return max(candidatas, key=lambda p: p.vigencia_desde)
 
 
 def tasa_bcv_completo_vigente(

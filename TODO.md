@@ -33,10 +33,13 @@ negocio a confirmar**. Implementado tal cual; parametrizable en nº de filas.
 
 ## Ambigüedades resueltas de forma conservadora (no regalar descuento)
 
-### 3. Condición de "método contado" con múltiples abonos (4.3b)
-El doc dice "método con `es_contado = TRUE`" en singular. Con varios abonos se
-exige que **TODOS** sean por método `es_contado`. Si alguno no lo es, no se
-proyecta contado. (Conservador: no se otorga contado salvo ruta de contado clara.)
+### 3. Contado ya NO depende del método de pago — ✅ DECIDIDO
+Aclaración de negocio: **cualquier método puede ser contado o crédito**, y
+**todos manejan ambas tasas** (BCV/Binance). Lo que determina el contado es
+**pagar el neto total dentro del plazo** (ventana de días hábiles desde la
+entrega completa), no el método. La ruta BCV/Binance se estampa **por abono** en
+la Vinculación (humano). `MetodosPago` queda como catálogo informativo; sus
+columnas `es_contado`/`tipo_tasa` no las usa el motor.
 
 ### 4. `fecha_entrega` ausente → sin contado
 Si la orden no tiene fecha de entrega (ancla de la ventana, 4.6), el contado **no

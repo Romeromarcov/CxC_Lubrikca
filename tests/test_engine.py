@@ -42,6 +42,7 @@ def _inputs(
     descuentos=(),
     reglas=(),
     bcv_diario=(),
+    promociones=(),
     feriados=(),
     resolver,
     fecha_calculo=date(2026, 6, 8),
@@ -53,6 +54,7 @@ def _inputs(
         descuentos=list(descuentos),
         reglas_recurrencia=list(reglas),
         descuento_bcv_diario=list(bcv_diario),
+        promociones_primera_compra=list(promociones),
         feriados_tabla=list(feriados),
         price_resolver=resolver,
         engine_config=CFG,
@@ -261,21 +263,41 @@ def test_neto_no_alcanzado_no_es_candidata() -> None:
     assert res.candidata_a_cierre is False
 
 
-def test_primera_compra_genera_nota_credito() -> None:
-    orden = b.orden(primera=True)
+def test_primera_compra_nc_es_precio_del_producto_promo() -> None:
+    # NC = precio del producto-promo en la lista de nacimiento (BCV) de la orden.
+    orden = b.orden(primera=True, lista="BCV")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100")
-    metodo = b.metodo(moneda=Moneda.USD, es_contado=False)
-    vinc = b.vinculacion(monto_aplicado="100", moneda_abono=Moneda.USD)
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES,
+                         tipo_tasa_abono=TipoTasa.BCV)
     inp = _inputs(
         orden=orden,
         lineas=[linea],
         abonos=[(vinc, metodo)],
-        reglas=[b.regla_primera_compra("50")],
-        resolver=_resolver(**{"P1@USD": "100"}),
+        promociones=[b.promo_primera("LIGA")],
+        # Precio de la línea (P1@BCV) + precio del producto-promo (LIGA@BCV).
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
     )
     res = calcular_factura(inp)
-    assert res.ncs_calculadas == Decimal("50.00")
-    assert res.total_motor == Decimal("50.00")  # 100 - 0 desc - 50 NC
+    assert res.lista_aplicada == "BCV"
+    assert res.ncs_calculadas == Decimal("12.50")
+    assert res.total_motor == Decimal("87.50")  # 100 - 0 desc - 12.50 NC
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "primera_compra" in origenes
+
+
+def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
+    orden = b.orden(primera=True, lista="BCV")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES,
+                         tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "100"}),  # sin promociones
+    )
+    res = calcular_factura(inp)
+    assert res.ncs_calculadas == Decimal("0.00")
 
 
 def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:

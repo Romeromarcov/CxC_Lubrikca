@@ -27,6 +27,7 @@ from .models import (
     MetodoPago,
     OrdenVenta,
     Pago,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     SerieTasa,
     Vinculacion,
@@ -102,6 +103,9 @@ class Repository(ABC):
     def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]: ...
 
     @abstractmethod
+    def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]: ...
+
+    @abstractmethod
     def feriados(self) -> list[Feriado]: ...
 
     # --- Bandeja de facturación (salida del motor) ---------------------------
@@ -137,6 +141,7 @@ class InMemoryRepository(Repository):
         self._descuentos: list[DescuentoMarcaCategoria] = []
         self._reglas: list[ReglaRecurrencia] = []
         self._bcv_diario: list[DescuentoBCVCompleto] = []
+        self._promos: list[PromocionPrimeraCompra] = []
         self._feriados: list[Feriado] = []
         self._bandeja: dict[str, BandejaFacturacion] = {}
         self._conciliaciones: dict[str, Conciliacion] = {}
@@ -234,6 +239,12 @@ class InMemoryRepository(Repository):
 
     def add_descuento_bcv_completo(self, regla: DescuentoBCVCompleto) -> None:
         self._bcv_diario.append(regla)
+
+    def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
+        return list(self._promos)
+
+    def add_promocion_primera_compra(self, promo: PromocionPrimeraCompra) -> None:
+        self._promos.append(promo)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)

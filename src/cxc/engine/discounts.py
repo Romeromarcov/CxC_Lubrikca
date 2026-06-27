@@ -27,6 +27,7 @@ from ..models import (
     LineaOrden,
     MetodoPago,
     OrdenVenta,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoBeneficio,
     TipoDescuento,
@@ -35,6 +36,7 @@ from ..models import (
 from .business_days import fin_ventana_contado
 from .effective_dating import (
     descuento_vigente,
+    promocion_primera_compra_vigente,
     regla_recurrencia_vigente,
     tasa_bcv_completo_vigente,
 )
@@ -58,6 +60,7 @@ class EngineInputs:
     descuentos: list[DescuentoMarcaCategoria]
     reglas_recurrencia: list[ReglaRecurrencia]
     descuento_bcv_diario: list[DescuentoBCVCompleto]
+    promociones_primera_compra: list[PromocionPrimeraCompra]
     feriados_tabla: list[Feriado]
     price_resolver: PriceResolver
     engine_config: EngineConfig
@@ -147,25 +150,32 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
     nc = Decimal("0")
+    promo_sin_precio = False
     detalle_recompra: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
-    condicion = (
-        Condicion.PRIMERA_COMPRA
-        if inp.orden.es_primera_compra
-        else Condicion.RECOMPRA
-    )
-    regla = regla_recurrencia_vigente(
-        inp.reglas_recurrencia, condicion=condicion, fecha=fecha_orden
-    )
-    if regla is not None:
-        if regla.tipo_beneficio == TipoBeneficio.NOTA_CREDITO:
-            nc = regla.valor
-            detalle_nc = DescuentoAplicado(
-                origen="recurrencia",
-                descripcion=f"NC {condicion.value} (monto fijo)",
-                monto=q2(nc),
-            )
-        else:  # porcentaje (recompra)
+    if inp.orden.es_primera_compra:
+        # NC = precio del producto-promo en la lista de NACIMIENTO de la orden.
+        promo = promocion_primera_compra_vigente(
+            inp.promociones_primera_compra, fecha=fecha_orden
+        )
+        if promo is not None:
+            try:
+                nc = inp.price_resolver.precio(
+                    promo.producto, inp.orden.lista_precios
+                )
+                detalle_nc = DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion=f"NC producto promo {promo.producto}",
+                    monto=q2(nc),
+                )
+            except KeyError:
+                # Sin precio del producto-promo → no inventar NC; marcar revisión.
+                promo_sin_precio = True
+    else:
+        regla = regla_recurrencia_vigente(
+            inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
+        )
+        if regla is not None and regla.tipo_beneficio == TipoBeneficio.PORCENTAJE:
             pct_recompra = precio_base * regla.valor
             detalle_recompra = DescuentoAplicado(
                 origen="recurrencia",
@@ -173,15 +183,13 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 monto=q2(pct_recompra),
             )
 
-    # (b) Contado por marca×categoría — proyección (sección 4.3b)
-    metodos = [m for _, m in inp.abonos]
-    contado_metodo_ok = (
-        bool(inp.abonos)
-        and all(m.es_contado for m in metodos)
-        and inp.orden.fecha_entrega is not None
-    )
+    # (b) Contado por marca×categoría — proyección (sección 4.3b).
+    # El método NO determina el contado: lo determina pagar el neto total dentro
+    # del plazo (ventana de días hábiles desde la entrega completa). Solo se
+    # requiere que haya abonos y un ancla de entrega.
+    contado_evaluable = bool(inp.abonos) and inp.orden.fecha_entrega is not None
     contado_proy = Decimal("0")
-    if contado_metodo_ok:
+    if contado_evaluable:
         for ln in inp.lineas:
             d = descuento_vigente(
                 inp.descuentos,
@@ -209,7 +217,10 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         nc=nc,
         detalle_recompra=detalle_recompra,
         detalle_nc=detalle_nc,
-        flags={"contado_metodo_ok": contado_metodo_ok},
+        flags={
+            "contado_evaluable": contado_evaluable,
+            "promo_sin_precio": promo_sin_precio,
+        },
     )
 
 
@@ -224,7 +235,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     lista = _determinar_lista(inp, pura_bcv)
     comp = _calcular_componentes(inp, lista, pura_bcv)
 
-    contado_metodo_ok = comp.flags["contado_metodo_ok"]
+    contado_evaluable = comp.flags["contado_evaluable"]
     valor_pagado = valor_pagado_usd(vincs) if vincs else Decimal("0")
 
     # Ventana de contado (sección 4.6) sobre la fecha de entrega.
@@ -247,7 +258,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     # Decisión del contado condicional (sección 4.0b).
     contado_confirmado = False
     contado_denied = False
-    if contado_metodo_ok:
+    if contado_evaluable:
         if liquidado_optimista and within_window:
             contado_confirmado = True
         elif (liquidado_optimista and not within_window) or (
@@ -256,10 +267,14 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             # Liquidó tarde, o venció la ventana sin liquidar → pasó a crédito.
             contado_denied = True
         # else: provisional dentro de ventana, sigue proyectando contado.
-    contado_incluido = contado_metodo_ok and not contado_denied
+    contado_incluido = contado_evaluable and not contado_denied
 
     # Apilamiento aditivo final (sección 4.1).
     detalle: list[DescuentoAplicado] = []
+    if comp.detalle_nc is not None:
+        # La NC se muestra en el desglose para auditoría; NO entra a
+        # total_descuentos (va en su propio término ncs_calculadas).
+        detalle.append(comp.detalle_nc)
     if comp.detalle_recompra is not None:
         detalle.append(comp.detalle_recompra)
     contado_aplicado = comp.contado_proy if contado_incluido else Decimal("0")
@@ -291,6 +306,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         any(v.es_tasa_heredada for v in vincs)
         or comp.bcv_completo > 0
         or contado_denied
+        or comp.flags["promo_sin_precio"]
     )
 
     return BandejaFacturacion(

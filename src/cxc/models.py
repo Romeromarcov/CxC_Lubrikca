@@ -165,6 +165,22 @@ class DescuentoBCVCompleto:
     activo: bool = True
 
 
+# --- 3.7c PromocionPrimeraCompra (configurable, effective dating) -----------
+@dataclass
+class PromocionPrimeraCompra:
+    """Producto de regalo por primera compra (ej. caja de liga de frenos).
+
+    La NC vale el precio de ``producto`` en la lista de nacimiento de la orden
+    (``OrdenVenta.lista_precios``), tomada a la fecha de la SO. Configurable con
+    vigencia: solo aplica si la SO cae dentro del período de la promoción.
+    """
+
+    producto: str
+    vigencia_desde: date
+    vigencia_hasta: date | None = None
+    activo: bool = True
+
+
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
 @dataclass
 class ReglaRecurrencia:

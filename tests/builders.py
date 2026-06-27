@@ -16,6 +16,7 @@ from cxc.models import (
     Moneda,
     OrdenVenta,
     Pago,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoBeneficio,
     TipoDescuento,
@@ -165,6 +166,15 @@ def regla_bcv_completo(
     return DescuentoBCVCompleto(
         vigencia_desde=desde, porcentaje=Decimal(porcentaje),
         vigencia_hasta=hasta,
+    )
+
+
+def promo_primera(
+    producto: str = "LIGA", desde: date = date(2026, 1, 1),
+    hasta: date | None = None,
+) -> PromocionPrimeraCompra:
+    return PromocionPrimeraCompra(
+        producto=producto, vigencia_desde=desde, vigencia_hasta=hasta,
     )
 
 

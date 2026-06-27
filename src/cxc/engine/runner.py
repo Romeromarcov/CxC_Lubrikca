@@ -68,6 +68,7 @@ class EngineRunner:
             descuentos=self._repo.descuentos_marca_categoria(),
             reglas_recurrencia=self._repo.reglas_recurrencia(),
             descuento_bcv_diario=self._repo.descuento_bcv_completo(),
+            promociones_primera_compra=self._repo.promociones_primera_compra(),
             feriados_tabla=self._repo.feriados(),
             price_resolver=self._resolver,
             engine_config=self._cfg,

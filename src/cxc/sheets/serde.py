@@ -28,6 +28,7 @@ from ..models import (
     Moneda,
     OrdenVenta,
     Pago,
+    PromocionPrimeraCompra,
     ReglaRecurrencia,
     ResultadoConciliacion,
     SerieTasa,
@@ -246,6 +247,25 @@ def bcv_completo_from_row(r: Mapping[str, str]) -> DescuentoBCVCompleto:
     return DescuentoBCVCompleto(
         vigencia_desde=p_date(r["vigencia_desde"]),
         porcentaje=p_dec(r.get("porcentaje", "0")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- PromocionPrimeraCompra --------------------------------------------------
+def promocion_to_row(p: PromocionPrimeraCompra) -> Row:
+    return {
+        "producto": p.producto,
+        "vigencia_desde": p.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(p.vigencia_hasta),
+        "activo": s_bool(p.activo),
+    }
+
+
+def promocion_from_row(r: Mapping[str, str]) -> PromocionPrimeraCompra:
+    return PromocionPrimeraCompra(
+        producto=r["producto"],
+        vigencia_desde=p_date(r["vigencia_desde"]),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
     )
