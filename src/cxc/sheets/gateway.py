@@ -36,6 +36,13 @@ class SheetGateway(ABC):
     @abstractmethod
     def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None: ...
 
+    def upsert_rows(
+        self, table: str, pk_field: str, rows: list[Mapping[str, str]]
+    ) -> None:
+        """Upsert por lote. Default: fila por fila. gspread lo optimiza (1 escritura)."""
+        for row in rows:
+            self.upsert_row(table, pk_field, row)
+
     @abstractmethod
     def get_meta(self, key: str) -> str | None: ...
 
@@ -109,6 +116,29 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 ws.update(f"A{fila_num}", [valores])
                 return
         ws.append_row(valores)
+
+    def upsert_rows(
+        self, table: str, pk_field: str, rows: list[Mapping[str, str]]
+    ) -> None:
+        # Lectura + escritura por lote: 1 read + 1 update por tabla (cuota-seguro).
+        if not rows:
+            return
+        ws = self._ws(table)
+        header = ws.row_values(1)
+        existentes = ws.get_all_records()
+        matriz = [[str(rec.get(col, "")) for col in header] for rec in existentes]
+        indice = {
+            str(rec.get(pk_field)): i for i, rec in enumerate(existentes)
+        }
+        for row in rows:
+            valores = [row.get(col, "") for col in header]
+            clave = row[pk_field]
+            if clave in indice:
+                matriz[indice[clave]] = valores
+            else:
+                indice[clave] = len(matriz)
+                matriz.append(valores)
+        ws.update(values=matriz, range_name="A2")
 
     def get_meta(self, key: str) -> str | None:
         for rec in self.read_rows(T_META):

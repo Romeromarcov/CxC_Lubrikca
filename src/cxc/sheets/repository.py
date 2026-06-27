@@ -64,20 +64,24 @@ class SheetsRepository(Repository):
 
     # --- Espejo (upsert por PK) ---------------------------------------------
     def upsert_clientes(self, filas: list[Cliente]) -> None:
-        for c in filas:
-            self._g.upsert_row(g.T_CLIENTES, "cliente_id", serde.cliente_to_row(c))
+        self._g.upsert_rows(
+            g.T_CLIENTES, "cliente_id", [serde.cliente_to_row(c) for c in filas]
+        )
 
     def upsert_ordenes(self, filas: list[OrdenVenta]) -> None:
-        for o in filas:
-            self._g.upsert_row(g.T_ORDENES, "so_id", serde.orden_to_row(o))
+        self._g.upsert_rows(
+            g.T_ORDENES, "so_id", [serde.orden_to_row(o) for o in filas]
+        )
 
     def upsert_lineas(self, filas: list[LineaOrden]) -> None:
-        for ln in filas:
-            self._g.upsert_row(g.T_LINEAS, "linea_id", serde.linea_to_row(ln))
+        self._g.upsert_rows(
+            g.T_LINEAS, "linea_id", [serde.linea_to_row(ln) for ln in filas]
+        )
 
     def upsert_pagos(self, filas: list[Pago]) -> None:
-        for p in filas:
-            self._g.upsert_row(g.T_PAGOS, "pago_id", serde.pago_to_row(p))
+        self._g.upsert_rows(
+            g.T_PAGOS, "pago_id", [serde.pago_to_row(p) for p in filas]
+        )
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
