@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxc-lubrikca"
+version = "1.0.0"
+description = "Backend del Sistema de Cobros y Conciliación de Lubrikca (CxC)"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=90"
+pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["cxc"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W", "C4", "SIM"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+packages = ["cxc"]
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true

@@ -1,0 +1,12 @@
+# Runtime dependencies — Sistema de Cobros y Conciliación Lubrikca (CxC)
+# Python 3.11+
+
+# HTTP para scraper de tasas (Binance P2P / BCV). Endpoints públicos, sin credenciales.
+requests==2.32.3
+
+# Cliente Google Sheets (espejo de Odoo + tablas de trabajo).
+gspread==6.1.2
+google-auth==2.35.0
+
+# Carga de configuración por variables de entorno (no secretos en el repo).
+python-dotenv==1.0.1
