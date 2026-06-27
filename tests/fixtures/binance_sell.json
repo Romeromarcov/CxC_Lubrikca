@@ -1,0 +1,14 @@
+{
+  "code": "000000",
+  "message": null,
+  "data": [
+    {"adv": {"price": "39.50", "asset": "USDT"}, "advertiser": {"nickName": "G"}},
+    {"adv": {"price": "39.60", "asset": "USDT"}, "advertiser": {"nickName": "H"}},
+    {"adv": {"price": "39.70", "asset": "USDT"}, "advertiser": {"nickName": "I"}},
+    {"adv": {"price": "39.80", "asset": "USDT"}, "advertiser": {"nickName": "J"}},
+    {"adv": {"price": "39.90", "asset": "USDT"}, "advertiser": {"nickName": "K"}},
+    {"adv": {"price": "40.00", "asset": "USDT"}, "advertiser": {"nickName": "L"}}
+  ],
+  "total": 6,
+  "success": true
+}
