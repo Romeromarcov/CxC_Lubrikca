@@ -92,6 +92,28 @@ solapados (idempotente por upsert).
 
 ---
 
+## 🚩 Precio por pricelist en Odoo 18 (bloqueante del motor en producción)
+
+Verificado contra el QA: el motor no puede leer el precio de un producto en una
+pricelist por los métodos asumidos:
+- `product.pricelist.price_get` → **removido en Odoo 18**.
+- `product.pricelist._get_product_price` / `_get_products_price` → privados, **no
+  invocables por XML-RPC**.
+- `product.pricelist.item` de las listas 4 y 5 → **vacío** (los precios no salen
+  de items simples; podrían venir de fórmula, lista base o del `list_price`).
+
+Opciones para producción (decisión de negocio + Odoo):
+1. **Usar el precio de la línea ya sincronizado** cuando la lista aplicada = lista
+   de nacimiento de la orden. En este negocio TODAS las órdenes nacen en la
+   pricelist 5 ("Precio USD Pago VES"); si la ruta de pago es VES/BCV, la lista
+   aplicada es la 5 y el precio de la línea sirve directo (es lo que usa el demo).
+2. Si se paga en USD (lista 4), exponer ese precio: crear un endpoint/acción en
+   Odoo, sincronizar una tabla `Precios(producto, lista, precio)`, o confirmar la
+   relación entre la lista 4 y la 5 (¿factor fijo? ¿misma base list_price?).
+
+Hasta resolverlo, el motor opera por ruta BCV/VES con precios de línea (caso real
+mayoritario). `OdooPriceResolver` queda como esqueleto a calibrar.
+
 ## Integraciones específicas del entorno (ver SETUP.md)
 
 - **`fecha_entrega` desde `stock.picking`** (3.2): el reader lee un campo

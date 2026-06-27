@@ -23,6 +23,12 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
 
     ``pricelist_ids`` mapea el nombre lógico de lista del motor (p. ej. "USD",
     "BCV") al id de la ``product.pricelist`` correspondiente en Odoo.
+
+    ⚠️ CALIBRAR PARA ODOO 18 (ver TODO.md): ``price_get`` fue removido en Odoo 18
+    y los métodos privados no son invocables por XML-RPC. Para la ruta BCV/VES
+    (lista de nacimiento) usar ``DictPriceResolver`` con el ``precio_unitario`` de
+    las líneas ya sincronizadas; para la lista USD definir el método real con
+    Odoo. Este resolver queda como esqueleto.
     """
 
     def __init__(

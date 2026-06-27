@@ -46,7 +46,7 @@ def _binance_config() -> BinanceConfig:
 def _bcv_config() -> BcvConfig:
     return BcvConfig(
         url="https://example.test/bcv",
-        usd_regex=r'id="dolar".*?<strong>\s*([\d.,]+)\s*</strong>',
+        usd_regex=r'id="dolar".*?<strong[^>]*>\s*([\d.,]+)',
         timeout_seconds=10,
     )
 

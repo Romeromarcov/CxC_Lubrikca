@@ -117,7 +117,7 @@ class BcvConfig:
             url=_get("BCV_URL", "https://www.bcv.org.ve/"),
             usd_regex=_get(
                 "BCV_USD_REGEX",
-                r'id="dolar".*?<strong>\s*([\d.,]+)\s*</strong>',
+                r'id="dolar".*?<strong[^>]*>\s*([\d.,]+)',
             ),
             timeout_seconds=_get_int("BCV_REQUEST_TIMEOUT_SECONDS", 20),
         )

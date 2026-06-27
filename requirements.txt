@@ -7,6 +7,9 @@ requests==2.32.3
 # Cliente Google Sheets (espejo de Odoo + tablas de trabajo).
 gspread==6.1.2
 google-auth==2.35.0
+# Solo para el modo OAuth de desarrollo (GspreadGateway.from_oauth). En
+# producción (cuenta de servicio) no se usa.
+google-auth-oauthlib==1.2.1
 
 # Carga de configuración por variables de entorno (no secretos en el repo).
 python-dotenv==1.0.1
