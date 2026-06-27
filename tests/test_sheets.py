@@ -93,6 +93,12 @@ def test_roundtrip_descuento_y_regla_y_feriado_y_metodo() -> None:
     assert serde.metodo_from_row(serde.metodo_to_row(m)) == m
 
 
+def test_roundtrip_bcv_completo() -> None:
+    d = b.regla_bcv_completo("0.10", desde=date(2026, 6, 27),
+                             hasta=date(2026, 6, 27))
+    assert serde.bcv_completo_from_row(serde.bcv_completo_to_row(d)) == d
+
+
 def test_roundtrip_cliente_linea_pago() -> None:
     c = b.cliente("C5")
     assert serde.cliente_from_row(serde.cliente_to_row(c)) == c
@@ -169,6 +175,8 @@ def test_config_y_vinculaciones_se_leen() -> None:
     gw.seed("DescuentosMarcaCategoria",
             [serde.descuento_to_row(b.descuento("D1"))])
     gw.seed("ReglasRecurrencia", [serde.regla_to_row(b.regla_recompra())])
+    gw.seed("DescuentoBCVCompleto",
+            [serde.bcv_completo_to_row(b.regla_bcv_completo("0.10"))])
     gw.seed("Feriados", [serde.feriado_to_row(b.feriado(date(2026, 5, 1)))])
     gw.seed("MetodosPago", [serde.metodo_to_row(b.metodo("M1"))])
     gw.seed("Vinculaciones",
@@ -176,6 +184,7 @@ def test_config_y_vinculaciones_se_leen() -> None:
 
     assert len(repo.descuentos_marca_categoria()) == 1
     assert len(repo.reglas_recurrencia()) == 1
+    assert repo.descuento_bcv_completo()[0].porcentaje == Decimal("0.10")
     assert len(repo.feriados()) == 1
     assert repo.get_metodo_pago("M1") is not None
     assert len(repo.vinculaciones_de_orden("SO1")) == 1

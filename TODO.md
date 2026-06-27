@@ -9,16 +9,21 @@ confirmar con negocio.
 
 ## Decisiones de negocio a confirmar (impactan dinero)
 
-### 1. Fórmula del descuento BCV-completo (sección 4.3c) — DEFERIDA EN EL DOC
-El doc define `descuento = f(tasa_bcv, tasa_binance)` por abono pero **no da la
-función**. Decisión por defecto (configurable vía `BCV_COMPLETE_FORMULA`):
+### 1. Fórmula del descuento BCV-completo (sección 4.3c) — ✅ DECIDIDA
+La gerencia **fija un porcentaje diario** y se lo comunica a los vendedores; el
+motor lo aplica **topado al diferencial real**, por abono:
 ```
 diferencial_i = (tasa_binance_i − tasa_bcv_i) / tasa_binance_i
-descuento     = Σ_i  equiv_usd_bcv_i × diferencial_i
+tasa_i        = max(0, min(porcentaje_gerencia(fecha_abono_i), diferencial_i))
+descuento     = Σ_i  equiv_usd_bcv_i × tasa_i
 ```
-- Se calcula **por abono** con la tasa estampada de su bucket (cumple 4.3c/4.4).
-- **Falta confirmar** la fórmula exacta con negocio. Un solo punto de cambio:
-  `_diferencial_binance` / `_bcv_completo_monto` en `src/cxc/engine/discounts.py`.
+- El porcentaje diario vive en la tabla **`DescuentoBCVCompleto`** (effective
+  dating). Si no hay porcentaje vigente para la fecha del abono → **no se otorga**
+  (conservador). Nunca excede el diferencial real.
+- Implementado en `_bcv_completo_monto` (`src/cxc/engine/discounts.py`) +
+  `tasa_bcv_completo_vigente` (effective_dating).
+- **Operativo:** la gerencia agrega/edita una fila en `DescuentoBCVCompleto` cada
+  vez que cambia la tasa del día.
 
 ### 2. Sesgo de la tasa Binance (sección 5.1)
 `(5 compra + 5 venta)/10` es un punto medio. El doc lo marca como **decisión de

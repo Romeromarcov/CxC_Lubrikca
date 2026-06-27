@@ -20,6 +20,7 @@ from ..models import (
     BandejaFacturacion,
     Condicion,
     DescuentoAplicado,
+    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     EstadoBandeja,
     Feriado,
@@ -32,7 +33,11 @@ from ..models import (
     Vinculacion,
 )
 from .business_days import fin_ventana_contado
-from .effective_dating import descuento_vigente, regla_recurrencia_vigente
+from .effective_dating import (
+    descuento_vigente,
+    regla_recurrencia_vigente,
+    tasa_bcv_completo_vigente,
+)
 from .equivalents import (
     congelar_en_vinculacion,
     es_ruta_bcv_pura,
@@ -52,6 +57,7 @@ class EngineInputs:
     abonos: list[tuple[Vinculacion, MetodoPago]]
     descuentos: list[DescuentoMarcaCategoria]
     reglas_recurrencia: list[ReglaRecurrencia]
+    descuento_bcv_diario: list[DescuentoBCVCompleto]
     feriados_tabla: list[Feriado]
     price_resolver: PriceResolver
     engine_config: EngineConfig
@@ -82,12 +88,16 @@ def _diferencial_binance(tasa_bcv: Decimal, tasa_binance: Decimal) -> Decimal:
 
 
 def _bcv_completo_monto(
-    vinculaciones: list[Vinculacion], formula: str
+    vinculaciones: list[Vinculacion],
+    reglas_bcv: list[DescuentoBCVCompleto],
+    formula: str,
 ) -> Decimal:
     """Descuento BCV-completo, calculado POR ABONO (sección 4.3c).
 
-    Cada abono usa la tasa Binance de su hora estampada. La base es el
-    equivalente USD a BCV ya congelado del abono.
+    La gerencia fija un porcentaje diario; el descuento aplicado por abono es
+    ``min(porcentaje_gerencia, diferencial_real)`` y nunca menos de 0. Si no hay
+    porcentaje configurado para la fecha del abono, no se otorga (conservador).
+    La base es el equivalente USD a BCV ya congelado del abono.
     """
     if formula != "differential_over_binance":
         raise ValueError(
@@ -96,7 +106,16 @@ def _bcv_completo_monto(
         )
     total = Decimal("0")
     for v in vinculaciones:
-        rate = _diferencial_binance(v.tasa_bcv_aplicada, v.tasa_binance_aplicada)
+        diferencial = _diferencial_binance(
+            v.tasa_bcv_aplicada, v.tasa_binance_aplicada
+        )
+        tasa_gerencia = tasa_bcv_completo_vigente(
+            reglas_bcv, fecha=v.hora_pago_confirmada.date()
+        )
+        if tasa_gerencia is None:
+            rate = Decimal("0")
+        else:
+            rate = max(Decimal("0"), min(tasa_gerencia, diferencial))
         base = v.equiv_usd_bcv
         assert base is not None  # congelado antes
         total += base * rate
@@ -179,7 +198,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     if pura_bcv:
         vincs = [v for v, _ in inp.abonos]
         bcv_completo = _bcv_completo_monto(
-            vincs, inp.engine_config.bcv_complete_formula
+            vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
         )
 
     return _Componentes(

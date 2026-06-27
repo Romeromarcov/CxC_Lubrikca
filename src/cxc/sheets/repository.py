@@ -14,6 +14,7 @@ from ..models import (
     BandejaFacturacion,
     Cliente,
     Conciliacion,
+    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     Feriado,
     LineaOrden,
@@ -143,6 +144,12 @@ class SheetsRepository(Repository):
 
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         return [serde.regla_from_row(r) for r in self._g.read_rows(g.T_REGLAS)]
+
+    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
+        return [
+            serde.bcv_completo_from_row(r)
+            for r in self._g.read_rows(g.T_BCV_COMPLETO)
+        ]
 
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]

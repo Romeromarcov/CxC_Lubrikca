@@ -149,6 +149,22 @@ class DescuentoMarcaCategoria:
     activo: bool = True
 
 
+# --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
+@dataclass
+class DescuentoBCVCompleto:
+    """Tasa de descuento BCV-completo que fija la gerencia (por fecha).
+
+    El descuento aplicado por abono es ``min(porcentaje, diferencial_real)``,
+    donde el diferencial real es ``(binance − bcv)/binance`` del bucket del abono.
+    Nunca excede el diferencial; la gerencia puede otorgar menos.
+    """
+
+    vigencia_desde: date
+    porcentaje: Decimal
+    vigencia_hasta: date | None = None
+    activo: bool = True
+
+
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
 @dataclass
 class ReglaRecurrencia:

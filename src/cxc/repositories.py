@@ -20,6 +20,7 @@ from .models import (
     BandejaFacturacion,
     Cliente,
     Conciliacion,
+    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     Feriado,
     LineaOrden,
@@ -98,6 +99,9 @@ class Repository(ABC):
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]: ...
 
     @abstractmethod
+    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]: ...
+
+    @abstractmethod
     def feriados(self) -> list[Feriado]: ...
 
     # --- Bandeja de facturación (salida del motor) ---------------------------
@@ -132,6 +136,7 @@ class InMemoryRepository(Repository):
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
         self._reglas: list[ReglaRecurrencia] = []
+        self._bcv_diario: list[DescuentoBCVCompleto] = []
         self._feriados: list[Feriado] = []
         self._bandeja: dict[str, BandejaFacturacion] = {}
         self._conciliaciones: dict[str, Conciliacion] = {}
@@ -223,6 +228,12 @@ class InMemoryRepository(Repository):
 
     def add_regla_recurrencia(self, regla: ReglaRecurrencia) -> None:
         self._reglas.append(regla)
+
+    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
+        return list(self._bcv_diario)
+
+    def add_descuento_bcv_completo(self, regla: DescuentoBCVCompleto) -> None:
+        self._bcv_diario.append(regla)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)

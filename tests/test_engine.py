@@ -41,6 +41,7 @@ def _inputs(
     abonos,
     descuentos=(),
     reglas=(),
+    bcv_diario=(),
     feriados=(),
     resolver,
     fecha_calculo=date(2026, 6, 8),
@@ -51,6 +52,7 @@ def _inputs(
         abonos=list(abonos),
         descuentos=list(descuentos),
         reglas_recurrencia=list(reglas),
+        descuento_bcv_diario=list(bcv_diario),
         feriados_tabla=list(feriados),
         price_resolver=resolver,
         engine_config=CFG,
@@ -188,14 +190,55 @@ def test_bcv_completo_aplica_en_ruta_bcv_pura() -> None:
         lineas=[linea],
         abonos=[(vinc, metodo_bcv)],
         reglas=[b.regla_recompra("0.03")],
+        bcv_diario=[b.regla_bcv_completo("0.15")],  # gerencia 15% > diferencial
         resolver=_resolver(**{"P1@BCV": "100"}),
     )
     res = calcular_factura(inp)
     assert res.lista_aplicada == "BCV"
     bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
     assert len(bcv) == 1
-    assert bcv[0].monto == Decimal("10.00")  # 100 USD * 10%
+    # min(15%, diferencial 10%) = 10% sobre 100 USD = 10.00
+    assert bcv[0].monto == Decimal("10.00")
     assert res.requiere_revision is True
+
+
+def test_bcv_completo_topado_al_porcentaje_de_gerencia() -> None:
+    # Gerencia fija 5% aunque el diferencial real sea 10% -> aplica 5%.
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo_bcv = b.metodo("MB", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV,
+                          es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV, tasa_bcv="36.0", tasa_binance="40.0",
+    )
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo_bcv)],
+        bcv_diario=[b.regla_bcv_completo("0.05")],
+        resolver=_resolver(**{"P1@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
+    assert bcv[0].monto == Decimal("5.00")  # min(5%, 10%) = 5% sobre 100 USD
+
+
+def test_bcv_completo_sin_tasa_diaria_no_se_otorga() -> None:
+    # Sin porcentaje configurado para la fecha -> no se regala (conservador).
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo_bcv = b.metodo("MB", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV,
+                          es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV, tasa_bcv="36.0", tasa_binance="40.0",
+    )
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo_bcv)],
+        resolver=_resolver(**{"P1@BCV": "100"}),  # sin bcv_diario
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "bcv_completo" not in origenes
 
 
 def test_neto_no_alcanzado_no_es_candidata() -> None:

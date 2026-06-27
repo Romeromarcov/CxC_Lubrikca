@@ -1,0 +1,550 @@
+so,rep_subtotal,rep_lines,partner,fecha,so_total,so_cli,so_estfac,ven_total,ven_dcto,ven_cli,monto_odoo,d_ven_rep,d_ven_so,d_ven_odoo,d_so_rep
+1,61.0,1.0,"GARAJE Y TALLERES FRIDELBA, C.A",2026-02-25 20:20:21,,,,,,,,,,,
+2,224.0,3.0,"GARAJE Y TALLERES FRIDELBA, C.A",2026-02-25 20:50:18,,,,,,,,,,,
+3,41.379999999999995,2.0,"INVERSIONES IRETE SUKA, C.A",2026-03-02 16:21:22,,,,,,,,,,,
+4,200.84,3.0,"GARAJE Y TALLERES FRIDELBA, C.A",2026-03-09 09:46:05,232.98,"GARAJE Y TALLERES FRIDELBA, C.A",Facturado por completo,232.98,175.0,"GARAJE Y TALLERES FRIDELBA, C.A",232.97,32.14,0.0,0.01,32.14
+5,220.48000000000002,4.0,FREDI MARQUEZ,2026-02-26 14:06:08,,,,,,,,,,,
+6,71.91,2.0,"GRUPO UNIFRENOS, CA",2026-02-26 14:28:32,,,,,,,,,,,
+7,212.07,5.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-02-26 15:03:34,246.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,246.0,246.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,246.0,33.93,0.0,0.0,33.93
+8,30.46,1.0,"ZIP MARKET, CA",2026-02-26 16:04:03,35.33,"ZIP MARKET, CA",Facturado por completo,35.33,35.33,"ZIP MARKET, CA",35.33,4.87,0.0,0.0,4.87
+9,289.64,1.0,E&M CAR SHOP C.A,2026-02-26 16:12:16,335.98,E&M CAR SHOP C.A,Facturado por completo,335.98,335.98,E&M CAR SHOP C.A,335.98,46.34,0.0,0.0,46.34
+10,23949.2,7.0,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",2026-03-16 12:30:19,27781.08,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",Facturado por completo,27781.08,27781.08,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",27781.07,3831.88,0.0,0.01,3831.88
+11,54.980000000000004,2.0,"MOTO MARCE 21, CA",2026-03-13 21:23:50,63.77,"MOTO MARCE 21, CA",Facturado por completo,63.77,63.77,"MOTO MARCE 21, CA",63.78,8.79,0.0,-0.01,8.79
+13,224.13,3.0,FREDI MARQUEZ,2026-03-02 16:18:39,,,,,,,,,,,
+14,70.9,1.0,"SPEED RACING, CA",2026-03-09 09:47:20,82.24,"SPEED RACING, CA",Facturado por completo,82.24,82.24,"SPEED RACING, CA",82.24,11.34,0.0,0.0,11.34
+15,823.0899999999999,4.0,Henry Blanco,2026-03-09 09:47:34,954.79,"SERVICIOS Y MANTENIMIENTO SPACARS, C.A, Henry Blanco",Facturado por completo,954.79,954.79,"SERVICIOS Y MANTENIMIENTO SPACARS, C.A, Henry Blanco",954.78,131.7,0.0,0.01,131.7
+17,89.96,2.0,"MOTO REPUESTOS LA FLECHA, C.A.",2026-03-09 09:47:50,104.36,"MOTO REPUESTOS LA FLECHA, C.A.",Facturado por completo,104.36,104.36,"MOTO REPUESTOS LA FLECHA, C.A.",104.35,14.4,0.0,0.01,14.4
+18,82.76,1.0,"AUTO ACCESORIOS VZLA, C.A.",2026-03-09 09:47:58,96.0,"AUTO ACCESORIOS VZLA, C.A.",Facturado por completo,96.0,96.0,"AUTO ACCESORIOS VZLA, C.A.",96.0,13.24,0.0,0.0,13.24
+19,67.46,1.0,"Ruta 8 Autopartes,c.a.",2026-03-03 19:32:17,78.25,"Ruta 8 Autopartes,c.a.",Facturado por completo,78.25,78.25,"Ruta 8 Autopartes,c.a.",78.25,10.79,0.0,0.0,10.79
+20,407.34000000000003,6.0,EMPRENDIMIENTO TOMAS MARCANO 5,2026-03-09 09:48:52,472.53,EMPRENDIMIENTO TOMAS MARCANO 5,Facturado por completo,472.53,472.53,EMPRENDIMIENTO TOMAS MARCANO 5,472.51,65.19,0.0,0.02,65.19
+21,183.37,3.0,"INVERSIONES SMALUM 21, C.A.",2026-03-09 09:49:02,212.72,"INVERSIONES SMALUM 21, C.A.",Facturado por completo,212.72,212.72,"INVERSIONES SMALUM 21, C.A.",212.71,29.35,0.0,0.01,29.35
+22,82.76,1.0,Autorepuestos las 24 horas,2026-03-09 09:49:11,96.0,Autorepuestos las 24 horas,Facturado por completo,96.0,96.0,Autorepuestos las 24 horas,96.0,13.24,0.0,0.0,13.24
+23,82.76,2.0,Multiservicios Sanahuja 36 C.A,2026-03-09 09:49:23,96.0,Multiservicios Sanahuja 36 C.A,Facturado por completo,96.0,96.0,Multiservicios Sanahuja 36 C.A,96.0,13.24,0.0,0.0,13.24
+24,77.96,2.0,Encamotors Catia C.A,2026-03-09 09:49:34,90.44,Encamotors Catia C.A,Facturado por completo,90.44,90.44,Encamotors Catia C.A,90.43,12.48,0.0,0.01,12.48
+25,159.17,2.0,Cauchera Guaicara C.A,2026-03-04 12:25:14,,,,,,,,,,,
+26,62.48,1.0,Joel Duque,2026-03-09 09:49:52,72.48,Joel Duque,Facturado por completo,72.48,72.48,Joel Duque,72.48,10.0,0.0,0.0,10.0
+27,439.65,4.0,Moises Alejandro Mares,2026-03-09 09:51:09,510.0,Moises Alejandro Mares,Facturado por completo,510.0,510.0,Moises Alejandro Mares,509.99,70.35,0.0,0.01,70.35
+28,59.72,1.0,Ricardo A. Fernandez.,2026-03-04 18:06:27,69.28,Ricardo A. Fernandez.,Facturado por completo,69.28,68.91196275,Ricardo A. Fernandez.,69.28,9.56,0.0,0.0,9.56
+29,225.84,3.0,AUTOREPUESTOS SION C.A.,2026-03-09 09:50:11,261.98,AUTOREPUESTOS SION C.A.,Facturado por completo,261.98,198.0,AUTOREPUESTOS SION C.A.,261.97,36.14,0.0,0.01,36.14
+30,125.93,3.0,HIDRAULICAS CAICEDO C.A.,2026-03-09 09:51:16,146.08,HIDRAULICAS CAICEDO C.A.,Facturado por completo,146.08,146.0,HIDRAULICAS CAICEDO C.A.,146.08,20.15,0.0,0.0,20.15
+31,249.28000000000003,2.0,COMERCIAL REPUESTOS MUNDIALES RMS 2022 C.A.,2026-03-09 09:50:21,289.16,COMERCIAL REPUESTOS MUNDIALES RMS 2022 C.A.,Facturado por completo,289.16,289.16,COMERCIAL REPUESTOS MUNDIALES RMS 2022 C.A.,289.16,39.88,0.0,0.0,39.88
+32,87.07,1.0,Ferretería JJ Martins c.a,2026-03-09 09:50:28,101.0,Ferretería JJ Martins c.a,Facturado por completo,101.0,86.70221035,Ferretería JJ Martins c.a,101.0,13.93,0.0,0.0,13.93
+33,209.49,1.0,Angel ARMAS,2026-03-05 12:44:27,243.01,Angel ARMAS,Facturado por completo,243.01,195.0,Angel ARMAS,243.01,33.52,0.0,0.0,33.52
+34,159.52,2.0,Miguel Antonio Chacon,2026-03-09 09:50:40,185.04,Miguel Antonio Chacon,Facturado por completo,185.04,185.04,Miguel Antonio Chacon,185.04,25.52,0.0,0.0,25.52
+36,374.86,6.0,inversiones El Gran Charles C.A,2026-03-09 09:50:49,434.83,inversiones El Gran Charles C.A,Facturado por completo,434.83,434.83,inversiones El Gran Charles C.A,434.84,59.97,0.0,-0.01,59.97
+37,64.66,2.0,Junior Marco Antonio Vivas Navas,2026-03-09 10:07:31,75.0,Junior Marco Antonio Vivas Navas,Facturado por completo,75.0,58.0,Junior Marco Antonio Vivas Navas,75.01,10.34,0.0,-0.01,10.34
+38,77.6,1.0,Auto repuestos Fontalvo,2026-03-09 10:07:38,90.02,Auto repuestos Fontalvo,Facturado por completo,90.02,72.0,Auto repuestos Fontalvo,90.02,12.42,0.0,0.0,12.42
+39,24.9,1.0,"Moto Bestia, C.A",2026-03-09 10:07:40,28.88,"Moto Bestia, C.A",Facturado por completo,28.88,28.88,"Moto Bestia, C.A",28.88,3.98,0.0,0.0,3.98
+40,931.5600000000001,12.0,"WILLY MOTOR CAR REPUESTOS Y SERVICIOS, C.A.",2026-03-09 10:07:43,1080.62,"WILLY MOTOR CAR REPUESTOS Y SERVICIOS, C.A.",Facturado por completo,1080.62,1080.62,"WILLY MOTOR CAR REPUESTOS Y SERVICIOS, C.A.",1080.61,149.06,0.0,0.01,149.06
+41,138.78,1.0,"Inversiones Trip K, c.a.",2026-03-09 10:07:48,160.98,"Inversiones Trip K, c.a.",Facturado por completo,160.98,160.98,"Inversiones Trip K, c.a.",160.98,22.2,0.0,0.0,22.2
+42,131.0,1.0,"ALIPLUS TRASPORTE Y EQUIPOS, CA",2026-03-06 18:04:22,151.96,"ALIPLUS TRASPORTE Y EQUIPOS, CA",Facturado por completo,151.96,130.9999993,"ALIPLUS TRASPORTE Y EQUIPOS, CA",151.96,20.96,0.0,0.0,20.96
+43,312.52,3.0,Vianney García,2026-03-06 20:17:37,362.52,Vianney García,Facturado por completo,362.52,362.52,Vianney García,362.52,50.0,0.0,0.0,50.0
+44,2087.84,1.0,Comercializadora Garabote,2026-03-06 20:23:53,2421.89,Comercializadora Garabote,Facturado por completo,2421.89,2147.0,Comercializadora Garabote,2421.89,334.05,0.0,0.0,334.05
+45,47.71,1.0,"INVERSIONES IRETE SUKA, C.A",2026-03-09 09:45:51,55.34,"INVERSIONES IRETE SUKA, C.A",Facturado por completo,55.34,55.34,"INVERSIONES IRETE SUKA, C.A",55.34,7.63,0.0,0.0,7.63
+46,112.06,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-03-10 14:36:19,129.99,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,129.99,129.98,EMPRENDIMIENTO IRMA RODRIGUEZ 6,129.99,17.93,0.0,0.0,17.93
+47,1632.0,1.0,Rawy Xavier Melendez Caripa,2026-03-09 17:14:07,1893.12,Rawy Xavier Melendez Caripa,Facturado por completo,1893.12,1796.760192,Rawy Xavier Melendez Caripa,1893.12,261.12,0.0,0.0,261.12
+48,46.370000000000005,2.0,"Autoelectronica Oranel, C.A.",2026-03-09 19:44:40,53.79,"Autoelectronica Oranel, C.A.",Facturado por completo,53.79,53.79,"Autoelectronica Oranel, C.A.",53.79,7.42,0.0,0.0,7.42
+49,890.97,9.0,Marlene Herrera,2026-03-10 15:02:53,1033.52,Marlene Herrera,Facturado por completo,1033.52,1033.52,Marlene Herrera,1033.53,142.55,0.0,-0.01,142.55
+50,56.03,1.0,FREDI MARQUEZ,2026-03-09 20:10:07,64.99,FREDI MARQUEZ,Facturado por completo,64.99,64.99,FREDI MARQUEZ,64.99,8.96,0.0,0.0,8.96
+51,103.46,2.0,Auto Repuestos Acal C.A,2026-03-10 15:02:28,120.02,Auto Repuestos Acal C.A,Facturado por completo,120.02,119.48,Auto Repuestos Acal C.A,120.01,16.56,0.0,0.01,16.56
+52,224.13,1.0,FREDI MARQUEZ,2026-03-10 11:52:48,259.99,FREDI MARQUEZ,Facturado por completo,259.99,259.99,FREDI MARQUEZ,259.99,35.86,0.0,0.0,35.86
+53,683.04,1.0,"INVERSIONES MI  LINDA YEMAIRE 2019, C.A",2026-03-10 15:02:06,792.33,"INVERSIONES MI  LINDA YEMAIRE 2019, C.A",Facturado por completo,792.33,792.33,"INVERSIONES MI LINDA YEMAIRE 2019, C.A",792.33,109.29,0.0,0.0,109.29
+54,502.39,7.0,Corporación Lubricantes 7ma Av.C.A,2026-03-11 12:57:54,582.77,Corporación Lubricantes 7ma Av.C.A,Facturado por completo,582.77,582.77,Corporación Lubricantes 7ma Av.C.A,582.77,80.38,0.0,0.0,80.38
+55,62.07,1.0,Barrios Rodríguez Marlon Enrique,2026-03-10 15:37:13,72.0,Barrios Rodríguez Marlon Enrique,Facturado por completo,72.0,72.0,Barrios Rodríguez Marlon Enrique,72.0,9.93,0.0,0.0,9.93
+56,115.51,1.0,Motolavado Yahir,2026-03-10 19:57:31,133.99,Motolavado Yahir,Facturado por completo,133.99,133.99,Motolavado Yahir,133.99,18.48,0.0,0.0,18.48
+57,72.67,3.0,Comercial Rio Paraguas C.A,2026-03-10 20:41:51,84.29,Comercial Rio Paraguas C.A,Facturado por completo,84.29,84.28992828,Comercial Rio Paraguas C.A,84.3,11.62,0.0,-0.01,11.62
+58,208.46,2.0,Repuestos y Accesorios chaustre 2024,2026-03-10 20:41:27,241.81,Repuestos y Accesorios chaustre 2024,Facturado por completo,241.81,241.81,Repuestos y Accesorios chaustre 2024,241.81,33.35,0.0,0.0,33.35
+59,1755.94,10.0,"Rhino Toyo Parts, C.A.",2026-03-10 20:42:16,2036.91,"Rhino Toyo Parts, C.A.",Facturado por completo,2036.91,2036.91,"Rhino Toyo Parts, C.A.",2036.89,280.97,0.0,0.02,280.97
+60,180.92000000000002,3.0,"INVERSIONES R&C 1817,  c.a.",2026-03-10 20:41:13,209.87,"INVERSIONES R&C 1817,  c.a.",Facturado por completo,209.87,190.0,"INVERSIONES R&C 1817, c.a.",209.87,28.95,0.0,0.0,28.95
+61,9258.29,6.0,SJMG 2012 C.A,2026-03-11 20:48:08,10739.61,SJMG 2012 C.A,Facturado por completo,10739.61,10739.61,SJMG 2012 C.A,10739.62,1481.32,0.0,-0.01,1481.32
+62,2925.75,11.0,SJMG 2012 C.A,2026-03-11 20:00:08,3393.87,SJMG 2012 C.A,Facturado por completo,3393.87,2492.0,SJMG 2012 C.A,3393.87,468.12,0.0,0.0,468.12
+63,62.07,1.0,"TorniRepuesto BA 2015, C.A",2026-03-11 12:57:24,72.0,"TorniRepuesto BA 2015, C.A",Facturado por completo,72.0,72.0,"TorniRepuesto BA 2015, C.A",72.0,9.93,0.0,0.0,9.93
+64,146.85999999999999,2.0,VAL VAL 16 C.A,2026-03-11 12:25:15,170.36,VAL VAL 16 C.A,Facturado por completo,170.36,154.4914484,VAL VAL 16 C.A,170.36,23.5,0.0,0.0,23.5
+65,323.58000000000004,4.0,"Auto Servicios HN 6972, C.A",2026-03-11 12:53:18,375.35,"Auto Servicios HN 6972, C.A",Facturado por completo,375.35,375.35,"Auto Servicios HN 6972, C.A",375.35,51.77,0.0,0.0,51.77
+66,114.2,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-03-11 19:59:02,132.47,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,132.47,132.47,EMPRENDIMIENTO IRMA RODRIGUEZ 6,132.47,18.27,0.0,0.0,18.27
+67,138.36,1.0,Jesus luciani Russiani.,2026-03-11 15:52:43,160.5,Jesus luciani Russiani.,Facturado por completo,160.5,159.9981744,Jesus luciani Russiani.,160.5,22.14,0.0,0.0,22.14
+69,483.5,9.0,Katiuska Alejandra Curvelo,2026-03-11 19:56:38,560.84,Katiuska Alejandra Curvelo,Facturado por completo,560.84,560.84,Katiuska Alejandra Curvelo,560.86,77.34,0.0,-0.02,77.34
+72,67.78,2.0,DISTRIBUIDORA PINOS 181297 C.A,2026-03-11 20:47:51,78.62,DISTRIBUIDORA PINOS 181297 C.A,Facturado por completo,78.62,78.62,DISTRIBUIDORA PINOS 181297 C.A,78.62,10.84,0.0,0.0,10.84
+73,357.83,5.0,"Remodelaciones Ivanro, C.A",2026-03-12 12:57:51,415.08,"Remodelaciones Ivanro, C.A",Facturado por completo,415.08,415.08,"Remodelaciones Ivanro, C.A",415.08,57.25,0.0,0.0,57.25
+74,158.19,3.0,"Servicios Nicolazzo 97, C.A",2026-03-12 12:57:33,183.49,"Servicios Nicolazzo 97, C.A",Facturado por completo,183.49,166.8520706,"Servicios Nicolazzo 97, C.A",183.5,25.3,0.0,-0.01,25.3
+76,1532.01,13.0,"Mini Market Las Mercedes,c.a.",2026-03-12 13:35:35,,,,,,,,,,,
+77,31.03,1.0,Ruben  Dario Fernandez,2026-03-12 13:53:55,35.99,Ruben  Dario Fernandez,Facturado por completo,35.99,35.99,Ruben Dario Fernandez,35.99,4.96,0.0,0.0,4.96
+78,259.36,6.0,"MULTISERVICIOS RECAM13, C.A.",2026-03-12 16:33:25,300.86,"MULTISERVICIOS RECAM13, C.A.",Facturado por completo,300.86,300.86,"MULTISERVICIOS RECAM13, C.A.",300.86,41.5,0.0,0.0,41.5
+79,459.78,2.0,E&M CAR SHOP C.A,2026-03-12 19:23:56,533.34,E&M CAR SHOP C.A,Facturado por completo,533.34,459.5356037,E&M CAR SHOP C.A,533.34,73.56,0.0,0.0,73.56
+81,62.06,1.0,"Coffee Party, C.A.",2026-03-12 21:06:14,71.99,"Coffee Party, C.A.",Facturado por completo,71.99,71.99,"Coffee Party, C.A.",71.99,9.93,0.0,0.0,9.93
+82,1407.8200000000002,2.0,Pedro Castro,2026-03-12 19:53:58,1633.07,Pedro Castro,Facturado por completo,1633.07,1250.0,Pedro Castro,1633.07,225.25,0.0,0.0,225.25
+83,836.26,10.0,"Inversiones Famasa, C.A",2026-03-12 21:30:57,970.07,"Inversiones Famasa, C.A",Facturado por completo,970.07,970.07,"Inversiones Famasa, C.A",970.06,133.81,0.0,0.01,133.81
+84,58.08,1.0,Inversiones maxgad & ef,2026-03-12 21:52:53,67.37,Inversiones maxgad & ef,Facturado por completo,67.37,67.37,Inversiones maxgad & ef,67.37,9.29,0.0,0.0,9.29
+86,149.7,3.0,Wuilliams bastidas,2026-03-12 21:52:10,173.65,Wuilliams bastidas,Facturado por completo,173.65,173.65,Wuilliams bastidas,173.65,23.95,0.0,0.0,23.95
+87,338.49,5.0,Javier Cardenas Prato.,2026-03-12 21:48:07,392.65,Javier Cardenas Prato.,Facturado por completo,392.65,333.0,Javier Cardenas Prato.,392.65,54.16,0.0,0.0,54.16
+88,246.99,2.0,"ALIPLUS TRASPORTE Y EQUIPOS, CA",2026-03-13 18:20:18,286.51,"ALIPLUS TRASPORTE Y EQUIPOS, CA",Facturado por completo,286.51,286.51,"ALIPLUS TRASPORTE Y EQUIPOS, CA",286.51,39.52,0.0,0.0,39.52
+89,77.58,2.0,Moto Repuestos Sanz 11. C.A.,2026-03-13 17:44:41,89.99,Moto Repuestos Sanz 11. C.A.,Facturado por completo,89.99,89.99,Moto Repuestos Sanz 11. C.A.,89.99,12.41,0.0,0.0,12.41
+90,147.41,3.0,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,2026-03-13 17:44:32,171.0,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,Facturado por completo,171.0,171.0,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,171.0,23.59,0.0,0.0,23.59
+91,1361.07,12.0,"Mini Market Las Mercedes,c.a.",2026-03-13 17:43:40,,,,,,,,,,,
+92,108.62,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-03-13 19:05:37,126.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,126.0,126.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,126.0,17.38,0.0,0.0,17.38
+93,212.07,1.0,Emprendimiento YSKRA,2026-03-13 19:06:03,246.0,Emprendimiento YSKRA,Facturado por completo,246.0,218.0,Emprendimiento YSKRA,246.0,33.93,0.0,0.0,33.93
+94,164.73,3.0,Moto repuestos jj,2026-03-13 19:30:47,191.1,Moto repuestos jj,Facturado por completo,191.1,191.1,Moto repuestos jj,191.09,26.37,0.0,0.01,26.37
+95,317.68,6.0,"Multiservicios Arizona, C.A.",2026-03-16 14:59:09,368.51,"Multiservicios Arizona, C.A.",Facturado por completo,368.51,317.6741321,"Multiservicios Arizona, C.A.",368.51,50.83,0.0,0.0,50.83
+96,374.94,5.0,"Video Electrónica Fermat, C.A",2026-03-16 14:58:20,434.94,"Video Electrónica Fermat, C.A",Facturado por completo,434.94,434.94,"Video Electrónica Fermat, C.A",434.93,60.0,0.0,0.01,60.0
+97,457.74,7.0,Felipe Granja,2026-03-16 14:58:41,530.98,Felipe Granja,Facturado por completo,530.98,530.98,Felipe Granja,530.98,73.24,0.0,0.0,73.24
+98,1399.83,13.0,"Mini Market Las Mercedes,c.a.",2026-03-16 13:48:58,1623.82,"Mini Market Las Mercedes,c.a.",Oportunidad de venta adicional,1623.82,1623.82,"Mini Market Las Mercedes,c.a.",1623.8,223.99,0.0,0.02,223.99
+99,80.17,1.0,"ZIP MARKET, CA",2026-03-16 15:42:28,93.0,"ZIP MARKET, CA",Facturado por completo,93.0,92.92978423,"ZIP MARKET, CA",93.0,12.83,0.0,0.0,12.83
+100,170.3,1.0,Diana Carolina Torres,2026-03-17 19:46:36,197.55,Diana Carolina Torres,Facturado por completo,197.55,193.9201999,Diana Carolina Torres,197.55,27.25,0.0,0.0,27.25
+101,158.70999999999998,2.0,"INVERSIONES JOSCAR  XXI, S.A.",2026-03-17 19:46:45,184.1,"INVERSIONES JOSCAR  XXI, S.A.",Facturado por completo,184.1,184.1,"INVERSIONES JOSCAR XXI, S.A.",184.1,25.39,0.0,0.0,25.39
+103,613.04,7.0,Alexis Rodríguez Fernández,2026-03-17 19:47:27,711.13,Alexis Rodríguez Fernández,Facturado por completo,711.13,711.13,Alexis Rodríguez Fernández,711.13,98.09,0.0,0.0,98.09
+104,256.05,1.0,Inversiones Brayan CT C.A,2026-03-17 19:47:47,297.02,Inversiones Brayan CT C.A,Facturado por completo,297.02,198.0,Inversiones Brayan CT C.A,297.02,40.97,0.0,0.0,40.97
+105,241.81,3.0,Ricardo A. Fernandez.,2026-03-17 19:48:10,280.5,Ricardo A. Fernandez.,Facturado por completo,280.5,280.5,Ricardo A. Fernandez.,280.5,38.69,0.0,0.0,38.69
+106,854.5,1.0,E&M CAR SHOP C.A,2026-03-17 17:29:12,991.22,E&M CAR SHOP C.A,Facturado por completo,991.22,991.22,E&M CAR SHOP C.A,991.22,136.72,0.0,0.0,136.72
+107,190.62,3.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-03-17 18:21:54,,,,,,,,,,,
+108,94.84,2.0,HIDRAULICAS CAICEDO C.A.,2026-03-17 19:48:29,110.01,HIDRAULICAS CAICEDO C.A.,Facturado por completo,110.01,110.01,HIDRAULICAS CAICEDO C.A.,110.01,15.17,0.0,0.0,15.17
+109,3003.95,3.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-03-17 18:58:29,,,,,,,,,,,
+110,6962.13,4.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-03-17 19:12:30,,,,,,,,,,,
+113,93.1,1.0,Franklin J. Mijares S.,2026-03-17 20:14:43,108.0,Franklin J. Mijares S.,Facturado por completo,108.0,72.0,Franklin J. Mijares S.,108.0,14.9,0.0,0.0,14.9
+114,256.02,1.0,Autoasesorio maxi motor,2026-03-18 21:47:57,296.98,Autoasesorio maxi motor,Facturado por completo,296.98,296.98,Autoasesorio maxi motor,296.98,40.96,0.0,0.0,40.96
+115,209.48,1.0,"ALIPLUS TRASPORTE Y EQUIPOS, CA",2026-03-17 22:10:37,,,,,,,,,,,
+116,85.35,2.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-03-18 12:50:51,99.01,"AGROPECUARIA EL TORO DORADO, C.A",Facturado por completo,99.01,99.01,"AGROPECUARIA EL TORO DORADO, C.A",99.01,13.66,0.0,0.0,13.66
+117,178.49,3.0,Jose Becerra,2026-03-18 21:48:16,207.05,Jose Becerra,Facturado por completo,207.05,140.0,Jose Becerra,207.05,28.56,0.0,0.0,28.56
+118,43.66,1.0,"ELIVAN2025, C.A",2026-03-18 21:48:39,50.65,"ELIVAN2025, C.A",Facturado por completo,50.65,34.0,"ELIVAN2025, C.A",50.65,6.99,0.0,0.0,6.99
+119,249.82,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-03-18 21:48:50,289.79,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,289.79,197.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,289.79,39.97,0.0,0.0,39.97
+120,155.17000000000002,3.0,MARTIN RAMON DIAZ BOLIVAR,2026-03-18 21:49:03,179.99,MARTIN RAMON DIAZ BOLIVAR,Facturado por completo,179.99,179.99,MARTIN RAMON DIAZ BOLIVAR,180.0,24.82,0.0,-0.01,24.82
+121,336.87,4.0,Jose Lopez Espinoza,2026-03-19 17:42:21,390.77,Jose Lopez Espinoza,Facturado por completo,390.77,371.2300102,Jose Lopez Espinoza,390.77,53.9,0.0,0.0,53.9
+122,62.07,1.0,Emprendimiento Tomas Paz,2026-03-19 17:42:43,72.0,Emprendimiento Tomas Paz,Facturado por completo,72.0,72.0,Emprendimiento Tomas Paz,72.0,9.93,0.0,0.0,9.93
+123,91.81,2.0,Ramon Alvarez Mota,2026-03-19 17:43:05,106.49,Ramon Alvarez Mota,Facturado por completo,106.49,76.0,Ramon Alvarez Mota,106.5,14.68,0.0,-0.01,14.68
+124,4013.69,7.0,"M.L.P Repuestos y Otros, C.A",2026-03-19 18:00:35,4655.88,"M.L.P Repuestos y Otros, C.A",Facturado por completo,4655.88,4655.88,"M.L.P Repuestos y Otros, C.A",4655.88,642.19,0.0,0.0,642.19
+125,171.98000000000002,2.0,Megacar2020.c.a,2026-03-19 22:16:03,199.49,Megacar2020.c.a,Por facturar,199.49,199.49,Megacar2020.c.a,199.5,27.51,0.0,-0.01,27.51
+126,1947.73,6.0,Victor Ordaz,2026-03-19 20:49:05,2259.37,Victor Ordaz,Facturado por completo,2259.37,2259.37,Victor Ordaz,2259.37,311.64,0.0,0.0,311.64
+127,821.12,1.0,Emprendimiento José Sánchez 203 c.a,2026-03-19 21:00:12,952.5,Emprendimiento José Sánchez 203 c.a,Facturado por completo,952.5,952.5,Emprendimiento José Sánchez 203 c.a,952.5,131.38,0.0,0.0,131.38
+128,256.02,1.0,Multiservicios Gre-orio2022 c.a,2026-03-19 21:05:57,296.98,Multiservicios Gre-orio2022 c.a,Facturado por completo,296.98,296.98,Multiservicios Gre-orio2022 c.a,296.98,40.96,0.0,0.0,40.96
+129,1678.6699999999998,6.0,Emprendimiento Jordy Valencia,2026-03-20 16:26:28,1947.24,Emprendimiento Jordy Valencia,Facturado por completo,1947.24,1947.24,Emprendimiento Jordy Valencia,1947.26,268.57,0.0,-0.02,268.57
+130,733.18,9.0,"TALLER TNMCAR, C.A",2026-03-20 19:49:51,850.5,"TALLER TNMCAR, C.A",Facturado por completo,850.5,565.0,"TALLER TNMCAR, C.A",850.49,117.32,0.0,0.01,117.32
+131,43.97,1.0,Neykel Quevedo,2026-03-20 21:05:18,51.01,Neykel Quevedo,Facturado por completo,51.01,32.9798,Neykel Quevedo,51.01,7.04,0.0,0.0,7.04
+132,81.04,1.0,Distribuidora Nesmari 2050 c.a,2026-03-20 20:53:36,94.01,Distribuidora Nesmari 2050 c.a,Facturado por completo,94.01,94.0,Distribuidora Nesmari 2050 c.a,94.01,12.97,0.0,0.0,12.97
+133,17479.0,5.0,"Inversiones La Bendición del Nazareno, C.A",2026-03-24 19:22:46,20275.64,"Inversiones La Bendición del Nazareno, C.A",Facturado por completo,20275.64,20275.64,"Inversiones La Bendición del Nazareno, C.A",20275.64,2796.64,0.0,0.0,2796.64
+134,8553.37,5.0,"AGROPECUARIA LECHE Y MIEL, C.A",2026-03-21 01:18:12,,,,,,,,,,,
+135,4528.45,3.0,Seguros Constitucion CA,2026-03-21 14:23:01,,,,,,,,,,,
+136,80.17,1.0,"ZIP MARKET, CA",2026-03-23 18:43:57,93.0,"ZIP MARKET, CA",Facturado por completo,93.0,93.0,"ZIP MARKET, CA",93.0,12.83,0.0,0.0,12.83
+137,112.0,1.0,FREDI MARQUEZ,2026-03-23 18:44:27,129.92,FREDI MARQUEZ,Facturado por completo,129.92,129.92,FREDI MARQUEZ,129.92,17.92,0.0,0.0,17.92
+138,310.35,2.0,Benefit c.a,2026-03-23 18:44:16,360.0,Benefit c.a,Facturado por completo,360.0,360.0,Benefit c.a,360.01,49.65,0.0,-0.01,49.65
+139,837.94,1.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-03-23 19:27:34,972.01,"AGROPECUARIA EL TORO DORADO, C.A",Facturado por completo,972.01,972.01,"AGROPECUARIA EL TORO DORADO, C.A",972.01,134.07,0.0,0.0,134.07
+140,46.25,1.0,JOSE STURCHIO CAPPELLANIA,2026-03-23 19:59:36,53.65,JOSE STURCHIO CAPPELLANIA,Facturado por completo,53.65,53.65,JOSE STURCHIO CAPPELLANIA,53.65,7.4,0.0,0.0,7.4
+141,259.92,3.0,Yulendri Carolina Pineda Blanco,2026-03-24 20:03:00,301.5,Yulendri Carolina Pineda Blanco,Facturado por completo,301.5,200.0,Yulendri Carolina Pineda Blanco,301.51,41.58,0.0,-0.01,41.58
+142,165.56,2.0,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",2026-03-24 20:07:08,192.05,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",Facturado por completo,192.05,139.0,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",192.05,26.49,0.0,0.0,26.49
+143,266.38,4.0,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,2026-03-24 20:06:40,309.0,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,Facturado por completo,309.0,202.0,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,309.0,42.62,0.0,0.0,42.62
+144,93.1,1.0,HIDRAULICAS CAICEDO C.A.,2026-03-24 20:04:10,108.0,HIDRAULICAS CAICEDO C.A.,Facturado por completo,108.0,108.0,HIDRAULICAS CAICEDO C.A.,108.0,14.9,0.0,0.0,14.9
+145,953.04,2.0,La cámara perfecta,2026-03-24 18:55:17,1105.53,La cámara perfecta,Facturado por completo,1105.53,1105.53,La cámara perfecta,1105.53,152.49,0.0,0.0,152.49
+146,1720.9,2.0,Alexander Quiroz,2026-03-24 20:35:21,1996.24,Alexander Quiroz,Facturado por completo,1996.24,1996.24,Alexander Quiroz,1996.24,275.34,0.0,0.0,275.34
+147,821.12,1.0,Kervin baez,2026-03-24 20:39:42,,,,,,,,,,,
+148,31.1,1.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-03-25 14:10:16,36.08,"AGROPECUARIA EL TORO DORADO, C.A",Facturado por completo,36.08,36.08,"AGROPECUARIA EL TORO DORADO, C.A",36.08,4.98,0.0,0.0,4.98
+149,2262.94,2.0,Emprendimiento ilaris cancelo,2026-03-25 20:20:53,2625.01,Emprendimiento ilaris cancelo,Facturado por completo,2625.01,2625.01,Emprendimiento ilaris cancelo,2625.01,362.07,0.0,0.0,362.07
+150,214.65,2.0,"Inversiones Dekamalbaz, C.A",2026-03-25 20:27:33,249.0,"Inversiones Dekamalbaz, C.A",Facturado por completo,249.0,249.0,"Inversiones Dekamalbaz, C.A",248.99,34.35,0.0,0.01,34.35
+151,248.28,2.0,Distribuidora Drako 2024 c.a,2026-03-25 20:30:23,288.0,Distribuidora Drako 2024 c.a,Facturado por completo,288.0,288.0,Distribuidora Drako 2024 c.a,288.0,39.72,0.0,0.0,39.72
+152,31.03,1.0,ESTACIONAMIENTO  CIACORE 2000 c.a,2026-03-26 13:27:17,35.99,ESTACIONAMIENTO  CIACORE 2000 c.a,Facturado por completo,35.99,35.0,ESTACIONAMIENTO CIACORE 2000 c.a,35.99,4.96,0.0,0.0,4.96
+153,131.89,2.0,Emprendimiento Yeizon Villaroel,2026-03-26 13:26:58,152.99,Emprendimiento Yeizon Villaroel,Facturado por completo,152.99,152.99,Emprendimiento Yeizon Villaroel,152.99,21.1,0.0,0.0,21.1
+154,1020.01,7.0,"SERVICIOS Y MANTENIMIENTO SPACARS, C.A",2026-03-26 13:36:49,1183.21,"SERVICIOS Y MANTENIMIENTO SPACARS, C.A",Facturado por completo,1183.21,1183.21,"SERVICIOS Y MANTENIMIENTO SPACARS, C.A",1183.21,163.2,0.0,0.0,163.2
+155,50.43,1.0,ALI ALEXANDER MORENO FIGUEREDO,2026-03-26 20:58:36,,,,,,,,,,,
+156,47.91,1.0,EMPRENDIMIENTO MARTIN BASTIDAS 2,2026-03-26 19:47:40,55.58,EMPRENDIMIENTO MARTIN BASTIDAS 2,Facturado por completo,55.58,39.0,EMPRENDIMIENTO MARTIN BASTIDAS 2,55.58,7.67,0.0,0.0,7.67
+157,106.89,1.0,"Turismo Apureño Turapca, C.A",2026-03-26 19:37:53,123.99,"Turismo Apureño Turapca, C.A",Facturado por completo,123.99,123.99,"Turismo Apureño Turapca, C.A",123.99,17.1,0.0,0.0,17.1
+158,941.38,6.0,Dimas Ortíz,2026-03-26 20:26:05,1092.0,Dimas Ortíz,Facturado por completo,1092.0,1092.0,Dimas Ortíz,1092.0,150.62,0.0,0.0,150.62
+159,1827.13,9.0,"Grupo 3030, C.A",2026-03-26 21:00:41,2119.46,"Grupo 3030, C.A",Facturado por completo,2119.46,1433.0,"Grupo 3030, C.A",2119.47,292.33,0.0,-0.01,292.33
+160,1622.27,17.0,"Lubripartes Vzla, c.a.",2026-03-26 21:31:20,1881.84,"Lubripartes Vzla, c.a.",Facturado por completo,1881.84,1881.84,"Lubripartes Vzla, c.a.",1881.83,259.57,0.0,0.01,259.57
+161,614.2,2.0,"Mini Market Las Mercedes,c.a.",2026-03-26 21:40:57,712.48,"Mini Market Las Mercedes,c.a.",Facturado por completo,712.48,712.48,"Mini Market Las Mercedes,c.a.",712.47,98.28,0.0,0.01,98.28
+162,139378.51,4.0,DISTRIBUIDORA MULTIAHORRO C.A.,2026-03-27 12:39:36,,,,,,,,,,,
+163,297.5,4.0,DISTRIBUIDORA MULTIAHORRO C.A.,2026-03-27 13:11:54,345.1,DISTRIBUIDORA MULTIAHORRO C.A.,Facturado por completo,345.1,226.0,DISTRIBUIDORA MULTIAHORRO C.A.,345.1,47.6,0.0,0.0,47.6
+164,305.83,4.0,"INVERSIONES IRETE SUKA, C.A",2026-03-27 17:30:42,354.77,"INVERSIONES IRETE SUKA, C.A",Facturado por completo,354.77,290.0,"INVERSIONES IRETE SUKA, C.A",354.76,48.94,0.0,0.01,48.94
+165,621.97,7.0,EMPRENDIMIENTO  HECTOR LLAMOZA,2026-03-27 18:26:25,721.47,EMPRENDIMIENTO  HECTOR LLAMOZA,Facturado por completo,721.47,721.47,EMPRENDIMIENTO HECTOR LLAMOZA,721.49,99.5,0.0,-0.02,99.5
+166,173.28,2.0,"Grupo Biker Way mm, C.A",2026-03-27 19:50:29,201.0,"Grupo Biker Way mm, C.A",Facturado por completo,201.0,201.0,"Grupo Biker Way mm, C.A",201.0,27.72,0.0,0.0,27.72
+167,142.23000000000002,2.0,"Frenos Elite, C.A",2026-03-27 19:50:38,164.98,"Frenos Elite, C.A",Facturado por completo,164.98,164.98,"Frenos Elite, C.A",164.99,22.75,0.0,-0.01,22.75
+168,321.98,5.0,ADS SERVICE C.A,2026-03-27 19:51:03,373.5,ADS SERVICE C.A,Facturado por completo,373.5,250.0,ADS SERVICE C.A,373.5,51.52,0.0,0.0,51.52
+169,20.69,1.0,ALI ALEXANDER MORENO FIGUEREDO,2026-03-27 21:26:14,24.0,ALI ALEXANDER MORENO FIGUEREDO,Facturado por completo,24.0,24.0,ALI ALEXANDER MORENO FIGUEREDO,24.0,3.31,0.0,0.0,3.31
+170,213.7,3.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-03-30 13:33:49,247.88,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,247.88,247.88,EMPRENDIMIENTO IRMA RODRIGUEZ 6,247.89,34.18,0.0,-0.01,34.18
+171,224.12,1.0,FREDI MARQUEZ,2026-03-30 13:33:57,259.98,FREDI MARQUEZ,Facturado por completo,259.98,259.98,FREDI MARQUEZ,259.98,35.86,0.0,0.0,35.86
+172,900.0,1.0,"Molinos Hidalgo, C.A.",2026-03-30 20:12:55,,,,,,,,,,,
+173,699.65,13.0,Yaneth Beatriz Castellanos,2026-03-31 12:45:45,,,,,,,,,,,
+174,468.10999999999996,5.0,"DISTRIBUIDORA E.P.L.C  2017, c.a.",2026-03-31 15:14:17,543.01,"DISTRIBUIDORA E.P.L.C  2017, c.a.",Facturado por completo,543.01,543.01,"DISTRIBUIDORA E.P.L.C 2017, c.a.",543.01,74.9,0.0,0.0,74.9
+175,139.64999999999998,2.0,ESTACIONAMIENTO  CIACORE 2000 c.a,2026-03-31 16:57:42,162.0,ESTACIONAMIENTO  CIACORE 2000 c.a,Facturado por completo,162.0,108.0,ESTACIONAMIENTO CIACORE 2000 c.a,161.99,22.35,0.0,0.01,22.35
+176,137.92,2.0,Jose Angel Gutierrez Rodriguez,2026-03-31 21:28:06,159.99,Jose Angel Gutierrez Rodriguez,Facturado por completo,159.99,159.99,Jose Angel Gutierrez Rodriguez,159.99,22.07,0.0,0.0,22.07
+177,320.69,3.0,Jhon Morales,2026-03-31 19:30:59,372.0,Jhon Morales,Facturado por completo,372.0,372.0,Jhon Morales,372.0,51.31,0.0,0.0,51.31
+178,812.0600000000001,6.0,Distribuidora Nesmari 2050 c.a,2026-03-31 21:10:45,941.99,Distribuidora Nesmari 2050 c.a,Facturado por completo,941.99,941.99,Distribuidora Nesmari 2050 c.a,941.99,129.93,0.0,0.0,129.93
+179,1537.26,3.0,Inversiones Vercris 17 C.A,2026-04-01 16:12:53,1783.22,Inversiones Vercris 17 C.A,Facturado por completo,1783.22,1783.22,Inversiones Vercris 17 C.A,1783.22,245.96,0.0,0.0,245.96
+181,121.54,1.0,Multiservicios Sanahuja 36 C.A,2026-04-01 16:45:55,140.99,Multiservicios Sanahuja 36 C.A,Facturado por completo,140.99,140.99,Multiservicios Sanahuja 36 C.A,140.99,19.45,0.0,0.0,19.45
+182,155.17,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-04-01 20:50:50,180.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,180.0,180.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,180.0,24.83,0.0,0.0,24.83
+183,1015.0,1.0,"AREA58 2022, C.A.",2026-04-06 12:54:40,1177.4,"AREA58 2022, C.A.",Facturado por completo,1177.4,1177.389616,"AREA58 2022, C.A.",1177.4,162.4,0.0,0.0,162.4
+184,93.07,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-04-06 12:33:22,107.96,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,107.96,107.96,EMPRENDIMIENTO IRMA RODRIGUEZ 6,107.96,14.89,0.0,0.0,14.89
+185,136.0,2.0,"Pidelo Y Punto,c.a.",2026-04-07 12:32:41,157.76,"Pidelo Y Punto,c.a.",Facturado por completo,157.76,157.446167,"Pidelo Y Punto,c.a.",157.76,21.76,0.0,0.0,21.76
+186,142.0,2.0,Cauchos y Suministros Camacho C.A,2026-04-06 20:30:54,164.72,Cauchos y Suministros Camacho C.A,Facturado por completo,164.72,164.72,Cauchos y Suministros Camacho C.A,164.72,22.72,0.0,0.0,22.72
+187,156.0,1.0,HP Repuestos 2007 C.A,2026-04-07 21:40:44,180.96,HP Repuestos 2007 C.A,Facturado por completo,180.96,180.96,HP Repuestos 2007 C.A,180.96,24.96,0.0,0.0,24.96
+188,123.72,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-04-07 21:40:55,143.52,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,143.52,143.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,143.52,19.8,0.0,0.0,19.8
+189,120.69999999999999,2.0,Manuel Emilio Reyes,2026-04-08 18:13:41,140.02,Manuel Emilio Reyes,Facturado por completo,140.02,140.0,Manuel Emilio Reyes,140.01,19.32,0.0,0.01,19.32
+190,459.88,1.0,Anthony Jose Quijada Diaz.,2026-04-09 13:51:49,533.46,Anthony Jose Quijada Diaz.,Facturado por completo,533.46,533.46,Anthony Jose Quijada Diaz.,533.46,73.58,0.0,0.0,73.58
+192,96.81,1.0,Global Ferre 888 C.A,2026-04-09 22:49:37,112.3,Global Ferre 888 C.A,Facturado por completo,112.3,112.3,Global Ferre 888 C.A,112.3,15.49,0.0,0.0,15.49
+193,674.68,4.0,"Inversiones JIMP24,C.A.",2026-04-09 14:18:14,,,,,,,,,,,
+194,100.85,2.0,Moto Repuestos Sanz 11. C.A.,2026-04-09 15:09:03,,,,,,,,,,,
+195,586.87,3.0,Paola M. Aguilera Z.,2026-04-09 20:39:13,680.77,Paola M. Aguilera Z.,Facturado por completo,680.77,680.77,Paola M. Aguilera Z.,680.77,93.9,0.0,0.0,93.9
+196,185.0,3.0,"Comercial los de faria,c.a.",2026-04-09 22:05:53,214.6,"Comercial los de faria,c.a.",Facturado por completo,214.6,214.6,"Comercial los de faria,c.a.",214.6,29.6,0.0,0.0,29.6
+197,222.42,3.0,Auto Repuestos Acal C.A,2026-04-09 22:49:20,258.01,Auto Repuestos Acal C.A,Facturado por completo,258.01,258.01,Auto Repuestos Acal C.A,258.01,35.59,0.0,0.0,35.59
+198,272.0,3.0,"Autorepuestos Pitstop,c.a.",2026-04-10 12:20:57,315.52,"Autorepuestos Pitstop,c.a.",Facturado por completo,315.52,315.52,"Autorepuestos Pitstop,c.a.",315.52,43.52,0.0,0.0,43.52
+199,500.0,1.0,PROYECTO MAQUIVEIRO 21 C.A.,2026-04-10 15:39:06,580.0,PROYECTO MAQUIVEIRO 21 C.A.,Facturado por completo,580.0,580.0,PROYECTO MAQUIVEIRO 21 C.A.,580.0,80.0,0.0,0.0,80.0
+200,90.0,1.0,AUTOREPUESTOS SION C.A.,2026-04-10 15:39:19,,,,,,,,,,,
+201,172.0,3.0,Junior Marco Antonio Vivas Navas,2026-04-10 15:38:23,199.52,Junior Marco Antonio Vivas Navas,Facturado por completo,199.52,130.0,Junior Marco Antonio Vivas Navas,199.52,27.52,0.0,0.0,27.52
+202,157.76,1.0,"Motorepuestos HD 94, C.A",2026-04-10 19:45:46,183.0,"Motorepuestos HD 94, C.A",Facturado por completo,183.0,183.0,"Motorepuestos HD 94, C.A",183.0,25.24,0.0,0.0,25.24
+203,90.0,1.0,Moto Repuestos Sanz 11. C.A.,2026-04-13 12:55:00,104.4,Moto Repuestos Sanz 11. C.A.,Facturado por completo,104.4,104.4,Moto Repuestos Sanz 11. C.A.,104.4,14.4,0.0,0.0,14.4
+204,622.0,5.0,Motolavado Yahir,2026-04-13 12:53:56,721.52,Motolavado Yahir,Facturado por completo,721.52,721.52,Motolavado Yahir,721.52,99.52,0.0,0.0,99.52
+205,370.0,2.0,"Inversiones Marfran 2025, C. A.",2026-04-13 12:53:39,429.2,"Inversiones Marfran 2025, C. A.",Facturado por completo,429.2,429.2,"Inversiones Marfran 2025, C. A.",429.2,59.2,0.0,0.0,59.2
+206,312.0,1.0,Paola M. Aguilera Z.,2026-04-11 13:45:39,361.92,Paola M. Aguilera Z.,Facturado por completo,361.92,361.92,Paola M. Aguilera Z.,361.92,49.92,0.0,0.0,49.92
+207,652.0,4.0,Ingrit Martinez,2026-04-13 20:59:04,756.32,Ingrit Martinez,Facturado por completo,756.32,756.32,Ingrit Martinez,756.32,104.32,0.0,0.0,104.32
+208,195.70999999999998,2.0,"GARAJE Y TALLERES FRIDELBA, C.A",2026-04-13 19:53:55,227.03,"GARAJE Y TALLERES FRIDELBA, C.A",Facturado por completo,227.03,150.0,"GARAJE Y TALLERES FRIDELBA, C.A",227.02,31.32,0.0,0.01,31.32
+209,465.0,3.0,Inversiones Mirelkys C.A,2026-04-13 19:53:44,539.4,Inversiones Mirelkys C.A,Facturado por completo,539.4,539.4,Inversiones Mirelkys C.A,539.4,74.4,0.0,0.0,74.4
+210,158.0,1.0,"Inversiones AreaElectric 2021,c.a.",2026-04-13 20:02:05,183.28,"Inversiones AreaElectric 2021,c.a.",Facturado por completo,183.28,183.28,"Inversiones AreaElectric 2021,c.a.",183.28,25.28,0.0,0.0,25.28
+211,85.0,1.0,"ZIP MARKET, CA",2026-04-13 20:58:23,98.6,"ZIP MARKET, CA",Facturado por completo,98.6,98.6,"ZIP MARKET, CA",98.6,13.6,0.0,0.0,13.6
+212,320.0,4.0,"Inversiones DSM 2706, c.a.",2026-04-13 20:58:31,371.2,"Inversiones DSM 2706, c.a.",Facturado por completo,371.2,371.2,"Inversiones DSM 2706, c.a.",371.2,51.2,0.0,0.0,51.2
+213,372.0,2.0,Angel ARMAS,2026-04-13 21:20:00,431.52,Angel ARMAS,Facturado por completo,431.52,431.52,Angel ARMAS,431.52,59.52,0.0,0.0,59.52
+214,8687.46,4.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-05-12 20:04:13,10077.45,"CONSTRUCTORA GRANO AGREGADO, C.A",Facturado por completo,10077.45,10077.45,"CONSTRUCTORA GRANO AGREGADO, C.A",10077.45,1389.99,0.0,0.0,1389.99
+215,100.0,1.0,Alejandro Zorrilla,2026-04-14 16:49:48,116.0,Alejandro Zorrilla,Facturado por completo,116.0,116.0,Alejandro Zorrilla,116.0,16.0,0.0,0.0,16.0
+218,383.0,4.0,"Cooperativa Dios mi Amparo, R.L.",2026-04-14 21:53:34,444.28,"Cooperativa Dios mi Amparo, R.L.",Facturado por completo,444.28,444.28,"Cooperativa Dios mi Amparo, R.L.",444.28,61.28,0.0,0.0,61.28
+219,295.69,2.0,"Montura de Cauchos Biondo,c.a.",2026-04-14 22:06:47,343.0,"Montura de Cauchos Biondo,c.a.",Facturado por completo,343.0,343.0,"Montura de Cauchos Biondo,c.a.",343.0,47.31,0.0,0.0,47.31
+220,108.0,3.0,HIDRAULICAS CAICEDO C.A.,2026-04-15 17:43:18,125.28,HIDRAULICAS CAICEDO C.A.,Facturado por completo,125.28,111.0,HIDRAULICAS CAICEDO C.A.,125.28,17.28,0.0,0.0,17.28
+221,185.63,3.0,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,2026-04-15 17:00:53,215.33,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,Facturado por completo,215.33,215.33,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,215.33,29.7,0.0,0.0,29.7
+222,430.0,3.0,Braulio R. Cedeño Gonzalez.,2026-04-15 16:04:44,498.8,Braulio R. Cedeño Gonzalez.,Facturado por completo,498.8,498.8,Braulio R. Cedeño Gonzalez.,498.8,68.8,0.0,0.0,68.8
+223,372.0,1.0,"Autorepuestos el Florin,c.a.",2026-04-15 16:44:15,431.52,"Autorepuestos el Florin,c.a.",Facturado por completo,431.52,431.52,"Autorepuestos el Florin,c.a.",431.52,59.52,0.0,0.0,59.52
+224,3441.0,3.0,"Constructora Grano Agregado, C.A.",2026-04-15 20:09:21,,,,,,,,,,,
+225,3441.0,3.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-04-15 20:14:55,3991.56,"CONSTRUCTORA GRANO AGREGADO, C.A",Facturado por completo,3991.56,3991.56,"CONSTRUCTORA GRANO AGREGADO, C.A",3991.56,550.56,0.0,0.0,550.56
+226,350.13,5.0,Josefina Guevera,2026-04-16 13:56:40,406.14,Josefina Guevera,Facturado por completo,406.14,406.14,Josefina Guevera,406.15,56.01,0.0,-0.01,56.01
+227,583.0,6.0,EN LA VIA 2023 C.A,2026-04-16 15:53:59,676.28,EN LA VIA 2023 C.A,Facturado por completo,676.28,606.3194444,EN LA VIA 2023 C.A,676.28,93.28,0.0,0.0,93.28
+228,255.0,3.0,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",2026-04-16 15:54:15,295.8,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",Facturado por completo,295.8,294.0037512,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",295.8,40.8,0.0,0.0,40.8
+229,443.9,4.0,"Devenalsa Deshidratadora Venezolana de Alimentos, S.A.",2026-04-16 16:09:39,514.93,"Devenalsa Deshidratadora Venezolana de Alimentos, S.A.",Facturado por completo,514.93,514.93,"Devenalsa Deshidratadora Venezolana de Alimentos, S.A.",514.92,71.03,0.0,0.01,71.03
+230,1215.0,4.0,E&M CAR SHOP C.A,2026-04-16 19:27:55,1409.4,E&M CAR SHOP C.A,Facturado por completo,1409.4,1321.363715,E&M CAR SHOP C.A,1409.4,194.4,0.0,0.0,194.4
+231,912.0,1.0,"Constructora  Campo Urbano,c.a.",2026-04-16 19:28:13,1057.92,"Constructora  Campo Urbano,c.a.",Facturado por completo,1057.92,1057.92,"Constructora Campo Urbano,c.a.",1057.92,145.92,0.0,0.0,145.92
+232,488.0,1.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-04-16 19:31:58,,,,,,,,,,,
+233,142.0,2.0,"Auto Partes Y Repuestos Encava Express,c.a.",2026-04-16 20:36:50,164.72,"Auto Partes Y Repuestos Encava Express,c.a.",Facturado por completo,164.72,164.4012755,"Auto Partes Y Repuestos Encava Express,c.a.",164.72,22.72,0.0,0.0,22.72
+234,217.23,1.0,"Cauchos California, C.A",2026-04-16 22:36:25,251.99,"Cauchos California, C.A",Facturado por completo,251.99,239.3905,"Cauchos California, C.A",251.99,34.76,0.0,0.0,34.76
+235,5144.85,4.0,"Grupo 3030, C.A",2026-04-17 14:45:21,5968.02,"Grupo 3030, C.A",Facturado por completo,5968.02,5968.02,"Grupo 3030, C.A",5968.03,823.17,0.0,-0.01,823.17
+236,4202.8,8.0,"Grupo 3030, C.A",2026-04-17 14:45:05,4875.25,"Grupo 3030, C.A",Facturado por completo,4875.25,4875.25,"Grupo 3030, C.A",4875.25,672.45,0.0,0.0,672.45
+237,384.0,1.0,"Comercial los de faria,c.a.",2026-04-17 14:45:38,445.44,"Comercial los de faria,c.a.",Facturado por completo,445.44,386.0890465,"Comercial los de faria,c.a.",445.44,61.44,0.0,0.0,61.44
+238,64.65,1.0,José Brea,2026-04-17 17:52:06,74.99,José Brea,Facturado por completo,74.99,74.99,José Brea,74.99,10.34,0.0,0.0,10.34
+239,56.03,1.0,JONNY DAVID BOLIVAR,2026-04-17 18:46:02,64.99,JONNY DAVID BOLIVAR,Facturado por completo,64.99,64.99,JONNY DAVID BOLIVAR,64.99,8.96,0.0,0.0,8.96
+240,100.0,1.0,Auto repuestos Fontalvo,2026-04-20 14:14:37,116.0,Auto repuestos Fontalvo,Facturado por completo,116.0,76.0,Auto repuestos Fontalvo,116.0,16.0,0.0,0.0,16.0
+241,138.79,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-04-20 15:53:38,161.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,161.0,161.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,161.0,22.21,0.0,0.0,22.21
+242,940.0,1.0,"Servicios de Gruas Torgil 300, c.a.",2026-04-20 15:58:50,1090.4,"Servicios de Gruas Torgil 300, c.a.",Facturado por completo,1090.4,943.8162257,"Servicios de Gruas Torgil 300, c.a.",1090.4,150.4,0.0,0.0,150.4
+243,340.0,5.0,"Cauchera William 2018, C.A",2026-04-20 15:58:38,394.4,"Cauchera William 2018, C.A",Facturado por completo,394.4,394.4,"Cauchera William 2018, C.A",394.4,54.4,0.0,0.0,54.4
+244,400.0,3.0,Lubricantes BK C.A,2026-04-20 20:05:36,464.0,Lubricantes BK C.A,Facturado por completo,464.0,464.0,Lubricantes BK C.A,464.0,64.0,0.0,0.0,64.0
+245,96.0,1.0,Barrios Rodríguez Marlon Enrique,2026-04-21 12:51:58,111.36,Barrios Rodríguez Marlon Enrique,Facturado por completo,111.36,111.36,Barrios Rodríguez Marlon Enrique,111.36,15.36,0.0,0.0,15.36
+246,3322.0,3.0,Luis Zambrano,2026-04-24 16:51:34,3853.52,Luis Zambrano,Facturado por completo,3853.52,3853.0,Luis Zambrano,3853.52,531.52,0.0,0.0,531.52
+247,391.03,5.0,"Multiservicios Arizona, C.A.",2026-04-21 19:38:23,453.59,"Multiservicios Arizona, C.A.",Facturado por completo,453.59,453.59,"Multiservicios Arizona, C.A.",453.59,62.56,0.0,0.0,62.56
+248,90.0,1.0,Abraham almenar,2026-04-21 19:38:37,104.4,Abraham almenar,Facturado por completo,104.4,104.4,Abraham almenar,104.4,14.4,0.0,0.0,14.4
+249,670.0,3.0,Comercializadora Dimon c.a,2026-04-21 21:38:08,777.2,Comercializadora Dimon c.a,Facturado por completo,777.2,777.2,Comercializadora Dimon c.a,777.2,107.2,0.0,0.0,107.2
+250,90.0,1.0,EMPRENDIMIENTO MANUEL GÓMEZ 6,2026-04-22 17:10:07,104.4,EMPRENDIMIENTO MANUEL GÓMEZ 6,Facturado por completo,104.4,104.4,EMPRENDIMIENTO MANUEL GÓMEZ 6,104.4,14.4,0.0,0.0,14.4
+255,226.0,2.0,"En ascenso 2011,c.a.",2026-04-22 17:03:56,,,,,,,,,,,
+257,272.0,3.0,AUTOREPUESTOS SION C.A.,2026-04-22 21:04:39,315.52,AUTOREPUESTOS SION C.A.,Facturado por completo,315.52,315.52,AUTOREPUESTOS SION C.A.,315.52,43.52,0.0,0.0,43.52
+258,141.0,2.0,Distribuidora El Frenazo,2026-04-22 21:04:27,163.56,Distribuidora El Frenazo,Facturado por completo,163.56,163.56,Distribuidora El Frenazo,163.56,22.56,0.0,0.0,22.56
+259,284.0,4.0,"Multiservicio Tocome, C.A",2026-04-22 21:04:17,329.44,"Multiservicio Tocome, C.A",Facturado por completo,329.44,329.44,"Multiservicio Tocome, C.A",329.44,45.44,0.0,0.0,45.44
+260,270.0,2.0,Jose Lopez Espinoza,2026-04-22 21:04:06,313.2,Jose Lopez Espinoza,Facturado por completo,313.2,312.999996,Jose Lopez Espinoza,313.2,43.2,0.0,0.0,43.2
+261,199.76,2.0,Autopartes Munich PH 168 C.A.,2026-04-23 14:03:39,231.72,Autopartes Munich PH 168 C.A.,Facturado por completo,231.72,231.72,Autopartes Munich PH 168 C.A.,231.72,31.96,0.0,0.0,31.96
+262,4441.030000000001,2.0,"Desarrollo Agrario Integral DAI Los Pucheros 13, C. A.",2026-04-28 18:07:47,5151.59,"Desarrollo Agrario Integral DAI Los Pucheros 13, C. A.",Facturado por completo,5151.59,5141.253858,"Desarrollo Agrario Integral DAI Los Pucheros 13, C. A.",5151.59,710.56,0.0,0.0,710.56
+263,340.12,5.0,Katiuska Alejandra Curvelo,2026-04-23 16:27:53,394.54,Katiuska Alejandra Curvelo,Facturado por completo,394.54,394.54,Katiuska Alejandra Curvelo,394.54,54.42,0.0,0.0,54.42
+264,192.0,1.0,"Inversiones Los compadres 7686, c.a.",2026-04-23 16:14:14,222.72,"Inversiones Los compadres 7686, c.a.",Facturado por completo,222.72,222.72,"Inversiones Los compadres 7686, c.a.",222.72,30.72,0.0,0.0,30.72
+265,235.0,3.0,"Repuestos Guia Dios Nuestro Camino,c.a.",2026-04-23 17:10:24,272.6,"Repuestos Guia Dios Nuestro Camino,c.a.",Facturado por completo,272.6,272.6,"Repuestos Guia Dios Nuestro Camino,c.a.",272.6,37.6,0.0,0.0,37.6
+274,236.19,3.0,ADS SERVICE C.A,2026-04-23 18:43:14,273.98,ADS SERVICE C.A,Facturado por completo,273.98,273.98,ADS SERVICE C.A,273.98,37.79,0.0,0.0,37.79
+279,115.51,1.0,Anthony Jose Quijada Diaz.,2026-04-23 19:01:55,133.99,Anthony Jose Quijada Diaz.,Facturado por completo,133.99,133.99,Anthony Jose Quijada Diaz.,133.99,18.48,0.0,0.0,18.48
+280,153.0,1.0,"Lubristation, C.A.",2026-04-23 19:54:22,177.48,"Lubristation, C.A.",Facturado por completo,177.48,158.9281431,"Lubristation, C.A.",177.48,24.48,0.0,0.0,24.48
+281,2719.0,4.0,"Maquinarias e Instrumentos Productivos, C.A",2026-04-23 19:41:52,,,,,,,,,,,
+282,216.0,2.0,Repuestos y accesorios motochiva23 c.a,2026-04-23 21:08:02,250.56,Repuestos y accesorios motochiva23 c.a,Facturado por completo,250.56,250.56,Repuestos y accesorios motochiva23 c.a,250.56,34.56,0.0,0.0,34.56
+283,182.0,3.0,LA CASA DE LAS BATERIAS,2026-04-23 21:08:13,211.12,LA CASA DE LAS BATERIAS,Facturado por completo,211.12,211.12,LA CASA DE LAS BATERIAS,211.12,29.12,0.0,0.0,29.12
+284,51.0,1.0,"SUPLIPARTES PARAISO, C.A",2026-04-24 17:50:52,59.16,"SUPLIPARTES PARAISO, C.A",Facturado por completo,59.16,51.76579051,"SUPLIPARTES PARAISO, C.A",59.16,8.16,0.0,0.0,8.16
+285,100.0,2.0,"Inversiones Air Brakes, C.A",2026-04-24 17:51:54,116.0,"Inversiones Air Brakes, C.A",Facturado por completo,116.0,116.0,"Inversiones Air Brakes, C.A",116.0,16.0,0.0,0.0,16.0
+286,149.0,2.0,Inversiones tydelmarojg,2026-04-24 17:51:33,172.84,Inversiones tydelmarojg,Facturado por completo,172.84,172.84,Inversiones tydelmarojg,172.84,23.84,0.0,0.0,23.84
+287,925.0,1.0,Javier gregorio Espinoza,2026-04-24 17:51:12,1073.0,Javier gregorio Espinoza,Facturado por completo,1073.0,1073.0,Javier gregorio Espinoza,1073.0,148.0,0.0,0.0,148.0
+289,103.96,1.0,Paola M. Aguilera Z.,2026-04-24 19:34:52,120.59,Paola M. Aguilera Z.,Facturado por completo,120.59,81.0,Paola M. Aguilera Z.,120.59,16.63,0.0,0.0,16.63
+291,517.0,2.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-05-18 16:01:07,599.72,"AGROPECUARIA EL TORO DORADO, C.A",Facturado por completo,599.72,599.72,"AGROPECUARIA EL TORO DORADO, C.A",599.72,82.72,0.0,0.0,82.72
+292,56.0,1.0,Jefferson rosales,2026-04-24 20:36:41,64.96,Jefferson rosales,Facturado por completo,64.96,64.96,Jefferson rosales,64.96,8.96,0.0,0.0,8.96
+293,264.0,2.0,Jose Becerra,2026-04-27 12:56:38,306.24,Jose Becerra,Facturado por completo,306.24,306.24,Jose Becerra,306.24,42.24,0.0,0.0,42.24
+294,2855.85,5.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-04-27 15:58:11,3312.78,"CONSTRUCTORA GRANO AGREGADO, C.A",Facturado por completo,3312.78,3312.78,"CONSTRUCTORA GRANO AGREGADO, C.A",3312.79,456.93,0.0,-0.01,456.93
+295,100.0,2.0,"MOTOS Y REPUESTOS DOS RUEDAS, C.A.",2026-04-27 15:33:40,116.0,"MOTOS Y REPUESTOS DOS RUEDAS, C.A.",Facturado por completo,116.0,76.0,"MOTOS Y REPUESTOS DOS RUEDAS, C.A.",116.0,16.0,0.0,0.0,16.0
+296,376.0,1.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-04-27 17:41:04,436.16,"CONSTRUCTORA GRANO AGREGADO, C.A",Facturado por completo,436.16,436.16,"CONSTRUCTORA GRANO AGREGADO, C.A",436.16,60.16,0.0,0.0,60.16
+297,2612.0,3.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-04-27 17:49:38,,,,,,,,,,,
+298,245.35000000000002,3.0,Inversiones Brayan CT C.A,2026-04-27 20:04:32,284.61,Inversiones Brayan CT C.A,Por facturar,284.61,284.61,Inversiones Brayan CT C.A,0.59,39.26,0.0,284.02,39.26
+300,141.38,2.0,"INVERSIONES ARCOSOL 21, C.A.",2026-04-27 22:19:49,164.0,"INVERSIONES ARCOSOL 21, C.A.",Facturado por completo,164.0,164.0,"INVERSIONES ARCOSOL 21, C.A.",164.0,22.62,0.0,0.0,22.62
+301,68.96,2.0,"CENTRO MOTRIZ GUADALUPE, C.A.",2026-04-28 16:41:07,80.0,"CENTRO MOTRIZ GUADALUPE, C.A.",Facturado por completo,80.0,80.0,"CENTRO MOTRIZ GUADALUPE, C.A.",79.99,11.04,0.0,0.01,11.04
+302,90.0,1.0,Sergio Ibrain Rumbo Mundaray,2026-04-29 13:21:13,104.4,Sergio Ibrain Rumbo Mundaray,Facturado por completo,104.4,68.0,Sergio Ibrain Rumbo Mundaray,104.4,14.4,0.0,0.0,14.4
+303,255.49,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-04-29 13:21:32,296.37,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,296.37,296.37,EMPRENDIMIENTO IRMA RODRIGUEZ 6,296.37,40.88,0.0,0.0,40.88
+304,1044.03,14.0,"TALLER TNMCAR, C.A",2026-04-29 17:14:39,1211.07,"TALLER TNMCAR, C.A",Facturado por completo,1211.07,1211.07,"TALLER TNMCAR, C.A",1211.07,167.04,0.0,0.0,167.04
+305,100.0,1.0,"INVERSIONES F-250, C.A",2026-04-29 19:59:08,116.0,"INVERSIONES F-250, C.A",Facturado por completo,116.0,115.9989723,"INVERSIONES F-250, C.A",116.0,16.0,0.0,0.0,16.0
+306,69.0,1.0,"LUBRIREPUESTOS PANORAMA, C.A.",2026-04-29 19:59:45,80.04,"LUBRIREPUESTOS PANORAMA, C.A.",Facturado por completo,80.04,80.04,"LUBRIREPUESTOS PANORAMA, C.A.",80.04,11.04,0.0,0.0,11.04
+307,100.0,1.0,"Multiservicio SOS Cars, C.A",2026-04-29 20:00:12,,,,,,,,,,,
+308,84.84,1.0,Jose Alzolay,2026-04-30 13:41:54,98.41,Jose Alzolay,Facturado por completo,98.41,98.41,Jose Alzolay,98.41,13.57,0.0,0.0,13.57
+309,170.0,2.0,"INVERSIONES JOSCAR  XXI, S.A.",2026-04-30 15:39:32,197.2,"INVERSIONES JOSCAR  XXI, S.A.",Facturado por completo,197.2,197.2,"INVERSIONES JOSCAR XXI, S.A.",197.2,27.2,0.0,0.0,27.2
+310,87.0,1.0,"Multiservicio SOS Cars, C.A",2026-04-30 15:39:54,100.92,"Multiservicio SOS Cars, C.A",Facturado por completo,100.92,100.92,"Multiservicio SOS Cars, C.A",100.92,13.92,0.0,0.0,13.92
+311,90.0,1.0,Carlos Bravo,2026-04-30 16:20:54,104.4,Carlos Bravo,Facturado por completo,104.4,104.4,Carlos Bravo,104.4,14.4,0.0,0.0,14.4
+313,87.0,1.0,Edgar salas,2026-04-30 20:58:16,100.92,Edgar salas,Facturado por completo,100.92,100.92,Edgar salas,100.92,13.92,0.0,0.0,13.92
+314,312.43,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-05-04 12:26:58,362.42,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,362.42,362.42,EMPRENDIMIENTO IRMA RODRIGUEZ 6,362.42,49.99,0.0,0.0,49.99
+315,696.52,1.0,"TALLER TNMCAR, C.A",2026-05-04 16:01:17,807.96,"TALLER TNMCAR, C.A",Facturado por completo,807.96,807.96,"TALLER TNMCAR, C.A",807.96,111.44,0.0,0.0,111.44
+316,72.0,1.0,"MOTO REPUESTO GARCIA 2023, C.A.",2026-05-04 16:01:37,83.52,"MOTO REPUESTO GARCIA 2023, C.A.",Facturado por completo,83.52,83.05533231,"MOTO REPUESTO GARCIA 2023, C.A.",83.52,11.52,0.0,0.0,11.52
+317,308.0,4.0,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,2026-05-04 19:31:46,357.28,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,Facturado por completo,357.28,357.28,ACCESORIOS Y REPUESTOS MOTO CAR 20-11-C.A,357.28,49.28,0.0,0.0,49.28
+318,70.0,1.0,JOSE RAFAEL MARTÍNEZ,2026-05-04 19:32:03,81.2,JOSE RAFAEL MARTÍNEZ,Facturado por completo,81.2,53.0,JOSE RAFAEL MARTÍNEZ,81.2,11.2,0.0,0.0,11.2
+319,431.0,6.0,Angi Edimar Carvajal Peñaranda,2026-05-04 20:06:20,499.96,Angi Edimar Carvajal Peñaranda,Facturado por completo,499.96,499.96,Angi Edimar Carvajal Peñaranda,499.96,68.96,0.0,0.0,68.96
+320,668.0,6.0,Ideal car,2026-05-04 20:06:33,774.88,Ideal car,Facturado por completo,774.88,774.88,Ideal car,774.88,106.88,0.0,0.0,106.88
+321,126.0,1.0,ANGEL LEON GALARRAGA,2026-05-04 20:36:20,146.16,ANGEL LEON GALARRAGA,Facturado por completo,146.16,146.16,ANGEL LEON GALARRAGA,146.16,20.16,0.0,0.0,20.16
+322,85.0,1.0,"ZIP MARKET, CA",2026-05-04 21:52:46,98.6,"ZIP MARKET, CA",Facturado por completo,98.6,97.93405239,"ZIP MARKET, CA",98.6,13.6,0.0,0.0,13.6
+323,185.81,1.0,FREDI MARQUEZ,2026-05-05 12:15:31,215.54,FREDI MARQUEZ,Facturado por completo,215.54,215.54,FREDI MARQUEZ,215.54,29.73,0.0,0.0,29.73
+324,207.79,1.0,Nemer Bourji,2026-05-05 12:15:44,241.04,Nemer Bourji,Facturado por completo,241.04,241.04,Nemer Bourji,241.04,33.25,0.0,0.0,33.25
+325,68.93,1.0,Comercializadora El Fénix de Catia,2026-05-05 16:02:27,79.96,Comercializadora El Fénix de Catia,Facturado por completo,79.96,52.0,Comercializadora El Fénix de Catia,79.96,11.03,0.0,0.0,11.03
+326,64.0,1.0,Encamotors Catia C.A,2026-05-05 16:02:12,74.24,Encamotors Catia C.A,Facturado por completo,74.24,49.0,Encamotors Catia C.A,74.24,10.24,0.0,0.0,10.24
+327,823.03,7.0,Kervin baez,2026-05-05 21:39:52,954.71,Kervin baez,Facturado por completo,954.71,954.71,Kervin baez,954.71,131.68,0.0,0.0,131.68
+328,5864.11,4.0,"AGROPECUARIA LECHE Y MIEL, C.A",2026-05-13 20:49:58,6802.37,"AGROPECUARIA LECHE Y MIEL, C.A",Facturado por completo,6802.37,6802.37,"AGROPECUARIA LECHE Y MIEL, C.A",6802.37,938.26,0.0,0.0,938.26
+329,1024.0,1.0,Ruben Casanova,2026-05-06 20:44:16,,,,,,,,,,,
+330,242.0,2.0,Diana Carolina Torres,2026-05-06 20:44:07,280.72,Diana Carolina Torres,Facturado por completo,280.72,257.9744284,Diana Carolina Torres,280.72,38.72,0.0,0.0,38.72
+331,92.0,2.0,ALI ALEXANDER MORENO FIGUEREDO,2026-05-06 20:43:59,106.72,ALI ALEXANDER MORENO FIGUEREDO,Facturado por completo,106.72,106.72,ALI ALEXANDER MORENO FIGUEREDO,106.72,14.72,0.0,0.0,14.72
+332,152.0,2.0,Inversiones García GL C.A,2026-05-06 20:43:47,176.32,Inversiones García GL C.A,Facturado por completo,176.32,176.32,Inversiones García GL C.A,176.32,24.32,0.0,0.0,24.32
+333,,,,,0.0,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",Nada que facturar,,,,,,,,
+334,258.0,2.0,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",2026-05-06 20:55:30,299.28,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",Facturado por completo,299.28,195.0,"LOGISTICA Y CONSULTORIA VINCARS, C.A.",299.28,41.28,0.0,0.0,41.28
+335,386.0,3.0,Wili Mervin León Romero,2026-05-07 15:50:46,447.76,Wili Mervin León Romero,Facturado por completo,447.76,447.76,Wili Mervin León Romero,447.76,61.76,0.0,0.0,61.76
+336,269.0,3.0,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,2026-05-07 15:51:00,312.04,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,Facturado por completo,312.04,312.04,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,312.04,43.04,0.0,0.0,43.04
+337,75.0,1.0,JOSE RUBIO ESPINEL,2026-05-07 18:51:41,87.0,JOSE RUBIO ESPINEL,Facturado por completo,87.0,87.0,JOSE RUBIO ESPINEL,87.0,12.0,0.0,0.0,12.0
+338,90.0,1.0,"TorniRepuesto BA 2015, C.A",2026-05-07 19:55:59,104.4,"TorniRepuesto BA 2015, C.A",Facturado por completo,104.4,104.4,"TorniRepuesto BA 2015, C.A",104.4,14.4,0.0,0.0,14.4
+339,1055.0,2.0,La cámara perfecta,2026-05-07 19:55:47,1223.8,La cámara perfecta,Facturado por completo,1223.8,1223.8,La cámara perfecta,1223.8,168.8,0.0,0.0,168.8
+340,194.0,1.0,Yeifri Alexander Marquez Zerpa,2026-05-07 20:43:09,225.04,Yeifri Alexander Marquez Zerpa,Facturado por completo,225.04,191.4256216,Yeifri Alexander Marquez Zerpa,225.04,31.04,0.0,0.0,31.04
+341,100.0,1.0,"Automecanica Marilu 2014, C.A",2026-05-07 20:43:25,116.0,"Automecanica Marilu 2014, C.A",Facturado por completo,116.0,116.0,"Automecanica Marilu 2014, C.A",116.0,16.0,0.0,0.0,16.0
+343,330.0,2.0,Moto repuestos el casco 2050 c.a,2026-05-07 20:53:03,382.8,Moto repuestos el casco 2050 c.a,Facturado por completo,382.8,382.8,Moto repuestos el casco 2050 c.a,382.8,52.8,0.0,0.0,52.8
+344,128.0,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-05-07 20:53:17,148.48,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,148.48,148.48,EMPRENDIMIENTO IRMA RODRIGUEZ 6,148.48,20.48,0.0,0.0,20.48
+346,906.47,1.0,"AUTOPERIQUITO EL  PEQUEÑO CHAMOY, C.A.",2026-05-08 14:58:27,1051.51,"AUTOPERIQUITO EL  PEQUEÑO CHAMOY, C.A.",Facturado por completo,1051.51,1051.51,"AUTOPERIQUITO EL PEQUEÑO CHAMOY, C.A.",1051.51,145.04,0.0,0.0,145.04
+347,300.0,2.0,"Auto Servicios HN 6972, C.A",2026-05-08 19:24:00,348.0,"Auto Servicios HN 6972, C.A",Facturado por completo,348.0,348.0,"Auto Servicios HN 6972, C.A",348.0,48.0,0.0,0.0,48.0
+348,420.0,1.0,Comercial Rio Paraguas C.A,2026-05-08 19:22:55,487.2,Comercial Rio Paraguas C.A,Facturado por completo,487.2,472.8462708,Comercial Rio Paraguas C.A,487.2,67.2,0.0,0.0,67.2
+349,64.0,1.0,CLUDE CARVALHO DE ACOSTA,2026-05-08 21:07:11,74.24,CLUDE CARVALHO DE ACOSTA,Facturado por completo,74.24,74.24,CLUDE CARVALHO DE ACOSTA,74.24,10.24,0.0,0.0,10.24
+350,1990.0,2.0,Melany Madrid,2026-05-08 21:07:25,2308.4,Melany Madrid,Facturado por completo,2308.4,2308.4,Melany Madrid,2308.4,318.4,0.0,0.0,318.4
+351,140.0,1.0,INVERSIONES BECLA PARTS C.A.,2026-05-08 21:25:12,162.4,INVERSIONES BECLA PARTS C.A.,Facturado por completo,162.4,162.4,INVERSIONES BECLA PARTS C.A.,162.4,22.4,0.0,0.0,22.4
+352,350.0,1.0,"Inversiones Air Brakes, C.A",2026-05-08 21:40:28,406.0,"Inversiones Air Brakes, C.A",Facturado por completo,406.0,406.0,"Inversiones Air Brakes, C.A",406.0,56.0,0.0,0.0,56.0
+353,140.0,1.0,Emprendimiento Tomas Paz,2026-05-08 21:40:41,162.4,Emprendimiento Tomas Paz,Facturado por completo,162.4,162.4,Emprendimiento Tomas Paz,162.4,22.4,0.0,0.0,22.4
+354,288.0,1.0,"REPRESENTACIONES LAGUS MEL, C. A",2026-05-11 12:10:44,334.08,"REPRESENTACIONES LAGUS MEL, C. A",Facturado por completo,334.08,334.08,"REPRESENTACIONES LAGUS MEL, C. A",334.08,46.08,0.0,0.0,46.08
+355,557.33,6.0,"DIADOMHAN AUTOMOTRIZ, C.A.",2026-05-11 12:26:04,646.49,"DIADOMHAN AUTOMOTRIZ, C.A.",Facturado por completo,646.49,646.49,"DIADOMHAN AUTOMOTRIZ, C.A.",646.5,89.16,0.0,-0.01,89.16
+356,99.88,1.0,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,2026-05-11 12:28:04,115.86,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,Facturado por completo,115.86,115.86,Asociación Cooperativa la Esquina del Lubricante 9999 R.L,115.86,15.98,0.0,0.0,15.98
+357,2981.0,1.0,"AGROPECUARIA LECHE Y MIEL, C.A",2026-05-13 20:50:09,3457.96,"AGROPECUARIA LECHE Y MIEL, C.A",Facturado por completo,3457.96,3457.96,"AGROPECUARIA LECHE Y MIEL, C.A",3457.96,476.96,0.0,0.0,476.96
+358,928.89,1.0,E&M CAR SHOP C.A,2026-05-11 17:33:34,1077.51,E&M CAR SHOP C.A,Facturado por completo,1077.51,965.6782965,E&M CAR SHOP C.A,1077.51,148.62,0.0,0.0,148.62
+359,279.66,1.0,EN LA VIA 2023 C.A,2026-05-11 17:33:47,324.41,EN LA VIA 2023 C.A,Facturado por completo,324.41,290.8474928,EN LA VIA 2023 C.A,324.41,44.75,0.0,0.0,44.75
+361,274.67,3.0,"Comercializadora Estoril 25,c.a.",2026-05-11 21:16:44,318.61,"Comercializadora Estoril 25,c.a.",Facturado por completo,318.61,318.61,"Comercializadora Estoril 25,c.a.",318.62,43.94,0.0,-0.01,43.94
+362,664.2,7.0,"AUTOSERVICIOS SPACARS, C.A.",2026-05-11 21:17:37,770.48,"AUTOSERVICIOS SPACARS, C.A.",Facturado por completo,770.48,770.48,"AUTOSERVICIOS SPACARS, C.A.",770.47,106.28,0.0,0.01,106.28
+363,923.89,1.0,MARIA CAROLINA  CARDENAS GUEVARA,2026-05-12 16:32:16,1071.71,MARIA CAROLINA  CARDENAS GUEVARA,Facturado por completo,1071.71,1071.71,MARIA CAROLINA CARDENAS GUEVARA,1071.71,147.82,0.0,0.0,147.82
+364,139.83,1.0,"CAUCHOS NUÑEZ, C.A.",2026-05-12 16:32:01,162.2,"CAUCHOS NUÑEZ, C.A.",Facturado por completo,162.2,106.0,"CAUCHOS NUÑEZ, C.A.",162.2,22.37,0.0,0.0,22.37
+365,96.88,1.0,"Kiosco Willianny 1013, C.A",2026-05-12 20:08:37,112.38,"Kiosco Willianny 1013, C.A",Facturado por completo,112.38,101.7006672,"Kiosco Willianny 1013, C.A",112.38,15.5,0.0,0.0,15.5
+366,99.88,1.0,Auto repuestos Fontalvo,2026-05-12 20:07:50,115.86,Auto repuestos Fontalvo,Facturado por completo,115.86,76.0,Auto repuestos Fontalvo,115.86,15.98,0.0,0.0,15.98
+368,1834.8799999999999,15.0,"Mini Market Las Mercedes,c.a.",2026-05-12 21:30:52,2128.45,"Mini Market Las Mercedes,c.a.",Facturado por completo,2128.45,2128.45,"Mini Market Las Mercedes,c.a.",2128.46,293.57,0.0,-0.01,293.57
+369,65.52,1.0,ELENA   MEJIAS,2026-05-12 21:55:53,76.0,ELENA   MEJIAS,Facturado por completo,76.0,76.0,ELENA MEJIAS,76.0,10.48,0.0,0.0,10.48
+370,6899.370000000001,3.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-05-13 12:46:33,,,,,,,,,,,
+372,555.29,2.0,"En ascenso 2011,c.a.",2026-05-13 18:13:21,644.13,"En ascenso 2011,c.a.",Facturado por completo,644.13,555.291207,"En ascenso 2011,c.a.",644.14,88.84,0.0,-0.01,88.84
+373,406.9,6.0,"INVERSIONES DA & JE,",2026-05-13 19:06:05,472.01,"INVERSIONES DA & JE,",Facturado por completo,472.01,472.01,"INVERSIONES DA & JE,",472.0,65.11,0.0,0.01,65.11
+374,,,,,0.0,Motolavado Yahir,Nada que facturar,0.0,0.0,Motolavado Yahir,,,0.0,,
+375,215.23000000000002,2.0,Deyanira Carpio De Sequera,2026-05-13 19:05:47,249.66,Deyanira Carpio De Sequera,Facturado por completo,249.66,249.66,Deyanira Carpio De Sequera,249.67,34.43,0.0,-0.01,34.43
+376,88.45,1.0,CLUDE CARVALHO DE ACOSTA,2026-05-13 19:08:35,102.6,CLUDE CARVALHO DE ACOSTA,Facturado por completo,102.6,67.0,CLUDE CARVALHO DE ACOSTA,102.6,14.15,0.0,0.0,14.15
+378,410.82,2.0,"Multiservicios y Distribuidora Todo Carro Bedyf, C.A",2026-05-13 20:03:30,476.55,"Multiservicios y Distribuidora Todo Carro Bedyf, C.A",Facturado por completo,476.55,476.55,"Multiservicios y Distribuidora Todo Carro Bedyf, C.A",476.55,65.73,0.0,0.0,65.73
+379,147.42000000000002,2.0,DISTRIBUIDORA PINOS 181297 C.A,2026-05-13 20:11:24,171.0,DISTRIBUIDORA PINOS 181297 C.A,Facturado por completo,171.0,146.899794,DISTRIBUIDORA PINOS 181297 C.A,171.01,23.58,0.0,-0.01,23.58
+380,115.97,2.0,Junior Marco Antonio Vivas Navas,2026-05-13 20:48:11,134.52,Junior Marco Antonio Vivas Navas,Facturado por completo,134.52,99.0,Junior Marco Antonio Vivas Navas,134.53,18.55,0.0,-0.01,18.55
+381,88.45,1.0,Moto Repuestos Sanz 11. C.A.,2026-05-13 20:46:41,102.6,Moto Repuestos Sanz 11. C.A.,Facturado por completo,102.6,102.6,Moto Repuestos Sanz 11. C.A.,102.6,14.15,0.0,0.0,14.15
+382,189.76999999999998,2.0,"Montura de Cauchos Biondo,c.a.",2026-05-13 20:45:58,220.13,"Montura de Cauchos Biondo,c.a.",Facturado por completo,220.13,202.5069926,"Montura de Cauchos Biondo,c.a.",220.13,30.36,0.0,0.0,30.36
+384,45.02,1.0,Marco Romero,2026-05-14 14:03:04,52.22,Marco Romero,Facturado por completo,52.22,52.22,Marco Romero,52.22,7.2,0.0,0.0,7.2
+385,484.1,1.0,FRANCISCO MONCADA,2026-05-14 18:49:41,,,,,,,,,,,
+386,86.21,1.0,SEBASTIAN RICON MOLINA,2026-05-14 18:50:37,100.0,SEBASTIAN RICON MOLINA,Facturado por completo,100.0,100.0,SEBASTIAN RICON MOLINA,100.0,13.79,0.0,0.0,13.79
+387,366.38,1.0,FRANCISCO MONCADA,2026-05-14 18:57:07,425.0,FRANCISCO MONCADA,Facturado por completo,425.0,425.0,FRANCISCO MONCADA,425.0,58.62,0.0,0.0,58.62
+388,229.45,2.0,Ricardo A. Fernandez.,2026-05-14 20:03:07,266.16,Ricardo A. Fernandez.,Facturado por completo,266.16,266.16,Ricardo A. Fernandez.,266.16,36.71,0.0,0.0,36.71
+389,219.83,1.0,Greicy Moncada,2026-05-14 19:48:14,255.0,Greicy Moncada,Facturado por completo,255.0,255.0,Greicy Moncada,255.0,35.17,0.0,0.0,35.17
+391,100.8,1.0,CASERES GONZALEZ RONALD OSWALDO,2026-05-14 19:59:09,,,,,,,,,,,
+392,100.8,1.0,CASERES GONZALEZ RONALD OSWALDO,2026-05-14 20:48:37,116.93,CASERES GONZALEZ RONALD OSWALDO,Facturado por completo,116.93,116.93,CASERES GONZALEZ RONALD OSWALDO,116.93,16.13,0.0,0.0,16.13
+393,263.93,2.0,Francesco orlando Espro bolaños,2026-05-14 22:06:30,306.16,Francesco orlando Espro bolaños,Facturado por completo,306.16,306.16,Francesco orlando Espro bolaños,306.16,42.23,0.0,0.0,42.23
+394,294.44,2.0,Sandra Katherine Quintero Crespo,2026-05-14 22:06:22,341.55,Sandra Katherine Quintero Crespo,Facturado por completo,341.55,339.3779926,Sandra Katherine Quintero Crespo,341.55,47.11,0.0,0.0,47.11
+395,70.29,1.0,Emprendimiento Eduardo Pérez 6,2026-05-14 22:06:15,81.54,Emprendimiento Eduardo Pérez 6,Facturado por completo,81.54,81.54,Emprendimiento Eduardo Pérez 6,81.54,11.25,0.0,0.0,11.25
+396,140.58,2.0,"INVERSIONES ARCOSOL 21, C.A.",2026-05-15 20:43:13,163.08,"INVERSIONES ARCOSOL 21, C.A.",Facturado por completo,163.08,163.08,"INVERSIONES ARCOSOL 21, C.A.",163.07,22.5,0.0,0.01,22.5
+397,112.73,1.0,Paola M. Aguilera Z.,2026-05-15 17:39:48,130.77,Paola M. Aguilera Z.,Facturado por completo,130.77,130.77,Paola M. Aguilera Z.,130.77,18.04,0.0,0.0,18.04
+398,210.87,2.0,Moto repuestos jj,2026-05-15 20:17:24,244.61,Moto repuestos jj,Facturado por completo,244.61,244.61,Moto repuestos jj,244.61,33.74,0.0,0.0,33.74
+399,217.5,3.0,Wuilliams bastidas,2026-05-15 20:17:14,252.31,Wuilliams bastidas,Facturado por completo,252.31,252.31,Wuilliams bastidas,252.3,34.81,0.0,0.01,34.81
+400,185.68,2.0,"TALLER Y REPUESTOS CHOPPERS, C.A.",2026-05-15 20:17:07,215.39,"TALLER Y REPUESTOS CHOPPERS, C.A.",Facturado por completo,215.39,215.39,"TALLER Y REPUESTOS CHOPPERS, C.A.",215.39,29.71,0.0,0.0,29.71
+401,46.42,1.0,Jorge Luis camacaro,2026-05-15 20:30:38,53.85,Jorge Luis camacaro,Facturado por completo,53.85,53.85,Jorge Luis camacaro,53.85,7.43,0.0,0.0,7.43
+402,90.19,1.0,Jorge Luis camacaro,2026-05-15 20:29:25,104.62,Jorge Luis camacaro,Facturado por completo,104.62,104.62,Jorge Luis camacaro,104.62,14.43,0.0,0.0,14.43
+404,59.0,1.0,Edgar salas,2026-05-15 21:05:45,68.44,Edgar salas,Facturado por completo,68.44,68.44,Edgar salas,68.44,9.44,0.0,0.0,9.44
+405,95.49,1.0,Anthony Jose Quijada Diaz.,2026-05-18 12:33:54,110.77,Anthony Jose Quijada Diaz.,Facturado por completo,110.77,110.77,Anthony Jose Quijada Diaz.,110.77,15.28,0.0,0.0,15.28
+406,217.5,3.0,Williams Bastidas,2026-05-18 13:00:32,,,,,,,,,,,
+407,193.64,1.0,FREDI MARQUEZ,2026-05-18 13:01:18,224.62,FREDI MARQUEZ,Facturado por completo,224.62,224.62,FREDI MARQUEZ,224.62,30.98,0.0,0.0,30.98
+408,165.78,2.0,HIDRAULICAS CAICEDO C.A.,2026-05-18 13:25:44,192.31,HIDRAULICAS CAICEDO C.A.,Facturado por completo,192.31,192.31,HIDRAULICAS CAICEDO C.A.,192.3,26.53,0.0,0.01,26.53
+409,112.73,1.0,Julio Pocaterra,2026-05-18 16:29:55,,,,,,,,,,,
+410,350.14,5.0,"Multiservicios gochi express 2024, c.a",2026-05-18 17:10:36,406.16,"Multiservicios gochi express 2024, c.a",Facturado por completo,406.16,406.16,"Multiservicios gochi express 2024, c.a",406.16,56.02,0.0,0.0,56.02
+411,1643.56,7.0,Pedro Castro,2026-05-19 12:55:15,1906.54,Pedro Castro,Facturado por completo,1906.54,1906.54,Pedro Castro,1906.53,262.98,0.0,0.01,262.98
+412,94.81,1.0,Anthony Jose Quijada Diaz.,2026-05-19 14:50:15,109.98,Anthony Jose Quijada Diaz.,Facturado por completo,109.98,109.0,Anthony Jose Quijada Diaz.,109.98,15.17,0.0,0.0,15.17
+413,70.29,1.0,ERICH GILBERTO CASERES MELENDEZ,2026-05-19 14:52:22,81.54,ERICH GILBERTO CASERES MELENDEZ,Facturado por completo,81.54,81.54,ERICH GILBERTO CASERES MELENDEZ,81.54,11.25,0.0,0.0,11.25
+414,197.61,3.0,Javier Cardenas Prato.,2026-05-19 20:22:18,229.23,Javier Cardenas Prato.,Facturado por completo,229.23,229.23,Javier Cardenas Prato.,229.23,31.62,0.0,0.0,31.62
+415,222.81,2.0,"Almacenadora X7, C.A",2026-05-21 18:28:09,258.46,"Almacenadora X7, C.A",Facturado por completo,258.46,258.46,"Almacenadora X7, C.A",258.46,35.65,0.0,0.0,35.65
+416,431.05,1.0,"COMERCIAL EKAFREN,C.A.",2026-05-20 13:11:05,500.02,"COMERCIAL EKAFREN,C.A.",Facturado por completo,500.02,500.02,"COMERCIAL EKAFREN,C.A.",500.02,68.97,0.0,0.0,68.97
+417,100.8,1.0,Franklin J. Mijares S.,2026-05-20 13:37:50,116.93,Franklin J. Mijares S.,Facturado por completo,116.93,116.93,Franklin J. Mijares S.,116.93,16.13,0.0,0.0,16.13
+418,70.29,1.0,Edgar salas,2026-05-20 14:20:50,81.54,Edgar salas,Facturado por completo,81.54,78.0,Edgar salas,81.54,11.25,0.0,0.0,11.25
+419,290.46,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-05-20 14:58:19,336.93,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,336.93,336.93,EMPRENDIMIENTO IRMA RODRIGUEZ 6,336.93,46.47,0.0,0.0,46.47
+420,287.81,3.0,"DISTRIBUIDORA R. LAYA MORA,C.A.",2026-05-20 15:02:44,333.86,"DISTRIBUIDORA R. LAYA MORA,C.A.",Facturado por completo,333.86,333.86,"DISTRIBUIDORA R. LAYA MORA,C.A.",333.86,46.05,0.0,0.0,46.05
+421,925.73,1.0,Wili Mervin León Romero,2026-05-20 19:43:48,1073.85,Wili Mervin León Romero,Facturado por completo,1073.85,1073.85,Wili Mervin León Romero,1073.85,148.12,0.0,0.0,148.12
+422,167.11,2.0,"INVERSIONES R&C 1817,  c.a.",2026-05-20 19:44:28,193.85,"INVERSIONES R&C 1817,  c.a.",Facturado por completo,193.85,193.85,"INVERSIONES R&C 1817, c.a.",193.85,26.74,0.0,0.0,26.74
+423,622.01,10.0,"OLIVEIRA & SANTOS, C.A.(SERVICENTRO EL CUÑO, C.A.)",2026-05-20 19:44:11,721.55,"OLIVEIRA & SANTOS, C.A.(SERVICENTRO EL CUÑO, C.A.)",Facturado por completo,721.55,721.55,"OLIVEIRA & SANTOS, C.A.(SERVICENTRO EL CUÑO, C.A.)",721.53,99.54,0.0,0.02,99.54
+424,1124.6399999999999,2.0,Antonio Terán,2026-05-20 21:13:02,1304.58,Antonio Terán,Facturado por completo,1304.58,1304.58,Antonio Terán,1304.58,179.94,0.0,0.0,179.94
+425,277.2,3.0,Katiuska Alejandra Curvelo,2026-05-20 21:43:07,321.55,Katiuska Alejandra Curvelo,Facturado por completo,321.55,321.55,Katiuska Alejandra Curvelo,321.55,44.35,0.0,0.0,44.35
+426,201.6,1.0,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",2026-05-20 21:45:19,233.86,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",Facturado por completo,233.86,233.86,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",233.86,32.26,0.0,0.0,32.26
+427,7023.860000000001,3.0,"CONSTRUCTORA GRANO AGREGADO, C.A",2026-05-26 14:04:53,8147.67,"CONSTRUCTORA GRANO AGREGADO, C.A",Facturado por completo,8147.67,8147.67,"CONSTRUCTORA GRANO AGREGADO, C.A",8147.68,1123.81,0.0,-0.01,1123.81
+428,187.01,2.0,Angel ARMAS,2026-05-21 14:21:07,216.93,Angel ARMAS,Facturado por completo,216.93,216.93,Angel ARMAS,216.93,29.92,0.0,0.0,29.92
+429,340.84000000000003,4.0,"INVERSIONES SM 2191, C.A.",2026-05-21 17:04:20,395.38,"INVERSIONES SM 2191, C.A.",Facturado por completo,395.38,395.38,"INVERSIONES SM 2191, C.A.",395.37,54.54,0.0,0.01,54.54
+430,1439.02,6.0,Dimas Ortíz,2026-05-21 17:17:30,1669.27,Dimas Ortíz,Facturado por completo,1669.27,1669.27,Dimas Ortíz,1669.26,230.25,0.0,0.01,230.25
+431,262.61,2.0,Carlos Eduardo Ascension Matos,2026-05-21 21:16:43,304.63,Carlos Eduardo Ascension Matos,Facturado por completo,304.63,273.9300058,Carlos Eduardo Ascension Matos,304.63,42.02,0.0,0.0,42.02
+432,428.44,1.0,"COMERCIAL EKAFREN,C.A.",2026-05-22 12:30:05,496.99,"COMERCIAL EKAFREN,C.A.",Facturado por completo,496.99,496.99,"COMERCIAL EKAFREN,C.A.",496.99,68.55,0.0,0.0,68.55
+433,201.6,1.0,"INVERSIONES JOSCAR  XXI, S.A.",2026-05-22 12:34:54,233.86,"INVERSIONES JOSCAR  XXI, S.A.",Facturado por completo,233.86,233.86,"INVERSIONES JOSCAR XXI, S.A.",233.86,32.26,0.0,0.0,32.26
+434,90.19,1.0,EMPRENDIMIENTO FRANCISCO VEGAS 3,2026-05-22 12:34:36,104.62,EMPRENDIMIENTO FRANCISCO VEGAS 3,Facturado por completo,104.62,104.62,EMPRENDIMIENTO FRANCISCO VEGAS 3,104.62,14.43,0.0,0.0,14.43
+435,2464.2,1.0,"PROYECTOS Y DESARROLLO TOMTOM,C.A.",2026-05-22 15:31:19,2858.47,"PROYECTOS Y DESARROLLO TOMTOM,C.A.",Facturado por completo,2858.47,2464.200009,"PROYECTOS Y DESARROLLO TOMTOM,C.A.",2858.47,394.27,0.0,0.0,394.27
+436,50.4,1.0,Marco Romero,2026-05-22 19:32:57,58.46,Marco Romero,Facturado por completo,58.46,58.46,Marco Romero,58.46,8.06,0.0,0.0,8.06
+437,100.8,1.0,"Mazare Motors, C.A",2026-05-22 21:00:33,116.93,"Mazare Motors, C.A",Facturado por completo,116.93,116.93,"Mazare Motors, C.A",116.93,16.13,0.0,0.0,16.13
+439,90.19,1.0,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,2026-05-25 12:16:58,104.62,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,Facturado por completo,104.62,104.62,MOTOREPUESTOS EL GUANÁBANO YRM C.A.,104.62,14.43,0.0,0.0,14.43
+440,193.64,1.0,FREDI MARQUEZ,2026-05-25 12:57:43,224.62,FREDI MARQUEZ,Facturado por completo,224.62,224.62,FREDI MARQUEZ,224.62,30.98,0.0,0.0,30.98
+441,1595.47,4.0,"GASOLVEN DISTRIBUIDORA, C.A",2026-05-25 17:39:00,1850.74,"GASOLVEN DISTRIBUIDORA, C.A",Facturado por completo,1850.74,1203.0,"GASOLVEN DISTRIBUIDORA, C.A",1850.75,255.27,0.0,-0.01,255.27
+442,86.21,1.0,Jhoe Zamora,2026-05-28 19:34:06,100.0,Jhoe Zamora,Facturado por completo,100.0,100.0,Jhoe Zamora,100.0,13.79,0.0,0.0,13.79
+443,224.14,2.0,"ZIP MARKET, CA",2026-05-25 22:00:24,260.01,"ZIP MARKET, CA",Facturado por completo,260.01,257.7723519,"ZIP MARKET, CA",260.0,35.87,0.0,0.01,35.87
+444,72.94,1.0,"GASOLVEN DISTRIBUIDORA, C.A",2026-05-26 14:20:24,84.61,"GASOLVEN DISTRIBUIDORA, C.A",Facturado por completo,84.61,84.61,"GASOLVEN DISTRIBUIDORA, C.A",84.61,11.67,0.0,0.0,11.67
+445,3953.51,2.0,Anthony Jose Quijada Diaz.,2026-05-26 14:11:30,,,,,,,,,,,
+446,95.49,1.0,JOSE RAFAEL MARTÍNEZ,2026-05-26 19:13:22,110.77,JOSE RAFAEL MARTÍNEZ,Facturado por completo,110.77,110.77,JOSE RAFAEL MARTÍNEZ,110.77,15.28,0.0,0.0,15.28
+447,124.67,1.0,"Inversiones Pronautica, C.A.",2026-05-26 20:51:42,144.62,"Inversiones Pronautica, C.A.",Facturado por completo,144.62,144.62,"Inversiones Pronautica, C.A.",144.62,19.95,0.0,0.0,19.95
+448,258.62,2.0,Douglas Mujica,2026-05-26 16:34:07,,,,,,,,,,,
+449,1742.04,2.0,Alexander Quiroz,2026-05-26 17:25:36,2020.77,Alexander Quiroz,Facturado por completo,2020.77,1354.0,Alexander Quiroz,2020.77,278.73,0.0,0.0,278.73
+450,193.59,3.0,"AGROPECUARIA EL TORO DORADO, C.A",2026-05-27 13:33:31,224.56,"AGROPECUARIA EL TORO DORADO, C.A",Facturado por completo,224.56,224.56,"AGROPECUARIA EL TORO DORADO, C.A",224.56,30.97,0.0,0.0,30.97
+451,427.06,2.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-05-26 20:42:12,495.39,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,495.39,495.39,EMPRENDIMIENTO IRMA RODRIGUEZ 6,495.39,68.33,0.0,0.0,68.33
+452,428.86,2.0,NAUDY MARTINEZ,2026-05-26 20:41:53,497.48,NAUDY MARTINEZ,Facturado por completo,497.48,487.5304,NAUDY MARTINEZ,497.48,68.62,0.0,0.0,68.62
+454,34.48,1.0,NAUDY MARTINEZ,2026-05-26 20:54:33,40.0,NAUDY MARTINEZ,Facturado por completo,40.0,37.6,NAUDY MARTINEZ,40.0,5.52,0.0,0.0,5.52
+456,236.07,3.0,ERICK JOSE MAIGUA GUILLEN,2026-05-26 21:48:31,273.85,ERICK JOSE MAIGUA GUILLEN,Facturado por completo,273.85,273.85,ERICK JOSE MAIGUA GUILLEN,273.84,37.78,0.0,0.01,37.78
+457,1173.72,2.0,Anthony Jose Quijada Diaz.,2026-05-28 12:13:25,1361.52,Anthony Jose Quijada Diaz.,Facturado por completo,1361.52,885.0,Anthony Jose Quijada Diaz.,1361.52,187.8,0.0,0.0,187.8
+458,18226.84,32.0,"Comercializadora 1108,c.a.",2026-05-29 14:28:28,21143.12,"Comercializadora 1108,c.a.",Facturado por completo,21143.12,21143.12,"Comercializadora 1108,c.a.",21143.13,2916.28,0.0,-0.01,2916.28
+459,156.5,1.0,"Comercializadora Venezuela Express, C.A.",2026-05-28 16:38:45,,,,,,,,,,,
+460,859.32,1.0,Ingeforca,2026-05-28 17:18:36,,,,,,,,,,,
+461,43185.630000000005,6.0,"PROVIDVEN,C.A.",2026-05-28 18:53:41,,,,,,,,,,,
+462,226.8,3.0,Edward Belén,2026-05-28 20:27:21,263.09,Edward Belén,Facturado por completo,263.09,263.09,Edward Belén,263.09,36.29,0.0,0.0,36.29
+464,271.65999999999997,4.0,Repuestos González peña 31 c.a,2026-05-28 21:35:04,315.12,Repuestos González peña 31 c.a,Facturado por completo,315.12,315.12,Repuestos González peña 31 c.a,315.13,43.46,0.0,-0.01,43.46
+465,244.02999999999997,2.0,"Multiservicios gochi express 2024, c.a",2026-05-29 23:38:15,283.08,"Multiservicios gochi express 2024, c.a",Facturado por completo,283.08,283.08,"Multiservicios gochi express 2024, c.a",283.07,39.05,0.0,0.01,39.05
+466,70.29,1.0,Edgar salas,2026-05-29 23:39:14,81.54,Edgar salas,Facturado por completo,81.54,81.54,Edgar salas,81.54,11.25,0.0,0.0,11.25
+467,497.35,1.0,PROYECTO MAQUIVEIRO 21 C.A.,2026-06-01 13:03:21,576.93,PROYECTO MAQUIVEIRO 21 C.A.,Facturado por completo,576.93,576.93,PROYECTO MAQUIVEIRO 21 C.A.,576.93,79.58,0.0,0.0,79.58
+468,954.92,7.0,ELISA ALEJANDRA JIMÉNEZ SUÁREZ,2026-06-01 13:02:51,1107.71,ELISA ALEJANDRA JIMÉNEZ SUÁREZ,Facturado por completo,1107.71,1107.71,ELISA ALEJANDRA JIMÉNEZ SUÁREZ,1107.71,152.79,0.0,0.0,152.79
+469,187.01,2.0,AUTOPERIQUITOS LA CAMPIÑA C.A.,2026-06-01 12:56:06,216.93,AUTOPERIQUITOS LA CAMPIÑA C.A.,Facturado por completo,216.93,216.93,AUTOPERIQUITOS LA CAMPIÑA C.A.,216.93,29.92,0.0,0.0,29.92
+470,856.76,1.0,Luis Zambrano,2026-06-03 14:51:47,993.84,Luis Zambrano,Facturado por completo,993.84,993.84,Luis Zambrano,993.84,137.08,0.0,0.0,137.08
+471,225.46,1.0,José Gregorio Hernández,2026-06-01 20:11:28,261.53,José Gregorio Hernández,Facturado por completo,261.53,261.53,José Gregorio Hernández,261.53,36.07,0.0,0.0,36.07
+472,1405.8,2.0,Antonio Terán,2026-06-01 20:10:54,1630.73,Antonio Terán,Facturado por completo,1630.73,1630.73,Antonio Terán,1630.73,224.93,0.0,0.0,224.93
+473,193.64,1.0,Yeifri Alexander Marquez Zerpa,2026-06-01 20:49:34,224.62,Yeifri Alexander Marquez Zerpa,Facturado por completo,224.62,224.62,Yeifri Alexander Marquez Zerpa,224.62,30.98,0.0,0.0,30.98
+474,64.99,1.0,"Hidromaticos La Colina, C.A",2026-06-01 20:49:25,75.39,"Hidromaticos La Colina, C.A",Facturado por completo,75.39,75.39,"Hidromaticos La Colina, C.A",75.39,10.4,0.0,0.0,10.4
+475,70.29,1.0,Emprendimiento Eduardo Pérez 6,2026-06-01 20:49:16,81.54,Emprendimiento Eduardo Pérez 6,Facturado por completo,81.54,81.54,Emprendimiento Eduardo Pérez 6,81.54,11.25,0.0,0.0,11.25
+476,224.14,3.0,"COMERCIALIZADORA J.A.N. 65, C.A",2026-06-01 21:23:57,260.0,"COMERCIALIZADORA J.A.N. 65, C.A",Facturado por completo,260.0,260.0,"COMERCIALIZADORA J.A.N. 65, C.A",260.0,35.86,0.0,0.0,35.86
+477,196.29,2.0,"Servi Motores 3A, C.A",2026-06-01 21:24:30,227.7,"Servi Motores 3A, C.A",Facturado por completo,227.7,227.7,"Servi Motores 3A, C.A",227.7,31.41,0.0,0.0,31.41
+478,100.8,1.0,AUTOPERIQUITOS LA CAMPIÑA C.A.,2026-06-02 12:32:47,116.93,AUTOPERIQUITOS LA CAMPIÑA C.A.,Facturado por completo,116.93,116.93,AUTOPERIQUITOS LA CAMPIÑA C.A.,116.93,16.13,0.0,0.0,16.13
+479,1330.28,9.0,Inversiones Todo marca Oeste C.A,2026-06-02 21:29:41,1543.12,Inversiones Todo marca Oeste C.A,Facturado por completo,1543.12,1543.12,Inversiones Todo marca Oeste C.A,1543.12,212.84,0.0,0.0,212.84
+480,100.8,1.0,Alejandro Zorrilla,2026-06-02 19:11:03,,,,,,,,,,,
+482,925.73,1.0,Kervin baez,2026-06-02 21:30:48,1073.85,Kervin baez,Facturado por completo,1073.85,1073.85,Kervin baez,1073.85,148.12,0.0,0.0,148.12
+483,201.6,1.0,"Power Sport Servicios El Hatillo, C.A",2026-06-02 21:44:20,233.86,"Power Sport Servicios El Hatillo, C.A",Facturado por completo,233.86,233.86,"Power Sport Servicios El Hatillo, C.A",233.86,32.26,0.0,0.0,32.26
+484,302.4,1.0,"MAXIAIRE ELECTROMOTRIZ, C.A",2026-06-02 21:43:57,350.78,"MAXIAIRE ELECTROMOTRIZ, C.A",Facturado por completo,350.78,350.78,"MAXIAIRE ELECTROMOTRIZ, C.A",350.78,48.38,0.0,0.0,48.38
+485,100.8,1.0,"Industrias Arasia, c.a.",2026-06-02 21:58:49,116.93,"Industrias Arasia, c.a.",Facturado por completo,116.93,116.93,"Industrias Arasia, c.a.",116.93,16.13,0.0,0.0,16.13
+486,100.8,1.0,Automotriz Danale C.A,2026-06-03 15:32:03,116.93,Automotriz Danale C.A,Facturado por completo,116.93,116.93,Automotriz Danale C.A,116.93,16.13,0.0,0.0,16.13
+487,2464.2,1.0,"SPL Tech company,c.a.",2026-06-03 17:58:25,,,,,,,,,,,
+488,257.3,3.0,"INVERSIONES IRETE SUKA, C.A",2026-06-03 19:26:58,298.47,"INVERSIONES IRETE SUKA, C.A",Facturado por completo,298.47,298.47,"INVERSIONES IRETE SUKA, C.A",298.47,41.17,0.0,0.0,41.17
+489,383.3,5.0,"Cauchera El Gordo 0410,c.a.",2026-06-03 19:27:30,444.63,"Cauchera El Gordo 0410,c.a.",Facturado por completo,444.63,444.6282095,"Cauchera El Gordo 0410,c.a.",444.63,61.33,0.0,0.0,61.33
+490,100.8,1.0,"WDH Automotriz 0706, c.a.",2026-06-03 20:00:17,116.93,"WDH Automotriz 0706, c.a.",Facturado por completo,116.93,116.93,"WDH Automotriz 0706, c.a.",116.93,16.13,0.0,0.0,16.13
+491,628.67,4.0,María Elena Hernández Rangel,2026-06-03 19:39:09,729.26,María Elena Hernández Rangel,Facturado por completo,729.26,729.26,María Elena Hernández Rangel,729.26,100.59,0.0,0.0,100.59
+492,96.82,1.0,Luis Eduardo Piñero Calcurian,2026-06-03 20:20:27,112.31,Luis Eduardo Piñero Calcurian,Facturado por completo,112.31,112.31,Luis Eduardo Piñero Calcurian,112.31,15.49,0.0,0.0,15.49
+493,155.16,1.0,"Lubristation, C.A.",2026-06-03 21:38:42,179.99,"Lubristation, C.A.",Facturado por completo,179.99,179.99,"Lubristation, C.A.",179.99,24.83,0.0,0.0,24.83
+494,287.81,2.0,Inversiones García GL C.A,2026-06-03 21:38:56,333.86,Inversiones García GL C.A,Facturado por completo,333.86,333.86,Inversiones García GL C.A,333.86,46.05,0.0,0.0,46.05
+495,34.48,1.0,Automotriz Danale C.A,2026-06-04 12:51:03,40.0,Automotriz Danale C.A,Facturado por completo,40.0,40.0,Automotriz Danale C.A,40.0,5.52,0.0,0.0,5.52
+496,94.16,1.0,"GASOLVEN DISTRIBUIDORA, C.A",2026-06-04 16:14:49,109.23,"GASOLVEN DISTRIBUIDORA, C.A",Facturado por completo,109.23,109.23,"GASOLVEN DISTRIBUIDORA, C.A",109.23,15.07,0.0,0.0,15.07
+497,318.31,4.0,ELECTROMECÁNICA DANPE C.A.,2026-06-04 18:16:44,369.24,ELECTROMECÁNICA DANPE C.A.,Facturado por completo,369.24,369.24,ELECTROMECÁNICA DANPE C.A.,369.24,50.93,0.0,0.0,50.93
+498,,,,,0.0,"Inversiones Marfran 2025, C. A.",Nada que facturar,0.0,0.0,"Inversiones Marfran 2025, C. A.",,,0.0,,
+499,140.58,1.0,"INVERSIONES ARCOSOL 21, C.A.",2026-06-04 18:16:02,163.07,"INVERSIONES ARCOSOL 21, C.A.",Facturado por completo,163.07,163.07,"INVERSIONES ARCOSOL 21, C.A.",163.07,22.49,0.0,0.0,22.49
+500,336.21,1.0,Gabriel Martinez,2026-06-04 17:00:23,390.0,Gabriel Martinez,Facturado por completo,390.0,390.0,Gabriel Martinez,390.0,53.79,0.0,0.0,53.79
+501,104.77,1.0,Jefferson rosales,2026-06-04 19:41:41,121.53,Jefferson rosales,Facturado por completo,121.53,121.53,Jefferson rosales,121.53,16.76,0.0,0.0,16.76
+502,100.8,1.0,GRIMAN DIAZ HECTOR EDUARDO,2026-06-04 19:41:04,116.93,GRIMAN DIAZ HECTOR EDUARDO,Facturado por completo,116.93,116.93,GRIMAN DIAZ HECTOR EDUARDO,116.93,16.13,0.0,0.0,16.13
+503,100.8,1.0,Inversiones maxgad & ef,2026-06-04 19:41:20,116.93,Inversiones maxgad & ef,Facturado por completo,116.93,101.0811109,Inversiones maxgad & ef,116.93,16.13,0.0,0.0,16.13
+504,2405.8999999999996,3.0,Alcaldía municipio Vargas C.A,2026-06-04 19:42:13,,,,,,,,,,,
+505,64.99,1.0,Servimecanica Brandao,2026-06-04 23:02:44,75.39,Servimecanica Brandao,Facturado por completo,75.39,75.39,Servimecanica Brandao,75.39,10.4,0.0,0.0,10.4
+506,65.52,1.0,Angel ARMAS,2026-06-05 12:35:16,76.0,Angel ARMAS,Facturado por completo,76.0,75.0,Angel ARMAS,76.0,10.48,0.0,0.0,10.48
+507,136.61,2.0,Sandra Katherine Quintero Crespo,2026-06-04 23:02:33,158.47,Sandra Katherine Quintero Crespo,Facturado por completo,158.47,141.0374702,Sandra Katherine Quintero Crespo,158.47,21.86,0.0,0.0,21.86
+508,263.93,2.0,Jose Becerra,2026-06-05 12:26:30,306.16,Jose Becerra,Facturado por completo,306.16,306.16,Jose Becerra,306.16,42.23,0.0,0.0,42.23
+509,62.93,1.0,GRIMAN DIAZ HECTOR EDUARDO,2026-06-05 13:09:36,73.0,GRIMAN DIAZ HECTOR EDUARDO,Facturado por completo,73.0,73.0,GRIMAN DIAZ HECTOR EDUARDO,73.0,10.07,0.0,0.0,10.07
+510,76.36,1.0,Daniela Sanobria,2026-06-05 13:10:30,88.58,Daniela Sanobria,Facturado por completo,88.58,88.58,Daniela Sanobria,88.58,12.22,0.0,0.0,12.22
+511,2314.33,9.0,"Multiservicios Diacedeg,c.a.",2026-06-05 15:51:51,2684.62,"Multiservicios Diacedeg,c.a.",Facturado por completo,2684.62,2684.62,"Multiservicios Diacedeg,c.a.",2684.62,370.29,0.0,0.0,370.29
+512,95.49,1.0,HIDRAULICAS CAICEDO C.A.,2026-06-05 17:35:12,110.77,HIDRAULICAS CAICEDO C.A.,Facturado por completo,110.77,110.77,HIDRAULICAS CAICEDO C.A.,110.77,15.28,0.0,0.0,15.28
+513,60.28,1.0,ELENA   MEJIAS,2026-06-05 19:23:46,69.92,ELENA   MEJIAS,Facturado por completo,69.92,69.92,ELENA MEJIAS,69.92,9.64,0.0,0.0,9.64
+514,103.44,1.0,"Ruta 8 Autopartes,c.a.",2026-06-05 20:03:57,119.99,"Ruta 8 Autopartes,c.a.",Facturado por completo,119.99,119.99,"Ruta 8 Autopartes,c.a.",119.99,16.55,0.0,0.0,16.55
+515,383.28,4.0,Emprendimiento Emily Blanco 10,2026-06-05 20:04:20,444.61,Emprendimiento Emily Blanco 10,Facturado por completo,444.61,444.61,Emprendimiento Emily Blanco 10,444.6,61.33,0.0,0.01,61.33
+516,190.99,2.0,"MOTO REPUESTOS LA FLECHA, C.A.",2026-06-05 22:00:11,221.55,"MOTO REPUESTOS LA FLECHA, C.A.",Facturado por completo,221.55,221.55,"MOTO REPUESTOS LA FLECHA, C.A.",221.55,30.56,0.0,0.0,30.56
+517,201.6,1.0,"Industrias Arasia, c.a.",2026-06-08 20:44:04,233.86,"Industrias Arasia, c.a.",Facturado por completo,233.86,233.86,"Industrias Arasia, c.a.",233.86,32.26,0.0,0.0,32.26
+518,140.58,1.0,EMPRENDIMIENTO IRMA RODRIGUEZ 6,2026-06-08 12:55:00,163.07,EMPRENDIMIENTO IRMA RODRIGUEZ 6,Facturado por completo,163.07,163.07,EMPRENDIMIENTO IRMA RODRIGUEZ 6,163.07,22.49,0.0,0.0,22.49
+519,3014.59,3.0,Comercializadora Garabote,2026-06-09 17:04:29,3496.92,Comercializadora Garabote,Facturado por completo,3496.92,3496.92,Comercializadora Garabote,3496.92,482.33,0.0,0.0,482.33
+520,131.22,3.0,"Inversiones Marfran 2025, C. A.",2026-06-08 20:44:23,152.22,"Inversiones Marfran 2025, C. A.",Facturado por completo,152.22,152.22,"Inversiones Marfran 2025, C. A.",152.22,21.0,0.0,0.0,21.0
+522,1232.1,1.0,Agustin Pedro Rodriguez Carro,2026-06-08 21:14:45,1429.24,Agustin Pedro Rodriguez Carro,Facturado por completo,1429.24,1429.24,Agustin Pedro Rodriguez Carro,1429.24,197.14,0.0,0.0,197.14
+523,363.22,4.0,Miguel Antonio Chacon,2026-06-09 13:26:44,421.34,Miguel Antonio Chacon,Facturado por completo,421.34,421.34,Miguel Antonio Chacon,421.34,58.12,0.0,0.0,58.12
+524,85.54,1.0,Junior Marco Antonio Vivas Navas,2026-06-09 12:42:13,,,,,,,,,,,
+525,85.54,1.0,Juan antonio salaverria herrera,2026-06-09 12:49:07,99.23,Juan antonio salaverria herrera,Facturado por completo,99.23,99.23,Juan antonio salaverria herrera,99.23,13.69,0.0,0.0,13.69
+526,100.02,1.0,Auto repuestos Fontalvo,2026-06-09 13:27:13,116.02,Auto repuestos Fontalvo,Facturado por completo,116.02,116.02,Auto repuestos Fontalvo,116.02,16.0,0.0,0.0,16.0
+527,123.71,1.0,"Fluidtack Soluciones, c.a.",2026-06-15 20:46:57,143.5,"Fluidtack Soluciones, c.a.",Facturado por completo,143.5,143.5,"Fluidtack Soluciones, c.a.",143.5,19.79,0.0,0.0,19.79
+528,47.41,1.0,Angel ARMAS,2026-06-09 16:33:07,55.0,Angel ARMAS,Facturado por completo,55.0,55.0,Angel ARMAS,55.0,7.59,0.0,0.0,7.59
+529,89.49,1.0,Megacar2020.c.a,2026-06-09 19:37:30,103.81,Megacar2020.c.a,Facturado por completo,103.81,103.81,Megacar2020.c.a,103.81,14.32,0.0,0.0,14.32
+530,652.7399999999999,4.0,Motolavado Yahir,2026-06-09 19:38:35,757.17,Motolavado Yahir,Facturado por completo,757.17,757.17,Motolavado Yahir,757.18,104.43,0.0,-0.01,104.43
+531,89.49,1.0,"Mazare Motors, C.A",2026-06-09 20:03:39,103.81,"Mazare Motors, C.A",Facturado por completo,103.81,103.81,"Mazare Motors, C.A",103.81,14.32,0.0,0.0,14.32
+532,1407.4,13.0,"Hipermercado Petare,c.a.",2026-06-10 16:24:00,1632.58,"Hipermercado Petare,c.a.",Facturado por completo,1632.58,1632.58,"Hipermercado Petare,c.a.",1632.58,225.18,0.0,0.0,225.18
+533,138.28,2.0,Jose Lopez Espinoza,2026-06-10 13:05:30,160.4,Jose Lopez Espinoza,Facturado por completo,160.4,160.4,Jose Lopez Espinoza,160.4,22.12,0.0,0.0,22.12
+534,198.29,1.0,Autopartes Munich PH 168 C.A.,2026-06-10 15:52:02,230.02,Autopartes Munich PH 168 C.A.,Facturado por completo,230.02,230.02,Autopartes Munich PH 168 C.A.,230.02,31.73,0.0,0.0,31.73
+535,289.62,2.0,"En ascenso 2011,c.a.",2026-06-10 18:02:25,335.96,"En ascenso 2011,c.a.",Facturado por completo,335.96,335.96,"En ascenso 2011,c.a.",335.96,46.34,0.0,0.0,46.34
+536,177.42,1.0,"INVERSIONES R&C 1817,  c.a.",2026-06-10 17:07:01,205.81,"INVERSIONES R&C 1817,  c.a.",Facturado por completo,205.81,205.81,"INVERSIONES R&C 1817, c.a.",205.81,28.39,0.0,0.0,28.39
+537,138.28,2.0,"LUBRIREPUESTOS PANORAMA, C.A.",2026-06-10 17:06:52,160.4,"LUBRIREPUESTOS PANORAMA, C.A.",Facturado por completo,160.4,160.4,"LUBRIREPUESTOS PANORAMA, C.A.",160.4,22.12,0.0,0.0,22.12
+538,297.41999999999996,3.0,"INVERSIONES SMALUM 21, C.A.",2026-06-10 18:20:12,345.01,"INVERSIONES SMALUM 21, C.A.",Facturado por completo,345.01,345.01,"INVERSIONES SMALUM 21, C.A.",345.01,47.59,0.0,0.0,47.59
+539,190.47,1.0,Diana Carolina Torres,2026-06-10 18:20:03,220.95,Diana Carolina Torres,Facturado por completo,220.95,220.95,Diana Carolina Torres,220.95,30.48,0.0,0.0,30.48
+540,256.99,3.0,"GARAJE Y TALLERES FRIDELBA, C.A",2026-06-10 18:19:54,298.11,"GARAJE Y TALLERES FRIDELBA, C.A",Facturado por completo,298.11,274.2599993,"GARAJE Y TALLERES FRIDELBA, C.A",298.11,41.12,0.0,0.0,41.12
+541,301.35,2.0,Bicicletas Repuestos Carioca C.A,2026-06-10 19:17:48,349.57,Bicicletas Repuestos Carioca C.A,Facturado por completo,349.57,349.57,Bicicletas Repuestos Carioca C.A,349.57,48.22,0.0,0.0,48.22
+542,1766.4699999999998,2.0,Alexander Quiroz,2026-06-10 20:01:43,2049.11,Alexander Quiroz,Facturado por completo,2049.11,2049.11,Alexander Quiroz,2049.11,282.64,0.0,0.0,282.64
+543,69.14,1.0,Jose de Andrade,2026-06-10 20:25:03,80.2,Jose de Andrade,Facturado por completo,80.2,80.2,Jose de Andrade,80.2,11.06,0.0,0.0,11.06
+544,380.91999999999996,2.0,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",2026-06-10 20:29:50,441.86,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",Facturado por completo,441.86,441.86,"MULTIPARTES Y SERVICIOS HONDANIS,C.A.",441.87,60.94,0.0,-0.01,60.94
+545,101.74,1.0,DISTRIBUIDORA PINOS 181297 C.A,2026-06-10 22:12:59,118.02,DISTRIBUIDORA PINOS 181297 C.A,Facturado por completo,118.02,118.02,DISTRIBUIDORA PINOS 181297 C.A,118.02,16.28,0.0,0.0,16.28
+546,344.08,2.0,"Constructora  Campo Urbano,c.a.",2026-06-11 18:58:06,399.14,"Constructora  Campo Urbano,c.a.",Facturado por completo,399.14,399.14,"Constructora Campo Urbano,c.a.",399.13,55.06,0.0,0.01,55.06
+547,98.31,1.0,ROBERT GUILLEN,2026-06-11 18:59:37,114.04,ROBERT GUILLEN,Facturado por completo,114.04,114.04,ROBERT GUILLEN,114.04,15.73,0.0,0.0,15.73
+549,313.04,2.0,Moto repuestos jj,2026-06-11 19:15:16,363.13,Moto repuestos jj,Facturado por completo,363.13,363.13,Moto repuestos jj,363.13,50.09,0.0,0.0,50.09
+550,447.56,5.0,ADS SERVICE C.A,2026-06-11 19:24:38,519.17,ADS SERVICE C.A,Facturado por completo,519.17,519.17,ADS SERVICE C.A,519.17,71.61,0.0,0.0,71.61
+551,366.05999999999995,4.0,Monkey moto Services C.A,2026-06-11 20:06:06,424.63,Monkey moto Services C.A,Facturado por completo,424.63,424.63,Monkey moto Services C.A,424.63,58.57,0.0,0.0,58.57
+552,322.09,3.0,"Repuestos Chevecars Gran Caracas, C.A",2026-06-11 21:02:17,373.62,"Repuestos Chevecars Gran Caracas, C.A",Facturado por completo,373.62,373.62,"Repuestos Chevecars Gran Caracas, C.A",373.62,51.53,0.0,0.0,51.53
+553,301.4,4.0,Autolavado Artico,2026-06-11 21:02:04,349.62,Autolavado Artico,Facturado por completo,349.62,349.62,Autolavado Artico,349.62,48.22,0.0,0.0,48.22
+554,100.9,2.0,"Inversiones Los compadres 7686, c.a.",2026-06-11 21:05:06,117.05,"Inversiones Los compadres 7686, c.a.",Facturado por completo,117.05,117.05,"Inversiones Los compadres 7686, c.a.",117.04,16.15,0.0,0.01,16.15
+555,18601.329999999998,6.0,"AGROPECUARIA LECHE Y MIEL, C.A",2026-06-19 17:54:05,21577.54,"AGROPECUARIA LECHE Y MIEL, C.A",Facturado por completo,21577.54,21577.54,"AGROPECUARIA LECHE Y MIEL, C.A",,2976.21,0.0,,2976.21
+556,369.24,1.0,Agustin Pedro Rodriguez Carro,2026-06-12 13:19:16,428.32,Agustin Pedro Rodriguez Carro,Facturado por completo,428.32,428.32,Agustin Pedro Rodriguez Carro,428.32,59.08,0.0,0.0,59.08
+557,171.81,3.0,ALI ALEXANDER MORENO FIGUEREDO,2026-06-12 19:13:25,199.3,ALI ALEXANDER MORENO FIGUEREDO,Facturado por completo,199.3,199.3,ALI ALEXANDER MORENO FIGUEREDO,199.3,27.49,0.0,0.0,27.49
+558,117.24,1.0,Carlos Bravo,2026-06-12 17:11:15,136.0,Carlos Bravo,Facturado por completo,136.0,136.0,Carlos Bravo,136.0,18.76,0.0,0.0,18.76
+559,99.99,2.0,Comercial Rio Paraguas C.A,2026-06-12 19:48:00,115.99,Comercial Rio Paraguas C.A,Facturado por completo,115.99,115.99,Comercial Rio Paraguas C.A,115.99,16.0,0.0,0.0,16.0
+560,194.89,1.0,"Auto Lavado Norte Sur CS, C.A",2026-06-12 19:48:16,226.07,"Auto Lavado Norte Sur CS, C.A",Facturado por completo,226.07,226.07,"Auto Lavado Norte Sur CS, C.A",226.07,31.18,0.0,0.0,31.18
+561,882.09,1.0,Repuestos El Portu26 C.A,2026-06-12 20:18:57,1023.22,Repuestos El Portu26 C.A,Facturado por completo,1023.22,1023.22,Repuestos El Portu26 C.A,1023.22,141.13,0.0,0.0,141.13
+562,100.0,1.0,"Auto partes Maideirense, C.A",2026-06-12 20:19:12,116.0,"Auto partes Maideirense, C.A",Facturado por completo,116.0,116.0,"Auto partes Maideirense, C.A",116.0,16.0,0.0,0.0,16.0
+563,877.01,2.0,Carlos Ruiz,2026-06-12 20:50:44,1017.34,Carlos Ruiz,Facturado por completo,1017.34,1017.34,Carlos Ruiz,1017.33,140.33,0.0,0.01,140.33
+564,305.13,1.0,Luis Francisco hernandez falcon,2026-06-13 18:21:44,353.95,Luis Francisco hernandez falcon,Facturado por completo,353.95,353.95,Luis Francisco hernandez falcon,353.95,48.82,0.0,0.0,48.82
+565,65.52,1.0,Larry Herrera,2026-06-15 18:29:48,76.0,Larry Herrera,Facturado por completo,76.0,76.0,Larry Herrera,76.0,10.48,0.0,0.0,10.48
+566,2449.49,2.0,Emprendimiento ilaris cancelo,2026-06-15 20:35:24,2841.41,Emprendimiento ilaris cancelo,Facturado por completo,2841.41,2841.41,Emprendimiento ilaris cancelo,2841.41,391.92,0.0,0.0,391.92
+567,310.33,4.0,Yulendri Carolina Pineda Blanco,2026-06-15 20:35:12,359.98,Yulendri Carolina Pineda Blanco,Facturado por completo,359.98,359.98,Yulendri Carolina Pineda Blanco,359.98,49.65,0.0,0.0,49.65
+568,298.88,2.0,Jefferson Navone,2026-06-15 21:20:12,346.7,Jefferson Navone,Facturado por completo,346.7,346.7,Jefferson Navone,346.7,47.82,0.0,0.0,47.82
+569,14799.67,5.0,"Inversiones Mercelt 2023, c.a.",2026-06-15 22:14:55,,,,,,,,,,,
+570,31.6,1.0,ELENA   MEJIAS,2026-06-16 14:07:50,36.66,ELENA   MEJIAS,Facturado por completo,36.66,36.66,ELENA MEJIAS,36.66,5.06,0.0,0.0,5.06
+571,17713.6,7.0,SJMG 2012 C.A,2026-06-16 20:49:39,20547.78,SJMG 2012 C.A,Facturado por completo,20547.78,20547.78,SJMG 2012 C.A,20547.78,2834.18,0.0,0.0,2834.18
+572,385.81,5.0,"AUTO REPUESTOS EL DUO 2013, C.A.",2026-06-16 20:49:57,447.53,"AUTO REPUESTOS EL DUO 2013, C.A.",Facturado por completo,447.53,447.53,"AUTO REPUESTOS EL DUO 2013, C.A.",447.54,61.72,0.0,-0.01,61.72
+573,1603.81,8.0,SJMG 2012 C.A,2026-06-16 20:50:34,1860.43,SJMG 2012 C.A,Facturado por completo,1860.43,1860.43,SJMG 2012 C.A,1860.42,256.62,0.0,0.01,256.62
+574,191.66,2.0,Katiuska Alejandra Curvelo,2026-06-16 20:50:14,222.32,Katiuska Alejandra Curvelo,Facturado por completo,222.32,222.32,Katiuska Alejandra Curvelo,222.33,30.66,0.0,-0.01,30.66
+575,81.37,1.0,"Grupo KACAOIL,C.A.",2026-06-17 13:33:03,94.39,"Grupo KACAOIL,C.A.",Facturado por completo,94.39,94.39,"Grupo KACAOIL,C.A.",94.39,13.02,0.0,0.0,13.02
+576,127.68,2.0,"INVERSIONES F-250, C.A",2026-06-17 21:09:53,148.11,"INVERSIONES F-250, C.A",Por facturar,148.11,148.11,"INVERSIONES F-250, C.A",148.11,20.43,0.0,0.0,20.43
+577,149.72,1.0,Jose Gregorio Lopez,2026-06-17 18:48:42,173.68,Jose Gregorio Lopez,Facturado por completo,173.68,173.68,Jose Gregorio Lopez,173.68,23.96,0.0,0.0,23.96
+578,334.25,3.0,AUTOLAVADO ANDRES BELLO C.A,2026-06-17 21:09:24,387.73,AUTOLAVADO ANDRES BELLO C.A,Por facturar,387.73,387.73,AUTOLAVADO ANDRES BELLO C.A,387.73,53.48,0.0,0.0,53.48
+579,94.27,1.0,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",2026-06-18 16:59:01,109.35,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",Por facturar,109.35,109.35,"CAUCHOS Y ACCESORIOS LA CAMPIÑA, C.A.",,15.08,0.0,,15.08
+580,529.61,5.0,Sandra Katherine Quintero Crespo,2026-06-18 21:34:11,614.35,Sandra Katherine Quintero Crespo,Por facturar,614.35,614.35,Sandra Katherine Quintero Crespo,,84.74,0.0,,84.74
+581,291.48,3.0,"Inversiones Repuestos Flash 3141, C.A",2026-06-18 21:34:28,338.12,"Inversiones Repuestos Flash 3141, C.A",Por facturar,338.12,338.12,"Inversiones Repuestos Flash 3141, C.A",,46.64,0.0,,46.64
+582,46.74,1.0,York Dick Mujica Andarcia,2026-06-19 13:16:42,54.22,York Dick Mujica Andarcia,Por facturar,54.22,54.22,York Dick Mujica Andarcia,,7.48,0.0,,7.48
+583,280.42,1.0,"UBAG Services,c.a.",2026-06-19 13:39:25,325.29,"UBAG Services,c.a.",Facturado por completo,325.29,325.29,"UBAG Services,c.a.",,44.87,0.0,,44.87
+584,18939.65,5.0,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",2026-06-19 19:12:04,21970.0,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",Por facturar,21970.0,21970.0,"TERA INGENIERIA Y SERVICIOS INDUSTRIALES, C.A",,3030.35,0.0,,3030.35
+585,517.79,3.0,E&M CAR SHOP C.A,2026-06-19 14:42:49,600.64,E&M CAR SHOP C.A,Facturado por completo,600.64,600.64,E&M CAR SHOP C.A,,82.85,0.0,,82.85
+586,195.56,1.0,July villasana,2026-06-19 21:18:43,226.85,July villasana,Por facturar,226.85,226.85,July villasana,,31.29,0.0,,31.29
+587,33.21,1.0,Abraham almenar,2026-06-19 21:18:33,38.52,Abraham almenar,Por facturar,38.52,38.52,Abraham almenar,,5.31,0.0,,5.31
+588,429.25,5.0,"Comercial los de faria,c.a.",2026-06-19 21:18:24,497.93,"Comercial los de faria,c.a.",Por facturar,497.93,497.93,"Comercial los de faria,c.a.",,68.68,0.0,,68.68
+589,776.11,7.0,SUKAY MOTORS V.I.P C.A,2026-06-22 12:05:20,900.28,SUKAY MOTORS V.I.P C.A,Por facturar,1800.56,1800.56,SUKAY MOTORS V.I.P C.A,,1024.45,900.28,,124.17
+590,153.7,2.0,Luis Eduardo Piñero Calcurian,2026-06-22 15:12:02,178.29,Luis Eduardo Piñero Calcurian,Por facturar,356.58,356.58,Luis Eduardo Piñero Calcurian,,202.88,178.29,,24.59
+591,92.71,1.0,Chaquiro Arteaga,2026-06-22 15:47:17,107.54,Chaquiro Arteaga,Facturado por completo,215.08,215.08,Chaquiro Arteaga,,122.37,107.54,,14.83
+592,79.29,1.0,Kevin Monsalve,2026-06-22 21:00:26,91.98,Kevin Monsalve,Por facturar,183.96,183.96,Kevin Monsalve,,104.67,91.98,,12.69
+593,232.23,1.0,"Comercial los de faria,c.a.",2026-06-23 12:51:03,269.39,"Comercial los de faria,c.a.",Por facturar,,,,,,,,37.16
+594,91.93,1.0,Junior Bermudez,2026-06-23 19:01:47,106.64,Junior Bermudez,Por facturar,,,,,,,,14.71
+595,59.27,1.0,Encamotors Catia C.A,2026-06-23 20:09:13,68.75,Encamotors Catia C.A,Por facturar,,,,,,,,9.48
+596,151.19,2.0,"INVERSIONES JOSCAR  XXI, S.A.",2026-06-23 20:39:32,175.38,"INVERSIONES JOSCAR  XXI, S.A.",Por facturar,,,,,,,,24.19
+597,183.86,1.0,AUTOREPUESTOS SION C.A.,2026-06-23 20:49:24,213.28,AUTOREPUESTOS SION C.A.,Por facturar,,,,,,,,29.42
+598,424.56,5.0,Ricardo Madrid,2026-06-23 20:49:55,492.49,"Cauchera William 2018, C.A, Ricardo Madrid",Por facturar,,,,,,,,67.93
+599,240.7,2.0,Lubricantes BK C.A,2026-06-23 21:04:17,279.22,Lubricantes BK C.A,Por facturar,,,,,,,,38.52
+600,1014.8199999999999,8.0,MOTO REPUESTOS LA FLECHA II C.A.,2026-06-23 21:04:30,1177.2,MOTO REPUESTOS LA FLECHA II C.A.,Por facturar,,,,,,,,162.38
+601,258.85,2.0,Inversiones may Cars 2016 c.a,2026-06-23 21:04:47,300.26,Inversiones may Cars 2016 c.a,Por facturar,,,,,,,,41.41
+602,8587.8,2.0,Edipica CA,2026-06-24 15:27:07,,,,,,,,,,,

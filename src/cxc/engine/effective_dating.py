@@ -8,9 +8,11 @@ regía entonces, no con el de hoy.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from ..models import (
     Condicion,
+    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     ReglaRecurrencia,
     TipoDescuento,
@@ -72,6 +74,28 @@ def descuento_vigente(
         candidatas,
         key=lambda r: (-_especificidad(r), r.porcentaje, r.regla_id),
     )
+
+
+def tasa_bcv_completo_vigente(
+    reglas: list[DescuentoBCVCompleto],
+    *,
+    fecha: date,
+) -> Decimal | None:
+    """Tasa de descuento BCV-completo que fijó la gerencia, vigente a ``fecha``.
+
+    Empate: gana la de ``vigencia_desde`` más reciente; luego el menor porcentaje
+    (conservador). None si no hay tasa configurada → el motor no otorga el
+    descuento (no se regala sin instrucción explícita).
+    """
+    candidatas = [
+        r
+        for r in reglas
+        if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
+    ]
+    if not candidatas:
+        return None
+    elegida = max(candidatas, key=lambda r: (r.vigencia_desde, -r.porcentaje))
+    return elegida.porcentaje
 
 
 def regla_recurrencia_vigente(

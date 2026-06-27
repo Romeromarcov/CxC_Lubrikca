@@ -18,6 +18,7 @@ from ..models import (
     Conciliacion,
     Condicion,
     DescuentoAplicado,
+    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     EstadoBandeja,
     EstadoVinculacion,
@@ -226,6 +227,25 @@ def descuento_from_row(r: Mapping[str, str]) -> DescuentoMarcaCategoria:
         tipo_descuento=TipoDescuento(r.get("tipo_descuento", "contado")),
         porcentaje=p_dec(r.get("porcentaje", "0")),
         vigencia_desde=p_date(r["vigencia_desde"]),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- DescuentoBCVCompleto ----------------------------------------------------
+def bcv_completo_to_row(d: DescuentoBCVCompleto) -> Row:
+    return {
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "porcentaje": str(d.porcentaje),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "activo": s_bool(d.activo),
+    }
+
+
+def bcv_completo_from_row(r: Mapping[str, str]) -> DescuentoBCVCompleto:
+    return DescuentoBCVCompleto(
+        vigencia_desde=p_date(r["vigencia_desde"]),
+        porcentaje=p_dec(r.get("porcentaje", "0")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
     )

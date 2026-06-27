@@ -56,6 +56,7 @@ Crear estas pestañas:
 | `MetodosPago` | Administración | `metodo_id, nombre, moneda, tipo_tasa, es_contado` |
 | `SerieTasas` | scraper (append) | `timestamp, tasa_bcv, tasa_binance, fuente, es_heredada, capturada_ok` |
 | `DescuentosMarcaCategoria` | Administración | `regla_id, marca, categoria, tipo_descuento, porcentaje, vigencia_desde, vigencia_hasta, activo` |
+| `DescuentoBCVCompleto` | Gerencia (diario) | `vigencia_desde, porcentaje, vigencia_hasta, activo` |
 | `ReglasRecurrencia` | Administración | `condicion, tipo_beneficio, valor, vigencia_desde, vigencia_hasta, activo` |
 | `Feriados` | Administración | `fecha, descripcion, tipo` |
 | `Vinculaciones` | AppSheet | `vinc_id, pago_id, so_id, monto_aplicado, hora_pago_confirmada, tasa_bcv_aplicada, tasa_binance_aplicada, es_tasa_heredada, equiv_usd_bcv, equiv_usd_binance, equiv_ves_bcv, equiv_ves_binance, confirmado_por, timestamp_registro, estado, moneda_abono, tipo_tasa_abono` |
