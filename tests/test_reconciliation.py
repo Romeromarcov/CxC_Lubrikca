@@ -79,17 +79,20 @@ def test_reconciler_recorre_bandeja_y_persiste() -> None:
     assert len(repo.all_conciliaciones()) == 2
 
 
-def test_odoo_facturas_reader_suma_facturas_y_ncs() -> None:
+def test_odoo_facturas_reader_suma_facturas_y_ncs_en_usd() -> None:
+    # La compañía factura en VES; se usa el equivalente USD de la factura.
     def fake_execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
         return [
-            {"id": 1, "so_id": "SO1", "amount_total": "100", "move_type": "out_invoice"},
-            {"id": 2, "so_id": "SO1", "amount_total": "6", "move_type": "out_refund"},
+            {"id": 1, "invoice_origin": "S00553",
+             "amount_total_signed_usd": "1650.42", "move_type": "out_invoice"},
+            {"id": 2, "invoice_origin": "S00553",
+             "amount_total_signed_usd": "-50.00", "move_type": "out_refund"},
         ]
 
     reader = OdooFacturasReader(fake_execute)
-    neto = reader.neto_facturado("SO1")
-    assert neto.monto_facturado == Decimal("100")
-    assert neto.ncs == Decimal("6")
+    neto = reader.neto_facturado("S00553")
+    assert neto.monto_facturado == Decimal("1650.42")
+    assert neto.ncs == Decimal("50.00")
     assert neto.facturada is True
 
 

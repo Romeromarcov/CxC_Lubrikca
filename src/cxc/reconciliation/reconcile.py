@@ -66,10 +66,15 @@ class FacturasOdoo(ABC):
 
 
 class OdooFacturasReader(FacturasOdoo):
-    """Lee account.move (facturas y NCs) de una orden vía ``execute`` inyectable."""
+    """Lee account.move (facturas y NCs) de una orden vía ``execute`` inyectable.
+
+    La compañía factura en VES; se usa ``amount_total_signed_usd`` (equivalente
+    USD a la tasa registrada en la factura). La orden se liga por
+    ``invoice_origin = SO.name``.
+    """
 
     MODEL = "account.move"
-    FIELDS = ["id", "so_id", "amount_total", "move_type", "state"]
+    FIELDS = ["id", "invoice_origin", "amount_total_signed_usd", "move_type", "state"]
 
     def __init__(
         self,
@@ -81,7 +86,8 @@ class OdooFacturasReader(FacturasOdoo):
         registros: list[dict[str, Any]] = self._execute(
             self.MODEL,
             "search_read",
-            [[["so_id", "=", so_id], ["state", "=", "posted"]]],
+            [[["invoice_origin", "=", so_id], ["state", "=", "posted"],
+              ["move_type", "in", ["out_invoice", "out_refund"]]]],
             {"fields": self.FIELDS},
         )
         monto = Decimal("0")

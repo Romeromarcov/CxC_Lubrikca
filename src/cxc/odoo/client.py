@@ -1,14 +1,18 @@
 """Cliente Odoo XML-RPC — solo lectura, delta por ``write_date`` (sección 2).
 
-Diseño para testabilidad sin red:
-  - Las funciones ``map_*`` son PURAS: convierten un registro de Odoo (dict) en
-    una dataclass del modelo. Se prueban con dicts, sin conexión.
-  - ``OdooXmlRpcReader`` recibe un callable ``execute`` inyectable
-    (``model, method, args, kwargs``). En producción lo provee ``ServerProxy``;
-    en tests, un fake. Así se cubre la construcción del dominio delta sin red.
+Mapeo calibrado contra el Odoo 18 QA de Lubrikca (ver docs/ODOO_MAPEO.md):
+  - SO identificada por ``name`` (S00553), no por id numérico.
+  - ``vendedor_email`` = ``user_id.login`` (resuelto con 2ª consulta a res.users).
+  - ``fecha_entrega`` = ``stock.picking.date_done`` del despacho saliente.
+  - marca/categoría salen del PRODUCTO (``brand_id`` / raíz de ``categ_id``).
+  - ``metodo_pago`` = ``journal_id`` (el diario lleva la identidad real).
+  - ``es_primera_compra`` se calcula (primera SO del partner).
 
-Los nombres de campo de Odoo son específicos del entorno (ver SETUP.md). Se
-declaran como constantes — único punto de ajuste si difieren.
+Diseño para testabilidad sin red:
+  - ``map_*`` son PURAS: convierten un dict ya enriquecido en una dataclass.
+  - ``OdooXmlRpcReader`` recibe un ``execute`` inyectable y hace el enriquecimiento
+    (resolución de relaciones) con consultas batch. En tests se prueba con un
+    ``execute`` falso que despacha por modelo.
 """
 
 from __future__ import annotations
@@ -36,6 +40,14 @@ def _m2o_id(value: Any) -> str:
     return str(value)
 
 
+def _m2o_name(value: Any) -> str:
+    if isinstance(value, list | tuple) and len(value) > 1:
+        return str(value[1])
+    if value in (False, None):
+        return ""
+    return str(value)
+
+
 def _to_date(value: Any) -> Any:
     if value in (False, None, ""):
         return None
@@ -43,13 +55,27 @@ def _to_date(value: Any) -> Any:
 
 
 def _to_datetime(value: Any) -> datetime:
-    return datetime.strptime(str(value)[:19], ODOO_DATETIME_FMT)
+    """Tolera fecha pura (``YYYY-MM-DD``) o datetime de Odoo."""
+    s = str(value)
+    if len(s) <= 10:
+        return datetime.strptime(s[:10], ODOO_DATE_FMT)
+    return datetime.strptime(s[:19], ODOO_DATETIME_FMT)
 
 
 def _dec(value: Any) -> Decimal:
     if value in (False, None, ""):
         return Decimal("0")
     return to_decimal(str(value))
+
+
+def _ids_of(recs: list[dict[str, Any]], field: str) -> set[int]:
+    """Conjunto de ids (int) de un campo many2one a lo largo de varios registros."""
+    out: set[int] = set()
+    for r in recs:
+        raw = _m2o_id(r.get(field))
+        if raw:
+            out.add(int(raw))
+    return out
 
 
 def map_cliente(rec: dict[str, Any]) -> Cliente:
@@ -61,58 +87,57 @@ def map_cliente(rec: dict[str, Any]) -> Cliente:
 
 
 def map_orden(rec: dict[str, Any]) -> OrdenVenta:
-    monto_fact = rec.get("monto_facturado")
     return OrdenVenta(
-        so_id=str(rec["id"]),
+        so_id=str(rec["name"]),
         cliente_id=_m2o_id(rec.get("partner_id")),
-        fecha=_to_date(rec.get("date_order")) or _to_datetime(rec["date_order"]).date(),
+        fecha=_to_datetime(rec["date_order"]).date(),
         fecha_entrega=_to_date(rec.get("fecha_entrega")),
         monto_total=_dec(rec.get("amount_total")),
-        lista_precios=_m2o_id(rec.get("pricelist_id")) or str(rec.get("lista_precios", "")),
+        lista_precios=_m2o_id(rec.get("pricelist_id")),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
         es_primera_compra=bool(rec.get("es_primera_compra", False)),
-        facturada=bool(rec.get("facturada", False)),
+        facturada=str(rec.get("invoice_status", "")) == "invoiced",
         factura_id=str(rec["factura_id"]) if rec.get("factura_id") else None,
-        monto_facturado=_dec(monto_fact) if monto_fact not in (False, None, "") else None,
+        monto_facturado=None,  # lo computa la conciliación (USD vía tasa de factura)
     )
 
 
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
-        so_id=_m2o_id(rec.get("order_id")),
-        producto=_m2o_id(rec.get("product_id")) or str(rec.get("producto", "")),
+        so_id=_m2o_name(rec.get("order_id")),  # nombre de la SO (calza OrdenesVenta.so_id)
+        producto=_m2o_id(rec.get("product_id")),
         marca=str(rec.get("marca", "") or ""),
         categoria=str(rec.get("categoria", "") or ""),
-        cantidad=_dec(rec.get("product_uom_qty", rec.get("cantidad"))),
-        precio_unitario=_dec(rec.get("price_unit", rec.get("precio_unitario"))),
+        cantidad=_dec(rec.get("product_uom_qty")),
+        precio_unitario=_dec(rec.get("price_unit")),
     )
 
 
 def map_pago(rec: dict[str, Any]) -> Pago:
-    moneda_raw = str(rec.get("moneda", "VES")).upper()
-    moneda = Moneda.USD if moneda_raw == "USD" else Moneda.VES
+    moneda = Moneda.USD if _m2o_name(rec.get("currency_id")) == "USD" else Moneda.VES
     return Pago(
         pago_id=str(rec["id"]),
         cliente_id=_m2o_id(rec.get("partner_id")),
-        monto=_dec(rec.get("amount", rec.get("monto"))),
+        monto=_dec(rec.get("amount")),
         moneda=moneda,
-        metodo_pago=_m2o_id(rec.get("metodo_pago")) or str(rec.get("metodo_pago", "")),
+        metodo_pago=_m2o_id(rec.get("journal_id")),
         fecha_pago=_to_datetime(rec.get("date") or rec["fecha_pago"]),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
     )
 
 
 def map_factura(rec: dict[str, Any]) -> tuple[str, Decimal, Decimal]:
-    """Mapea una factura/NC de Odoo a (so_id, monto_facturado, ncs).
+    """Mapea una factura/NC de Odoo a (so_id, monto_usd, ncs_usd).
 
-    ``move_type`` ``out_refund`` (nota de crédito) suma a NCs; el resto a monto.
+    Usa ``amount_total_signed_usd`` (equivalente USD a la tasa registrada en la
+    factura — la compañía factura en VES). ``out_refund`` (NC) suma a NCs.
     """
-    so_id = _m2o_id(rec.get("so_id")) or str(rec.get("so_id", ""))
-    monto = _dec(rec.get("amount_total", rec.get("monto")))
+    so_id = str(rec.get("invoice_origin", "") or "")
+    usd = abs(_dec(rec.get("amount_total_signed_usd")))
     if str(rec.get("move_type", "")) == "out_refund":
-        return so_id, Decimal("0"), monto
-    return so_id, monto, Decimal("0")
+        return so_id, Decimal("0"), usd
+    return so_id, usd, Decimal("0")
 
 
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
@@ -134,70 +159,197 @@ class OdooReader(ABC):
     def changed_pagos(self, since: datetime | None) -> list[Pago]: ...
 
 
-# Campos a leer por modelo (único punto de ajuste de mapeo Odoo).
-FIELDS_CLIENTE = ["id", "name", "vendedor_email", "write_date"]
-FIELDS_ORDEN = [
-    "id", "partner_id", "date_order", "fecha_entrega", "amount_total",
-    "pricelist_id", "vendedor_email", "es_primera_compra", "facturada",
-    "factura_id", "monto_facturado", "write_date",
-]
-FIELDS_LINEA = [
-    "id", "order_id", "product_id", "marca", "categoria",
-    "product_uom_qty", "price_unit", "write_date",
-]
-FIELDS_PAGO = [
-    "id", "partner_id", "amount", "moneda", "metodo_pago",
-    "date", "vendedor_email", "write_date",
-]
-
-
 class OdooXmlRpcReader(OdooReader):
-    MODEL_CLIENTE = "res.partner"
+    MODEL_PARTNER = "res.partner"
+    MODEL_USERS = "res.users"
     MODEL_ORDEN = "sale.order"
     MODEL_LINEA = "sale.order.line"
     MODEL_PAGO = "account.payment"
+    MODEL_PICKING = "stock.picking"
+    MODEL_PRODUCT = "product.product"
+    MODEL_MOVE = "account.move"
 
     def __init__(self, config: OdooConfig, execute: ExecuteFn | None = None) -> None:
         self._config = config
         self._execute = execute or _connect(config)
 
     @staticmethod
-    def _domain(since: datetime | None) -> list[Any]:
+    def _delta(since: datetime | None) -> list[Any]:
         if since is None:
             return []
         return [["write_date", ">", since.strftime(ODOO_DATETIME_FMT)]]
 
     def _search_read(
-        self, model: str, fields: list[str], since: datetime | None
+        self, model: str, domain: list[Any], fields: list[str]
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = self._execute(
-            model, "search_read", [self._domain(since)], {"fields": fields}
+            model, "search_read", [domain], {"fields": fields}
         )
         return result
 
+    def _read(self, model: str, ids: list[int], fields: list[str]) -> list[dict[str, Any]]:
+        if not ids:
+            return []
+        result: list[dict[str, Any]] = self._execute(model, "read", [ids], {"fields": fields})
+        return result
+
+    # --- resolución de relaciones -------------------------------------------
+    def _user_logins(self, user_ids: set[int]) -> dict[int, str]:
+        recs = self._read(self.MODEL_USERS, sorted(user_ids), ["id", "login"])
+        return {int(r["id"]): str(r.get("login", "") or "") for r in recs}
+
+    # --- Clientes ------------------------------------------------------------
     def changed_clientes(self, since: datetime | None) -> list[Cliente]:
-        return [
-            map_cliente(r)
-            for r in self._search_read(self.MODEL_CLIENTE, FIELDS_CLIENTE, since)
-        ]
+        recs = self._search_read(
+            self.MODEL_PARTNER, self._delta(since), ["id", "name", "user_id"]
+        )
+        uids = {int(_m2o_id(r.get("user_id"))) for r in recs if _m2o_id(r.get("user_id"))}
+        logins = self._user_logins(uids)
+        for r in recs:
+            uid = _m2o_id(r.get("user_id"))
+            r["vendedor_email"] = logins.get(int(uid), "") if uid else ""
+        return [map_cliente(r) for r in recs]
 
+    # --- OrdenesVenta --------------------------------------------------------
     def changed_ordenes(self, since: datetime | None) -> list[OrdenVenta]:
-        return [
-            map_orden(r)
-            for r in self._search_read(self.MODEL_ORDEN, FIELDS_ORDEN, since)
-        ]
+        recs = self._search_read(
+            self.MODEL_ORDEN,
+            self._delta(since),
+            ["id", "name", "partner_id", "date_order", "amount_total",
+             "pricelist_id", "user_id", "invoice_status"],
+        )
+        if not recs:
+            return []
+        so_ids = [int(r["id"]) for r in recs]
+        so_names = [str(r["name"]) for r in recs]
+        partner_ids = _ids_of(recs, "partner_id")
+        uids = _ids_of(recs, "user_id")
 
+        logins = self._user_logins(uids)
+        entregas = self._fechas_entrega(so_ids)
+        primeras = self._primeras_compras(partner_ids)
+        facturas = self._facturas_por_origen(so_names)
+
+        for r in recs:
+            uid = _m2o_id(r.get("user_id"))
+            r["vendedor_email"] = logins.get(int(uid), "") if uid else ""
+            r["fecha_entrega"] = entregas.get(int(r["id"]))
+            partner = _m2o_id(r.get("partner_id"))
+            r["es_primera_compra"] = (
+                bool(partner) and primeras.get(int(partner)) == str(r["name"])
+            )
+            r["factura_id"] = facturas.get(str(r["name"]))
+        return [map_orden(r) for r in recs]
+
+    def _fechas_entrega(self, so_ids: list[int]) -> dict[int, str]:
+        """Mapa id de SO → fecha de entrega (date_done del despacho saliente)."""
+        if not so_ids:
+            return {}
+        pickings = self._search_read(
+            self.MODEL_PICKING,
+            [["sale_id", "in", so_ids], ["picking_type_code", "=", "outgoing"]],
+            ["sale_id", "date_done", "scheduled_date", "state"],
+        )
+        out: dict[int, str] = {}
+        for p in pickings:
+            sid = _m2o_id(p.get("sale_id"))
+            if not sid:
+                continue
+            fecha = p.get("date_done") or p.get("scheduled_date")
+            if not fecha:
+                continue
+            fecha_s = str(fecha)[:10]
+            prev = out.get(int(sid))
+            # Quedarse con la entrega más reciente si hay varias.
+            if prev is None or fecha_s > prev:
+                out[int(sid)] = fecha_s
+        return out
+
+    def _primeras_compras(self, partner_ids: set[int]) -> dict[int, str]:
+        """Mapa partner → nombre de su SO más antigua (para es_primera_compra)."""
+        if not partner_ids:
+            return {}
+        recs = self._search_read(
+            self.MODEL_ORDEN,
+            [["partner_id", "in", sorted(partner_ids)]],
+            ["name", "partner_id", "date_order"],
+        )
+        primeras: dict[int, tuple[str, str]] = {}
+        for r in recs:
+            pid = _m2o_id(r.get("partner_id"))
+            if not pid:
+                continue
+            fecha = str(r.get("date_order", ""))
+            actual = primeras.get(int(pid))
+            if actual is None or fecha < actual[1]:
+                primeras[int(pid)] = (str(r["name"]), fecha)
+        return {k: v[0] for k, v in primeras.items()}
+
+    def _facturas_por_origen(self, so_names: list[str]) -> dict[str, str]:
+        if not so_names:
+            return {}
+        recs = self._search_read(
+            self.MODEL_MOVE,
+            [["invoice_origin", "in", so_names], ["move_type", "=", "out_invoice"],
+             ["state", "=", "posted"]],
+            ["id", "invoice_origin"],
+        )
+        return {str(r["invoice_origin"]): str(r["id"]) for r in recs if r.get("invoice_origin")}
+
+    # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:
-        return [
-            map_linea(r)
-            for r in self._search_read(self.MODEL_LINEA, FIELDS_LINEA, since)
-        ]
+        domain = self._delta(since) + [["display_type", "=", False]]
+        recs = self._search_read(
+            self.MODEL_LINEA,
+            domain,
+            ["id", "order_id", "product_id", "product_uom_qty", "price_unit"],
+        )
+        prod_ids = _ids_of(recs, "product_id")
+        productos = self._productos(prod_ids)
+        for r in recs:
+            pid = _m2o_id(r.get("product_id"))
+            marca, categoria = productos.get(int(pid), ("", "")) if pid else ("", "")
+            r["marca"] = marca
+            r["categoria"] = categoria
+        return [map_linea(r) for r in recs]
 
+    def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str]]:
+        """Mapa producto → (marca, categoría raíz). categoría = 1er nivel del árbol."""
+        recs = self._read(self.MODEL_PRODUCT, sorted(prod_ids), ["id", "brand_id", "categ_id"])
+        out: dict[int, tuple[str, str]] = {}
+        for r in recs:
+            marca = _m2o_name(r.get("brand_id"))
+            categoria_full = _m2o_name(r.get("categ_id"))
+            categoria = categoria_full.split("/")[0].strip() if categoria_full else ""
+            out[int(r["id"])] = (marca, categoria)
+        return out
+
+    # --- Pagos ---------------------------------------------------------------
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
-        return [
-            map_pago(r)
-            for r in self._search_read(self.MODEL_PAGO, FIELDS_PAGO, since)
-        ]
+        domain = self._delta(since) + [["payment_type", "=", "inbound"]]
+        recs = self._search_read(
+            self.MODEL_PAGO,
+            domain,
+            ["id", "partner_id", "amount", "currency_id", "journal_id", "date"],
+        )
+        partner_ids = _ids_of(recs, "partner_id")
+        vendedores = self._vendedor_por_partner(partner_ids)
+        for r in recs:
+            pid = _m2o_id(r.get("partner_id"))
+            r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
+        return [map_pago(r) for r in recs]
+
+    def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
+        if not partner_ids:
+            return {}
+        partners = self._read(self.MODEL_PARTNER, sorted(partner_ids), ["id", "user_id"])
+        uids = {int(_m2o_id(p.get("user_id"))) for p in partners if _m2o_id(p.get("user_id"))}
+        logins = self._user_logins(uids)
+        out: dict[int, str] = {}
+        for p in partners:
+            uid = _m2o_id(p.get("user_id"))
+            out[int(p["id"])] = logins.get(int(uid), "") if uid else ""
+        return out
 
 
 def _connect(config: OdooConfig) -> ExecuteFn:  # pragma: no cover - red externa
