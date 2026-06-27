@@ -93,6 +93,29 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         )
         self._sh = self._gc.open_by_key(spreadsheet_id)
 
+    @classmethod
+    def from_oauth(
+        cls,
+        spreadsheet_id: str,
+        client_secret_path: str,
+        token_path: str = "authorized_user.json",
+    ) -> GspreadGateway:
+        """Autentica como usuario (OAuth) en vez de cuenta de servicio.
+
+        Útil cuando la organización bloquea la creación de claves de cuenta de
+        servicio (``iam.disableServiceAccountKeyCreation``). La 1ª corrida abre el
+        navegador para consentir; el token se cachea en ``token_path``.
+        """
+        import gspread
+
+        self = cls.__new__(cls)
+        self._gc = gspread.oauth(  # type: ignore[attr-defined]
+            credentials_filename=client_secret_path,
+            authorized_user_filename=token_path,
+        )
+        self._sh = self._gc.open_by_key(spreadsheet_id)
+        return self
+
     def _ws(self, table: str):  # type: ignore[no-untyped-def]
         return self._sh.worksheet(table)
 
