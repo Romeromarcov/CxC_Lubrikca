@@ -36,10 +36,12 @@ def test_map_orden_usa_name_como_so_id() -> None:
         "amount_total": "1650.44", "pricelist_id": [5, "Precio USD Pago VES"],
         "vendedor_email": "rep@x.com", "es_primera_compra": True,
         "invoice_status": "invoiced", "factura_id": "3835",
+        "delivery_status": "full",
     })
     assert o.so_id == "S00553"
     assert o.cliente_id == "181"
     assert o.fecha.isoformat() == "2026-06-12"
+    assert o.entregada_completa is True
     assert o.fecha_entrega is not None and o.fecha_entrega.isoformat() == "2026-06-13"
     assert o.monto_total == Decimal("1650.44")
     assert o.lista_precios == "5"
@@ -57,6 +59,20 @@ def test_map_orden_no_facturada() -> None:
     assert o.facturada is False
     assert o.factura_id is None
     assert o.fecha_entrega is None
+
+
+def test_map_orden_entrega_parcial_no_ancla_el_plazo() -> None:
+    # Aunque haya una fecha de entrega, si no está completa no arranca el plazo.
+    o = map_orden({
+        "id": 1, "name": "S1", "partner_id": [1, "X"],
+        "date_order": "2026-06-01 10:00:00", "fecha_entrega": "2026-06-05",
+        "amount_total": "100", "pricelist_id": [5, "x"], "invoice_status": "no",
+        "delivery_status": "partial", "tiene_devolucion": True,
+    })
+    assert o.estado_entrega == "partial"
+    assert o.entregada_completa is False
+    assert o.fecha_entrega is None  # el plazo de contado no arrancó
+    assert o.tiene_devolucion is True
 
 
 def test_map_linea_usa_nombre_de_so() -> None:
@@ -115,6 +131,10 @@ class FakeExecute:
             domain = args[0]
             es_primeras = any("partner_id" in str(c) for c in domain)
             return self.data.get("ordenes_primeras" if es_primeras else "ordenes", [])
+        if model == "stock.picking" and method == "search_read":
+            domain = args[0]
+            es_devolucion = any("return_id" in str(c) for c in domain)
+            return self.data.get("devoluciones" if es_devolucion else "pickings", [])
         key = {
             ("res.partner", "search_read"): "partners",
             ("res.partner", "read"): "partners_read",
@@ -122,7 +142,6 @@ class FakeExecute:
             ("sale.order.line", "search_read"): "lineas",
             ("product.product", "read"): "productos",
             ("account.payment", "search_read"): "pagos",
-            ("stock.picking", "search_read"): "pickings",
             ("account.move", "search_read"): "facturas",
         }.get((model, method))
         return self.data.get(key, [])
@@ -144,7 +163,7 @@ def test_changed_ordenes_enriquece_todo() -> None:
             "id": 553, "name": "S00553", "partner_id": [181, "ACME"],
             "date_order": "2026-06-12 15:49:16", "amount_total": 1650.44,
             "pricelist_id": [5, "Precio USD Pago VES"], "user_id": [13, "TORO"],
-            "invoice_status": "invoiced",
+            "invoice_status": "invoiced", "delivery_status": "full",
         }],
         "users": [{"id": 13, "login": "ruta07@gmail.com"}],
         "pickings": [{"sale_id": [553, "S00553"], "date_done": "2026-06-13 10:00:00",
@@ -171,7 +190,7 @@ def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
     fake = FakeExecute({
         "lineas": [{"id": 1463, "order_id": [553, "S00553"],
                     "product_id": [906, "ELITE"], "product_uom_qty": 20.0,
-                    "price_unit": 71.13}],
+                    "price_unit": 71.13, "qty_delivered": 18.0}],
         "productos": [{"id": 906, "brand_id": False,
                        "categ_id": [506, "Comercial / Elite / Sintetico / Gasolina"]}],
     })
@@ -181,6 +200,7 @@ def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
     assert ln.marca == ""  # brand_id vacío en QA
     assert ln.categoria == "Comercial"  # raíz del árbol
     assert ln.cantidad == Decimal("20")
+    assert ln.cantidad_entregada == Decimal("18")  # neto de devoluciones
 
 
 def test_changed_pagos_resuelve_vendedor_y_journal() -> None:

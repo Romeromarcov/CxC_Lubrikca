@@ -87,11 +87,15 @@ def map_cliente(rec: dict[str, Any]) -> Cliente:
 
 
 def map_orden(rec: dict[str, Any]) -> OrdenVenta:
+    estado_entrega = str(rec.get("delivery_status", "") or "")
+    entregada_completa = estado_entrega == "full"
+    # El plazo de contado solo arranca con la entrega completa.
+    fecha_entrega = _to_date(rec.get("fecha_entrega")) if entregada_completa else None
     return OrdenVenta(
         so_id=str(rec["name"]),
         cliente_id=_m2o_id(rec.get("partner_id")),
         fecha=_to_datetime(rec["date_order"]).date(),
-        fecha_entrega=_to_date(rec.get("fecha_entrega")),
+        fecha_entrega=fecha_entrega,
         monto_total=_dec(rec.get("amount_total")),
         lista_precios=_m2o_id(rec.get("pricelist_id")),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
@@ -99,6 +103,9 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
         facturada=str(rec.get("invoice_status", "")) == "invoiced",
         factura_id=str(rec["factura_id"]) if rec.get("factura_id") else None,
         monto_facturado=None,  # lo computa la conciliación (USD vía tasa de factura)
+        estado_entrega=estado_entrega,
+        entregada_completa=entregada_completa,
+        tiene_devolucion=bool(rec.get("tiene_devolucion", False)),
     )
 
 
@@ -111,6 +118,7 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
         categoria=str(rec.get("categoria", "") or ""),
         cantidad=_dec(rec.get("product_uom_qty")),
         precio_unitario=_dec(rec.get("price_unit")),
+        cantidad_entregada=_dec(rec.get("qty_delivered")),
     )
 
 
@@ -216,7 +224,7 @@ class OdooXmlRpcReader(OdooReader):
             self.MODEL_ORDEN,
             self._delta(since),
             ["id", "name", "partner_id", "date_order", "amount_total",
-             "pricelist_id", "user_id", "invoice_status"],
+             "pricelist_id", "user_id", "invoice_status", "delivery_status"],
         )
         if not recs:
             return []
@@ -229,6 +237,7 @@ class OdooXmlRpcReader(OdooReader):
         entregas = self._fechas_entrega(so_ids)
         primeras = self._primeras_compras(partner_ids)
         facturas = self._facturas_por_origen(so_names)
+        con_devolucion = self._ordenes_con_devolucion(so_ids)
 
         for r in recs:
             uid = _m2o_id(r.get("user_id"))
@@ -239,7 +248,19 @@ class OdooXmlRpcReader(OdooReader):
                 bool(partner) and primeras.get(int(partner)) == str(r["name"])
             )
             r["factura_id"] = facturas.get(str(r["name"]))
+            r["tiene_devolucion"] = int(r["id"]) in con_devolucion
         return [map_orden(r) for r in recs]
+
+    def _ordenes_con_devolucion(self, so_ids: list[int]) -> set[int]:
+        """Ids de SO con al menos un picking de devolución (``return_id`` seteado)."""
+        if not so_ids:
+            return set()
+        pickings = self._search_read(
+            self.MODEL_PICKING,
+            [["sale_id", "in", so_ids], ["return_id", "!=", False]],
+            ["sale_id"],
+        )
+        return {int(_m2o_id(p.get("sale_id"))) for p in pickings if _m2o_id(p.get("sale_id"))}
 
     def _fechas_entrega(self, so_ids: list[int]) -> dict[int, str]:
         """Mapa id de SO → fecha de entrega (date_done del despacho saliente)."""
@@ -302,7 +323,8 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_LINEA,
             domain,
-            ["id", "order_id", "product_id", "product_uom_qty", "price_unit"],
+            ["id", "order_id", "product_id", "product_uom_qty", "price_unit",
+             "qty_delivered"],
         )
         prod_ids = _ids_of(recs, "product_id")
         productos = self._productos(prod_ids)

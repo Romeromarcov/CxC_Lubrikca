@@ -120,6 +120,9 @@ def orden_to_row(o: OrdenVenta) -> Row:
         "facturada": s_bool(o.facturada),
         "factura_id": s_optstr(o.factura_id),
         "monto_facturado": s_optdec(o.monto_facturado),
+        "estado_entrega": o.estado_entrega,
+        "entregada_completa": s_bool(o.entregada_completa),
+        "tiene_devolucion": s_bool(o.tiene_devolucion),
     }
 
 
@@ -136,6 +139,9 @@ def orden_from_row(r: Mapping[str, str]) -> OrdenVenta:
         facturada=p_bool(r.get("facturada", "FALSE")),
         factura_id=p_optstr(r.get("factura_id", "")),
         monto_facturado=p_optdec(r.get("monto_facturado", "")),
+        estado_entrega=r.get("estado_entrega", ""),
+        entregada_completa=p_bool(r.get("entregada_completa", "FALSE")),
+        tiene_devolucion=p_bool(r.get("tiene_devolucion", "FALSE")),
     )
 
 
@@ -145,6 +151,7 @@ def linea_to_row(ln: LineaOrden) -> Row:
         "linea_id": ln.linea_id, "so_id": ln.so_id, "producto": ln.producto,
         "marca": ln.marca, "categoria": ln.categoria,
         "cantidad": str(ln.cantidad), "precio_unitario": str(ln.precio_unitario),
+        "cantidad_entregada": str(ln.cantidad_entregada),
     }
 
 
@@ -155,6 +162,7 @@ def linea_from_row(r: Mapping[str, str]) -> LineaOrden:
         categoria=r.get("categoria", ""),
         cantidad=p_dec(r.get("cantidad", "0")),
         precio_unitario=p_dec(r.get("precio_unitario", "0")),
+        cantidad_entregada=p_dec(r.get("cantidad_entregada", "0")),
     )
 
 

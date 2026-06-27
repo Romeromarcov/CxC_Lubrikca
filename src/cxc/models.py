@@ -81,6 +81,8 @@ class OrdenVenta:
     so_id: str
     cliente_id: str
     fecha: date
+    # fecha_entrega = fecha de la ENTREGA COMPLETA (despacho). El plazo de contado
+    # solo arranca cuando la orden está entregada completa; si no, va None.
     fecha_entrega: date | None
     monto_total: Decimal
     lista_precios: str
@@ -89,6 +91,10 @@ class OrdenVenta:
     facturada: bool = False
     factura_id: str | None = None
     monto_facturado: Decimal | None = None
+    # Seguimiento de entrega/devoluciones (sección 4.6 — ampliación).
+    estado_entrega: str = ""  # delivery_status de Odoo: pending/partial/full
+    entregada_completa: bool = False
+    tiene_devolucion: bool = False
 
 
 # --- 3.3 LineasOrden (espejo) -----------------------------------------------
@@ -101,6 +107,8 @@ class LineaOrden:
     categoria: str
     cantidad: Decimal
     precio_unitario: Decimal
+    # Cantidad realmente entregada (neta de devoluciones) — seguimiento visual.
+    cantidad_entregada: Decimal = Decimal("0")
 
 
 # --- 3.4 Pagos (espejo) ------------------------------------------------------

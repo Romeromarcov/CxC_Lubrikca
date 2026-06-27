@@ -50,8 +50,8 @@ Crear estas pestañas:
 | Pestaña | Quién escribe | Cabeceras (fila 1) |
 |---|---|---|
 | `Clientes` | sync | `cliente_id, nombre, vendedor_email` |
-| `OrdenesVenta` | sync | `so_id, cliente_id, fecha, fecha_entrega, monto_total, lista_precios, vendedor_email, es_primera_compra, facturada, factura_id, monto_facturado` |
-| `LineasOrden` | sync | `linea_id, so_id, producto, marca, categoria, cantidad, precio_unitario` |
+| `OrdenesVenta` | sync | `so_id, cliente_id, fecha, fecha_entrega, monto_total, lista_precios, vendedor_email, es_primera_compra, facturada, factura_id, monto_facturado, estado_entrega, entregada_completa, tiene_devolucion` |
+| `LineasOrden` | sync | `linea_id, so_id, producto, marca, categoria, cantidad, precio_unitario, cantidad_entregada` |
 | `Pagos` | sync | `pago_id, cliente_id, monto, moneda, metodo_pago, fecha_pago, vendedor_email` |
 | `MetodosPago` | Administración | `metodo_id, nombre, moneda, tipo_tasa, es_contado` |
 | `SerieTasas` | scraper (append) | `timestamp, tasa_bcv, tasa_binance, fuente, es_heredada, capturada_ok` |

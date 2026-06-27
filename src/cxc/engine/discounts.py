@@ -307,6 +307,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         or comp.bcv_completo > 0
         or contado_denied
         or comp.flags["promo_sin_precio"]
+        or inp.orden.tiene_devolucion  # devoluciones se revisan a mano
     )
 
     return BandejaFacturacion(

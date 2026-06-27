@@ -300,6 +300,21 @@ def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
     assert res.ncs_calculadas == Decimal("0.00")
 
 
+def test_orden_con_devolucion_requiere_revision() -> None:
+    orden = b.orden(primera=False)
+    orden.tiene_devolucion = True
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(monto_aplicado="94", moneda_abono=Moneda.USD)
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        reglas=[b.regla_recompra("0.03")],
+        resolver=_resolver(**{"P1@USD": "100"}),
+    )
+    res = calcular_factura(inp)
+    assert res.requiere_revision is True
+
+
 def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:
     # Feriado lunes 8-jun extiende la ventana al jueves 11; abono el 11 entra.
     orden = b.orden(primera=False)
