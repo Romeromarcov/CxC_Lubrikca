@@ -137,8 +137,26 @@ def _determinar_lista(inp: EngineInputs, pura_bcv: bool) -> str:
     return cfg.lista_bcv if pura_bcv else cfg.lista_usd
 
 
+def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
+    """Cantidad a facturar por línea (sección 4.6 — devoluciones).
+
+    Si la orden está entregada completa y tiene devolución, se usa la cantidad
+    realmente entregada (``qty_delivered``, neta de la devolución). Eso resuelve
+    la opción B (pedida − devuelta) y, a la vez, evita el doble descuento cuando
+    la SO ya fue modificada para ajustar las cantidades: en ese caso
+    ``cantidad_entregada`` ya coincide con la cantidad ajustada. En cualquier otro
+    caso se usa la cantidad pedida (base provisional; Lubrikca factura antes de
+    despachar, donde ``qty_delivered`` aún puede ser 0).
+    """
+    if inp.orden.entregada_completa and inp.orden.tiene_devolucion:
+        return linea.cantidad_entregada
+    return linea.cantidad
+
+
 def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
-    return inp.price_resolver.precio(linea.producto, lista) * linea.cantidad
+    return inp.price_resolver.precio(linea.producto, lista) * _cantidad_efectiva(
+        inp, linea
+    )
 
 
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:

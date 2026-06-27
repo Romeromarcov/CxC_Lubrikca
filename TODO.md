@@ -49,12 +49,13 @@ columnas `es_contado`/`tipo_tasa` no las usa el motor.
   `OrdenVenta.tiene_devolucion` → la orden queda `requiere_revision = TRUE` y es
   visible para seguimiento. `LineaOrden.cantidad_entregada` (qty_delivered, neta
   de devoluciones) se sincroniza para verla en AppSheet.
-- **PENDIENTE de confirmar:** cuando hay devolución, ¿el motor debe **recalcular
-  el neto sobre lo que quedó** (cantidad efectiva = `cantidad_entregada` o
-  `cantidad − devuelto`) en vez de la cantidad pedida? Hoy se **marca para
-  revisión** (humano ajusta), no se recalcula automático, porque Lubrikca factura
-  antes de despachar (qty_delivered puede ser 0 sin que haya devolución). Definir
-  la regla exacta de "lo que quedó" para automatizarlo.
+- **Recálculo con devolución — ✅ DECIDIDO (opción D):** si la orden está
+  entregada completa **y** tiene devolución, el motor factura sobre
+  `cantidad_entregada` (qty_delivered, neta de la devolución). Esto implementa
+  "pedida − devuelta" y, a la vez, evita el doble descuento si la SO ya fue
+  modificada para ajustar cantidades (en ese caso `cantidad_entregada` ya coincide
+  con la cantidad ajustada). Si no hay devolución, se usa la cantidad pedida. La
+  orden sigue marcándose `requiere_revision` para verificación humana.
 
 ### 4. `fecha_entrega` ausente → sin contado
 Si la orden no tiene fecha de entrega (ancla de la ventana, 4.6), el contado **no

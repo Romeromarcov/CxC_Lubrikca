@@ -315,6 +315,40 @@ def test_orden_con_devolucion_requiere_revision() -> None:
     assert res.requiere_revision is True
 
 
+def test_devolucion_factura_sobre_cantidad_entregada() -> None:
+    # Entregada completa con devolución: pidió 20, quedaron 15 → factura 15.
+    orden = b.orden(primera=False)
+    orden.entregada_completa = True
+    orden.tiene_devolucion = True
+    linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="20")
+    linea.cantidad_entregada = Decimal("15")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(monto_aplicado="100", moneda_abono=Moneda.USD)
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@USD": "10"}),
+    )
+    res = calcular_factura(inp)
+    assert res.precio_base_calculado == Decimal("150.00")  # 15 × 10, no 20 × 10
+
+
+def test_sin_devolucion_factura_sobre_cantidad_pedida() -> None:
+    # Sin devolución se usa la cantidad pedida aunque entregada_completa.
+    orden = b.orden(primera=False)
+    orden.entregada_completa = True
+    orden.tiene_devolucion = False
+    linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="20")
+    linea.cantidad_entregada = Decimal("20")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(monto_aplicado="100", moneda_abono=Moneda.USD)
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@USD": "10"}),
+    )
+    res = calcular_factura(inp)
+    assert res.precio_base_calculado == Decimal("200.00")  # 20 × 10
+
+
 def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:
     # Feriado lunes 8-jun extiende la ventana al jueves 11; abono el 11 entra.
     orden = b.orden(primera=False)
