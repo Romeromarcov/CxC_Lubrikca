@@ -27,9 +27,7 @@ def _vigente(
         return False
     if fecha < vigencia_desde:
         return False
-    if vigencia_hasta is not None and fecha > vigencia_hasta:
-        return False
-    return True
+    return not (vigencia_hasta is not None and fecha > vigencia_hasta)
 
 
 def _especificidad(regla: DescuentoMarcaCategoria) -> int:

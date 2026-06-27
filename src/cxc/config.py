@@ -21,12 +21,16 @@ def _get(name: str, default: str | None = None) -> str:
 
 def _get_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
-    return int(raw) if raw not in (None, "") else default
+    if raw is None or raw == "":
+        return default
+    return int(raw)
 
 
 def _get_decimal(name: str, default: str) -> Decimal:
     raw = os.environ.get(name)
-    return Decimal(raw) if raw not in (None, "") else Decimal(default)
+    if raw is None or raw == "":
+        return Decimal(default)
+    return Decimal(raw)
 
 
 def _get_optional(name: str) -> str | None:
@@ -222,7 +226,7 @@ class AppConfig:
 def _maybe_load_dotenv() -> None:
     """Carga un `.env` local si python-dotenv está disponible. Best-effort."""
     try:
-        from dotenv import load_dotenv  # type: ignore[import-untyped]
+        from dotenv import load_dotenv
     except ImportError:  # pragma: no cover - dotenv siempre está en requirements
         return
     load_dotenv()

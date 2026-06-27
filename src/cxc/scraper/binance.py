@@ -115,7 +115,9 @@ class BinanceClient:
         return compute_binance_rate(buy, sell, self._config)
 
 
-def _default_post(url: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:  # pragma: no cover - red externa
+def _default_post(  # pragma: no cover - red externa
+    url: str, body: dict[str, Any], timeout: int
+) -> dict[str, Any]:
     import requests
 
     resp = requests.post(url, json=body, timeout=timeout)
