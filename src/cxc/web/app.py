@@ -68,6 +68,10 @@ class DescuentoMarcaRequest(BaseModel):
     tipo_descuento: str
     porcentaje: float
 
+class MetaRequest(BaseModel):
+    cash_window_business_days: int
+    descuento_recompra: float
+
 def get_repo() -> SheetsRepository:
     config = AppConfig.from_env()
     print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
@@ -78,6 +82,40 @@ def get_repo() -> SheetsRepository:
             config.sheets.spreadsheet_id, config.sheets.service_account_file
         )
     return SheetsRepository(gateway)
+
+def get_rate_for_datetime(dt: datetime) -> tuple[Decimal, Decimal]:
+    repo = get_repo()
+    rows = repo._g.read_rows("SerieTasas")
+    if not rows:
+        return Decimal("36.5"), Decimal("38.0")
+    
+    closest_row = None
+    min_diff = None
+    
+    for r in rows:
+        ts_str = r.get("timestamp")
+        if not ts_str:
+            continue
+        try:
+            ts_str = ts_str.replace("T", " ")
+            if "." in ts_str:
+                ts_str = ts_str.split(".")[0]
+            row_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        except:
+            try:
+                row_dt = datetime.strptime(ts_str[:16], "%Y-%m-%d %H:%M")
+            except:
+                continue
+                
+        diff = abs((dt - row_dt).total_seconds())
+        if min_diff is None or diff < min_diff:
+            min_diff = diff
+            closest_row = r
+            
+    if closest_row:
+        return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(closest_row.get("tasa_binance"))
+        
+    return Decimal("36.5"), Decimal("38.0")
 
 import traceback
 
@@ -229,15 +267,42 @@ async def get_pagos_pendientes():
                 cliente = clientes_map.get(cliente_id)
                 cliente_nombre = cliente.nombre if cliente else f"Cliente ID: {cliente_id}"
                 
+                moneda = p.get("moneda", "USD")
+                fecha_str = p.get("fecha_pago", "")
+                
+                dt_pago = datetime.now()
+                if fecha_str:
+                    try:
+                        if len(fecha_str) == 10:
+                            dt_pago = datetime.strptime(f"{fecha_str} 12:00:00", "%Y-%m-%d %H:%M:%S")
+                        else:
+                            fs = fecha_str.replace("T", " ")
+                            if "." in fs:
+                                fs = fs.split(".")[0]
+                            dt_pago = datetime.strptime(fs, "%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+                
+                bcv, binance = get_rate_for_datetime(dt_pago)
+                
+                if moneda == "VES":
+                    equiv_usd_bcv = saldo_pendiente / bcv
+                    equiv_usd_binance = saldo_pendiente / binance
+                else:
+                    equiv_usd_bcv = saldo_pendiente
+                    equiv_usd_binance = saldo_pendiente
+                
                 pendientes.append({
                     "pago_id": pago_id,
                     "cliente_id": cliente_id,
                     "cliente_nombre": cliente_nombre,
                     "monto": float(saldo_pendiente),
                     "monto_original": float(monto_original),
-                    "moneda": p.get("moneda", "USD"),
-                    "fecha": p.get("fecha_pago", ""),
-                    "metodo_pago": p.get("metodo_pago", "")
+                    "moneda": moneda,
+                    "fecha": fecha_str,
+                    "metodo_pago": p.get("metodo_pago", ""),
+                    "equiv_usd_bcv": float(equiv_usd_bcv),
+                    "equiv_usd_binance": float(equiv_usd_binance)
                 })
         return pendientes
     except Exception as e:
@@ -691,6 +756,144 @@ async def get_config_listas_precio():
             })
             
         return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/meta")
+async def get_config_meta():
+    try:
+        repo = get_repo()
+        rows = repo._g.read_rows("_Meta")
+        meta = {}
+        for r in rows:
+            k = r.get("key")
+            if k:
+                meta[k] = r.get("value", "")
+        # Defaults
+        if "cash_window_business_days" not in meta:
+            meta["cash_window_business_days"] = "3"
+        if "descuento_recompra" not in meta:
+            meta["descuento_recompra"] = "0.05"
+        return meta
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/meta")
+async def post_config_meta(req: MetaRequest):
+    try:
+        repo = get_repo()
+        from cxc.sheets import gateway as g
+        repo._g.upsert_row("_Meta", "key", {"key": "cash_window_business_days", "value": str(req.cash_window_business_days)})
+        repo._g.upsert_row("_Meta", "key", {"key": "descuento_recompra", "value": str(req.descuento_recompra)})
+        
+        # Sync to ReglasRecurrencia sheet for RECOMPRA rule
+        rules = repo._g.read_rows("ReglasRecurrencia")
+        recompra_exists = False
+        for r in rules:
+            if r.get("condicion") == "recompra":
+                recompra_exists = True
+                r["porcentaje"] = str(req.descuento_recompra)
+                repo._g.upsert_row("ReglasRecurrencia", "regla_id", r)
+                break
+        if not recompra_exists:
+            repo._g.append_row("ReglasRecurrencia", {
+                "regla_id": "REG_RECOMPRA",
+                "condicion": "recompra",
+                "porcentaje": str(req.descuento_recompra),
+                "vigencia_desde": date.today().isoformat(),
+                "vigencia_hasta": "",
+                "activo": "TRUE"
+            })
+            
+        return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/odoo/marcas")
+async def get_odoo_marcas():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        brands = execute("product.brand", "search_read", [[]], {"fields": ["name"]})
+        return [b["name"] for b in brands]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/odoo/categorias")
+async def get_odoo_categorias():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        cats = execute("product.category", "search_read", [[]], {"fields": ["name"]})
+        return sorted(list(set(c["name"] for c in cats)))
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/tasa-referencia")
+async def get_tasa_referencia(fecha: str, hora: str):
+    try:
+        dt_str = f"{fecha} {hora}:00"
+        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        bcv, binance = get_rate_for_datetime(dt)
+        return {
+            "tasa_bcv": float(bcv),
+            "tasa_binance": float(binance)
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/config/tasas/sync-odoo")
+async def post_sync_odoo_rates():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        
+        # Fetch rates since 2026-01-01
+        rates = execute(
+            "res.currency.rate",
+            "search_read",
+            [[["name", ">=", "2026-01-01"], ["currency_id", "=", 1]]],
+            {"fields": ["name", "inverse_company_rate"]}
+        )
+        
+        repo = get_repo()
+        existing_rows = repo._g.read_rows("SerieTasas")
+        existing_dates = set()
+        for r in existing_rows:
+            ts = r.get("timestamp", "")
+            if ts:
+                existing_dates.add(ts.split(" ")[0].split("T")[0])
+                
+        from cxc.sheets import serde, gateway as g
+        from cxc.models import SerieTasa
+        
+        rates.sort(key=lambda x: x["name"])
+        added_count = 0
+        for rate in rates:
+            date_str = rate["name"]
+            if date_str not in existing_dates:
+                ts = datetime.combine(date.fromisoformat(date_str), datetime.min.time().replace(hour=8))
+                bcv = Decimal(str(rate.get("inverse_company_rate", "1.0")))
+                binance = bcv * Decimal("1.05") 
+                
+                tasa = SerieTasa(
+                    timestamp=ts,
+                    tasa_bcv=bcv,
+                    tasa_binance=binance,
+                    fuente="Odoo Sync",
+                    es_heredada=False,
+                    capturada_ok=True
+                )
+                repo.append_serie_tasa(tasa)
+                added_count += 1
+                
+        return {"status": "success", "message": f"Sincronizados {added_count} registros de tasas desde Odoo."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

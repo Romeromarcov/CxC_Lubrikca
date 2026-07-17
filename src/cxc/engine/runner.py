@@ -61,6 +61,18 @@ class EngineRunner:
         from ..config import EngineConfig  # local para evitar ciclo de tipos
 
         assert isinstance(self._cfg, EngineConfig)
+        
+        # Override cash_window_business_days with value from _Meta if available
+        try:
+            if hasattr(self._repo, "_g"):
+                rows = self._repo._g.read_rows("_Meta")
+                for r in rows:
+                    if r.get("key") == "cash_window_business_days" and r.get("value"):
+                        import dataclasses
+                        self._cfg = dataclasses.replace(self._cfg, cash_window_business_days=int(r.get("value")))
+        except Exception as e:
+            logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)
+
         inputs = EngineInputs(
             orden=orden,
             lineas=lineas,

@@ -85,12 +85,33 @@
                                     <input type="hidden" id="form-cliente-id">
                                 </div>
                                 <div class="form-group">
-                                    <label>Monto Disponible</label>
+                                    <label>Monto Original Recibido</label>
                                     <div class="currency-input-wrapper">
                                         <span class="input-currency" id="form-pago-moneda">USD</span>
                                         <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
                                     </div>
                                 </div>
+
+                                <!-- Sección dinámica para pagos en VES -->
+                                <div class="form-group" id="group-fecha-hora-pago" style="display: none;">
+                                    <label>Fecha/Hora de Pago (Ajustar Tasa)</label>
+                                    <div class="form-group-row">
+                                        <input type="date" id="form-pago-fecha" style="width: 55%;">
+                                        <input type="time" id="form-pago-hora" style="width: 45%;">
+                                    </div>
+                                </div>
+                                <div class="form-group" id="group-tasas-referencia" style="display: none; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px dashed #cbd5e1; margin-bottom: 0.5rem;">
+                                    <label style="margin-bottom: 0.35rem; font-weight:700;">Tasas de Referencia Aplicadas</label>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
+                                        <span>Tasa BCV: <strong id="lbl-tasa-bcv">0.00</strong> Bs</span>
+                                        <span>Tasa Binance: <strong id="lbl-tasa-binance">0.00</strong> Bs</span>
+                                    </div>
+                                    <div style="font-size: 0.8rem; line-height: 1.4; color: #64748b;">
+                                        Equivalente BCV: <strong id="lbl-eq-bcv" style="color: #0f172a;">$0.00 USD</strong><br>
+                                        Equivalente Binance: <strong id="lbl-eq-binance" style="color: #0f172a;">$0.00 USD</strong>
+                                    </div>
+                                </div>
+
                                 <div class="form-group">
                                     <label>Orden de Venta Odoo (SO)</label>
                                     <select id="form-so-select" required disabled>
@@ -98,8 +119,8 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label>Monto a Aplicar</label>
-                                    <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto">
+                                    <label>Monto a Aplicar (USD)</label>
+                                    <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto en USD">
                                 </div>
                                 <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
                             </form>
@@ -214,11 +235,30 @@
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <div id="tab-config" class="tab-panel">
             <div class="config-grid">
+                <!-- Ajustes Generales del Motor -->
+                <section class="config-card card">
+                    <div class="panel-header">
+                        <h2>Ajustes Generales del Motor</h2>
+                        <p>Configura las variables globales del motor de cobranza en Google Sheets</p>
+                    </div>
+                    <form id="settings-form" class="cxc-form">
+                        <div class="form-group">
+                            <label>Días de Gracia (Pronto Pago)</label>
+                            <input type="number" id="cfg-meta-days" min="1" required placeholder="Ej: 3">
+                        </div>
+                        <div class="form-group">
+                            <label>Descuento Recompra (Recurrencia %)</label>
+                            <input type="number" id="cfg-meta-recompra" step="0.01" min="0" max="1" required placeholder="Ej: 0.05">
+                        </div>
+                        <button type="submit" class="btn-primary">Guardar Ajustes Generales</button>
+                    </form>
+                </section>
+
                 <!-- Tasas de Cambio -->
                 <section class="config-card card">
                     <div class="panel-header">
-                        <h2>Tasas de Cambio del Día</h2>
-                        <p>Carga manual o visualización de las tasas registradas en SerieTasas</p>
+                        <h2>Tasas de Cambio (Odoo Sync + Manual)</h2>
+                        <p>Carga manual o sincroniza las tasas registradas en Odoo desde enero 2026</p>
                     </div>
                     
                     <form id="tasa-form" class="cxc-form">
@@ -232,7 +272,10 @@
                                 <input type="number" id="cfg-tasa-binance" step="0.01" required placeholder="Ej: 38.20">
                             </div>
                         </div>
-                        <button type="submit" class="btn-primary">Guardar Tasas del Día</button>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button type="submit" class="btn-primary" style="flex:1;">Guardar Manual</button>
+                            <button type="button" id="btn-sync-odoo-rates" class="btn-primary" style="background: #10b981; flex:1;">🔄 Sincronizar Odoo</button>
+                        </div>
                     </form>
 
                     <div class="mini-table-wrapper">
@@ -304,22 +347,26 @@
 
                     <form id="descuento-form" class="cxc-form">
                         <div class="form-group-row">
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1;">
                                 <label>Marca</label>
-                                <input type="text" id="cfg-desc-marca" required placeholder="Ej: Castrol o ALL">
+                                <select id="cfg-desc-marca" required>
+                                    <option value="ALL">Todas las marcas (ALL)</option>
+                                </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1;">
                                 <label>Categoría</label>
-                                <input type="text" id="cfg-desc-cat" required placeholder="Ej: Lubricantes o ALL">
+                                <select id="cfg-desc-cat" required>
+                                    <option value="ALL">Todas las categorías (ALL)</option>
+                                </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1;">
                                 <label>Tipo de Descuento</label>
                                 <select id="cfg-desc-tipo" required>
                                     <option value="porcentaje">Porcentaje Fijo</option>
                                     <option value="pronto_pago">Pronto Pago</option>
                                 </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1;">
                                 <label>Porcentaje (%)</label>
                                 <input type="number" id="cfg-desc-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
                             </div>

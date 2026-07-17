@@ -25,15 +25,30 @@ document.addEventListener("DOMContentLoaded", () => {
     const vinculacionForm = document.getElementById("vinculacion-form");
     const bandejaTableBody = document.getElementById("bandeja-table-body");
 
+    // Elements - Payment Allocator VES dynamic rate adjuster
+    const groupFechaHoraPago = document.getElementById("group-fecha-hora-pago");
+    const groupTasasReferencia = document.getElementById("group-tasas-referencia");
+    const formPagoFecha = document.getElementById("form-pago-fecha");
+    const formPagoHora = document.getElementById("form-pago-hora");
+    const lblTasaBcv = document.getElementById("lbl-tasa-bcv");
+    const lblTasaBinance = document.getElementById("lbl-tasa-binance");
+    const lblEqBcv = document.getElementById("lbl-eq-bcv");
+    const lblEqBinance = document.getElementById("lbl-eq-binance");
+
     // Elements - Reporte & Mapa
     const reporteTableBody = document.getElementById("reporte-table-body");
     const mapaTableBody = document.getElementById("mapa-table-body");
     const reporteSearch = document.getElementById("reporte-search");
 
     // Elements - Config
+    const settingsForm = document.getElementById("settings-form");
+    const cfgMetaDays = document.getElementById("cfg-meta-days");
+    const cfgMetaRecompra = document.getElementById("cfg-meta-recompra");
+
     const tasaForm = document.getElementById("tasa-form");
     const cfgTasaBcv = document.getElementById("cfg-tasa-bcv");
     const cfgTasaBinance = document.getElementById("cfg-tasa-binance");
+    const btnSyncOdooRates = document.getElementById("btn-sync-odoo-rates");
     const tasasTableBody = document.getElementById("tasas-table-body");
     
     const feriadoForm = document.getElementById("feriado-form");
@@ -154,6 +169,29 @@ document.addEventListener("DOMContentLoaded", () => {
         formMontoAplicar.value = "";
         formMontoAplicar.disabled = true;
         btnSubmit.disabled = true;
+
+        // Reset and show/hide VES converter elements
+        if (payment.moneda === "VES") {
+            groupFechaHoraPago.style.display = "block";
+            groupTasasReferencia.style.display = "block";
+            
+            // Prefill date and hour from payment
+            let pDate = new Date().toISOString().split("T")[0];
+            let pHour = "12:00";
+            if (payment.fecha) {
+                const parts = payment.fecha.split("T");
+                if (parts[0]) pDate = parts[0];
+                if (parts[1]) pHour = parts[1].substring(0, 5);
+            }
+            formPagoFecha.value = pDate;
+            formPagoHora.value = pHour;
+            
+            // Fetch rates for this prefilled date/hour
+            updateVESCalculatedEquivalents();
+        } else {
+            groupFechaHoraPago.style.display = "none";
+            groupTasasReferencia.style.display = "none";
+        }
         
         try {
             const res = await fetch(`/api/ordenes-pendientes/${payment.cliente_id}`);
@@ -174,13 +212,59 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 formSoSelect.disabled = false;
                 formMontoAplicar.disabled = false;
-                formMontoAplicar.value = payment.monto.toFixed(2);
-                formMontoAplicar.max = payment.monto;
+                
+                // If it is VES, we recommend applying the calculated Binance USD amount
+                if (payment.moneda === "VES") {
+                    // Start by defaulting to the Binance equivalent value
+                    formMontoAplicar.value = payment.equiv_usd_binance.toFixed(2);
+                } else {
+                    formMontoAplicar.value = payment.monto.toFixed(2);
+                }
+                formMontoAplicar.max = payment.moneda === "VES" ? payment.equiv_usd_binance * 1.5 : payment.monto;
                 btnSubmit.disabled = false;
             }
         } catch (err) {
             formSoSelect.innerHTML = '<option value="">Error al cargar órdenes.</option>';
             console.error("Error fetching client orders:", err);
+        }
+    }
+
+    // Trigger update when date/hour changes on payment allocator
+    if (formPagoFecha && formPagoHora) {
+        formPagoFecha.addEventListener("change", updateVESCalculatedEquivalents);
+        formPagoHora.addEventListener("change", updateVESCalculatedEquivalents);
+    }
+
+    async function updateVESCalculatedEquivalents() {
+        if (!selectedPayment || selectedPayment.moneda !== "VES") return;
+        const fecha = formPagoFecha.value;
+        const hora = formPagoHora.value;
+        if (!fecha || !hora) return;
+
+        try {
+            const res = await fetch(`/api/config/tasa-referencia?fecha=${fecha}&hora=${hora}`);
+            if (res.ok) {
+                const data = await res.json();
+                const bcv = data.tasa_bcv;
+                const binance = data.tasa_binance;
+
+                lblTasaBcv.textContent = bcv.toFixed(4);
+                lblTasaBinance.textContent = binance.toFixed(4);
+
+                const amt = selectedPayment.monto;
+                const eqBcv = amt / bcv;
+                const eqBinance = amt / binance;
+
+                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                lblEqBcv.textContent = fmt(eqBcv);
+                lblEqBinance.textContent = fmt(eqBinance);
+
+                // Auto update form amount to apply (using Binance by default)
+                formMontoAplicar.value = eqBinance.toFixed(2);
+                formMontoAplicar.max = eqBinance * 1.5;
+            }
+        } catch (err) {
+            console.error("Error fetching reference rates:", err);
         }
     }
 
@@ -215,6 +299,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnSubmit.disabled = true;
                 btnSubmit.textContent = "Asignar Cobro";
                 selectedPayment = null;
+                
+                groupFechaHoraPago.style.display = "none";
+                groupTasasReferencia.style.display = "none";
                 
                 loadKPIs();
                 loadPayments();
@@ -358,7 +445,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong>#${item.pago_id}</strong></td>
                         <td>${item.cliente_nombre}</td>
                         <td>${item.fecha_pago}</td>
-                        <td><strong style="color: #10b981">${fmt(item.monto_aplicado)}</strong></td>
+                        <td>
+                            <strong style="color: #10b981">${new Intl.NumberFormat('es-US', { style: 'currency', currency: item.moneda }).format(item.monto_aplicado)}</strong>
+                            ${item.moneda === "VES" ? `<div style="font-size:0.7rem; color:#64748b">Eq. Binance: ${fmt(item.monto_aplicado)}</div>` : ""}
+                        </td>
                         <td><strong>${item.so_id}</strong></td>
                         <td>
                             <div>Total: ${fmt(item.order_details.total)}</div>
@@ -401,11 +491,54 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- Tab 3: Configuration Panels ---
     async function loadConfigData() {
+        loadSettingsMeta();
         loadTasas();
         loadFeriados();
         loadDescuentosMarca();
         loadListasPrecio();
+        populateBrandsAndCategories();
     }
+
+    // Load general Settings meta variables
+    async function loadSettingsMeta() {
+        try {
+            const res = await fetch("/api/config/meta");
+            if (res.ok) {
+                const data = await res.json();
+                cfgMetaDays.value = data.cash_window_business_days || 3;
+                cfgMetaRecompra.value = data.descuento_recompra || 0.05;
+            }
+        } catch (err) {
+            console.error("Error loading settings meta:", err);
+        }
+    }
+
+    // Save global settings variables
+    settingsForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            cash_window_business_days: parseInt(cfgMetaDays.value),
+            descuento_recompra: parseFloat(cfgMetaRecompra.value)
+        };
+
+        try {
+            const res = await fetch("/api/config/meta", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("✅ Ajustes generales del motor guardados correctamente en Google Sheets.");
+                loadSettingsMeta();
+            } else {
+                alert("❌ Error al guardar los ajustes.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al guardar ajustes.");
+            console.error(err);
+        }
+    });
 
     async function loadTasas() {
         try {
@@ -435,6 +568,28 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Sync Odoo currency rates trigger
+    btnSyncOdooRates.addEventListener("click", async () => {
+        btnSyncOdooRates.disabled = true;
+        btnSyncOdooRates.textContent = "Sincronizando...";
+        try {
+            const res = await fetch("/api/config/tasas/sync-odoo", { method: "POST" });
+            if (res.ok) {
+                const data = await res.json();
+                alert(`✅ ${data.message}`);
+                loadTasas();
+            } else {
+                alert("❌ Error al sincronizar tasas de Odoo.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al sincronizar tasas.");
+            console.error(err);
+        } finally {
+            btnSyncOdooRates.disabled = false;
+            btnSyncOdooRates.textContent = "🔄 Sincronizar Odoo";
+        }
+    });
+
     async function loadFeriados() {
         try {
             feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando feriados...</td></tr>';
@@ -459,6 +614,39 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             console.error(err);
+        }
+    }
+
+    // Populate Brands and Categories from Odoo in discount registration dropdowns
+    async function populateBrandsAndCategories() {
+        try {
+            // Fetch brands
+            const bRes = await fetch("/api/odoo/marcas");
+            if (bRes.ok) {
+                const brands = await bRes.json();
+                cfgDescMarca.innerHTML = '<option value="ALL">Todas las marcas (ALL)</option>';
+                brands.forEach(b => {
+                    const opt = document.createElement("option");
+                    opt.value = b;
+                    opt.textContent = b;
+                    cfgDescMarca.appendChild(opt);
+                });
+            }
+
+            // Fetch categories
+            const cRes = await fetch("/api/odoo/categorias");
+            if (cRes.ok) {
+                const cats = await cRes.json();
+                cfgDescCat.innerHTML = '<option value="ALL">Todas las categorías (ALL)</option>';
+                cats.forEach(c => {
+                    const opt = document.createElement("option");
+                    opt.value = c;
+                    opt.textContent = c;
+                    cfgDescCat.appendChild(opt);
+                });
+            }
+        } catch (err) {
+            console.error("Error populating dropdowns:", err);
         }
     }
 
@@ -507,7 +695,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 data.forEach(pl => {
                     const row = document.createElement("tr");
 
-                    // Gather dates range
                     let startVal = "N/A";
                     let endVal = "N/A";
                     if (pl.reglas && pl.reglas.length > 0) {
