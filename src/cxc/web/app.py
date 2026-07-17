@@ -38,6 +38,7 @@ class VinculacionRequest(BaseModel):
 
 def get_repo() -> SheetsRepository:
     config = AppConfig.from_env()
+    print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
     if os.environ.get("GOOGLE_TOKEN_JSON"):
         gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
     else:
@@ -53,6 +54,7 @@ async def run_sync_in_background():
         try:
             print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
             config = AppConfig.from_env()
+            print(f"DEBUG SYNC: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
             if os.environ.get("GOOGLE_TOKEN_JSON"):
                 gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
             else:
@@ -81,6 +83,7 @@ async def run_scraper_in_background():
             from cxc.alerts import build_alerter
 
             config = AppConfig.from_env()
+            print(f"DEBUG SCRAPER: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
             if os.environ.get("GOOGLE_TOKEN_JSON"):
                 gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
             else:
