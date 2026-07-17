@@ -64,7 +64,7 @@ class SheetsConfig:
     def from_env(cls) -> SheetsConfig:
         return cls(
             spreadsheet_id=_get("GOOGLE_SHEETS_SPREADSHEET_ID"),
-            service_account_file=_get("GOOGLE_SERVICE_ACCOUNT_FILE"),
+            service_account_file=_get("GOOGLE_SERVICE_ACCOUNT_FILE", default=""),
         )
 
 
