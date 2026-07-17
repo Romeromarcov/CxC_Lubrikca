@@ -66,10 +66,44 @@ async def run_sync_in_background():
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
         await asyncio.sleep(300)
 
+async def run_scraper_in_background():
+    # Esperar 30 segundos tras el arranque inicial antes del primer scrape de tasas
+    await asyncio.sleep(30)
+    while True:
+        try:
+            print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
+            from cxc.scraper.bcv import BcvClient
+            from cxc.scraper.binance import BinanceClient
+            from cxc.scraper.rates_scraper import RatesScraper
+            from cxc.alerts import build_alerter
+
+            config = AppConfig.from_env()
+            if os.environ.get("GOOGLE_TOKEN_JSON"):
+                gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+            else:
+                gateway = GspreadGateway(
+                    config.sheets.spreadsheet_id, config.sheets.service_account_file
+                )
+            repo = SheetsRepository(gateway)
+            scraper = RatesScraper(
+                repo,
+                BinanceClient(config.binance),
+                BcvClient(config.bcv),
+                build_alerter(config.alert),
+                config.scraper_policy,
+            )
+            fila = scraper.run(datetime.now())
+            print(f"FastAPI Daemon: Tasas de cambio actualizadas. BCV: {fila.tasa_bcv}, Binance: {fila.tasa_binance}")
+        except Exception as e:
+            print(f"Error en daemon de scraping de tasas: {e}", file=sys.stderr)
+        # Repetir cada 1 hora (3600 segundos)
+        await asyncio.sleep(3600)
+
 @app.on_event("startup")
 async def startup_event():
-    # Start the synchronization daemon loop in the background
+    # Start the synchronization and scraping daemon loops in the background
     asyncio.create_task(run_sync_in_background())
+    asyncio.create_task(run_scraper_in_background())
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
