@@ -62,6 +62,12 @@ class FeriadoRequest(BaseModel):
     fecha: str
     descripcion: str
 
+class DescuentoMarcaRequest(BaseModel):
+    marca: str
+    categoria: str
+    tipo_descuento: str
+    porcentaje: float
+
 def get_repo() -> SheetsRepository:
     config = AppConfig.from_env()
     print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
@@ -504,6 +510,187 @@ async def post_config_feriados(req: FeriadoRequest):
         )
         repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
         return {"status": "success", "message": "Feriado registrado con éxito."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mapa-vinculaciones")
+async def get_mapa_vinculaciones():
+    try:
+        repo = get_repo()
+        vincs = repo.all_vinculaciones()
+        
+        # Load clients once
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        
+        # Load all orders
+        ordenes = {o.so_id: o for o in repo.all_ordenes()}
+        
+        # Fetch Odoo Invoices in batch
+        so_ids = list(ordenes.keys())
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        invoices = execute(
+            "account.move",
+            "search_read",
+            [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
+            {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_untaxed", "amount_tax", "amount_residual", "payment_state", "move_type"]}
+        )
+        invoices_by_so = {}
+        for inv in invoices:
+            so = str(inv.get("invoice_origin", "")).strip()
+            if so:
+                invoices_by_so.setdefault(so, []).append(inv)
+                
+        resultado = []
+        for v in vincs:
+            o = ordenes.get(v.so_id)
+            client_name = clientes_map.get(o.cliente_id, "Desconocido") if o else "Desconocido"
+            
+            # Fetch invoice details for this SO
+            inv_name = "N/A"
+            inv_total = 0.0
+            inv_subtotal = 0.0
+            inv_tax = 0.0
+            inv_residual = 0.0
+            
+            if o and o.so_id in invoices_by_so:
+                inv_list = invoices_by_so[o.so_id]
+                inv_names = [inv.get("name", "") for inv in inv_list]
+                inv_name = ", ".join(inv_names)
+                
+                inv_total = sum(float(inv.get("amount_total", 0.0)) for inv in inv_list)
+                inv_subtotal = sum(float(inv.get("amount_untaxed", 0.0)) for inv in inv_list)
+                inv_tax = sum(float(inv.get("amount_tax", 0.0)) for inv in inv_list)
+                inv_residual = sum(float(inv.get("amount_residual", 0.0)) for inv in inv_list)
+                
+            resultado.append({
+                "vinc_id": v.vinc_id,
+                "pago_id": v.pago_id,
+                "so_id": v.so_id,
+                "cliente_nombre": client_name,
+                "monto_aplicado": float(v.monto_aplicado),
+                "moneda": v.moneda_abono.value,
+                "fecha_pago": v.hora_pago_confirmada.date().isoformat(),
+                "invoice_id": inv_name,
+                "order_details": {
+                    "total": float(o.monto_total) if o else 0.0,
+                    "subtotal": float(o.monto_total) / 1.16 if o else 0.0,
+                    "iva": float(o.monto_total) - (float(o.monto_total) / 1.16) if o else 0.0
+                },
+                "invoice_details": {
+                    "total": inv_total,
+                    "subtotal": inv_subtotal,
+                    "iva": inv_tax,
+                    "saldo_deudor": inv_residual,
+                    "retencion_iva_est": inv_tax * 0.75
+                }
+            })
+            
+        return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/descuentos-marca")
+async def get_config_descuentos_marca():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_marca_categoria()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "tipo_descuento": r.tipo_descuento,
+                "porcentaje": float(r.porcentaje),
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-marca")
+async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoMarcaCategoria
+        from cxc.sheets import serde, gateway as g
+        import uuid
+        
+        regla_id = f"REG_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoMarcaCategoria(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            tipo_descuento=req.tipo_descuento,
+            porcentaje=Decimal(str(req.porcentaje)),
+            vigencia_desde=date.today(),
+            vigencia_hasta=None,
+            activo=True
+        )
+        repo._g.append_row(g.T_DESCUENTOS, serde.descuento_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/listas-precio")
+async def get_config_listas_precio():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        
+        # Fetch all pricelists including archived
+        pricelists = execute(
+            "product.pricelist",
+            "search_read",
+            [[["active", "in", [True, False]]]],
+            {"fields": ["id", "name", "currency_id", "active"]}
+        )
+        
+        # Fetch items/rules for these pricelists
+        list_ids = [pl["id"] for pl in pricelists]
+        items = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "in", list_ids]]],
+            {"fields": ["pricelist_id", "fixed_price", "percent_price", "date_start", "date_end", "product_tmpl_id"]}
+        )
+        
+        # Group items by pricelist ID
+        items_by_list = {}
+        for item in items:
+            pl_id = item["pricelist_id"][0]
+            items_by_list.setdefault(pl_id, []).append(item)
+            
+        resultado = []
+        for pl in pricelists:
+            pl_items = items_by_list.get(pl["id"], [])
+            rules = []
+            for item in pl_items:
+                prod = item.get("product_tmpl_id")
+                prod_name = prod[1] if isinstance(prod, list) and len(prod) > 1 else "Todos los productos"
+                
+                rules.append({
+                    "producto": prod_name,
+                    "precio_fijo": float(item.get("fixed_price") or 0.0),
+                    "descuento_porcentaje": float(item.get("percent_price") or 0.0),
+                    "fecha_inicio": item.get("date_start") or "N/A",
+                    "fecha_fin": item.get("date_end") or "N/A"
+                })
+                
+            resultado.append({
+                "id": pl["id"],
+                "name": pl["name"],
+                "moneda": pl["currency_id"][1] if isinstance(pl["currency_id"], list) else "USD",
+                "active": pl["active"],
+                "reglas": rules
+            })
+            
+        return resultado
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

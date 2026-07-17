@@ -138,42 +138,77 @@
             </div>
         </div>
 
-        <!-- PESTAÑA 2: REPORTE DE SALDOS -->
+        <!-- PESTAÑA 2: REPORTE DE SALDOS Y VINCULACIONES -->
         <div id="tab-reporte" class="tab-panel">
-            <section class="reporte-panel card">
-                <div class="panel-header-row">
-                    <div>
-                        <h2>Reporte General de Saldos por Cobrar</h2>
-                        <p>Estado detallado de cada orden de venta, abonos acumulados, descuentos y saldo deudor en tiempo real</p>
+            <div class="reporte-layout">
+                <!-- Reporte General de Saldos -->
+                <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2>Reporte General de Saldos por Cobrar</h2>
+                            <p>Estado detallado de cada orden de venta, abonos acumulados, descuentos y saldo deudor en tiempo real</p>
+                        </div>
+                        <div class="filter-actions">
+                            <input type="text" id="reporte-search" placeholder="🔍 Buscar por cliente o SO...">
+                        </div>
                     </div>
-                    <div class="filter-actions">
-                        <input type="text" id="reporte-search" placeholder="🔍 Buscar por cliente o SO...">
-                    </div>
-                </div>
 
-                <div class="table-wrapper large-table">
-                    <table class="cxc-table">
-                        <thead>
-                            <tr>
-                                <th>Orden (SO)</th>
-                                <th>Cliente</th>
-                                <th>Fecha</th>
-                                <th>Total Original ($)</th>
-                                <th>Abonos Recibidos ($)</th>
-                                <th>Saldo Deudor ($)</th>
-                                <th>Estado Odoo</th>
-                                <th>Cierre</th>
-                                <th>Semáforo</th>
-                            </tr>
-                        </thead>
-                        <tbody id="reporte-table-body">
-                            <tr>
-                                <td colspan="9" class="table-empty">Cargando reporte de saldos...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Total Original ($)</th>
+                                    <th>Abonos Recibidos ($)</th>
+                                    <th>Saldo Deudor ($)</th>
+                                    <th>Estado Odoo</th>
+                                    <th>Cierre</th>
+                                    <th>Semáforo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reporte-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando reporte de saldos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Mapa de Vinculaciones Cruzadas -->
+                <section class="mapa-panel card">
+                    <div class="panel-header">
+                        <h2>Mapa de Conciliación de Pagos Cruzados (Pago ↔ Orden ↔ Factura)</h2>
+                        <p>Desglose de la base imponible (subtotal), IVA, saldo deudor residual de la factura y retenciones estimadas de IVA</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Pago ID</th>
+                                    <th>Cliente</th>
+                                    <th>F. Pago</th>
+                                    <th>Abono ($)</th>
+                                    <th>Orden (SO)</th>
+                                    <th>SO Subtotal / Total ($)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Fact. Subtotal / IVA ($)</th>
+                                    <th>Fact. Total / Saldo Due ($)</th>
+                                    <th>Retención IVA (75% Est.) ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mapa-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando mapa de vinculaciones...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
         </div>
 
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
@@ -254,6 +289,88 @@
                             <tbody id="feriados-table-body">
                                 <tr>
                                     <td colspan="3" class="table-empty">Cargando feriados...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Reglas de Descuentos Comerciales -->
+                <section class="config-card card" style="grid-column: 1 / span 2;">
+                    <div class="panel-header">
+                        <h2>Reglas de Descuentos por Marca y Categoría</h2>
+                        <p>Agrega o edita las reglas de descuento que aplica el motor de forma automática</p>
+                    </div>
+
+                    <form id="descuento-form" class="cxc-form">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>Marca</label>
+                                <input type="text" id="cfg-desc-marca" required placeholder="Ej: Castrol o ALL">
+                            </div>
+                            <div class="form-group">
+                                <label>Categoría</label>
+                                <input type="text" id="cfg-desc-cat" required placeholder="Ej: Lubricantes o ALL">
+                            </div>
+                            <div class="form-group">
+                                <label>Tipo de Descuento</label>
+                                <select id="cfg-desc-tipo" required>
+                                    <option value="porcentaje">Porcentaje Fijo</option>
+                                    <option value="pronto_pago">Pronto Pago</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Porcentaje (%)</label>
+                                <input type="number" id="cfg-desc-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Regla de Descuento</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas Activas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Regla ID</th>
+                                    <th>Marca</th>
+                                    <th>Categoría</th>
+                                    <th>Tipo</th>
+                                    <th>Porcentaje (%)</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="descuentos-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando descuentos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Listas de Precios de Odoo -->
+                <section class="config-card card" style="grid-column: 1 / span 2;">
+                    <div class="panel-header">
+                        <h2>Listas de Precios Importadas de Odoo</h2>
+                        <p>Visualiza todas las listas de precios vigentes o archivadas, su moneda y fechas de vigencia</p>
+                    </div>
+
+                    <div class="mini-table-wrapper" style="max-height: 400px; overflow-y: auto;">
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Lista ID</th>
+                                    <th>Nombre de Lista</th>
+                                    <th>Moneda</th>
+                                    <th>Estado</th>
+                                    <th>Nº de Reglas</th>
+                                    <th>Vigencia de Reglas</th>
+                                </tr>
+                            </thead>
+                            <tbody id="listas-precio-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando listas de precios de Odoo...</td>
                                 </tr>
                             </tbody>
                         </table>

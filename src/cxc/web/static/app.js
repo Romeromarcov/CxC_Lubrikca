@@ -25,8 +25,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const vinculacionForm = document.getElementById("vinculacion-form");
     const bandejaTableBody = document.getElementById("bandeja-table-body");
 
-    // Elements - Reporte
+    // Elements - Reporte & Mapa
     const reporteTableBody = document.getElementById("reporte-table-body");
+    const mapaTableBody = document.getElementById("mapa-table-body");
     const reporteSearch = document.getElementById("reporte-search");
 
     // Elements - Config
@@ -39,6 +40,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgFeriadoFecha = document.getElementById("cfg-feriado-fecha");
     const cfgFeriadoDesc = document.getElementById("cfg-feriado-desc");
     const feriadosTableBody = document.getElementById("feriados-table-body");
+
+    const descuentoForm = document.getElementById("descuento-form");
+    const cfgDescMarca = document.getElementById("cfg-desc-marca");
+    const cfgDescCat = document.getElementById("cfg-desc-cat");
+    const cfgDescTipo = document.getElementById("cfg-desc-tipo");
+    const cfgDescPorcentaje = document.getElementById("cfg-desc-porcentaje");
+    const descuentosTableBody = document.getElementById("descuentos-table-body");
+
+    const listasPrecioTableBody = document.getElementById("listas-precio-table-body");
 
     // Tab Navigation Logic
     tabButtons.forEach(btn => {
@@ -60,6 +70,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // Lazy load tab data
             if (targetTab === "tab-reporte") {
                 loadReporte();
+                loadMapa();
             } else if (targetTab === "tab-config") {
                 loadConfigData();
             }
@@ -316,13 +327,61 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${item.fecha}</td>
                 <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total)}</td>
                 <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_pagado)}</td>
-                <td><strong style="color: ${item.saldo_deudor > 0 ? '#fbbf24' : '#34d399'}">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.saldo_deudor)}</strong></td>
+                <td><strong style="color: ${item.saldo_deudor > 0 ? '#fbbf24' : '#10b981'}">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.saldo_deudor)}</strong></td>
                 <td>${odooHtml}</td>
                 <td>${closeHtml}</td>
                 <td>${semHtml}</td>
             `;
             reporteTableBody.appendChild(row);
         });
+    }
+
+    // Load Cross-Referenced Mapping (Pago ↔ SO ↔ Invoice)
+    async function loadMapa() {
+        try {
+            mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando mapa de vinculación...</td></tr>';
+            const res = await fetch("/api/mapa-vinculaciones");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay vinculaciones registradas.</td></tr>';
+                    return;
+                }
+
+                mapaTableBody.innerHTML = "";
+                data.forEach(item => {
+                    const row = document.createElement("tr");
+
+                    const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val);
+
+                    row.innerHTML = `
+                        <td><strong>#${item.pago_id}</strong></td>
+                        <td>${item.cliente_nombre}</td>
+                        <td>${item.fecha_pago}</td>
+                        <td><strong style="color: #10b981">${fmt(item.monto_aplicado)}</strong></td>
+                        <td><strong>${item.so_id}</strong></td>
+                        <td>
+                            <div>Total: ${fmt(item.order_details.total)}</div>
+                            <div style="font-size:0.7rem; color:#64748b">Base: ${fmt(item.order_details.subtotal)}</div>
+                        </td>
+                        <td><span class="state-badge">${item.invoice_id}</span></td>
+                        <td>
+                            <div>Base: ${fmt(item.invoice_details.subtotal)}</div>
+                            <div style="font-size:0.7rem; color:#64748b">IVA: ${fmt(item.invoice_details.iva)}</div>
+                        </td>
+                        <td>
+                            <div>Total: ${fmt(item.invoice_details.total)}</div>
+                            <div style="font-size:0.7rem; color:#d97706; font-weight:700">Saldo: ${fmt(item.invoice_details.saldo_deudor)}</div>
+                        </td>
+                        <td><strong>${fmt(item.invoice_details.retencion_iva_est)}</strong></td>
+                    `;
+                    mapaTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar el mapa.</td></tr>';
+            console.error(err);
+        }
     }
 
     // Filter report table in real-time
@@ -344,6 +403,8 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadConfigData() {
         loadTasas();
         loadFeriados();
+        loadDescuentosMarca();
+        loadListasPrecio();
     }
 
     async function loadTasas() {
@@ -401,6 +462,78 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    async function loadDescuentosMarca() {
+        try {
+            descuentosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando descuentos...</td></tr>';
+            const res = await fetch("/api/config/descuentos-marca");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    descuentosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas registradas.</td></tr>';
+                    return;
+                }
+
+                descuentosTableBody.innerHTML = "";
+                data.forEach(r => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${r.marca}</td>
+                        <td>${r.categoria}</td>
+                        <td><span class="state-badge">${r.tipo_descuento}</span></td>
+                        <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
+                    `;
+                    descuentosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function loadListasPrecio() {
+        try {
+            listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando listas de precios de Odoo...</td></tr>';
+            const res = await fetch("/api/config/listas-precio");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay listas de precios en Odoo.</td></tr>';
+                    return;
+                }
+
+                listasPrecioTableBody.innerHTML = "";
+                data.forEach(pl => {
+                    const row = document.createElement("tr");
+
+                    // Gather dates range
+                    let startVal = "N/A";
+                    let endVal = "N/A";
+                    if (pl.reglas && pl.reglas.length > 0) {
+                        const nonNaStarts = pl.reglas.map(r => r.fecha_inicio).filter(d => d !== "N/A");
+                        const nonNaEnds = pl.reglas.map(r => r.fecha_fin).filter(d => d !== "N/A");
+                        if (nonNaStarts.length > 0) startVal = nonNaStarts[0].split(" ")[0];
+                        if (nonNaEnds.length > 0) endVal = nonNaEnds[0].split(" ")[0];
+                    }
+
+                    row.innerHTML = `
+                        <td><strong>#${pl.id}</strong></td>
+                        <td>${pl.name}</td>
+                        <td><strong>${pl.moneda}</strong></td>
+                        <td><span class="semaphore ${pl.active ? 'verde' : 'rojo'}">${pl.active ? 'Vigente' : 'Archivado'}</span></td>
+                        <td><strong>${pl.reglas.length} reglas</strong></td>
+                        <td>Desde: ${startVal} / Hasta: ${endVal}</td>
+                    `;
+                    listasPrecioTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar listas de precios.</td></tr>';
+            console.error(err);
+        }
+    }
+
     // Save exchange rates
     tasaForm.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -453,6 +586,36 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             alert("❌ Error de red al registrar feriado.");
+            console.error(err);
+        }
+    });
+
+    // Save Brand Discount Rule
+    descuentoForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            marca: cfgDescMarca.value,
+            categoria: cfgDescCat.value,
+            tipo_descuento: cfgDescTipo.value,
+            porcentaje: parseFloat(cfgDescPorcentaje.value)
+        };
+
+        try {
+            const res = await fetch("/api/config/descuentos-marca", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("✅ Regla de descuento registrada correctamente en Google Sheets.");
+                descuentoForm.reset();
+                loadDescuentosMarca();
+            } else {
+                alert("❌ Error al guardar la regla.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar regla.");
             console.error(err);
         }
     });
