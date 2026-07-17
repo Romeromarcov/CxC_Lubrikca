@@ -64,6 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const descuentosTableBody = document.getElementById("descuentos-table-body");
 
     const listasPrecioTableBody = document.getElementById("listas-precio-table-body");
+    const productosTableBody = document.getElementById("productos-table-body");
 
     // Tab Navigation Logic
     tabButtons.forEach(btn => {
@@ -215,7 +216,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 // If it is VES, we recommend applying the calculated Binance USD amount
                 if (payment.moneda === "VES") {
-                    // Start by defaulting to the Binance equivalent value
                     formMontoAplicar.value = payment.equiv_usd_binance.toFixed(2);
                 } else {
                     formMontoAplicar.value = payment.monto.toFixed(2);
@@ -496,6 +496,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadFeriados();
         loadDescuentosMarca();
         loadListasPrecio();
+        loadOdooProductos();
         populateBrandsAndCategories();
     }
 
@@ -717,6 +718,39 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar listas de precios.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    // Load Odoo Product catalog with USD & VES pricelists prices
+    async function loadOdooProductos() {
+        try {
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
+            const res = await fetch("/api/odoo/productos");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay productos disponibles.</td></tr>';
+                    return;
+                }
+
+                productosTableBody.innerHTML = "";
+                data.forEach(p => {
+                    const row = document.createElement("tr");
+                    const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                    
+                    row.innerHTML = `
+                        <td><strong>${p.ref_interna}</strong></td>
+                        <td>${p.nombre}</td>
+                        <td>${fmt(p.precio_publico)}</td>
+                        <td><strong style="color: #059669">${fmt(p.precio_usd)}</strong></td>
+                        <td><strong style="color: #d97706">${fmt(p.precio_ves_usd)}</strong></td>
+                    `;
+                    productosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
             console.error(err);
         }
     }

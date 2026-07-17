@@ -897,3 +897,54 @@ async def post_sync_odoo_rates():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/odoo/productos")
+async def get_odoo_productos():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        
+        # Fetch active products
+        prods = execute(
+            "product.template",
+            "search_read",
+            [[["sale_ok", "=", True], ["active", "=", True]]],
+            {"fields": ["id", "name", "default_code", "list_price"], "limit": 100}
+        )
+        
+        # Mappings of pricelists
+        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+        lista_ves_id = int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+        
+        prod_ids = [p["id"] for p in prods]
+        
+        prices_usd = {}
+        prices_ves = {}
+        
+        try:
+            res_usd = execute("product.pricelist", "price_get", [lista_usd_id, 1.0, prod_ids], {})
+            prices_usd = {int(k): float(v) for k, v in res_usd.get(str(lista_usd_id), {}).items()}
+        except Exception as e:
+            print(f"Error fetching USD prices: {e}", file=sys.stderr)
+            
+        try:
+            res_ves = execute("product.pricelist", "price_get", [lista_ves_id, 1.0, prod_ids], {})
+            prices_ves = {int(k): float(v) for k, v in res_ves.get(str(lista_ves_id), {}).items()}
+        except Exception as e:
+            print(f"Error fetching VES prices: {e}", file=sys.stderr)
+            
+        resultado = []
+        for p in prods:
+            pid = p["id"]
+            resultado.append({
+                "id": pid,
+                "nombre": p["name"],
+                "ref_interna": p.get("default_code") or "N/A",
+                "precio_publico": float(p.get("list_price") or 0.0),
+                "precio_usd": prices_usd.get(pid, float(p.get("list_price") or 0.0)),
+                "precio_ves_usd": prices_ves.get(pid, 0.0)
+            })
+        return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
