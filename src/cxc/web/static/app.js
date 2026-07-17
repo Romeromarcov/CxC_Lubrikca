@@ -1,13 +1,19 @@
 document.addEventListener("DOMContentLoaded", () => {
     // State
     let selectedPayment = null;
+    let reporteData = []; // Cache for live filtering
     
-    // Elements
+    // Elements - Navigation
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    const tabPanels = document.querySelectorAll(".tab-panel");
+
+    // Elements - KPIs
     const kpiCobrables = document.getElementById("kpi-cobrables");
     const kpiSinAsignar = document.getElementById("kpi-sin-asignar");
     const kpiAlertas = document.getElementById("kpi-alertas");
-    const paymentsList = document.getElementById("payments-list");
     
+    // Elements - Dashboard/Payments
+    const paymentsList = document.getElementById("payments-list");
     const formPagoId = document.getElementById("form-pago-id");
     const formClienteNombre = document.getElementById("form-cliente-nombre");
     const formClienteId = document.getElementById("form-cliente-id");
@@ -19,6 +25,47 @@ document.addEventListener("DOMContentLoaded", () => {
     const vinculacionForm = document.getElementById("vinculacion-form");
     const bandejaTableBody = document.getElementById("bandeja-table-body");
 
+    // Elements - Reporte
+    const reporteTableBody = document.getElementById("reporte-table-body");
+    const reporteSearch = document.getElementById("reporte-search");
+
+    // Elements - Config
+    const tasaForm = document.getElementById("tasa-form");
+    const cfgTasaBcv = document.getElementById("cfg-tasa-bcv");
+    const cfgTasaBinance = document.getElementById("cfg-tasa-binance");
+    const tasasTableBody = document.getElementById("tasas-table-body");
+    
+    const feriadoForm = document.getElementById("feriado-form");
+    const cfgFeriadoFecha = document.getElementById("cfg-feriado-fecha");
+    const cfgFeriadoDesc = document.getElementById("cfg-feriado-desc");
+    const feriadosTableBody = document.getElementById("feriados-table-body");
+
+    // Tab Navigation Logic
+    tabButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const targetTab = btn.dataset.tab;
+            
+            // Toggle active buttons
+            tabButtons.forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            
+            // Toggle active panels
+            tabPanels.forEach(panel => {
+                panel.classList.remove("active");
+                if (panel.id === targetTab) {
+                    panel.classList.add("active");
+                }
+            });
+
+            // Lazy load tab data
+            if (targetTab === "tab-reporte") {
+                loadReporte();
+            } else if (targetTab === "tab-config") {
+                loadConfigData();
+            }
+        });
+    });
+
     // Fetch and render KPIs
     async function loadKPIs() {
         try {
@@ -29,7 +76,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 kpiSinAsignar.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.pagos_sin_asignar_usd);
                 kpiAlertas.textContent = data.alertas_reconciliacion;
                 
-                // Classify alerts danger state
                 if (data.alertas_reconciliacion > 0) {
                     kpiAlertas.classList.add("danger");
                 } else {
@@ -81,27 +127,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Handle payment selection
     async function selectPayment(payment, element) {
-        // Highlight active item
         document.querySelectorAll(".payment-item").forEach(item => item.classList.remove("active"));
         element.classList.add("active");
         
         selectedPayment = payment;
         
-        // Fill form fields
         formPagoId.value = payment.pago_id;
         formClienteNombre.value = payment.cliente_nombre;
         formClienteId.value = payment.cliente_id;
         formPagoMoneda.textContent = payment.moneda;
         formPagoDisponible.value = payment.monto.toFixed(2);
         
-        // Reset and lock SO select and amount input
         formSoSelect.innerHTML = '<option value="">Cargando órdenes del cliente...</option>';
         formSoSelect.disabled = true;
         formMontoAplicar.value = "";
         formMontoAplicar.disabled = true;
         btnSubmit.disabled = true;
         
-        // Fetch client orders
         try {
             const res = await fetch(`/api/ordenes-pendientes/${payment.cliente_id}`);
             if (res.ok) {
@@ -119,10 +161,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     formSoSelect.appendChild(opt);
                 });
                 
-                // Enable inputs
                 formSoSelect.disabled = false;
                 formMontoAplicar.disabled = false;
-                formMontoAplicar.value = payment.monto.toFixed(2); // Prefill full payment amount
+                formMontoAplicar.value = payment.monto.toFixed(2);
                 formMontoAplicar.max = payment.monto;
                 btnSubmit.disabled = false;
             }
@@ -150,24 +191,20 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch("/api/vincular", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
             
             if (res.ok) {
                 alert("✅ Cobro asignado y vinculado con éxito. El motor recalculando balances en segundo plano.");
-                // Reset form
                 vinculacionForm.reset();
-                formSoSelect.innerHTML = '<option value="">Selecciona una orden de venta...</option>';
+                formSoSelect.innerHTML = '<option value="">Selecciona una orden...</option>';
                 formSoSelect.disabled = true;
                 formMontoAplicar.disabled = true;
                 btnSubmit.disabled = true;
                 btnSubmit.textContent = "Asignar Cobro";
                 selectedPayment = null;
                 
-                // Reload page data
                 loadKPIs();
                 loadPayments();
                 loadBandeja();
@@ -185,14 +222,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Fetch and render Bandeja / Audit Table
+    // Fetch and render Bandeja / Approval Table
     async function loadBandeja() {
         try {
             const res = await fetch("/api/bandeja");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    bandejaTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay registros auditados en la bandeja.</td></tr>';
+                    bandejaTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay propuestas pendientes en la bandeja.</td></tr>';
                     return;
                 }
                 
@@ -200,14 +237,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 items.forEach(item => {
                     const row = document.createElement("tr");
                     
-                    // Format semaphore
                     let semHtml = '<span class="semaphore">Ninguno</span>';
                     if (item.reconciliacion) {
                         const resVal = item.reconciliacion.resultado;
                         semHtml = `<span class="semaphore ${resVal.toLowerCase()}">${resVal}</span>`;
                     }
                     
-                    // Format close candidacy
                     let closeHtml = '<span class="state-badge">Abierta</span>';
                     if (item.candidata_a_cierre) {
                         closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
@@ -231,14 +266,209 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Initial Load
+    // --- Tab 2: Accounts Receivable Report ---
+    async function loadReporte() {
+        try {
+            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
+            const res = await fetch("/api/reporte-saldos");
+            if (res.ok) {
+                reporteData = await res.json();
+                renderReporteTable(reporteData);
+            }
+        } catch (err) {
+            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error de red al cargar el reporte.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    function renderReporteTable(data) {
+        if (data.length === 0) {
+            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
+            return;
+        }
+
+        reporteTableBody.innerHTML = "";
+        data.forEach(item => {
+            const row = document.createElement("tr");
+
+            // Format Odoo State
+            let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
+            if (item.facturada) {
+                odooHtml = '<span class="state-badge facturada">Facturado en Odoo</span>';
+            }
+
+            // Format Close State
+            let closeHtml = '<span class="state-badge">Abierta</span>';
+            if (item.candidata_a_cierre) {
+                closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
+            }
+
+            // Format Semaphore
+            let semHtml = '<span class="semaphore">Ninguno</span>';
+            if (item.reconciliacion) {
+                const resVal = item.reconciliacion.resultado;
+                semHtml = `<span class="semaphore ${resVal.toLowerCase()}">${resVal}</span>`;
+            }
+
+            row.innerHTML = `
+                <td><strong>${item.so_id}</strong></td>
+                <td>${item.cliente_nombre}</td>
+                <td>${item.fecha}</td>
+                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total)}</td>
+                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_pagado)}</td>
+                <td><strong style="color: ${item.saldo_deudor > 0 ? '#fbbf24' : '#34d399'}">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.saldo_deudor)}</strong></td>
+                <td>${odooHtml}</td>
+                <td>${closeHtml}</td>
+                <td>${semHtml}</td>
+            `;
+            reporteTableBody.appendChild(row);
+        });
+    }
+
+    // Filter report table in real-time
+    reporteSearch.addEventListener("keyup", () => {
+        const query = reporteSearch.value.toLowerCase().trim();
+        if (!query) {
+            renderReporteTable(reporteData);
+            return;
+        }
+
+        const filtered = reporteData.filter(item => 
+            item.so_id.toLowerCase().includes(query) || 
+            item.cliente_nombre.toLowerCase().includes(query)
+        );
+        renderReporteTable(filtered);
+    });
+
+    // --- Tab 3: Configuration Panels ---
+    async function loadConfigData() {
+        loadTasas();
+        loadFeriados();
+    }
+
+    async function loadTasas() {
+        try {
+            tasasTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando tasas...</td></tr>';
+            const res = await fetch("/api/config/tasas");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    tasasTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay tasas registradas.</td></tr>';
+                    return;
+                }
+                
+                tasasTableBody.innerHTML = "";
+                data.forEach(t => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td>${t.timestamp}</td>
+                        <td><strong>${t.tasa_bcv.toFixed(4)} Bs</strong></td>
+                        <td><strong>${t.tasa_binance.toFixed(4)} Bs</strong></td>
+                        <td>${t.fuente}</td>
+                    `;
+                    tasasTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function loadFeriados() {
+        try {
+            feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando feriados...</td></tr>';
+            const res = await fetch("/api/config/feriados");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">No hay feriados registrados.</td></tr>';
+                    return;
+                }
+                
+                feriadosTableBody.innerHTML = "";
+                data.forEach(f => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${f.fecha}</strong></td>
+                        <td>${f.descripcion}</td>
+                        <td><span class="state-badge">${f.tipo}</span></td>
+                    `;
+                    feriadosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Save exchange rates
+    tasaForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            tasa_bcv: parseFloat(cfgTasaBcv.value),
+            tasa_binance: parseFloat(cfgTasaBinance.value)
+        };
+
+        try {
+            const res = await fetch("/api/config/tasas", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("✅ Tasas de cambio manuales cargadas exitosamente.");
+                tasaForm.reset();
+                loadTasas();
+            } else {
+                alert("❌ Error al guardar las tasas.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar tasas.");
+            console.error(err);
+        }
+    });
+
+    // Save custom holiday
+    feriadoForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            fecha: cfgFeriadoFecha.value,
+            descripcion: cfgFeriadoDesc.value
+        };
+
+        try {
+            const res = await fetch("/api/config/feriados", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("✅ Feriado registrado correctamente en Google Sheets.");
+                feriadoForm.reset();
+                loadFeriados();
+            } else {
+                alert("❌ Error al guardar el feriado.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar feriado.");
+            console.error(err);
+        }
+    });
+
+    // Initial Load for Dashboard
     loadKPIs();
     loadPayments();
     loadBandeja();
     
-    // Auto-refresh every 30 seconds for dynamic KPIs and tables
+    // Auto-refresh Dashboard every 30 seconds
     setInterval(() => {
-        loadKPIs();
-        loadBandeja();
+        // Only refresh if active tab is dashboard to save Google Sheets API quota
+        const activeTab = document.querySelector(".tab-navigation .active").dataset.tab;
+        if (activeTab === "tab-dashboard") {
+            loadKPIs();
+            loadBandeja();
+        }
     }, 30000);
 });

@@ -54,6 +54,14 @@ class VinculacionRequest(BaseModel):
     so_id: str
     monto_aplicado: float
 
+class TasaRequest(BaseModel):
+    tasa_bcv: float
+    tasa_binance: float
+
+class FeriadoRequest(BaseModel):
+    fecha: str
+    descripcion: str
+
 def get_repo() -> SheetsRepository:
     config = AppConfig.from_env()
     print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
@@ -386,3 +394,116 @@ def recalculate_all(so_id: str):
         print(f"Recálculo de {so_id} completado con éxito.")
     except Exception as e:
         print(f"Error al recalcular {so_id}: {e}", file=sys.stderr)
+
+@app.get("/api/reporte-saldos")
+async def get_reporte_saldos():
+    try:
+        repo = get_repo()
+        ordenes = repo.all_ordenes()
+        vincs = repo.all_vinculaciones()
+        concs = {c.so_id: c for c in repo.all_conciliaciones()}
+        
+        # Load clients once
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        
+        # Calculate sum of linked payment amounts per so_id
+        linked_by_so = {}
+        for v in vincs:
+            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+            
+        reporte = []
+        for o in ordenes:
+            client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
+            pagado = linked_by_so.get(o.so_id, Decimal("0"))
+            saldo = o.monto_total - pagado
+            conc = concs.get(o.so_id)
+            
+            reporte.append({
+                "so_id": o.so_id,
+                "cliente_nombre": client_name,
+                "fecha": o.fecha.isoformat(),
+                "monto_total": float(o.monto_total),
+                "monto_pagado": float(pagado),
+                "saldo_deudor": float(saldo) if saldo > Decimal("0") else 0.0,
+                "facturada": o.facturada,
+                "candidata_a_cierre": saldo <= Decimal("0.05"),
+                "reconciliacion": {
+                    "resultado": conc.resultado.value if conc else "pendiente"
+                } if conc else None
+            })
+        return reporte
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/tasas")
+async def get_config_tasas():
+    try:
+        repo = get_repo()
+        # Read the last 15 raw rows from SerieTasas
+        filas = repo._g.read_rows("SerieTasas")[-15:]
+        tasas = []
+        for f in reversed(filas):
+            tasas.append({
+                "timestamp": f.get("timestamp", ""),
+                "tasa_bcv": float(parse_decimal_safe(f.get("tasa_bcv", "0"))),
+                "tasa_binance": float(parse_decimal_safe(f.get("tasa_binance", "0"))),
+                "fuente": f.get("fuente", "")
+            })
+        return tasas
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/tasas")
+async def post_config_tasas(req: TasaRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import SerieTasa
+        tasa = SerieTasa(
+            timestamp=datetime.now(),
+            tasa_bcv=Decimal(str(req.tasa_bcv)),
+            tasa_binance=Decimal(str(req.tasa_binance)),
+            fuente="Carga Manual Web",
+            es_heredada=False,
+            capturada_ok=True
+        )
+        repo.append_serie_tasa(tasa)
+        return {"status": "success", "message": "Tasa manual registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/feriados")
+async def get_config_feriados():
+    try:
+        repo = get_repo()
+        feriados = repo.feriados()
+        return [
+            {
+                "fecha": f.fecha.isoformat(),
+                "descripcion": f.descripcion,
+                "tipo": f.tipo.value
+            } for f in feriados
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/feriados")
+async def post_config_feriados(req: FeriadoRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import Feriado, TipoFeriado
+        from cxc.sheets import serde, gateway as g
+        feriado = Feriado(
+            fecha=date.fromisoformat(req.fecha),
+            descripcion=req.descripcion,
+            tipo=TipoFeriado.NACIONAL
+        )
+        repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
+        return {"status": "success", "message": "Feriado registrado con éxito."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
