@@ -118,6 +118,37 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         self._sh = self._gc.open_by_key(spreadsheet_id)
         return self
 
+    @classmethod
+    def from_env_vars(cls, spreadsheet_id: str) -> GspreadGateway:
+        """Autentica utilizando las variables de entorno de OAuth token y secrets."""
+        import gspread
+        import json
+        import os
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+
+        token_str = os.environ.get("GOOGLE_TOKEN_JSON")
+        secret_str = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
+
+        if not token_str:
+            raise ValueError("Falta GOOGLE_TOKEN_JSON en las variables de entorno.")
+
+        token_info = json.loads(token_str)
+        if secret_str:
+            secret_info = json.loads(secret_str)
+            client_config = secret_info.get("installed") or secret_info.get("web") or {}
+            token_info["client_id"] = client_config.get("client_id")
+            token_info["client_secret"] = client_config.get("client_secret")
+
+        creds = Credentials.from_authorized_user_info(token_info, scopes=['https://www.googleapis.com/auth/drive'])
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+
+        self = cls.__new__(cls)
+        self._gc = gspread.Client(auth=creds)
+        self._sh = self._gc.open_by_key(spreadsheet_id)
+        return self
+
     def _ws(self, table: str):  # type: ignore[no-untyped-def]
         return self._sh.worksheet(table)
 

@@ -13,3 +13,7 @@ google-auth-oauthlib==1.2.1
 
 # Carga de configuración por variables de entorno (no secretos en el repo).
 python-dotenv==1.0.1
+
+# FastAPI & Uvicorn para el Dashboard Web
+fastapi==0.111.0
+uvicorn==0.30.1

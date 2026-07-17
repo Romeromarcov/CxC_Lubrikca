@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Cobranza y Conciliación — Lubrikca</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="glow-container">
+        <div class="glow-circle blue"></div>
+        <div class="glow-circle cyan"></div>
+    </div>
+
+    <header class="main-header">
+        <div class="logo-area">
+            <span class="logo-icon">⚡</span>
+            <div>
+                <h1>Lubrikca CxC</h1>
+                <p>Gestión de Cobranzas y Conciliación de Cuentas</p>
+            </div>
+        </div>
+        <div class="system-status">
+            <span class="status-indicator online"></span>
+            <span>Daemon Activo (Sync 5 min)</span>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- Tarjeta de Estadísticas (KPIs) -->
+        <section class="kpi-panel card">
+            <div class="kpi-card">
+                <span class="kpi-label">Por Cobrar en Órdenes</span>
+                <span class="kpi-value" id="kpi-cobrables">$0.00</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">Pagos Sin Asignar</span>
+                <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">Alertas Rojas</span>
+                <span class="kpi-value danger" id="kpi-alertas">0</span>
+            </div>
+        </section>
+
+        <!-- Bloque Principal: Asignación de Pagos -->
+        <section class="main-panel card">
+            <div class="panel-header">
+                <h2>Asignación de Pagos Recibidos</h2>
+                <p>Vincula los cobros registrados por vendedores en Odoo a sus respectivas órdenes pendientes de facturación</p>
+            </div>
+            
+            <div class="splitter">
+                <!-- Lista de Pagos Sin Asignar -->
+                <div class="payment-list-area">
+                    <h3>Pagos Recientes Sin Factura</h3>
+                    <div class="list-wrapper" id="payments-list">
+                        <div class="loading-spinner">Cargando pagos...</div>
+                    </div>
+                </div>
+
+                <!-- Formulario de Vinculación -->
+                <div class="association-form-area">
+                    <h3>Vincular Pago Seleccionado</h3>
+                    <form id="vinculacion-form" class="cxc-form">
+                        <div class="form-group">
+                            <label>ID del Pago</label>
+                            <input type="text" id="form-pago-id" readonly placeholder="Selecciona un pago de la lista">
+                        </div>
+                        <div class="form-group">
+                            <label>Cliente</label>
+                            <input type="text" id="form-cliente-nombre" readonly placeholder="Cliente asociado">
+                            <input type="hidden" id="form-cliente-id">
+                        </div>
+                        <div class="form-group">
+                            <label>Monto Disponible</label>
+                            <div class="currency-input-wrapper">
+                                <span class="input-currency" id="form-pago-moneda">USD</span>
+                                <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Orden de Venta Odoo (SO)</label>
+                            <select id="form-so-select" required disabled>
+                                <option value="">Selecciona una orden de venta...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Monto a Aplicar a la Orden</label>
+                            <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto">
+                        </div>
+                        <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
+                    </form>
+                </div>
+            </div>
+        </section>
+
+        <!-- Bandeja de Facturación y Aprobaciones -->
+        <section class="side-panel card">
+            <div class="panel-header">
+                <h2>Bandeja de Aprobación y Conciliación</h2>
+                <p>Visualiza el cálculo neto de descuentos sugerido por el motor y su conciliación con Odoo</p>
+            </div>
+            
+            <div class="table-wrapper">
+                <table class="cxc-table">
+                    <thead>
+                        <tr>
+                            <th>Orden (SO)</th>
+                            <th>Lista</th>
+                            <th>Base ($)</th>
+                            <th>Dctos ($)</th>
+                            <th>Total Motor ($)</th>
+                            <th>Semáforo</th>
+                            <th>Cierre</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bandeja-table-body">
+                        <tr>
+                            <td colspan="7" class="table-empty">Cargando bandeja de auditoría...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="main-footer">
+        <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar. Sincronizado mediante Odoo XML-RPC API y Google Sheets.</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

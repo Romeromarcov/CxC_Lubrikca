@@ -21,11 +21,16 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
 
     logging.basicConfig(level=logging.INFO)
     config = AppConfig.from_env()
-    repo = SheetsRepository(
-        GspreadGateway(
+    import os
+
+    if os.environ.get("GOOGLE_TOKEN_JSON"):
+        gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+    else:
+        gateway = GspreadGateway(
             config.sheets.spreadsheet_id, config.sheets.service_account_file
         )
-    )
+
+    repo = SheetsRepository(gateway)
     execute = _connect(config.odoo)
     # Mantener viva la referencia al reader no es necesario; usamos execute directo.
     _ = OdooXmlRpcReader

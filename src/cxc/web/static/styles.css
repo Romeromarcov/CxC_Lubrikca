@@ -1,0 +1,489 @@
+/* Reset y Estilos Globales */
+:root {
+    --bg-dark: 224, 71%, 4%;     /* #020617 (Fondo profundo) */
+    --bg-card: 222, 47%, 11%;    /* #0f172a (Tarjetas con glassmorphism) */
+    --border-card: 217, 33%, 17%;/* #1e293b */
+    --text-primary: 210, 40%, 98%;/* #f8fafc */
+    --text-secondary: 215, 20%, 65%;/* #94a3b8 */
+    --accent-cyan: 188, 86%, 53%; /* #06b6d4 */
+    --accent-emerald: 160, 84%, 39%; /* #10b981 */
+    --accent-amber: 37, 90%, 51%; /* #f59e0b */
+    --accent-rose: 343, 89%, 60%; /* #f43f5e */
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Outfit', sans-serif;
+    background-color: hsl(var(--bg-dark));
+    color: hsl(var(--text-primary));
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    position: relative;
+}
+
+/* Efectos de Resplandor en Segundo Plano */
+.glow-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    z-index: -1;
+    pointer-events: none;
+}
+
+.glow-circle {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(140px);
+    opacity: 0.15;
+}
+
+.glow-circle.blue {
+    top: -10%;
+    right: 10%;
+    width: 450px;
+    height: 450px;
+    background-color: hsl(var(--accent-cyan));
+}
+
+.glow-circle.cyan {
+    bottom: 5%;
+    left: -5%;
+    width: 500px;
+    height: 500px;
+    background-color: #2563eb;
+}
+
+/* Header */
+.main-header {
+    background: rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1.25rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.logo-icon {
+    font-size: 1.75rem;
+    background: linear-gradient(135deg, hsl(var(--accent-cyan)), #2563eb);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.logo-area h1 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    background: linear-gradient(100deg, #ffffff, hsl(var(--text-secondary)));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.logo-area p {
+    font-size: 0.75rem;
+    color: hsl(var(--text-secondary));
+}
+
+.system-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: hsl(var(--text-secondary));
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.35rem 0.75rem;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-indicator.online {
+    background-color: hsl(var(--accent-emerald));
+    box-shadow: 0 0 10px hsl(var(--accent-emerald));
+}
+
+/* Layout Grid */
+.dashboard-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 1.5rem;
+    padding: 1.5rem 2rem;
+}
+
+/* Tarjetas */
+.card {
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 1.5rem;
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+}
+
+.panel-header {
+    margin-bottom: 1.25rem;
+}
+
+.panel-header h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.panel-header p {
+    font-size: 0.8rem;
+    color: hsl(var(--text-secondary));
+}
+
+/* KPIs Panel */
+.kpi-panel {
+    grid-column: 1 / span 2;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+.kpi-card {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.kpi-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.kpi-label {
+    font-size: 0.75rem;
+    color: hsl(var(--text-secondary));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.kpi-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.kpi-value.warning {
+    color: hsl(var(--accent-amber));
+}
+
+.kpi-value.danger {
+    color: hsl(var(--accent-rose));
+}
+
+/* Splitter Layout in Main Panel */
+.splitter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    height: calc(100% - 3.5rem);
+}
+
+.payment-list-area, .association-form-area {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.payment-list-area h3, .association-form-area h3 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    color: hsl(var(--text-secondary));
+    letter-spacing: 0.05em;
+    margin-bottom: 0.75rem;
+}
+
+.list-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    max-height: 380px;
+}
+
+/* Items de Pago */
+.payment-item {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-left-color 0.2s ease;
+    border-left: 3px solid transparent;
+}
+
+.payment-item:last-child {
+    border-bottom: none;
+}
+
+.payment-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.payment-item.active {
+    background: rgba(6, 182, 212, 0.08);
+    border-left-color: hsl(var(--accent-cyan));
+}
+
+.p-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+}
+
+.p-id {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.p-amount {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: hsl(var(--accent-emerald));
+}
+
+.p-client {
+    font-size: 0.75rem;
+    color: hsl(var(--text-secondary));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 0.25rem;
+}
+
+.p-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* Spinner & Loader */
+.loading-spinner {
+    padding: 2rem;
+    text-align: center;
+    color: hsl(var(--text-secondary));
+    font-size: 0.85rem;
+}
+
+/* Formulario */
+.cxc-form {
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.form-group label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: hsl(var(--text-secondary));
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.form-group input, .form-group select {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #ffffff;
+    padding: 0.5rem 0.75rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-group input[readonly] {
+    background: rgba(0, 0, 0, 0.15);
+    color: hsl(var(--text-secondary));
+    cursor: not-allowed;
+}
+
+.form-group input:focus, .form-group select:focus {
+    outline: none;
+    border-color: hsl(var(--accent-cyan));
+    box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.15);
+}
+
+.currency-input-wrapper {
+    position: relative;
+}
+
+.input-currency {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+/* Botones */
+.btn-primary {
+    background: linear-gradient(135deg, hsl(var(--accent-cyan)), #2563eb);
+    border: none;
+    border-radius: 6px;
+    color: #ffffff;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.65rem;
+    cursor: pointer;
+    transition: filter 0.2s ease, opacity 0.2s ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Tablas */
+.table-wrapper {
+    overflow-x: auto;
+    max-height: 480px;
+}
+
+.cxc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.cxc-table th {
+    background: rgba(0, 0, 0, 0.25);
+    color: hsl(var(--text-secondary));
+    font-weight: 600;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cxc-table td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    color: hsl(var(--text-secondary));
+}
+
+.cxc-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.cxc-table td strong {
+    color: #ffffff;
+}
+
+.table-empty {
+    text-align: center;
+    padding: 2.5rem !important;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* Semáforos y Estados */
+.semaphore {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.semaphore.verde {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+}
+
+.semaphore.amarillo {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+}
+
+.semaphore.rojo {
+    background: rgba(244, 63, 94, 0.15);
+    color: #f87171;
+    animation: pulse 2s infinite;
+}
+
+.state-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+}
+
+.state-badge.cierre {
+    background: rgba(6, 182, 212, 0.2);
+    color: hsl(var(--accent-cyan));
+    font-weight: 700;
+}
+
+/* Footer */
+.main-footer {
+    text-align: center;
+    padding: 1.5rem 2rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.25);
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* Animación de Pulso */
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
