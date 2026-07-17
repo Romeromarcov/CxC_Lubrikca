@@ -30,6 +30,24 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+def parse_decimal_safe(val) -> Decimal:
+    if not val:
+        return Decimal("0")
+    s = str(val).strip()
+    s = s.replace("$", "").replace("€", "").replace("Bs.", "").replace("Bs", "").strip()
+    if not s:
+        return Decimal("0")
+    # European/Spanish format check: comma for decimals
+    if "," in s:
+        if "." in s and s.find(".") < s.find(","):
+            s = s.replace(".", "").replace(",", ".")
+        elif "." not in s:
+            s = s.replace(",", ".")
+    try:
+        return Decimal(s)
+    except:
+        return Decimal("0")
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -139,7 +157,7 @@ async def get_resumen():
             if pid and pid not in linked_pago_ids:
                 try:
                     # Let's count them in USD (if VES, convert or count original)
-                    monto = Decimal(str(p.get("monto", "0")))
+                    monto = parse_decimal_safe(p.get("monto", "0"))
                     pagos_pendientes_monto += monto
                 except:
                     pass
@@ -175,7 +193,7 @@ async def get_pagos_pendientes():
             pago_id = str(p.get("pago_id", ""))
             if not pago_id:
                 continue
-            monto_original = Decimal(str(p.get("monto", "0")))
+            monto_original = parse_decimal_safe(p.get("monto", "0"))
             monto_vinculado = linked_amounts.get(pago_id, Decimal("0"))
             
             saldo_pendiente = monto_original - monto_vinculado
