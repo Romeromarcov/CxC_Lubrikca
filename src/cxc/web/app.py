@@ -183,6 +183,18 @@ async def get_pagos_pendientes():
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         
+        # Load all clients once to avoid N+1 queries to Google Sheets API
+        clientes_rows = repo._g.read_rows("Clientes")
+        from cxc.sheets import serde
+        clientes_map = {}
+        for r in clientes_rows:
+            cid = str(r.get("cliente_id", ""))
+            if cid:
+                try:
+                    clientes_map[cid] = serde.cliente_from_row(r)
+                except:
+                    pass
+        
         # Gather amounts linked per pago_id
         linked_amounts = {}
         for v in vincs:
@@ -198,9 +210,9 @@ async def get_pagos_pendientes():
             
             saldo_pendiente = monto_original - monto_vinculado
             if saldo_pendiente > Decimal("0.05"):
-                # Retrieve client name
+                # Retrieve client name from cache map
                 cliente_id = str(p.get("cliente_id", ""))
-                cliente = repo.get_cliente(cliente_id)
+                cliente = clientes_map.get(cliente_id)
                 cliente_nombre = cliente.nombre if cliente else f"Cliente ID: {cliente_id}"
                 
                 pendientes.append({
@@ -213,6 +225,7 @@ async def get_pagos_pendientes():
                     "fecha": p.get("fecha_pago", ""),
                     "metodo_pago": p.get("metodo_pago", "")
                 })
+        return pendientes
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
