@@ -46,6 +46,8 @@ def get_repo() -> SheetsRepository:
         )
     return SheetsRepository(gateway)
 
+import traceback
+
 async def run_sync_in_background():
     while True:
         try:
@@ -64,6 +66,7 @@ async def run_sync_in_background():
             print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
         await asyncio.sleep(300)
 
 async def run_scraper_in_background():
@@ -96,6 +99,7 @@ async def run_scraper_in_background():
             print(f"FastAPI Daemon: Tasas de cambio actualizadas. BCV: {fila.tasa_bcv}, Binance: {fila.tasa_binance}")
         except Exception as e:
             print(f"Error en daemon de scraping de tasas: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
         # Repetir cada 1 hora (3600 segundos)
         await asyncio.sleep(3600)
 
@@ -147,6 +151,7 @@ async def get_resumen():
             "alertas_reconciliacion": alertas_rojas
         }
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/pagos-pendientes")
@@ -187,8 +192,8 @@ async def get_pagos_pendientes():
                     "fecha": p.get("fecha_pago", ""),
                     "metodo_pago": p.get("metodo_pago", "")
                 })
-        return pendientes
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ordenes-pendientes/{cliente_id}")
@@ -209,6 +214,7 @@ async def get_ordenes_pendientes(cliente_id: str):
                 })
         return pendientes
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/vincular")
