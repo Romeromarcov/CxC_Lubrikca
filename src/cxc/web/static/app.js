@@ -115,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 orders.forEach(o => {
                     const opt = document.createElement("option");
                     opt.value = o.so_id;
-                    opt.textContent = `${o.so_id} - ${o.fecha} (${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(o.monto_total)})`;
+                    opt.textContent = `${o.so_id} - ${o.fecha} (Saldo: ${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(o.saldo_pendiente)} / Total: ${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(o.monto_total)})`;
                     formSoSelect.appendChild(opt);
                 });
                 

@@ -235,17 +235,31 @@ async def get_ordenes_pendientes(cliente_id: str):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
+        vincs = repo.all_vinculaciones()
         
+        # Calculate sum of linked payment amounts per so_id
+        linked_by_so = {}
+        for v in vincs:
+            # We assume linked amount is matching currency of the order (USD)
+            # or in terms of the applied amount
+            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+            
         # Filter outstanding orders for this client
         pendientes = []
         for o in ordenes:
             if o.cliente_id == cliente_id and not o.facturada:
-                pendientes.append({
-                    "so_id": o.so_id,
-                    "fecha": o.fecha.isoformat(),
-                    "monto_total": float(o.monto_total),
-                    "vendedor": o.vendedor_email
-                })
+                pagado = linked_by_so.get(o.so_id, Decimal("0"))
+                saldo = o.monto_total - pagado
+                
+                # Show only orders that still have a outstanding balance (> $0.05)
+                if saldo > Decimal("0.05"):
+                    pendientes.append({
+                        "so_id": o.so_id,
+                        "fecha": o.fecha.isoformat(),
+                        "monto_total": float(o.monto_total),
+                        "saldo_pendiente": float(saldo),
+                        "vendedor": o.vendedor_email
+                    })
         return pendientes
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
