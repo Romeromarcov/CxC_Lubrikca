@@ -156,9 +156,9 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         except gspread.exceptions.WorksheetNotFound:
             # Auto-create sheet with headers if missing
             headers = {
-                "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "activo"],
+                "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
                 "PromocionPrimeraCompra": ["producto", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "activo"],
+                "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
                 "Feriados": ["fecha", "descripcion", "tipo"]
             }
             cols = headers.get(table, ["id"])

@@ -61,6 +61,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgDescCat = document.getElementById("cfg-desc-cat");
     const cfgDescTipo = document.getElementById("cfg-desc-tipo");
     const cfgDescPorcentaje = document.getElementById("cfg-desc-porcentaje");
+    const cfgDescDesde = document.getElementById("cfg-desc-desde");
+    const cfgDescHasta = document.getElementById("cfg-desc-hasta");
+    const cfgDescListas = document.getElementById("cfg-desc-listas");
     const descuentosTableBody = document.getElementById("descuentos-table-body");
 
     const listasPrecioTableBody = document.getElementById("listas-precio-table-body");
@@ -80,6 +83,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgDescVolCat = document.getElementById("cfg-desc-vol-cat");
     const cfgDescVolLitros = document.getElementById("cfg-desc-vol-litros");
     const cfgDescVolPorcentaje = document.getElementById("cfg-desc-vol-porcentaje");
+    const cfgDescVolDesde = document.getElementById("cfg-desc-vol-desde");
+    const cfgDescVolHasta = document.getElementById("cfg-desc-vol-hasta");
+    const cfgDescVolListas = document.getElementById("cfg-desc-vol-listas");
     const descuentosVolumenTableBody = document.getElementById("descuentos-volumen-table-body");
 
     // Tab Navigation Logic
@@ -698,24 +704,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadDescuentosMarca() {
         try {
-            descuentosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando descuentos...</td></tr>';
+            descuentosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos...</td></tr>';
             const res = await fetch("/api/config/descuentos-marca");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    descuentosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas registradas.</td></tr>';
+                    descuentosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas registradas.</td></tr>';
                     return;
                 }
 
                 descuentosTableBody.innerHTML = "";
                 data.forEach(r => {
                     const row = document.createElement("tr");
+                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
                     row.innerHTML = `
                         <td><strong>${r.regla_id}</strong></td>
                         <td>${r.marca}</td>
                         <td>${r.categoria}</td>
                         <td><span class="state-badge">${r.tipo_descuento}</span></td>
                         <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td>${r.vigencia_desde || 'N/A'}</td>
+                        <td>${r.vigencia_hasta || 'N/A'}</td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
                         <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
                     `;
                     descuentosTableBody.appendChild(row);
@@ -903,7 +913,10 @@ document.addEventListener("DOMContentLoaded", () => {
             marca: cfgDescMarca.value,
             categoria: cfgDescCat.value,
             tipo_descuento: cfgDescTipo.value,
-            porcentaje: parseFloat(cfgDescPorcentaje.value)
+            porcentaje: parseFloat(cfgDescPorcentaje.value),
+            vigencia_desde: cfgDescDesde.value || new Date().toISOString().split('T')[0],
+            vigencia_hasta: cfgDescHasta.value || null,
+            listas_aplicables: cfgDescListas.value
         };
 
         try {
@@ -984,23 +997,27 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load Volume Discount Rules
     async function loadDescuentosVolumen() {
         try {
-            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando descuentos por volumen...</td></tr>';
+            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos por volumen...</td></tr>';
             const res = await fetch("/api/config/descuentos-volumen");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
+                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
                     return;
                 }
                 descuentosVolumenTableBody.innerHTML = "";
                 data.forEach(r => {
                     const row = document.createElement("tr");
+                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
                     row.innerHTML = `
                         <td><strong>${r.regla_id}</strong></td>
                         <td>${r.marca}</td>
                         <td>${r.categoria}</td>
                         <td><strong>${r.litros_minimo} L</strong></td>
                         <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td>${r.vigencia_desde || 'N/A'}</td>
+                        <td>${r.vigencia_hasta || 'N/A'}</td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
                         <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
                     `;
                     descuentosVolumenTableBody.appendChild(row);
@@ -1018,7 +1035,10 @@ document.addEventListener("DOMContentLoaded", () => {
             marca: cfgDescVolMarca.value,
             categoria: cfgDescVolCat.value,
             litros_minimo: parseFloat(cfgDescVolLitros.value),
-            porcentaje: parseFloat(cfgDescVolPorcentaje.value)
+            porcentaje: parseFloat(cfgDescVolPorcentaje.value),
+            vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
+            vigencia_hasta: cfgDescVolHasta.value || null,
+            listas_aplicables: cfgDescVolListas.value
         };
         try {
             const res = await fetch("/api/config/descuentos-volumen", {

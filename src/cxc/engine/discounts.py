@@ -68,6 +68,7 @@ class EngineInputs:
     price_resolver: PriceResolver
     engine_config: EngineConfig
     fecha_calculo: date
+    all_ordenes: list[OrdenVenta] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -199,12 +200,28 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
         )
         if regla is not None and regla.tipo_beneficio == TipoBeneficio.PORCENTAJE:
-            pct_recompra = precio_base * regla.valor
-            detalle_recompra = DescuentoAplicado(
-                origen="recurrencia",
-                descripcion=f"recompra {regla.valor}",
-                monto=q2(pct_recompra),
-            )
+            # Check monthly first purchase condition for recompra
+            is_first_in_month = True
+            current_year_month = (fecha_orden.year, fecha_orden.month)
+            for o in inp.all_ordenes:
+                if o.cliente_id == inp.orden.cliente_id and o.so_id != inp.orden.so_id:
+                    o_ym = (o.fecha.year, o.fecha.month)
+                    if o_ym == current_year_month:
+                        # Break tie by date, then by order ID if same day
+                        if o.fecha < fecha_orden:
+                            is_first_in_month = False
+                            break
+                        elif o.fecha == fecha_orden and o.so_id < inp.orden.so_id:
+                            is_first_in_month = False
+                            break
+            
+            if is_first_in_month:
+                pct_recompra = precio_base * regla.valor
+                detalle_recompra = DescuentoAplicado(
+                    origen="recurrencia",
+                    descripcion=f"recompra {regla.valor}",
+                    monto=q2(pct_recompra),
+                )
 
     # (b) Contado por marca×categoría — proyección (sección 4.3b).
     # El método NO determina el contado: lo determina pagar el neto total dentro
@@ -220,13 +237,14 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 categoria=ln.categoria,
                 tipo=TipoDescuento.CONTADO,
                 fecha=fecha_orden,
+                lista_precios=lista,
             )
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
 
-    # (c) BCV-completo (sección 4.3c) — solo si ruta BCV pura
+    # (c) BCV-completo (sección 4.3c) — solo si ruta BCV pura y no generada a Lista USD (#4)
     bcv_completo = Decimal("0")
-    if pura_bcv:
+    if pura_bcv and inp.orden.lista_precios != "4":
         vincs = [v for v, _ in inp.abonos]
         bcv_completo = _bcv_completo_monto(
             vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
@@ -255,7 +273,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             inp.descuentos_volumen,
             marca=marca,
             categoria=categoria,
-            litros=total_litros
+            litros=total_litros,
+            fecha=fecha_orden,
+            lista_precios=lista,
         )
         if regla_vol is not None and regla_vol.porcentaje > 0:
             subt = subtotal_por_mc[(marca, categoria)]

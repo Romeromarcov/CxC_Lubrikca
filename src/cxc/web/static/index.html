@@ -421,8 +421,25 @@
                                 <label>Porcentaje (%)</label>
                                 <input type="number" id="cfg-desc-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
                             </div>
+                        <div class="form-group-row" style="margin-top: 1rem;">
+                            <div class="form-group" style="flex:1;">
+                                <label>Fecha de Inicio</label>
+                                <input type="date" id="cfg-desc-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Fecha de Finalización</label>
+                                <input type="date" id="cfg-desc-hasta">
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Listas Aplicables</label>
+                                <select id="cfg-desc-listas" required>
+                                    <option value="*">Todas las listas (*)</option>
+                                    <option value="4">Solo Lista USD (#4)</option>
+                                    <option value="5">Solo Lista VES (#5)</option>
+                                </select>
+                            </div>
                         </div>
-                        <button type="submit" class="btn-primary">Registrar Regla de Descuento</button>
+                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">Registrar Regla de Descuento</button>
                     </form>
 
                     <div class="mini-table-wrapper">
@@ -435,12 +452,15 @@
                                     <th>Categoría</th>
                                     <th>Tipo</th>
                                     <th>Porcentaje (%)</th>
+                                    <th>Fecha de Inicio</th>
+                                    <th>Fecha de Finalización</th>
+                                    <th>Listas</th>
                                     <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="descuentos-table-body">
                                 <tr>
-                                    <td colspan="6" class="table-empty">Cargando descuentos...</td>
+                                    <td colspan="9" class="table-empty">Cargando descuentos...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -476,8 +496,25 @@
                                 <label>Porcentaje Descuento (%)</label>
                                 <input type="number" id="cfg-desc-vol-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
                             </div>
+                        <div class="form-group-row" style="margin-top: 1rem;">
+                            <div class="form-group" style="flex:1;">
+                                <label>Fecha de Inicio</label>
+                                <input type="date" id="cfg-desc-vol-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Fecha de Finalización</label>
+                                <input type="date" id="cfg-desc-vol-hasta">
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Listas Aplicables</label>
+                                <select id="cfg-desc-vol-listas" required>
+                                    <option value="*">Todas las listas (*)</option>
+                                    <option value="4">Solo Lista USD (#4)</option>
+                                    <option value="5">Solo Lista VES (#5)</option>
+                                </select>
+                            </div>
                         </div>
-                        <button type="submit" class="btn-primary">Registrar Regla de Volumen</button>
+                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">Registrar Regla de Volumen</button>
                     </form>
 
                     <div class="mini-table-wrapper">
@@ -490,12 +527,15 @@
                                     <th>Categoría</th>
                                     <th>Litros Mínimos</th>
                                     <th>Descuento (%)</th>
+                                    <th>Fecha de Inicio</th>
+                                    <th>Fecha de Finalización</th>
+                                    <th>Listas</th>
                                     <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="descuentos-volumen-table-body">
                                 <tr>
-                                    <td colspan="6" class="table-empty">Cargando descuentos por volumen...</td>
+                                    <td colspan="9" class="table-empty">Cargando descuentos por volumen...</td>
                                 </tr>
                             </tbody>
                         </table>

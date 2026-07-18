@@ -154,6 +154,7 @@ class DescuentoMarcaCategoria:
     porcentaje: Decimal
     vigencia_desde: date
     vigencia_hasta: date | None = None
+    listas_aplicables: str = "*"
     activo: bool = True
 
 
@@ -165,6 +166,9 @@ class DescuentoVolumen:
     categoria: str
     litros_minimo: Decimal
     porcentaje: Decimal
+    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_hasta: date | None = None
+    listas_aplicables: str = "*"
     activo: bool = True
 
 

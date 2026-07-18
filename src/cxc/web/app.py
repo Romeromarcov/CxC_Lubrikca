@@ -67,6 +67,9 @@ class DescuentoMarcaRequest(BaseModel):
     categoria: str
     tipo_descuento: str
     porcentaje: float
+    vigencia_desde: str
+    vigencia_hasta: str | None = None
+    listas_aplicables: str = "*"
 
 class MetaRequest(BaseModel):
     cash_window_business_days: int
@@ -83,6 +86,9 @@ class DescuentoVolumenRequest(BaseModel):
     categoria: str
     litros_minimo: float
     porcentaje: float
+    vigencia_desde: str
+    vigencia_hasta: str | None = None
+    listas_aplicables: str = "*"
 
 _repo_cache: SheetsRepository | None = None
 
@@ -805,6 +811,9 @@ async def get_config_descuentos_marca():
                 "categoria": r.categoria,
                 "tipo_descuento": r.tipo_descuento,
                 "porcentaje": float(r.porcentaje),
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "listas_aplicables": r.listas_aplicables,
                 "activo": r.activo
             } for r in rules
         ]
@@ -820,6 +829,9 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
         from cxc.sheets import serde, gateway as g
         import uuid
         
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        
         regla_id = f"REG_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoMarcaCategoria(
             regla_id=regla_id,
@@ -827,8 +839,9 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
             categoria=req.categoria,
             tipo_descuento=req.tipo_descuento,
             porcentaje=Decimal(str(req.porcentaje)),
-            vigencia_desde=date.today(),
-            vigencia_hasta=None,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            listas_aplicables=req.listas_aplicables,
             activo=True
         )
         repo._g.append_row(g.T_DESCUENTOS, serde.descuento_to_row(rule))
@@ -1214,6 +1227,9 @@ async def get_config_descuentos_volumen():
                 "categoria": r.categoria,
                 "litros_minimo": float(r.litros_minimo),
                 "porcentaje": float(r.porcentaje),
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "listas_aplicables": r.listas_aplicables,
                 "activo": r.activo
             } for r in rules
         ]
@@ -1229,6 +1245,9 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         from cxc.sheets import serde
         import uuid
         
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        
         regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoVolumen(
             regla_id=regla_id,
@@ -1236,6 +1255,9 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             categoria=req.categoria,
             litros_minimo=Decimal(str(req.litros_minimo)),
             porcentaje=Decimal(str(req.porcentaje)),
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            listas_aplicables=req.listas_aplicables,
             activo=True
         )
         repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))

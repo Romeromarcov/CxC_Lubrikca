@@ -55,13 +55,9 @@ def descuento_vigente(
     categoria: str,
     tipo: TipoDescuento,
     fecha: date,
+    lista_precios: str = "*",
 ) -> DescuentoMarcaCategoria | None:
-    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha``.
-
-    Resuelve comodines por especificidad. Empates (configuración inconsistente)
-    se rompen de forma conservadora: menor porcentaje (no regalar descuento),
-    luego ``regla_id`` para determinismo.
-    """
+    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha`` y lista."""
     candidatas = [
         r
         for r in reglas
@@ -69,6 +65,7 @@ def descuento_vigente(
         and (r.marca == marca or r.marca == "*")
         and (r.categoria == categoria or r.categoria == "*")
         and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
+        and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
     ]
     if not candidatas:
         return None
@@ -147,6 +144,8 @@ def descuento_volumen_vigente(
     marca: str,
     categoria: str,
     litros: Decimal,
+    fecha: date = date(2026, 1, 1),
+    lista_precios: str = "*",
 ) -> DescuentoVolumen | None:
     """Retorna la regla de descuento por volumen aplicable para la marca/categoría."""
     candidatas = [
@@ -155,7 +154,8 @@ def descuento_volumen_vigente(
         if (r.marca == marca or r.marca == "*")
         and (r.categoria == categoria or r.categoria == "*")
         and litros >= r.litros_minimo
-        and r.activo
+        and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
+        and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
     ]
     if not candidatas:
         return None

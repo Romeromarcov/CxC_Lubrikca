@@ -47,6 +47,7 @@ def _inputs(
     feriados=(),
     resolver,
     fecha_calculo=date(2026, 6, 8),
+    all_ordenes=None,
 ) -> EngineInputs:
     return EngineInputs(
         orden=orden,
@@ -61,6 +62,7 @@ def _inputs(
         price_resolver=resolver,
         engine_config=CFG,
         fecha_calculo=fecha_calculo,
+        all_ordenes=list(all_ordenes) if all_ordenes is not None else [],
     )
 
 
@@ -410,3 +412,44 @@ def test_descuento_por_volumen_litros() -> None:
     # Total motor should be 950 USD
     assert res.total_descuentos == Decimal("50.00")
     assert res.total_motor == Decimal("950.00")
+
+
+def test_recompra_aplica_solo_primera_compra_del_mes() -> None:
+    # First purchase in month should get recompra, subsequent one should not
+    orden1 = b.orden(primera=False, fecha=date(2026, 6, 5))
+    orden1.so_id = "SO_FIRST"
+    orden1.cliente_id = "C1"
+    
+    orden2 = b.orden(primera=False, fecha=date(2026, 6, 15))
+    orden2.so_id = "SO_SECOND"
+    orden2.cliente_id = "C1"
+    
+    linea = b.linea(marca="Sinoco", categoria="Comercial", precio="100")
+    regla = b.regla_recompra("0.05")
+    
+    # 1. Calculation for first order (should apply 5% recompra)
+    inp1 = _inputs(
+        orden=orden1,
+        lineas=[linea],
+        abonos=[],
+        reglas=[regla],
+        all_ordenes=[orden1, orden2],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+    )
+    res1 = calcular_factura(inp1)
+    recompra_d1 = [d for d in res1.descuentos_detalle if d.origen == "recurrencia"]
+    assert len(recompra_d1) == 1
+    assert recompra_d1[0].monto == Decimal("5.00")
+    
+    # 2. Calculation for second order (should NOT apply recompra since it's the second)
+    inp2 = _inputs(
+        orden=orden2,
+        lineas=[linea],
+        abonos=[],
+        reglas=[regla],
+        all_ordenes=[orden1, orden2],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+    )
+    res2 = calcular_factura(inp2)
+    recompra_d2 = [d for d in res2.descuentos_detalle if d.origen == "recurrencia"]
+    assert len(recompra_d2) == 0

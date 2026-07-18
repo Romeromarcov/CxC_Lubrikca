@@ -86,6 +86,7 @@ class EngineRunner:
             price_resolver=self._resolver,
             engine_config=self._cfg,
             fecha_calculo=fecha_calculo,
+            all_ordenes=self._repo.all_ordenes(),
         )
         bandeja = calcular_factura(inputs)
         self._repo.upsert_bandeja(bandeja)

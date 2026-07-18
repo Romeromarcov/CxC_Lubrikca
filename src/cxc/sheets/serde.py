@@ -226,7 +226,9 @@ def descuento_to_row(d: DescuentoMarcaCategoria) -> Row:
         "regla_id": d.regla_id, "marca": d.marca, "categoria": d.categoria,
         "tipo_descuento": d.tipo_descuento.value, "porcentaje": str(d.porcentaje),
         "vigencia_desde": d.vigencia_desde.isoformat(),
-        "vigencia_hasta": s_optdate(d.vigencia_hasta), "activo": s_bool(d.activo),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "listas_aplicables": d.listas_aplicables,
+        "activo": s_bool(d.activo),
     }
 
 
@@ -238,6 +240,7 @@ def descuento_from_row(r: Mapping[str, str]) -> DescuentoMarcaCategoria:
         porcentaje=p_dec(r.get("porcentaje", "0")),
         vigencia_desde=p_date(r["vigencia_desde"]),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        listas_aplicables=r.get("listas_aplicables", "*"),
         activo=p_bool(r.get("activo", "TRUE")),
     )
 
@@ -288,6 +291,9 @@ def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
         "categoria": d.categoria,
         "litros_minimo": str(d.litros_minimo),
         "porcentaje": str(d.porcentaje),
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "listas_aplicables": d.listas_aplicables,
         "activo": s_bool(d.activo)
     }
 
@@ -298,6 +304,9 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         categoria=r.get("categoria", "*"),
         litros_minimo=p_dec(r.get("litros_minimo", "0")),
         porcentaje=p_dec(r.get("porcentaje", "0")),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        listas_aplicables=r.get("listas_aplicables", "*"),
         activo=p_bool(r.get("activo", "TRUE"))
     )
 
