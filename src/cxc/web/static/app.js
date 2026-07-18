@@ -132,10 +132,25 @@ document.addEventListener("DOMContentLoaded", () => {
                     const item = document.createElement("div");
                     item.className = "payment-item";
                     item.dataset.pagoId = p.pago_id;
+                    
+                    const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                    let amountHtml = "";
+                    if (p.moneda === "VES") {
+                        amountHtml = `
+                            <span class="p-amount text-ves" style="font-size: 0.9rem; text-align: right; line-height: 1.3;">
+                                VES ${p.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                                <span style="font-size: 0.75rem; font-weight: normal; color: #64748b; display: block;">
+                                    ~ ${fmt(p.equiv_usd_binance)} USD
+                                </span>
+                            </span>`;
+                    } else {
+                        amountHtml = `<span class="p-amount">${new Intl.NumberFormat('es-US', { style: 'currency', currency: p.moneda }).format(p.monto)}</span>`;
+                    }
+
                     item.innerHTML = `
                         <div class="p-header">
                             <span class="p-id">#${p.pago_id}</span>
-                            <span class="p-amount">${new Intl.NumberFormat('es-US', { style: 'currency', currency: p.moneda }).format(p.monto)}</span>
+                            ${amountHtml}
                         </div>
                         <div class="p-client">${p.cliente_nombre}</div>
                         <div class="p-meta">
