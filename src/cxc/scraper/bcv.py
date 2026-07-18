@@ -62,3 +62,27 @@ def _default_get(url: str, timeout: int) -> str:  # pragma: no cover - red exter
     resp = requests.get(url, timeout=timeout, verify=False)  # noqa: S501 - BCV usa cert propio
     resp.raise_for_status()
     return resp.text
+
+
+class OdooBcvClient:
+    """Consigue la tasa del BCV desde Odoo en lugar de hacer scraping del sitio web."""
+
+    def __init__(self, odoo_config: object) -> None:
+        self._config = odoo_config
+
+    def fetch_rate(self) -> Decimal:
+        from ..odoo.client import _connect
+        execute = _connect(self._config)
+        
+        # Query the latest USD exchange rate in Odoo (USD ID = 1)
+        rates = execute(
+            "res.currency.rate",
+            "search_read",
+            [[["name", ">=", "2026-01-01"], ["currency_id", "=", 1]]],
+            {"fields": ["name", "inverse_company_rate"], "limit": 1, "order": "name desc"}
+        )
+        if rates:
+            val = rates[0].get("inverse_company_rate")
+            if val:
+                return Decimal(str(val))
+        raise ValueError("No se pudo obtener la tasa BCV desde Odoo")

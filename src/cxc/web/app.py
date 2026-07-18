@@ -148,7 +148,7 @@ async def run_scraper_in_background():
     while True:
         try:
             print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
-            from cxc.scraper.bcv import BcvClient
+            from cxc.scraper.bcv import OdooBcvClient
             from cxc.scraper.binance import BinanceClient
             from cxc.scraper.rates_scraper import RatesScraper
             from cxc.alerts import build_alerter
@@ -165,7 +165,7 @@ async def run_scraper_in_background():
             scraper = RatesScraper(
                 repo,
                 BinanceClient(config.binance),
-                BcvClient(config.bcv),
+                OdooBcvClient(config.odoo),
                 build_alerter(config.alert),
                 config.scraper_policy,
             )
@@ -954,14 +954,7 @@ async def get_odoo_marcas():
 
 @app.get("/api/odoo/categorias")
 async def get_odoo_categorias():
-    try:
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
-        cats = execute("product.category", "search_read", [[]], {"fields": ["name"]})
-        return sorted(list(set(c["name"] for c in cats)))
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+    return ["Comercial", "Industrial"]
 
 @app.get("/api/config/tasa-referencia")
 async def get_tasa_referencia(fecha: str, hora: str):
@@ -1022,8 +1015,38 @@ async def post_sync_odoo_rates():
                 )
                 repo.append_serie_tasa(tasa)
                 added_count += 1
+
+        # Automated Holidays Detection Heuristics
+        # Days where BCV didn't publish rates (except weekends and Mondays to avoid bank holidays)
+        from datetime import timedelta
+        start_date = date(2026, 1, 1)
+        end_date = date.today() - timedelta(days=1)
+        
+        odoo_rate_dates = {r["name"] for r in rates}
+        existing_feriados = {f.fecha for f in repo.feriados()}
+        detected_feriados_count = 0
+        
+        current = start_date
+        while current <= end_date:
+            wday = current.weekday()
+            if wday not in (0, 5, 6): # Tuesday to Friday
+                date_str = current.isoformat()
+                if date_str not in odoo_rate_dates and current not in existing_feriados:
+                    from cxc.models import Feriado, TipoFeriado
+                    feriado = Feriado(
+                        fecha=current,
+                        descripcion="Feriado detectado por BCV (sin tasa)",
+                        tipo=TipoFeriado.NACIONAL
+                    )
+                    repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
+                    detected_feriados_count += 1
+            current += timedelta(days=1)
                 
-        return {"status": "success", "message": f"Sincronizados {added_count} registros de tasas desde Odoo."}
+        msg = f"Sincronizados {added_count} registros de tasas desde Odoo."
+        if detected_feriados_count > 0:
+            msg += f" Detectados y registrados {detected_feriados_count} nuevos feriados nacionales automáticos."
+            
+        return {"status": "success", "message": msg}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

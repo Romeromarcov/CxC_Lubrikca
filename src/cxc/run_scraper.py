@@ -12,7 +12,7 @@ from datetime import datetime
 def main() -> None:  # pragma: no cover - wiring de producción (red)
     from .alerts import build_alerter
     from .config import AppConfig
-    from .scraper.bcv import BcvClient
+    from .scraper.bcv import OdooBcvClient
     from .scraper.binance import BinanceClient
     from .scraper.rates_scraper import RatesScraper
     from .sheets.gateway import GspreadGateway
@@ -33,7 +33,7 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
     scraper = RatesScraper(
         repo,
         BinanceClient(config.binance),
-        BcvClient(config.bcv),
+        OdooBcvClient(config.odoo),
         build_alerter(config.alert),
         config.scraper_policy,
     )

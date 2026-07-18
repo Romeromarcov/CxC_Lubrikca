@@ -336,13 +336,23 @@ class OdooXmlRpcReader(OdooReader):
         return [map_linea(r) for r in recs]
 
     def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str]]:
-        """Mapa producto → (marca, categoría raíz). categoría = 1er nivel del árbol."""
+        """Mapa producto → (marca, categoría raíz). categoría = Comercial / Industrial."""
         recs = self._read(self.MODEL_PRODUCT, sorted(prod_ids), ["id", "brand_id", "categ_id"])
         out: dict[int, tuple[str, str]] = {}
         for r in recs:
             marca = _m2o_name(r.get("brand_id"))
             categoria_full = _m2o_name(r.get("categ_id"))
-            categoria = categoria_full.split("/")[0].strip() if categoria_full else ""
+            categoria = ""
+            if categoria_full:
+                parts = [p.strip() for p in categoria_full.split("/")]
+                if "Comercial" in parts:
+                    categoria = "Comercial"
+                elif "Industrial" in parts:
+                    categoria = "Industrial"
+                else:
+                    # Fallback to first non-All part
+                    non_all = [p for p in parts if p != "All"]
+                    categoria = non_all[0] if non_all else parts[0]
             out[int(r["id"])] = (marca, categoria)
         return out
 

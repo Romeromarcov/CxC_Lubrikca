@@ -19,7 +19,7 @@ from ..alerts import Alerter
 from ..config import ScraperPolicy
 from ..models import SerieTasa
 from ..repositories import Repository
-from .bcv import BcvClient
+from .bcv import BcvClient, OdooBcvClient
 from .binance import BinanceClient
 
 logger = logging.getLogger("cxc.scraper")
@@ -34,7 +34,7 @@ class RatesScraper:
         self,
         repo: Repository,
         binance: BinanceClient,
-        bcv: BcvClient,
+        bcv: BcvClient | OdooBcvClient,
         alerter: Alerter,
         policy: ScraperPolicy,
         fuente: str = "binance+bcv",
