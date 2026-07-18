@@ -24,6 +24,7 @@ from ..models import (
     DescuentoMarcaCategoria,
     DescuentoVolumen,
     EstadoBandeja,
+    ExclusionRegla,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -69,6 +70,7 @@ class EngineInputs:
     engine_config: EngineConfig
     fecha_calculo: date
     all_ordenes: list[OrdenVenta] = field(default_factory=list)
+    exclusiones: list[ExclusionRegla] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -178,23 +180,47 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     detalle_recompra: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     if inp.orden.es_primera_compra:
-        # NC = precio del producto-promo en la lista de NACIMIENTO de la orden.
+        unidades_comercial = sum(_cantidad_efectiva(inp, ln) for ln in inp.lineas if ln.categoria == "Comercial")
         promo = promocion_primera_compra_vigente(
-            inp.promociones_primera_compra, fecha=fecha_orden
+            inp.promociones_primera_compra, fecha=fecha_orden, cantidad_comercial=unidades_comercial
         )
         if promo is not None:
-            try:
-                nc = inp.price_resolver.precio(
-                    promo.producto, inp.orden.lista_precios
-                )
+            if promo.tipo_beneficio == "porcentaje":
+                nc = precio_base * promo.valor
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",
-                    descripcion=f"NC producto promo {promo.producto}",
+                    descripcion=f"Descuento primera compra {promo.valor*100}%",
                     monto=q2(nc),
                 )
-            except KeyError:
-                # Sin precio del producto-promo → no inventar NC; marcar revisión.
-                promo_sin_precio = True
+            elif promo.tipo_beneficio == "producto":
+                lista_prod = [x.strip() for x in promo.productos.split(",") if x.strip()]
+                if promo.regalo_tipo == "conjunto":
+                    nc_acum = Decimal("0")
+                    for prod in lista_prod:
+                        matching_lines = [ln for ln in inp.lineas if ln.producto == prod]
+                        if matching_lines:
+                            for ln in matching_lines:
+                                if ln.descuento < Decimal("99.9"):
+                                    nc_acum += min(ln.cantidad, promo.valor) * ln.precio_unitario
+                    nc = nc_acum
+                    if nc > 0:
+                        detalle_nc = DescuentoAplicado(
+                            origen="primera_compra",
+                            descripcion=f"NC obsequio conjunto ({', '.join(lista_prod)})",
+                            monto=q2(nc),
+                        )
+                else:  # "solo_uno"
+                    gifted_in_lines = any(ln.descuento >= Decimal("99.9") for ln in inp.lineas if ln.producto in lista_prod)
+                    if not gifted_in_lines:
+                        matching_lines = [ln for ln in inp.lineas if ln.producto in lista_prod and ln.descuento < Decimal("99.9")]
+                        if matching_lines:
+                            best_line = max(matching_lines, key=lambda ln: min(ln.cantidad, promo.valor) * ln.precio_unitario)
+                            nc = min(best_line.cantidad, promo.valor) * best_line.precio_unitario
+                            detalle_nc = DescuentoAplicado(
+                                origen="primera_compra",
+                                descripcion=f"NC obsequio ({best_line.producto})",
+                                monto=q2(nc),
+                            )
     else:
         regla = regla_recurrencia_vigente(
             inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
@@ -332,10 +358,27 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         if fechas_abono:
             within_window = max(fechas_abono) <= fin_ventana
     window_expired = fin_ventana is not None and inp.fecha_calculo > fin_ventana
+    # Exclusiones en optimista
+    val_opt = {
+        "primera_compra": comp.nc,
+        "recurrencia": comp.pct_recompra,
+        "contado": comp.contado_proy,
+        "volumen": comp.volumen,
+        "bcv_completo": comp.bcv_completo
+    }
+    for exc in inp.exclusiones:
+        if exc.activo:
+            ta, tb = exc.regla_tipo_a, exc.regla_tipo_b
+            if ta in val_opt and tb in val_opt:
+                va, vb = val_opt[ta], val_opt[tb]
+                if va > 0 and vb > 0:
+                    if va >= vb:
+                        val_opt[tb] = Decimal("0")
+                    else:
+                        val_opt[ta] = Decimal("0")
 
-    # Neto OPTIMISTA (asume contado) para decidir si liquidó dentro de ventana.
-    descuentos_optimista = comp.pct_recompra + comp.contado_proy + comp.bcv_completo + comp.volumen
-    neto_optimista = comp.precio_base - descuentos_optimista - comp.nc
+    descuentos_optimista = val_opt["recurrencia"] + val_opt["contado"] + val_opt["bcv_completo"] + val_opt["volumen"]
+    neto_optimista = comp.precio_base - descuentos_optimista - val_opt["primera_compra"]
     liquidado_optimista = valor_pagado >= neto_optimista - _EPS
 
     # Decisión del contado condicional (sección 4.0b).
@@ -352,16 +395,39 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         # else: provisional dentro de ventana, sigue proyectando contado.
     contado_incluido = contado_evaluable and not contado_denied
 
+    # Exclusiones en el cálculo final
+    contado_aplicado_base = comp.contado_proy if contado_incluido else Decimal("0")
+    valores = {
+        "primera_compra": comp.nc,
+        "recurrencia": comp.pct_recompra,
+        "contado": contado_aplicado_base,
+        "volumen": comp.volumen,
+        "bcv_completo": comp.bcv_completo
+    }
+    for exc in inp.exclusiones:
+        if exc.activo:
+            ta, tb = exc.regla_tipo_a, exc.regla_tipo_b
+            if ta in valores and tb in valores:
+                va, vb = valores[ta], valores[tb]
+                if va > 0 and vb > 0:
+                    if va >= vb:
+                        valores[tb] = Decimal("0")
+                    else:
+                        valores[ta] = Decimal("0")
+
+    final_nc = valores["primera_compra"]
+    final_recompra = valores["recurrencia"]
+    final_contado = valores["contado"]
+    final_volumen = valores["volumen"]
+    final_bcv = valores["bcv_completo"]
+
     # Apilamiento aditivo final (sección 4.1).
     detalle: list[DescuentoAplicado] = []
-    if comp.detalle_nc is not None:
-        # La NC se muestra en el desglose para auditoría; NO entra a
-        # total_descuentos (va en su propio término ncs_calculadas).
+    if final_nc > 0 and comp.detalle_nc is not None:
         detalle.append(comp.detalle_nc)
-    if comp.detalle_recompra is not None:
+    if final_recompra > 0 and comp.detalle_recompra is not None:
         detalle.append(comp.detalle_recompra)
-    contado_aplicado = comp.contado_proy if contado_incluido else Decimal("0")
-    if contado_incluido and comp.contado_proy > 0:
+    if final_contado > 0:
         detalle.append(
             DescuentoAplicado(
                 origen="contado",
@@ -369,22 +435,22 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
                     "contado por marca/categoría"
                     + (" (confirmado)" if contado_confirmado else " (proyectado)")
                 ),
-                monto=q2(comp.contado_proy),
+                monto=q2(final_contado),
             )
         )
-    if comp.bcv_completo > 0:
+    if final_bcv > 0:
         detalle.append(
             DescuentoAplicado(
                 origen="bcv_completo",
                 descripcion="BCV-completo (diferencial por abono)",
-                monto=q2(comp.bcv_completo),
+                monto=q2(final_bcv),
             )
         )
-    if comp.detalle_volumen is not None:
+    if final_volumen > 0 and comp.detalle_volumen is not None:
         detalle.append(comp.detalle_volumen)
 
-    total_descuentos = comp.pct_recompra + contado_aplicado + comp.bcv_completo + comp.volumen
-    neto = comp.precio_base - total_descuentos - comp.nc
+    total_descuentos = final_recompra + final_contado + final_bcv + final_volumen
+    neto = comp.precio_base - total_descuentos - final_nc
     candidata = bool(vincs) and valor_pagado >= neto - _EPS
 
     requiere_revision = (

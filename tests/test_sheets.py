@@ -192,7 +192,7 @@ def test_config_y_vinculaciones_se_leen() -> None:
     assert len(repo.descuentos_marca_categoria()) == 1
     assert len(repo.reglas_recurrencia()) == 1
     assert repo.descuento_bcv_completo()[0].porcentaje == Decimal("0.10")
-    assert repo.promociones_primera_compra()[0].producto == "LIGA"
+    assert repo.promociones_primera_compra()[0].productos == "LIGA"
     assert len(repo.feriados()) == 1
     assert repo.get_metodo_pago("M1") is not None
     assert len(repo.vinculaciones_de_orden("SO1")) == 1

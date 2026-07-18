@@ -268,26 +268,103 @@ def test_neto_no_alcanzado_no_es_candidata() -> None:
 
 
 def test_primera_compra_nc_es_precio_del_producto_promo() -> None:
-    # NC = precio del producto-promo en la lista de nacimiento (BCV) de la orden.
+    # When gift product IS in the order line with 0% discount → NC = quantity * price
     orden = b.orden(primera=True, lista="BCV")
-    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    linea_compra = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="100")
+    linea_regalo = b.linea(linea_id="L2", producto="LIGA", marca="Sinoco", categoria="Comercial",
+                           precio="12.50", cantidad="1", descuento="0")  # gift added but no discount applied (error)
     metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
-    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES,
-                         tipo_tasa_abono=TipoTasa.BCV)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_compra, linea_regalo],
+        abonos=[(vinc, metodo)],
+        # Gift promotion: buy 1 Comercial unit, get 1 LIGA (solo_uno)
+        promociones=[b.promo_primera("LIGA", compra_minima="1", valor="1")],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
+    )
+    res = calcular_factura(inp)
+    # NC should equal min(1, 1) * 12.50 = 12.50 because LIGA is in the order but no 99.9% discount
+    assert res.ncs_calculadas == Decimal("12.50")
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "primera_compra" in origenes
+
+
+def test_primera_compra_regalo_ya_descontado_no_genera_nc() -> None:
+    # When gift line has 99.9% discount already → NC = 0 (correctly facturado)
+    orden = b.orden(primera=True, lista="BCV")
+    linea_compra = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="100")
+    linea_regalo = b.linea(linea_id="L2", producto="LIGA", marca="Sinoco", categoria="Comercial",
+                           precio="12.50", cantidad="1", descuento="99.99")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_compra, linea_regalo],
+        abonos=[(vinc, metodo)],
+        promociones=[b.promo_primera("LIGA", compra_minima="1", valor="1")],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
+    )
+    res = calcular_factura(inp)
+    assert res.ncs_calculadas == Decimal("0.00")
+
+
+def test_primera_compra_regalo_fuera_de_orden_no_genera_nc() -> None:
+    # When gift product is NOT in order lines → NC = 0 (assume inventory adjustment)
+    orden = b.orden(primera=True, lista="BCV")
+    linea_compra = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="100")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_compra],  # LIGA is NOT in the order
+        abonos=[(vinc, metodo)],
+        promociones=[b.promo_primera("LIGA", compra_minima="1", valor="1")],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
+    )
+    res = calcular_factura(inp)
+    assert res.ncs_calculadas == Decimal("0.00")
+
+
+def test_primera_compra_porcentaje_aplica_2pct() -> None:
+    # Percentage-based first purchase promotion (2%)
+    orden = b.orden(primera=True, lista="BCV")
+    linea = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial", precio="100")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
     inp = _inputs(
         orden=orden,
         lineas=[linea],
         abonos=[(vinc, metodo)],
-        promociones=[b.promo_primera("LIGA")],
-        # Precio de la línea (P1@BCV) + precio del producto-promo (LIGA@BCV).
-        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
+        promociones=[b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")],
+        resolver=_resolver(**{"P1@BCV": "100"}),
     )
     res = calcular_factura(inp)
-    assert res.lista_aplicada == "BCV"
-    assert res.ncs_calculadas == Decimal("12.50")
-    assert res.total_motor == Decimal("87.50")  # 100 - 0 desc - 12.50 NC
+    # 2% of 100 = 2.00 NC
+    assert res.ncs_calculadas == Decimal("2.00")
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "primera_compra" in origenes
+
+
+def test_primera_compra_solo_unidades_comerciales_califican() -> None:
+    # Threshold check: only Comercial units count toward promo qualification
+    orden = b.orden(primera=True, lista="BCV")
+    # 2 Comercial + 1 Industrial → only 2 count. Promo requires 3 → should NOT qualify for product
+    # But 2% porcentaje with compra_minima=0 should still apply
+    linea_com = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="50", cantidad="2")
+    linea_ind = b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Industrial", precio="50", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_com, linea_ind],
+        abonos=[(vinc, metodo)],
+        # requires 3 Comercial units to get product gift, but only 2 → doesn't qualify for product gift
+        promociones=[b.promo_primera("LIGA", compra_minima="3", valor="1")],
+        resolver=_resolver(**{"P1@BCV": "50", "P2@BCV": "50"}),
+    )
+    res = calcular_factura(inp)
+    assert res.ncs_calculadas == Decimal("0.00")  # No NC since 2 < 3 threshold
 
 
 def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
@@ -453,3 +530,58 @@ def test_recompra_aplica_solo_primera_compra_del_mes() -> None:
     res2 = calcular_factura(inp2)
     recompra_d2 = [d for d in res2.descuentos_detalle if d.origen == "recurrencia"]
     assert len(recompra_d2) == 0
+
+
+def test_exclusion_mutua_volumen_vs_recompra() -> None:
+    """Con exclusión activa entre volumen y recompra, se aplica el de mayor valor."""
+    from cxc.models import ExclusionRegla
+    orden = b.orden(primera=False)
+    linea = b.linea(marca="Sinoco", categoria="Comercial", precio="100", cantidad="1")
+    desc_vol = b.descuento_volumen(marca="Sinoco", categoria="Comercial", litros_minimo="0", porcentaje="0.10")
+    regla_rec = b.regla_recompra("0.03")  # 3% recurrencia < 10% volumen → volumen gana
+    excl = ExclusionRegla(regla_tipo_a="volumen", regla_tipo_b="recurrencia", activo=True)
+    inp = EngineInputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos=[],
+        descuentos_volumen=[desc_vol],
+        reglas_recurrencia=[regla_rec],
+        descuento_bcv_diario=[],
+        promociones_primera_compra=[],
+        feriados_tabla=[],
+        price_resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+        engine_config=CFG,
+        fecha_calculo=date(2026, 6, 8),
+        all_ordenes=[orden],
+        exclusiones=[excl],
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    # volumen (10%) > recompra (3%) → volumen should be applied, recompra excluded
+    assert "volumen" in origenes
+    assert "recurrencia" not in origenes
+    assert res.total_descuentos == Decimal("10.00")  # 10% of 100
+
+
+def test_primera_compra_regalo_conjunto() -> None:
+    """Modo conjunto: NC = suma de todos los productos del catálogo que no tienen 99.9% descuento."""
+    orden = b.orden(primera=True, lista="BCV")
+    linea_com = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="100", cantidad="1")
+    linea_liga = b.linea(linea_id="L2", producto="LIGA", marca="Sinoco", categoria="Comercial",
+                         precio="5", cantidad="1", descuento="0")
+    linea_oct = b.linea(linea_id="L3", producto="OCT", marca="Sinoco", categoria="Comercial",
+                        precio="8", cantidad="1", descuento="0")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_com, linea_liga, linea_oct],
+        abonos=[(vinc, metodo)],
+        promociones=[b.promo_primera("LIGA,OCT", compra_minima="1", valor="1", regalo_tipo="conjunto")],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "5", "OCT@BCV": "8"}),
+    )
+    res = calcular_factura(inp)
+    # Both LIGA (5) and OCT (8) have 0% discount → NC = 5 + 8 = 13
+    assert res.ncs_calculadas == Decimal("13.00")
+

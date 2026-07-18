@@ -10,6 +10,7 @@ from cxc.models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoVolumen,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -63,6 +64,7 @@ def linea(
     categoria: str = "*",
     cantidad: str = "1",
     precio: str = "100",
+    descuento: str = "0",
 ) -> LineaOrden:
     return LineaOrden(
         linea_id=linea_id,
@@ -72,6 +74,7 @@ def linea(
         categoria=categoria,
         cantidad=Decimal(cantidad),
         precio_unitario=Decimal(precio),
+        descuento=Decimal(descuento),
     )
 
 
@@ -159,6 +162,27 @@ def descuento(
     )
 
 
+def descuento_volumen(
+    regla_id: str = "DV1",
+    *,
+    marca: str = "Sinoco",
+    categoria: str = "*",
+    litros_minimo: str = "100",
+    porcentaje: str = "0.05",
+    desde: date = date(2026, 1, 1),
+    hasta: date | None = None,
+) -> DescuentoVolumen:
+    return DescuentoVolumen(
+        regla_id=regla_id,
+        marca=marca,
+        categoria=categoria,
+        litros_minimo=Decimal(litros_minimo),
+        porcentaje=Decimal(porcentaje),
+        vigencia_desde=desde,
+        vigencia_hasta=hasta,
+    )
+
+
 def regla_bcv_completo(
     porcentaje: str = "0.15", desde: date = date(2026, 1, 1),
     hasta: date | None = None,
@@ -170,11 +194,23 @@ def regla_bcv_completo(
 
 
 def promo_primera(
-    producto: str = "LIGA", desde: date = date(2026, 1, 1),
+    producto: str = "LIGA",
+    desde: date = date(2026, 1, 1),
     hasta: date | None = None,
+    tipo_beneficio: str = "producto",
+    valor: str = "1",
+    compra_minima: str = "0",
+    regalo_tipo: str = "solo_uno",
 ) -> PromocionPrimeraCompra:
     return PromocionPrimeraCompra(
-        producto=producto, vigencia_desde=desde, vigencia_hasta=hasta,
+        regla_id="TEST_PROMO",
+        tipo_beneficio=tipo_beneficio,
+        productos=producto,
+        valor=Decimal(valor),
+        compra_minima=Decimal(compra_minima),
+        regalo_tipo=regalo_tipo,
+        vigencia_desde=desde,
+        vigencia_hasta=hasta,
     )
 
 
