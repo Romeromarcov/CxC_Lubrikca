@@ -157,9 +157,10 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
             # Auto-create sheet with headers if missing
             headers = {
                 "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
-                "PromocionPrimeraCompra": ["producto", "vigencia_desde", "vigencia_hasta", "activo"],
+                "PromocionPrimeraCompra": ["regla_id", "tipo_beneficio", "productos", "valor", "compra_minima", "regalo_tipo", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
-                "Feriados": ["fecha", "descripcion", "tipo"]
+                "Feriados": ["fecha", "descripcion", "tipo"],
+                "Exclusiones": ["regla_tipo_a", "regla_tipo_b", "activo"]
             }
             cols = headers.get(table, ["id"])
             ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)

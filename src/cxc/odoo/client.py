@@ -119,6 +119,7 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
         cantidad=_dec(rec.get("product_uom_qty")),
         precio_unitario=_dec(rec.get("price_unit")),
         cantidad_entregada=_dec(rec.get("qty_delivered")),
+        descuento=_dec(rec.get("discount")),
     )
 
 
@@ -324,7 +325,7 @@ class OdooXmlRpcReader(OdooReader):
             self.MODEL_LINEA,
             domain,
             ["id", "order_id", "product_id", "product_uom_qty", "price_unit",
-             "qty_delivered"],
+             "qty_delivered", "discount"],
         )
         prod_ids = _ids_of(recs, "product_id")
         productos = self._productos(prod_ids)

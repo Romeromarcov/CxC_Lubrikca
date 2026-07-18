@@ -17,6 +17,7 @@ from ..models import (
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
+    ExclusionRegla,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -166,6 +167,25 @@ class SheetsRepository(Repository):
 
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
+
+    def exclusiones(self) -> list[ExclusionRegla]:
+        return [serde.exclusion_from_row(r) for r in self._g.read_rows("Exclusiones")]
+
+    def save_exclusion(self, rule: ExclusionRegla) -> None:
+        ws = self._g._ws("Exclusiones")
+        records = ws.get_all_records()
+        row_idx = None
+        for i, r in enumerate(records):
+            if (r.get("regla_tipo_a") == rule.regla_tipo_a and r.get("regla_tipo_b") == rule.regla_tipo_b) or \
+               (r.get("regla_tipo_a") == rule.regla_tipo_b and r.get("regla_tipo_b") == rule.regla_tipo_a):
+                row_idx = i + 2
+                break
+        
+        row_data = serde.exclusion_to_row(rule)
+        if row_idx is not None:
+            ws.update(f"A{row_idx}:C{row_idx}", [[row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])]])
+        else:
+            ws.append_row([row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])])
 
     # --- Bandeja -------------------------------------------------------------
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None:

@@ -23,6 +23,7 @@ from .models import (
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
+    ExclusionRegla,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -112,6 +113,12 @@ class Repository(ABC):
     @abstractmethod
     def feriados(self) -> list[Feriado]: ...
 
+    @abstractmethod
+    def exclusiones(self) -> list[ExclusionRegla]: ...
+
+    @abstractmethod
+    def save_exclusion(self, rule: ExclusionRegla) -> None: ...
+
     # --- Bandeja de facturación (salida del motor) ---------------------------
     @abstractmethod
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None: ...
@@ -148,6 +155,7 @@ class InMemoryRepository(Repository):
         self._bcv_diario: list[DescuentoBCVCompleto] = []
         self._promos: list[PromocionPrimeraCompra] = []
         self._feriados: list[Feriado] = []
+        self._exclusiones: list[ExclusionRegla] = []
         self._bandeja: dict[str, BandejaFacturacion] = {}
         self._conciliaciones: dict[str, Conciliacion] = {}
 
@@ -262,6 +270,18 @@ class InMemoryRepository(Repository):
 
     def add_feriado(self, feriado: Feriado) -> None:
         self._feriados.append(feriado)
+
+    def exclusiones(self) -> list[ExclusionRegla]:
+        return list(self._exclusiones)
+
+    def save_exclusion(self, rule: ExclusionRegla) -> None:
+        # Check either order of rule type
+        for i, r in enumerate(self._exclusiones):
+            if (r.regla_tipo_a == rule.regla_tipo_a and r.regla_tipo_b == rule.regla_tipo_b) or \
+               (r.regla_tipo_a == rule.regla_tipo_b and r.regla_tipo_b == rule.regla_tipo_a):
+                self._exclusiones[i] = rule
+                return
+        self._exclusiones.append(rule)
 
     # --- Bandeja -------------------------------------------------------------
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None:

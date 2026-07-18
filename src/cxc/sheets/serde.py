@@ -23,6 +23,7 @@ from ..models import (
     DescuentoVolumen,
     EstadoBandeja,
     EstadoVinculacion,
+    ExclusionRegla,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -153,6 +154,7 @@ def linea_to_row(ln: LineaOrden) -> Row:
         "marca": ln.marca, "categoria": ln.categoria,
         "cantidad": str(ln.cantidad), "precio_unitario": str(ln.precio_unitario),
         "cantidad_entregada": str(ln.cantidad_entregada),
+        "descuento": str(ln.descuento),
     }
 
 
@@ -164,6 +166,7 @@ def linea_from_row(r: Mapping[str, str]) -> LineaOrden:
         cantidad=p_dec(r.get("cantidad", "0")),
         precio_unitario=p_dec(r.get("precio_unitario", "0")),
         cantidad_entregada=p_dec(r.get("cantidad_entregada", "0")),
+        descuento=p_dec(r.get("descuento", "0")),
     )
 
 
@@ -267,7 +270,12 @@ def bcv_completo_from_row(r: Mapping[str, str]) -> DescuentoBCVCompleto:
 # --- PromocionPrimeraCompra --------------------------------------------------
 def promocion_to_row(p: PromocionPrimeraCompra) -> Row:
     return {
-        "producto": p.producto,
+        "regla_id": p.regla_id,
+        "tipo_beneficio": p.tipo_beneficio,
+        "productos": p.productos,
+        "valor": str(p.valor),
+        "compra_minima": str(p.compra_minima),
+        "regalo_tipo": p.regalo_tipo,
         "vigencia_desde": p.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(p.vigencia_hasta),
         "activo": s_bool(p.activo),
@@ -276,9 +284,31 @@ def promocion_to_row(p: PromocionPrimeraCompra) -> Row:
 
 def promocion_from_row(r: Mapping[str, str]) -> PromocionPrimeraCompra:
     return PromocionPrimeraCompra(
-        producto=r["producto"],
+        regla_id=r.get("regla_id", "LEGACY_PROMO"),
+        tipo_beneficio=r.get("tipo_beneficio", "producto"),
+        productos=r.get("productos", r.get("producto", "")),
+        valor=p_dec(r.get("valor", "1")),
+        compra_minima=p_dec(r.get("compra_minima", "3")),
+        regalo_tipo=r.get("regalo_tipo", "solo_uno"),
         vigencia_desde=p_date(r["vigencia_desde"]),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- ExclusionRegla ----------------------------------------------------------
+def exclusion_to_row(exc: ExclusionRegla) -> Row:
+    return {
+        "regla_tipo_a": exc.regla_tipo_a,
+        "regla_tipo_b": exc.regla_tipo_b,
+        "activo": s_bool(exc.activo),
+    }
+
+
+def exclusion_from_row(r: Mapping[str, str]) -> ExclusionRegla:
+    return ExclusionRegla(
+        regla_tipo_a=r["regla_tipo_a"],
+        regla_tipo_b=r["regla_tipo_b"],
         activo=p_bool(r.get("activo", "TRUE")),
     )
 

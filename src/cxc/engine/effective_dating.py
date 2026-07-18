@@ -79,16 +79,18 @@ def promocion_primera_compra_vigente(
     promos: list[PromocionPrimeraCompra],
     *,
     fecha: date,
+    cantidad_comercial: Decimal,
 ) -> PromocionPrimeraCompra | None:
-    """Promoción de primera compra vigente a ``fecha`` (la más reciente)."""
+    """Promoción de primera compra vigente a ``fecha`` con suficiente cantidad comercial."""
     candidatas = [
         p
         for p in promos
         if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha)
+        and cantidad_comercial >= p.compra_minima
     ]
     if not candidatas:
         return None
-    return max(candidatas, key=lambda p: p.vigencia_desde)
+    return max(candidatas, key=lambda p: (p.compra_minima, p.vigencia_desde))
 
 
 def tasa_bcv_completo_vigente(
