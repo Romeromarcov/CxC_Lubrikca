@@ -65,6 +65,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const listasPrecioTableBody = document.getElementById("listas-precio-table-body");
     const productosTableBody = document.getElementById("productos-table-body");
+    const clientesAuditoriaTableBody = document.getElementById("clientes-auditoria-table-body");
 
     // Tab Navigation Logic
     tabButtons.forEach(btn => {
@@ -497,6 +498,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadDescuentosMarca();
         loadListasPrecio();
         loadOdooProductos();
+        loadClientesAuditoria();
         populateBrandsAndCategories();
     }
 
@@ -722,15 +724,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Load Odoo Product catalog with USD & VES pricelists prices
+    // Load Odoo Product catalog with USD & VES pricelists prices & litros
     async function loadOdooProductos() {
         try {
-            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
+            productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
             const res = await fetch("/api/odoo/productos");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay productos disponibles.</td></tr>';
+                    productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay productos disponibles.</td></tr>';
                     return;
                 }
 
@@ -742,6 +744,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     row.innerHTML = `
                         <td><strong>${p.ref_interna}</strong></td>
                         <td>${p.nombre}</td>
+                        <td><strong>${p.litros ? p.litros.toFixed(2) : "0.00"} L</strong></td>
                         <td>${fmt(p.precio_publico)}</td>
                         <td><strong style="color: #059669">${fmt(p.precio_usd)}</strong></td>
                         <td><strong style="color: #d97706">${fmt(p.precio_ves_usd)}</strong></td>
@@ -750,7 +753,38 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
+            productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    // Load Odoo Client Sales stats for recurrence audit
+    async function loadClientesAuditoria() {
+        try {
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando auditoría de clientes desde Odoo...</td></tr>';
+            const res = await fetch("/api/odoo/clientes-auditoria");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay clientes con estadísticas en Odoo.</td></tr>';
+                    return;
+                }
+
+                clientesAuditoriaTableBody.innerHTML = "";
+                data.forEach(c => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>#${c.id}</strong></td>
+                        <td>${c.nombre}</td>
+                        <td>${c.fecha_creacion}</td>
+                        <td><strong style="color: #2563eb">${c.ventas_cantidad}</strong></td>
+                        <td>${c.fecha_ultima_venta}</td>
+                    `;
+                    clientesAuditoriaTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar clientes de Odoo.</td></tr>';
             console.error(err);
         }
     }
@@ -848,7 +882,6 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Auto-refresh Dashboard every 30 seconds
     setInterval(() => {
-        // Only refresh if active tab is dashboard to save Google Sheets API quota
         const activeTab = document.querySelector(".tab-navigation .active").dataset.tab;
         if (activeTab === "tab-dashboard") {
             loadKPIs();

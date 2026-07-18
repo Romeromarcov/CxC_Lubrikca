@@ -424,6 +424,33 @@
                     </div>
                 </section>
 
+                <!-- Auditoría de Clientes y Recurrencia -->
+                <section class="config-card card" style="grid-column: 1 / span 2;">
+                    <div class="panel-header">
+                        <h2>Auditoría de Clientes y Recurrencia (Odoo)</h2>
+                        <p>Consulte la fecha de creación del cliente, total de órdenes de venta facturadas y última fecha de compra para validar promociones de primera compra y recurrencias</p>
+                    </div>
+
+                    <div class="mini-table-wrapper" style="max-height: 400px; overflow-y: auto;">
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Cliente ID</th>
+                                    <th>Nombre del Cliente</th>
+                                    <th>Fecha de Creación</th>
+                                    <th>Cantidad de Ventas</th>
+                                    <th>Fecha Última Venta</th>
+                                </tr>
+                            </thead>
+                            <tbody id="clientes-auditoria-table-body">
+                                <tr>
+                                    <td colspan="5" class="table-empty">Cargando datos de clientes desde Odoo...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Catálogo de Productos y Precios Odoo -->
                 <section class="config-card card" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
@@ -437,6 +464,7 @@
                                 <tr>
                                     <th>Ref. Interna</th>
                                     <th>Nombre del Producto</th>
+                                    <th>Litros</th>
                                     <th>P. Público ($)</th>
                                     <th>Precio Lista USD ($)</th>
                                     <th>Precio Lista VES ($)</th>
@@ -444,7 +472,7 @@
                             </thead>
                             <tbody id="productos-table-body">
                                 <tr>
-                                    <td colspan="5" class="table-empty">Cargando productos de Odoo...</td>
+                                    <td colspan="6" class="table-empty">Cargando productos de Odoo...</td>
                                 </tr>
                             </tbody>
                         </table>

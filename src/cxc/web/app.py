@@ -83,9 +83,10 @@ def get_repo() -> SheetsRepository:
         )
     return SheetsRepository(gateway)
 
-def get_rate_for_datetime(dt: datetime) -> tuple[Decimal, Decimal]:
-    repo = get_repo()
-    rows = repo._g.read_rows("SerieTasas")
+def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
+    if rows is None:
+        repo = get_repo()
+        rows = repo._g.read_rows("SerieTasas")
     if not rows:
         return Decimal("36.5"), Decimal("38.0")
     
@@ -235,6 +236,9 @@ async def get_pagos_pendientes():
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         
+        # Read SerieTasas once to avoid N+1 Sheets API quota errors
+        tasas_rows = repo._g.read_rows("SerieTasas")
+        
         # Load all clients once to avoid N+1 queries to Google Sheets API
         clientes_rows = repo._g.read_rows("Clientes")
         from cxc.sheets import serde
@@ -283,7 +287,7 @@ async def get_pagos_pendientes():
                     except:
                         pass
                 
-                bcv, binance = get_rate_for_datetime(dt_pago)
+                bcv, binance = get_rate_for_datetime(dt_pago, tasas_rows)
                 
                 if moneda == "VES":
                     equiv_usd_bcv = saldo_pendiente / bcv
@@ -904,35 +908,39 @@ async def get_odoo_productos():
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         
-        # Fetch active products
+        # Fetch active products with product_volume (litros)
         prods = execute(
             "product.template",
             "search_read",
             [[["sale_ok", "=", True], ["active", "=", True]]],
-            {"fields": ["id", "name", "default_code", "list_price"], "limit": 100}
+            {"fields": ["id", "name", "default_code", "list_price", "product_volume"], "limit": 100}
         )
         
-        # Mappings of pricelists
         lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
         lista_ves_id = int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
         
-        prod_ids = [p["id"] for p in prods]
+        # Query rules directly from product.pricelist.item to get exact raw pricing entered
+        rules = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "in", [lista_usd_id, lista_ves_id]], ["compute_price", "=", "fixed"]]],
+            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"]}
+        )
         
         prices_usd = {}
         prices_ves = {}
-        
-        try:
-            res_usd = execute("product.pricelist", "price_get", [lista_usd_id, 1.0, prod_ids], {})
-            prices_usd = {int(k): float(v) for k, v in res_usd.get(str(lista_usd_id), {}).items()}
-        except Exception as e:
-            print(f"Error fetching USD prices: {e}", file=sys.stderr)
+        for r in rules:
+            pl_id = r.get("pricelist_id")
+            p_id = pl_id[0] if isinstance(pl_id, list) else pl_id
+            prod_tmpl_id = r.get("product_tmpl_id")
+            pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
             
-        try:
-            res_ves = execute("product.pricelist", "price_get", [lista_ves_id, 1.0, prod_ids], {})
-            prices_ves = {int(k): float(v) for k, v in res_ves.get(str(lista_ves_id), {}).items()}
-        except Exception as e:
-            print(f"Error fetching VES prices: {e}", file=sys.stderr)
-            
+            if pt_id:
+                if p_id == lista_usd_id:
+                    prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+                elif p_id == lista_ves_id:
+                    prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
+                    
         resultado = []
         for p in prods:
             pid = p["id"]
@@ -942,7 +950,58 @@ async def get_odoo_productos():
                 "ref_interna": p.get("default_code") or "N/A",
                 "precio_publico": float(p.get("list_price") or 0.0),
                 "precio_usd": prices_usd.get(pid, float(p.get("list_price") or 0.0)),
-                "precio_ves_usd": prices_ves.get(pid, 0.0)
+                "precio_ves_usd": prices_ves.get(pid, 0.0),
+                "litros": float(p.get("product_volume") or 0.0)
+            })
+        return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/odoo/clientes-auditoria")
+async def get_odoo_clientes_auditoria():
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        
+        # Fetch customers
+        partners = execute(
+            "res.partner",
+            "search_read",
+            [[["customer_rank", ">", 0]]],
+            {"fields": ["id", "name", "create_date"]}
+        )
+        
+        # Fetch sales count & last order date
+        orders = execute(
+            "sale.order",
+            "search_read",
+            [[["state", "in", ["sale", "done"]]]],
+            {"fields": ["partner_id", "date_order"]}
+        )
+        
+        stats = {}
+        for o in orders:
+            pid_info = o.get("partner_id")
+            if isinstance(pid_info, list) and len(pid_info) > 0:
+                pid = pid_info[0]
+                date_str = o.get("date_order", "")
+                
+                s = stats.setdefault(pid, {"count": 0, "last_date": ""})
+                s["count"] += 1
+                if date_str and (not s["last_date"] or date_str > s["last_date"]):
+                    s["last_date"] = date_str
+                    
+        resultado = []
+        for p in partners:
+            pid = p["id"]
+            p_stats = stats.get(pid, {"count": 0, "last_date": "N/A"})
+            resultado.append({
+                "id": pid,
+                "nombre": p["name"],
+                "fecha_creacion": p.get("create_date", "N/A").split(" ")[0] if p.get("create_date") else "N/A",
+                "ventas_cantidad": p_stats["count"],
+                "fecha_ultima_venta": p_stats["last_date"].split(" ")[0] if p_stats["last_date"] != "N/A" else "N/A"
             })
         return resultado
     except Exception as e:
