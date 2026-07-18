@@ -84,16 +84,21 @@ class DescuentoVolumenRequest(BaseModel):
     litros_minimo: float
     porcentaje: float
 
+_repo_cache: SheetsRepository | None = None
+
 def get_repo() -> SheetsRepository:
-    config = AppConfig.from_env()
-    print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
-    if os.environ.get("GOOGLE_TOKEN_JSON"):
-        gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-    else:
-        gateway = GspreadGateway(
-            config.sheets.spreadsheet_id, config.sheets.service_account_file
-        )
-    return SheetsRepository(gateway)
+    global _repo_cache
+    if _repo_cache is None:
+        config = AppConfig.from_env()
+        print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
+        if os.environ.get("GOOGLE_TOKEN_JSON"):
+            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+        else:
+            gateway = GspreadGateway(
+                config.sheets.spreadsheet_id, config.sheets.service_account_file
+            )
+        _repo_cache = SheetsRepository(gateway)
+    return _repo_cache
 
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     if rows is None:
@@ -137,14 +142,7 @@ async def run_sync_in_background():
         try:
             print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
             config = AppConfig.from_env()
-            print(f"DEBUG SYNC: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
-            if os.environ.get("GOOGLE_TOKEN_JSON"):
-                gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-            else:
-                gateway = GspreadGateway(
-                    config.sheets.spreadsheet_id, config.sheets.service_account_file
-                )
-            repo = SheetsRepository(gateway)
+            repo = get_repo()
             reader = OdooXmlRpcReader(config.odoo)
             sync = IncrementalSync(repo, reader)
             result = sync.run(datetime.now())
@@ -166,14 +164,7 @@ async def run_scraper_in_background():
             from cxc.alerts import build_alerter
 
             config = AppConfig.from_env()
-            print(f"DEBUG SCRAPER: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
-            if os.environ.get("GOOGLE_TOKEN_JSON"):
-                gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-            else:
-                gateway = GspreadGateway(
-                    config.sheets.spreadsheet_id, config.sheets.service_account_file
-                )
-            repo = SheetsRepository(gateway)
+            repo = get_repo()
             scraper = RatesScraper(
                 repo,
                 BinanceClient(config.binance),
