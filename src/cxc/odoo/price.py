@@ -44,14 +44,39 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         clave = (producto, lista)
         if clave in self._cache:
             return self._cache[clave]
-        pricelist_id = self._pricelist_ids[lista]
-        # product.pricelist.price_get devuelve {pricelist_id: precio}.
-        resultado = self._execute(
-            "product.pricelist",
-            "price_get",
-            [int(pricelist_id), 1.0, [int(producto)]],
-            {},
+            
+        if lista.isdigit():
+            pricelist_id = int(lista)
+        else:
+            pricelist_id = self._pricelist_ids.get(lista)
+            if not pricelist_id:
+                # If key not found, fallback to lista directly
+                try:
+                    pricelist_id = int(lista)
+                except:
+                    pricelist_id = 4 # default to USD
+            
+        # Search rules for this product template in Odoo
+        rules = self._execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "=", pricelist_id], ["product_tmpl_id", "=", int(producto)], ["compute_price", "=", "fixed"]]],
+            {"fields": ["fixed_price"], "limit": 1}
         )
-        precio = to_decimal(str(resultado[str(pricelist_id)]))
+        if rules:
+            precio = to_decimal(str(rules[0]["fixed_price"]))
+        else:
+            # Fallback to product.template list_price
+            prod = self._execute(
+                "product.template",
+                "read",
+                [int(producto)],
+                ["list_price"]
+            )
+            if prod:
+                precio = to_decimal(str(prod[0]["list_price"]))
+            else:
+                precio = Decimal("0.0")
+                
         self._cache[clave] = precio
         return precio

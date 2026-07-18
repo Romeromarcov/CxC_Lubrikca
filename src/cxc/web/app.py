@@ -419,15 +419,80 @@ async def get_bandeja():
         bandeja = repo.all_bandeja()
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
         
+        # Load Odoo product prices for list 4 once
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+        rules = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
+            {"fields": ["product_tmpl_id", "fixed_price"]}
+        )
+        prices_usd = {}
+        for r in rules:
+            prod_tmpl_id = r.get("product_tmpl_id")
+            pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
+            if pt_id:
+                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+
+        all_lines = repo._g.read_rows("LineasOrden")
+        lines_by_so = {}
+        for r in all_lines:
+            so = r.get("so_id", "")
+            if so:
+                lines_by_so.setdefault(so, []).append(r)
+                
         resultados = []
         for b in bandeja:
             conc = concs.get(b.so_id)
+            
+            # Find order to check its original pricelist
+            ord_row = repo.get_orden(b.so_id)
+            lista_precios_orig = ord_row.lista_precios if ord_row else "4"
+            
+            # Compute total proyectado USD under List 4
+            order_lines = lines_by_so.get(b.so_id, [])
+            total_proyectado_usd = Decimal("0.0")
+            for ln in order_lines:
+                qty = Decimal(str(ln.get("cantidad", "0")))
+                prod_raw = ln.get("producto", "")
+                pt_id = None
+                if isinstance(prod_raw, str):
+                    if prod_raw.startswith("["):
+                        try:
+                            import json
+                            parsed = json.loads(prod_raw.replace("'", '"'))
+                            pt_id = int(parsed[0])
+                        except:
+                            import re
+                            match = re.search(r'\d+', prod_raw)
+                            if match:
+                                pt_id = int(match.group())
+                    elif prod_raw.isdigit():
+                        pt_id = int(prod_raw)
+                elif isinstance(prod_raw, (int, float)):
+                    pt_id = int(prod_raw)
+                    
+                price_usd = Decimal(str(prices_usd.get(pt_id))) if pt_id in prices_usd else Decimal(str(ln.get("precio_unitario", "0")))
+                total_proyectado_usd += qty * price_usd
+            
+            pct = Decimal("0")
+            if b.precio_base_calculado > 0:
+                pct = b.total_descuentos / b.precio_base_calculado
+                
+            total_descuentos_proy = total_proyectado_usd * pct
+            total_motor_proy = total_proyectado_usd - total_descuentos_proy
+            
+            lista_name = "Lista USD (#4)" if b.lista_aplicada == "4" else f"Precio VES (#{b.lista_aplicada})"
+            
             resultados.append({
                 "so_id": b.so_id,
-                "lista_aplicada": b.lista_aplicada,
+                "lista_aplicada": lista_name,
                 "precio_base": float(b.precio_base_calculado),
                 "total_descuentos": float(b.total_descuentos),
                 "total_motor": float(b.total_motor),
+                "total_proyectado_usd": float(total_motor_proy) if lista_precios_orig != "4" else float(b.total_motor),
                 "candidata_a_cierre": b.candidata_a_cierre,
                 "estado": b.estado.value,
                 "reconciliacion": {
@@ -439,6 +504,7 @@ async def get_bandeja():
             })
         return resultados
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
 def recalculate_all(so_id: str):
@@ -487,6 +553,30 @@ async def get_reporte_saldos():
         for v in vincs:
             linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
             
+        # Fetch product fixed prices for list 4 once
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+        rules = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
+            {"fields": ["product_tmpl_id", "fixed_price"]}
+        )
+        prices_usd = {}
+        for r in rules:
+            prod_tmpl_id = r.get("product_tmpl_id")
+            pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
+            if pt_id:
+                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+
+        all_lines = repo._g.read_rows("LineasOrden")
+        lines_by_so = {}
+        for r in all_lines:
+            so = r.get("so_id", "")
+            if so:
+                lines_by_so.setdefault(so, []).append(r)
+
         reporte = []
         for o in ordenes:
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
@@ -494,11 +584,46 @@ async def get_reporte_saldos():
             saldo = o.monto_total - pagado
             conc = concs.get(o.so_id)
             
+            # Compute actual subtotal from lines
+            order_lines = lines_by_so.get(o.so_id, [])
+            subtotal = sum(Decimal(str(ln.get("cantidad", "0"))) * Decimal(str(ln.get("precio_unitario", "0"))) for ln in order_lines)
+            
+            # Compute projected USD subtotal and total under List 4 (USD)
+            total_proyectado_usd = Decimal("0.0")
+            for ln in order_lines:
+                qty = Decimal(str(ln.get("cantidad", "0")))
+                prod_raw = ln.get("producto", "")
+                pt_id = None
+                if isinstance(prod_raw, str):
+                    if prod_raw.startswith("["):
+                        try:
+                            import json
+                            parsed = json.loads(prod_raw.replace("'", '"'))
+                            pt_id = int(parsed[0])
+                        except:
+                            import re
+                            match = re.search(r'\d+', prod_raw)
+                            if match:
+                                pt_id = int(match.group())
+                    elif prod_raw.isdigit():
+                        pt_id = int(prod_raw)
+                elif isinstance(prod_raw, (int, float)):
+                    pt_id = int(prod_raw)
+                    
+                price_usd = Decimal(str(prices_usd.get(pt_id))) if pt_id in prices_usd else Decimal(str(ln.get("precio_unitario", "0")))
+                total_proyectado_usd += qty * price_usd
+                
+            lista_name = "Lista USD (#4)" if o.lista_precios == "4" else f"Precio VES (#{o.lista_precios})"
+            monto_total_proyectado_usd = float(total_proyectado_usd) if o.lista_precios != "4" else float(o.monto_total)
+            
             reporte.append({
                 "so_id": o.so_id,
                 "cliente_nombre": client_name,
                 "fecha": o.fecha.isoformat(),
+                "lista_precios": lista_name,
+                "subtotal": float(subtotal),
                 "monto_total": float(o.monto_total),
+                "monto_total_proyectado_usd": float(monto_total_proyectado_usd),
                 "monto_pagado": float(pagado),
                 "saldo_deudor": float(saldo) if saldo > Decimal("0") else 0.0,
                 "facturada": o.facturada,
@@ -883,7 +1008,8 @@ async def post_sync_odoo_rates():
             date_str = rate["name"]
             if date_str not in existing_dates:
                 ts = datetime.combine(date.fromisoformat(date_str), datetime.min.time().replace(hour=8))
-                bcv = Decimal(str(rate.get("inverse_company_rate", "1.0")))
+                val = rate.get("inverse_company_rate")
+                bcv = Decimal(str(val)) if val else Decimal("1.0")
                 binance = bcv * Decimal("1.05") 
                 
                 tasa = SerieTasa(

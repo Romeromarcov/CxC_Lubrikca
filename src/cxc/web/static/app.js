@@ -339,14 +339,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Fetch and render Bandeja / Approval Table
+    // Fetch and render Bandeja / Approval Table with USD projection
     async function loadBandeja() {
         try {
             const res = await fetch("/api/bandeja");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    bandejaTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay propuestas pendientes en la bandeja.</td></tr>';
+                    bandejaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay propuestas pendientes en la bandeja.</td></tr>';
                     return;
                 }
                 
@@ -367,10 +367,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     
                     row.innerHTML = `
                         <td><strong>${item.so_id}</strong></td>
-                        <td>${item.lista_aplicada == "4" ? "USD" : "BCV"}</td>
+                        <td>${item.lista_aplicada}</td>
                         <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.precio_base)}</td>
                         <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_descuentos)}</td>
                         <td><strong>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_motor)}</strong></td>
+                        <td><strong style="color: #2563eb;">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_proyectado_usd)}</strong></td>
                         <td>${semHtml}</td>
                         <td>${closeHtml}</td>
                     `;
@@ -378,7 +379,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            bandejaTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al conectar con la bandeja de facturación.</td></tr>';
+            bandejaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al conectar con la bandeja de facturación.</td></tr>';
             console.error("Error loading bandeja:", err);
         }
     }
@@ -386,21 +387,21 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- Tab 2: Accounts Receivable Report ---
     async function loadReporte() {
         try {
-            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
             const res = await fetch("/api/reporte-saldos");
             if (res.ok) {
                 reporteData = await res.json();
                 renderReporteTable(reporteData);
             }
         } catch (err) {
-            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error de red al cargar el reporte.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Error de red al cargar el reporte.</td></tr>';
             console.error(err);
         }
     }
 
     function renderReporteTable(data) {
         if (data.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
             return;
         }
 
@@ -430,8 +431,11 @@ document.addEventListener("DOMContentLoaded", () => {
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
+                <td><span class="state-badge">${item.lista_precios}</span></td>
                 <td>${item.fecha}</td>
+                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.subtotal)}</td>
                 <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total)}</td>
+                <td><strong style="color: #2563eb;">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total_proyectado_usd)}</strong></td>
                 <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_pagado)}</td>
                 <td><strong style="color: ${item.saldo_deudor > 0 ? '#fbbf24' : '#10b981'}">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.saldo_deudor)}</strong></td>
                 <td>${odooHtml}</td>
@@ -742,15 +746,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Load Odoo Product catalog with USD & VES pricelists prices & litros
+    // Load Odoo Product catalog with USD & VES pricelists prices & litros (Public price removed)
     async function loadOdooProductos() {
         try {
-            productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
             const res = await fetch("/api/odoo/productos");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay productos disponibles.</td></tr>';
+                    productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay productos disponibles.</td></tr>';
                     return;
                 }
 
@@ -763,7 +767,6 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong>${p.ref_interna}</strong></td>
                         <td>${p.nombre}</td>
                         <td><strong>${p.litros ? p.litros.toFixed(2) : "0.00"} L</strong></td>
-                        <td>${fmt(p.precio_publico)}</td>
                         <td><strong style="color: #059669">${fmt(p.precio_usd)}</strong></td>
                         <td><strong style="color: #d97706">${fmt(p.precio_ves_usd)}</strong></td>
                     `;
@@ -771,7 +774,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            productosTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
             console.error(err);
         }
     }
