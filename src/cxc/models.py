@@ -109,6 +109,7 @@ class LineaOrden:
     precio_unitario: Decimal
     # Cantidad realmente entregada (neta de devoluciones) — seguimiento visual.
     cantidad_entregada: Decimal = Decimal("0")
+    descuento: Decimal = Decimal("0")
 
 
 # --- 3.4 Pagos (espejo) ------------------------------------------------------
@@ -191,16 +192,22 @@ class DescuentoBCVCompleto:
 # --- 3.7c PromocionPrimeraCompra (configurable, effective dating) -----------
 @dataclass
 class PromocionPrimeraCompra:
-    """Producto de regalo por primera compra (ej. caja de liga de frenos).
-
-    La NC vale el precio de ``producto`` en la lista de nacimiento de la orden
-    (``OrdenVenta.lista_precios``), tomada a la fecha de la SO. Configurable con
-    vigencia: solo aplica si la SO cae dentro del período de la promoción.
-    """
-
-    producto: str
+    regla_id: str
+    tipo_beneficio: str  # "producto" o "porcentaje"
+    productos: str  # Comma-separated list of product IDs/names
+    valor: Decimal  # quantity for product, or percentage for porcentaje (e.g. 0.02)
+    compra_minima: Decimal  # Comercial units threshold
+    regalo_tipo: str  # "conjunto" o "solo_uno"
     vigencia_desde: date
     vigencia_hasta: date | None = None
+    activo: bool = True
+
+
+# --- 3.7d ExclusionRegla (configurable) --------------------------------------
+@dataclass
+class ExclusionRegla:
+    regla_tipo_a: str
+    regla_tipo_b: str
     activo: bool = True
 
 
@@ -283,3 +290,21 @@ class Conciliacion:
     diferencia: Decimal
     resultado: ResultadoConciliacion
     revisado_por: str | None = None
+
+
+# --- 3.12 ExclusionRegla (pares de descuentos mutuamente excluyentes) --------
+@dataclass
+class ExclusionRegla:
+    """Par de tipos de descuento/promoción que no pueden aplicarse simultáneamente.
+
+    Cuando ambos tienen valor > 0, se aplica el de mayor valor y el otro
+    se anula para el cálculo del total de la bandeja de facturación.
+
+    Valores válidos para regla_tipo_a / regla_tipo_b:
+      'primera_compra', 'recurrencia', 'contado', 'volumen', 'bcv_completo'
+    """
+
+    regla_tipo_a: str
+    regla_tipo_b: str
+    activo: bool = True
+
