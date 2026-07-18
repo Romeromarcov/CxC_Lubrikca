@@ -150,7 +150,21 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         return self
 
     def _ws(self, table: str):  # type: ignore[no-untyped-def]
-        return self._sh.worksheet(table)
+        import gspread
+        try:
+            return self._sh.worksheet(table)
+        except gspread.exceptions.WorksheetNotFound:
+            # Auto-create sheet with headers if missing
+            headers = {
+                "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "activo"],
+                "PromocionPrimeraCompra": ["producto", "vigencia_desde", "vigencia_hasta", "activo"],
+                "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "activo"],
+                "Feriados": ["fecha", "descripcion", "tipo"]
+            }
+            cols = headers.get(table, ["id"])
+            ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)
+            ws.append_row(cols)
+            return ws
 
     def read_rows(self, table: str) -> list[dict[str, str]]:
         records = self._ws(table).get_all_records()

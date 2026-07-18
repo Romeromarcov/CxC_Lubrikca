@@ -17,12 +17,17 @@ class PriceResolver(ABC):
     def precio(self, producto: str, lista: str) -> Decimal:
         """Precio unitario del producto en la lista indicada."""
 
+    @abstractmethod
+    def volumen(self, producto: str) -> Decimal:
+        """Volumen en litros del producto template."""
+
 
 class DictPriceResolver(PriceResolver):
     """Resolver en memoria — ``{(producto, lista): precio}``."""
 
-    def __init__(self, precios: dict[tuple[str, str], Decimal]) -> None:
+    def __init__(self, precios: dict[tuple[str, str], Decimal], volumenes: dict[str, Decimal] | None = None) -> None:
         self._precios = dict(precios)
+        self._volumenes = dict(volumenes or {})
 
     def precio(self, producto: str, lista: str) -> Decimal:
         try:
@@ -32,5 +37,11 @@ class DictPriceResolver(PriceResolver):
                 f"Sin precio para producto={producto!r} en lista={lista!r}"
             ) from exc
 
+    def volumen(self, producto: str) -> Decimal:
+        return self._volumenes.get(producto, Decimal("0"))
+
     def set_precio(self, producto: str, lista: str, precio: Decimal) -> None:
         self._precios[(producto, lista)] = precio
+
+    def set_volumen(self, producto: str, vol: Decimal) -> None:
+        self._volumenes[producto] = vol

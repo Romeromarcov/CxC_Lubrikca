@@ -40,6 +40,7 @@ def _inputs(
     lineas,
     abonos,
     descuentos=(),
+    descuentos_volumen=(),
     reglas=(),
     bcv_diario=(),
     promociones=(),
@@ -52,6 +53,7 @@ def _inputs(
         lineas=list(lineas),
         abonos=list(abonos),
         descuentos=list(descuentos),
+        descuentos_volumen=list(descuentos_volumen),
         reglas_recurrencia=list(reglas),
         descuento_bcv_diario=list(bcv_diario),
         promociones_primera_compra=list(promociones),
@@ -372,3 +374,39 @@ def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "contado" in origenes
     assert res.total_descuentos == Decimal("6.00")
+
+
+def test_descuento_por_volumen_litros() -> None:
+    # Set up order lines
+    orden = b.orden(primera=False)
+    linea1 = b.linea(producto="P1", marca="Sinoco", categoria="Comercial", cantidad="10", precio="100")
+    
+    # Resolver returning price 100 and volume 25 L for P1
+    resolver = _resolver(**{"P1@USD": "100", "P1@BCV": "100"})
+    resolver.set_volumen("P1", Decimal("25.0")) # 10 * 25 L = 250 L
+    
+    # 250 L should trigger a volume discount rule for brand="Sinoco", category="Comercial", liters_min=200, pct=0.05
+    from cxc.models import DescuentoVolumen
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL1",
+        marca="Sinoco",
+        categoria="Comercial",
+        litros_minimo=Decimal("200"),
+        porcentaje=Decimal("0.05"),
+        activo=True
+    )
+    
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea1],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+    )
+    res = calcular_factura(inp)
+    
+    # Base price: 10 * 100 = 1000 USD
+    # Volume discount: 1000 * 0.05 = 50 USD
+    # Total motor should be 950 USD
+    assert res.total_descuentos == Decimal("50.00")
+    assert res.total_motor == Decimal("950.00")

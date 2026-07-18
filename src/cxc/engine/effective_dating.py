@@ -14,6 +14,7 @@ from ..models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoVolumen,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoDescuento,
@@ -137,4 +138,37 @@ def regla_recurrencia_vigente(
     return max(
         candidatas,
         key=lambda r: (r.vigencia_desde, -r.valor),
+    )
+
+
+def descuento_volumen_vigente(
+    reglas: list[DescuentoVolumen],
+    *,
+    marca: str,
+    categoria: str,
+    litros: Decimal,
+) -> DescuentoVolumen | None:
+    """Retorna la regla de descuento por volumen aplicable para la marca/categoría."""
+    candidatas = [
+        r
+        for r in reglas
+        if (r.marca == marca or r.marca == "*")
+        and (r.categoria == categoria or r.categoria == "*")
+        and litros >= r.litros_minimo
+        and r.activo
+    ]
+    if not candidatas:
+        return None
+
+    def specificity(r: DescuentoVolumen) -> int:
+        score = 0
+        if r.marca != "*":
+            score += 2
+        if r.categoria != "*":
+            score += 1
+        return score
+
+    return max(
+        candidatas,
+        key=lambda r: (specificity(r), r.porcentaje),
     )

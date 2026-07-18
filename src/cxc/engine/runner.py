@@ -78,6 +78,7 @@ class EngineRunner:
             lineas=lineas,
             abonos=abonos,
             descuentos=self._repo.descuentos_marca_categoria(),
+            descuentos_volumen=self._repo.descuentos_volumen(),
             reglas_recurrencia=self._repo.reglas_recurrencia(),
             descuento_bcv_diario=self._repo.descuento_bcv_completo(),
             promociones_primera_compra=self._repo.promociones_primera_compra(),

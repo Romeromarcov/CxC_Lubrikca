@@ -342,6 +342,53 @@
                     </div>
                 </section>
 
+                <!-- Promociones Primera Compra -->
+                <section class="config-card card">
+                    <div class="panel-header">
+                        <h2>Promociones de Primera Compra</h2>
+                        <p>Define qué producto se regala y las fechas de vigencia de la promoción</p>
+                    </div>
+
+                    <form id="promo-form" class="cxc-form">
+                        <div class="form-group">
+                            <label>Producto de Regalo</label>
+                            <select id="cfg-promo-producto" required>
+                                <option value="">Seleccione un producto...</option>
+                            </select>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>Fecha de Inicio</label>
+                                <input type="date" id="cfg-promo-desde" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Fecha de Finalización</label>
+                                <input type="date" id="cfg-promo-hasta">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Promoción</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Promociones Activas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th>Fecha de Inicio</th>
+                                    <th>Fecha de Finalización</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="promos-table-body">
+                                <tr>
+                                    <td colspan="4" class="table-empty">Cargando promociones...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Reglas de Descuentos Comerciales -->
                 <section class="config-card card" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
@@ -394,6 +441,61 @@
                             <tbody id="descuentos-table-body">
                                 <tr>
                                     <td colspan="6" class="table-empty">Cargando descuentos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Reglas de Descuentos por Volumen -->
+                <section class="config-card card" style="grid-column: 1 / span 2;">
+                    <div class="panel-header">
+                        <h2>Reglas de Descuentos por Volumen (Litros)</h2>
+                        <p>Define descuentos basados en la cantidad mínima de litros comprados por marca y categoría</p>
+                    </div>
+
+                    <form id="descuento-volumen-form" class="cxc-form">
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1;">
+                                <label>Marca</label>
+                                <select id="cfg-desc-vol-marca" required>
+                                    <option value="ALL">Todas las marcas (ALL)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Categoría</label>
+                                <select id="cfg-desc-vol-cat" required>
+                                    <option value="ALL">Todas las categorías (ALL)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Litros Mínimos</label>
+                                <input type="number" id="cfg-desc-vol-litros" min="1" required placeholder="Ej: 200">
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Porcentaje Descuento (%)</label>
+                                <input type="number" id="cfg-desc-vol-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Regla de Volumen</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Volumen Activas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Regla ID</th>
+                                    <th>Marca</th>
+                                    <th>Categoría</th>
+                                    <th>Litros Mínimos</th>
+                                    <th>Descuento (%)</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="descuentos-volumen-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando descuentos por volumen...</td>
                                 </tr>
                             </tbody>
                         </table>

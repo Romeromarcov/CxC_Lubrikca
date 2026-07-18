@@ -72,6 +72,18 @@ class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
 
+class PromocionRequest(BaseModel):
+    producto: str
+    vigencia_desde: str
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+class DescuentoVolumenRequest(BaseModel):
+    marca: str
+    categoria: str
+    litros_minimo: float
+    porcentaje: float
+
 def get_repo() -> SheetsRepository:
     config = AppConfig.from_env()
     print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
@@ -1156,6 +1168,87 @@ async def get_odoo_clientes_auditoria():
                 "fecha_ultima_venta": p_stats["last_date"].split(" ")[0] if p_stats["last_date"] != "N/A" else "N/A"
             })
         return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/promociones")
+async def get_config_promociones():
+    try:
+        repo = get_repo()
+        promos = repo.promociones_primera_compra()
+        return [
+            {
+                "producto": p.producto,
+                "vigencia_desde": p.vigencia_desde.isoformat(),
+                "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
+                "activo": p.activo
+            } for p in promos
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/promociones")
+async def post_config_promociones(req: PromocionRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import PromocionPrimeraCompra
+        from cxc.sheets import serde, gateway as g
+        
+        v_desde = date.fromisoformat(req.vigencia_desde)
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        
+        promo = PromocionPrimeraCompra(
+            producto=req.producto,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row(g.T_PROMO_PRIMERA, serde.promocion_to_row(promo))
+        return {"status": "success", "message": "Promoción registrada correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/descuentos-volumen")
+async def get_config_descuentos_volumen():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_volumen()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "litros_minimo": float(r.litros_minimo),
+                "porcentaje": float(r.porcentaje),
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-volumen")
+async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoVolumen
+        from cxc.sheets import serde
+        import uuid
+        
+        regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoVolumen(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            litros_minimo=Decimal(str(req.litros_minimo)),
+            porcentaje=Decimal(str(req.porcentaje)),
+            activo=True
+        )
+        repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

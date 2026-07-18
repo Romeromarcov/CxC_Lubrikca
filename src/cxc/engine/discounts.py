@@ -22,6 +22,7 @@ from ..models import (
     DescuentoAplicado,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoVolumen,
     EstadoBandeja,
     Feriado,
     LineaOrden,
@@ -36,6 +37,7 @@ from ..models import (
 from .business_days import fin_ventana_contado
 from .effective_dating import (
     descuento_vigente,
+    descuento_volumen_vigente,
     promocion_primera_compra_vigente,
     regla_recurrencia_vigente,
     tasa_bcv_completo_vigente,
@@ -58,6 +60,7 @@ class EngineInputs:
     # Cada abono: la vinculación (con equivalentes congelados) + su método.
     abonos: list[tuple[Vinculacion, MetodoPago]]
     descuentos: list[DescuentoMarcaCategoria]
+    descuentos_volumen: list[DescuentoVolumen]
     reglas_recurrencia: list[ReglaRecurrencia]
     descuento_bcv_diario: list[DescuentoBCVCompleto]
     promociones_primera_compra: list[PromocionPrimeraCompra]
@@ -77,10 +80,12 @@ class _Componentes:
     pct_recompra: Decimal
     contado_proy: Decimal
     bcv_completo: Decimal
+    volumen: Decimal
     nc: Decimal
     detalle_recompra: DescuentoAplicado | None = None
     detalle_contado: DescuentoAplicado | None = None
     detalle_bcv: DescuentoAplicado | None = None
+    detalle_volumen: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     flags: dict[str, bool] = field(default_factory=dict)
 
@@ -227,13 +232,53 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
         )
 
+    # (d) Descuento por Volumen (Litros)
+    litros_por_mc: dict[tuple[str, str], Decimal] = {}
+    subtotal_por_mc: dict[tuple[str, str], Decimal] = {}
+    for ln in inp.lineas:
+        try:
+            vol_unit = inp.price_resolver.volumen(ln.producto)
+        except Exception:
+            vol_unit = Decimal("0.0")
+        qty = _cantidad_efectiva(inp, ln)
+        litros_linea = qty * vol_unit
+        k = (ln.marca, ln.categoria)
+        litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + litros_linea
+        subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
+        
+    volumen_desc = Decimal("0.0")
+    detalle_volumen: DescuentoAplicado | None = None
+    detalles_vol = []
+    
+    for (marca, categoria), total_litros in litros_por_mc.items():
+        regla_vol = descuento_volumen_vigente(
+            inp.descuentos_volumen,
+            marca=marca,
+            categoria=categoria,
+            litros=total_litros
+        )
+        if regla_vol is not None and regla_vol.porcentaje > 0:
+            subt = subtotal_por_mc[(marca, categoria)]
+            monto_desc = subt * regla_vol.porcentaje
+            volumen_desc += monto_desc
+            detalles_vol.append(f"{marca}/{categoria} (>{regla_vol.litros_minimo}L): {regla_vol.porcentaje*100}%")
+            
+    if volumen_desc > 0:
+        detalle_volumen = DescuentoAplicado(
+            origen="volumen",
+            descripcion="Dcto volumen " + ", ".join(detalles_vol),
+            monto=q2(volumen_desc)
+        )
+
     return _Componentes(
         precio_base=precio_base,
         pct_recompra=pct_recompra,
         contado_proy=contado_proy,
         bcv_completo=bcv_completo,
+        volumen=volumen_desc,
         nc=nc,
         detalle_recompra=detalle_recompra,
+        detalle_volumen=detalle_volumen,
         detalle_nc=detalle_nc,
         flags={
             "contado_evaluable": contado_evaluable,
@@ -269,7 +314,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     window_expired = fin_ventana is not None and inp.fecha_calculo > fin_ventana
 
     # Neto OPTIMISTA (asume contado) para decidir si liquidó dentro de ventana.
-    descuentos_optimista = comp.pct_recompra + comp.contado_proy + comp.bcv_completo
+    descuentos_optimista = comp.pct_recompra + comp.contado_proy + comp.bcv_completo + comp.volumen
     neto_optimista = comp.precio_base - descuentos_optimista - comp.nc
     liquidado_optimista = valor_pagado >= neto_optimista - _EPS
 
@@ -315,8 +360,10 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
                 monto=q2(comp.bcv_completo),
             )
         )
+    if comp.detalle_volumen is not None:
+        detalle.append(comp.detalle_volumen)
 
-    total_descuentos = comp.pct_recompra + contado_aplicado + comp.bcv_completo
+    total_descuentos = comp.pct_recompra + contado_aplicado + comp.bcv_completo + comp.volumen
     neto = comp.precio_base - total_descuentos - comp.nc
     candidata = bool(vincs) and valor_pagado >= neto - _EPS
 

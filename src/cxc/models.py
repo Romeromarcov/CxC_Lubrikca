@@ -157,6 +157,17 @@ class DescuentoMarcaCategoria:
     activo: bool = True
 
 
+# --- 3.7_vol DescuentosVolumen (configurable, volume pricing) ----------------
+@dataclass
+class DescuentoVolumen:
+    regla_id: str
+    marca: str
+    categoria: str
+    litros_minimo: Decimal
+    porcentaje: Decimal
+    activo: bool = True
+
+
 # --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
 @dataclass
 class DescuentoBCVCompleto:

@@ -67,6 +67,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const productosTableBody = document.getElementById("productos-table-body");
     const clientesAuditoriaTableBody = document.getElementById("clientes-auditoria-table-body");
 
+    // Elements - Promociones Primera Compra
+    const promoForm = document.getElementById("promo-form");
+    const cfgPromoProducto = document.getElementById("cfg-promo-producto");
+    const cfgPromoDesde = document.getElementById("cfg-promo-desde");
+    const cfgPromoHasta = document.getElementById("cfg-promo-hasta");
+    const promosTableBody = document.getElementById("promos-table-body");
+
+    // Elements - Descuentos por Volumen
+    const descuentoVolumenForm = document.getElementById("descuento-volumen-form");
+    const cfgDescVolMarca = document.getElementById("cfg-desc-vol-marca");
+    const cfgDescVolCat = document.getElementById("cfg-desc-vol-cat");
+    const cfgDescVolLitros = document.getElementById("cfg-desc-vol-litros");
+    const cfgDescVolPorcentaje = document.getElementById("cfg-desc-vol-porcentaje");
+    const descuentosVolumenTableBody = document.getElementById("descuentos-volumen-table-body");
+
     // Tab Navigation Logic
     tabButtons.forEach(btn => {
         btn.addEventListener("click", () => {
@@ -517,7 +532,9 @@ document.addEventListener("DOMContentLoaded", () => {
         loadSettingsMeta();
         loadTasas();
         loadFeriados();
+        loadPromociones();
         loadDescuentosMarca();
+        loadDescuentosVolumen();
         loadListasPrecio();
         loadOdooProductos();
         loadClientesAuditoria();
@@ -650,11 +667,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bRes.ok) {
                 const brands = await bRes.json();
                 cfgDescMarca.innerHTML = '<option value="ALL">Todas las marcas (ALL)</option>';
+                cfgDescVolMarca.innerHTML = '<option value="ALL">Todas las marcas (ALL)</option>';
                 brands.forEach(b => {
                     const opt = document.createElement("option");
                     opt.value = b;
                     opt.textContent = b;
                     cfgDescMarca.appendChild(opt);
+                    cfgDescVolMarca.appendChild(opt.cloneNode(true));
                 });
             }
 
@@ -663,11 +682,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (cRes.ok) {
                 const cats = await cRes.json();
                 cfgDescCat.innerHTML = '<option value="ALL">Todas las categorías (ALL)</option>';
+                cfgDescVolCat.innerHTML = '<option value="ALL">Todas las categorías (ALL)</option>';
                 cats.forEach(c => {
                     const opt = document.createElement("option");
                     opt.value = c;
                     opt.textContent = c;
                     cfgDescCat.appendChild(opt);
+                    cfgDescVolCat.appendChild(opt.cloneNode(true));
                 });
             }
         } catch (err) {
@@ -771,6 +792,15 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong style="color: #d97706">${fmt(p.precio_ves_usd)}</strong></td>
                     `;
                     productosTableBody.appendChild(row);
+                });
+
+                // Populate promotions products select dropdown
+                cfgPromoProducto.innerHTML = '<option value="">Seleccione un producto...</option>';
+                data.forEach(p => {
+                    const opt = document.createElement("option");
+                    opt.value = p.id;
+                    opt.textContent = `[${p.ref_interna}] ${p.nombre}`;
+                    cfgPromoProducto.appendChild(opt);
                 });
             }
         } catch (err) {
@@ -892,6 +922,119 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             alert("❌ Error de red al registrar regla.");
+            console.error(err);
+        }
+    });
+
+    // Load Promociones Primera Compra
+    async function loadPromociones() {
+        try {
+            promosTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando promociones...</td></tr>';
+            const res = await fetch("/api/config/promociones");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    promosTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay promociones registradas.</td></tr>';
+                    return;
+                }
+                promosTableBody.innerHTML = "";
+                data.forEach(p => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${p.producto}</strong></td>
+                        <td>${p.vigencia_desde}</td>
+                        <td>${p.vigencia_hasta || "N/A"}</td>
+                        <td><span class="semaphore ${p.activo ? 'verde' : 'rojo'}">${p.activo ? 'Activa' : 'Inactiva'}</span></td>
+                    `;
+                    promosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Save Promotion Rule
+    promoForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            producto: cfgPromoProducto.value,
+            vigencia_desde: cfgPromoDesde.value,
+            vigencia_hasta: cfgPromoHasta.value || null
+        };
+        try {
+            const res = await fetch("/api/config/promociones", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                alert("✅ Promoción registrada exitosamente.");
+                promoForm.reset();
+                loadPromociones();
+            } else {
+                alert("❌ Error al registrar la promoción.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar promoción.");
+            console.error(err);
+        }
+    });
+
+    // Load Volume Discount Rules
+    async function loadDescuentosVolumen() {
+        try {
+            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando descuentos por volumen...</td></tr>';
+            const res = await fetch("/api/config/descuentos-volumen");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
+                    return;
+                }
+                descuentosVolumenTableBody.innerHTML = "";
+                data.forEach(r => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${r.marca}</td>
+                        <td>${r.categoria}</td>
+                        <td><strong>${r.litros_minimo} L</strong></td>
+                        <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
+                    `;
+                    descuentosVolumenTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Save Volume Discount Rule
+    descuentoVolumenForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            marca: cfgDescVolMarca.value,
+            categoria: cfgDescVolCat.value,
+            litros_minimo: parseFloat(cfgDescVolLitros.value),
+            porcentaje: parseFloat(cfgDescVolPorcentaje.value)
+        };
+        try {
+            const res = await fetch("/api/config/descuentos-volumen", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                alert("✅ Regla de volumen registrada exitosamente.");
+                descuentoVolumenForm.reset();
+                loadDescuentosVolumen();
+            } else {
+                alert("❌ Error al registrar la regla de volumen.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar regla de volumen.");
             console.error(err);
         }
     });

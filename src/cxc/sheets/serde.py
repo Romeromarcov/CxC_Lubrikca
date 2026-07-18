@@ -20,6 +20,7 @@ from ..models import (
     DescuentoAplicado,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoVolumen,
     EstadoBandeja,
     EstadoVinculacion,
     Feriado,
@@ -276,6 +277,28 @@ def promocion_from_row(r: Mapping[str, str]) -> PromocionPrimeraCompra:
         vigencia_desde=p_date(r["vigencia_desde"]),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- DescuentosVolumen --------------------------------------------------------
+def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
+    return {
+        "regla_id": d.regla_id,
+        "marca": d.marca,
+        "categoria": d.categoria,
+        "litros_minimo": str(d.litros_minimo),
+        "porcentaje": str(d.porcentaje),
+        "activo": s_bool(d.activo)
+    }
+
+def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
+    return DescuentoVolumen(
+        regla_id=r["regla_id"],
+        marca=r.get("marca", "*"),
+        categoria=r.get("categoria", "*"),
+        litros_minimo=p_dec(r.get("litros_minimo", "0")),
+        porcentaje=p_dec(r.get("porcentaje", "0")),
+        activo=p_bool(r.get("activo", "TRUE"))
     )
 
 

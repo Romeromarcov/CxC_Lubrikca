@@ -80,3 +80,22 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                 
         self._cache[clave] = precio
         return precio
+
+    def volumen(self, producto: str) -> Decimal:
+        clave = (producto, "volumen")
+        if clave in self._cache:
+            return self._cache[clave]
+            
+        prod = self._execute(
+            "product.template",
+            "read",
+            [int(producto)],
+            ["product_volume"]
+        )
+        if prod:
+            vol = to_decimal(str(prod[0].get("product_volume") or "0.0"))
+        else:
+            vol = Decimal("0.0")
+            
+        self._cache[clave] = vol
+        return vol

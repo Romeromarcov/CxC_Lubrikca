@@ -16,6 +16,7 @@ from ..models import (
     Conciliacion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoVolumen,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -141,6 +142,11 @@ class SheetsRepository(Repository):
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         return [
             serde.descuento_from_row(r) for r in self._g.read_rows(g.T_DESCUENTOS)
+        ]
+
+    def descuentos_volumen(self) -> list[DescuentoVolumen]:
+        return [
+            serde.desc_volumen_from_row(r) for r in self._g.read_rows("DescuentosVolumen")
         ]
 
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
