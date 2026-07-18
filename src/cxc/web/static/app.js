@@ -137,10 +137,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     let amountHtml = "";
                     if (p.moneda === "VES") {
                         amountHtml = `
-                            <span class="p-amount text-ves" style="font-size: 0.9rem; text-align: right; line-height: 1.3;">
+                            <span class="p-amount text-ves" style="font-size: 0.9rem; text-align: right; line-height: 1.35;">
                                 VES ${p.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
-                                <span style="font-size: 0.75rem; font-weight: normal; color: #64748b; display: block;">
-                                    ~ ${fmt(p.equiv_usd_binance)} USD
+                                <span style="font-size: 0.72rem; font-weight: normal; color: #059669; display: block;">
+                                    BCV: ~ ${fmt(p.equiv_usd_bcv)} USD
+                                </span>
+                                <span style="font-size: 0.72rem; font-weight: normal; color: #d97706; display: block;">
+                                    Binance: ~ ${fmt(p.equiv_usd_binance)} USD
                                 </span>
                             </span>`;
                     } else {
