@@ -239,23 +239,44 @@
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <div id="tab-config" class="tab-panel">
             <div class="config-grid">
-                <!-- Ajustes Generales del Motor -->
+                <!-- Días Feriados -->
                 <section class="config-card card">
                     <div class="panel-header">
-                        <h2>Ajustes Generales del Motor</h2>
-                        <p>Configura las variables globales del motor de cobranza en Google Sheets</p>
+                        <h2>Días Feriados y No Laborables</h2>
+                        <p>Registra feriados locales para el cálculo correcto del vencimiento de pronto pago</p>
                     </div>
-                    <form id="settings-form" class="cxc-form">
-                        <div class="form-group">
-                            <label>Días de Gracia (Pronto Pago)</label>
-                            <input type="number" id="cfg-meta-days" min="1" required placeholder="Ej: 3">
+
+                    <form id="feriado-form" class="cxc-form">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>Fecha del Feriado</label>
+                                <input type="date" id="cfg-feriado-fecha" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Descripción / Motivo</label>
+                                <input type="text" id="cfg-feriado-desc" required placeholder="Ej: Semana Santa">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Descuento Recompra (Recurrencia %)</label>
-                            <input type="number" id="cfg-meta-recompra" step="0.01" min="0" max="1" required placeholder="Ej: 0.05">
-                        </div>
-                        <button type="submit" class="btn-primary">Guardar Ajustes Generales</button>
+                        <button type="submit" class="btn-primary">Registrar Feriado</button>
                     </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Feriados Registrados</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Descripción</th>
+                                    <th>Tipo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="feriados-table-body">
+                                <tr>
+                                    <td colspan="3" class="table-empty">Cargando feriados...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </section>
 
                 <!-- Tasas de Cambio -->
@@ -296,46 +317,6 @@
                             <tbody id="tasas-table-body">
                                 <tr>
                                     <td colspan="4" class="table-empty">Cargando tasas...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- Días Feriados -->
-                <section class="config-card card">
-                    <div class="panel-header">
-                        <h2>Días Feriados y No Laborables</h2>
-                        <p>Registra feriados locales para el cálculo correcto del vencimiento de pronto pago</p>
-                    </div>
-
-                    <form id="feriado-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group">
-                                <label>Fecha del Feriado</label>
-                                <input type="date" id="cfg-feriado-fecha" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Descripción / Motivo</label>
-                                <input type="text" id="cfg-feriado-desc" required placeholder="Ej: Semana Santa">
-                            </div>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Feriado</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Feriados Registrados</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>Fecha</th>
-                                    <th>Descripción</th>
-                                    <th>Tipo</th>
-                                </tr>
-                            </thead>
-                            <tbody id="feriados-table-body">
-                                <tr>
-                                    <td colspan="3" class="table-empty">Cargando feriados...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -387,6 +368,25 @@
                             </tbody>
                         </table>
                     </div>
+                </section>
+
+                <!-- Ajustes Generales del Motor -->
+                <section class="config-card card">
+                    <div class="panel-header">
+                        <h2>Ajustes Generales del Motor</h2>
+                        <p>Configura las variables globales del motor de cobranza en Google Sheets</p>
+                    </div>
+                    <form id="settings-form" class="cxc-form">
+                        <div class="form-group">
+                            <label>Días de Gracia (Pronto Pago)</label>
+                            <input type="number" id="cfg-meta-days" min="1" required placeholder="Ej: 3">
+                        </div>
+                        <div class="form-group">
+                            <label>Descuento Recompra (Recurrencia %)</label>
+                            <input type="number" id="cfg-meta-recompra" step="0.01" min="0" max="1" required placeholder="Ej: 0.05">
+                        </div>
+                        <button type="submit" class="btn-primary">Guardar Ajustes Generales</button>
+                    </form>
                 </section>
 
                 <!-- Reglas de Descuentos Comerciales -->
