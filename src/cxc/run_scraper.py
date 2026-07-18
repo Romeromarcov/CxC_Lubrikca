@@ -37,7 +37,10 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
         build_alerter(config.alert),
         config.scraper_policy,
     )
-    fila = scraper.run(datetime.now())
+    from datetime import timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    now_caracas = (now_utc - timedelta(hours=4)).replace(tzinfo=None)
+    fila = scraper.run(now_caracas)
     logging.getLogger("cxc").info(
         "SerieTasas += %s (bcv=%s binance=%s heredada=%s)",
         fila.timestamp, fila.tasa_bcv, fila.tasa_binance, fila.es_heredada,

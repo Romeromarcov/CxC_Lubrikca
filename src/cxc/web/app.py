@@ -169,7 +169,10 @@ async def run_scraper_in_background():
                 build_alerter(config.alert),
                 config.scraper_policy,
             )
-            fila = scraper.run(datetime.now())
+            from datetime import timezone, timedelta
+            now_utc = datetime.now(timezone.utc)
+            now_caracas = (now_utc - timedelta(hours=4)).replace(tzinfo=None)
+            fila = scraper.run(now_caracas)
             print(f"FastAPI Daemon: Tasas de cambio actualizadas. BCV: {fila.tasa_bcv}, Binance: {fila.tasa_binance}")
         except Exception as e:
             print(f"Error en daemon de scraping de tasas: {e}", file=sys.stderr)
