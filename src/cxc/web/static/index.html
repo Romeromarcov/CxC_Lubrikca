@@ -327,26 +327,84 @@
                 <section class="config-card card">
                     <div class="panel-header">
                         <h2>Promociones de Primera Compra</h2>
-                        <p>Define qué producto se regala y las fechas de vigencia de la promoción</p>
+                        <p>Configura productos de obsequio, descuentos fallback, compra mínima y categorías aplicables</p>
                     </div>
 
                     <form id="promo-form" class="cxc-form">
+                        <!-- Tipo de beneficio -->
                         <div class="form-group">
-                            <label>Producto de Regalo</label>
-                            <select id="cfg-promo-producto" required>
-                                <option value="">Seleccione un producto...</option>
+                            <label>Tipo de Beneficio</label>
+                            <select id="cfg-promo-tipo-beneficio" required>
+                                <option value="producto">Obsequio de Producto (99.99% descuento)</option>
+                                <option value="porcentaje">Descuento Porcentual (ej. 2%)</option>
                             </select>
                         </div>
+
+                        <!-- Productos de regalo (solo visible si tipo=producto) -->
+                        <div id="promo-productos-section" class="form-group">
+                            <label>Productos de Obsequio <small style="color:var(--text-muted)">(selecciona uno o varios; Ctrl+clic para múltiples)</small></label>
+                            <select id="cfg-promo-productos" multiple style="min-height:90px">
+                            </select>
+                            <small style="color:var(--text-muted); margin-top:4px; display:block">
+                                Productos seleccionados: <span id="promo-productos-count">0</span>
+                            </small>
+                        </div>
+
+                        <!-- Modo de entrega (solo visible si tipo=producto y hay varios productos) -->
+                        <div id="promo-regalo-tipo-section" class="form-group">
+                            <label>Modo de Entrega del Obsequio</label>
+                            <select id="cfg-promo-regalo-tipo">
+                                <option value="solo_uno">Solo uno del catálogo (cliente elige)</option>
+                                <option value="conjunto">Todos juntos (conjunto completo)</option>
+                            </select>
+                        </div>
+
+                        <!-- Valor (pct, visible si tipo=porcentaje) -->
+                        <div id="promo-porcentaje-section" class="form-group" style="display:none">
+                            <label>Porcentaje de Descuento (ej. 0.02 = 2%)</label>
+                            <input type="number" id="cfg-promo-valor" step="0.0001" min="0" max="1" placeholder="Ej: 0.02">
+                        </div>
+
+                        <!-- Condición de compra mínima + fallback -->
                         <div class="form-group-row">
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1">
+                                <label>Compra Mínima (und. Comercial para recibir el obsequio)</label>
+                                <input type="number" id="cfg-promo-compra-minima" min="0" step="1" value="3" placeholder="Ej: 3">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Descuento Fallback si no alcanza mínimo (%)</label>
+                                <input type="number" id="cfg-promo-fallback" step="0.0001" min="0" max="1" value="0.02" placeholder="Ej: 0.02 = 2%">
+                            </div>
+                        </div>
+
+                        <!-- Categorías que califican -->
+                        <div class="form-group">
+                            <label>Categorías que califican para la promoción</label>
+                            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:6px">
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+                                    <input type="checkbox" id="cat-comercial" value="Comercial" checked> Comercial
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+                                    <input type="checkbox" id="cat-industrial" value="Industrial"> Industrial
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+                                    <input type="checkbox" id="cat-todos" value="*"> Todas las categorías
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Fechas de vigencia -->
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
                                 <label>Fecha de Inicio</label>
                                 <input type="date" id="cfg-promo-desde" required>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" style="flex:1">
                                 <label>Fecha de Finalización</label>
                                 <input type="date" id="cfg-promo-hasta">
                             </div>
                         </div>
+
                         <button type="submit" class="btn-primary">Registrar Promoción</button>
                     </form>
 
@@ -355,20 +413,84 @@
                         <table class="cxc-table mini">
                             <thead>
                                 <tr>
-                                    <th>Producto</th>
-                                    <th>Fecha de Inicio</th>
-                                    <th>Fecha de Finalización</th>
+                                    <th>Tipo</th>
+                                    <th>Productos / Valor</th>
+                                    <th>Compra Mín.</th>
+                                    <th>Fallback</th>
+                                    <th>Categorías</th>
+                                    <th>Desde</th>
+                                    <th>Hasta</th>
                                     <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="promos-table-body">
                                 <tr>
-                                    <td colspan="4" class="table-empty">Cargando promociones...</td>
+                                    <td colspan="8" class="table-empty">Cargando promociones...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
+
+                <!-- Exclusiones Mutuas entre Descuentos/Promociones -->
+                <section class="config-card card">
+                    <div class="panel-header">
+                        <h2>Exclusiones Mutuas de Descuentos</h2>
+                        <p>Define pares de descuentos/promociones que no pueden aplicarse simultáneamente. Se aplica el de mayor valor.</p>
+                    </div>
+
+                    <form id="exclusion-form" class="cxc-form">
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Descuento A</label>
+                                <select id="cfg-excl-tipo-a" required>
+                                    <option value="">Seleccione...</option>
+                                    <option value="primera_compra">Primera Compra (obsequio/2%)</option>
+                                    <option value="recurrencia">Recompra (recurrencia)</option>
+                                    <option value="contado">Pronto Pago (contado)</option>
+                                    <option value="volumen">Volumen</option>
+                                    <option value="bcv_completo">Diferencial Cambiario BCV</option>
+                                </select>
+                            </div>
+                            <div style="display:flex;align-items:flex-end;padding-bottom:8px;font-size:1.2rem;color:var(--text-muted)">⟷</div>
+                            <div class="form-group" style="flex:1">
+                                <label>Descuento B (excluyente con A)</label>
+                                <select id="cfg-excl-tipo-b" required>
+                                    <option value="">Seleccione...</option>
+                                    <option value="primera_compra">Primera Compra (obsequio/2%)</option>
+                                    <option value="recurrencia">Recompra (recurrencia)</option>
+                                    <option value="contado">Pronto Pago (contado)</option>
+                                    <option value="volumen">Volumen</option>
+                                    <option value="bcv_completo">Diferencial Cambiario BCV</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Exclusión</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Exclusiones Configuradas</h3>
+                        <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:8px">
+                            Cuando ambos descuentos aplican a una orden, solo se tomará el de mayor valor monetario.
+                        </p>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Descuento A</th>
+                                    <th>↔</th>
+                                    <th>Descuento B</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="exclusiones-table-body">
+                                <tr>
+                                    <td colspan="4" class="table-empty">Cargando exclusiones...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
 
                 <!-- Ajustes Generales del Motor -->
                 <section class="config-card card">

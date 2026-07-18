@@ -72,10 +72,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Elements - Promociones Primera Compra
     const promoForm = document.getElementById("promo-form");
-    const cfgPromoProducto = document.getElementById("cfg-promo-producto");
+    const cfgPromoTipoBeneficio = document.getElementById("cfg-promo-tipo-beneficio");
+    const cfgPromoProductos = document.getElementById("cfg-promo-productos");
+    const cfgPromoProductosCount = document.getElementById("promo-productos-count");
+    const cfgPromoRegaloTipo = document.getElementById("cfg-promo-regalo-tipo");
+    const cfgPromoValor = document.getElementById("cfg-promo-valor");
+    const cfgPromoCompraMinima = document.getElementById("cfg-promo-compra-minima");
+    const cfgPromoFallback = document.getElementById("cfg-promo-fallback");
     const cfgPromoDesde = document.getElementById("cfg-promo-desde");
     const cfgPromoHasta = document.getElementById("cfg-promo-hasta");
     const promosTableBody = document.getElementById("promos-table-body");
+    const promoProductosSection = document.getElementById("promo-productos-section");
+    const promoRegaloTipoSection = document.getElementById("promo-regalo-tipo-section");
+    const promoPorcentajeSection = document.getElementById("promo-porcentaje-section");
+
+    // Elements - Exclusiones
+    const exclusionForm = document.getElementById("exclusion-form");
+    const cfgExclTipoA = document.getElementById("cfg-excl-tipo-a");
+    const cfgExclTipoB = document.getElementById("cfg-excl-tipo-b");
+    const excluisionesTableBody = document.getElementById("exclusiones-table-body");
 
     // Elements - Descuentos por Volumen
     const descuentoVolumenForm = document.getElementById("descuento-volumen-form");
@@ -539,6 +554,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadTasas();
         loadFeriados();
         loadPromociones();
+        loadExclusiones();
         loadDescuentosMarca();
         loadDescuentosVolumen();
         loadListasPrecio();
@@ -805,12 +821,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
 
                 // Populate promotions products select dropdown
-                cfgPromoProducto.innerHTML = '<option value="">Seleccione un producto...</option>';
+                cfgPromoProductos.innerHTML = '';
                 data.forEach(p => {
                     const opt = document.createElement("option");
                     opt.value = p.id;
                     opt.textContent = `[${p.ref_interna}] ${p.nombre}`;
-                    cfgPromoProducto.appendChild(opt);
+                    cfgPromoProductos.appendChild(opt);
                 });
             }
         } catch (err) {
@@ -939,22 +955,50 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // Promo tipo beneficio toggle
+    cfgPromoTipoBeneficio.addEventListener("change", () => {
+        const isProducto = cfgPromoTipoBeneficio.value === "producto";
+        promoProductosSection.style.display = isProducto ? "" : "none";
+        promoRegaloTipoSection.style.display = isProducto ? "" : "none";
+        promoPorcentajeSection.style.display = isProducto ? "none" : "";
+    });
+
+    // Update product count display
+    cfgPromoProductos.addEventListener("change", () => {
+        cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
+    });
+
     // Load Promociones Primera Compra
+    const TIPO_LABELS = {
+        "primera_compra": "Primera Compra", "recurrencia": "Recompra",
+        "contado": "Pronto Pago", "volumen": "Volumen", "bcv_completo": "Diferencial BCV"
+    };
+
     async function loadPromociones() {
         try {
-            promosTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando promociones...</td></tr>';
+            promosTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando promociones...</td></tr>';
             const res = await fetch("/api/config/promociones");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    promosTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay promociones registradas.</td></tr>';
+                    promosTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay promociones registradas.</td></tr>';
                     return;
                 }
                 promosTableBody.innerHTML = "";
                 data.forEach(p => {
                     const row = document.createElement("tr");
+                    const tipoLabel = p.tipo_beneficio === "producto" ? "🎁 Obsequio" : "💲 Porcentaje";
+                    const valorLabel = p.tipo_beneficio === "producto"
+                        ? p.productos
+                        : (parseFloat(p.valor) * 100).toFixed(2) + "%";
+                    const fallbackPct = parseFloat(p.descuento_fallback || 0);
+                    const fallbackLabel = fallbackPct > 0 ? (fallbackPct * 100).toFixed(2) + "%" : "—";
                     row.innerHTML = `
-                        <td><strong>${p.producto}</strong></td>
+                        <td>${tipoLabel}</td>
+                        <td><strong>${valorLabel}</strong></td>
+                        <td>${p.compra_minima || "—"}</td>
+                        <td>${fallbackLabel}</td>
+                        <td>${p.categorias_aplica || "Comercial"}</td>
                         <td>${p.vigencia_desde}</td>
                         <td>${p.vigencia_hasta || "N/A"}</td>
                         <td><span class="semaphore ${p.activo ? 'verde' : 'rojo'}">${p.activo ? 'Activa' : 'Inactiva'}</span></td>
@@ -970,8 +1014,29 @@ document.addEventListener("DOMContentLoaded", () => {
     // Save Promotion Rule
     promoForm.addEventListener("submit", async (e) => {
         e.preventDefault();
+        const tipoBenef = cfgPromoTipoBeneficio.value;
+        const productosSeleccionados = tipoBenef === "producto"
+            ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
+            : "";
+        const cats = ["cat-comercial", "cat-industrial", "cat-todos"]
+            .map(id => document.getElementById(id))
+            .filter(cb => cb && cb.checked)
+            .map(cb => cb.value);
+        const categoriasAplica = cats.includes("*") ? "*" : cats.join(",") || "Comercial";
+
+        if (tipoBenef === "producto" && productosSeleccionados === "") {
+            alert("⚠️ Selecciona al menos un producto de obsequio.");
+            return;
+        }
+
         const payload = {
-            producto: cfgPromoProducto.value,
+            tipo_beneficio: tipoBenef,
+            productos: productosSeleccionados,
+            valor: tipoBenef === "porcentaje" ? parseFloat(cfgPromoValor.value || 0) : 1,
+            compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
+            descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
+            regalo_tipo: cfgPromoRegaloTipo.value,
+            categorias_aplica: categoriasAplica,
             vigencia_desde: cfgPromoDesde.value,
             vigencia_hasta: cfgPromoHasta.value || null
         };
@@ -984,15 +1049,79 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 alert("✅ Promoción registrada exitosamente.");
                 promoForm.reset();
+                cfgPromoProductosCount.textContent = "0";
                 loadPromociones();
             } else {
-                alert("❌ Error al registrar la promoción.");
+                const err = await res.json();
+                alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
             }
         } catch (err) {
             alert("❌ Error de red al registrar promoción.");
             console.error(err);
         }
     });
+
+    // Load Exclusiones
+    async function loadExclusiones() {
+        try {
+            excluisionesTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando exclusiones...</td></tr>';
+            const res = await fetch("/api/config/exclusiones");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    excluisionesTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay exclusiones configuradas.</td></tr>';
+                    return;
+                }
+                excluisionesTableBody.innerHTML = "";
+                data.forEach(exc => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${TIPO_LABELS[exc.regla_tipo_a] || exc.regla_tipo_a}</strong></td>
+                        <td style="text-align:center">⟷</td>
+                        <td><strong>${TIPO_LABELS[exc.regla_tipo_b] || exc.regla_tipo_b}</strong></td>
+                        <td><span class="semaphore ${exc.activo ? 'verde' : 'rojo'}">${exc.activo ? 'Activa' : 'Inactiva'}</span></td>
+                    `;
+                    excluisionesTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Save Exclusion Rule
+    exclusionForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (cfgExclTipoA.value === cfgExclTipoB.value) {
+            alert("⚠️ Los dos descuentos no pueden ser el mismo tipo.");
+            return;
+        }
+        const payload = {
+            regla_tipo_a: cfgExclTipoA.value,
+            regla_tipo_b: cfgExclTipoB.value,
+            activo: true
+        };
+        try {
+            const res = await fetch("/api/config/exclusiones", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                alert("✅ Exclusión registrada correctamente.");
+                exclusionForm.reset();
+                loadExclusiones();
+            } else {
+                const err = await res.json();
+                alert("❌ Error: " + (err.detail || "Error al registrar la exclusión."));
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar exclusión.");
+            console.error(err);
+        }
+    });
+
+
 
     // Load Volume Discount Rules
     async function loadDescuentosVolumen() {

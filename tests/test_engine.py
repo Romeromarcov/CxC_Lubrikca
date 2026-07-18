@@ -364,7 +364,8 @@ def test_primera_compra_solo_unidades_comerciales_califican() -> None:
         resolver=_resolver(**{"P1@BCV": "50", "P2@BCV": "50"}),
     )
     res = calcular_factura(inp)
-    assert res.ncs_calculadas == Decimal("0.00")  # No NC since 2 < 3 threshold
+    # Falls back to 2% since 2 < 3 Comercial units threshold. 2% of 150 = 3.00
+    assert res.ncs_calculadas == Decimal("3.00")
 
 
 def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
@@ -379,6 +380,26 @@ def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
     )
     res = calcular_factura(inp)
     assert res.ncs_calculadas == Decimal("0.00")
+
+
+def test_primera_compra_industrial_sin_promos_aplica_2pct() -> None:
+    # First purchase with Industrial products and no active promo should get 2% discount on Industrial lines
+    orden = b.orden(primera=True, lista="BCV")
+    linea_ind = b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial", precio="150", cantidad="1")
+    linea_com = b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_ind, linea_com],
+        abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),  # no promos configured
+    )
+    res = calcular_factura(inp)
+    # Should get 2% of Industrial line (150) = 3.00 NC (nothing on Comercial line)
+    assert res.ncs_calculadas == Decimal("3.00")
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "primera_compra" in origenes
 
 
 def test_orden_con_devolucion_requiere_revision() -> None:

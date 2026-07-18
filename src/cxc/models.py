@@ -200,6 +200,8 @@ class PromocionPrimeraCompra:
     regalo_tipo: str  # "conjunto" o "solo_uno"
     vigencia_desde: date
     vigencia_hasta: date | None = None
+    descuento_fallback: Decimal = Decimal("0")
+    categorias_aplica: str = "Comercial"
     activo: bool = True
 
 

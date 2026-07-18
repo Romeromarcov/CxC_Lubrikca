@@ -76,9 +76,20 @@ class MetaRequest(BaseModel):
     descuento_recompra: float
 
 class PromocionRequest(BaseModel):
-    producto: str
-    vigencia_desde: str
+    tipo_beneficio: str = "producto"       # 'producto' | 'porcentaje'
+    productos: str = ""                    # CSV de SKUs de regalo
+    valor: float = 1.0                     # cantidad o pct (0.02 = 2%)
+    compra_minima: float = 0.0             # unidades Comercial mínimas para el regalo
+    descuento_fallback: float = 0.0        # pct si no alcanza compra_minima
+    regalo_tipo: str = "solo_uno"          # 'solo_uno' | 'conjunto'
+    categorias_aplica: str = "Comercial"   # CSV de categorías que califican
+    vigencia_desde: str = ""
     vigencia_hasta: str | None = None
+    activo: bool = True
+
+class ExclusionRequest(BaseModel):
+    regla_tipo_a: str
+    regla_tipo_b: str
     activo: bool = True
 
 class DescuentoVolumenRequest(BaseModel):
@@ -832,6 +843,21 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
         
+        # Check date overlap with active rules of same type, brand, category, list
+        existing = repo.descuentos_marca_categoria()
+        for r in existing:
+            if r.activo and r.tipo_descuento == req.tipo_descuento:
+                if r.marca == req.marca and r.categoria == req.categoria:
+                    lists_overlap = (r.listas_aplicables == "*" or req.listas_aplicables == "*" or r.listas_aplicables == req.listas_aplicables)
+                    if lists_overlap:
+                        h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
+                        h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
+                        if max(v_desde, r.vigencia_desde) <= min(h1, h2):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Conflicto: ya existe la regla activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'}) para esta marca/categoría/lista."
+                            )
+
         regla_id = f"REG_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoMarcaCategoria(
             regla_id=regla_id,
@@ -1183,7 +1209,14 @@ async def get_config_promociones():
         promos = repo.promociones_primera_compra()
         return [
             {
-                "producto": p.producto,
+                "regla_id": p.regla_id,
+                "tipo_beneficio": p.tipo_beneficio,
+                "productos": p.productos,
+                "valor": str(p.valor),
+                "compra_minima": str(p.compra_minima),
+                "descuento_fallback": str(getattr(p, 'descuento_fallback', '0')),
+                "regalo_tipo": p.regalo_tipo,
+                "categorias_aplica": getattr(p, 'categorias_aplica', 'Comercial'),
                 "vigencia_desde": p.vigencia_desde.isoformat(),
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
                 "activo": p.activo
@@ -1199,18 +1232,74 @@ async def post_config_promociones(req: PromocionRequest):
         repo = get_repo()
         from cxc.models import PromocionPrimeraCompra
         from cxc.sheets import serde, gateway as g
-        
+
         v_desde = date.fromisoformat(req.vigencia_desde)
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
-        
+
+        # Check date overlap with active first purchase promos
+        existing = repo.promociones_primera_compra()
+        for r in existing:
+            if r.activo:
+                h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
+                h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
+                if max(v_desde, r.vigencia_desde) <= min(h1, h2):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Conflicto: ya existe la promoción activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'})."
+                    )
+
+        regla_id = f"PROMO_{uuid.uuid4().hex[:8].upper()}"
+
         promo = PromocionPrimeraCompra(
-            producto=req.producto,
+            regla_id=regla_id,
+            tipo_beneficio=req.tipo_beneficio,
+            productos=req.productos,
+            valor=Decimal(str(req.valor)),
+            compra_minima=Decimal(str(req.compra_minima)),
+            regalo_tipo=req.regalo_tipo,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
+            descuento_fallback=Decimal(str(req.descuento_fallback)),
+            categorias_aplica=req.categorias_aplica,
             activo=req.activo
         )
-        repo._g.append_row(g.T_PROMO_PRIMERA, serde.promocion_to_row(promo))
+        row = serde.promocion_to_row(promo)
+        repo._g.append_row(g.T_PROMO_PRIMERA, row)
         return {"status": "success", "message": "Promoción registrada correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/exclusiones")
+async def get_config_exclusiones():
+    try:
+        repo = get_repo()
+        excls = repo.exclusiones()
+        return [
+            {
+                "regla_tipo_a": e.regla_tipo_a,
+                "regla_tipo_b": e.regla_tipo_b,
+                "activo": e.activo
+            } for e in excls
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/exclusiones")
+async def post_config_exclusiones(req: ExclusionRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import ExclusionRegla
+        rule = ExclusionRegla(
+            regla_tipo_a=req.regla_tipo_a,
+            regla_tipo_b=req.regla_tipo_b,
+            activo=req.activo
+        )
+        repo.save_exclusion(rule)
+        return {"status": "success", "message": "Exclusión registrada correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1247,7 +1336,21 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
-        
+
+        # Check date overlap with active volume rules of same brand, category, list
+        existing = repo.descuentos_volumen()
+        for r in existing:
+            if r.activo and r.marca == req.marca and r.categoria == req.categoria:
+                lists_overlap = (r.listas_aplicables == "*" or req.listas_aplicables == "*" or r.listas_aplicables == req.listas_aplicables)
+                if lists_overlap:
+                    h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
+                    h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
+                    if max(v_desde, r.vigencia_desde) <= min(h1, h2):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Conflicto: ya existe la regla de volumen activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'}) para esta marca/categoría/lista."
+                        )
+
         regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoVolumen(
             regla_id=regla_id,
