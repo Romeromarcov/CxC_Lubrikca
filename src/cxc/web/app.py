@@ -1681,10 +1681,10 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
             "DescuentosProntoPago": ["DescuentosProntoPago", "DescuentosMarcaCategoria"],
             "DescuentosRecompra": ["DescuentosRecompra", "ReglasRecurrencia"],
             "DescuentosProducto": ["DescuentosProducto", "PromocionesPrimeraCompra"],
-            "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentosBCVCompleto"],
+            "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentoBCVCompleto"],
         }
         
-        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla, "DescuentosProntoPago", "DescuentosMarcaCategoria", "ReglasRecurrencia", "PromocionesPrimeraCompra"])
+        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla, "DescuentosProntoPago", "DescuentosMarcaCategoria", "DescuentosRecompra", "DescuentosProducto", "DescuentosDiferencialCambiario"])
         target_id_str = str(req.regla_id).strip()
 
         # Handle GspreadGateway (Real Google Sheets)
@@ -1731,6 +1731,41 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
                             "status": "success",
                             "message": f"Estado de la regla {target_id_str} actualizado a {'Activo' if req.activo else 'Inactivo'}."
                         }
+
+        # If not found in Sheet, handle Default Fallback Rules by persisting them into Google Sheets
+        DEFAULT_RULES_SEED = {
+            "RECOMPRA_DEFAULT": ("DescuentosRecompra", {
+                "regla_id": "RECOMPRA_DEFAULT", "porcentaje": "0.05", "max_usos_mes": "2",
+                "dias_ventana": "30", "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
+                "activo": "TRUE" if req.activo else "FALSE"
+            }),
+            "DIF_35_VES": ("DescuentosDiferencialCambiario", {
+                "regla_id": "DIF_35_VES", "nombre": "35% Fijo VES a USD", "tipo_diferencial": "fijo_35_ves_usd",
+                "tipo_calculo": "fijo", "porcentaje_fijo": "0.35", "monedas_aplicables": "*", "listas_aplicables": "*",
+                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
+                "activo": "TRUE" if req.activo else "FALSE"
+            }),
+            "DIF_EQUIPARAR": ("DescuentosDiferencialCambiario", {
+                "regla_id": "DIF_EQUIPARAR", "nombre": "Equiparar Binance N/C", "tipo_diferencial": "equiparar_binance",
+                "tipo_calculo": "variable", "porcentaje_fijo": "0", "monedas_aplicables": "*", "listas_aplicables": "*",
+                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
+                "activo": "TRUE" if req.activo else "FALSE"
+            }),
+            "DIF_BRECHA_CIERRE": ("DescuentosDiferencialCambiario", {
+                "regla_id": "DIF_BRECHA_CIERRE", "nombre": "Brecha BCV vs Binance Cierre", "tipo_diferencial": "diferencial_bcv_binance",
+                "tipo_calculo": "variable", "porcentaje_fijo": "0", "monedas_aplicables": "*", "listas_aplicables": "*",
+                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
+                "activo": "TRUE" if req.activo else "FALSE"
+            }),
+        }
+
+        if target_id_str in DEFAULT_RULES_SEED:
+            target_table, seed_row = DEFAULT_RULES_SEED[target_id_str]
+            repo._g.append_row(target_table, seed_row)
+            return {
+                "status": "success",
+                "message": f"Regla por defecto {target_id_str} registrada y actualizada a {'Activo' if req.activo else 'Inactivo'}."
+            }
 
         raise HTTPException(status_code=404, detail=f"Regla '{target_id_str}' no encontrada en Google Sheets.")
     except HTTPException:
