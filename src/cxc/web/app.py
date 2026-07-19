@@ -2,12 +2,15 @@ import os
 import sys
 import json
 import asyncio
+import logging
 from datetime import datetime, date
 from decimal import Decimal
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger("cxc.web.app")
 
 # Reconfigure stdout to use UTF-8
 if sys.version_info >= (3, 7):
@@ -1681,35 +1684,19 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
             "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentosBCVCompleto"],
         }
         
-        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla])
+        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla, "DescuentosProntoPago", "DescuentosMarcaCategoria", "ReglasRecurrencia", "PromocionesPrimeraCompra"])
         target_id_str = str(req.regla_id).strip()
 
         # Handle GspreadGateway (Real Google Sheets)
         if hasattr(repo._g, "_sh"):
-            sh = repo._g._sh
-            try:
-                all_worksheets = sh.worksheets()
-                all_ws_names = [w.title for w in all_worksheets]
-            except Exception:
-                all_ws_names = candidate_names
-
-            ordered_ws_names = []
-            for name in candidate_names:
-                if name in all_ws_names and name not in ordered_ws_names:
-                    ordered_ws_names.append(name)
-            for name in all_ws_names:
-                if name not in ordered_ws_names:
-                    ordered_ws_names.append(name)
-
-            for w_name in ordered_ws_names:
+            for w_name in candidate_names:
                 try:
-                    ws = sh.worksheet(w_name)
+                    ws = repo._g._ws(w_name)
                     values = ws.get_all_values()
                     if not values or len(values) < 2:
                         continue
                     
                     headers = [str(h).strip().lower() for h in values[0]]
-                    
                     activo_col_idx = None
                     for idx, h in enumerate(headers):
                         if h in ("activo", "active", "estado"):
