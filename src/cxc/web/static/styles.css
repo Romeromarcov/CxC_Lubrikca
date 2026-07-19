@@ -224,7 +224,7 @@ body {
 .kpi-panel {
     grid-column: 1 / span 2;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 1.5rem;
 }
 
@@ -522,11 +522,14 @@ body {
     color: hsl(var(--text-secondary));
 }
 
-/* Configuración Grid */
+/* Configuración Layout */
 .config-grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 1.5rem;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .mini-table-wrapper {
