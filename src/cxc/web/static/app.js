@@ -821,17 +821,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
 
                 // Populate promotions products select dropdown
-                cfgPromoProductos.innerHTML = '';
-                data.forEach(p => {
-                    const opt = document.createElement("option");
-                    opt.value = p.id;
-                    opt.textContent = `[${p.ref_interna}] ${p.nombre}`;
-                    cfgPromoProductos.appendChild(opt);
-                });
+                if (cfgPromoProductos) {
+                    cfgPromoProductos.innerHTML = '';
+                    data.forEach(p => {
+                        const opt = document.createElement("option");
+                        opt.value = p.nombre || p.ref_interna || p.id;
+                        opt.textContent = `[${p.ref_interna || 'N/A'}] ${p.nombre}`;
+                        cfgPromoProductos.appendChild(opt);
+                    });
+                }
+            } else {
+                productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No se pudieron cargar los productos desde Odoo (Servidor retornó error).</td></tr>';
             }
         } catch (err) {
             productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
-            console.error(err);
+            console.error("Error al cargar productos de Odoo:", err);
         }
     }
 

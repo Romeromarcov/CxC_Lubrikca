@@ -373,11 +373,18 @@ body {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    min-width: 0;
 }
 
 .form-group-row {
     display: flex;
     gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.form-group-row > .form-group {
+    flex: 1 1 180px;
+    min-width: 0;
 }
 
 .form-group label {
@@ -397,7 +404,15 @@ body {
     font-family: inherit;
     font-size: 0.85rem;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-group select option {
+    background: #ffffff;
+    color: #0f172a;
+    padding: 4px;
 }
 
 .form-group input[readonly] {
