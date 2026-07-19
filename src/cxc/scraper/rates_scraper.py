@@ -79,19 +79,21 @@ class RatesScraper:
                     tb = Decimal(str(r.get("tasa_binance", "0")))
                     if tb > Decimal("0"):
                         diario_rates.append(tb)
-                        ts_hour = int(r.get("timestamp", "00:00").split("T")[-1].split(" ")[-1].split(":")[0])
-                        if ts_hour < 12:
+                        ts_str = str(r.get("timestamp", "00:00"))
+                        time_part = ts_str.split("T")[-1].split(" ")[-1]
+                        ts_hour = int(time_part.split(":")[0])
+                        if 6 <= ts_hour <= 9:
                             manana_rates.append(tb)
-                        else:
+                        elif 10 <= ts_hour <= 13:
                             tarde_rates.append(tb)
                 except:
                     pass
 
             if fila.tasa_binance > Decimal("0"):
                 diario_rates.append(fila.tasa_binance)
-                if now.hour < 12:
+                if 6 <= now.hour <= 9:
                     manana_rates.append(fila.tasa_binance)
-                else:
+                elif 10 <= now.hour <= 13:
                     tarde_rates.append(fila.tasa_binance)
 
             avg = lambda lst: sum(lst) / Decimal(str(len(lst))) if lst else None

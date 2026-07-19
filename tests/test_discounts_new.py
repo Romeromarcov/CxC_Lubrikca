@@ -103,8 +103,12 @@ def test_rates_scraper_run():
     
     repo = DummyRepo()
     scraper = RatesScraper(repo, DummyBinance(), DummyBCV(), ScraperPolicy(fail_alert_threshold=3), LoggingAlerter())
-    now = datetime(2026, 1, 1, 10, 0, 0)
+    now = datetime(2026, 1, 1, 9, 0, 0)
     fila = scraper.run(now)
     assert fila.tasa_binance == Decimal("38.5")
     assert fila.tasa_binance_manana == Decimal("38.5")
     assert fila.diferencial_bcv_binance_pct is not None
+
+    now_tarde = datetime(2026, 1, 1, 11, 0, 0)
+    fila_tarde = scraper.run(now_tarde)
+    assert fila_tarde.tasa_binance_tarde == Decimal("38.5")

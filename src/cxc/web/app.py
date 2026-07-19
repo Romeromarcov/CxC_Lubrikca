@@ -1738,14 +1738,15 @@ async def get_tasas_promedios():
                     time_part = ts_str.split("T")[-1].split(" ")[-1]
                     ts_hour = int(time_part.split(":")[0])
                     
+                    if 6 <= ts_hour <= 9:
+                        manana_near_9.append(tb)
+                    elif 10 <= ts_hour <= 13:
+                        tarde_near_13.append(tb)
+                    
                     if ts_hour < 12:
                         manana_all.append(tb)
-                        if 8 <= ts_hour <= 10:
-                            manana_near_9.append(tb)
                     else:
                         tarde_all.append(tb)
-                        if 12 <= ts_hour <= 14:
-                            tarde_near_13.append(tb)
 
                 t_bcv = Decimal(str(r.get("tasa_bcv", "0")))
                 if t_bcv > Decimal("0"):
