@@ -141,6 +141,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (targetTab === "tab-dashboard") {
                 loadKPIs();
                 loadBandeja();
+                loadTasasPromedios();
             } else if (targetTab === "tab-reporte") {
                 loadReporte();
             } else if (targetTab === "tab-conciliaciones") {
@@ -959,7 +960,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 tipo_calculo: document.getElementById("cfg-dif-tipo-calculo").value,
                 porcentaje_fijo: parseFloat(document.getElementById("cfg-dif-porcentaje-fijo").value || 0),
                 monedas_aplicables: document.getElementById("cfg-dif-monedas").value,
-                listas_aplicables: "*",
+                listas_aplicables: document.getElementById("cfg-dif-listas") ? document.getElementById("cfg-dif-listas").value : "*",
                 vigencia_desde: document.getElementById("cfg-dif-desde").value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-dif-hasta").value || null,
                 activo: true
@@ -1059,11 +1060,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 tasasTableBody.innerHTML = "";
                 data.forEach(t => {
                     const row = document.createElement("tr");
+                    const diffBs = t.diferencia_bs !== undefined ? t.diferencia_bs : (t.tasa_binance - t.tasa_bcv);
+                    const diffPct = t.diferencia_pct !== undefined ? t.diferencia_pct : (t.tasa_binance > 0 ? ((diffBs / t.tasa_binance) * 100) : 0);
                     row.innerHTML = `
                         <td>${t.timestamp}</td>
                         <td><strong>${t.tasa_bcv.toFixed(4)} Bs</strong></td>
                         <td><strong>${t.tasa_binance.toFixed(4)} Bs</strong></td>
-                        <td>${t.fuente}</td>
+                        <td><strong style="color: #d97706">+Bs. ${diffBs.toFixed(2)} (${diffPct.toFixed(1)}%)</strong></td>
                     `;
                     tasasTableBody.appendChild(row);
                 });
@@ -1264,12 +1267,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("diferencial-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando reglas de diferencial...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reglas de diferencial...</td></tr>';
             const res = await fetch("/api/config/descuentos-diferencial-cambiario");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
@@ -1288,15 +1291,16 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><span class="state-badge">${r.tipo_calculo}</span></td>
                         <td><strong>${(r.porcentaje_fijo * 100).toFixed(1)}%</strong></td>
                         <td><span class="state-badge">${r.monedas_aplicables}</span></td>
+                        <td><span class="state-badge">${r.listas_aplicables || '*'}</span></td>
                         <td><small>Desde: ${r.vigencia_desde}</small></td>
                         <td></td>
                     `;
-                    row.children[7].appendChild(statusBtn);
+                    row.children[8].appendChild(statusBtn);
                     tbody.appendChild(row);
                 });
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
         }
     }
 
@@ -1373,8 +1377,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     prodSel.innerHTML = "";
                     prods.forEach(p => {
                         const opt = document.createElement("option");
-                        opt.value = p.default_code || p.id;
-                        opt.textContent = `[${p.default_code || p.id}] ${p.name}`;
+                        const code = (p.ref_interna && p.ref_interna !== "N/A") ? p.ref_interna : (p.default_code || p.id);
+                        const name = p.nombre || p.name || `Producto ${p.id}`;
+                        opt.value = code;
+                        opt.textContent = `[${code}] ${name}`;
                         prodSel.appendChild(opt);
                     });
                 }

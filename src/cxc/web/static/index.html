@@ -59,6 +59,37 @@
                     </div>
                 </section>
 
+                <!-- Promedios de Tasa Binance y Diferencial BCV -->
+                <section class="card" style="margin-bottom:1.5rem">
+                    <div class="panel-header">
+                        <h2>Promedios de Tasa Binance & Brecha BCV</h2>
+                        <p>Cálculo automático de promedios turno mañana (9:00 AM), tarde (1:00 PM), día completo y % de diferencial BCV vs. Binance</p>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem;">
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#64748b; display:block">BCV Oficial</span>
+                            <strong style="font-size:1.1rem; color:#0f172a" id="lbl-rate-bcv-actual">-</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Mañana (9 AM)</span>
+                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-manana">-</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Tarde (1 PM)</span>
+                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-tarde">-</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Diario</span>
+                            <strong style="font-size:1.1rem; color:#059669" id="lbl-rate-binance-diario">-</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#64748b; display:block">Brecha BCV/Binance</span>
+                            <strong style="font-size:1.1rem; color:#d97706" id="lbl-rate-diferencial-pct">-</strong>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- BANDEJA 1: Órdenes Pendientes por Facturar -->
                 <section class="tray-panel card">
                     <div class="panel-header">
@@ -525,7 +556,7 @@
                                     <th>Fecha/Hora</th>
                                     <th>BCV (Bs)</th>
                                     <th>Binance (Bs)</th>
-                                    <th>Fuente</th>
+                                    <th>Diferencia (Binance - BCV)</th>
                                 </tr>
                             </thead>
                             <tbody id="tasas-table-body">
@@ -705,37 +736,6 @@
                     </div>
                 </section>
 
-
-                <!-- Promedios de Tasa Binance y Diferencial BCV -->
-                <section class="config-card card">
-                    <div class="panel-header">
-                        <h2>Promedios de Tasa Binance & Brecha BCV</h2>
-                        <p>Cálculo automático diario de promedios turno mañana, tarde, día completo y % de diferencial BCV vs. Binance</p>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom:1rem;">
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">BCV Oficial</span>
-                            <strong style="font-size:1.1rem; color:#0f172a" id="lbl-rate-bcv-actual">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Mañana</span>
-                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-manana">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Tarde</span>
-                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-tarde">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Diario</span>
-                            <strong style="font-size:1.1rem; color:#059669" id="lbl-rate-binance-diario">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Brecha BCV/Binance</span>
-                            <strong style="font-size:1.1rem; color:#d97706" id="lbl-rate-diferencial-pct">-</strong>
-                        </div>
-                    </div>
-                </section>
 
                 <!-- PANEL 1: Descuento por Recompra / Recurrencia -->
                 <section class="config-card card">
@@ -1003,6 +1003,14 @@
                                     <option value="VES">VES</option>
                                 </select>
                             </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Listas Aplicables</label>
+                                <select id="cfg-dif-listas">
+                                    <option value="*">Todas (*)</option>
+                                    <option value="4">Lista USD (#4)</option>
+                                    <option value="5">Lista VES (#5)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="form-group-row">
@@ -1030,91 +1038,13 @@
                                     <th>Cálculo</th>
                                     <th>% Fijo</th>
                                     <th>Monedas</th>
+                                    <th>Listas</th>
                                     <th>Vigencia</th>
                                     <th>Estado (Switch)</th>
                                 </tr>
                             </thead>
                             <tbody id="diferencial-table-body">
-                                <tr><td colspan="8" class="table-empty">Cargando reglas de diferencial...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- Reglas de Descuentos Comerciales -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
-                    <div class="panel-header">
-                        <h2>Reglas de Descuentos por Marca y Categoría</h2>
-                        <p>Agrega o edita las reglas de descuento que aplica el motor de forma automática</p>
-                    </div>
-
-                    <form id="descuento-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1;">
-                                <label>Marca</label>
-                                <select id="cfg-desc-marca" required>
-                                    <option value="ALL">Todas las marcas (ALL)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Categoría</label>
-                                <select id="cfg-desc-cat" required>
-                                    <option value="ALL">Todas las categorías (ALL)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Tipo de Descuento</label>
-                                <select id="cfg-desc-tipo" required>
-                                    <option value="porcentaje">Porcentaje Fijo</option>
-                                    <option value="pronto_pago">Pronto Pago</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Porcentaje (%)</label>
-                                <input type="number" id="cfg-desc-porcentaje" step="0.01" min="0" max="1" required placeholder="Ej: 0.05 para 5%">
-                            </div>
-                        </div>
-                        <div class="form-group-row" style="margin-top: 1rem;">
-                            <div class="form-group" style="flex:1;">
-                                <label>Fecha de Inicio</label>
-                                <input type="date" id="cfg-desc-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Fecha de Finalización</label>
-                                <input type="date" id="cfg-desc-hasta">
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>Listas Aplicables</label>
-                                <select id="cfg-desc-listas" required>
-                                    <option value="*">Todas las listas (*)</option>
-                                    <option value="4">Solo Lista USD (#4)</option>
-                                    <option value="5">Solo Lista VES (#5)</option>
-                                </select>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">Registrar Regla de Descuento</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Reglas Activas</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>Regla ID</th>
-                                    <th>Marca</th>
-                                    <th>Categoría</th>
-                                    <th>Tipo</th>
-                                    <th>Porcentaje (%)</th>
-                                    <th>Fecha de Inicio</th>
-                                    <th>Fecha de Finalización</th>
-                                    <th>Listas</th>
-                                    <th>Estado</th>
-                                </tr>
-                            </thead>
-                            <tbody id="descuentos-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">Cargando descuentos...</td>
-                                </tr>
+                                <tr><td colspan="9" class="table-empty">Cargando reglas de diferencial...</td></tr>
                             </tbody>
                         </table>
                     </div>

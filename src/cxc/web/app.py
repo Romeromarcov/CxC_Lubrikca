@@ -746,10 +746,16 @@ async def get_config_tasas():
         filas = repo._g.read_rows("SerieTasas")[-15:]
         tasas = []
         for f in reversed(filas):
+            tbcv = float(parse_decimal_safe(f.get("tasa_bcv", "0")))
+            tbin = float(parse_decimal_safe(f.get("tasa_binance", "0")))
+            diff_bs = tbin - tbcv
+            diff_pct = (diff_bs / tbin * 100) if tbin > 0 else 0.0
             tasas.append({
                 "timestamp": f.get("timestamp", ""),
-                "tasa_bcv": float(parse_decimal_safe(f.get("tasa_bcv", "0"))),
-                "tasa_binance": float(parse_decimal_safe(f.get("tasa_binance", "0"))),
+                "tasa_bcv": tbcv,
+                "tasa_binance": tbin,
+                "diferencia_bs": round(diff_bs, 2),
+                "diferencia_pct": round(diff_pct, 2),
                 "fuente": f.get("fuente", "")
             })
         return tasas
@@ -1667,25 +1673,39 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
 async def post_toggle_descuento(req: ToggleDescuentoRequest):
     try:
         repo = get_repo()
-        ws = repo._g._ws(req.tabla)
-        records = ws.get_all_records()
-        row_idx = None
-        for i, r in enumerate(records):
-            if str(r.get("regla_id")) == req.regla_id:
-                row_idx = i + 2
-                break
+        
+        TABLE_CANDIDATES = {
+            "DescuentosProntoPago": ["DescuentosProntoPago", "DescuentosMarcaCategoria"],
+            "DescuentosRecompra": ["DescuentosRecompra", "ReglasRecurrencia"],
+            "DescuentosProducto": ["DescuentosProducto", "PromocionesPrimeraCompra"],
+            "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentosBCVCompleto"],
+        }
+        
+        candidates = TABLE_CANDIDATES.get(req.tabla, [req.tabla])
+        
+        for t_name in candidates:
+            try:
+                ws = repo._g._ws(t_name)
+                records = ws.get_all_records()
+                for i, r in enumerate(records):
+                    r_id = str(r.get("regla_id") or r.get("id") or "")
+                    if r_id == req.regla_id:
+                        row_idx = i + 2
+                        headers = ws.row_values(1)
+                        if "activo" in headers:
+                            col_idx = headers.index("activo") + 1
+                            ws.update_cell(row_idx, col_idx, "TRUE" if req.activo else "FALSE")
+                            return {
+                                "status": "success",
+                                "message": f"Estado de la regla {req.regla_id} actualizado a {'Activo' if req.activo else 'Inactivo'}."
+                            }
+            except Exception as inner_e:
+                logger.warning("Fallo al buscar regla %s en tabla %s: %s", req.regla_id, t_name, inner_e)
+                continue
 
-        if row_idx is None:
-            raise HTTPException(status_code=404, detail="Regla no encontrada en la tabla.")
-
-        headers = ws.row_values(1)
-        if "activo" in headers:
-            col_idx = headers.index("activo") + 1
-            col_letter = chr(64 + col_idx) if col_idx <= 26 else "A"
-            ws.update(f"{col_letter}{row_idx}", [[str(req.activo).upper()]])
-            return {"status": "success", "message": f"Estado de la regla {req.regla_id} actualizado a {'Activo' if req.activo else 'Inactivo'}."}
-        else:
-            raise HTTPException(status_code=400, detail="La tabla no tiene columna 'activo'.")
+        raise HTTPException(status_code=404, detail=f"Regla {req.regla_id} no encontrada en Google Sheets.")
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1700,30 +1720,44 @@ async def get_tasas_promedios():
         today_str = date.today().isoformat()
         
         rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
-        
-        manana = []
-        tarde = []
-        diario = []
+        target_rows = rates_today if rates_today else rows[-24:]
 
+        manana_near_9 = []
+        manana_all = []
+        tarde_near_13 = []
+        tarde_all = []
+        diario = []
         last_bcv = Decimal("0")
-        for r in (rates_today or rows[-24:]):
+
+        for r in target_rows:
             try:
                 tb = Decimal(str(r.get("tasa_binance", "0")))
                 if tb > Decimal("0"):
                     diario.append(tb)
-                    ts_hour = int(r.get("timestamp", "00:00").split("T")[-1].split(" ")[-1].split(":")[0])
+                    ts_str = str(r.get("timestamp", "00:00"))
+                    time_part = ts_str.split("T")[-1].split(" ")[-1]
+                    ts_hour = int(time_part.split(":")[0])
+                    
                     if ts_hour < 12:
-                        manana.append(tb)
+                        manana_all.append(tb)
+                        if 8 <= ts_hour <= 10:
+                            manana_near_9.append(tb)
                     else:
-                        tarde.append(tb)
+                        tarde_all.append(tb)
+                        if 12 <= ts_hour <= 14:
+                            tarde_near_13.append(tb)
+
                 t_bcv = Decimal(str(r.get("tasa_bcv", "0")))
                 if t_bcv > Decimal("0"):
                     last_bcv = t_bcv
             except:
                 pass
 
-        avg_m = float(sum(manana) / Decimal(len(manana))) if manana else None
-        avg_t = float(sum(tarde) / Decimal(len(tarde))) if tarde else None
+        m_list = manana_near_9 if manana_near_9 else manana_all
+        t_list = tarde_near_13 if tarde_near_13 else tarde_all
+
+        avg_m = float(sum(m_list) / Decimal(len(m_list))) if m_list else None
+        avg_t = float(sum(t_list) / Decimal(len(t_list))) if t_list else None
         avg_d = float(sum(diario) / Decimal(len(diario))) if diario else None
         
         diff_pct = 0.0
