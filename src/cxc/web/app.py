@@ -1681,29 +1681,71 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
             "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentosBCVCompleto"],
         }
         
-        candidates = TABLE_CANDIDATES.get(req.tabla, [req.tabla])
-        
-        for t_name in candidates:
+        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla])
+        target_id_str = str(req.regla_id).strip()
+
+        # Handle GspreadGateway (Real Google Sheets)
+        if hasattr(repo._g, "_sh"):
+            sh = repo._g._sh
             try:
-                ws = repo._g._ws(t_name)
-                records = ws.get_all_records()
-                for i, r in enumerate(records):
-                    r_id = str(r.get("regla_id") or r.get("id") or "")
-                    if r_id == req.regla_id:
-                        row_idx = i + 2
-                        headers = ws.row_values(1)
-                        if "activo" in headers:
-                            col_idx = headers.index("activo") + 1
-                            ws.update_cell(row_idx, col_idx, "TRUE" if req.activo else "FALSE")
+                all_worksheets = sh.worksheets()
+                all_ws_names = [w.title for w in all_worksheets]
+            except Exception:
+                all_ws_names = candidate_names
+
+            ordered_ws_names = []
+            for name in candidate_names:
+                if name in all_ws_names and name not in ordered_ws_names:
+                    ordered_ws_names.append(name)
+            for name in all_ws_names:
+                if name not in ordered_ws_names:
+                    ordered_ws_names.append(name)
+
+            for w_name in ordered_ws_names:
+                try:
+                    ws = sh.worksheet(w_name)
+                    values = ws.get_all_values()
+                    if not values or len(values) < 2:
+                        continue
+                    
+                    headers = [str(h).strip().lower() for h in values[0]]
+                    
+                    activo_col_idx = None
+                    for idx, h in enumerate(headers):
+                        if h in ("activo", "active", "estado"):
+                            activo_col_idx = idx + 1
+                            break
+                    
+                    if not activo_col_idx:
+                        continue
+                    
+                    for r_idx, row in enumerate(values[1:], start=2):
+                        row_str_values = [str(val).strip() for val in row]
+                        if target_id_str in row_str_values:
+                            ws.update_cell(r_idx, activo_col_idx, "TRUE" if req.activo else "FALSE")
+                            logger.info("Regla %s actualizada a %s en '%s', fila %d", target_id_str, req.activo, w_name, r_idx)
                             return {
                                 "status": "success",
-                                "message": f"Estado de la regla {req.regla_id} actualizado a {'Activo' if req.activo else 'Inactivo'}."
+                                "message": f"Estado de la regla {target_id_str} actualizado a {'Activo' if req.activo else 'Inactivo'} en '{w_name}'."
                             }
-            except Exception as inner_e:
-                logger.warning("Fallo al buscar regla %s en tabla %s: %s", req.regla_id, t_name, inner_e)
-                continue
+                except Exception as inner_e:
+                    logger.warning("Error buscando regla %s en '%s': %s", target_id_str, w_name, inner_e)
+                    continue
+        else:
+            # InMemorySheetGateway fallback for tests
+            for t_name in candidate_names:
+                rows = repo._g.read_rows(t_name)
+                for r in rows:
+                    r_id = str(r.get("regla_id") or r.get("id") or "")
+                    if r_id == target_id_str:
+                        r["activo"] = "TRUE" if req.activo else "FALSE"
+                        repo._g.upsert_row(t_name, "regla_id", r)
+                        return {
+                            "status": "success",
+                            "message": f"Estado de la regla {target_id_str} actualizado a {'Activo' if req.activo else 'Inactivo'}."
+                        }
 
-        raise HTTPException(status_code=404, detail=f"Regla {req.regla_id} no encontrada en Google Sheets.")
+        raise HTTPException(status_code=404, detail=f"Regla '{target_id_str}' no encontrada en Google Sheets.")
     except HTTPException:
         raise
     except Exception as e:
