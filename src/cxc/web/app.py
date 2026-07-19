@@ -1449,22 +1449,37 @@ async def get_auditoria():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
 
-        # Load pricelist 4 (USD) prices from Odoo
+        # Load pricelist 4 (USD) and pricelist 5 (VES) prices from Odoo
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
-        rules = execute(
+        lista_ves_id = int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+
+        rules_usd = execute(
             "product.pricelist.item",
             "search_read",
             [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
             {"fields": ["product_tmpl_id", "fixed_price"]}
         )
         prices_usd = {}
-        for r in rules:
+        for r in rules_usd:
             pt = r.get("product_tmpl_id")
             pt_id = pt[0] if isinstance(pt, list) else pt
             if pt_id:
                 prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+
+        rules_ves = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "=", lista_ves_id], ["compute_price", "=", "fixed"]]],
+            {"fields": ["product_tmpl_id", "fixed_price"]}
+        )
+        prices_ves = {}
+        for r in rules_ves:
+            pt = r.get("product_tmpl_id")
+            pt_id = pt[0] if isinstance(pt, list) else pt
+            if pt_id:
+                prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
 
         lines_by_so = {}
         for r in lines_rows:
@@ -1481,11 +1496,20 @@ async def get_auditoria():
             so_lines = lines_by_so.get(o.so_id, [])
 
             has_discrepancy = False
+            is_ves = (o.lista_precios == "5") or (o.lista_precios != "4")
+            official_prices_map = prices_ves if is_ves else prices_usd
+            pricelist_label = "Lista VES (#5)" if is_ves else "Lista USD (#4)"
 
-            # Check 1: Unit prices vs pricelist 4
+            # Check 1: Unit prices vs correct official pricelist (VES or USD)
             for ln in so_lines:
                 qty = parse_decimal_safe(ln.get("cantidad", "0"))
+                qty_delivered = parse_decimal_safe(ln.get("cantidad_entregada", ln.get("qty_delivered", "0")))
                 price_order = parse_decimal_safe(ln.get("precio_unitario", "0"))
+
+                # Skip returned/non-delivered/zero-qty lines (returns with price=0 or qty=0)
+                if qty <= Decimal("0") or price_order <= Decimal("0") or qty_delivered <= Decimal("0"):
+                    continue
+
                 prod_raw = ln.get("producto", "")
                 pt_id = None
                 if isinstance(prod_raw, str):
@@ -1504,8 +1528,8 @@ async def get_auditoria():
                 elif isinstance(prod_raw, (int, float)):
                     pt_id = int(prod_raw)
 
-                if pt_id in prices_usd:
-                    price_official = Decimal(str(prices_usd[pt_id]))
+                if pt_id in official_prices_map:
+                    price_official = Decimal(str(official_prices_map[pt_id]))
                     if price_order < price_official - Decimal("0.01"):
                         has_discrepancy = True
                         diff_unit = price_official - price_order
@@ -1517,7 +1541,7 @@ async def get_auditoria():
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
                             "tipo": "Precio Inferior a Lista",
-                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < Lista oficial (${float(price_official):.2f})",
+                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < {pricelist_label} (${float(price_official):.2f}) [Entregado: {float(qty_delivered):.0f} und]",
                             "esperado": float(price_official * qty),
                             "actual": float(price_order * qty),
                             "diferencia_monto": round(diff_monto, 2),
@@ -1536,7 +1560,7 @@ async def get_auditoria():
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
                             "tipo": "Descuento Manual No Explicado",
-                            "detalle": f"Descuento manual del {float(disc):.1f}% otorgado en línea sin regla activa",
+                            "detalle": f"Descuento manual del {float(disc):.1f}% en línea sin regla activa [Entregado: {float(qty_delivered):.0f} und]",
                             "esperado": float(price_order * qty),
                             "actual": float((price_order * qty) - Decimal(str(disc_monto))),
                             "diferencia_monto": round(disc_monto, 2),

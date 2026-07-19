@@ -206,8 +206,8 @@ class OdooXmlRpcReader(OdooReader):
 
     # --- resolución de relaciones -------------------------------------------
     def _user_logins(self, user_ids: set[int]) -> dict[int, str]:
-        recs = self._read(self.MODEL_USERS, sorted(user_ids), ["id", "login"])
-        return {int(r["id"]): str(r.get("login", "") or "") for r in recs}
+        recs = self._read(self.MODEL_USERS, sorted(user_ids), ["id", "name", "login"])
+        return {int(r["id"]): str(r.get("name") or r.get("login") or "") for r in recs}
 
     # --- Clientes ------------------------------------------------------------
     def changed_clientes(self, since: datetime | None) -> list[Cliente]:
