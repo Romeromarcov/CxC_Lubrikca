@@ -1400,3 +1400,193 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pagos-historial")
+async def get_pagos_historial():
+    try:
+        repo = get_repo()
+        vincs = repo.all_vinculaciones()
+        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_map = {r.get("pago_id"): r for r in pagos_rows}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+
+        historial = []
+        for v in vincs:
+            p_data = pagos_map.get(v.pago_id, {})
+            cid = p_data.get("cliente_id", "")
+            c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
+            o = ordenes_map.get(v.so_id)
+            factura_id = o.factura_id if o and o.factura_id else "N/A"
+
+            historial.append({
+                "pago_id": v.pago_id,
+                "cliente_nombre": c_name,
+                "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d") if v.hora_pago_confirmada else "",
+                "monto_aplicado": float(v.monto_aplicado),
+                "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
+                "so_id": v.so_id,
+                "factura_id": factura_id,
+                "confirmado_por": v.confirmado_por or "Sistema",
+                "estado": v.estado.value
+            })
+        return historial
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auditoria")
+async def get_auditoria():
+    try:
+        repo = get_repo()
+        ordenes = repo.all_ordenes()
+        lines_rows = repo._g.read_rows("LineasOrden")
+        bandeja_rows = repo.all_bandeja()
+        bandeja_map = {b.so_id: b for b in bandeja_rows}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+
+        # Load pricelist 4 (USD) prices from Odoo
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+        rules = execute(
+            "product.pricelist.item",
+            "search_read",
+            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
+            {"fields": ["product_tmpl_id", "fixed_price"]}
+        )
+        prices_usd = {}
+        for r in rules:
+            pt = r.get("product_tmpl_id")
+            pt_id = pt[0] if isinstance(pt, list) else pt
+            if pt_id:
+                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+
+        lines_by_so = {}
+        for r in lines_rows:
+            so = r.get("so_id", "")
+            if so:
+                lines_by_so.setdefault(so, []).append(r)
+
+        operaciones_conformes = []
+        discrepancias = []
+
+        for o in ordenes:
+            c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
+            b = bandeja_map.get(o.so_id)
+            so_lines = lines_by_so.get(o.so_id, [])
+
+            has_discrepancy = False
+
+            # Check 1: Unit prices vs pricelist 4
+            for ln in so_lines:
+                qty = parse_decimal_safe(ln.get("cantidad", "0"))
+                price_order = parse_decimal_safe(ln.get("precio_unitario", "0"))
+                prod_raw = ln.get("producto", "")
+                pt_id = None
+                if isinstance(prod_raw, str):
+                    if prod_raw.startswith("["):
+                        try:
+                            import json
+                            parsed = json.loads(prod_raw.replace("'", '"'))
+                            pt_id = int(parsed[0])
+                        except:
+                            import re
+                            m = re.search(r'\d+', prod_raw)
+                            if m:
+                                pt_id = int(m.group())
+                    elif prod_raw.isdigit():
+                        pt_id = int(prod_raw)
+                elif isinstance(prod_raw, (int, float)):
+                    pt_id = int(prod_raw)
+
+                if pt_id in prices_usd:
+                    price_official = Decimal(str(prices_usd[pt_id]))
+                    if price_order < price_official - Decimal("0.01"):
+                        has_discrepancy = True
+                        diff_unit = price_official - price_order
+                        diff_monto = float(diff_unit * qty)
+                        diff_pct = float((diff_unit / price_official) * 100) if price_official > 0 else 0.0
+                        discrepancias.append({
+                            "so_id": o.so_id,
+                            "factura_id": o.factura_id or "N/A",
+                            "cliente_nombre": c_name,
+                            "vendedor": o.vendedor_email or "N/A",
+                            "tipo": "Precio Inferior a Lista",
+                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < Lista oficial (${float(price_official):.2f})",
+                            "esperado": float(price_official * qty),
+                            "actual": float(price_order * qty),
+                            "diferencia_monto": round(diff_monto, 2),
+                            "diferencia_porcentaje": round(diff_pct, 2)
+                        })
+
+                # Check 2: Manual unapproved line discounts
+                disc = parse_decimal_safe(ln.get("descuento", "0"))
+                if disc > Decimal("0"):
+                    if not b or (b and b.total_descuentos == Decimal("0") and b.ncs_calculadas == Decimal("0")):
+                        has_discrepancy = True
+                        disc_monto = float((price_order * qty) * (disc / Decimal("100")))
+                        discrepancias.append({
+                            "so_id": o.so_id,
+                            "factura_id": o.factura_id or "N/A",
+                            "cliente_nombre": c_name,
+                            "vendedor": o.vendedor_email or "N/A",
+                            "tipo": "Descuento Manual No Explicado",
+                            "detalle": f"Descuento manual del {float(disc):.1f}% otorgado en línea sin regla activa",
+                            "esperado": float(price_order * qty),
+                            "actual": float((price_order * qty) - Decimal(str(disc_monto))),
+                            "diferencia_monto": round(disc_monto, 2),
+                            "diferencia_porcentaje": float(disc)
+                        })
+
+            # Check 3: Sub-facturación / Sobre-facturación
+            if o.facturada and o.monto_facturado:
+                net_expected = b.total_motor if b else o.monto_total
+                diff_inv = o.monto_facturado - net_expected
+                if abs(diff_inv) > Decimal("0.05"):
+                    has_discrepancy = True
+                    tipo_str = "Sobre-facturación" if diff_inv > Decimal("0") else "Sub-facturación"
+                    pct_inv = float((abs(diff_inv) / net_expected) * 100) if net_expected > 0 else 0.0
+                    discrepancias.append({
+                        "so_id": o.so_id,
+                        "factura_id": o.factura_id or "N/A",
+                        "cliente_nombre": c_name,
+                        "vendedor": o.vendedor_email or "N/A",
+                        "tipo": tipo_str,
+                        "detalle": f"Factura Odoo (${float(o.monto_facturado):.2f}) no coincide con Neto Motor (${float(net_expected):.2f})",
+                        "esperado": float(net_expected),
+                        "actual": float(o.monto_facturado),
+                        "diferencia_monto": round(float(abs(diff_inv)), 2),
+                        "diferencia_porcentaje": round(pct_inv, 2)
+                    })
+
+            if not has_discrepancy and (o.facturada or (b and b.candidata_a_cierre)):
+                neto = float(b.total_motor) if b else float(o.monto_total)
+                desc_tot = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
+                operaciones_conformes.append({
+                    "so_id": o.so_id,
+                    "factura_id": o.factura_id or "N/A",
+                    "cliente_nombre": c_name,
+                    "fecha": o.fecha.isoformat(),
+                    "monto_original": float(o.monto_total),
+                    "descuentos_aplicados": desc_tot,
+                    "monto_neto_conciliado": neto,
+                    "estado": "Conforme 100%"
+                })
+
+        return {
+            "operaciones_conformes": operaciones_conformes,
+            "discrepancias": discrepancias,
+            "resumen_auditoria": {
+                "total_conformes": len(operaciones_conformes),
+                "total_discrepancias": len(discrepancias),
+                "monto_discrepancia_total": round(sum(d["diferencia_monto"] for d in discrepancias), 2)
+            }
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))

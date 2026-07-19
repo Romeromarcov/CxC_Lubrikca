@@ -110,6 +110,7 @@ body {
     padding: 0.35rem;
     border-radius: 8px;
     border: 1px solid #e2e8f0;
+    flex-wrap: wrap;
 }
 
 .tab-btn {

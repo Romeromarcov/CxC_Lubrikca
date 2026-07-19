@@ -73,6 +73,8 @@ class Cliente:
     cliente_id: str
     nombre: str
     vendedor_email: str
+    wh_iva_agent: bool = False
+    wh_iva_rate: float = 75.0
 
 
 # --- 3.2 OrdenesVenta (espejo) ----------------------------------------------

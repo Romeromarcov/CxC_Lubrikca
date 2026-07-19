@@ -27,7 +27,9 @@
         <!-- Navegación por pestañas -->
         <nav class="tab-navigation">
             <button class="tab-btn active" data-tab="tab-dashboard">📊 Dashboard</button>
-            <button class="tab-btn" data-tab="tab-reporte">📈 Reporte de Saldos</button>
+            <button class="tab-btn" data-tab="tab-reporte">📑 Reporte de Saldos</button>
+            <button class="tab-btn" data-tab="tab-conciliaciones">🤝 Conciliaciones</button>
+            <button class="tab-btn" data-tab="tab-auditoria">🔍 Auditoría</button>
             <button class="tab-btn" data-tab="tab-config">⚙️ Configuración</button>
         </nav>
 
@@ -38,9 +40,9 @@
     </header>
 
     <main class="main-content">
-        <!-- PESTAÑA 1: DASHBOARD -->
+        <!-- PESTAÑA 1: DASHBOARD (3 BANDEJAS DE APROBACIÓN) -->
         <div id="tab-dashboard" class="tab-panel active">
-            <div class="dashboard-grid">
+            <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <!-- Tarjeta de Estadísticas (KPIs) -->
                 <section class="kpi-panel">
                     <div class="kpi-card card">
@@ -57,101 +59,87 @@
                     </div>
                 </section>
 
-                <!-- Bloque Principal: Asignación de Pagos -->
-                <section class="main-panel card">
+                <!-- BANDEJA 1: Órdenes Pendientes por Facturar -->
+                <section class="tray-panel card">
                     <div class="panel-header">
-                        <h2>Asignación de Pagos Recibidos</h2>
-                        <p>Vincula cobros de Odoo a órdenes abiertas</p>
+                        <h2>Bandeja 1: Órdenes Pendientes por Facturar</h2>
+                        <p>Órdenes sin facturar pagadas hasta su Subtotal (Agentes de Retención IVA) o Total. Indica el descuento a aplicar al facturar.</p>
                     </div>
-                    
-                    <div class="splitter">
-                        <div class="payment-list-area">
-                            <h3>Pagos Recientes Sin Factura</h3>
-                            <div class="list-wrapper" id="payments-list">
-                                <div class="loading-spinner">Cargando pagos...</div>
-                            </div>
-                        </div>
-
-                        <div class="association-form-area">
-                            <h3>Vincular Pago</h3>
-                            <form id="vinculacion-form" class="cxc-form">
-                                <div class="form-group">
-                                    <label>ID del Pago</label>
-                                    <input type="text" id="form-pago-id" readonly placeholder="Selecciona un pago">
-                                </div>
-                                <div class="form-group">
-                                    <label>Cliente</label>
-                                    <input type="text" id="form-cliente-nombre" readonly placeholder="Cliente asociado">
-                                    <input type="hidden" id="form-cliente-id">
-                                </div>
-                                <div class="form-group">
-                                    <label>Monto Original Recibido</label>
-                                    <div class="currency-input-wrapper">
-                                        <span class="input-currency" id="form-pago-moneda">USD</span>
-                                        <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
-                                    </div>
-                                </div>
-
-                                <!-- Sección dinámica para pagos en VES -->
-                                <div class="form-group" id="group-fecha-hora-pago" style="display: none;">
-                                    <label>Fecha/Hora de Pago (Ajustar Tasa)</label>
-                                    <div class="form-group-row">
-                                        <input type="date" id="form-pago-fecha" style="width: 55%;">
-                                        <input type="time" id="form-pago-hora" style="width: 45%;">
-                                    </div>
-                                </div>
-                                <div class="form-group" id="group-tasas-referencia" style="display: none; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px dashed #cbd5e1; margin-bottom: 0.5rem;">
-                                    <label style="margin-bottom: 0.35rem; font-weight:700;">Tasas de Referencia Aplicadas</label>
-                                    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
-                                        <span>Tasa BCV: <strong id="lbl-tasa-bcv">0.00</strong> Bs</span>
-                                        <span>Tasa Binance: <strong id="lbl-tasa-binance">0.00</strong> Bs</span>
-                                    </div>
-                                    <div style="font-size: 0.8rem; line-height: 1.4; color: #64748b;">
-                                        Equivalente BCV: <strong id="lbl-eq-bcv" style="color: #0f172a;">$0.00 USD</strong><br>
-                                        Equivalente Binance: <strong id="lbl-eq-binance" style="color: #0f172a;">$0.00 USD</strong>
-                                    </div>
-                                </div>
-
-                                <div class="form-group">
-                                    <label>Orden de Venta Odoo (SO)</label>
-                                    <select id="form-so-select" required disabled>
-                                        <option value="">Selecciona una orden...</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Monto a Aplicar (USD)</label>
-                                    <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto en USD">
-                                </div>
-                                <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
-                            </form>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Bandeja de Facturación y Aprobaciones -->
-                <section class="side-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja de Aprobación</h2>
-                        <p>Últimas propuestas de facturación con descuento</p>
-                    </div>
-                    
                     <div class="table-wrapper">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
                                     <th>Orden (SO)</th>
-                                    <th>Lista</th>
-                                    <th>Base ($)</th>
-                                    <th>Dctos ($)</th>
+                                    <th>Cliente</th>
+                                    <th>Agente Ret. IVA</th>
+                                    <th>Fecha</th>
+                                    <th>Abono ($)</th>
+                                    <th>Subtotal Neto ($)</th>
                                     <th>Total Motor ($)</th>
-                                    <th>Total Proy USD ($)</th>
-                                    <th>Semáforo</th>
-                                    <th>Cierre</th>
+                                    <th>Descuento a Aplicar ($ / %)</th>
+                                    <th>Acción</th>
                                 </tr>
                             </thead>
-                            <tbody id="bandeja-table-body">
+                            <tbody id="bandeja1-table-body">
                                 <tr>
-                                    <td colspan="8" class="table-empty">Cargando bandeja de aprobación...</td>
+                                    <td colspan="9" class="table-empty">Cargando órdenes por facturar...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA 2: Órdenes Facturadas Pendientes por Nota de Crédito -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
+                        <p>Órdenes ya facturadas que requieren emisión de N/C por obsequio de producto o descuento porcentual no aplicado inicialmente.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Abono ($)</th>
+                                    <th>Monto N/C ($)</th>
+                                    <th>% N/C</th>
+                                    <th>Concepto N/C</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja2-table-body">
+                                <tr>
+                                    <td colspan="8" class="table-empty">Cargando órdenes pendientes por N/C...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención)</h2>
+                        <p>Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Factura Odoo</th>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>% Retención</th>
+                                    <th>Base Cobrada ($)</th>
+                                    <th>Retención IVA Est. ($)</th>
+                                    <th>Estado Comprobante</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja3-table-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -160,10 +148,9 @@
             </div>
         </div>
 
-        <!-- PESTAÑA 2: REPORTE DE SALDOS Y VINCULACIONES -->
+        <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
-                <!-- Reporte General de Saldos -->
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
                         <div>
@@ -203,8 +190,83 @@
                         </table>
                     </div>
                 </section>
+            </div>
+        </div>
 
-                <!-- Mapa de Vinculaciones Cruzadas -->
+        <!-- PESTAÑA 3: CONCILIACIONES Y ASIGNACIÓN DE PAGOS -->
+        <div id="tab-conciliaciones" class="tab-panel">
+            <div class="conciliaciones-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- Asignación de Pagos Recibidos -->
+                <section class="main-panel card">
+                    <div class="panel-header">
+                        <h2>Asignación de Pagos Recibidos (Pagos Sin Asignar)</h2>
+                        <p>Vincula cobros de Odoo a órdenes abiertas (excluye pagos ya asignados a facturas en Odoo)</p>
+                    </div>
+                    
+                    <div class="splitter">
+                        <div class="payment-list-area">
+                            <h3>Pagos Recientes Por Asignar</h3>
+                            <div class="list-wrapper" id="payments-list">
+                                <div class="loading-spinner">Cargando pagos...</div>
+                            </div>
+                        </div>
+
+                        <div class="association-form-area">
+                            <h3>Vincular Pago</h3>
+                            <form id="vinculacion-form" class="cxc-form">
+                                <div class="form-group">
+                                    <label>ID del Pago</label>
+                                    <input type="text" id="form-pago-id" readonly placeholder="Selecciona un pago">
+                                </div>
+                                <div class="form-group">
+                                    <label>Cliente</label>
+                                    <input type="text" id="form-cliente-nombre" readonly placeholder="Cliente asociado">
+                                    <input type="hidden" id="form-cliente-id">
+                                </div>
+                                <div class="form-group">
+                                    <label>Monto Original Recibido</label>
+                                    <div class="currency-input-wrapper">
+                                        <span class="input-currency" id="form-pago-moneda">USD</span>
+                                        <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
+                                    </div>
+                                </div>
+
+                                <div class="form-group" id="group-fecha-hora-pago" style="display: none;">
+                                    <label>Fecha/Hora de Pago (Ajustar Tasa)</label>
+                                    <div class="form-group-row">
+                                        <input type="date" id="form-pago-fecha" style="width: 55%;">
+                                        <input type="time" id="form-pago-hora" style="width: 45%;">
+                                    </div>
+                                </div>
+                                <div class="form-group" id="group-tasas-referencia" style="display: none; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px dashed #cbd5e1; margin-bottom: 0.5rem;">
+                                    <label style="margin-bottom: 0.35rem; font-weight:700;">Tasas de Referencia Aplicadas</label>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
+                                        <span>Tasa BCV: <strong id="lbl-tasa-bcv">0.00</strong> Bs</span>
+                                        <span>Tasa Binance: <strong id="lbl-tasa-binance">0.00</strong> Bs</span>
+                                    </div>
+                                    <div style="font-size: 0.8rem; line-height: 1.4; color: #64748b;">
+                                        Equivalente BCV: <strong id="lbl-eq-bcv" style="color: #0f172a;">$0.00 USD</strong><br>
+                                        Equivalente Binance: <strong id="lbl-eq-binance" style="color: #0f172a;">$0.00 USD</strong>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Orden de Venta Odoo (SO)</label>
+                                    <select id="form-so-select" required disabled>
+                                        <option value="">Selecciona una orden...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Monto a Aplicar (USD)</label>
+                                    <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto en USD">
+                                </div>
+                                <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Mapa de Conciliación de Pagos Cruzados -->
                 <section class="mapa-panel card">
                     <div class="panel-header">
                         <h2>Mapa de Conciliación de Pagos Cruzados (Pago ↔ Orden ↔ Factura)</h2>
@@ -230,6 +292,120 @@
                             <tbody id="mapa-table-body">
                                 <tr>
                                     <td colspan="10" class="table-empty">Cargando mapa de vinculaciones...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Historial de Pagos Asignados -->
+                <section class="historial-panel card">
+                    <div class="panel-header">
+                        <h2>Historial de Pagos Asignados</h2>
+                        <p>Registro completo de cobros ya vinculados a su respectiva Factura en Odoo y Orden de Venta</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Pago ID</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha Pago</th>
+                                    <th>Monto Aplicado ($)</th>
+                                    <th>Moneda</th>
+                                    <th>Orden (SO)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Confirmado Por</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historial-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando historial de pagos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PESTAÑA 4: AUDITORÍA DE COBROS Y PRECIOS -->
+        <div id="tab-auditoria" class="tab-panel">
+            <div class="auditoria-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- KPIs Resumen de Auditoría -->
+                <section class="kpi-panel">
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Operaciones Conformes (100%)</span>
+                        <span class="kpi-value" style="color: #059669" id="audit-kpi-conformes">0</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Discrepancias Detectadas</span>
+                        <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Monto Total Discrepancias ($)</span>
+                        <span class="kpi-value warning" id="audit-kpi-monto-discrepancia">$0.00</span>
+                    </div>
+                </section>
+
+                <!-- SECCIÓN 2: Discrepancias y Anomalías Detectadas -->
+                <section class="auditoria-panel card">
+                    <div class="panel-header">
+                        <h2>Discrepancias y Anomalías Detectadas</h2>
+                        <p>Precios inferiores a lista oficial, descuentos manuales sin regla aprobada e inconsistencias de facturación</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Tipo de Anomalía</th>
+                                    <th>Detalle</th>
+                                    <th>Esperado ($)</th>
+                                    <th>Actual ($)</th>
+                                    <th>Discrepancia ($)</th>
+                                    <th>% Discrepancia</th>
+                                </tr>
+                            </thead>
+                            <tbody id="discrepancias-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando auditoría de discrepancias...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- SECCIÓN 1: Operaciones Conformes (100% Correctas) -->
+                <section class="auditoria-panel card">
+                    <div class="panel-header">
+                        <h2>Operaciones Conformes y Conciliadas (100% Correctas)</h2>
+                        <p>Órdenes y facturas procesadas en estricta conformidad con las listas de precios y reglas del motor</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Monto Original ($)</th>
+                                    <th>Dctos Aplicados ($)</th>
+                                    <th>Monto Neto Conciliado ($)</th>
+                                    <th>Estado Auditoría</th>
+                                </tr>
+                            </thead>
+                            <tbody id="conformes-table-body">
+                                <tr>
+                                    <td colspan="8" class="table-empty">Cargando operaciones conformes...</td>
                                 </tr>
                             </tbody>
                         </table>

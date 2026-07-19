@@ -103,6 +103,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgDescVolListas = document.getElementById("cfg-desc-vol-listas");
     const descuentosVolumenTableBody = document.getElementById("descuentos-volumen-table-body");
 
+    // Elements - 3 Bandejas Dashboard
+    const bandeja1TableBody = document.getElementById("bandeja1-table-body");
+    const bandeja2TableBody = document.getElementById("bandeja2-table-body");
+    const bandeja3TableBody = document.getElementById("bandeja3-table-body");
+
+    // Elements - Conciliaciones & Historial
+    const historialTableBody = document.getElementById("historial-table-body");
+
+    // Elements - Auditoria
+    const auditKpiConformes = document.getElementById("audit-kpi-conformes");
+    const auditKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
+    const auditKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
+    const discrepanciasTableBody = document.getElementById("discrepancias-table-body");
+    const conformesTableBody = document.getElementById("conformes-table-body");
+
     // Tab Navigation Logic
     tabButtons.forEach(btn => {
         btn.addEventListener("click", () => {
@@ -121,9 +136,17 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             // Lazy load tab data
-            if (targetTab === "tab-reporte") {
+            if (targetTab === "tab-dashboard") {
+                loadKPIs();
+                loadBandeja();
+            } else if (targetTab === "tab-reporte") {
                 loadReporte();
+            } else if (targetTab === "tab-conciliaciones") {
+                loadPayments();
                 loadMapa();
+                loadHistorialPagos();
+            } else if (targetTab === "tab-auditoria") {
+                loadAuditoria();
             } else if (targetTab === "tab-config") {
                 loadConfigData();
             }
@@ -375,48 +398,214 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Fetch and render Bandeja / Approval Table with USD projection
+    // Fetch and render the 3 Dashboard Approval Trays
     async function loadBandeja() {
         try {
+            if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por facturar...</td></tr>';
+            if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
+            if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
+
             const res = await fetch("/api/bandeja");
+            if (res.ok) {
+                const data = await res.json();
+                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+
+                // Handle legacy array format or structured 3 trays dict
+                const tray1 = data.ordenes_por_facturar || (Array.isArray(data) ? data.filter(x => !x.facturada) : []);
+                const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
+                const tray3 = data.iva_pendiente_agentes || [];
+
+                // Render Tray 1
+                if (bandeja1TableBody) {
+                    if (tray1.length === 0) {
+                        bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes pendientes por facturar.</td></tr>';
+                    } else {
+                        bandeja1TableBody.innerHTML = "";
+                        tray1.forEach(item => {
+                            const row = document.createElement("tr");
+                            const isAgent = item.wh_iva_agent ? `<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Agente (${item.wh_iva_rate || 75}%)</span>` : '<span class="state-badge">No</span>';
+                            const descText = item.descuento_aplicar_monto > 0 ? `${fmt(item.descuento_aplicar_monto)} (${(item.descuento_aplicar_pct || 0).toFixed(1)}%)` : '$0.00 (0%)';
+                            
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${isAgent}</td>
+                                <td>${item.fecha || ''}</td>
+                                <td><strong style="color:#059669">${fmt(item.monto_pagado || item.precio_base || 0)}</strong></td>
+                                <td>${fmt(item.subtotal_neto || item.precio_base || 0)}</td>
+                                <td><strong>${fmt(item.total_motor || 0)}</strong></td>
+                                <td><strong style="color:#d97706">${descText}</strong></td>
+                                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="alert('Facturar SO ${item.so_id} en Odoo')">Aprobar Factura</button></td>
+                            `;
+                            bandeja1TableBody.appendChild(row);
+                        });
+                    }
+                }
+
+                // Render Tray 2
+                if (bandeja2TableBody) {
+                    if (tray2.length === 0) {
+                        bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay órdenes pendientes por Nota de Crédito.</td></tr>';
+                    } else {
+                        bandeja2TableBody.innerHTML = "";
+                        tray2.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td><span class="state-badge">${item.factura_id || 'Odoo'}</span></td>
+                                <td><strong style="color:#059669">${fmt(item.monto_pagado || 0)}</strong></td>
+                                <td><strong style="color:#dc2626">${fmt(item.nc_monto || item.total_descuentos || 0)}</strong></td>
+                                <td><strong style="color:#dc2626">${(item.nc_porcentaje || 0).toFixed(1)}%</strong></td>
+                                <td>${item.concepto || 'Obsequio / Descuento'}</td>
+                                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#dc2626" onclick="alert('Emitir N/C para ${item.so_id}')">Aprobar N/C</button></td>
+                            `;
+                            bandeja2TableBody.appendChild(row);
+                        });
+                    }
+                }
+
+                // Render Tray 3
+                if (bandeja3TableBody) {
+                    if (tray3.length === 0) {
+                        bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay facturas pendientes por comprobante de retención IVA.</td></tr>';
+                    } else {
+                        bandeja3TableBody.innerHTML = "";
+                        tray3.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><span class="state-badge">${item.factura_id}</span></td>
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre}</td>
+                                <td><span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">${item.wh_iva_rate || 75}%</span></td>
+                                <td><strong style="color:#059669">${fmt(item.base_cobrada)}</strong></td>
+                                <td><strong style="color:#2563eb">${fmt(item.retencion_iva_est)}</strong></td>
+                                <td><span class="state-badge abiertas">${item.estado_comprobante || 'Pendiente'}</span></td>
+                            `;
+                            bandeja3TableBody.appendChild(row);
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Error loading bandeja:", err);
+            if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar bandeja 1.</td></tr>';
+            if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
+            if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
+        }
+    }
+
+    // Load Historial de Pagos Asignados
+    async function loadHistorialPagos() {
+        if (!historialTableBody) return;
+        try {
+            historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando historial de pagos asignados...</td></tr>';
+            const res = await fetch("/api/pagos-historial");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    bandejaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay propuestas pendientes en la bandeja.</td></tr>';
+                    historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay pagos asignados en el historial.</td></tr>';
                     return;
                 }
-                
-                bandejaTableBody.innerHTML = "";
+                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                historialTableBody.innerHTML = "";
                 items.forEach(item => {
                     const row = document.createElement("tr");
-                    
-                    let semHtml = '<span class="semaphore">Ninguno</span>';
-                    if (item.reconciliacion) {
-                        const resVal = item.reconciliacion.resultado;
-                        semHtml = `<span class="semaphore ${resVal.toLowerCase()}">${resVal}</span>`;
-                    }
-                    
-                    let closeHtml = '<span class="state-badge">Abierta</span>';
-                    if (item.candidata_a_cierre) {
-                        closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
-                    }
-                    
                     row.innerHTML = `
+                        <td><strong>#${item.pago_id}</strong></td>
+                        <td>${item.cliente_nombre}</td>
+                        <td>${item.fecha_pago}</td>
+                        <td><strong style="color: #059669">${fmt(item.monto_aplicado)}</strong></td>
+                        <td><span class="state-badge">${item.moneda}</span></td>
                         <td><strong>${item.so_id}</strong></td>
-                        <td>${item.lista_aplicada}</td>
-                        <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.precio_base)}</td>
-                        <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_descuentos)}</td>
-                        <td><strong>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_motor)}</strong></td>
-                        <td><strong style="color: #2563eb;">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.total_proyectado_usd)}</strong></td>
-                        <td>${semHtml}</td>
-                        <td>${closeHtml}</td>
+                        <td><span class="state-badge">${item.factura_id}</span></td>
+                        <td>${item.confirmado_por}</td>
+                        <td><span class="state-badge cierre">${item.estado}</span></td>
                     `;
-                    bandejaTableBody.appendChild(row);
+                    historialTableBody.appendChild(row);
                 });
             }
         } catch (err) {
-            bandejaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al conectar con la bandeja de facturación.</td></tr>';
-            console.error("Error loading bandeja:", err);
+            historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar el historial.</td></tr>';
+            console.error("Error loading historial:", err);
+        }
+    }
+
+    // Load Auditoría Panel Data
+    async function loadAuditoria() {
+        if (!discrepanciasTableBody || !conformesTableBody) return;
+        try {
+            discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
+            conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando operaciones conformes...</td></tr>';
+
+            const res = await fetch("/api/auditoria");
+            if (res.ok) {
+                const data = await res.json();
+                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+
+                // KPIs
+                const summary = data.resumen_auditoria;
+                if (auditKpiConformes) auditKpiConformes.textContent = summary.total_conformes;
+                if (auditKpiDiscrepancias) auditKpiDiscrepancias.textContent = summary.total_discrepancias;
+                if (auditKpiMontoDiscrepancia) auditKpiMontoDiscrepancia.textContent = fmt(summary.monto_discrepancia_total);
+
+                // Render Discrepancias
+                if (data.discrepancias.length === 0) {
+                    discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias de precio ni facturación. Todos los registros coinciden con las reglas del motor.</td></tr>';
+                } else {
+                    discrepanciasTableBody.innerHTML = "";
+                    data.discrepancias.forEach(item => {
+                        const row = document.createElement("tr");
+                        let tipoBadge = '<span class="state-badge abiertas" style="background:#fef3c7;color:#b45309">Discrepancia</span>';
+                        if (item.tipo.includes("Precio")) {
+                            tipoBadge = '<span class="state-badge" style="background:#fee2e2;color:#b91c1c;font-weight:700">Precio < Lista</span>';
+                        } else if (item.tipo.includes("Descuento")) {
+                            tipoBadge = '<span class="state-badge" style="background:#ffedd5;color:#c2410c">Desc. No Explicado</span>';
+                        } else {
+                            tipoBadge = '<span class="state-badge" style="background:#fef2f2;color:#dc2626">Descalce Factura</span>';
+                        }
+
+                        row.innerHTML = `
+                            <td><strong>${item.so_id}</strong></td>
+                            <td><span class="state-badge">${item.factura_id}</span></td>
+                            <td>${item.cliente_nombre}</td>
+                            <td>${item.vendedor}</td>
+                            <td>${tipoBadge}</td>
+                            <td style="font-size:0.78rem; color:#475569">${item.detalle}</td>
+                            <td>${fmt(item.esperado)}</td>
+                            <td>${fmt(item.actual)}</td>
+                            <td><strong style="color:#dc2626">${fmt(item.diferencia_monto)}</strong></td>
+                            <td><strong style="color:#dc2626">${item.diferencia_porcentaje.toFixed(1)}%</strong></td>
+                        `;
+                        discrepanciasTableBody.appendChild(row);
+                    });
+                }
+
+                // Render Operaciones Conformes
+                if (data.operaciones_conformes.length === 0) {
+                    conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes registradas aún.</td></tr>';
+                } else {
+                    conformesTableBody.innerHTML = "";
+                    data.operaciones_conformes.forEach(item => {
+                        const row = document.createElement("tr");
+                        row.innerHTML = `
+                            <td><strong>${item.so_id}</strong></td>
+                            <td><span class="state-badge">${item.factura_id}</span></td>
+                            <td>${item.cliente_nombre}</td>
+                            <td>${item.fecha}</td>
+                            <td>${fmt(item.monto_original)}</td>
+                            <td>${fmt(item.descuentos_aplicados)}</td>
+                            <td><strong style="color:#059669">${fmt(item.monto_neto_conciliado)}</strong></td>
+                            <td><span class="state-badge cierre" style="background:#dcfce7;color:#15803d">Conforme 100%</span></td>
+                        `;
+                        conformesTableBody.appendChild(row);
+                    });
+                }
+            }
+        } catch (err) {
+            console.error("Error loading auditoria:", err);
+            if (discrepanciasTableBody) discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar auditoría.</td></tr>';
+            if (conformesTableBody) conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar auditoría.</td></tr>';
         }
     }
 

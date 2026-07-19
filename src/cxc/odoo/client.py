@@ -83,6 +83,8 @@ def map_cliente(rec: dict[str, Any]) -> Cliente:
         cliente_id=str(rec["id"]),
         nombre=str(rec.get("name", "")),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
+        wh_iva_agent=bool(rec.get("wh_iva_agent")),
+        wh_iva_rate=float(rec.get("wh_iva_rate") or 75.0) if rec.get("wh_iva_rate") is not None else 75.0,
     )
 
 
@@ -210,7 +212,7 @@ class OdooXmlRpcReader(OdooReader):
     # --- Clientes ------------------------------------------------------------
     def changed_clientes(self, since: datetime | None) -> list[Cliente]:
         recs = self._search_read(
-            self.MODEL_PARTNER, self._delta(since), ["id", "name", "user_id"]
+            self.MODEL_PARTNER, self._delta(since), ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate"]
         )
         uids = {int(_m2o_id(r.get("user_id"))) for r in recs if _m2o_id(r.get("user_id"))}
         logins = self._user_logins(uids)
