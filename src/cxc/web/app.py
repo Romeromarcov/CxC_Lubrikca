@@ -600,7 +600,7 @@ async def get_reporte_saldos():
             if so:
                 lines_by_so.setdefault(so, []).append(r)
 
-        bandeja_rows = repo.bandeja()
+        bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
 
         reporte = []
