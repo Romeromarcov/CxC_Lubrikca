@@ -600,6 +600,9 @@ async def get_reporte_saldos():
             if so:
                 lines_by_so.setdefault(so, []).append(r)
 
+        bandeja_rows = repo.bandeja()
+        bandeja_map = {b.so_id: b for b in bandeja_rows}
+
         reporte = []
         for o in ordenes:
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
@@ -639,6 +642,31 @@ async def get_reporte_saldos():
             lista_name = "Lista USD (#4)" if o.lista_precios == "4" else f"Precio VES (#{o.lista_precios})"
             monto_total_proyectado_usd = float(total_proyectado_usd) if o.lista_precios != "4" else float(o.monto_total)
             
+            # Engine calculation data
+            b = bandeja_map.get(o.so_id)
+            if b:
+                total_descuentos_monto = float(b.total_descuentos + b.ncs_calculadas)
+                total_con_descuentos = float(b.total_motor)
+                descuentos_desglose = []
+                for d in b.descuentos_detalle:
+                    descuentos_desglose.append({
+                        "origen": d.origen,
+                        "descripcion": d.descripcion,
+                        "monto": float(d.monto)
+                    })
+                if b.ncs_calculadas > Decimal("0") and not any(d["origen"] == "primera_compra" for d in descuentos_desglose):
+                    descuentos_desglose.append({
+                        "origen": "primera_compra",
+                        "descripcion": "Obsequio / Promo Primera Compra",
+                        "monto": float(b.ncs_calculadas)
+                    })
+            else:
+                total_descuentos_monto = 0.0
+                total_con_descuentos = float(o.monto_total)
+                descuentos_desglose = []
+
+            saldo_deudor_con_descuentos = max(0.0, total_con_descuentos - float(pagado))
+
             reporte.append({
                 "so_id": o.so_id,
                 "cliente_nombre": client_name,
@@ -649,8 +677,12 @@ async def get_reporte_saldos():
                 "monto_total_proyectado_usd": float(monto_total_proyectado_usd),
                 "monto_pagado": float(pagado),
                 "saldo_deudor": float(saldo) if saldo > Decimal("0") else 0.0,
+                "total_con_descuentos": total_con_descuentos,
+                "total_descuentos_monto": total_descuentos_monto,
+                "saldo_deudor_con_descuentos": float(saldo_deudor_con_descuentos),
+                "descuentos_desglose": descuentos_desglose,
                 "facturada": o.facturada,
-                "candidata_a_cierre": saldo <= Decimal("0.05"),
+                "candidata_a_cierre": saldo <= Decimal("0.05") or saldo_deudor_con_descuentos <= 0.05,
                 "reconciliacion": {
                     "resultado": conc.resultado.value if conc else "pendiente"
                 } if conc else None

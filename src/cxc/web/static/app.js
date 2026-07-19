@@ -437,13 +437,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderReporteTable(data) {
         if (data.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
             return;
         }
 
         reporteTableBody.innerHTML = "";
         data.forEach(item => {
             const row = document.createElement("tr");
+
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val);
 
             // Format Odoo State
             let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
@@ -464,16 +466,54 @@ document.addEventListener("DOMContentLoaded", () => {
                 semHtml = `<span class="semaphore ${resVal.toLowerCase()}">${resVal}</span>`;
             }
 
+            // Format Descuentos Aplicados Breakdown
+            const baseTotal = item.monto_total || 0;
+            const totalDesc = item.total_descuentos_monto || 0;
+            const pctTotal = baseTotal > 0 ? (totalDesc / baseTotal * 100) : 0;
+            let descuentosHtml = '<span style="color:#94a3b8">$0.00 (0%)</span>';
+
+            if (totalDesc > 0) {
+                let itemsList = '';
+                if (item.descuentos_desglose && item.descuentos_desglose.length > 0) {
+                    itemsList = item.descuentos_desglose.map(d => {
+                        const itemPct = baseTotal > 0 ? (d.monto / baseTotal * 100) : (d.porcentaje || 0);
+                        const label = d.descripcion || d.origen;
+                        return `<div>• ${label}: <strong>${fmt(d.monto)}</strong> (${itemPct.toFixed(1)}%)</div>`;
+                    }).join("");
+                } else {
+                    itemsList = `<div>• Descuentos: <strong>${fmt(totalDesc)}</strong> (${pctTotal.toFixed(1)}%)</div>`;
+                }
+
+                descuentosHtml = `
+                    <div>
+                        <strong style="color: #059669">${fmt(totalDesc)} (${pctTotal.toFixed(1)}%)</strong>
+                        <div style="font-size:0.72rem; color:#475569; margin-top:2px; line-height:1.3">
+                            ${itemsList}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Format Saldo con Descuentos
+            const saldoNeto = item.saldo_deudor_con_descuentos !== undefined ? item.saldo_deudor_con_descuentos : Math.max(0, (item.total_con_descuentos || baseTotal) - (item.monto_pagado || 0));
+            const totalNetoMotor = item.total_con_descuentos !== undefined ? item.total_con_descuentos : baseTotal;
+            const saldoNetoColor = saldoNeto > 0.05 ? '#2563eb' : '#059669';
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
                 <td><span class="state-badge">${item.lista_precios}</span></td>
                 <td>${item.fecha}</td>
-                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.subtotal)}</td>
-                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total)}</td>
-                <td><strong style="color: #2563eb;">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_total_proyectado_usd)}</strong></td>
-                <td>${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.monto_pagado)}</td>
-                <td><strong style="color: ${item.saldo_deudor > 0 ? '#fbbf24' : '#10b981'}">${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(item.saldo_deudor)}</strong></td>
+                <td>${fmt(item.subtotal)}</td>
+                <td>${fmt(item.monto_total)}</td>
+                <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
+                <td>${fmt(item.monto_pagado)}</td>
+                <td><strong style="color: ${item.saldo_deudor > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor)}</strong></td>
+                <td>
+                    <strong style="color: ${saldoNetoColor}">${fmt(saldoNeto)}</strong>
+                    <div style="font-size:0.7rem; color:#64748b">Neto Motor: ${fmt(totalNetoMotor)}</div>
+                </td>
+                <td>${descuentosHtml}</td>
                 <td>${odooHtml}</td>
                 <td>${closeHtml}</td>
                 <td>${semHtml}</td>
