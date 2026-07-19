@@ -1481,6 +1481,10 @@ async def get_auditoria():
             if pt_id:
                 prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
 
+        # Load accepted anomalies from Google Sheets
+        anomalias_aceptadas_rows = repo._g.read_rows("AnomaliasAceptadas")
+        aceptadas_map = {r.get("anomalia_id"): r for r in anomalias_aceptadas_rows}
+
         lines_by_so = {}
         for r in lines_rows:
             so = r.get("so_id", "")
@@ -1488,7 +1492,7 @@ async def get_auditoria():
                 lines_by_so.setdefault(so, []).append(r)
 
         operaciones_conformes = []
-        discrepancias = []
+        raw_discrepancias = []
 
         for o in ordenes:
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
@@ -1535,7 +1539,7 @@ async def get_auditoria():
                         diff_unit = price_official - price_order
                         diff_monto = float(diff_unit * qty)
                         diff_pct = float((diff_unit / price_official) * 100) if price_official > 0 else 0.0
-                        discrepancias.append({
+                        raw_discrepancias.append({
                             "so_id": o.so_id,
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
@@ -1554,7 +1558,7 @@ async def get_auditoria():
                     if not b or (b and b.total_descuentos == Decimal("0") and b.ncs_calculadas == Decimal("0")):
                         has_discrepancy = True
                         disc_monto = float((price_order * qty) * (disc / Decimal("100")))
-                        discrepancias.append({
+                        raw_discrepancias.append({
                             "so_id": o.so_id,
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
@@ -1567,7 +1571,7 @@ async def get_auditoria():
                             "diferencia_porcentaje": float(disc)
                         })
 
-            # Check 3: Sub-facturación / Sobre-facturación
+            # Check 3: Sub-facturación / Sobre-facturación / Orden vs Factura
             if o.facturada and o.monto_facturado:
                 net_expected = b.total_motor if b else o.monto_total
                 diff_inv = o.monto_facturado - net_expected
@@ -1575,13 +1579,13 @@ async def get_auditoria():
                     has_discrepancy = True
                     tipo_str = "Sobre-facturación" if diff_inv > Decimal("0") else "Sub-facturación"
                     pct_inv = float((abs(diff_inv) / net_expected) * 100) if net_expected > 0 else 0.0
-                    discrepancias.append({
+                    raw_discrepancias.append({
                         "so_id": o.so_id,
                         "factura_id": o.factura_id or "N/A",
                         "cliente_nombre": c_name,
                         "vendedor": o.vendedor_email or "N/A",
                         "tipo": tipo_str,
-                        "detalle": f"Factura Odoo (${float(o.monto_facturado):.2f}) no coincide con Neto Motor (${float(net_expected):.2f})",
+                        "detalle": f"Factura Odoo (${float(o.monto_facturado):.2f}) no coincide con Neto Orden Esperado (${float(net_expected):.2f})",
                         "esperado": float(net_expected),
                         "actual": float(o.monto_facturado),
                         "diferencia_monto": round(float(abs(diff_inv)), 2),
@@ -1602,15 +1606,64 @@ async def get_auditoria():
                     "estado": "Conforme 100%"
                 })
 
+        # Separate into pending discrepancies and accepted anomalies
+        discrepancias_pendientes = []
+        anomalias_aceptadas = []
+
+        for item in raw_discrepancias:
+            tipo_clean = item["tipo"].replace(" ", "_").upper()
+            anomalia_id = f"ANOM_{item['so_id']}_{tipo_clean}_{item['factura_id']}"
+            item["anomalia_id"] = anomalia_id
+
+            if anomalia_id in aceptadas_map:
+                ac_rec = aceptadas_map[anomalia_id]
+                item["motivo_aceptacion"] = ac_rec.get("motivo_aceptacion", "Revisado y Aceptado")
+                item["aprobado_por"] = ac_rec.get("aprobado_por", "Dirección")
+                item["timestamp_aprobacion"] = ac_rec.get("timestamp_aprobacion", "")
+                anomalias_aceptadas.append(item)
+            else:
+                discrepancias_pendientes.append(item)
+
         return {
             "operaciones_conformes": operaciones_conformes,
-            "discrepancias": discrepancias,
+            "discrepancias": discrepancias_pendientes,
+            "anomalias_aceptadas": anomalias_aceptadas,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
-                "total_discrepancias": len(discrepancias),
-                "monto_discrepancia_total": round(sum(d["diferencia_monto"] for d in discrepancias), 2)
+                "total_discrepancias": len(discrepancias_pendientes),
+                "total_aceptadas": len(anomalias_aceptadas),
+                "monto_discrepancia_total": round(sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2)
             }
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AceptarAnomaliaRequest(BaseModel):
+    anomalia_id: str
+    so_id: str
+    factura_id: str = "N/A"
+    tipo_anomalia: str
+    motivo_aceptacion: str = "Revisado y Aceptado en Auditoría"
+    aprobado_por: str = "Dirección / Auditor"
+
+
+@app.post("/api/auditoria/aceptar-anomalia")
+async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
+    try:
+        repo = get_repo()
+        row = {
+            "anomalia_id": req.anomalia_id,
+            "so_id": req.so_id,
+            "factura_id": req.factura_id,
+            "tipo_anomalia": req.tipo_anomalia,
+            "motivo_aceptacion": req.motivo_aceptacion,
+            "aprobado_por": req.aprobado_por,
+            "timestamp_aprobacion": datetime.now().isoformat()
+        }
+        repo._g.append_row("AnomaliasAceptadas", row)
+        return {"status": "success", "message": "Anomalía aceptada y movida al historial de revisiones."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

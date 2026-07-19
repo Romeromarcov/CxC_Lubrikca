@@ -114,8 +114,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Elements - Auditoria
     const auditKpiConformes = document.getElementById("audit-kpi-conformes");
     const auditKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
+    const auditKpiAceptadas = document.getElementById("audit-kpi-aceptadas");
     const auditKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
     const discrepanciasTableBody = document.getElementById("discrepancias-table-body");
+    const anomaliasAceptadasTableBody = document.getElementById("anomalias-aceptadas-table-body");
     const conformesTableBody = document.getElementById("conformes-table-body");
 
     // Tab Navigation Logic
@@ -535,7 +537,8 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadAuditoria() {
         if (!discrepanciasTableBody || !conformesTableBody) return;
         try {
-            discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
+            discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
+            if (anomaliasAceptadasTableBody) anomaliasAceptadasTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando anomalías aceptadas...</td></tr>';
             conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando operaciones conformes...</td></tr>';
 
             const res = await fetch("/api/auditoria");
@@ -547,11 +550,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const summary = data.resumen_auditoria;
                 if (auditKpiConformes) auditKpiConformes.textContent = summary.total_conformes;
                 if (auditKpiDiscrepancias) auditKpiDiscrepancias.textContent = summary.total_discrepancias;
+                if (auditKpiAceptadas) auditKpiAceptadas.textContent = summary.total_aceptadas || 0;
                 if (auditKpiMontoDiscrepancia) auditKpiMontoDiscrepancia.textContent = fmt(summary.monto_discrepancia_total);
 
-                // Render Discrepancias
+                // Render Discrepancias Pendientes
                 if (data.discrepancias.length === 0) {
-                    discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias de precio ni facturación. Todos los registros coinciden con las reglas del motor.</td></tr>';
+                    discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias pendientes. Todas las anomalías están revisadas o conformes.</td></tr>';
                 } else {
                     discrepanciasTableBody.innerHTML = "";
                     data.discrepancias.forEach(item => {
@@ -562,8 +566,14 @@ document.addEventListener("DOMContentLoaded", () => {
                         } else if (item.tipo.includes("Descuento")) {
                             tipoBadge = '<span class="state-badge" style="background:#ffedd5;color:#c2410c">Desc. No Explicado</span>';
                         } else {
-                            tipoBadge = '<span class="state-badge" style="background:#fef2f2;color:#dc2626">Descalce Factura</span>';
+                            tipoBadge = '<span class="state-badge" style="background:#fef2f2;color:#dc2626">Orden vs Factura</span>';
                         }
+
+                        const actionBtn = document.createElement("button");
+                        actionBtn.className = "btn-primary";
+                        actionBtn.style.cssText = "padding:4px 8px;font-size:0.75rem;background:#2563eb;";
+                        actionBtn.textContent = "Aceptar Anomalía";
+                        actionBtn.onclick = () => aceptarAnomalia(item);
 
                         row.innerHTML = `
                             <td><strong>${item.so_id}</strong></td>
@@ -576,9 +586,36 @@ document.addEventListener("DOMContentLoaded", () => {
                             <td>${fmt(item.actual)}</td>
                             <td><strong style="color:#dc2626">${fmt(item.diferencia_monto)}</strong></td>
                             <td><strong style="color:#dc2626">${item.diferencia_porcentaje.toFixed(1)}%</strong></td>
+                            <td></td>
                         `;
+                        row.children[10].appendChild(actionBtn);
                         discrepanciasTableBody.appendChild(row);
                     });
+                }
+
+                // Render Anomalías Aceptadas
+                if (anomaliasAceptadasTableBody) {
+                    const aceptadas = data.anomalias_aceptadas || [];
+                    if (aceptadas.length === 0) {
+                        anomaliasAceptadasTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td></tr>';
+                    } else {
+                        anomaliasAceptadasTableBody.innerHTML = "";
+                        aceptadas.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><small><strong>${item.anomalia_id}</strong></small></td>
+                                <td><strong>${item.so_id}</strong></td>
+                                <td><span class="state-badge">${item.factura_id}</span></td>
+                                <td>${item.cliente_nombre}</td>
+                                <td><span class="state-badge cierre">${item.tipo}</span></td>
+                                <td><strong style="color:#2563eb">${fmt(item.diferencia_monto)}</strong></td>
+                                <td>${item.motivo_aceptacion || 'Revisado y Aceptado'}</td>
+                                <td>${item.aprobado_por || 'Dirección'}</td>
+                                <td><small>${item.timestamp_aprobacion ? item.timestamp_aprobacion.substring(0, 10) : ''}</small></td>
+                            `;
+                            anomaliasAceptadasTableBody.appendChild(row);
+                        });
+                    }
                 }
 
                 // Render Operaciones Conformes
@@ -604,8 +641,39 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             console.error("Error loading auditoria:", err);
-            if (discrepanciasTableBody) discrepanciasTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar auditoría.</td></tr>';
+            if (discrepanciasTableBody) discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Error de red al cargar auditoría.</td></tr>';
             if (conformesTableBody) conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar auditoría.</td></tr>';
+        }
+    }
+
+    async function aceptarAnomalia(item) {
+        const motivo = prompt(`Ingresa el motivo de aceptación/aprobación de la anomalía en ${item.so_id}:`, "Revisado por Dirección - Negociación cerrada con cliente");
+        if (!motivo) return;
+
+        try {
+            const res = await fetch("/api/auditoria/aceptar-anomalia", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    anomalia_id: item.anomalia_id,
+                    so_id: item.so_id,
+                    factura_id: item.factura_id,
+                    tipo_anomalia: item.tipo,
+                    motivo_aceptacion: motivo,
+                    aprobado_por: "Dirección / Auditor Web"
+                })
+            });
+
+            if (res.ok) {
+                alert("✅ Anomalía aceptada y movida al historial de revisiones.");
+                loadAuditoria();
+            } else {
+                const err = await res.json();
+                alert(`❌ Error al aceptar anomalía: ${err.detail || 'Error en servidor'}`);
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar aceptación.");
+            console.error(err);
         }
     }
 

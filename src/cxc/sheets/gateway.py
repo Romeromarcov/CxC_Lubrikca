@@ -160,7 +160,8 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 "PromocionPrimeraCompra": ["regla_id", "tipo_beneficio", "productos", "valor", "compra_minima", "regalo_tipo", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
                 "Feriados": ["fecha", "descripcion", "tipo"],
-                "Exclusiones": ["regla_tipo_a", "regla_tipo_b", "activo"]
+                "Exclusiones": ["regla_tipo_a", "regla_tipo_b", "activo"],
+                "AnomaliasAceptadas": ["anomalia_id", "so_id", "factura_id", "tipo_anomalia", "motivo_aceptacion", "aprobado_por", "timestamp_aprobacion"]
             }
             cols = headers.get(table, ["id"])
             ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)

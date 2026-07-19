@@ -335,26 +335,30 @@
         <div id="tab-auditoria" class="tab-panel">
             <div class="auditoria-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <!-- KPIs Resumen de Auditoría -->
-                <section class="kpi-panel">
+                <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
                     <div class="kpi-card card">
-                        <span class="kpi-label">Operaciones Conformes (100%)</span>
+                        <span class="kpi-label">Operaciones Conformes</span>
                         <span class="kpi-value" style="color: #059669" id="audit-kpi-conformes">0</span>
                     </div>
                     <div class="kpi-card card">
-                        <span class="kpi-label">Discrepancias Detectadas</span>
+                        <span class="kpi-label">Discrepancias Pendientes</span>
                         <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
                     </div>
                     <div class="kpi-card card">
-                        <span class="kpi-label">Monto Total Discrepancias ($)</span>
+                        <span class="kpi-label">Anomalías Aceptadas</span>
+                        <span class="kpi-value" style="color: #2563eb" id="audit-kpi-aceptadas">0</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Monto Discrepancia Pendiente</span>
                         <span class="kpi-value warning" id="audit-kpi-monto-discrepancia">$0.00</span>
                     </div>
                 </section>
 
-                <!-- SECCIÓN 2: Discrepancias y Anomalías Detectadas -->
+                <!-- SECCIÓN 2: Discrepancias y Anomalías Pendientes -->
                 <section class="auditoria-panel card">
                     <div class="panel-header">
-                        <h2>Discrepancias y Anomalías Detectadas</h2>
-                        <p>Precios inferiores a lista oficial, descuentos manuales sin regla aprobada e inconsistencias de facturación</p>
+                        <h2>Discrepancias y Anomalías Pendientes (Requieren Revisión)</h2>
+                        <p>Precios inferiores a lista oficial, descuentos manuales sin regla e inconsistencias orden vs factura</p>
                     </div>
 
                     <div class="table-wrapper large-table">
@@ -371,11 +375,43 @@
                                     <th>Actual ($)</th>
                                     <th>Discrepancia ($)</th>
                                     <th>% Discrepancia</th>
+                                    <th>Acción</th>
                                 </tr>
                             </thead>
                             <tbody id="discrepancias-table-body">
                                 <tr>
-                                    <td colspan="10" class="table-empty">Cargando auditoría de discrepancias...</td>
+                                    <td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- SECCIÓN 3: Anomalías Aceptadas y Revisadas -->
+                <section class="auditoria-panel card">
+                    <div class="panel-header">
+                        <h2>Anomalías Aceptadas y Revisadas (Historial Aprobado)</h2>
+                        <p>Registro de discrepancias ya auditadas y aceptadas por dirección/ventas que no serán modificadas en Odoo</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>ID Anomalía</th>
+                                    <th>Orden (SO)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Cliente</th>
+                                    <th>Tipo de Anomalía</th>
+                                    <th>Discrepancia ($)</th>
+                                    <th>Motivo de Aceptación</th>
+                                    <th>Aprobado Por</th>
+                                    <th>Fecha Revisión</th>
+                                </tr>
+                            </thead>
+                            <tbody id="anomalias-aceptadas-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
                                 </tr>
                             </tbody>
                         </table>
