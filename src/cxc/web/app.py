@@ -92,6 +92,52 @@ class ExclusionRequest(BaseModel):
     regla_tipo_b: str
     activo: bool = True
 
+class ProntoPagoRequest(BaseModel):
+    marca: str = "*"
+    categoria: str = "*"
+    dias_gracia: int = 3
+    porcentaje: float = 0.05
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+class RecompraRequest(BaseModel):
+    porcentaje: float = 0.05
+    max_usos_mes: int = 2
+    dias_ventana: int = 30
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+class ProductoPromoRequest(BaseModel):
+    productos: str = "*"
+    marca: str = "*"
+    categoria: str = "*"
+    porcentaje: float = 0.05
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+class DiferencialCambiarioRequest(BaseModel):
+    nombre: str
+    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    tipo_calculo: str      # 'fijo' | 'variable'
+    porcentaje_fijo: float = 0.35
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+class ToggleDescuentoRequest(BaseModel):
+    tabla: str
+    regla_id: str
+    activo: bool
+
 class DescuentoVolumenRequest(BaseModel):
     marca: str
     categoria: str
@@ -1397,6 +1443,301 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         )
         repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Pronto Pago Endpoints ---
+@app.get("/api/config/descuentos-pronto-pago")
+async def get_config_pronto_pago():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_pronto_pago()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "dias_gracia": r.dias_gracia,
+                "porcentaje": float(r.porcentaje),
+                "monedas_aplicables": r.monedas_aplicables,
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-pronto-pago")
+async def post_config_pronto_pago(req: ProntoPagoRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoProntoPago
+        from cxc.sheets import serde
+        import uuid
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+
+        regla_id = f"PP_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoProntoPago(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            dias_gracia=req.dias_gracia,
+            porcentaje=Decimal(str(req.porcentaje)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Recompra Endpoints ---
+@app.get("/api/config/descuentos-recompra")
+async def get_config_recompra():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_recompra()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "porcentaje": float(r.porcentaje),
+                "max_usos_mes": r.max_usos_mes,
+                "dias_ventana": r.dias_ventana,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-recompra")
+async def post_config_recompra(req: RecompraRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoRecompra
+        from cxc.sheets import serde
+        import uuid
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+
+        regla_id = f"REC_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoRecompra(
+            regla_id=regla_id,
+            porcentaje=Decimal(str(req.porcentaje)),
+            max_usos_mes=req.max_usos_mes,
+            dias_ventana=req.dias_ventana,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row("DescuentosRecompra", serde.recompra_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento por recompra registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Producto Promo Endpoints ---
+@app.get("/api/config/descuentos-producto")
+async def get_config_producto():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_producto()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "productos": r.productos,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "porcentaje": float(r.porcentaje),
+                "monedas_aplicables": r.monedas_aplicables,
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-producto")
+async def post_config_producto(req: ProductoPromoRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoProducto
+        from cxc.sheets import serde
+        import uuid
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+
+        regla_id = f"PROD_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoProducto(
+            regla_id=regla_id,
+            productos=req.productos,
+            marca=req.marca,
+            categoria=req.categoria,
+            porcentaje=Decimal(str(req.porcentaje)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row("DescuentosProducto", serde.producto_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento por producto registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Diferencial Cambiario Endpoints ---
+@app.get("/api/config/descuentos-diferencial-cambiario")
+async def get_config_diferencial():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_diferencial_cambiario()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "nombre": r.nombre,
+                "tipo_diferencial": r.tipo_diferencial,
+                "tipo_calculo": r.tipo_calculo,
+                "porcentaje_fijo": float(r.porcentaje_fijo),
+                "monedas_aplicables": r.monedas_aplicables,
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-diferencial-cambiario")
+async def post_config_diferencial(req: DiferencialCambiarioRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoDiferencialCambiario
+        from cxc.sheets import serde
+        import uuid
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+
+        regla_id = f"DIF_{uuid.uuid4().hex[:8].upper()}"
+        rule = DescuentoDiferencialCambiario(
+            regla_id=regla_id,
+            nombre=req.nombre,
+            tipo_diferencial=req.tipo_diferencial,
+            tipo_calculo=req.tipo_calculo,
+            porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(rule))
+        return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Toggle Rule Active Endpoint ---
+@app.post("/api/config/toggle-descuento")
+async def post_toggle_descuento(req: ToggleDescuentoRequest):
+    try:
+        repo = get_repo()
+        ws = repo._g._ws(req.tabla)
+        records = ws.get_all_records()
+        row_idx = None
+        for i, r in enumerate(records):
+            if str(r.get("regla_id")) == req.regla_id:
+                row_idx = i + 2
+                break
+
+        if row_idx is None:
+            raise HTTPException(status_code=404, detail="Regla no encontrada en la tabla.")
+
+        headers = ws.row_values(1)
+        if "activo" in headers:
+            col_idx = headers.index("activo") + 1
+            col_letter = chr(64 + col_idx) if col_idx <= 26 else "A"
+            ws.update(f"{col_letter}{row_idx}", [[str(req.activo).upper()]])
+            return {"status": "success", "message": f"Estado de la regla {req.regla_id} actualizado a {'Activo' if req.activo else 'Inactivo'}."}
+        else:
+            raise HTTPException(status_code=400, detail="La tabla no tiene columna 'activo'.")
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Rate Averages Endpoint ---
+@app.get("/api/config/tasas-promedios")
+async def get_tasas_promedios():
+    try:
+        repo = get_repo()
+        rows = repo._g.read_rows("SerieTasas")
+        today_str = date.today().isoformat()
+        
+        rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
+        
+        manana = []
+        tarde = []
+        diario = []
+
+        last_bcv = Decimal("0")
+        for r in (rates_today or rows[-24:]):
+            try:
+                tb = Decimal(str(r.get("tasa_binance", "0")))
+                if tb > Decimal("0"):
+                    diario.append(tb)
+                    ts_hour = int(r.get("timestamp", "00:00").split("T")[-1].split(" ")[-1].split(":")[0])
+                    if ts_hour < 12:
+                        manana.append(tb)
+                    else:
+                        tarde.append(tb)
+                t_bcv = Decimal(str(r.get("tasa_bcv", "0")))
+                if t_bcv > Decimal("0"):
+                    last_bcv = t_bcv
+            except:
+                pass
+
+        avg_m = float(sum(manana) / Decimal(len(manana))) if manana else None
+        avg_t = float(sum(tarde) / Decimal(len(tarde))) if tarde else None
+        avg_d = float(sum(diario) / Decimal(len(diario))) if diario else None
+        
+        diff_pct = 0.0
+        if avg_d and last_bcv > Decimal("0"):
+            diff_pct = float(((Decimal(str(avg_d)) - last_bcv) / Decimal(str(avg_d))) * 100)
+
+        return {
+            "fecha": today_str,
+            "tasa_bcv_actual": float(last_bcv),
+            "tasa_binance_manana": round(avg_m, 2) if avg_m else None,
+            "tasa_binance_tarde": round(avg_t, 2) if avg_t else None,
+            "tasa_binance_diario": round(avg_d, 2) if avg_d else None,
+            "diferencial_bcv_binance_pct": round(diff_pct, 2)
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

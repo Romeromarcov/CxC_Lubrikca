@@ -9,6 +9,7 @@ de trabajo humano.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from ..models import (
     BandejaFacturacion,
@@ -16,6 +17,10 @@ from ..models import (
     Conciliacion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoProntoPago,
+    DescuentoRecompra,
+    DescuentoProducto,
+    DescuentoDiferencialCambiario,
     DescuentoVolumen,
     ExclusionRegla,
     Feriado,
@@ -141,9 +146,32 @@ class SheetsRepository(Repository):
         )
 
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
-        return [
-            serde.descuento_from_row(r) for r in self._g.read_rows(g.T_DESCUENTOS)
-        ]
+        rows = self._g.read_rows("DescuentosProntoPago")
+        if not rows:
+            rows = self._g.read_rows(g.T_DESCUENTOS)
+        return [serde.pronto_pago_from_row(r) for r in rows]
+
+    def descuentos_pronto_pago(self) -> list[DescuentoProntoPago]:
+        return self.descuentos_marca_categoria()
+
+    def descuentos_recompra(self) -> list[DescuentoRecompra]:
+        rows = self._g.read_rows("DescuentosRecompra")
+        if not rows:
+            return [DescuentoRecompra(regla_id="RECOMPRA_DEFAULT", porcentaje=Decimal("0.05"), max_usos_mes=2, dias_ventana=30)]
+        return [serde.recompra_from_row(r) for r in rows]
+
+    def descuentos_producto(self) -> list[DescuentoProducto]:
+        return [serde.producto_from_row(r) for r in self._g.read_rows("DescuentosProducto")]
+
+    def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
+        rows = self._g.read_rows("DescuentosDiferencialCambiario")
+        if not rows:
+            return [
+                DescuentoDiferencialCambiario(regla_id="DIF_35_VES", nombre="35% Fijo VES a USD", tipo_diferencial="fijo_35_ves_usd", tipo_calculo="fijo", porcentaje_fijo=Decimal("0.35")),
+                DescuentoDiferencialCambiario(regla_id="DIF_EQUIPARAR", nombre="Equiparar Binance N/C", tipo_diferencial="equiparar_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0")),
+                DescuentoDiferencialCambiario(regla_id="DIF_BRECHA_CIERRE", nombre="Brecha BCV vs Binance Cierre", tipo_diferencial="diferencial_bcv_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"))
+            ]
+        return [serde.diferencial_from_row(r) for r in rows]
 
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
         return [

@@ -20,6 +20,10 @@ from ..models import (
     DescuentoAplicado,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoProntoPago,
+    DescuentoRecompra,
+    DescuentoProducto,
+    DescuentoDiferencialCambiario,
     DescuentoVolumen,
     EstadoBandeja,
     EstadoVinculacion,
@@ -211,6 +215,10 @@ def serie_to_row(s: SerieTasa) -> Row:
         "timestamp": s_dt(s.timestamp), "tasa_bcv": str(s.tasa_bcv),
         "tasa_binance": str(s.tasa_binance), "fuente": s.fuente,
         "es_heredada": s_bool(s.es_heredada), "capturada_ok": s_bool(s.capturada_ok),
+        "tasa_binance_manana": str(s.tasa_binance_manana) if s.tasa_binance_manana else "",
+        "tasa_binance_tarde": str(s.tasa_binance_tarde) if s.tasa_binance_tarde else "",
+        "tasa_binance_diario": str(s.tasa_binance_diario) if s.tasa_binance_diario else "",
+        "diferencial_bcv_binance_pct": str(s.diferencial_bcv_binance_pct) if s.diferencial_bcv_binance_pct else "",
     }
 
 
@@ -220,30 +228,130 @@ def serie_from_row(r: Mapping[str, str]) -> SerieTasa:
         tasa_binance=p_dec(r.get("tasa_binance", "0")), fuente=r.get("fuente", ""),
         es_heredada=p_bool(r.get("es_heredada", "FALSE")),
         capturada_ok=p_bool(r.get("capturada_ok", "TRUE")),
+        tasa_binance_manana=p_dec(r.get("tasa_binance_manana", "")) if r.get("tasa_binance_manana") else None,
+        tasa_binance_tarde=p_dec(r.get("tasa_binance_tarde", "")) if r.get("tasa_binance_tarde") else None,
+        tasa_binance_diario=p_dec(r.get("tasa_binance_diario", "")) if r.get("tasa_binance_diario") else None,
+        diferencial_bcv_binance_pct=p_dec(r.get("diferencial_bcv_binance_pct", "")) if r.get("diferencial_bcv_binance_pct") else None,
     )
 
 
-# --- DescuentosMarcaCategoria ------------------------------------------------
-def descuento_to_row(d: DescuentoMarcaCategoria) -> Row:
+# --- DescuentosProntoPago ---------------------------------------------------
+def pronto_pago_to_row(d: DescuentoProntoPago) -> Row:
     return {
         "regla_id": d.regla_id, "marca": d.marca, "categoria": d.categoria,
-        "tipo_descuento": d.tipo_descuento.value, "porcentaje": str(d.porcentaje),
+        "dias_gracia": str(d.dias_gracia), "porcentaje": str(d.porcentaje),
+        "monedas_aplicables": d.monedas_aplicables,
+        "listas_aplicables": d.listas_aplicables,
         "vigencia_desde": d.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
-        "listas_aplicables": d.listas_aplicables,
         "activo": s_bool(d.activo),
     }
 
 
-def descuento_from_row(r: Mapping[str, str]) -> DescuentoMarcaCategoria:
-    return DescuentoMarcaCategoria(
-        regla_id=r["regla_id"], marca=r.get("marca", "*"),
+def pronto_pago_from_row(r: Mapping[str, str]) -> DescuentoProntoPago:
+    return DescuentoProntoPago(
+        regla_id=r.get("regla_id", "PRONTO_PAGO_DEFAULT"),
+        marca=r.get("marca", "*"),
         categoria=r.get("categoria", "*"),
-        tipo_descuento=TipoDescuento(r.get("tipo_descuento", "contado")),
-        porcentaje=p_dec(r.get("porcentaje", "0")),
-        vigencia_desde=p_date(r["vigencia_desde"]),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        dias_gracia=int(r.get("dias_gracia", "3")),
+        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        monedas_aplicables=r.get("monedas_aplicables", "*"),
         listas_aplicables=r.get("listas_aplicables", "*"),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+descuento_to_row = pronto_pago_to_row
+
+def descuento_from_row(r: Mapping[str, str]) -> DescuentoProntoPago:
+    return pronto_pago_from_row(r)
+
+
+# --- DescuentoRecompra ------------------------------------------------------
+def recompra_to_row(d: DescuentoRecompra) -> Row:
+    return {
+        "regla_id": d.regla_id,
+        "porcentaje": str(d.porcentaje),
+        "max_usos_mes": str(d.max_usos_mes),
+        "dias_ventana": str(d.dias_ventana),
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "activo": s_bool(d.activo),
+    }
+
+
+def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
+    return DescuentoRecompra(
+        regla_id=r.get("regla_id", "RECOMPRA_DEFAULT"),
+        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        max_usos_mes=int(r.get("max_usos_mes", "2")),
+        dias_ventana=int(r.get("dias_ventana", "30")),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- DescuentoProducto ------------------------------------------------------
+def producto_to_row(d: DescuentoProducto) -> Row:
+    return {
+        "regla_id": d.regla_id,
+        "productos": d.productos,
+        "marca": d.marca,
+        "categoria": d.categoria,
+        "porcentaje": str(d.porcentaje),
+        "monedas_aplicables": d.monedas_aplicables,
+        "listas_aplicables": d.listas_aplicables,
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "activo": s_bool(d.activo),
+    }
+
+
+def producto_from_row(r: Mapping[str, str]) -> DescuentoProducto:
+    return DescuentoProducto(
+        regla_id=r.get("regla_id", "PROD_DEFAULT"),
+        productos=r.get("productos", "*"),
+        marca=r.get("marca", "*"),
+        categoria=r.get("categoria", "*"),
+        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        monedas_aplicables=r.get("monedas_aplicables", "*"),
+        listas_aplicables=r.get("listas_aplicables", "*"),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
+    )
+
+
+# --- DescuentoDiferencialCambiario -------------------------------------------
+def diferencial_to_row(d: DescuentoDiferencialCambiario) -> Row:
+    return {
+        "regla_id": d.regla_id,
+        "nombre": d.nombre,
+        "tipo_diferencial": d.tipo_diferencial,
+        "tipo_calculo": d.tipo_calculo,
+        "porcentaje_fijo": str(d.porcentaje_fijo),
+        "monedas_aplicables": d.monedas_aplicables,
+        "listas_aplicables": d.listas_aplicables,
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "activo": s_bool(d.activo),
+    }
+
+
+def diferencial_from_row(r: Mapping[str, str]) -> DescuentoDiferencialCambiario:
+    return DescuentoDiferencialCambiario(
+        regla_id=r.get("regla_id", "DIF_DEFAULT"),
+        nombre=r.get("nombre", "Descuento Diferencial Cambiario"),
+        tipo_diferencial=r.get("tipo_diferencial", "fijo_35_ves_usd"),
+        tipo_calculo=r.get("tipo_calculo", "fijo"),
+        porcentaje_fijo=p_dec(r.get("porcentaje_fijo", "0.35")),
+        monedas_aplicables=r.get("monedas_aplicables", "*"),
+        listas_aplicables=r.get("listas_aplicables", "*"),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
     )
 

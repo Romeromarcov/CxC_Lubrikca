@@ -62,6 +62,48 @@ class RatesScraper:
         else:
             fila = self._heredar(now)
 
+        # Compute morning, afternoon, and daily averages for the current day
+        try:
+            today_str = now.strftime("%Y-%m-%d")
+            rows_today = [
+                r for r in self._repo._g.read_rows("SerieTasas")
+                if r.get("timestamp", "").startswith(today_str)
+            ]
+            
+            manana_rates = []
+            tarde_rates = []
+            diario_rates = []
+
+            for r in rows_today:
+                try:
+                    tb = Decimal(str(r.get("tasa_binance", "0")))
+                    if tb > Decimal("0"):
+                        diario_rates.append(tb)
+                        ts_hour = int(r.get("timestamp", "00:00").split("T")[-1].split(" ")[-1].split(":")[0])
+                        if ts_hour < 12:
+                            manana_rates.append(tb)
+                        else:
+                            tarde_rates.append(tb)
+                except:
+                    pass
+
+            if fila.tasa_binance > Decimal("0"):
+                diario_rates.append(fila.tasa_binance)
+                if now.hour < 12:
+                    manana_rates.append(fila.tasa_binance)
+                else:
+                    tarde_rates.append(fila.tasa_binance)
+
+            avg = lambda lst: sum(lst) / Decimal(str(len(lst))) if lst else None
+            fila.tasa_binance_manana = avg(manana_rates)
+            fila.tasa_binance_tarde = avg(tarde_rates)
+            fila.tasa_binance_diario = avg(diario_rates)
+            
+            if fila.tasa_binance_diario and fila.tasa_binance_diario > Decimal("0") and fila.tasa_bcv > Decimal("0"):
+                fila.diferencial_bcv_binance_pct = ((fila.tasa_binance_diario - fila.tasa_bcv) / fila.tasa_binance_diario) * Decimal("100")
+        except Exception as e:
+            logger.warning("Error calculando promedios de tasa Binance: %s", e)
+
         self._repo.append_serie_tasa(fila)
         self._chequear_alerta(fila)
         return fila

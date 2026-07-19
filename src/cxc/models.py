@@ -145,20 +145,30 @@ class SerieTasa:
     fuente: str
     es_heredada: bool = False
     capturada_ok: bool = True
+    tasa_binance_manana: Decimal | None = None
+    tasa_binance_tarde: Decimal | None = None
+    tasa_binance_diario: Decimal | None = None
+    diferencial_bcv_binance_pct: Decimal | None = None
 
 
-# --- 3.7 DescuentosMarcaCategoria (configurable, effective dating) -----------
+# --- 3.7 DescuentosProntoPago (configurable, pronto pago con días de gracia) ---
 @dataclass
-class DescuentoMarcaCategoria:
+class DescuentoProntoPago:
     regla_id: str
-    marca: str  # '*' = todas
-    categoria: str  # '*' = todas las de esa marca
-    tipo_descuento: TipoDescuento
-    porcentaje: Decimal
-    vigencia_desde: date
+    marca: str = "*"
+    categoria: str = "*"
+    dias_gracia: int = 3
+    porcentaje: Decimal = Decimal("0.05")
+    monedas_aplicables: str = "*"  # "USD", "VES", "*"
+    listas_aplicables: str = "*"   # "4", "5", "*"
+    vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
-    listas_aplicables: str = "*"
     activo: bool = True
+    tipo_descuento: TipoDescuento = TipoDescuento.CONTADO
+
+
+# Legacy Alias for backward compatibility
+DescuentoMarcaCategoria = DescuentoProntoPago
 
 
 # --- 3.7_vol DescuentosVolumen (configurable, volume pricing) ----------------
@@ -178,13 +188,6 @@ class DescuentoVolumen:
 # --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
 @dataclass
 class DescuentoBCVCompleto:
-    """Tasa de descuento BCV-completo que fija la gerencia (por fecha).
-
-    El descuento aplicado por abono es ``min(porcentaje, diferencial_real)``,
-    donde el diferencial real es ``(binance − bcv)/binance`` del bucket del abono.
-    Nunca excede el diferencial; la gerencia puede otorgar menos.
-    """
-
     vigencia_desde: date
     porcentaje: Decimal
     vigencia_hasta: date | None = None
@@ -207,7 +210,49 @@ class PromocionPrimeraCompra:
     activo: bool = True
 
 
-# --- 3.7d ExclusionRegla (configurable) --------------------------------------
+# --- 3.7d DescuentoRecompra (configurable, recompra/recurrencia) -----------
+@dataclass
+class DescuentoRecompra:
+    regla_id: str
+    porcentaje: Decimal = Decimal("0.05")
+    max_usos_mes: int = 2
+    dias_ventana: int = 30
+    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_hasta: date | None = None
+    activo: bool = True
+
+
+# --- 3.7e DescuentoProducto (configurable, promoción específica por producto) -
+@dataclass
+class DescuentoProducto:
+    regla_id: str
+    productos: str  # CSV de SKUs/IDs de producto o '*'
+    marca: str = "*"
+    categoria: str = "*"
+    porcentaje: Decimal = Decimal("0.05")
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_hasta: date | None = None
+    activo: bool = True
+
+
+# --- 3.7f DescuentoDiferencialCambiario (configurable, diferencial camb) ----
+@dataclass
+class DescuentoDiferencialCambiario:
+    regla_id: str
+    nombre: str
+    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    tipo_calculo: str  # 'fijo' | 'variable'
+    porcentaje_fijo: Decimal = Decimal("0.35")
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_hasta: date | None = None
+    activo: bool = True
+
+
+# --- 3.7g ExclusionRegla (configurable) --------------------------------------
 @dataclass
 class ExclusionRegla:
     regla_tipo_a: str

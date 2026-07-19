@@ -845,19 +845,163 @@ document.addEventListener("DOMContentLoaded", () => {
         renderReporteTable(filtered);
     });
 
+    // Form submit handlers for new discount panels
+    const recompraForm = document.getElementById("recompra-form");
+    if (recompraForm) {
+        recompraForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                porcentaje: parseFloat(document.getElementById("cfg-rec-porcentaje").value),
+                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos").value),
+                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana").value),
+                vigencia_desde: document.getElementById("cfg-rec-desde").value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-rec-hasta").value || null,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/descuentos-recompra", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de recompra registrada correctamente.");
+                    recompraForm.reset();
+                    loadRecompra();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    const prontoPagoForm = document.getElementById("pronto-pago-form");
+    if (prontoPagoForm) {
+        prontoPagoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                dias_gracia: parseInt(document.getElementById("cfg-pp-dias-gracia").value),
+                marca: document.getElementById("cfg-pp-marca").value,
+                categoria: document.getElementById("cfg-pp-categoria").value,
+                porcentaje: parseFloat(document.getElementById("cfg-pp-porcentaje").value),
+                monedas_aplicables: document.getElementById("cfg-pp-monedas").value,
+                listas_aplicables: document.getElementById("cfg-pp-listas").value,
+                vigencia_desde: document.getElementById("cfg-pp-desde").value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-pp-hasta").value || null,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/descuentos-pronto-pago", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de pronto pago registrada correctamente.");
+                    prontoPagoForm.reset();
+                    loadProntoPago();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    const productoPromoForm = document.getElementById("producto-promo-form");
+    if (productoPromoForm) {
+        productoPromoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const selProds = Array.from(document.getElementById("cfg-prod-select").selectedOptions).map(o => o.value).join(",");
+            const payload = {
+                productos: selProds || "*",
+                marca: document.getElementById("cfg-prod-marca").value,
+                categoria: document.getElementById("cfg-prod-cat").value,
+                porcentaje: parseFloat(document.getElementById("cfg-prod-porcentaje").value),
+                monedas_aplicables: document.getElementById("cfg-prod-monedas").value,
+                listas_aplicables: document.getElementById("cfg-prod-listas").value,
+                vigencia_desde: document.getElementById("cfg-prod-desde").value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-prod-hasta").value || null,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/descuentos-producto", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de promoción por producto registrada.");
+                    productoPromoForm.reset();
+                    loadProductoPromo();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    const diferencialForm = document.getElementById("diferencial-form");
+    if (diferencialForm) {
+        diferencialForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                nombre: document.getElementById("cfg-dif-nombre").value,
+                tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial").value,
+                tipo_calculo: document.getElementById("cfg-dif-tipo-calculo").value,
+                porcentaje_fijo: parseFloat(document.getElementById("cfg-dif-porcentaje-fijo").value || 0),
+                monedas_aplicables: document.getElementById("cfg-dif-monedas").value,
+                listas_aplicables: "*",
+                vigencia_desde: document.getElementById("cfg-dif-desde").value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-dif-hasta").value || null,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/descuentos-diferencial-cambiario", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de diferencial cambiario registrada.");
+                    diferencialForm.reset();
+                    loadDiferencial();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
     // --- Tab 3: Configuration Panels ---
     async function loadConfigData() {
-        loadSettingsMeta();
+        loadTasasPromedios();
+        loadProntoPago();
+        loadRecompra();
+        loadProductoPromo();
+        loadDiferencial();
         loadTasas();
         loadFeriados();
-        loadPromociones();
-        loadExclusiones();
+        populateBrandsAndCategories();
         loadDescuentosMarca();
         loadDescuentosVolumen();
+        loadPromociones();
+        loadExclusiones();
         loadListasPrecio();
         loadOdooProductos();
         loadClientesAuditoria();
-        populateBrandsAndCategories();
+        loadSettingsMeta();
     }
 
     // Load general Settings meta variables
@@ -951,6 +1095,211 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // --- Load Rates Averages & Differential ---
+    async function loadTasasPromedios() {
+        try {
+            const res = await fetch("/api/config/tasas-promedios");
+            if (res.ok) {
+                const d = await res.json();
+                const bcvLbl = document.getElementById("lbl-rate-bcv-actual");
+                const mLbl = document.getElementById("lbl-rate-binance-manana");
+                const tLbl = document.getElementById("lbl-rate-binance-tarde");
+                const dLbl = document.getElementById("lbl-rate-binance-diario");
+                const diffLbl = document.getElementById("lbl-rate-diferencial-pct");
+
+                if (bcvLbl) bcvLbl.textContent = d.tasa_bcv_actual ? `Bs. ${d.tasa_bcv_actual.toFixed(2)}` : "-";
+                if (mLbl) mLbl.textContent = d.tasa_binance_manana ? `Bs. ${d.tasa_binance_manana.toFixed(2)}` : "N/A";
+                if (tLbl) tLbl.textContent = d.tasa_binance_tarde ? `Bs. ${d.tasa_binance_tarde.toFixed(2)}` : "N/A";
+                if (dLbl) dLbl.textContent = d.tasa_binance_diario ? `Bs. ${d.tasa_binance_diario.toFixed(2)}` : "N/A";
+                if (diffLbl) diffLbl.textContent = `${d.diferencial_bcv_binance_pct.toFixed(2)}%`;
+            }
+        } catch (err) {
+            console.error("Error loading tasas promedios:", err);
+        }
+    }
+
+    // Helper for interactive toggle switch
+    async function toggleRuleActive(tabla, reglaId, currentActive) {
+        try {
+            const res = await fetch("/api/config/toggle-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: !currentActive })
+            });
+            if (res.ok) {
+                loadConfigData();
+            } else {
+                alert("❌ Error al cambiar estado de la regla.");
+            }
+        } catch (err) {
+            console.error("Error toggling rule:", err);
+        }
+    }
+
+    // --- Load Pronto Pago Rules ---
+    async function loadProntoPago() {
+        const tbody = document.getElementById("pronto-pago-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando pronto pago...</td></tr>';
+            const res = await fetch("/api/config/descuentos-pronto-pago");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de pronto pago.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const row = document.createElement("tr");
+                    const statusBtn = document.createElement("button");
+                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
+                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
+                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
+                    statusBtn.onclick = () => toggleRuleActive("DescuentosProntoPago", r.regla_id, r.activo);
+
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${r.marca}</td>
+                        <td>${r.categoria}</td>
+                        <td><strong>${r.dias_gracia} días</strong></td>
+                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
+                        <td><span class="state-badge">${r.listas_aplicables}</span></td>
+                        <td><small>Desde: ${r.vigencia_desde}</small></td>
+                        <td></td>
+                    `;
+                    row.children[8].appendChild(statusBtn);
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar pronto pago.</td></tr>';
+        }
+    }
+
+    // --- Load Recompra Rules ---
+    async function loadRecompra() {
+        const tbody = document.getElementById("recompra-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando reglas de recompra...</td></tr>';
+            const res = await fetch("/api/config/descuentos-recompra");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas de recompra.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const row = document.createElement("tr");
+                    const statusBtn = document.createElement("button");
+                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
+                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
+                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
+                    statusBtn.onclick = () => toggleRuleActive("DescuentosRecompra", r.regla_id, r.activo);
+
+                    row.innerHTML = `
+                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><strong>${r.max_usos_mes}</strong></td>
+                        <td><strong>${r.dias_ventana} días</strong></td>
+                        <td><small>${r.vigencia_desde}</small></td>
+                        <td><small>${r.vigencia_hasta || 'N/A'}</small></td>
+                        <td></td>
+                    `;
+                    row.children[5].appendChild(statusBtn);
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar recompra.</td></tr>';
+        }
+    }
+
+    // --- Load Producto Promo Rules ---
+    async function loadProductoPromo() {
+        const tbody = document.getElementById("producto-promo-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando promociones de productos...</td></tr>';
+            const res = await fetch("/api/config/descuentos-producto");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay promociones por producto.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const row = document.createElement("tr");
+                    const statusBtn = document.createElement("button");
+                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
+                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
+                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
+                    statusBtn.onclick = () => toggleRuleActive("DescuentosProducto", r.regla_id, r.activo);
+
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td><small>${r.productos}</small></td>
+                        <td>${r.marca}</td>
+                        <td>${r.categoria}</td>
+                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
+                        <td><span class="state-badge">${r.listas_aplicables}</span></td>
+                        <td><small>Desde: ${r.vigencia_desde}</small></td>
+                        <td></td>
+                    `;
+                    row.children[8].appendChild(statusBtn);
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar promociones de producto.</td></tr>';
+        }
+    }
+
+    // --- Load Diferencial Rules ---
+    async function loadDiferencial() {
+        const tbody = document.getElementById("diferencial-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando reglas de diferencial...</td></tr>';
+            const res = await fetch("/api/config/descuentos-diferencial-cambiario");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const row = document.createElement("tr");
+                    const statusBtn = document.createElement("button");
+                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
+                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
+                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
+                    statusBtn.onclick = () => toggleRuleActive("DescuentosDiferencialCambiario", r.regla_id, r.activo);
+
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${r.nombre}</td>
+                        <td><span class="state-badge">${r.tipo_diferencial}</span></td>
+                        <td><span class="state-badge">${r.tipo_calculo}</span></td>
+                        <td><strong>${(r.porcentaje_fijo * 100).toFixed(1)}%</strong></td>
+                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
+                        <td><small>Desde: ${r.vigencia_desde}</small></td>
+                        <td></td>
+                    `;
+                    row.children[7].appendChild(statusBtn);
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
+        }
+    }
+
     async function loadFeriados() {
         try {
             feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando feriados...</td></tr>';
@@ -985,14 +1334,16 @@ document.addEventListener("DOMContentLoaded", () => {
             const bRes = await fetch("/api/odoo/marcas");
             if (bRes.ok) {
                 const brands = await bRes.json();
-                cfgDescMarca.innerHTML = '<option value="ALL">Todas las marcas (ALL)</option>';
-                cfgDescVolMarca.innerHTML = '<option value="ALL">Todas las marcas (ALL)</option>';
+                const ppMarca = document.getElementById("cfg-pp-marca");
+                const prodMarca = document.getElementById("cfg-prod-marca");
+                if (ppMarca) ppMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
+                if (prodMarca) prodMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
                 brands.forEach(b => {
                     const opt = document.createElement("option");
                     opt.value = b;
                     opt.textContent = b;
-                    cfgDescMarca.appendChild(opt);
-                    cfgDescVolMarca.appendChild(opt.cloneNode(true));
+                    if (ppMarca) ppMarca.appendChild(opt.cloneNode(true));
+                    if (prodMarca) prodMarca.appendChild(opt.cloneNode(true));
                 });
             }
 
@@ -1000,15 +1351,33 @@ document.addEventListener("DOMContentLoaded", () => {
             const cRes = await fetch("/api/odoo/categorias");
             if (cRes.ok) {
                 const cats = await cRes.json();
-                cfgDescCat.innerHTML = '<option value="ALL">Todas las categorías (ALL)</option>';
-                cfgDescVolCat.innerHTML = '<option value="ALL">Todas las categorías (ALL)</option>';
+                const ppCat = document.getElementById("cfg-pp-categoria");
+                const prodCat = document.getElementById("cfg-prod-cat");
+                if (ppCat) ppCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
+                if (prodCat) prodCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
                 cats.forEach(c => {
                     const opt = document.createElement("option");
                     opt.value = c;
                     opt.textContent = c;
-                    cfgDescCat.appendChild(opt);
-                    cfgDescVolCat.appendChild(opt.cloneNode(true));
+                    if (ppCat) ppCat.appendChild(opt.cloneNode(true));
+                    if (prodCat) prodCat.appendChild(opt.cloneNode(true));
                 });
+            }
+
+            // Fetch products for product promo multiselect
+            const pRes = await fetch("/api/odoo/productos");
+            if (pRes.ok) {
+                const prods = await pRes.json();
+                const prodSel = document.getElementById("cfg-prod-select");
+                if (prodSel) {
+                    prodSel.innerHTML = "";
+                    prods.forEach(p => {
+                        const opt = document.createElement("option");
+                        opt.value = p.default_code || p.id;
+                        opt.textContent = `[${p.default_code || p.id}] ${p.name}`;
+                        prodSel.appendChild(opt);
+                    });
+                }
             }
         } catch (err) {
             console.error("Error populating dropdowns:", err);
