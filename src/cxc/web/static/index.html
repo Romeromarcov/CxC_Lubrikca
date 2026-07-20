@@ -182,32 +182,32 @@
         <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
-                <!-- 5 Tarjetas de Antigüedad de Saldos / Vencimientos -->
+                <!-- 5 Tarjetas Interactivas de Antigüedad de Saldos / Vencimientos -->
                 <div class="kpi-grid aging-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 1.5rem;">
-                    <div class="kpi-card card border-emerald">
+                    <div class="kpi-card card border-emerald interactive-kpi" data-antiguedad="vigentes" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
                         <div class="kpi-label">Vigentes (Sin Vencer)</div>
                         <div class="kpi-value text-emerald" id="reporte-kpi-vigentes">$0.00</div>
-                        <div class="kpi-subtext">Al día según fecha entrega</div>
+                        <div class="kpi-subtext">💡 Clic para filtrar vigentes</div>
                     </div>
-                    <div class="kpi-card card border-amber">
+                    <div class="kpi-card card border-amber interactive-kpi" data-antiguedad="1_30" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
                         <div class="kpi-label">Vencidas 1 - 30 Días</div>
                         <div class="kpi-value text-amber" id="reporte-kpi-1-30">$0.00</div>
-                        <div class="kpi-subtext">Vencimiento reciente</div>
+                        <div class="kpi-subtext">💡 Clic para ver 1-30 días</div>
                     </div>
-                    <div class="kpi-card card border-orange">
+                    <div class="kpi-card card border-orange interactive-kpi" data-antiguedad="31_60" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
                         <div class="kpi-label">Vencidas 31 - 60 Días</div>
                         <div class="kpi-value style-orange" id="reporte-kpi-31-60" style="color: #ea580c;">$0.00</div>
-                        <div class="kpi-subtext">Cobranza prioridad media</div>
+                        <div class="kpi-subtext">💡 Clic para ver 31-60 días</div>
                     </div>
-                    <div class="kpi-card card border-rose">
+                    <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="61_90" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
                         <div class="kpi-label">Vencidas 61 - 90 Días</div>
                         <div class="kpi-value text-rose" id="reporte-kpi-61-90">$0.00</div>
-                        <div class="kpi-subtext">Cobranza mora alta</div>
+                        <div class="kpi-subtext">💡 Clic para ver 61-90 días</div>
                     </div>
-                    <div class="kpi-card card border-purple">
+                    <div class="kpi-card card border-purple interactive-kpi" data-antiguedad="mas_90" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
                         <div class="kpi-label">Vencidas +90 Días</div>
                         <div class="kpi-value style-purple" id="reporte-kpi-mas-90" style="color: #7e22ce;">$0.00</div>
-                        <div class="kpi-subtext">Mora crítica o legal</div>
+                        <div class="kpi-subtext">💡 Clic para ver +90 días</div>
                     </div>
                 </div>
 
@@ -218,9 +218,19 @@
                             <p>Análisis de saldos en lista USD y tasa BCV, vendedores, fecha de entrega y días de vencimiento</p>
                         </div>
                         <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                            <select id="reporte-antiguedad-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white; font-weight: 500;">
+                                <option value="*">Todas las Antigüedades</option>
+                                <option value="vigentes">Vigentes (Sin Vencer)</option>
+                                <option value="1_30">Vencidas 1 - 30 Días</option>
+                                <option value="31_60">Vencidas 31 - 60 Días</option>
+                                <option value="61_90">Vencidas 61 - 90 Días</option>
+                                <option value="mas_90">Vencidas +90 Días (Mora Alta)</option>
+                            </select>
+
                             <select id="reporte-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
                                 <option value="*">Todos los Vendedores</option>
                             </select>
+
                             <input type="text" id="reporte-search" placeholder="🔍 Buscar por cliente o SO...">
                         </div>
                     </div>
@@ -252,6 +262,39 @@
                             <tbody id="reporte-table-body">
                                 <tr>
                                     <td colspan="18" class="table-empty">Cargando reporte de saldos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- TABLA SEGUIMIENTO PRIORITARIO MORA CRÍTICA (+60 Y +90 DÍAS) -->
+                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #ef4444;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>🚨</span> Seguimiento Prioritario: Mora Crítica (+60 y +90 Días)
+                        </h2>
+                        <p style="color: #7f1d1d;">Detalle exclusivo de órdenes con retraso de cobro severo para acción inmediata de cobranza y gerencia</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Fecha Delivery</th>
+                                    <th>Vencimiento</th>
+                                    <th>Días Vencido</th>
+                                    <th>Último Abono</th>
+                                    <th>Saldo Deudor Lista USD ($)</th>
+                                    <th>Saldo Desc. Lista USD ($)</th>
+                                    <th>Estado Odoo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reporte-critica-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">No hay cuentas por cobrar en mora crítica (+60 días).</td>
                                 </tr>
                             </tbody>
                         </table>

@@ -704,6 +704,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (kpi6190) kpi6190.textContent = fmt(kpis.vencidas_61_90);
                 if (kpiMas90) kpiMas90.textContent = fmt(kpis.vencidas_mas_90);
 
+                // Attach Click Handlers to Interactive KPI Cards
+                document.querySelectorAll(".interactive-kpi").forEach(card => {
+                    if (!card.dataset.listenerAttached) {
+                        card.addEventListener("click", () => {
+                            const targetVal = card.dataset.antiguedad;
+                            const selectEl = document.getElementById("reporte-antiguedad-filter");
+                            if (selectEl) {
+                                selectEl.value = (selectEl.value === targetVal) ? "*" : targetVal;
+                                applyReporteFilters();
+                            }
+                        });
+                        card.dataset.listenerAttached = "true";
+                    }
+                });
+
                 // Populate Vendedor Filter Dropdown
                 const vendedorSelect = document.getElementById("reporte-vendedor-filter");
                 if (vendedorSelect && data.vendedores) {
@@ -723,6 +738,12 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
+                const antiguedadSelect = document.getElementById("reporte-antiguedad-filter");
+                if (antiguedadSelect && !antiguedadSelect.dataset.listenerAttached) {
+                    antiguedadSelect.addEventListener("change", applyReporteFilters);
+                    antiguedadSelect.dataset.listenerAttached = "true";
+                }
+
                 const searchInput = document.getElementById("reporte-search");
                 if (searchInput && !searchInput.dataset.listenerAttached) {
                     searchInput.addEventListener("input", applyReporteFilters);
@@ -730,6 +751,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
 
                 applyReporteFilters();
+                renderCriticaTable(fullReporteItems);
             }
         } catch (err) {
             reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Error de red al cargar el reporte.</td></tr>';
@@ -739,23 +761,95 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function applyReporteFilters() {
         const vendedorVal = document.getElementById("reporte-vendedor-filter")?.value || "*";
-        const searchVal = (document.getElementById("reporte-search")?.value || "").toLowerCase().strip?.() || (document.getElementById("reporte-search")?.value || "").toLowerCase().trim();
+        const antiguedadVal = document.getElementById("reporte-antiguedad-filter")?.value || "*";
+        const searchInputEl = document.getElementById("reporte-search");
+        const searchVal = searchInputEl ? searchInputEl.value.toLowerCase().trim() : "";
+
+        // Highlight Active KPI Card
+        document.querySelectorAll(".interactive-kpi").forEach(card => {
+            if (card.dataset.antiguedad === antiguedadVal) {
+                card.style.transform = "scale(1.03)";
+                card.style.boxShadow = "0 6px 16px rgba(0,0,0,0.12)";
+                card.style.borderColor = "#2563eb";
+            } else {
+                card.style.transform = "none";
+                card.style.boxShadow = "none";
+                card.style.borderColor = "";
+            }
+        });
 
         let filtered = fullReporteItems.filter(item => {
+            const dv = item.dias_vencido || 0;
             const matchVendedor = (vendedorVal === "*") || (item.vendedor === vendedorVal);
+            
+            let matchAntiguedad = true;
+            if (antiguedadVal === "vigentes") matchAntiguedad = (dv <= 0);
+            else if (antiguedadVal === "1_30") matchAntiguedad = (dv >= 1 && dv <= 30);
+            else if (antiguedadVal === "31_60") matchAntiguedad = (dv >= 31 && dv <= 60);
+            else if (antiguedadVal === "61_90") matchAntiguedad = (dv >= 61 && dv <= 90);
+            else if (antiguedadVal === "mas_90") matchAntiguedad = (dv > 90);
+
             const matchSearch = !searchVal || 
                 (item.so_id && item.so_id.toLowerCase().includes(searchVal)) ||
                 (item.cliente_nombre && item.cliente_nombre.toLowerCase().includes(searchVal)) ||
                 (item.vendedor && item.vendedor.toLowerCase().includes(searchVal));
-            return matchVendedor && matchSearch;
+
+            return matchVendedor && matchAntiguedad && matchSearch;
         });
 
         renderReporteTable(filtered);
     }
 
+    function renderCriticaTable(items) {
+        const tbody = document.getElementById("reporte-critica-table-body");
+        if (!tbody) return;
+
+        // Filter items with mora critical (+60 days overdue) and active debt
+        const criticaItems = items.filter(item => {
+            const dv = item.dias_vencido || 0;
+            const debtUSD = item.saldo_con_descuento_lista_usd || item.saldo_deudor_lista_usd || 0;
+            return dv >= 61 && debtUSD > 0.05;
+        });
+
+        if (criticaItems.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
+            return;
+        }
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+        tbody.innerHTML = "";
+        criticaItems.forEach(item => {
+            const row = document.createElement("tr");
+            const dv = item.dias_vencido || 0;
+            const agingBadge = dv > 90 ?
+                `<span class="state-badge" style="background:#f3e8ff;color:#6b21a8;font-weight:bold">+${dv} d (Más de 90d)</span>` :
+                `<span class="state-badge" style="background:#ffe4e6;color:#be123c;font-weight:bold">+${dv} d (61-90d)</span>`;
+
+            let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
+            if (item.facturada) {
+                odooHtml = '<span class="state-badge facturada">Facturado en Odoo</span>';
+            }
+
+            row.innerHTML = `
+                <td><strong>${item.so_id}</strong></td>
+                <td><strong>${item.cliente_nombre}</strong></td>
+                <td><small>${item.vendedor || 'Sin Vendedor'}</small></td>
+                <td><small>${item.fecha_entrega || item.fecha}</small></td>
+                <td><small>${item.fecha_vencimiento || '-'}</small></td>
+                <td>${agingBadge}</td>
+                <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
+                <td><strong style="color: #d97706;">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
+                <td><strong style="color: #b91c1c; font-size: 0.95rem;">${fmt(item.saldo_con_descuento_lista_usd)}</strong></td>
+                <td>${odooHtml}</td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
     function renderReporteTable(data) {
         if (data.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">No hay registros de cobranza que coincidan con el filtro.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
 
