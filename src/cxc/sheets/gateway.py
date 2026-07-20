@@ -147,12 +147,28 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         self = cls.__new__(cls)
         self._gc = gspread.Client(auth=creds)
         self._sh = self._gc.open_by_key(spreadsheet_id)
+        self._ws_cache = {}
+        self._read_cache = {}
+        self._cache_ttl_seconds = 10.0
         return self
+
+    def invalidate_cache(self, table: str | None = None) -> None:
+        if not hasattr(self, "_read_cache"):
+            self._read_cache = {}
+        if table:
+            self._read_cache.pop(table, None)
+        else:
+            self._read_cache.clear()
 
     def _ws(self, table: str):  # type: ignore[no-untyped-def]
         import gspread
+        if not hasattr(self, "_ws_cache"):
+            self._ws_cache = {}
+        if table in self._ws_cache:
+            return self._ws_cache[table]
+
         try:
-            return self._sh.worksheet(table)
+            ws = self._sh.worksheet(table)
         except gspread.exceptions.WorksheetNotFound:
             # Auto-create sheet with headers if missing
             headers = {
@@ -170,18 +186,33 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
             cols = headers.get(table, ["id"])
             ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)
             ws.append_row(cols)
-            return ws
+
+        self._ws_cache[table] = ws
+        return ws
 
     def read_rows(self, table: str) -> list[dict[str, str]]:
+        import time
+        if not hasattr(self, "_read_cache"):
+            self._read_cache = {}
+        now = time.time()
+        if table in self._read_cache:
+            cached_time, cached_records = self._read_cache[table]
+            if now - cached_time < getattr(self, "_cache_ttl_seconds", 10.0):
+                return [dict(r) for r in cached_records]
+
         records = self._ws(table).get_all_records()
-        return [{k: str(v) for k, v in rec.items()} for rec in records]
+        res = [{k: str(v) for k, v in rec.items()} for rec in records]
+        self._read_cache[table] = (now, res)
+        return [dict(r) for r in res]
 
     def append_row(self, table: str, row: Mapping[str, str]) -> None:
+        self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
         ws.append_row([row.get(col, "") for col in header])
 
     def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None:
+        self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
         col_idx = header.index(pk_field) + 1
@@ -199,6 +230,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         # Lectura + escritura por lote: 1 read + 1 update por tabla (cuota-seguro).
         if not rows:
             return
+        self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
         existentes = ws.get_all_records()

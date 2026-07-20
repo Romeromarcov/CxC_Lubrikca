@@ -1710,6 +1710,8 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
                         row_str_values = [str(val).strip() for val in row]
                         if target_id_str in row_str_values:
                             ws.update_cell(r_idx, activo_col_idx, "TRUE" if req.activo else "FALSE")
+                            if hasattr(repo._g, "invalidate_cache"):
+                                repo._g.invalidate_cache(w_name)
                             logger.info("Regla %s actualizada a %s en '%s', fila %d", target_id_str, req.activo, w_name, r_idx)
                             return {
                                 "status": "success",
