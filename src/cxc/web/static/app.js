@@ -176,7 +176,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const pageToTabMap = {
             "dashboard": "tab-dashboard",
+            "facturacion": "tab-facturacion",
             "conciliaciones": "tab-conciliaciones",
+            "cobranza": "tab-cobranza",
             "reporte": "tab-reporte",
             "auditoria": "tab-auditoria",
             "configuracion": "tab-config"
@@ -204,21 +206,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Load data for active page
         if (path === "dashboard") {
-            loadKPIs();
-            loadBandeja();
             loadTasasPromedios();
-        } else if (path === "reporte") {
-            loadReporte();
+        } else if (path === "facturacion") {
+            loadBandeja();
         } else if (path === "conciliaciones") {
+            loadKPIs();
             loadPayments();
             loadMapa();
             loadHistorialPagos();
+        } else if (path === "cobranza") {
+            loadCobranza();
+        } else if (path === "reporte") {
+            loadReporte();
+            loadReporteDiario();
         } else if (path === "auditoria") {
             loadAuditoria();
         } else if (path === "configuracion") {
             loadConfigData();
             if (currentUserSession && currentUserSession.rol === "admin") {
-                loadAdminUsuarios();
+                loadUsuariosAdmin();
             }
         }
     }
@@ -2170,17 +2176,207 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // COBRANZA & RECIBOS MODULE
+    let cobranzaDataGlobal = [];
+
+    async function loadCobranza() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const vSelect = document.getElementById("cobranza-vendedor-filter");
+        if (!tbody) return;
+
+        tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Cargando cobranzas registradas...</td></tr>';
+        try {
+            const res = await fetch("/api/cobranza");
+            if (!res.ok) throw new Error("Error al obtener la lista de cobranza");
+            cobranzaDataGlobal = await res.json();
+            
+            // Populate vendor filter options
+            if (vSelect) {
+                const vendedores = [...new Set(cobranzaDataGlobal.map(item => item.vendedor || "Sin Vendedor"))].sort();
+                const curVal = vSelect.value;
+                vSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vSelect.appendChild(opt);
+                });
+                vSelect.value = curVal || "*";
+                vSelect.onchange = renderCobranzaTable;
+            }
+
+            renderCobranzaTable();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="13" class="table-empty danger">Error cargando cobranza: ${err.message}</td></tr>`;
+            console.error(err);
+        }
+    }
+
+    function renderCobranzaTable() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const vSelect = document.getElementById("cobranza-vendedor-filter");
+        if (!tbody) return;
+
+        const selVend = vSelect ? vSelect.value : "*";
+        const filtered = cobranzaDataGlobal.filter(item => {
+            if (selVend !== "*" && item.vendedor !== selVend) return false;
+            return true;
+        });
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">No hay cobranzas registradas para el filtro seleccionado.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = filtered.map(item => {
+            const estadoBadge = item.recibido ? 
+                `<span class="semaphore green" title="Dinero entregado a Administración">✓ Recibido</span>` : 
+                `<span class="semaphore yellow" title="Pendiente por confirmar entrega">⏳ Pendiente</span>`;
+                
+            return `
+                <tr>
+                    <td><input type="checkbox" class="check-cobranza-item" value="${item.pago_id}" data-vendedor="${item.vendedor}"></td>
+                    <td><strong>${item.pago_id}</strong></td>
+                    <td>${item.fecha}</td>
+                    <td><strong>${item.vendedor}</strong></td>
+                    <td>${item.cliente_nombre}</td>
+                    <td><span class="badge blue">${item.so_id}</span></td>
+                    <td>${item.metodo_pago} <br><small style="color:#64748b">${item.referencia}</small></td>
+                    <td><strong>${item.moneda} ${item.monto.toLocaleString('es-VE', {minimumFractionDigits: 2})}</strong></td>
+                    <td>Bs. ${item.tasa_bcv.toFixed(2)}</td>
+                    <td><strong style="color:#2563eb">$${item.equivalente_bcv_usd.toFixed(2)}</strong></td>
+                    <td>$${item.equivalente_binance_usd.toFixed(2)}</td>
+                    <td>${estadoBadge}</td>
+                    <td><small>${item.numero_recibido}</small></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    window.toggleAllCobranza = function(el) {
+        document.querySelectorAll(".check-cobranza-item").forEach(cb => cb.checked = el.checked);
+    };
+
+    window.generarReciboSeleccionados = async function() {
+        const checked = Array.from(document.querySelectorAll(".check-cobranza-item:checked")).map(cb => cb.value);
+        if (checked.length === 0) {
+            alert("⚠️ Por favor selecciona al menos un pago para generar el Recibo de Entrega.");
+            return;
+        }
+
+        try {
+            const res = await fetch("/api/cobranza/marcar-recibido", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ pago_ids: checked })
+            });
+
+            if (!res.ok) throw new Error("Error registrando entrega de recibo");
+            const data = await res.json();
+
+            // Populate printable receipt preview
+            document.getElementById("recibo-num-1").textContent = data.numero_recibido;
+            document.getElementById("recibo-num-2").textContent = data.numero_recibido;
+            document.getElementById("recibo-fecha-1").textContent = `Fecha: ${data.fecha_recibido}`;
+            document.getElementById("recibo-fecha-2").textContent = `Fecha: ${data.fecha_recibido}`;
+            
+            const firstPago = data.pagos[0] || {};
+            const vendedorName = firstPago.vendedor || "Vendedor";
+            document.getElementById("recibo-vendedor-1").textContent = vendedorName;
+            document.getElementById("recibo-vendedor-2").textContent = vendedorName;
+            document.getElementById("recibo-cajero-1").textContent = data.recibido_por;
+            document.getElementById("recibo-cajero-2").textContent = data.recibido_por;
+
+            document.getElementById("recibo-entregado-firma-1").textContent = `Firma: ${vendedorName}`;
+            document.getElementById("recibo-entregado-firma-2").textContent = `Firma: ${vendedorName}`;
+            document.getElementById("recibo-recibido-firma-1").textContent = `Firma: ${data.recibido_por}`;
+            document.getElementById("recibo-recibido-firma-2").textContent = `Firma: ${data.recibido_por}`;
+
+            const rowsHtml = data.pagos.map(p => `
+                <tr>
+                    <td><strong>${p.pago_id}</strong></td>
+                    <td>${p.fecha || '-'}</td>
+                    <td>${p.metodo_pago || 'Efectivo'} (${p.referencia || 'S/R'})</td>
+                    <td><strong>${p.moneda || 'USD'} ${parseFloat(p.monto || 0).toFixed(2)}</strong></td>
+                    <td>Bs. ${parseFloat(p.tasa_bcv || 0).toFixed(2)}</td>
+                    <td><strong>$${parseFloat(p.equivalente_bcv_usd || p.monto || 0).toFixed(2)}</strong></td>
+                    <td>${p.so_id || 'Pendiente'}</td>
+                </tr>
+            `).join('');
+
+            document.getElementById("recibo-items-1").innerHTML = rowsHtml;
+            document.getElementById("recibo-items-2").innerHTML = rowsHtml;
+
+            document.getElementById("recibo-modal").style.display = "flex";
+            loadCobranza();
+        } catch (err) {
+            alert("❌ Error: " + err.message);
+            console.error(err);
+        }
+    };
+
+    window.cerrarReciboModal = function() {
+        document.getElementById("recibo-modal").style.display = "none";
+    };
+
+    // REPORTE DIARIO DE VENTAS Y COBRANZA
+    async function loadReporteDiario() {
+        const vTbody = document.getElementById("diario-ventas-table-body");
+        const cTbody = document.getElementById("diario-cobranza-table-body");
+        if (!vTbody || !cTbody) return;
+
+        vTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de ventas...</td></tr>';
+        cTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de cobranza...</td></tr>';
+
+        try {
+            const res = await fetch("/api/reporte/diario");
+            if (!res.ok) throw new Error("Error consultando reporte diario");
+            const data = await res.json();
+
+            // Ventas
+            if (data.ventas_diarias.length === 0) {
+                vTbody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay registros de ventas.</td></tr>';
+            } else {
+                vTbody.innerHTML = data.ventas_diarias.map(v => `
+                    <tr>
+                        <td><strong>${v.fecha}</strong></td>
+                        <td>${v.ordenes_count} órds.</td>
+                        <td><strong style="color:#2563eb">$${v.total_usd.toLocaleString('es-VE', {minimumFractionDigits:2})}</strong></td>
+                        <td><strong style="color:#059669">${v.litros_totales.toLocaleString('es-VE', {minimumFractionDigits:1})} L</strong></td>
+                    </tr>
+                `).join('');
+            }
+
+            // Cobranza
+            if (data.cobranza_diaria.length === 0) {
+                cTbody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay registros de cobranza.</td></tr>';
+            } else {
+                cTbody.innerHTML = data.cobranza_diaria.map(c => {
+                    const monedaStr = Object.entries(c.por_moneda).map(([m, val]) => `${m}: ${val.toFixed(2)}`).join(' | ');
+                    const metodoStr = Object.entries(c.por_metodo).map(([m, val]) => `${m}: $${val.toFixed(2)}`).join(' | ');
+                    return `
+                        <tr>
+                            <td><strong>${c.fecha}</strong></td>
+                            <td><strong style="color:#2563eb">$${c.total_eq_bcv.toLocaleString('es-VE', {minimumFractionDigits:2})}</strong></td>
+                            <td><small>${monedaStr}</small></td>
+                            <td><small>${metodoStr}</small></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        } catch (err) {
+            console.error("Error cargando reporte diario:", err);
+        }
+    }
+
     // Initial Load for Dashboard
-    loadKPIs();
-    loadPayments();
-    loadBandeja();
+    loadTasasPromedios();
     
     // Auto-refresh Dashboard every 30 seconds
     setInterval(() => {
-        const activeTab = document.querySelector(".tab-navigation .active").dataset.tab;
-        if (activeTab === "tab-dashboard") {
-            loadKPIs();
-            loadBandeja();
+        const activeTab = document.querySelector(".tab-navigation .active");
+        if (activeTab && activeTab.dataset.page === "dashboard") {
+            loadTasasPromedios();
         }
     }, 30000);
 });

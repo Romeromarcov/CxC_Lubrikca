@@ -27,7 +27,9 @@
         <!-- Navegación por Páginas -->
         <nav class="tab-navigation">
             <a href="/dashboard" class="tab-btn nav-link" data-page="dashboard" style="text-decoration: none;">📊 Dashboard</a>
+            <a href="/facturacion" class="tab-btn nav-link" data-page="facturacion" style="text-decoration: none;">🧾 Facturación</a>
             <a href="/conciliaciones" class="tab-btn nav-link" data-page="conciliaciones" style="text-decoration: none;">🤝 Conciliaciones</a>
+            <a href="/cobranza" class="tab-btn nav-link" data-page="cobranza" style="text-decoration: none;">💵 Cobranza</a>
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
             <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
             <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
@@ -51,27 +53,11 @@
     </header>
 
     <main class="main-content">
-        <!-- PESTAÑA 1: DASHBOARD (3 BANDEJAS DE APROBACIÓN) -->
+        <!-- PESTAÑA 1: DASHBOARD DE INICIO -->
         <div id="tab-dashboard" class="tab-panel active">
             <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <!-- Tarjeta de Estadísticas (KPIs) -->
-                <section class="kpi-panel">
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Por Cobrar en Órdenes</span>
-                        <span class="kpi-value" id="kpi-cobrables">$0.00</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Pagos Sin Asignar</span>
-                        <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Alertas Rojas</span>
-                        <span class="kpi-value danger" id="kpi-alertas">0</span>
-                    </div>
-                </section>
-
                 <!-- Promedios de Tasa Binance y Diferencial BCV -->
-                <section class="card" style="margin-bottom:1.5rem">
+                <section class="card" style="margin-bottom:1rem">
                     <div class="panel-header">
                         <h2>Promedios de Tasa Binance & Brecha BCV</h2>
                         <p>Cálculo automático de promedios turno mañana (6 AM - 9 AM), tarde (10 AM - 1 PM), día completo y % de diferencial BCV vs. Binance</p>
@@ -101,6 +87,26 @@
                     </div>
                 </section>
 
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
+                    <a href="/facturacion" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #2563eb; display:block;">
+                        <h3 style="margin:0 0 0.5rem 0; color:#1e40af;">🧾 Gestión de Facturación</h3>
+                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Acceda a las 3 Bandejas de Aprobación de Órdenes por Facturar, Notas de Crédito y Retenciones de IVA.</p>
+                    </a>
+                    <a href="/conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #059669; display:block;">
+                        <h3 style="margin:0 0 0.5rem 0; color:#065f46;">🤝 Conciliación y Asignación</h3>
+                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Asigne pagos recibidos a órdenes abiertas y consulte el mapa de vinculación e historial.</p>
+                    </a>
+                    <a href="/cobranza" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #d97706; display:block;">
+                        <h3 style="margin:0 0 0.5rem 0; color:#92400e;">💵 Registro de Cobranzas</h3>
+                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Gestione la entrega de dinero por vendedores y emita el Recibo de Entrega impreso (2 copias).</p>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- PESTAÑA 2: FACTURACIÓN (3 BANDEJAS DE APROBACIÓN) -->
+        <div id="tab-facturacion" class="tab-panel">
+            <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <!-- BANDEJA 1: Órdenes Pendientes por Facturar -->
                 <section class="tray-panel card">
                     <div class="panel-header">
@@ -181,7 +187,7 @@
                             </thead>
                             <tbody id="bandeja3-table-body">
                                 <tr>
-                                    <td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td>
+                                    <td colspan="7" class="table-empty">Cargando comprobantes pendientes...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -311,12 +317,82 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- REPORTE DIARIO EJECUTIVO DE VENTAS (USD Y LITROS) Y COBRANZA -->
+                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #059669;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #065f46; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📊</span> Reporte Diario Ejecutivo de Ventas (USD y Litros) y Cobranzas
+                        </h2>
+                        <p style="color: #047857;">Consolidado diario de lo vendido en dinero ($ USD) y volumen de lubricantes (Litros L), junto con el cobro por moneda y método de pago</p>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem;">
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">🛍️ Ventas Diarias (USD y Litros)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>N° Órdenes</th>
+                                            <th>Vendido ($ USD)</th>
+                                            <th>Volumen (Litros L)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-ventas-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de ventas...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">💵 Cobranza Diaria (Por Moneda y Método)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Cobrado (Tasa BCV $)</th>
+                                            <th>Desglose por Moneda</th>
+                                            <th>Desglose por Método</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-cobranza-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de cobranza...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
 
         <!-- PESTAÑA 3: CONCILIACIONES Y ASIGNACIÓN DE PAGOS -->
         <div id="tab-conciliaciones" class="tab-panel">
             <div class="conciliaciones-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- Tarjeta de Estadísticas (KPIs) -->
+                <section class="kpi-panel">
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Por Cobrar en Órdenes</span>
+                        <span class="kpi-value" id="kpi-cobrables">$0.00</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Pagos Sin Asignar</span>
+                        <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Alertas Rojas</span>
+                        <span class="kpi-value danger" id="kpi-alertas">0</span>
+                    </div>
+                </section>
+
                 <!-- Asignación de Pagos Recibidos -->
                 <section class="main-panel card">
                     <div class="panel-header">
@@ -444,6 +520,55 @@
                             <tbody id="historial-table-body">
                                 <tr>
                                     <td colspan="9" class="table-empty">Cargando historial de pagos...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PESTAÑA: COBRANZA Y RECIBOS DE ENTREGA -->
+        <div id="tab-cobranza" class="tab-panel">
+            <div class="cobranza-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="cobranza-panel card">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom: 1rem;">
+                        <div>
+                            <h2>💵 Registro y Entrega de Cobranzas por Vendedor</h2>
+                            <p>Gestión de pagos recibidos, equivalencias a tasa BCV y Binance, asignación a órdenes y emisión de recibos de entrega</p>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                            <select id="cobranza-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
+                                <option value="*">Todos los Vendedores</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
+                                <span>🖨️</span> Marcar Recibido y Generar Recibo (2 Copias)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:30px;"><input type="checkbox" id="check-all-cobranza" onclick="toggleAllCobranza(this)"></th>
+                                    <th>Pago ID</th>
+                                    <th>Fecha Pago</th>
+                                    <th>Vendedor</th>
+                                    <th>Cliente</th>
+                                    <th>Orden / Factura</th>
+                                    <th>Método / Ref</th>
+                                    <th>Monto Original</th>
+                                    <th>Tasa BCV</th>
+                                    <th>Equiv. BCV ($)</th>
+                                    <th>Equiv. Binance ($)</th>
+                                    <th>Estado Recepción</th>
+                                    <th>Recibo N°</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cobranza-table-body">
+                                <tr>
+                                    <td colspan="13" class="table-empty">Cargando cobranzas registradas...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1334,10 +1459,126 @@
         </div>
     </main>
 
+    <!-- MODAL DE IMPRESIÓN DE RECIBO DE ENTREGA (2 COPIAS) -->
+    <div id="recibo-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99999; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+        <div style="max-width:850px; width:100%; background:white; padding:1.75rem; border-radius:16px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; border-bottom:1px solid #e2e8f0; padding-bottom:0.75rem;" class="no-print">
+                <h3 style="margin:0; color:#0f172a; font-size:1.15rem;">📄 Vista Previa de Recibo de Entrega (2 Copias para Imprimir)</h3>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn btn-primary" onclick="window.print()" style="padding:0.5rem 1rem; font-weight:600;">🖨️ Imprimir en PDF</button>
+                    <button class="btn btn-secondary" onclick="cerrarReciboModal()" style="padding:0.5rem 1rem;">✖️ Cerrar</button>
+                </div>
+            </div>
+            
+            <div id="recibo-print-area">
+                <!-- COPIA 1: VENDEDOR -->
+                <div class="recibo-copia" style="border: 2px dashed #94a3b8; padding: 1.25rem; border-radius: 10px; margin-bottom: 1.25rem; background: #ffffff;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #2563eb; padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
+                        <div style="display:flex; align-items:center; gap:0.75rem;">
+                            <img src="/static/logo.png" style="height:40px;">
+                            <div>
+                                <strong style="font-size: 1.15rem; color: #0f172a; display:block;">RECIBO DE ENTREGA DE DINERO</strong>
+                                <span style="font-size:0.75rem; color:#2563eb; font-weight:600;">COPIA 1: VENDEDOR / COBRADOR</span>
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <strong style="color:#b91c1c; font-size:1.05rem;" id="recibo-num-1">REC-20260720-001</strong><br>
+                            <span style="font-size:0.75rem; color:#64748b;" id="recibo-fecha-1">Fecha: -</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.75rem; color:#334155;">
+                        <span><strong>Entregado por (Vendedor):</strong> <span id="recibo-vendedor-1">-</span></span>
+                        <span><strong>Recibido por (Caja):</strong> <span id="recibo-cajero-1">Administración</span></span>
+                    </div>
+                    <table class="cxc-table mini" style="width:100%; font-size:0.78rem; margin-bottom: 0.75rem;">
+                        <thead>
+                            <tr>
+                                <th>Pago ID</th>
+                                <th>Fecha</th>
+                                <th>Método / Ref</th>
+                                <th>Monto Original</th>
+                                <th>Tasa BCV</th>
+                                <th>Equiv. BCV ($)</th>
+                                <th>Orden / Factura</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recibo-items-1"></tbody>
+                    </table>
+                    <div style="display:flex; justify-content:space-between; margin-top: 1.5rem; font-size:0.78rem;">
+                        <div style="text-align:center; width:42%; border-top:1px solid #0f172a; padding-top:4px;">
+                            <strong id="recibo-entregado-firma-1">Firma Entregado (Vendedor)</strong>
+                        </div>
+                        <div style="text-align:center; width:42%; border-top:1px solid #0f172a; padding-top:4px;">
+                            <strong id="recibo-recibido-firma-1">Firma Recibido (Caja / Admin)</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LÍNEA CORTE -->
+                <div style="border-top:1px dashed #cbd5e1; margin: 1rem 0; text-align:center;" class="corte-line">
+                    <span style="background:white; padding:0 10px; font-size:0.7rem; color:#94a3b8;">✂️ Doblar o Cortar Aquí</span>
+                </div>
+
+                <!-- COPIA 2: ADMINISTRACIÓN -->
+                <div class="recibo-copia" style="border: 2px dashed #94a3b8; padding: 1.25rem; border-radius: 10px; background: #ffffff;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #2563eb; padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
+                        <div style="display:flex; align-items:center; gap:0.75rem;">
+                            <img src="/static/logo.png" style="height:40px;">
+                            <div>
+                                <strong style="font-size: 1.15rem; color: #0f172a; display:block;">RECIBO DE ENTREGA DE DINERO</strong>
+                                <span style="font-size:0.75rem; color:#2563eb; font-weight:600;">COPIA 2: ADMINISTRACIÓN / CAJA</span>
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <strong style="color:#b91c1c; font-size:1.05rem;" id="recibo-num-2">REC-20260720-001</strong><br>
+                            <span style="font-size:0.75rem; color:#64748b;" id="recibo-fecha-2">Fecha: -</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.75rem; color:#334155;">
+                        <span><strong>Entregado por (Vendedor):</strong> <span id="recibo-vendedor-2">-</span></span>
+                        <span><strong>Recibido por (Caja):</strong> <span id="recibo-cajero-2">Administración</span></span>
+                    </div>
+                    <table class="cxc-table mini" style="width:100%; font-size:0.78rem; margin-bottom: 0.75rem;">
+                        <thead>
+                            <tr>
+                                <th>Pago ID</th>
+                                <th>Fecha</th>
+                                <th>Método / Ref</th>
+                                <th>Monto Original</th>
+                                <th>Tasa BCV</th>
+                                <th>Equiv. BCV ($)</th>
+                                <th>Orden / Factura</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recibo-items-2"></tbody>
+                    </table>
+                    <div style="display:flex; justify-content:space-between; margin-top: 1.5rem; font-size:0.78rem;">
+                        <div style="text-align:center; width:42%; border-top:1px solid #0f172a; padding-top:4px;">
+                            <strong id="recibo-entregado-firma-2">Firma Entregado (Vendedor)</strong>
+                        </div>
+                        <div style="text-align:center; width:42%; border-top:1px solid #0f172a; padding-top:4px;">
+                            <strong id="recibo-recibido-firma-2">Firma Recibido (Caja / Admin)</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        @media print {
+            body * { visibility: hidden; }
+            #recibo-print-area, #recibo-print-area * { visibility: visible; }
+            #recibo-modal { position: absolute; left: 0; top: 0; width: 100%; height: auto; background: white !important; padding: 0 !important; }
+            .no-print { display: none !important; }
+            .recibo-copia { page-break-inside: avoid; border: 1px dashed #000 !important; }
+        }
+    </style>
+
     <footer class="main-footer">
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260720_03"></script>
+    <script src="/static/app.js?v=20260720_04"></script>
 </body>
 </html>

@@ -356,6 +356,14 @@ def render_page_or_login(page_name: str, cxc_session: str | None):
     with open(index_path, 'r', encoding='utf-8') as f:
         return f.read()
 
+@app.get("/facturacion", response_class=HTMLResponse)
+async def page_facturacion(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("facturacion", cxc_session)
+
+@app.get("/cobranza", response_class=HTMLResponse)
+async def page_cobranza(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("cobranza", cxc_session)
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("dashboard", cxc_session)

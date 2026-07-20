@@ -18,14 +18,16 @@ T_USUARIOS = "UsuariosPlataforma"
 
 # Matriz de Permisos por Rol
 ROLES_PERMISOS: dict[str, list[str]] = {
-    "admin": ["dashboard", "conciliaciones", "reporte", "auditoria", "configuracion"],
-    "tesoreria": ["dashboard", "conciliaciones", "reporte"],
-    "auditor": ["dashboard", "reporte", "auditoria"],
-    "ventas": ["reporte"],
+    "admin": ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte", "auditoria", "configuracion"],
+    "gerente_ventas": ["dashboard", "cobranza", "reporte", "facturacion", "conciliaciones"],
+    "tesoreria": ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte"],
+    "auditor": ["dashboard", "reporte", "auditoria", "facturacion"],
+    "ventas": ["cobranza", "reporte"],
 }
 
 NOMBRES_ROLES: dict[str, str] = {
     "admin": "Administrador / Gerencia",
+    "gerente_ventas": "Supervisor / Gerente de Ventas",
     "tesoreria": "Tesorería y Cobranza",
     "auditor": "Auditoría y Contabilidad",
     "ventas": "Ventas y Comercial",
