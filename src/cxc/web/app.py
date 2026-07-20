@@ -749,22 +749,25 @@ async def get_bandeja():
         bandeja = repo.all_bandeja()
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
         
-        # Load Odoo product prices for list 4 once
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
-        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
-        rules = execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
-            {"fields": ["product_tmpl_id", "fixed_price"]}
-        )
         prices_usd = {}
-        for r in rules:
-            prod_tmpl_id = r.get("product_tmpl_id")
-            pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
-            if pt_id:
-                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+                rules = execute(
+                    "product.pricelist.item",
+                    "search_read",
+                    [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
+                    {"fields": ["product_tmpl_id", "fixed_price"]}
+                )
+                for r in rules:
+                    prod_tmpl_id = r.get("product_tmpl_id")
+                    pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
+                    if pt_id:
+                        prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+        except Exception as e_rules:
+            logger.warning("Error leyendo precios de Odoo en get_bandeja: %s", e_rules)
 
         all_lines = repo._g.read_rows("LineasOrden")
         lines_by_so = {}
@@ -878,13 +881,17 @@ async def get_reporte_saldos():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
+        execute = None
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+        except Exception as e_conn:
+            logger.warning("No se pudo conectar a Odoo en get_reporte_saldos: %s", e_conn)
 
         # Query Odoo SOs for seller (user_id) & payment terms (payment_term_id)
         so_ids_names = [o.so_id for o in ordenes]
         so_odoo_data = {}
-        if so_ids_names:
+        if execute and so_ids_names:
             try:
                 so_records = execute(
                     "sale.order",
@@ -908,7 +915,7 @@ async def get_reporte_saldos():
 
         # Query Odoo Pickings for Delivery Date (stock.picking done)
         picking_delivery_map = {}
-        if so_ids_names:
+        if execute and so_ids_names:
             try:
                 pickings = execute(
                     "stock.picking",
@@ -2863,18 +2870,18 @@ async def get_reporte_diario():
         lineas = repo._g.read_rows("LineasOrden")
         pagos = repo._g.read_rows("Pagos")
         
-        # Load products for liters calculation
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
         prod_litros_map = {}
         try:
-            prods = execute("product.product", "search_read", [], {"fields": ["id", "default_code", "name", "volume", "weight"]})
-            for p in prods:
-                pid = p.get("id")
-                vol = parse_decimal_safe(p.get("volume") or "0")
-                if vol == Decimal("0"):
-                    vol = parse_decimal_safe(p.get("weight") or "1.0")
-                prod_litros_map[pid] = vol
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                prods = execute("product.product", "search_read", [], {"fields": ["id", "default_code", "name", "volume", "weight"]})
+                for p in prods:
+                    pid = p.get("id")
+                    vol = parse_decimal_safe(p.get("volume") or "0")
+                    if vol == Decimal("0"):
+                        vol = parse_decimal_safe(p.get("weight") or "1.0")
+                    prod_litros_map[pid] = vol
         except Exception as e_p:
             logger.warning("Error leyendo litros de productos: %s", e_p)
             
