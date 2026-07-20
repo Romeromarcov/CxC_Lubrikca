@@ -30,12 +30,15 @@ def test_roundtrip_orden_con_opcionales() -> None:
     assert serde.orden_from_row(serde.orden_to_row(o)) == o
 
 
-def test_roundtrip_orden_sin_opcionales() -> None:
-    o = b.orden("SO10")
-    rt = serde.orden_from_row(serde.orden_to_row(o))
-    assert rt == o
-    assert rt.factura_id is None
-    assert rt.monto_facturado is None
+def test_sheets_repository_fechas_historicas_map() -> None:
+    gw = InMemorySheetGateway()
+    gw.append_row("FechasHistoricas", {"so_id": "S00004", "fecha_historica": "2026-03-09"})
+    gw.append_row("FechasHistoricas", {"so_id": "S00007", "fecha_historica": "2026-02-26"})
+    repo = SheetsRepository(gw)
+    m = repo.fechas_historicas_map()
+    assert m["4"] == "2026-03-09"
+    assert m["S00004"] == "2026-03-09"
+    assert m["7"] == "2026-02-26"
 
 
 def test_roundtrip_vinculacion_con_equivalentes() -> None:

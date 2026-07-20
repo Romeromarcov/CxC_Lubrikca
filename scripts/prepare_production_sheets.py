@@ -45,7 +45,8 @@ PROTECTED_TABLES = [
     "DescuentosDiferencialCambiario",
     "PromocionPrimeraCompra",
     "Exclusiones",
-    "Feriados"
+    "Feriados",
+    "FechasHistoricas"
 ]
 
 def main():

@@ -48,6 +48,24 @@ class SheetsRepository(Repository):
     def _serie_rows(self) -> list[SerieTasa]:
         return [serde.serie_from_row(r) for r in self._g.read_rows(g.T_SERIE)]
 
+    def fechas_historicas_map(self) -> dict[str, str]:
+        """Retorna {so_id_normalizado: fecha_iso} desde la pestaña FechasHistoricas de Google Sheets."""
+        try:
+            rows = self._g.read_rows(g.T_FECHAS_HISTORICAS)
+            res = {}
+            import re
+            for r in rows:
+                so_id = str(r.get("so_id", "")).strip()
+                fecha = str(r.get("fecha_historica", "")).strip()
+                if so_id and fecha:
+                    digits = re.sub(r"[^\d]", "", so_id)
+                    if digits:
+                        res[str(int(digits))] = fecha
+                    res[so_id.upper()] = fecha
+            return res
+        except Exception:
+            return {}
+
     def last_serie_tasa(self) -> SerieTasa | None:
         filas = self._serie_rows()
         return filas[-1] if filas else None
