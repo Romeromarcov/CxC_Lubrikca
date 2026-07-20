@@ -2539,6 +2539,8 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
         
         # Load clients and orders for vendor names
         ordenes = {o.so_id: o for o in repo.all_ordenes()}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         
         resultados = []
         for p in pagos:
@@ -2561,7 +2563,8 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
             so_id = v.so_id if v else "-"
             orden_obj = ordenes.get(so_id)
             vendedor = p.get("vendedor") or (orden_obj.vendedor_email if orden_obj else "Sin Vendedor")
-            cliente = p.get("cliente_nombre") or (orden_obj.cliente_nombre if orden_obj else "Sin Cliente")
+            cliente_name_from_order = clientes_map.get(orden_obj.cliente_id, "Sin Cliente") if orden_obj else "Sin Cliente"
+            cliente = p.get("cliente_nombre") or cliente_name_from_order
             
             item = {
                 "pago_id": pid,
