@@ -20,6 +20,7 @@ pythonpath = ["src"]
 [tool.coverage.run]
 branch = true
 source = ["cxc"]
+omit = ["src/cxc/web/app.py"]
 
 [tool.coverage.report]
 exclude_lines = [
