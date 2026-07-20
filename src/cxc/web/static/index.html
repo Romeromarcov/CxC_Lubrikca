@@ -376,6 +376,50 @@
 
         <!-- PESTAÑA 3: CONCILIACIONES Y ASIGNACIÓN DE PAGOS -->
         <div id="tab-conciliaciones" class="tab-panel">
+                <!-- SUGERENCIAS INTELIGENTES DE CONCILIACIÓN (FIFO) -->
+                <section class="card" style="margin-bottom: 2rem; border-left: 5px solid #3b82f6;">
+                    <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div>
+                            <h2 style="color: #1d4ed8; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                                <span>⚡</span> Sugerencias Inteligentes de Conciliación Automática (FIFO por Cliente)
+                            </h2>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Asocia pagos no asignados con la orden pendiente más antigua del mismo cliente. Puedes aprobar en lote o seleccionar individualmente.</p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span id="badge-sugerencias-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px;">0 Sugerencias</span>
+                            <button class="btn btn-primary" onclick="aprobarSugerenciasSeleccionadas()" style="background:#2563eb; font-weight:600;">⚡ Aprobar Seleccionadas (Bulk)</button>
+                            <button class="btn btn-secondary" onclick="loadSugerenciasConciliacion()">🔄 Actualizar</button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper large-table" style="max-height: 350px; overflow-y: auto;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 35px; text-align: center;">
+                                        <input type="checkbox" id="check-all-sugerencias" onclick="toggleAllSugerencias(this)">
+                                    </th>
+                                    <th>Pago ID</th>
+                                    <th>Fecha Pago</th>
+                                    <th>Cliente</th>
+                                    <th>Monto Pago ($)</th>
+                                    <th>Orden Sugerida (FIFO)</th>
+                                    <th>Fecha Orden</th>
+                                    <th>Saldo Orden ($)</th>
+                                    <th>Monto a Aplicar ($)</th>
+                                    <th>Vendedor</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sugerencias-table-body">
+                                <tr>
+                                    <td colspan="11" class="table-empty">Cargando sugerencias inteligentes...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
             <div class="conciliaciones-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <!-- Tarjeta de Estadísticas (KPIs) -->
                 <section class="kpi-panel">
@@ -1376,6 +1420,35 @@
                     </div>
                 </section>
 
+                <!-- Mapeo Configurable de Listas de Precios Históricas (USD y VES) -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-left: 5px solid var(--accent-blue, #2563eb);">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h2 style="color: #1e40af; margin:0;">Mapeo Configurable de Listas de Precios Históricas (USD y VES)</h2>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Selecciona qué listas de precios de Odoo deben tomarse como referencia para cálculos en USD y en Bolívares (VES). El sistema aplicará la regla con vigencia activa según la fecha de cada orden.</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary" onclick="loadListasMapeo()">🔄 Cargar Mapeo</button>
+                    </div>
+
+                    <form id="listas-mapeo-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="saveListasMapeo(event)">
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#1e40af;">Listas Válidas para USD ($)</label>
+                                <div id="usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#065f46;">Listas Válidas para VES (Bs)</label>
+                                <div id="ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">💾 Guardar Configuración de Listas</button>
+                    </form>
+                </section>
+
                 <!-- Listas de Precios de Odoo -->
                 <section class="config-card card" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
@@ -1581,6 +1654,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260720_06"></script>
+    <script src="/static/app.js?v=20260720_07"></script>
 </body>
 </html>

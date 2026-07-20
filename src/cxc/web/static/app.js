@@ -219,6 +219,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else if (path === "conciliaciones") {
             loadKPIs();
             loadPayments();
+            loadSugerenciasConciliacion();
             loadMapa();
             loadHistorialPagos();
         } else if (path === "cobranza") {
@@ -229,6 +230,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadAuditoria();
         } else if (path === "configuracion") {
             loadConfigData();
+            loadListasMapeo();
             if (currentUserSession && currentUserSession.rol === "admin") {
                 loadUsuariosAdmin();
             }
@@ -2394,6 +2396,218 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("Error cargando reporte diario:", err);
         }
     }
+
+    // --- LISTAS DE PRECIOS MAPEO ---
+    window.loadListasMapeo = async function() {
+        const usdBox = document.getElementById("usd-pricelists-checkboxes");
+        const vesBox = document.getElementById("ves-pricelists-checkboxes");
+        if (!usdBox || !vesBox) return;
+
+        try {
+            usdBox.innerHTML = '<span style="font-size:0.85rem; color:#64748b;">Cargando...</span>';
+            vesBox.innerHTML = '<span style="font-size:0.85rem; color:#64748b;">Cargando...</span>';
+
+            const [plRes, mapRes] = await Promise.all([
+                fetch('/api/odoo/listas-precio'),
+                fetch('/api/config/listas-precio-mapeo')
+            ]);
+
+            const pricelists = await plRes.json();
+            const mapData = await mapRes.json();
+
+            const validUSD = mapData.valid_pricelists_usd || ["4"];
+            const validVES = mapData.valid_pricelists_ves || ["5"];
+
+            if (!Array.isArray(pricelists) || pricelists.length === 0) {
+                usdBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
+                vesBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
+                return;
+            }
+
+            usdBox.innerHTML = pricelists.map(pl => {
+                const checked = validUSD.includes(String(pl.id)) ? 'checked' : '';
+                return `
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
+                        <input type="checkbox" name="cfg_listas_usd" value="${pl.id}" ${checked}>
+                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})</span>
+                    </label>
+                `;
+            }).join('');
+
+            vesBox.innerHTML = pricelists.map(pl => {
+                const checked = validVES.includes(String(pl.id)) ? 'checked' : '';
+                return `
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
+                        <input type="checkbox" name="cfg_listas_ves" value="${pl.id}" ${checked}>
+                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})</span>
+                    </label>
+                `;
+            }).join('');
+        } catch (err) {
+            console.error("Error cargando mapeo de listas:", err);
+            usdBox.innerHTML = '<span style="color:#ef4444; font-size:0.85rem;">Error al cargar listas.</span>';
+            vesBox.innerHTML = '<span style="color:#ef4444; font-size:0.85rem;">Error al cargar listas.</span>';
+        }
+    };
+
+    window.saveListasMapeo = async function(event) {
+        if (event) event.preventDefault();
+        const usdChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_usd"]:checked')).map(el => el.value);
+        const vesChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_ves"]:checked')).map(el => el.value);
+
+        try {
+            const res = await fetch('/api/config/listas-precio-mapeo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    valid_pricelists_usd: usdChecked,
+                    valid_pricelists_ves: vesChecked
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Configuración guardada exitosamente: " + data.message);
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo guardar."));
+            }
+        } catch (err) {
+            console.error("Error guardando mapeo de listas:", err);
+            alert("❌ Error de red al guardar la configuración.");
+        }
+    };
+
+    // --- SUGERENCIAS INTELIGENTES DE CONCILIACIÓN (FIFO) ---
+    let currentSugerenciasList = [];
+
+    window.loadSugerenciasConciliacion = async function() {
+        const tbody = document.getElementById("sugerencias-table-body");
+        const countBadge = document.getElementById("badge-sugerencias-count");
+        if (!tbody) return;
+
+        try {
+            tbody.innerHTML = '<tr><td colspan="11" class="table-empty">Calculando asignaciones recomendadas (FIFO)...</td></tr>';
+            const res = await fetch('/api/conciliaciones/sugerencias');
+            const data = await res.json();
+
+            if (!res.ok || !Array.isArray(data)) {
+                tbody.innerHTML = '<tr><td colspan="11" class="table-empty">No se pudieron cargar sugerencias.</td></tr>';
+                if (countBadge) countBadge.textContent = "0 Sugerencias";
+                return;
+            }
+
+            currentSugerenciasList = data;
+            if (countBadge) countBadge.textContent = `${data.length} Sugerencias`;
+
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11" class="table-empty">🎉 No hay pagos pendientes que requieran asociación automática.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.map((item, idx) => {
+                return `
+                    <tr>
+                        <td style="text-align:center;">
+                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" checked>
+                        </td>
+                        <td><strong>${item.pago_id}</strong></td>
+                        <td>${item.pago_fecha}</td>
+                        <td>${item.cliente_nombre}</td>
+                        <td>$${item.monto_pago.toFixed(2)} (${item.moneda_pago})</td>
+                        <td><span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span></td>
+                        <td>${item.so_fecha}</td>
+                        <td>$${item.so_saldo_pendiente.toFixed(2)}</td>
+                        <td><strong style="color:#16a34a;">$${item.monto_sugerido.toFixed(2)}</strong></td>
+                        <td><small>${item.vendedor}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        } catch (err) {
+            console.error("Error cargando sugerencias:", err);
+            tbody.innerHTML = '<tr><td colspan="11" class="table-empty">Error de conexión al cargar sugerencias.</td></tr>';
+        }
+    };
+
+    window.toggleAllSugerencias = function(master) {
+        const checks = document.querySelectorAll(".check-sugerencia-item");
+        checks.forEach(c => c.checked = master.checked);
+    };
+
+    window.aprobarSugerenciaIndividual = async function(pago_id, so_id, monto_sugerido) {
+        if (!confirm(`¿Confirmar asociación de $${monto_sugerido.toFixed(2)} del Pago ${pago_id} a la Orden ${so_id}?`)) return;
+
+        try {
+            const res = await fetch('/api/vincular', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pago_id: pago_id,
+                    so_id: so_id,
+                    monto_aplicado: monto_sugerido
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Vinculación completada con éxito.");
+                loadSugerenciasConciliacion();
+                loadKPIs();
+                loadPayments();
+                loadMapa();
+                loadHistorialPagos();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo vincular."));
+            }
+        } catch (err) {
+            console.error("Error al vincular sugerencia:", err);
+            alert("❌ Error de red.");
+        }
+    };
+
+    window.aprobarSugerenciasSeleccionadas = async function() {
+        const selectedChecks = Array.from(document.querySelectorAll(".check-sugerencia-item:checked"));
+        if (selectedChecks.length === 0) {
+            alert("Por favor selecciona al menos una sugerencia para aprobar.");
+            return;
+        }
+
+        const itemsToApprove = selectedChecks.map(c => {
+            const idx = parseInt(c.dataset.idx);
+            const item = currentSugerenciasList[idx];
+            return {
+                pago_id: item.pago_id,
+                so_id: item.so_id,
+                monto_aplicado: item.monto_sugerido
+            };
+        });
+
+        const totalMonto = itemsToApprove.reduce((sum, i) => sum + i.monto_aplicado, 0);
+
+        if (!confirm(`¿Desea aprobar masivamente ${itemsToApprove.length} vinculación(es) sugerida(s) por un total de $${totalMonto.toFixed(2)} USD?`)) return;
+
+        try {
+            const res = await fetch('/api/vincular-masivo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: itemsToApprove })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert(`🎉 ${data.message}`);
+                loadSugerenciasConciliacion();
+                loadKPIs();
+                loadPayments();
+                loadMapa();
+                loadHistorialPagos();
+            } else {
+                alert("❌ Error procesando lote: " + (data.detail || "Error desconocido."));
+            }
+        } catch (err) {
+            console.error("Error en aprobación masiva:", err);
+            alert("❌ Error de comunicación con el servidor.");
+        }
+    };
 
     // Initial Load for Dashboard
     loadTasasPromedios();

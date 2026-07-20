@@ -255,3 +255,77 @@ def test_e2e_08_executive_daily_report():
         assert len(data["ventas_diarias"]) >= 1
         assert len(data["cobranza_diaria"]) >= 1
 
+def test_e2e_09_listas_precio_mapeo():
+    """Test 9: Configuración y lectura de mapeo de Listas de Precios por vigencia."""
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = [
+        {"key": "valid_pricelists_usd", "value": "4,6"},
+        {"key": "valid_pricelists_ves", "value": "5,7"}
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res_get = client.get("/api/config/listas-precio-mapeo")
+        assert res_get.status_code == 200
+        data_get = res_get.json()
+        assert data_get["valid_pricelists_usd"] == ["4", "6"]
+        assert data_get["valid_pricelists_ves"] == ["5", "7"]
+
+        payload = {
+            "valid_pricelists_usd": ["4", "8"],
+            "valid_pricelists_ves": ["5", "9"]
+        }
+        res_post = client.post("/api/config/listas-precio-mapeo", json=payload)
+        assert res_post.status_code == 200
+        assert res_post.json()["status"] == "success"
+        assert mock_repo._g.upsert_row.call_count == 2
+
+def test_e2e_10_conciliaciones_sugerencias_and_bulk_approval():
+    """Test 10: Sugerencias Inteligentes de Conciliación (FIFO por cliente) y Aprobación Masiva."""
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: [
+        {"pago_id": "P_SUG_1", "cliente_id": "CLI_10", "monto": "500.0", "moneda": "USD", "fecha_pago": "2026-07-15", "vendedor": "juan@lubrikca.com"}
+    ] if sheet == "Pagos" else ([{"cliente_id": "CLI_10", "nombre": "Cliente Diez"}] if sheet == "Clientes" else [])
+
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_FIFO_1", cliente_id="CLI_10", vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1), fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("300.00"), lista_precios="4", es_primera_compra=False
+        ),
+        OrdenVenta(
+            so_id="SO_FIFO_2", cliente_id="CLI_10", vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 10), fecha_entrega=date(2026, 7, 10),
+            monto_total=Decimal("400.00"), lista_precios="4", es_primera_compra=False
+        )
+    ]
+    mock_repo.get_pago.return_value = Pago(
+        pago_id="P_SUG_1", cliente_id="CLI_10", monto=Decimal("500.00"), moneda=Moneda.USD,
+        metodo_pago="Zelle", fecha_pago=datetime(2026, 7, 15, 10, 0), vendedor_email="juan@lubrikca.com"
+    )
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), \
+         patch("cxc.web.app.recalculate_all"):
+        res_sug = client.get("/api/conciliaciones/sugerencias")
+        assert res_sug.status_code == 200
+        sug_data = res_sug.json()
+        assert len(sug_data) == 2
+        # First suggestion matches oldest order SO_FIFO_1
+        assert sug_data[0]["so_id"] == "SO_FIFO_1"
+        assert sug_data[0]["monto_sugerido"] == 300.0
+        # Second suggestion matches remaining $200 of payment to SO_FIFO_2
+        assert sug_data[1]["so_id"] == "SO_FIFO_2"
+        assert sug_data[1]["monto_sugerido"] == 200.0
+
+        bulk_payload = {
+            "items": [
+                {"pago_id": "P_SUG_1", "so_id": "SO_FIFO_1", "monto_aplicado": 300.0},
+                {"pago_id": "P_SUG_1", "so_id": "SO_FIFO_2", "monto_aplicado": 200.0}
+            ]
+        }
+        res_bulk = client.post("/api/vincular-masivo", json=bulk_payload)
+        assert res_bulk.status_code == 200
+        assert res_bulk.json()["procesados"] == 2
+        assert mock_repo.update_vinculacion.call_count == 2
+
+

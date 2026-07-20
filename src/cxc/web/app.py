@@ -79,6 +79,13 @@ class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
 
+class PricelistMapRequest(BaseModel):
+    valid_pricelists_usd: list[str]
+    valid_pricelists_ves: list[str]
+
+class VincularMasivoRequest(BaseModel):
+    items: list[VinculacionRequest]
+
 class PromocionRequest(BaseModel):
     tipo_beneficio: str = "producto"       # 'producto' | 'porcentaje'
     productos: str = ""                    # CSV de SKUs de regalo
@@ -1481,6 +1488,217 @@ async def post_config_meta(req: MetaRequest):
             })
             
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/listas-precio-mapeo")
+async def get_config_listas_precio_mapeo():
+    try:
+        repo = get_repo()
+        rows = repo._g.read_rows("_Meta")
+        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
+        
+        usd_str = meta.get("valid_pricelists_usd", "4")
+        ves_str = meta.get("valid_pricelists_ves", "5")
+        
+        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()]
+        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()]
+        
+        return {
+            "valid_pricelists_usd": usd_list,
+            "valid_pricelists_ves": ves_list
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/listas-precio-mapeo")
+async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
+    try:
+        repo = get_repo()
+        usd_val = ",".join(req.valid_pricelists_usd) if req.valid_pricelists_usd else "4"
+        ves_val = ",".join(req.valid_pricelists_ves) if req.valid_pricelists_ves else "5"
+        
+        repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_usd", "value": usd_val})
+        repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_ves", "value": ves_val})
+        
+        return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conciliaciones/sugerencias")
+async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
+    try:
+        repo = get_repo()
+        user = get_current_user_from_cookie(cxc_session)
+        
+        pagos_rows = repo._g.read_rows("Pagos")
+        vincs = repo.all_vinculaciones()
+        ordenes = repo.all_ordenes()
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+        
+        linked_pago = {}
+        linked_so = {}
+        for v in vincs:
+            linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + v.monto_aplicado
+            linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+            
+        unallocated_pagos = []
+        for p in pagos_rows:
+            pid = str(p.get("pago_id", "")).strip()
+            if not pid:
+                continue
+            monto_orig = parse_decimal_safe(p.get("monto", "0"))
+            monto_vinculado = linked_pago.get(pid, Decimal("0"))
+            saldo = monto_orig - monto_vinculado
+            
+            if saldo > Decimal("0.05"):
+                vendedor = p.get("vendedor") or "Sin Vendedor"
+                cliente_id = str(p.get("cliente_id", "")).strip()
+                cliente_nombre = p.get("cliente_nombre") or clientes_map.get(cliente_id) or f"Cliente {cliente_id}"
+                
+                unallocated_pagos.append({
+                    "pago_id": pid,
+                    "fecha_pago": str(p.get("fecha_pago") or p.get("fecha") or "")[:10],
+                    "cliente_id": cliente_id,
+                    "cliente_nombre": cliente_nombre,
+                    "monto_original": monto_orig,
+                    "saldo_pendiente": saldo,
+                    "moneda": p.get("moneda", "USD"),
+                    "vendedor": vendedor
+                })
+                
+        open_orders_by_client = {}
+        for o in ordenes:
+            if not o.facturada:
+                pagado = linked_so.get(o.so_id, Decimal("0"))
+                saldo = o.monto_total - pagado
+                if saldo > Decimal("0.05"):
+                    if o.cliente_id not in open_orders_by_client:
+                        open_orders_by_client[o.cliente_id] = []
+                    open_orders_by_client[o.cliente_id].append({
+                        "so_id": o.so_id,
+                        "fecha": o.fecha,
+                        "monto_total": o.monto_total,
+                        "saldo_pendiente": saldo,
+                        "vendedor": o.vendedor_email
+                    })
+                    
+        for cid in open_orders_by_client:
+            open_orders_by_client[cid].sort(key=lambda x: x["fecha"])
+            
+        sugerencias = []
+        for p in unallocated_pagos:
+            cid = p["cliente_id"]
+            client_orders = open_orders_by_client.get(cid, [])
+            
+            monto_pago_restante = p["saldo_pendiente"]
+            for o in client_orders:
+                if monto_pago_restante <= Decimal("0.05"):
+                    break
+                if o["saldo_pendiente"] <= Decimal("0.05"):
+                    continue
+                    
+                monto_aplicar = min(monto_pago_restante, o["saldo_pendiente"])
+                
+                sug_id = f"SUG_{p['pago_id']}_{o['so_id']}"
+                item = {
+                    "sugerencia_id": sug_id,
+                    "pago_id": p["pago_id"],
+                    "pago_fecha": p["fecha_pago"],
+                    "cliente_nombre": p["cliente_nombre"],
+                    "monto_pago": float(p["monto_original"]),
+                    "saldo_pago": float(p["saldo_pendiente"]),
+                    "moneda_pago": p["moneda"],
+                    "so_id": o["so_id"],
+                    "so_fecha": o["fecha"].isoformat() if hasattr(o["fecha"], "isoformat") else str(o["fecha"]),
+                    "so_monto_total": float(o["monto_total"]),
+                    "so_saldo_pendiente": float(o["saldo_pendiente"]),
+                    "monto_sugerido": float(monto_aplicar),
+                    "vendedor": p["vendedor"] or o["vendedor"]
+                }
+                
+                if user and user["rol"] == "ventas":
+                    u_name = (user["nombre"] or user["email"]).strip().lower()
+                    if item["vendedor"].strip().lower() != u_name and user["email"].strip().lower() not in item["vendedor"].lower():
+                        continue
+                        
+                sugerencias.append(item)
+                monto_pago_restante -= monto_aplicar
+                o["saldo_pendiente"] -= monto_aplicar
+                
+        return sugerencias
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/vincular-masivo")
+async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: BackgroundTasks):
+    try:
+        repo = get_repo()
+        last_tasa = repo.last_serie_tasa()
+        tasa_bcv = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+        tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
+        
+        processed = 0
+        so_ids_affected = set()
+        
+        for item in req.items:
+            pago = repo.get_pago(item.pago_id)
+            if not pago:
+                continue
+                
+            monto_dec = Decimal(str(item.monto_aplicado))
+            if monto_dec <= Decimal("0"):
+                continue
+                
+            if pago.moneda == "USD":
+                equiv_usd_bcv = monto_dec
+                equiv_usd_binance = monto_dec
+                equiv_ves_bcv = monto_dec * tasa_bcv
+                equiv_ves_binance = monto_dec * tasa_binance
+            else:
+                equiv_usd_bcv = monto_dec / tasa_bcv
+                equiv_usd_binance = monto_dec / tasa_binance
+                equiv_ves_bcv = monto_dec
+                equiv_ves_binance = monto_dec
+
+            vinc_id = f"VINC_{item.pago_id}_{item.so_id}"
+            vinc = Vinculacion(
+                vinc_id=vinc_id,
+                pago_id=item.pago_id,
+                so_id=item.so_id,
+                monto_aplicado=monto_dec,
+                hora_pago_confirmada=datetime.combine(pago.fecha_pago, datetime.min.time()),
+                tasa_bcv_aplicada=tasa_bcv,
+                tasa_binance_aplicada=tasa_binance,
+                es_tasa_heredada=False,
+                equiv_usd_bcv=equiv_usd_bcv,
+                equiv_usd_binance=equiv_usd_binance,
+                equiv_ves_bcv=equiv_ves_bcv,
+                equiv_ves_binance=equiv_ves_binance,
+                confirmado_por="Aprobador Masivo FIFO",
+                timestamp_registro=datetime.now(),
+                estado=EstadoVinculacion.PENDIENTE,
+                moneda_abono=Moneda(pago.moneda),
+                tipo_tasa_abono=TipoTasa.BCV
+            )
+            
+            repo.update_vinculacion(vinc)
+            processed += 1
+            so_ids_affected.add(item.so_id)
+            
+        for so_id in so_ids_affected:
+            background_tasks.add_task(recalculate_all, so_id)
+            
+        return {
+            "status": "success",
+            "message": f"Se procesaron {processed} vinculaciones exitosamente.",
+            "procesados": processed
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
