@@ -57,7 +57,7 @@ def main():
     parser.add_argument("--confirm-reset-production", action="store_true", help="Confirmación explícita para borrar los datos operacionales.")
     args = parser.parse_args()
 
-    if not args.dry_run and not args.confirm-reset-production:
+    if not args.dry_run and not args.confirm_reset_production:
         logger.error("Debe especificar --dry-run o --confirm-reset-production para ejecutar el script.")
         sys.exit(1)
 
