@@ -2551,7 +2551,7 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
             fecha_str = str(p.get("fecha", ""))[:10]
             
             # Find rates for that date
-            bcv_rate, binance_rate = get_closest_rates_to_datetime(repo, datetime.now())
+            bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
             
             # Compute BCV and Binance equivalents
             eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
@@ -2695,7 +2695,7 @@ async def get_reporte_diario():
             moneda = p.get("moneda", "VES")
             metodo = p.get("metodo_pago") or p.get("forma_pago") or "Efectivo"
             
-            bcv_rate, binance_rate = get_closest_rates_to_datetime(repo, datetime.now())
+            bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
             eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
             eq_binance = monto if moneda == "USD" else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
 

@@ -1894,78 +1894,86 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Save custom holiday
-    feriadoForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const payload = {
-            fecha: cfgFeriadoFecha.value,
-            descripcion: cfgFeriadoDesc.value
-        };
+    if (feriadoForm) {
+        feriadoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                fecha: cfgFeriadoFecha.value,
+                descripcion: cfgFeriadoDesc.value
+            };
 
-        try {
-            const res = await fetch("/api/config/feriados", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+            try {
+                const res = await fetch("/api/config/feriados", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
 
-            if (res.ok) {
-                alert("✅ Feriado registrado correctamente en Google Sheets.");
-                feriadoForm.reset();
-                loadFeriados();
-            } else {
-                alert("❌ Error al guardar el feriado.");
+                if (res.ok) {
+                    alert("✅ Feriado registrado correctamente en Google Sheets.");
+                    feriadoForm.reset();
+                    loadFeriados();
+                } else {
+                    alert("❌ Error al guardar el feriado.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar feriado.");
+                console.error(err);
             }
-        } catch (err) {
-            alert("❌ Error de red al registrar feriado.");
-            console.error(err);
-        }
-    });
+        });
+    }
 
     // Save Brand Discount Rule
-    descuentoForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const payload = {
-            marca: cfgDescMarca.value,
-            categoria: cfgDescCat.value,
-            tipo_descuento: cfgDescTipo.value,
-            porcentaje: parseFloat(cfgDescPorcentaje.value),
-            vigencia_desde: cfgDescDesde.value || new Date().toISOString().split('T')[0],
-            vigencia_hasta: cfgDescHasta.value || null,
-            listas_aplicables: cfgDescListas.value
-        };
+    if (descuentoForm) {
+        descuentoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                marca: cfgDescMarca.value,
+                categoria: cfgDescCat.value,
+                tipo_descuento: cfgDescTipo.value,
+                porcentaje: parseFloat(cfgDescPorcentaje.value),
+                vigencia_desde: cfgDescDesde.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: cfgDescHasta.value || null,
+                listas_aplicables: cfgDescListas.value
+            };
 
-        try {
-            const res = await fetch("/api/config/descuentos-marca", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+            try {
+                const res = await fetch("/api/config/descuentos-marca", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
 
-            if (res.ok) {
-                alert("✅ Regla de descuento registrada correctamente en Google Sheets.");
-                descuentoForm.reset();
-                loadDescuentosMarca();
-            } else {
-                alert("❌ Error al guardar la regla.");
+                if (res.ok) {
+                    alert("✅ Regla de descuento registrada correctamente en Google Sheets.");
+                    descuentoForm.reset();
+                    loadDescuentosMarca();
+                } else {
+                    alert("❌ Error al guardar la regla.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar regla.");
+                console.error(err);
             }
-        } catch (err) {
-            alert("❌ Error de red al registrar regla.");
-            console.error(err);
-        }
-    });
+        });
+    }
 
     // Promo tipo beneficio toggle
-    cfgPromoTipoBeneficio.addEventListener("change", () => {
-        const isProducto = cfgPromoTipoBeneficio.value === "producto";
-        promoProductosSection.style.display = isProducto ? "" : "none";
-        promoRegaloTipoSection.style.display = isProducto ? "" : "none";
-        promoPorcentajeSection.style.display = isProducto ? "none" : "";
-    });
+    if (cfgPromoTipoBeneficio) {
+        cfgPromoTipoBeneficio.addEventListener("change", () => {
+            const isProducto = cfgPromoTipoBeneficio.value === "producto";
+            if (promoProductosSection) promoProductosSection.style.display = isProducto ? "" : "none";
+            if (promoRegaloTipoSection) promoRegaloTipoSection.style.display = isProducto ? "" : "none";
+            if (promoPorcentajeSection) promoPorcentajeSection.style.display = isProducto ? "none" : "";
+        });
+    }
 
     // Update product count display
-    cfgPromoProductos.addEventListener("change", () => {
-        cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
-    });
+    if (cfgPromoProductos) {
+        cfgPromoProductos.addEventListener("change", () => {
+            if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
+        });
+    }
 
     // Load Promociones Primera Compra
     const TIPO_LABELS = {
@@ -1974,6 +1982,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     async function loadPromociones() {
+        if (!promosTableBody) return;
         try {
             promosTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando promociones...</td></tr>';
             const res = await fetch("/api/config/promociones");
@@ -2011,57 +2020,60 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save Promotion Rule
-    promoForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const tipoBenef = cfgPromoTipoBeneficio.value;
-        const productosSeleccionados = tipoBenef === "producto"
-            ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
-            : "";
-        const cats = ["cat-comercial", "cat-industrial", "cat-todos"]
-            .map(id => document.getElementById(id))
-            .filter(cb => cb && cb.checked)
-            .map(cb => cb.value);
-        const categoriasAplica = cats.includes("*") ? "*" : cats.join(",") || "Comercial";
+    if (promoForm) {
+        promoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const tipoBenef = cfgPromoTipoBeneficio.value;
+            const productosSeleccionados = tipoBenef === "producto"
+                ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
+                : "";
+            const cats = ["cat-comercial", "cat-industrial", "cat-todos"]
+                .map(id => document.getElementById(id))
+                .filter(cb => cb && cb.checked)
+                .map(cb => cb.value);
+            const categoriasAplica = cats.includes("*") ? "*" : cats.join(",") || "Comercial";
 
-        if (tipoBenef === "producto" && productosSeleccionados === "") {
-            alert("⚠️ Selecciona al menos un producto de obsequio.");
-            return;
-        }
-
-        const payload = {
-            tipo_beneficio: tipoBenef,
-            productos: productosSeleccionados,
-            valor: tipoBenef === "porcentaje" ? parseFloat(cfgPromoValor.value || 0) : 1,
-            compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
-            descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
-            regalo_tipo: cfgPromoRegaloTipo.value,
-            categorias_aplica: categoriasAplica,
-            vigencia_desde: cfgPromoDesde.value,
-            vigencia_hasta: cfgPromoHasta.value || null
-        };
-        try {
-            const res = await fetch("/api/config/promociones", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                alert("✅ Promoción registrada exitosamente.");
-                promoForm.reset();
-                cfgPromoProductosCount.textContent = "0";
-                loadPromociones();
-            } else {
-                const err = await res.json();
-                alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
+            if (tipoBenef === "producto" && productosSeleccionados === "") {
+                alert("⚠️ Selecciona al menos un producto de obsequio.");
+                return;
             }
-        } catch (err) {
-            alert("❌ Error de red al registrar promoción.");
-            console.error(err);
-        }
-    });
+
+            const payload = {
+                tipo_beneficio: tipoBenef,
+                productos: productosSeleccionados,
+                valor: tipoBenef === "porcentaje" ? parseFloat(cfgPromoValor.value || 0) : 1,
+                compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
+                descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
+                regalo_tipo: cfgPromoRegaloTipo.value,
+                categorias_aplica: categoriasAplica,
+                vigencia_desde: cfgPromoDesde.value,
+                vigencia_hasta: cfgPromoHasta.value || null
+            };
+            try {
+                const res = await fetch("/api/config/promociones", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Promoción registrada exitosamente.");
+                    promoForm.reset();
+                    if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = "0";
+                    loadPromociones();
+                } else {
+                    const err = await res.json();
+                    alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar promoción.");
+                console.error(err);
+            }
+        });
+    }
 
     // Load Exclusiones
     async function loadExclusiones() {
+        if (!excluisionesTableBody) return;
         try {
             excluisionesTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando exclusiones...</td></tr>';
             const res = await fetch("/api/config/exclusiones");
@@ -2089,41 +2101,42 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save Exclusion Rule
-    exclusionForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        if (cfgExclTipoA.value === cfgExclTipoB.value) {
-            alert("⚠️ Los dos descuentos no pueden ser el mismo tipo.");
-            return;
-        }
-        const payload = {
-            regla_tipo_a: cfgExclTipoA.value,
-            regla_tipo_b: cfgExclTipoB.value,
-            activo: true
-        };
-        try {
-            const res = await fetch("/api/config/exclusiones", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                alert("✅ Exclusión registrada correctamente.");
-                exclusionForm.reset();
-                loadExclusiones();
-            } else {
-                const err = await res.json();
-                alert("❌ Error: " + (err.detail || "Error al registrar la exclusión."));
+    if (exclusionForm) {
+        exclusionForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            if (cfgExclTipoA.value === cfgExclTipoB.value) {
+                alert("⚠️ Los dos descuentos no pueden ser el mismo tipo.");
+                return;
             }
-        } catch (err) {
-            alert("❌ Error de red al registrar exclusión.");
-            console.error(err);
-        }
-    });
-
-
+            const payload = {
+                regla_tipo_a: cfgExclTipoA.value,
+                regla_tipo_b: cfgExclTipoB.value,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/exclusiones", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Exclusión registrada correctamente.");
+                    exclusionForm.reset();
+                    loadExclusiones();
+                } else {
+                    const err = await res.json();
+                    alert("❌ Error: " + (err.detail || "Error al registrar la exclusión."));
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar exclusión.");
+                console.error(err);
+            }
+        });
+    }
 
     // Load Volume Discount Rules
     async function loadDescuentosVolumen() {
+        if (!descuentosVolumenTableBody) return;
         try {
             descuentosVolumenTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos por volumen...</td></tr>';
             const res = await fetch("/api/config/descuentos-volumen");
@@ -2157,35 +2170,37 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save Volume Discount Rule
-    descuentoVolumenForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const payload = {
-            marca: cfgDescVolMarca.value,
-            categoria: cfgDescVolCat.value,
-            litros_minimo: parseFloat(cfgDescVolLitros.value),
-            porcentaje: parseFloat(cfgDescVolPorcentaje.value),
-            vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
-            vigencia_hasta: cfgDescVolHasta.value || null,
-            listas_aplicables: cfgDescVolListas.value
-        };
-        try {
-            const res = await fetch("/api/config/descuentos-volumen", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                alert("✅ Regla de volumen registrada exitosamente.");
-                descuentoVolumenForm.reset();
-                loadDescuentosVolumen();
-            } else {
-                alert("❌ Error al registrar la regla de volumen.");
+    if (descuentoVolumenForm) {
+        descuentoVolumenForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                marca: cfgDescVolMarca.value,
+                categoria: cfgDescVolCat.value,
+                litros_minimo: parseFloat(cfgDescVolLitros.value),
+                porcentaje: parseFloat(cfgDescVolPorcentaje.value),
+                vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: cfgDescVolHasta.value || null,
+                listas_aplicables: cfgDescVolListas.value
+            };
+            try {
+                const res = await fetch("/api/config/descuentos-volumen", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de volumen registrada exitosamente.");
+                    descuentoVolumenForm.reset();
+                    loadDescuentosVolumen();
+                } else {
+                    alert("❌ Error al registrar la regla de volumen.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar regla de volumen.");
+                console.error(err);
             }
-        } catch (err) {
-            alert("❌ Error de red al registrar regla de volumen.");
-            console.error(err);
-        }
-    });
+        });
+    }
 
     // COBRANZA & RECIBOS MODULE
     let cobranzaDataGlobal = [];
