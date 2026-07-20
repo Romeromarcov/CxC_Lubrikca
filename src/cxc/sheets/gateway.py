@@ -172,6 +172,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         except gspread.exceptions.WorksheetNotFound:
             # Auto-create sheet with headers if missing
             headers = {
+                "UsuariosPlataforma": ["email", "nombre_odoo", "password_hash", "salt", "rol", "activo", "fecha_registro"],
                 "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
                 "PromocionPrimeraCompra": ["regla_id", "tipo_beneficio", "productos", "valor", "compra_minima", "regalo_tipo", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
@@ -200,8 +201,11 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
             if now - cached_time < getattr(self, "_cache_ttl_seconds", 10.0):
                 return [dict(r) for r in cached_records]
 
-        records = self._ws(table).get_all_records()
-        res = [{k: str(v) for k, v in rec.items()} for rec in records]
+        try:
+            records = self._ws(table).get_all_records()
+            res = [{k: str(v) for k, v in rec.items()} for rec in records]
+        except Exception:
+            res = []
         self._read_cache[table] = (now, res)
         return [dict(r) for r in res]
 
@@ -209,17 +213,33 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
-        ws.append_row([row.get(col, "") for col in header])
+        if not header:
+            header = list(row.keys())
+            ws.append_row(header)
+        ws.append_row([str(row.get(col, "")) for col in header])
 
     def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None:
         self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
+
+        if not header or pk_field not in header:
+            header = list(row.keys())
+            ws.clear()
+            ws.append_row(header)
+        else:
+            missing = [k for k in row.keys() if k not in header]
+            if missing:
+                header.extend(missing)
+                ws.update("A1", [header])
+
         col_idx = header.index(pk_field) + 1
         celdas = ws.col_values(col_idx)
-        valores = [row.get(col, "") for col in header]
+        valores = [str(row.get(col, "")) for col in header]
+        target_pk_val = str(row[pk_field]).strip().lower()
+
         for fila_num, valor in enumerate(celdas[1:], start=2):
-            if valor == row[pk_field]:
+            if str(valor).strip().lower() == target_pk_val:
                 ws.update(f"A{fila_num}", [valores])
                 return
         ws.append_row(valores)
