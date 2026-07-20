@@ -120,40 +120,194 @@ document.addEventListener("DOMContentLoaded", () => {
     const anomaliasAceptadasTableBody = document.getElementById("anomalias-aceptadas-table-body");
     const conformesTableBody = document.getElementById("conformes-table-body");
 
-    // Tab Navigation Logic
-    tabButtons.forEach(btn => {
-        btn.addEventListener("click", () => {
-            const targetTab = btn.dataset.tab;
-            
-            // Toggle active buttons
-            tabButtons.forEach(b => b.classList.remove("active"));
-            btn.classList.add("active");
-            
-            // Toggle active panels
-            tabPanels.forEach(panel => {
-                panel.classList.remove("active");
-                if (panel.id === targetTab) {
-                    panel.classList.add("active");
-                }
-            });
+    // User Session & Multi-Page Initialization
+    let currentUserSession = null;
 
-            // Lazy load tab data
-            if (targetTab === "tab-dashboard") {
-                loadKPIs();
-                loadBandeja();
-                loadTasasPromedios();
-            } else if (targetTab === "tab-reporte") {
-                loadReporte();
-            } else if (targetTab === "tab-conciliaciones") {
-                loadPayments();
-                loadMapa();
-                loadHistorialPagos();
-            } else if (targetTab === "tab-auditoria") {
-                loadAuditoria();
-            } else if (targetTab === "tab-config") {
-                loadConfigData();
+    async function initUserSession() {
+        try {
+            const res = await fetch("/api/auth/me");
+            if (res.ok) {
+                currentUserSession = await res.json();
+                renderUserProfile(currentUserSession);
+                filterNavbarByPermissions(currentUserSession);
+            }
+        } catch (err) {
+            console.error("Error fetching user session:", err);
+        }
+    }
+
+    function renderUserProfile(user) {
+        const nameEl = document.getElementById("header-user-name");
+        const roleEl = document.getElementById("header-user-role");
+        const avatarEl = document.getElementById("header-avatar");
+
+        if (nameEl) nameEl.textContent = user.nombre || user.email;
+        if (roleEl) roleEl.textContent = user.nombre_rol || user.rol;
+        if (avatarEl) {
+            const initial = (user.nombre || user.email || "U").charAt(0).toUpperCase();
+            avatarEl.textContent = initial;
+        }
+    }
+
+    function filterNavbarByPermissions(user) {
+        const navLinks = document.querySelectorAll(".nav-link");
+        const perms = user.permisos || ["reporte"];
+        const isAdm = user.rol === "admin";
+
+        navLinks.forEach(link => {
+            const page = link.dataset.page;
+            if (isAdm || perms.includes(page)) {
+                link.style.display = "inline-flex";
+            } else {
+                link.style.display = "none";
             }
         });
+
+        const adminPanel = document.getElementById("admin-user-mgmt-panel");
+        if (adminPanel) {
+            adminPanel.style.display = isAdm ? "block" : "none";
+        }
+    }
+
+    // Page Route Initialization
+    function initCurrentPage() {
+        let path = window.location.pathname.replace("/", "").trim();
+        if (!path || path === "index.html") path = "dashboard";
+
+        const pageToTabMap = {
+            "dashboard": "tab-dashboard",
+            "conciliaciones": "tab-conciliaciones",
+            "reporte": "tab-reporte",
+            "auditoria": "tab-auditoria",
+            "configuracion": "tab-config"
+        };
+
+        const targetTabId = pageToTabMap[path] || "tab-dashboard";
+
+        // Active Link Highlight
+        document.querySelectorAll(".nav-link").forEach(link => {
+            if (link.dataset.page === path) {
+                link.classList.add("active");
+            } else {
+                link.classList.remove("active");
+            }
+        });
+
+        // Active Tab Panel Show
+        tabPanels.forEach(panel => {
+            if (panel.id === targetTabId) {
+                panel.classList.add("active");
+            } else {
+                panel.classList.remove("active");
+            }
+        });
+
+        // Load data for active page
+        if (path === "dashboard") {
+            loadKPIs();
+            loadBandeja();
+            loadTasasPromedios();
+        } else if (path === "reporte") {
+            loadReporte();
+        } else if (path === "conciliaciones") {
+            loadPayments();
+            loadMapa();
+            loadHistorialPagos();
+        } else if (path === "auditoria") {
+            loadAuditoria();
+        } else if (path === "configuracion") {
+            loadConfigData();
+            if (currentUserSession && currentUserSession.rol === "admin") {
+                loadAdminUsuarios();
+            }
+        }
+    }
+
+    window.loadAdminUsuarios = async function() {
+        const tbody = document.getElementById("admin-usuarios-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando lista de usuarios de la plataforma...</td></tr>';
+            const res = await fetch("/api/admin/usuarios");
+            if (res.ok) {
+                const users = await res.json();
+                if (users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay usuarios registrados en la plataforma.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                users.forEach(u => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${u.email}</strong></td>
+                        <td>${u.nombre_odoo || u.email}</td>
+                        <td>
+                            <select onchange="cambiarRolUsuario('${u.email}', this.value)" style="padding: 0.35rem 0.65rem; border-radius: 6px; border: 1px solid #cbd5e1; font-family: inherit; font-size: 0.82rem; background: white; font-weight: 500;">
+                                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Administrador / Gerencia</option>
+                                <option value="tesoreria" ${u.rol === 'tesoreria' ? 'selected' : ''}>Tesorería y Cobranza</option>
+                                <option value="auditor" ${u.rol === 'auditor' ? 'selected' : ''}>Auditoría y Contabilidad</option>
+                                <option value="ventas" ${u.rol === 'ventas' ? 'selected' : ''}>Ventas y Comercial</option>
+                            </select>
+                        </td>
+                        <td><small>${u.fecha_registro ? u.fecha_registro.replace("T", " ").split(".")[0] : '-'}</small></td>
+                        <td><span class="state-badge ${u.activo ? 'cierre' : ''}">${u.activo ? 'Activo en Odoo' : 'Inactivo'}</span></td>
+                        <td>
+                            <button class="btn btn-secondary" onclick="adminResetPassword('${u.email}')" style="padding: 0.3rem 0.65rem; font-size: 0.78rem;">🔒 Restablecer Clave</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error cargando lista de usuarios.</td></tr>';
+            console.error(err);
+        }
+    };
+
+    window.cambiarRolUsuario = async function(email, nuevoRol) {
+        try {
+            const res = await fetch("/api/admin/cambiar-rol", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, nuevo_rol: nuevoRol })
+            });
+            if (res.ok) {
+                alert(`✅ Rol de ${email} actualizado correctamente.`);
+            } else {
+                const err = await res.json();
+                alert(`❌ Error al cambiar rol: ${err.detail || 'Error en servidor'}`);
+            }
+        } catch (err) {
+            alert("❌ Error de red al cambiar rol.");
+        }
+    };
+
+    window.adminResetPassword = async function(email) {
+        const newPassword = prompt(`Introduce la nueva contraseña para el usuario ${email}:`);
+        if (!newPassword || newPassword.trim().length < 6) {
+            if (newPassword !== null) alert("❌ La contraseña debe tener al menos 6 caracteres.");
+            return;
+        }
+        try {
+            const res = await fetch("/api/auth/reset-password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password: newPassword.trim() })
+            });
+            if (res.ok) {
+                alert(`✅ Contraseña de ${email} restablecida exitosamente.`);
+            } else {
+                const err = await res.json();
+                alert(`❌ Error: ${err.detail || 'No se pudo restablecer'}`);
+            }
+        } catch (err) {
+            alert("❌ Error de red.");
+        }
+    };
+
+    // Run user session and page setup
+    initUserSession().then(() => {
+        initCurrentPage();
     });
 
     // Fetch and render KPIs

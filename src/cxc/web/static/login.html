@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión — CxC Lubrikca C.A.</title>
+    
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/static/styles.css?v=20260720_03">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: radial-gradient(circle at 50% 30%, #f8fafc, #e2e8f0);
+            padding: 1.5rem;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 440px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            border-radius: 20px;
+            padding: 2.5rem 2rem;
+            box-shadow: 0 20px 40px -15px rgba(15, 23, 42, 0.1);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 1.75rem;
+        }
+
+        .login-logo {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #06b6d4, #2563eb);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .login-header h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .login-header p {
+            font-size: 0.85rem;
+            color: #64748b;
+            margin-top: 0.25rem;
+        }
+
+        .login-tabs {
+            display: flex;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            gap: 4px;
+        }
+
+        .login-tab-btn {
+            flex: 1;
+            padding: 0.5rem 0.25rem;
+            border: none;
+            background: transparent;
+            font-family: inherit;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #64748b;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: center;
+        }
+
+        .login-tab-btn.active {
+            background: #ffffff;
+            color: #2563eb;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .auth-form-panel {
+            display: none;
+        }
+
+        .auth-form-panel.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 1.15rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 0.35rem;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem 0.9rem;
+            border-radius: 10px;
+            border: 1px solid #cbd5e1;
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-group input:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .auth-btn {
+            width: 100%;
+            padding: 0.85rem;
+            border: none;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+            margin-top: 0.5rem;
+        }
+
+        .auth-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+        }
+
+        .auth-btn:active {
+            transform: translateY(0);
+        }
+
+        .alert-msg {
+            padding: 0.75rem 0.9rem;
+            border-radius: 10px;
+            font-size: 0.82rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .alert-msg.error {
+            display: block;
+            background: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+        }
+
+        .alert-msg.success {
+            display: block;
+            background: #f0fdf4;
+            color: #15803d;
+            border: 1px solid #bbf7d0;
+        }
+
+        .odoo-notice {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-align: center;
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px dashed #e2e8f0;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-logo">❖</div>
+            <h1>CxC Lubrikca C.A.</h1>
+            <p>Acceso Seguro al Sistema de Cobranzas y Conciliación</p>
+        </div>
+
+        <div class="login-tabs">
+            <button class="login-tab-btn active" onclick="switchAuthTab('login')">Ingresar</button>
+            <button class="login-tab-btn" onclick="switchAuthTab('primer-ingreso')">Primer Ingreso</button>
+            <button class="login-tab-btn" onclick="switchAuthTab('olvidaste')">¿Olvidaste clave?</button>
+        </div>
+
+        <div id="auth-alert" class="alert-msg"></div>
+
+        <!-- FORMULARIO 1: LOGIN -->
+        <div id="panel-login" class="auth-form-panel active">
+            <form id="form-login">
+                <div class="form-group">
+                    <label>Correo Electrónico (Odoo)</label>
+                    <input type="email" id="login-email" required placeholder="ejemplo@lubrikca.com">
+                </div>
+                <div class="form-group">
+                    <label>Contraseña</label>
+                    <input type="password" id="login-password" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="auth-btn">Iniciar Sesión</button>
+            </form>
+        </div>
+
+        <!-- FORMULARIO 2: PRIMER INGRESO / CREAR CLAVE -->
+        <div id="panel-primer-ingreso" class="auth-form-panel">
+            <form id="form-primer-ingreso">
+                <div class="form-group">
+                    <label>Correo Electrónico registrado en Odoo</label>
+                    <input type="email" id="reg-email" required placeholder="ejemplo@lubrikca.com">
+                </div>
+                <div class="form-group">
+                    <label>Crea tu Contraseña</label>
+                    <input type="password" id="reg-password" required minlength="6" placeholder="Mínimo 6 caracteres">
+                </div>
+                <div class="form-group">
+                    <label>Confirma tu Contraseña</label>
+                    <input type="password" id="reg-password-confirm" required minlength="6" placeholder="Repite tu contraseña">
+                </div>
+                <button type="submit" class="auth-btn" style="background: linear-gradient(135deg, #059669, #047857);">Crear Contraseña y Registrar</button>
+            </form>
+        </div>
+
+        <!-- FORMULARIO 3: RESTABLECER CLAVE OLVIDADA -->
+        <div id="panel-olvidaste" class="auth-form-panel">
+            <form id="form-reset-password">
+                <div class="form-group">
+                    <label>Correo Electrónico de Odoo</label>
+                    <input type="email" id="reset-email" required placeholder="ejemplo@lubrikca.com">
+                </div>
+                <div class="form-group">
+                    <label>Nueva Contraseña</label>
+                    <input type="password" id="reset-new-password" required minlength="6" placeholder="Nueva contraseña de acceso">
+                </div>
+                <button type="submit" class="auth-btn" style="background: linear-gradient(135deg, #d97706, #b45309);">Restablecer Mi Contraseña</button>
+            </form>
+        </div>
+
+        <div class="odoo-notice">
+            🔒 Acceso restringido a usuarios activos en Odoo ERP
+        </div>
+    </div>
+
+    <script>
+        function switchAuthTab(tab) {
+            document.querySelectorAll('.login-tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.auth-form-panel').forEach(p => p.classList.remove('active'));
+            hideAlert();
+
+            if (tab === 'login') {
+                document.querySelectorAll('.login-tab-btn')[0].classList.add('active');
+                document.getElementById('panel-login').classList.add('active');
+            } else if (tab === 'primer-ingreso') {
+                document.querySelectorAll('.login-tab-btn')[1].classList.add('active');
+                document.getElementById('panel-primer-ingreso').classList.add('active');
+            } else if (tab === 'olvidaste') {
+                document.querySelectorAll('.login-tab-btn')[2].classList.add('active');
+                document.getElementById('panel-olvidaste').classList.add('active');
+            }
+        }
+
+        function showAlert(msg, isError = true) {
+            const el = document.getElementById('auth-alert');
+            el.className = 'alert-msg ' + (isError ? 'error' : 'success');
+            el.textContent = msg;
+        }
+
+        function hideAlert() {
+            const el = document.getElementById('auth-alert');
+            el.className = 'alert-msg';
+            el.textContent = '';
+        }
+
+        // Handle Login Form
+        document.getElementById('form-login').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideAlert();
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    showAlert('✅ Sesión iniciada. Redirigiendo...', false);
+                    setTimeout(() => {
+                        window.location.href = data.redirect || '/dashboard';
+                    }, 500);
+                } else {
+                    const err = await res.json();
+                    showAlert(err.detail || 'Error al iniciar sesión');
+                }
+            } catch (err) {
+                showAlert('Error de red al conectar con el servidor');
+            }
+        });
+
+        // Handle Primer Ingreso Form
+        document.getElementById('form-primer-ingreso').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideAlert();
+            const email = document.getElementById('reg-email').value.trim();
+            const password = document.getElementById('reg-password').value;
+            const confirm = document.getElementById('reg-password-confirm').value;
+
+            if (password !== confirm) {
+                showAlert('Las contraseñas no coinciden');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/auth/register-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    showAlert('✅ Contraseña creada exitosamente. Redirigiendo...', false);
+                    setTimeout(() => {
+                        window.location.href = data.redirect || '/dashboard';
+                    }, 800);
+                } else {
+                    const err = await res.json();
+                    showAlert(err.detail || 'Error al crear contraseña');
+                }
+            } catch (err) {
+                showAlert('Error de red al conectar con el servidor');
+            }
+        });
+
+        // Handle Reset Password Form
+        document.getElementById('form-reset-password').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideAlert();
+            const email = document.getElementById('reset-email').value.trim();
+            const password = document.getElementById('reset-new-password').value;
+
+            try {
+                const res = await fetch('/api/auth/reset-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (res.ok) {
+                    showAlert('✅ Contraseña restablecida correctamente. Ya puedes iniciar sesión.', false);
+                    setTimeout(() => {
+                        switchAuthTab('login');
+                        document.getElementById('login-email').value = email;
+                    }, 1200);
+                } else {
+                    const err = await res.json();
+                    showAlert(err.detail || 'Error al restablecer contraseña');
+                }
+            } catch (err) {
+                showAlert('Error de red al conectar con el servidor');
+            }
+        });
+    </script>
+</body>
+</html>

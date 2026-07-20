@@ -255,13 +255,255 @@ async def startup_event():
     asyncio.create_task(run_sync_in_background())
     asyncio.create_task(run_scraper_in_background())
 
+from fastapi import Cookie, Request, Response, Depends
+from fastapi.responses import RedirectResponse
+from cxc.auth import (
+    ROLES_PERMISOS, NOMBRES_ROLES, hash_password, verificar_password,
+    verificar_usuario_odoo_activo, obtener_usuarios_plataforma,
+    buscar_usuario_plataforma, registrar_o_actualizar_usuario,
+    autenticar_usuario, crear_session_token, verificar_session_token
+)
+
+SECRET_KEY = os.environ.get("SESSION_SECRET", "lubrikca_cxc_secret_key_2026")
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class RegisterPasswordRequest(BaseModel):
+    email: str
+    password: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    password: str
+
+class CambiarRolRequest(BaseModel):
+    email: str
+    nuevo_rol: str
+
+
+def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, Any] | None:
+    if not cxc_session:
+        return None
+    email = verificar_session_token(cxc_session, SECRET_KEY)
+    if not email:
+        return None
+    try:
+        repo = get_repo()
+        u_row = buscar_usuario_plataforma(repo, email)
+        if not u_row or u_row.get("activo") == "FALSE":
+            return None
+        rol = u_row.get("rol", "ventas")
+        return {
+            "email": email,
+            "nombre": u_row.get("nombre_odoo") or email,
+            "rol": rol,
+            "nombre_rol": NOMBRES_ROLES.get(rol, "Ventas"),
+            "permisos": ROLES_PERMISOS.get(rol, ["reporte"])
+        }
+    except Exception as e:
+        logger.warning("Error buscando usuario de sesión %s: %s", email, e)
+        return None
+
+
+# --- MULTI-PAGE & AUTH ROUTES ---
+
 @app.get("/", response_class=HTMLResponse)
-async def read_index():
+async def read_root(cxc_session: str | None = Cookie(default=None)):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        return RedirectResponse(url="/login")
+    first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+    return RedirectResponse(url=f"/{first_perm}")
+
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login(cxc_session: str | None = Cookie(default=None)):
+    user = get_current_user_from_cookie(cxc_session)
+    if user:
+        first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+        return RedirectResponse(url=f"/{first_perm}")
+    login_path = os.path.join(static_dir, "login.html")
+    if not os.path.exists(login_path):
+        return HTMLResponse("<html><body><h1>Error</h1><p>Archivo static/login.html no encontrado</p></body></html>")
+    with open(login_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+@app.get("/logout")
+async def handle_logout_get(response: Response):
+    res = RedirectResponse(url="/login")
+    res.delete_cookie(key="cxc_session")
+    return res
+
+@app.post("/api/auth/logout")
+async def handle_logout_post():
+    res = Response(content=json.dumps({"status": "success", "message": "Sesión cerrada"}), media_type="application/json")
+    res.delete_cookie(key="cxc_session")
+    return res
+
+def render_page_or_login(page_name: str, cxc_session: str | None):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        return RedirectResponse(url="/login")
+    if page_name not in user["permisos"] and user["rol"] != "admin":
+        first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+        return RedirectResponse(url=f"/{first_perm}")
+    
     index_path = os.path.join(static_dir, "index.html")
     if not os.path.exists(index_path):
-        return HTMLResponse("<html><body><h1>Servidor Iniciado</h1><p>Frontend no encontrado en static/index.html</p></body></html>")
+        return HTMLResponse("<html><body><h1>Servidor Iniciado</h1><p>Frontend no encontrado</p></body></html>")
     with open(index_path, 'r', encoding='utf-8') as f:
         return f.read()
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("dashboard", cxc_session)
+
+@app.get("/conciliaciones", response_class=HTMLResponse)
+async def page_conciliaciones(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("conciliaciones", cxc_session)
+
+@app.get("/reporte", response_class=HTMLResponse)
+async def page_reporte(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("reporte", cxc_session)
+
+@app.get("/auditoria", response_class=HTMLResponse)
+async def page_auditoria(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("auditoria", cxc_session)
+
+@app.get("/configuracion", response_class=HTMLResponse)
+async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("configuracion", cxc_session)
+
+# --- AUTH & ADMIN API ENDPOINTS ---
+
+@app.post("/api/auth/login")
+async def api_auth_login(req: LoginRequest):
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        repo = get_repo()
+        
+        user_info, err_msg = autenticar_usuario(execute, repo, req.email, req.password)
+        if not user_info:
+            raise HTTPException(status_code=401, detail=err_msg or "Credenciales inválidas")
+        
+        token = crear_session_token(req.email, SECRET_KEY)
+        first_perm = user_info["permisos"][0] if user_info["permisos"] else "reporte"
+        
+        res = Response(
+            content=json.dumps({"status": "success", "user": user_info, "redirect": f"/{first_perm}"}),
+            media_type="application/json"
+        )
+        res.set_cookie(key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/register-password")
+async def api_auth_register_password(req: RegisterPasswordRequest):
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        repo = get_repo()
+        
+        odoo_user = verificar_usuario_odoo_activo(execute, req.email)
+        if not odoo_user:
+            raise HTTPException(status_code=400, detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.")
+        
+        u_row = registrar_o_actualizar_usuario(
+            repo,
+            email=req.email,
+            password=req.password,
+            nombre_odoo=odoo_user.get("name") or "",
+            activo=True
+        )
+        
+        token = crear_session_token(req.email, SECRET_KEY)
+        rol = u_row.get("rol", "ventas")
+        permisos = ROLES_PERMISOS.get(rol, ["reporte"])
+        first_perm = permisos[0] if permisos else "reporte"
+        
+        res = Response(
+            content=json.dumps({"status": "success", "message": "Contraseña creada exitosamente", "redirect": f"/{first_perm}"}),
+            media_type="application/json"
+        )
+        res.set_cookie(key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/reset-password")
+async def api_auth_reset_password(req: ResetPasswordRequest):
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        repo = get_repo()
+        
+        odoo_user = verificar_usuario_odoo_activo(execute, req.email)
+        if not odoo_user:
+            raise HTTPException(status_code=400, detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.")
+        
+        registrar_o_actualizar_usuario(
+            repo,
+            email=req.email,
+            password=req.password,
+            nombre_odoo=odoo_user.get("name") or "",
+            activo=True
+        )
+        return {"status": "success", "message": "Contraseña restablecida exitosamente."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/auth/me")
+async def api_auth_me(cxc_session: str | None = Cookie(default=None)):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    return user
+
+@app.get("/api/admin/usuarios")
+async def api_admin_list_usuarios(cxc_session: str | None = Cookie(default=None)):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] != "admin":
+        raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol Administrador")
+    repo = get_repo()
+    rows = obtener_usuarios_plataforma(repo)
+    clean_rows = []
+    for r in rows:
+        clean_rows.append({
+            "email": r.get("email"),
+            "nombre_odoo": r.get("nombre_odoo"),
+            "rol": r.get("rol", "ventas"),
+            "nombre_rol": NOMBRES_ROLES.get(r.get("rol", "ventas"), "Ventas"),
+            "activo": r.get("activo") == "TRUE",
+            "fecha_registro": r.get("fecha_registro")
+        })
+    return clean_rows
+
+@app.post("/api/admin/cambiar-rol")
+async def api_admin_cambiar_rol(req: CambiarRolRequest, cxc_session: str | None = Cookie(default=None)):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] != "admin":
+        raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol Administrador")
+    if req.nuevo_rol not in ROLES_PERMISOS:
+        raise HTTPException(status_code=400, detail=f"Rol '{req.nuevo_rol}' no es válido.")
+    repo = get_repo()
+    u_row = buscar_usuario_plataforma(repo, req.email)
+    if not u_row:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    u_row["rol"] = req.nuevo_rol
+    repo._g.upsert_row("UsuariosPlataforma", "email", u_row)
+    return {"status": "success", "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}."}
 
 @app.get("/api/resumen")
 async def get_resumen():

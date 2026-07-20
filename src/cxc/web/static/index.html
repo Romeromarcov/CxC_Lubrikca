@@ -24,18 +24,29 @@
             </div>
         </div>
         
-        <!-- Navegación por pestañas -->
+        <!-- Navegación por Páginas -->
         <nav class="tab-navigation">
-            <button class="tab-btn active" data-tab="tab-dashboard">📊 Dashboard</button>
-            <button class="tab-btn" data-tab="tab-reporte">📑 Reporte de Saldos</button>
-            <button class="tab-btn" data-tab="tab-conciliaciones">🤝 Conciliaciones</button>
-            <button class="tab-btn" data-tab="tab-auditoria">🔍 Auditoría</button>
-            <button class="tab-btn" data-tab="tab-config">⚙️ Configuración</button>
+            <a href="/dashboard" class="tab-btn nav-link" data-page="dashboard" style="text-decoration: none;">📊 Dashboard</a>
+            <a href="/conciliaciones" class="tab-btn nav-link" data-page="conciliaciones" style="text-decoration: none;">🤝 Conciliaciones</a>
+            <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
+            <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
+            <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
         </nav>
 
-        <div class="system-status">
-            <span class="status-indicator online"></span>
-            <span>Daemon Activo</span>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <div class="user-profile-area" id="header-user-profile" style="display:flex; align-items:center; gap:0.65rem; background: #ffffff; padding: 0.35rem 0.85rem; border-radius: 30px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.03);">
+                <div style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #06b6d4, #2563eb); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85rem;" id="header-avatar">U</div>
+                <div style="display:flex; flex-direction:column; line-height: 1.15;">
+                    <strong style="font-size: 0.8rem; color: #0f172a;" id="header-user-name">Usuario Odoo</strong>
+                    <span style="font-size: 0.68rem; color: #2563eb; font-weight: 600;" id="header-user-role">Cargando...</span>
+                </div>
+                <a href="/logout" title="Cerrar Sesión" style="margin-left: 0.25rem; color: #ef4444; text-decoration: none; font-size: 1.1rem; padding: 2px 6px; border-radius: 6px;" onclick="return confirm('¿Deseas cerrar tu sesión?')">🚪</a>
+            </div>
+
+            <div class="system-status">
+                <span class="status-indicator online"></span>
+                <span>Daemon Activo</span>
+            </div>
         </div>
     </header>
 
@@ -1199,6 +1210,39 @@
                             <tbody id="descuentos-volumen-table-body">
                                 <tr>
                                     <td colspan="9" class="table-empty">Cargando descuentos por volumen...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- GESTIÓN DE USUARIOS Y ROLES DE LA PLATAFORMA (SOLO ADMINS) -->
+                <section class="config-card card" id="admin-user-mgmt-panel" style="grid-column: 1 / span 2; border-left: 5px solid #2563eb;">
+                    <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div>
+                            <h2 style="color: #1e40af; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>👥</span> Gestión de Usuarios y Roles de la Plataforma
+                            </h2>
+                            <p style="color: #475569;">Asigna o modifica los niveles de acceso de cada usuario registrado con su correo de Odoo ERP</p>
+                        </div>
+                        <button class="btn btn-secondary" onclick="loadAdminUsuarios()" style="padding: 0.4rem 0.85rem; font-size: 0.82rem;">🔄 Actualizar Lista</button>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Usuario (Odoo Email)</th>
+                                    <th>Nombre del Colaborador</th>
+                                    <th>Rol Asignado</th>
+                                    <th>Fecha Registro</th>
+                                    <th>Estado</th>
+                                    <th>Acciones Administrador</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-usuarios-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando usuarios de la plataforma...</td>
                                 </tr>
                             </tbody>
                         </table>
