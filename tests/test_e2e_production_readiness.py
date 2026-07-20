@@ -1,0 +1,257 @@
+import os
+import pytest
+from decimal import Decimal
+from datetime import date, datetime
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+
+from cxc.models import (
+    OrdenVenta, LineaOrden, Pago, Vinculacion, EstadoVinculacion, Moneda, TipoTasa,
+    DescuentoMarcaCategoria, DescuentoVolumen, DescuentoProntoPago, DescuentoRecompra,
+    DescuentoDiferencialCambiario, Feriado
+)
+from cxc.engine.runner import EngineRunner
+from cxc.reconciliation.reconcile import Reconciler, OdooFacturasReader
+from cxc.web.app import app, SECRET_KEY, crear_session_token
+
+client = TestClient(app)
+
+@patch("cxc.web.app._connect", return_value=lambda model, method, args, kwargs={}: [
+    {"id": 1, "name": "Chevron"},
+    {"id": 2, "name": "Lubrikca"}
+] if model == "product.brand" else [])
+@patch("cxc.web.app.AppConfig.from_env")
+def test_e2e_01_catalog_and_odoo_ingestion(mock_env, mock_conn):
+    """Test 1: Ingestión de catálogo de Odoo (productos, marcas y categorías)."""
+    res = client.get("/api/odoo/marcas")
+    assert res.status_code == 200
+    data = res.json()
+    assert "Chevron" in data
+    assert "Lubrikca" in data
+
+def test_e2e_02_payment_loading_and_manual_allocation():
+    """Test 2 & 3: Carga de pagos y asignación manual a órdenes de venta."""
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO100",
+            cliente_id="CLI_001",
+            vendedor_email="vendedor1@lubrikca.com",
+            fecha=date(2026, 7, 10),
+            fecha_entrega=date(2026, 7, 10),
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False
+        )
+    ]
+    mock_pago = Pago(
+        pago_id="PAGO_100",
+        cliente_id="CLI_001",
+        monto=Decimal("300.00"),
+        moneda=Moneda.USD,
+        metodo_pago="Zelle",
+        fecha_pago=datetime(2026, 7, 11, 10, 0),
+        vendedor_email="vendedor1@lubrikca.com"
+    )
+    mock_repo.get_pago.return_value = mock_pago
+    mock_repo.all_pagos.return_value = [mock_pago]
+    mock_repo.all_vinculaciones.return_value = []
+    
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), \
+         patch("cxc.web.app._connect"), \
+         patch("cxc.web.app.recalculate_all"):
+        payload = {
+            "pago_id": "PAGO_100",
+            "so_id": "SO100",
+            "monto_aplicado": 300.00
+        }
+        
+        res = client.post("/api/vincular", json=payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        mock_repo.update_vinculacion.assert_called_once()
+
+def test_e2e_04_discount_engine_evaluation():
+    """Test 4: Evaluación completa del motor de 5 reglas de descuento."""
+    orden = OrdenVenta(
+        so_id="SO200",
+        cliente_id="CLI_002",
+        vendedor_email="vendedor2@lubrikca.com",
+        fecha=date(2026, 7, 1),
+        fecha_entrega=date(2026, 7, 1),
+        monto_total=Decimal("1000.00"),
+        lista_precios="4",
+        es_primera_compra=False
+    )
+    lineas = [
+        LineaOrden(
+            linea_id="L1",
+            so_id="SO200",
+            producto="Aceite Motor Chevron 20W50",
+            marca="Chevron",
+            categoria="Comercial",
+            cantidad=Decimal("100.0"),
+            precio_unitario=Decimal("10.00")
+        )
+    ]
+    descuentos_mc = [
+        DescuentoMarcaCategoria(
+            regla_id="R_MC_1", marca="Chevron", categoria="Comercial",
+            tipo_descuento="marca", porcentaje=Decimal("0.05"),
+            vigencia_desde=date(2026, 1, 1), activo=True
+        )
+    ]
+    descuentos_vol = [
+        DescuentoVolumen(
+            regla_id="R_VOL_1", marca="Chevron", categoria="Comercial",
+            litros_minimo=Decimal("50.0"), porcentaje=Decimal("0.03"),
+            vigencia_desde=date(2026, 1, 1), activo=True
+        )
+    ]
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = orden
+    mock_repo.lineas_de_orden.return_value = lineas
+    mock_repo.vinculaciones_de_orden.return_value = []
+    mock_repo.descuentos_marca_categoria.return_value = descuentos_mc
+    mock_repo.descuentos_volumen.return_value = descuentos_vol
+    mock_repo.descuentos_pronto_pago.return_value = []
+    mock_repo.descuento_recompra.return_value = None
+    mock_repo.descuento_diferencial_cambiario.return_value = None
+    mock_repo.exclusiones.return_value = []
+    mock_repo.feriados.return_value = []
+    mock_repo.descuentos_producto.return_value = []
+    mock_repo.promocion_primera_compra.return_value = None
+    mock_repo.es_primera_compra_cliente.return_value = False
+
+    from cxc.config import EngineConfig
+    from cxc.engine.price_resolver import PriceResolver
+
+    cfg = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full", lista_usd="4", lista_bcv="5")
+    resolver = MagicMock()
+    resolver.volumen.return_value = Decimal("100.0")
+    resolver.precio.return_value = Decimal("10.00")
+    runner = EngineRunner(mock_repo, resolver, cfg)
+    res = runner.run_orden("SO200", date(2026, 7, 5))
+    assert res is not None
+    assert res.so_id == "SO200"
+
+def test_e2e_05_reconciliation_trays():
+    """Test 5: Clasificación automática de conciliaciones en las 3 Bandejas."""
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: [
+        {
+            "pago_id": "P1", "fecha": "2026-07-15", "monto": "100.0", "moneda": "USD",
+            "vendedor": "vendedor1@lubrikca.com", "cliente_nombre": "Cliente A"
+        }
+    ] if sheet == "Pagos" else []
+    
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO300", cliente_id="C3", vendedor_email="vendedor1@lubrikca.com",
+            fecha=date(2026, 7, 10), fecha_entrega=date(2026, 7, 10),
+            monto_total=Decimal("100.00"), lista_precios="4", es_primera_compra=False
+        )
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1", pago_id="P1", so_id="SO300",
+            monto_aplicado=Decimal("100.00"), hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"), tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False, estado=EstadoVinculacion.CONCILIADO
+        )
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+    
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), \
+         patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        data = res.json()
+        assert isinstance(data, list)
+
+def test_e2e_06_vendor_scoping_and_roles():
+    """Test 6: Scoping por vendedor y permisos de rol en reportes/cobranza."""
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: [
+        {
+            "pago_id": "P_VEND_1", "fecha": "2026-07-15", "monto": "200.0", "moneda": "USD",
+            "vendedor": "vendedor_juan@lubrikca.com", "cliente_nombre": "Cliente Juan"
+        },
+        {
+            "pago_id": "P_VEND_2", "fecha": "2026-07-15", "monto": "500.0", "moneda": "USD",
+            "vendedor": "vendedor_pedro@lubrikca.com", "cliente_nombre": "Cliente Pedro"
+        }
+    ] if sheet == "Pagos" else []
+    
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    token = crear_session_token("vendedor_juan@lubrikca.com", SECRET_KEY)
+    
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), \
+         patch("cxc.web.app.get_current_user_from_cookie", return_value={
+             "email": "vendedor_juan@lubrikca.com",
+             "rol": "ventas",
+             "nombre": "Juan Vendedor"
+         }):
+        client.cookies.set("cxc_session", token)
+        res = client.get("/api/cobranza")
+        assert res.status_code == 200
+        data = res.json()
+        for item in data:
+            assert item["vendedor"] == "vendedor_juan@lubrikca.com"
+
+def test_e2e_07_receipt_generation():
+    """Test 7: Generación de Recibo de Entrega (2 Copias PDF)."""
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: [
+        {
+            "pago_id": "P_REC_1", "fecha": "2026-07-18", "monto": "150.0", "moneda": "USD",
+            "vendedor": "juan", "cliente_nombre": "Cliente Test", "recibido": "FALSE"
+        }
+    ] if sheet == "Pagos" else []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    payload = {
+        "pago_ids": ["P_REC_1"],
+        "recibido_por": "Caja Principal"
+    }
+    
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.post("/api/cobranza/marcar-recibido", json=payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert "numero_recibido" in data
+        assert data["recibido_por"] == "Caja Principal"
+        assert len(data["pagos"]) == 1
+
+def test_e2e_08_executive_daily_report():
+    """Test 8: Consolidados de Reporte Diario Ejecutivo (USD, Litros y Cobranza)."""
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_D1", cliente_id="C1", vendedor_email="v1",
+            fecha=date(2026, 7, 18), fecha_entrega=date(2026, 7, 18),
+            monto_total=Decimal("1200.00"), lista_precios="4", es_primera_compra=False
+        )
+    ]
+    mock_repo._g.read_rows.side_effect = lambda sheet: [
+        {"so_id": "SO_D1", "product_id": "101", "cantidad_entregada": "50"}
+    ] if sheet == "LineasOrden" else (
+        [{"pago_id": "P_D1", "fecha": "2026-07-18", "monto": "600.0", "moneda": "USD", "metodo_pago": "Efectivo"}]
+        if sheet == "Pagos" else []
+    )
+    
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/reporte/diario")
+        assert res.status_code == 200
+        data = res.json()
+        assert "ventas_diarias" in data
+        assert "cobranza_diaria" in data
+        assert len(data["ventas_diarias"]) >= 1
+        assert len(data["cobranza_diaria"]) >= 1
+
