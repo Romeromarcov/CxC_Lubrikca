@@ -848,13 +848,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderReporteTable(data) {
-        if (data.length === 0) {
+        const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : []);
+        if (!list || list.length === 0) {
             reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
 
         reporteTableBody.innerHTML = "";
-        data.forEach(item => {
+        list.forEach(item => {
             const row = document.createElement("tr");
             const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
@@ -990,19 +991,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Filter report table in real-time
-    reporteSearch.addEventListener("keyup", () => {
-        const query = reporteSearch.value.toLowerCase().trim();
-        if (!query) {
-            renderReporteTable(reporteData);
-            return;
-        }
-
-        const filtered = reporteData.filter(item => 
-            item.so_id.toLowerCase().includes(query) || 
-            item.cliente_nombre.toLowerCase().includes(query)
-        );
-        renderReporteTable(filtered);
-    });
+    const reporteSearchEl = document.getElementById("reporte-search");
+    if (reporteSearchEl) {
+        reporteSearchEl.addEventListener("keyup", () => {
+            applyReporteFilters();
+        });
+    }
 
     // Form submit handlers for new discount panels
     const recompraForm = document.getElementById("recompra-form");
