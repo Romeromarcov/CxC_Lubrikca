@@ -88,15 +88,47 @@ def map_cliente(rec: dict[str, Any]) -> Cliente:
     )
 
 
+import json
+import os
+import re
+from datetime import date
+
+_FECHAS_HISTORICAS_DATA: dict[str, str] = {}
+try:
+    _json_path = os.path.join(os.path.dirname(__file__), "..", "data", "fechas_historicas_ordenes.json")
+    if os.path.exists(_json_path):
+        with open(_json_path, "r", encoding="utf-8") as _f:
+            _d = json.load(_f)
+            _FECHAS_HISTORICAS_DATA = _d.get("fechas_por_numero", {})
+except Exception:
+    pass
+
+def _resolve_fecha_orden(so_name: str, odoo_date_val: Any) -> date:
+    """Retorna la fecha histórica del CSV si existe para la orden; si no, la fecha de Odoo."""
+    if so_name and _FECHAS_HISTORICAS_DATA:
+        digits = re.sub(r"[^\d]", "", str(so_name).strip())
+        if digits:
+            norm_key = str(int(digits))
+            if norm_key in _FECHAS_HISTORICAS_DATA:
+                try:
+                    return date.fromisoformat(_FECHAS_HISTORICAS_DATA[norm_key])
+                except Exception:
+                    pass
+    return _to_datetime(odoo_date_val).date()
+
 def map_orden(rec: dict[str, Any]) -> OrdenVenta:
     estado_entrega = str(rec.get("delivery_status", "") or "")
     entregada_completa = estado_entrega == "full"
     # El plazo de contado solo arranca con la entrega completa.
     fecha_entrega = _to_date(rec.get("fecha_entrega")) if entregada_completa else None
+    
+    so_name = str(rec.get("name", ""))
+    fecha_orden = _resolve_fecha_orden(so_name, rec.get("date_order"))
+    
     return OrdenVenta(
-        so_id=str(rec["name"]),
+        so_id=so_name,
         cliente_id=_m2o_id(rec.get("partner_id")),
-        fecha=_to_datetime(rec["date_order"]).date(),
+        fecha=fecha_orden,
         fecha_entrega=fecha_entrega,
         monto_total=_dec(rec.get("amount_total")),
         lista_precios=_m2o_id(rec.get("pricelist_id")),

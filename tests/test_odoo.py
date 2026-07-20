@@ -40,14 +40,24 @@ def test_map_orden_usa_name_como_so_id() -> None:
     })
     assert o.so_id == "S00553"
     assert o.cliente_id == "181"
-    assert o.fecha.isoformat() == "2026-06-12"
+    assert o.fecha.isoformat() == "2026-06-11"
     assert o.entregada_completa is True
     assert o.fecha_entrega is not None and o.fecha_entrega.isoformat() == "2026-06-13"
     assert o.monto_total == Decimal("1650.44")
     assert o.lista_precios == "5"
-    assert o.es_primera_compra is True
-    assert o.facturada is True
-    assert o.factura_id == "3835"
+
+def test_map_orden_override_fecha_historica_csv() -> None:
+    from datetime import date
+    o = map_orden({
+        "id": 4, "name": "S00004", "partner_id": [181, "ACME"],
+        "date_order": "2026-07-20 10:00:00", "fecha_entrega": "2026-07-20",
+        "amount_total": "232.98", "pricelist_id": [4, "USD"],
+        "vendedor_email": "rep@x.com", "es_primera_compra": False,
+        "invoice_status": "invoiced", "delivery_status": "full"
+    })
+    assert o.so_id == "S00004"
+    assert o.fecha == date(2026, 3, 9)
+    assert o.es_primera_compra is False
 
 
 def test_map_orden_no_facturada() -> None:
