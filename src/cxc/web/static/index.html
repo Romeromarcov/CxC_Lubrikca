@@ -182,13 +182,45 @@
         <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
+                <!-- 5 Tarjetas de Antigüedad de Saldos / Vencimientos -->
+                <div class="kpi-grid aging-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 1.5rem;">
+                    <div class="kpi-card card border-emerald">
+                        <div class="kpi-label">Vigentes (Sin Vencer)</div>
+                        <div class="kpi-value text-emerald" id="reporte-kpi-vigentes">$0.00</div>
+                        <div class="kpi-subtext">Al día según fecha entrega</div>
+                    </div>
+                    <div class="kpi-card card border-amber">
+                        <div class="kpi-label">Vencidas 1 - 30 Días</div>
+                        <div class="kpi-value text-amber" id="reporte-kpi-1-30">$0.00</div>
+                        <div class="kpi-subtext">Vencimiento reciente</div>
+                    </div>
+                    <div class="kpi-card card border-orange">
+                        <div class="kpi-label">Vencidas 31 - 60 Días</div>
+                        <div class="kpi-value style-orange" id="reporte-kpi-31-60" style="color: #ea580c;">$0.00</div>
+                        <div class="kpi-subtext">Cobranza prioridad media</div>
+                    </div>
+                    <div class="kpi-card card border-rose">
+                        <div class="kpi-label">Vencidas 61 - 90 Días</div>
+                        <div class="kpi-value text-rose" id="reporte-kpi-61-90">$0.00</div>
+                        <div class="kpi-subtext">Cobranza mora alta</div>
+                    </div>
+                    <div class="kpi-card card border-purple">
+                        <div class="kpi-label">Vencidas +90 Días</div>
+                        <div class="kpi-value style-purple" id="reporte-kpi-mas-90" style="color: #7e22ce;">$0.00</div>
+                        <div class="kpi-subtext">Mora crítica o legal</div>
+                    </div>
+                </div>
+
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
                         <div>
-                            <h2>Reporte General de Saldos por Cobrar</h2>
-                            <p>Estado detallado de cada orden de venta, abonos acumulados, descuentos y saldo deudor en tiempo real</p>
+                            <h2>Reporte General y Consolidado de Cuentas por Cobrar</h2>
+                            <p>Análisis de saldos en lista USD y tasa BCV, vendedores, fecha de entrega y días de vencimiento</p>
                         </div>
-                        <div class="filter-actions">
+                        <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                            <select id="reporte-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
+                                <option value="*">Todos los Vendedores</option>
+                            </select>
                             <input type="text" id="reporte-search" placeholder="🔍 Buscar por cliente o SO...">
                         </div>
                     </div>
@@ -199,23 +231,27 @@
                                 <tr>
                                     <th>Orden (SO)</th>
                                     <th>Cliente</th>
-                                    <th>Lista Precios</th>
-                                    <th>Fecha</th>
-                                    <th>Subtotal ($)</th>
-                                    <th>Total Original ($)</th>
+                                    <th>Vendedor</th>
+                                    <th>Fecha Delivery</th>
+                                    <th>Términos</th>
+                                    <th>Vencimiento</th>
+                                    <th>Días Vencido</th>
+                                    <th>Último Abono</th>
                                     <th>Total Proy USD ($)</th>
-                                    <th>Abonos Recibidos ($)</th>
-                                    <th>Saldo Deudor Actual ($)</th>
-                                    <th>Saldo con Descuentos ($)</th>
-                                    <th>Descuentos Aplicados ($)</th>
+                                    <th>Abonos BCV ($)</th>
+                                    <th>Abonos Binance ($)</th>
+                                    <th>Saldo Deudor BCV ($)</th>
+                                    <th>Saldo Deudor Lista USD ($)</th>
+                                    <th>Total Descuentos ($)</th>
+                                    <th>Saldo Desc. BCV ($)</th>
+                                    <th>Saldo Desc. Lista USD ($)</th>
                                     <th>Estado Odoo</th>
                                     <th>Cierre</th>
-                                    <th>Semáforo</th>
                                 </tr>
                             </thead>
                             <tbody id="reporte-table-body">
                                 <tr>
-                                    <td colspan="14" class="table-empty">Cargando reporte de saldos...</td>
+                                    <td colspan="18" class="table-empty">Cargando reporte de saldos...</td>
                                 </tr>
                             </tbody>
                         </table>

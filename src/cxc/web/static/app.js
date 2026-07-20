@@ -679,31 +679,103 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- Tab 2: Accounts Receivable Report ---
+    let fullReporteItems = [];
+
     async function loadReporte() {
         try {
-            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
             const res = await fetch("/api/reporte-saldos");
             if (res.ok) {
-                reporteData = await res.json();
-                renderReporteTable(reporteData);
+                const data = await res.json();
+                const kpis = data.kpis || { vigentes: 0, vencidas_1_30: 0, vencidas_31_60: 0, vencidas_61_90: 0, vencidas_mas_90: 0 };
+                fullReporteItems = data.items || (Array.isArray(data) ? data : []);
+
+                // Render KPI Cards
+                const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+                const kpiVigentes = document.getElementById("reporte-kpi-vigentes");
+                const kpi130 = document.getElementById("reporte-kpi-1-30");
+                const kpi3160 = document.getElementById("reporte-kpi-31-60");
+                const kpi6190 = document.getElementById("reporte-kpi-61-90");
+                const kpiMas90 = document.getElementById("reporte-kpi-mas-90");
+
+                if (kpiVigentes) kpiVigentes.textContent = fmt(kpis.vigentes);
+                if (kpi130) kpi130.textContent = fmt(kpis.vencidas_1_30);
+                if (kpi3160) kpi3160.textContent = fmt(kpis.vencidas_31_60);
+                if (kpi6190) kpi6190.textContent = fmt(kpis.vencidas_61_90);
+                if (kpiMas90) kpiMas90.textContent = fmt(kpis.vencidas_mas_90);
+
+                // Populate Vendedor Filter Dropdown
+                const vendedorSelect = document.getElementById("reporte-vendedor-filter");
+                if (vendedorSelect && data.vendedores) {
+                    const currentVal = vendedorSelect.value || "*";
+                    vendedorSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                    data.vendedores.forEach(v => {
+                        const opt = document.createElement("option");
+                        opt.value = v;
+                        opt.textContent = v;
+                        vendedorSelect.appendChild(opt);
+                    });
+                    vendedorSelect.value = currentVal;
+
+                    if (!vendedorSelect.dataset.listenerAttached) {
+                        vendedorSelect.addEventListener("change", applyReporteFilters);
+                        vendedorSelect.dataset.listenerAttached = "true";
+                    }
+                }
+
+                const searchInput = document.getElementById("reporte-search");
+                if (searchInput && !searchInput.dataset.listenerAttached) {
+                    searchInput.addEventListener("input", applyReporteFilters);
+                    searchInput.dataset.listenerAttached = "true";
+                }
+
+                applyReporteFilters();
             }
         } catch (err) {
-            reporteTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Error de red al cargar el reporte.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Error de red al cargar el reporte.</td></tr>';
             console.error(err);
         }
     }
 
+    function applyReporteFilters() {
+        const vendedorVal = document.getElementById("reporte-vendedor-filter")?.value || "*";
+        const searchVal = (document.getElementById("reporte-search")?.value || "").toLowerCase().strip?.() || (document.getElementById("reporte-search")?.value || "").toLowerCase().trim();
+
+        let filtered = fullReporteItems.filter(item => {
+            const matchVendedor = (vendedorVal === "*") || (item.vendedor === vendedorVal);
+            const matchSearch = !searchVal || 
+                (item.so_id && item.so_id.toLowerCase().includes(searchVal)) ||
+                (item.cliente_nombre && item.cliente_nombre.toLowerCase().includes(searchVal)) ||
+                (item.vendedor && item.vendedor.toLowerCase().includes(searchVal));
+            return matchVendedor && matchSearch;
+        });
+
+        renderReporteTable(filtered);
+    }
+
     function renderReporteTable(data) {
         if (data.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">No hay registros de cobranza en el sistema.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">No hay registros de cobranza que coincidan con el filtro.</td></tr>';
             return;
         }
 
         reporteTableBody.innerHTML = "";
         data.forEach(item => {
             const row = document.createElement("tr");
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
-            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val);
+            // Aging badge
+            const dv = item.dias_vencido || 0;
+            let agingBadge = '<span class="state-badge cierre" style="background:#dcfce7;color:#15803d">Vigente (0 d)</span>';
+            if (dv >= 1 && dv <= 30) {
+                agingBadge = `<span class="state-badge" style="background:#fef3c7;color:#b45309">+${dv} d</span>`;
+            } else if (dv >= 31 && dv <= 60) {
+                agingBadge = `<span class="state-badge" style="background:#ffedd5;color:#c2410c">+${dv} d</span>`;
+            } else if (dv >= 61 && dv <= 90) {
+                agingBadge = `<span class="state-badge" style="background:#ffe4e6;color:#be123c">+${dv} d</span>`;
+            } else if (dv > 90) {
+                agingBadge = `<span class="state-badge" style="background:#f3e8ff;color:#6b21a8;font-weight:bold">+${dv} d</span>`;
+            }
 
             // Format Odoo State
             let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
@@ -715,13 +787,6 @@ document.addEventListener("DOMContentLoaded", () => {
             let closeHtml = '<span class="state-badge">Abierta</span>';
             if (item.candidata_a_cierre) {
                 closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
-            }
-
-            // Format Semaphore
-            let semHtml = '<span class="semaphore">Ninguno</span>';
-            if (item.reconciliacion) {
-                const resVal = item.reconciliacion.resultado;
-                semHtml = `<span class="semaphore ${resVal.toLowerCase()}">${resVal}</span>`;
             }
 
             // Format Descuentos Aplicados Breakdown
@@ -752,29 +817,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 `;
             }
 
-            // Format Saldo con Descuentos
-            const saldoNeto = item.saldo_deudor_con_descuentos !== undefined ? item.saldo_deudor_con_descuentos : Math.max(0, (item.total_con_descuentos || baseTotal) - (item.monto_pagado || 0));
-            const totalNetoMotor = item.total_con_descuentos !== undefined ? item.total_con_descuentos : baseTotal;
-            const saldoNetoColor = saldoNeto > 0.05 ? '#2563eb' : '#059669';
+            const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
+            const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
 
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
-                <td><span class="state-badge">${item.lista_precios}</span></td>
-                <td>${item.fecha}</td>
-                <td>${fmt(item.subtotal)}</td>
-                <td>${fmt(item.monto_total)}</td>
+                <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
+                <td><small>${item.fecha_entrega || item.fecha}</small></td>
+                <td><small>${item.terminos_pago || 'Contado'}</small></td>
+                <td><small>${item.fecha_vencimiento || '-'}</small></td>
+                <td>${agingBadge}</td>
+                <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
                 <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
-                <td>${fmt(item.monto_pagado)}</td>
-                <td><strong style="color: ${item.saldo_deudor > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor)}</strong></td>
-                <td>
-                    <strong style="color: ${saldoNetoColor}">${fmt(saldoNeto)}</strong>
-                    <div style="font-size:0.7rem; color:#64748b">Neto Motor: ${fmt(totalNetoMotor)}</div>
-                </td>
+                <td>${fmt(item.abono_usd_bcv || item.monto_pagado)}</td>
+                <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
+                <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
+                <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
                 <td>${descuentosHtml}</td>
+                <td><strong style="color: ${saldoDescBCV > 0.05 ? '#2563eb' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
+                <td><strong style="color: ${saldoDescUSD > 0.05 ? '#7e22ce' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
                 <td>${odooHtml}</td>
                 <td>${closeHtml}</td>
-                <td>${semHtml}</td>
             `;
             reporteTableBody.appendChild(row);
         });

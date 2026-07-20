@@ -3,7 +3,7 @@ import sys
 import json
 import asyncio
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -620,14 +620,83 @@ async def get_reporte_saldos():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         
-        # Calculate sum of linked payment amounts per so_id
-        linked_by_so = {}
-        for v in vincs:
-            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
-            
-        # Fetch product fixed prices for list 4 once
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
+
+        # Query Odoo SOs for seller (user_id) & payment terms (payment_term_id)
+        so_ids_names = [o.so_id for o in ordenes]
+        so_odoo_data = {}
+        if so_ids_names:
+            try:
+                so_records = execute(
+                    "sale.order",
+                    "search_read",
+                    [[["name", "in", so_ids_names]]],
+                    {"fields": ["name", "user_id", "payment_term_id", "date_order"]}
+                )
+                for s in so_records:
+                    s_name = s.get("name")
+                    u_info = s.get("user_id")
+                    t_info = s.get("payment_term_id")
+                    vendedor_name = u_info[1] if isinstance(u_info, (list, tuple)) and len(u_info) > 1 else "Sin Vendedor"
+                    term_name = t_info[1] if isinstance(t_info, (list, tuple)) and len(t_info) > 1 else "Contado"
+                    so_odoo_data[s_name] = {
+                        "vendedor": vendedor_name,
+                        "payment_term_name": term_name,
+                        "date_order": s.get("date_order")
+                    }
+            except Exception as e_so:
+                logger.warning("Error consultando sale.order en Odoo: %s", e_so)
+
+        # Query Odoo Pickings for Delivery Date (stock.picking done)
+        picking_delivery_map = {}
+        if so_ids_names:
+            try:
+                pickings = execute(
+                    "stock.picking",
+                    "search_read",
+                    [[["state", "=", "done"], ["origin", "in", so_ids_names]]],
+                    {"fields": ["origin", "date_done", "scheduled_date"]}
+                )
+                for p in pickings:
+                    origin = str(p.get("origin") or "").strip()
+                    dt_done = p.get("date_done") or p.get("scheduled_date")
+                    if origin and dt_done:
+                        dt_str = str(dt_done).split(" ")[0]
+                        if origin not in picking_delivery_map or dt_str > picking_delivery_map[origin]:
+                            picking_delivery_map[origin] = dt_str
+            except Exception as e_pic:
+                logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
+
+        # Compute payments per SO (BCV and Binance equivalents)
+        pagos_by_so = {}
+        for v in vincs:
+            if v.so_id not in pagos_by_so:
+                pagos_by_so[v.so_id] = {
+                    "abono_bcv": Decimal("0"),
+                    "abono_binance": Decimal("0"),
+                    "ultimo_abono": None
+                }
+            
+            # BCV equivalent
+            eq_bcv = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
+            pagos_by_so[v.so_id]["abono_bcv"] += eq_bcv
+
+            # Binance equivalent
+            if v.equiv_usd_binance is not None:
+                eq_binance = v.equiv_usd_binance
+            else:
+                eq_binance = v.monto_aplicado
+            pagos_by_so[v.so_id]["abono_binance"] += eq_binance
+
+            # Track latest payment date
+            if v.hora_pago_confirmada:
+                dt_pago_str = v.hora_pago_confirmada.strftime("%Y-%m-%d")
+                curr_last = pagos_by_so[v.so_id]["ultimo_abono"]
+                if not curr_last or dt_pago_str > curr_last:
+                    pagos_by_so[v.so_id]["ultimo_abono"] = dt_pago_str
+
+        # Fetch product fixed prices for list 4 once
         lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
         rules = execute(
             "product.pricelist.item",
@@ -652,13 +721,40 @@ async def get_reporte_saldos():
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
 
+        def parse_term_days(t_name: str) -> int:
+            if not t_name:
+                return 0
+            t_low = t_name.lower().strip()
+            if "immediate" in t_low or "contado" in t_low:
+                return 0
+            import re
+            m = re.search(r'(\d+)\s*(dias|días|days|day|día)', t_low)
+            if m:
+                return int(m.group(1))
+            return 0
+
         reporte = []
+        vendedores_set = set()
+
+        kpi_vigentes = 0.0
+        kpi_1_30 = 0.0
+        kpi_31_60 = 0.0
+        kpi_61_90 = 0.0
+        kpi_mas_90 = 0.0
+
+        today_date = date.today()
+
         for o in ordenes:
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
-            pagado = linked_by_so.get(o.so_id, Decimal("0"))
-            saldo = o.monto_total - pagado
-            conc = concs.get(o.so_id)
-            
+            odoo_info = so_odoo_data.get(o.so_id, {})
+            vendedor = odoo_info.get("vendedor", "Sin Vendedor")
+            vendedores_set.add(vendedor)
+
+            p_data = pagos_by_so.get(o.so_id, {"abono_bcv": Decimal("0"), "abono_binance": Decimal("0"), "ultimo_abono": None})
+            abono_bcv = float(p_data["abono_bcv"])
+            abono_binance = float(p_data["abono_binance"])
+            fecha_ultimo_abono = p_data["ultimo_abono"]
+
             # Compute actual subtotal from lines
             order_lines = lines_by_so.get(o.so_id, [])
             subtotal = sum(Decimal(str(ln.get("cantidad", "0"))) * Decimal(str(ln.get("precio_unitario", "0"))) for ln in order_lines)
@@ -714,30 +810,95 @@ async def get_reporte_saldos():
                 total_con_descuentos = float(o.monto_total)
                 descuentos_desglose = []
 
-            saldo_deudor_con_descuentos = max(0.0, total_con_descuentos - float(pagado))
+            # Debt columns
+            monto_orig = float(o.monto_total)
+            saldo_deudor_bcv = max(0.0, monto_orig - abono_bcv)
+            saldo_deudor_lista_usd = max(0.0, monto_total_proyectado_usd - abono_binance)
+            saldo_con_descuento_bcv = max(0.0, saldo_deudor_bcv - total_descuentos_monto)
+            saldo_con_descuento_lista_usd = max(0.0, saldo_deudor_lista_usd - total_descuentos_monto)
+
+            # Dates & aging calculation
+            fecha_delivery = picking_delivery_map.get(o.so_id)
+            if not fecha_delivery:
+                fecha_delivery = o.fecha.isoformat()
+            
+            term_name = odoo_info.get("payment_term_name") or "Contado"
+            dias_credito = parse_term_days(term_name)
+            
+            try:
+                dt_del = datetime.strptime(fecha_delivery[:10], "%Y-%m-%d").date()
+            except Exception:
+                dt_del = o.fecha
+            dt_venc = dt_del + timedelta(days=dias_credito)
+            fecha_vencimiento = dt_venc.isoformat()
+            
+            dias_vencido = 0
+            if today_date > dt_venc:
+                dias_vencido = (today_date - dt_venc).days
+
+            # Accumulate Aging KPIs for active debt
+            if saldo_con_descuento_lista_usd > 0.05:
+                if dias_vencido <= 0:
+                    kpi_vigentes += saldo_con_descuento_lista_usd
+                elif 1 <= dias_vencido <= 30:
+                    kpi_1_30 += saldo_con_descuento_lista_usd
+                elif 31 <= dias_vencido <= 60:
+                    kpi_31_60 += saldo_con_descuento_lista_usd
+                elif 61 <= dias_vencido <= 90:
+                    kpi_61_90 += saldo_con_descuento_lista_usd
+                else:
+                    kpi_mas_90 += saldo_con_descuento_lista_usd
+
+            conc = concs.get(o.so_id)
 
             reporte.append({
                 "so_id": o.so_id,
                 "cliente_nombre": client_name,
+                "vendedor": vendedor,
                 "fecha": o.fecha.isoformat(),
+                "fecha_entrega": fecha_delivery[:10],
+                "terminos_pago": term_name,
+                "dias_credito": dias_credito,
+                "fecha_vencimiento": fecha_vencimiento,
+                "dias_vencido": dias_vencido,
+                "fecha_ultimo_abono": fecha_ultimo_abono,
                 "lista_precios": lista_name,
                 "subtotal": float(subtotal),
-                "monto_total": float(o.monto_total),
-                "monto_total_proyectado_usd": float(monto_total_proyectado_usd),
-                "monto_pagado": float(pagado),
-                "saldo_deudor": float(saldo) if saldo > Decimal("0") else 0.0,
+                "monto_total": monto_orig,
+                "monto_total_proyectado_usd": monto_total_proyectado_usd,
+                "abono_usd_bcv": abono_bcv,
+                "abono_usd_binance": abono_binance,
+                "monto_pagado": abono_bcv,
+                "saldo_deudor": saldo_deudor_bcv,
+                "saldo_deudor_bcv": saldo_deudor_bcv,
+                "saldo_deudor_lista_usd": saldo_deudor_lista_usd,
                 "total_con_descuentos": total_con_descuentos,
                 "total_descuentos_monto": total_descuentos_monto,
-                "saldo_deudor_con_descuentos": float(saldo_deudor_con_descuentos),
+                "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
+                "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
+                "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
                 "descuentos_desglose": descuentos_desglose,
                 "facturada": o.facturada,
-                "candidata_a_cierre": saldo <= Decimal("0.05") or saldo_deudor_con_descuentos <= 0.05,
+                "candidata_a_cierre": saldo_deudor_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05,
                 "reconciliacion": {
                     "resultado": conc.resultado.value if conc else "pendiente"
                 } if conc else None
             })
-        return reporte
+
+        return {
+            "kpis": {
+                "vigentes": kpi_vigentes,
+                "vencidas_1_30": kpi_1_30,
+                "vencidas_31_60": kpi_31_60,
+                "vencidas_61_90": kpi_61_90,
+                "vencidas_mas_90": kpi_mas_90,
+            },
+            "vendedores": sorted(list(vendedores_set)),
+            "items": reporte
+        }
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
