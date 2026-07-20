@@ -1383,6 +1383,7 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/config/listas-precio")
+@app.get("/api/odoo/listas-precio")
 async def get_config_listas_precio():
     try:
         config = AppConfig.from_env()

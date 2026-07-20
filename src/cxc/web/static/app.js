@@ -232,7 +232,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadConfigData();
             loadListasMapeo();
             if (currentUserSession && currentUserSession.rol === "admin") {
-                loadUsuariosAdmin();
+                loadAdminUsuarios();
             }
         }
     }
@@ -1331,8 +1331,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/config/meta");
             if (res.ok) {
                 const data = await res.json();
-                cfgMetaDays.value = data.cash_window_business_days || 3;
-                cfgMetaRecompra.value = data.descuento_recompra || 0.05;
+                if (cfgMetaDays) cfgMetaDays.value = data.cash_window_business_days || 3;
+                if (cfgMetaRecompra) cfgMetaRecompra.value = data.descuento_recompra || 0.05;
             }
         } catch (err) {
             console.error("Error loading settings meta:", err);
@@ -2408,7 +2408,7 @@ document.addEventListener("DOMContentLoaded", () => {
             vesBox.innerHTML = '<span style="font-size:0.85rem; color:#64748b;">Cargando...</span>';
 
             const [plRes, mapRes] = await Promise.all([
-                fetch('/api/odoo/listas-precio'),
+                fetch('/api/config/listas-precio'),
                 fetch('/api/config/listas-precio-mapeo')
             ]);
 
