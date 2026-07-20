@@ -22,7 +22,7 @@ ROLES_PERMISOS: dict[str, list[str]] = {
     "gerente_ventas": ["dashboard", "cobranza", "reporte", "facturacion", "conciliaciones"],
     "tesoreria": ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte"],
     "auditor": ["dashboard", "reporte", "auditoria", "facturacion"],
-    "ventas": ["cobranza", "reporte"],
+    "ventas": ["dashboard", "cobranza", "conciliaciones", "reporte"],
 }
 
 NOMBRES_ROLES: dict[str, str] = {

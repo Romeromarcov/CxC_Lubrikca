@@ -88,19 +88,73 @@
                 </section>
 
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
-                    <a href="/facturacion" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #2563eb; display:block;">
-                        <h3 style="margin:0 0 0.5rem 0; color:#1e40af;">🧾 Gestión de Facturación</h3>
-                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Acceda a las 3 Bandejas de Aprobación de Órdenes por Facturar, Notas de Crédito y Retenciones de IVA.</p>
+                    <a href="/facturacion" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #2563eb; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#1e40af;">🧾 Gestión de Facturación</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">3 Bandejas de Aprobación de Órdenes por Facturar, N/C y Comprobantes de IVA.</p>
                     </a>
-                    <a href="/conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #059669; display:block;">
-                        <h3 style="margin:0 0 0.5rem 0; color:#065f46;">🤝 Conciliación y Asignación</h3>
-                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Asigne pagos recibidos a órdenes abiertas y consulte el mapa de vinculación e historial.</p>
+                    <a href="/conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #059669; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#065f46;">🤝 Conciliación y Asignación</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Asigne pagos recibidos a órdenes abiertas y consulte el mapa de vinculación.</p>
                     </a>
-                    <a href="/cobranza" class="card nav-link" style="text-decoration:none; padding:1.5rem; border-left:4px solid #d97706; display:block;">
-                        <h3 style="margin:0 0 0.5rem 0; color:#92400e;">💵 Registro de Cobranzas</h3>
-                        <p style="margin:0; font-size:0.85rem; color:#64748b;">Gestione la entrega de dinero por vendedores y emita el Recibo de Entrega impreso (2 copias).</p>
+                    <a href="/cobranza" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #d97706; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#92400e;">💵 Registro de Cobranzas</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Gestione la entrega de dinero por vendedores y emita recibos de entrega en PDF.</p>
                     </a>
                 </div>
+
+                <!-- REPORTE DIARIO EJECUTIVO DE VENTAS (USD Y LITROS) Y COBRANZA -->
+                <section class="reporte-panel card" style="border-left: 5px solid #059669;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #065f46; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📊</span> Reporte Diario Ejecutivo de Ventas (USD y Litros) y Cobranzas
+                        </h2>
+                        <p style="color: #047857;">Consolidado diario de lo vendido en dinero ($ USD) y volumen de lubricantes (Litros L), junto con el cobro por moneda y método de pago</p>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem;">
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">🛍️ Ventas Diarias (USD y Litros)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>N° Órdenes</th>
+                                            <th>Vendido ($ USD)</th>
+                                            <th>Volumen (Litros L)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-ventas-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de ventas...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">💵 Cobranza Diaria (Por Moneda y Método)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Cobrado (Tasa BCV $)</th>
+                                            <th>Desglose por Moneda</th>
+                                            <th>Desglose por Método</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-cobranza-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de cobranza...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
 
@@ -317,60 +371,6 @@
                         </table>
                     </div>
                 </section>
-
-                <!-- REPORTE DIARIO EJECUTIVO DE VENTAS (USD Y LITROS) Y COBRANZA -->
-                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #059669;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #065f46; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>📊</span> Reporte Diario Ejecutivo de Ventas (USD y Litros) y Cobranzas
-                        </h2>
-                        <p style="color: #047857;">Consolidado diario de lo vendido en dinero ($ USD) y volumen de lubricantes (Litros L), junto con el cobro por moneda y método de pago</p>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem;">
-                        <div>
-                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">🛍️ Ventas Diarias (USD y Litros)</h3>
-                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
-                                <table class="cxc-table mini">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>N° Órdenes</th>
-                                            <th>Vendido ($ USD)</th>
-                                            <th>Volumen (Litros L)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="diario-ventas-table-body">
-                                        <tr>
-                                            <td colspan="4" class="table-empty">Cargando reporte de ventas...</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div>
-                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">💵 Cobranza Diaria (Por Moneda y Método)</h3>
-                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
-                                <table class="cxc-table mini">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>Cobrado (Tasa BCV $)</th>
-                                            <th>Desglose por Moneda</th>
-                                            <th>Desglose por Método</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="diario-cobranza-table-body">
-                                        <tr>
-                                            <td colspan="4" class="table-empty">Cargando reporte de cobranza...</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
             </div>
         </div>
 
@@ -541,9 +541,11 @@
                             <select id="cobranza-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
                                 <option value="*">Todos los Vendedores</option>
                             </select>
-                            <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
-                                <span>🖨️</span> Marcar Recibido y Generar Recibo (2 Copias)
-                            </button>
+                            <div id="btn-generar-recibo-container">
+                                <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
+                                    <span>🖨️</span> Marcar Recibido y Generar Recibo (2 Copias)
+                                </button>
+                            </div>
                         </div>
                     </div>
 

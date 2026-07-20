@@ -167,6 +167,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (adminPanel) {
             adminPanel.style.display = isAdm ? "block" : "none";
         }
+
+        const reciboBtnContainer = document.getElementById("btn-generar-recibo-container");
+        if (reciboBtnContainer) {
+            const canGenerateReceipt = ["admin", "tesoreria", "gerente_ventas"].includes(user.rol);
+            reciboBtnContainer.style.display = canGenerateReceipt ? "block" : "none";
+        }
     }
 
     // Page Route Initialization
@@ -207,6 +213,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Load data for active page
         if (path === "dashboard") {
             loadTasasPromedios();
+            loadReporteDiario();
         } else if (path === "facturacion") {
             loadBandeja();
         } else if (path === "conciliaciones") {
@@ -218,7 +225,6 @@ document.addEventListener("DOMContentLoaded", () => {
             loadCobranza();
         } else if (path === "reporte") {
             loadReporte();
-            loadReporteDiario();
         } else if (path === "auditoria") {
             loadAuditoria();
         } else if (path === "configuracion") {
@@ -1332,33 +1338,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save global settings variables
-    settingsForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const payload = {
-            cash_window_business_days: parseInt(cfgMetaDays.value),
-            descuento_recompra: parseFloat(cfgMetaRecompra.value)
-        };
+    if (settingsForm) {
+        settingsForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                cash_window_business_days: parseInt(cfgMetaDays.value),
+                descuento_recompra: parseFloat(cfgMetaRecompra.value)
+            };
 
-        try {
-            const res = await fetch("/api/config/meta", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+            try {
+                const res = await fetch("/api/config/meta", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
 
-            if (res.ok) {
-                alert("✅ Ajustes generales del motor guardados correctamente en Google Sheets.");
-                loadSettingsMeta();
-            } else {
-                alert("❌ Error al guardar los ajustes.");
+                if (res.ok) {
+                    alert("✅ Ajustes generales del motor guardados correctamente en Google Sheets.");
+                    loadSettingsMeta();
+                } else {
+                    alert("❌ Error al guardar los ajustes.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al guardar ajustes.");
+                console.error(err);
             }
-        } catch (err) {
-            alert("❌ Error de red al guardar ajustes.");
-            console.error(err);
-        }
-    });
+        });
+    }
 
     async function loadTasas() {
+        if (!tasasTableBody) return;
         try {
             tasasTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando tasas...</td></tr>';
             const res = await fetch("/api/config/tasas");
@@ -1389,26 +1398,28 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Sync Odoo currency rates trigger
-    btnSyncOdooRates.addEventListener("click", async () => {
-        btnSyncOdooRates.disabled = true;
-        btnSyncOdooRates.textContent = "Sincronizando...";
-        try {
-            const res = await fetch("/api/config/tasas/sync-odoo", { method: "POST" });
-            if (res.ok) {
-                const data = await res.json();
-                alert(`✅ ${data.message}`);
-                loadTasas();
-            } else {
-                alert("❌ Error al sincronizar tasas de Odoo.");
+    if (btnSyncOdooRates) {
+        btnSyncOdooRates.addEventListener("click", async () => {
+            btnSyncOdooRates.disabled = true;
+            btnSyncOdooRates.textContent = "Sincronizando...";
+            try {
+                const res = await fetch("/api/config/tasas/sync-odoo", { method: "POST" });
+                if (res.ok) {
+                    const data = await res.json();
+                    alert(`✅ ${data.message}`);
+                    loadTasas();
+                } else {
+                    alert("❌ Error al sincronizar tasas de Odoo.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al sincronizar tasas.");
+                console.error(err);
+            } finally {
+                btnSyncOdooRates.disabled = false;
+                btnSyncOdooRates.textContent = "🔄 Sincronizar Odoo";
             }
-        } catch (err) {
-            alert("❌ Error de red al sincronizar tasas.");
-            console.error(err);
-        } finally {
-            btnSyncOdooRates.disabled = false;
-            btnSyncOdooRates.textContent = "🔄 Sincronizar Odoo";
-        }
-    });
+        });
+    }
 
     // --- Load Rates Averages & Differential ---
     async function loadTasasPromedios() {

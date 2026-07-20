@@ -2521,3 +2521,218 @@ async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class MarcarRecibidoRequest(BaseModel):
+    pago_ids: list[str]
+    recibido_por: str = "Administración"
+
+
+@app.get("/api/cobranza")
+async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
+    try:
+        repo = get_repo()
+        user = get_current_user_from_cookie(cxc_session)
+        pagos = repo._g.read_rows("Pagos")
+        vincs = repo.all_vinculaciones()
+        vinc_by_pago = {v.pago_id: v for v in vincs}
+        
+        # Load clients and orders for vendor names
+        ordenes = {o.so_id: o for o in repo.all_ordenes()}
+        
+        resultados = []
+        for p in pagos:
+            pid = str(p.get("pago_id", "")).strip()
+            if not pid:
+                continue
+            
+            moneda = p.get("moneda", "VES")
+            monto = parse_decimal_safe(p.get("monto", "0"))
+            fecha_str = str(p.get("fecha", ""))[:10]
+            
+            # Find rates for that date
+            bcv_rate, binance_rate = get_closest_rates_to_datetime(repo, datetime.now())
+            
+            # Compute BCV and Binance equivalents
+            eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+            eq_binance = monto if moneda == "USD" else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
+            
+            v = vinc_by_pago.get(pid)
+            so_id = v.so_id if v else "-"
+            orden_obj = ordenes.get(so_id)
+            vendedor = p.get("vendedor") or (orden_obj.vendedor_email if orden_obj else "Sin Vendedor")
+            cliente = p.get("cliente_nombre") or (orden_obj.cliente_nombre if orden_obj else "Sin Cliente")
+            
+            item = {
+                "pago_id": pid,
+                "fecha": fecha_str,
+                "monto": float(monto),
+                "moneda": moneda,
+                "metodo_pago": p.get("metodo_pago") or p.get("forma_pago") or "Efectivo",
+                "referencia": p.get("referencia") or p.get("banco") or "-",
+                "vendedor": vendedor,
+                "cliente_nombre": cliente,
+                "so_id": so_id,
+                "tasa_bcv": float(bcv_rate),
+                "tasa_binance": float(binance_rate),
+                "equivalente_bcv_usd": float(eq_bcv),
+                "equivalente_binance_usd": float(eq_binance),
+                "recibido": p.get("recibido") == "TRUE",
+                "numero_recibido": p.get("numero_recibido") or "-",
+                "fecha_recibido": p.get("fecha_recibido") or "-",
+                "recibido_por": p.get("recibido_por") or "-"
+            }
+            
+            # Filter if user is vendor
+            if user and user["rol"] == "ventas":
+                u_name = (user["nombre"] or user["email"]).strip().lower()
+                if item["vendedor"].strip().lower() != u_name and user["email"].strip().lower() not in item["vendedor"].lower():
+                    continue
+                    
+            resultados.append(item)
+            
+        return resultados
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cobranza/marcar-recibido")
+async def post_marcar_recibido(req: MarcarRecibidoRequest, cxc_session: str | None = Cookie(default=None)):
+    try:
+        user = get_current_user_from_cookie(cxc_session)
+        recibido_por = req.recibido_por or (user["nombre"] if user else "Administración")
+        repo = get_repo()
+        pagos_rows = repo._g.read_rows("Pagos")
+        
+        now = datetime.now()
+        recibo_num = f"REC-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
+        
+        target_pago_ids = set(req.pago_ids)
+        pagos_actualizados = []
+        
+        for r in pagos_rows:
+            pid = str(r.get("pago_id", "")).strip()
+            if pid in target_pago_ids:
+                r["recibido"] = "TRUE"
+                r["numero_recibido"] = recibo_num
+                r["fecha_recibido"] = now.isoformat()[:19]
+                r["recibido_por"] = recibido_por
+                repo._g.upsert_row("Pagos", "pago_id", r)
+                pagos_actualizados.append(r)
+                
+        return {
+            "status": "success",
+            "numero_recibido": recibo_num,
+            "fecha_recibido": now.strftime("%Y-%m-%d %H:%M"),
+            "recibido_por": recibido_por,
+            "pagos": pagos_actualizados
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/reporte/diario")
+async def get_reporte_diario():
+    try:
+        repo = get_repo()
+        ordenes = repo.all_ordenes()
+        lineas = repo._g.read_rows("LineasOrden")
+        pagos = repo._g.read_rows("Pagos")
+        
+        # Load products for liters calculation
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        prod_litros_map = {}
+        try:
+            prods = execute("product.product", "search_read", [], {"fields": ["id", "default_code", "name", "volume", "weight"]})
+            for p in prods:
+                pid = p.get("id")
+                vol = parse_decimal_safe(p.get("volume") or "0")
+                if vol == Decimal("0"):
+                    vol = parse_decimal_safe(p.get("weight") or "1.0")
+                prod_litros_map[pid] = vol
+        except Exception as e_p:
+            logger.warning("Error leyendo litros de productos: %s", e_p)
+            
+        # 1. Ventas por Día (USD y Litros)
+        ventas_por_dia = {}
+        for o in ordenes:
+            fecha_key = o.fecha.isoformat()[:10]
+            if fecha_key not in ventas_por_dia:
+                ventas_por_dia[fecha_key] = {"fecha": fecha_key, "total_usd": Decimal("0"), "litros_totales": Decimal("0"), "ordenes_count": 0}
+            ventas_por_dia[fecha_key]["total_usd"] += o.monto_total
+            ventas_por_dia[fecha_key]["ordenes_count"] += 1
+
+        # Sum line liters
+        for l in lineas:
+            so_id = l.get("so_id")
+            prod_id = int(l.get("product_id") or 0)
+            qty = parse_decimal_safe(l.get("cantidad_entregada") or l.get("cantidad_ordenada") or "0")
+            l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
+            total_l = qty * l_per_unit
+            
+            o_match = next((o for o in ordenes if o.so_id == so_id), None)
+            if o_match:
+                fk = o_match.fecha.isoformat()[:10]
+                if fk in ventas_por_dia:
+                    ventas_por_dia[fk]["litros_totales"] += total_l
+
+        # 2. Cobranza por Día (Desglosada por Moneda y Método)
+        cobranza_por_dia = {}
+        for p in pagos:
+            fecha_key = str(p.get("fecha", ""))[:10] or date.today().isoformat()
+            if fecha_key not in cobranza_por_dia:
+                cobranza_por_dia[fecha_key] = {
+                    "fecha": fecha_key,
+                    "total_eq_bcv": Decimal("0"),
+                    "total_eq_binance": Decimal("0"),
+                    "por_moneda": {},
+                    "por_metodo": {}
+                }
+            monto = parse_decimal_safe(p.get("monto", "0"))
+            moneda = p.get("moneda", "VES")
+            metodo = p.get("metodo_pago") or p.get("forma_pago") or "Efectivo"
+            
+            bcv_rate, binance_rate = get_closest_rates_to_datetime(repo, datetime.now())
+            eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+            eq_binance = monto if moneda == "USD" else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
+
+            cobranza_por_dia[fecha_key]["total_eq_bcv"] += eq_bcv
+            cobranza_por_dia[fecha_key]["total_eq_binance"] += eq_binance
+            
+            if moneda not in cobranza_por_dia[fecha_key]["por_moneda"]:
+                cobranza_por_dia[fecha_key]["por_moneda"][moneda] = Decimal("0")
+            cobranza_por_dia[fecha_key]["por_moneda"][moneda] += monto
+            
+            if metodo not in cobranza_por_dia[fecha_key]["por_metodo"]:
+                cobranza_por_dia[fecha_key]["por_metodo"][metodo] = Decimal("0")
+            cobranza_por_dia[fecha_key]["por_metodo"][metodo] += eq_bcv
+
+        ventas_list = [
+            {
+                "fecha": k,
+                "total_usd": float(v["total_usd"]),
+                "litros_totales": float(v["litros_totales"]),
+                "ordenes_count": v["ordenes_count"]
+            } for k, v in sorted(ventas_por_dia.items(), reverse=True)
+        ]
+        
+        cobranza_list = [
+            {
+                "fecha": k,
+                "total_eq_bcv": float(v["total_eq_bcv"]),
+                "total_eq_binance": float(v["total_eq_binance"]),
+                "por_moneda": {m: float(val) for m, val in v["por_moneda"].items()},
+                "por_metodo": {m: float(val) for m, val in v["por_metodo"].items()}
+            } for k, v in sorted(cobranza_por_dia.items(), reverse=True)
+        ]
+        
+        return {
+            "ventas_diarias": ventas_list,
+            "cobranza_diaria": cobranza_list
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
