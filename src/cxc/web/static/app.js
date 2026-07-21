@@ -1839,30 +1839,35 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load Odoo Client Sales stats for recurrence audit
     async function loadClientesAuditoria() {
         try {
-            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando auditoría de clientes desde Odoo...</td></tr>';
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando auditoría de clientes desde Odoo...</td></tr>';
             const res = await fetch("/api/odoo/clientes-auditoria");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay clientes con estadísticas en Odoo.</td></tr>';
+                    clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay clientes con estadísticas en Odoo.</td></tr>';
                     return;
                 }
 
                 clientesAuditoriaTableBody.innerHTML = "";
                 data.forEach(c => {
                     const row = document.createElement("tr");
+                    const litG = parseFloat(c.litros_global || 0).toLocaleString('es-VE', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+                    const litS = parseFloat(c.litros_sinoco || 0).toLocaleString('es-VE', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
                     row.innerHTML = `
                         <td><strong>#${c.id}</strong></td>
                         <td>${c.nombre}</td>
                         <td>${c.fecha_creacion}</td>
                         <td><strong style="color: #2563eb">${c.ventas_cantidad}</strong></td>
+                        <td><strong style="color: #059669">${c.ventas_mes_actual || 0}</strong></td>
+                        <td><span style="font-weight: 600; color: #1e293b">${litG} L</span></td>
+                        <td><span style="font-weight: 600; color: #1e293b">${litS} L</span></td>
                         <td>${c.fecha_ultima_venta}</td>
                     `;
                     clientesAuditoriaTableBody.appendChild(row);
                 });
             }
         } catch (err) {
-            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar clientes de Odoo.</td></tr>';
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar clientes de Odoo.</td></tr>';
             console.error(err);
         }
     }

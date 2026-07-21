@@ -220,6 +220,22 @@ class DescuentoRecompra:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
+    min_cajas: int = 1
+    max_cajas: int = 9999
+
+
+# --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------
+@dataclass
+class DescuentoFidelizacion:
+    regla_id: str
+    nombre: str
+    marca: str
+    min_litros_acumulados: Decimal
+    porcentaje: Decimal
+    ventana_dias: int = 90
+    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_hasta: date | None = None
+    activo: bool = True
 
 
 # --- 3.7e DescuentoProducto (configurable, promoción específica por producto) -

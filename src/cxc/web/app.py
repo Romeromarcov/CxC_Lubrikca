@@ -1880,46 +1880,168 @@ async def get_odoo_productos():
 @app.get("/api/odoo/clientes-auditoria")
 async def get_odoo_clientes_auditoria():
     try:
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
-        
-        # Fetch customers
-        partners = execute(
-            "res.partner",
-            "search_read",
-            [[["customer_rank", ">", 0]]],
-            {"fields": ["id", "name", "create_date"]}
-        )
-        
-        # Fetch sales count & last order date
-        orders = execute(
-            "sale.order",
-            "search_read",
-            [[["state", "in", ["sale", "done"]]]],
-            {"fields": ["partner_id", "date_order"]}
-        )
-        
+        current_year_month = datetime.now().strftime("%Y-%m")
+        execute = None
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+        except Exception as e_conn:
+            logger.warning("No se pudo conectar a Odoo para clientes-auditoria, usando fallback Sheets: %s", e_conn)
+
         stats = {}
-        for o in orders:
-            pid_info = o.get("partner_id")
-            if isinstance(pid_info, list) and len(pid_info) > 0:
-                pid = pid_info[0]
-                date_str = o.get("date_order", "")
-                
-                s = stats.setdefault(pid, {"count": 0, "last_date": ""})
-                s["count"] += 1
-                if date_str and (not s["last_date"] or date_str > s["last_date"]):
-                    s["last_date"] = date_str
+        partners_data = []
+
+        if execute:
+            partners = execute(
+                "res.partner",
+                "search_read",
+                [[["customer_rank", ">", 0]]],
+                {"fields": ["id", "name", "create_date"]}
+            )
+            orders = execute(
+                "sale.order",
+                "search_read",
+                [[["state", "in", ["sale", "done"]]]],
+                {"fields": ["id", "name", "partner_id", "date_order"]}
+            )
+            so_ids = [o["id"] for o in orders]
+            lines = []
+            if so_ids:
+                try:
+                    lines = execute(
+                        "sale.order.line",
+                        "search_read",
+                        [[["order_id", "in", so_ids]]],
+                        {"fields": ["order_id", "product_uom_qty", "qty_delivered", "product_id"]}
+                    )
+                except Exception:
+                    pass
+
+            product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
+            product_map = {}
+            if product_ids:
+                try:
+                    prods = execute(
+                        "product.product",
+                        "search_read",
+                        [[["id", "in", product_ids]]],
+                        {"fields": ["id", "volume", "weight", "brand_id"]}
+                    )
+                    for p in prods:
+                        b_info = p.get("brand_id")
+                        b_name = b_info[1] if isinstance(b_info, list) else ""
+                        vol = parse_decimal_safe(p.get("volume") or "0")
+                        if vol == Decimal("0"):
+                            vol = parse_decimal_safe(p.get("weight") or "1.0")
+                        product_map[p["id"]] = {"brand": b_name, "volume": vol}
+                except Exception:
+                    pass
+
+            so_partner_map = {}
+            for o in orders:
+                pid_info = o.get("partner_id")
+                if isinstance(pid_info, list) and len(pid_info) > 0:
+                    pid = str(pid_info[0])
+                    so_partner_map[o["id"]] = pid
+                    date_str = str(o.get("date_order") or "")
                     
+                    s = stats.setdefault(pid, {
+                        "count": 0,
+                        "count_mes": 0,
+                        "litros_global": Decimal("0"),
+                        "litros_sinoco": Decimal("0"),
+                        "last_date": ""
+                    })
+                    s["count"] += 1
+                    if date_str and date_str.startswith(current_year_month):
+                        s["count_mes"] += 1
+                    if date_str and (not s["last_date"] or date_str > s["last_date"]):
+                        s["last_date"] = date_str
+
+            for l in lines:
+                so_id = l["order_id"][0] if isinstance(l.get("order_id"), list) else None
+                pid = so_partner_map.get(so_id)
+                if pid and pid in stats:
+                    p_info = l.get("product_id")
+                    p_id = p_info[0] if isinstance(p_info, list) else None
+                    if p_id in product_map:
+                        brand = product_map[p_id]["brand"]
+                        vol = product_map[p_id]["volume"]
+                        qty = parse_decimal_safe(l.get("qty_delivered") or l.get("product_uom_qty") or "0")
+                        total_l = qty * vol
+                        if "GLOBAL" in brand.upper():
+                            stats[pid]["litros_global"] += total_l
+                        elif "SINOCO" in brand.upper():
+                            stats[pid]["litros_sinoco"] += total_l
+
+            for p in partners:
+                partners_data.append({
+                    "id": str(p["id"]),
+                    "name": p["name"],
+                    "create_date": str(p.get("create_date") or "").split(" ")[0] or "N/A"
+                })
+
+        else:
+            repo = get_repo()
+            clientes_rows = repo._g.read_rows("Clientes")
+            ordenes = repo.all_ordenes()
+            lineas = repo._g.read_rows("LineasOrden")
+
+            for c in clientes_rows:
+                partners_data.append({
+                    "id": c.get("cliente_id", ""),
+                    "name": c.get("nombre", ""),
+                    "create_date": "N/A"
+                })
+
+            so_partner_map = {}
+            for o in ordenes:
+                pid = str(o.cliente_id)
+                so_partner_map[o.so_id] = pid
+                date_str = o.fecha.isoformat()
+                
+                s = stats.setdefault(pid, {
+                    "count": 0,
+                    "count_mes": 0,
+                    "litros_global": Decimal("0"),
+                    "litros_sinoco": Decimal("0"),
+                    "last_date": ""
+                })
+                s["count"] += 1
+                if date_str.startswith(current_year_month):
+                    s["count_mes"] += 1
+                if not s["last_date"] or date_str > s["last_date"]:
+                    s["last_date"] = date_str
+
+            for l in lineas:
+                so_id = l.get("so_id")
+                pid = so_partner_map.get(so_id)
+                if pid and pid in stats:
+                    brand = str(l.get("marca", "")).upper()
+                    qty = parse_decimal_safe(l.get("cantidad_entregada") or l.get("cantidad") or "0")
+                    if "GLOBAL" in brand:
+                        stats[pid]["litros_global"] += qty
+                    elif "SINOCO" in brand:
+                        stats[pid]["litros_sinoco"] += qty
+
         resultado = []
-        for p in partners:
+        for p in partners_data:
             pid = p["id"]
-            p_stats = stats.get(pid, {"count": 0, "last_date": "N/A"})
+            p_stats = stats.get(pid, {
+                "count": 0,
+                "count_mes": 0,
+                "litros_global": Decimal("0"),
+                "litros_sinoco": Decimal("0"),
+                "last_date": "N/A"
+            })
             resultado.append({
                 "id": pid,
                 "nombre": p["name"],
-                "fecha_creacion": p.get("create_date", "N/A").split(" ")[0] if p.get("create_date") else "N/A",
+                "fecha_creacion": p["create_date"],
                 "ventas_cantidad": p_stats["count"],
+                "ventas_mes_actual": p_stats["count_mes"],
+                "litros_global": float(p_stats["litros_global"]),
+                "litros_sinoco": float(p_stats["litros_sinoco"]),
                 "fecha_ultima_venta": p_stats["last_date"].split(" ")[0] if p_stats["last_date"] != "N/A" else "N/A"
             })
         return resultado
