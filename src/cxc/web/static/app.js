@@ -1173,6 +1173,8 @@ document.addEventListener("DOMContentLoaded", () => {
             e.preventDefault();
             const payload = {
                 porcentaje: parseFloat(document.getElementById("cfg-rec-porcentaje").value),
+                min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas").value || 1),
+                max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas").value || 9999),
                 max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos").value),
                 dias_ventana: parseInt(document.getElementById("cfg-rec-ventana").value),
                 vigencia_desde: document.getElementById("cfg-rec-desde").value || new Date().toISOString().split('T')[0],
@@ -1511,12 +1513,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("recompra-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando reglas de recompra...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando reglas de recompra...</td></tr>';
             const res = await fetch("/api/config/descuentos-recompra");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay reglas de recompra.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay reglas de recompra.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
@@ -1528,20 +1530,23 @@ document.addEventListener("DOMContentLoaded", () => {
                     statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
                     statusBtn.onclick = () => toggleRuleActive("DescuentosRecompra", r.regla_id, r.activo);
 
+                    const tramoText = (r.max_cajas && r.max_cajas < 9000) ? `${r.min_cajas || 1} a ${r.max_cajas} cajas` : `${r.min_cajas || 1}+ cajas`;
+
                     row.innerHTML = `
                         <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1;">${tramoText}</span></td>
                         <td><strong>${r.max_usos_mes}</strong></td>
                         <td><strong>${r.dias_ventana} días</strong></td>
                         <td><small>${r.vigencia_desde}</small></td>
                         <td><small>${r.vigencia_hasta || 'N/A'}</small></td>
                         <td></td>
                     `;
-                    row.children[5].appendChild(statusBtn);
+                    row.children[6].appendChild(statusBtn);
                     tbody.appendChild(row);
                 });
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar recompra.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar recompra.</td></tr>';
         }
     }
 
@@ -2145,24 +2150,28 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadDescuentosVolumen() {
         if (!descuentosVolumenTableBody) return;
         try {
-            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos por volumen...</td></tr>';
+            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando descuentos por volumen...</td></tr>';
             const res = await fetch("/api/config/descuentos-volumen");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
+                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
                     return;
                 }
                 descuentosVolumenTableBody.innerHTML = "";
                 data.forEach(r => {
                     const row = document.createElement("tr");
                     const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+                    const evalText = r.tipo_evaluacion === "acumulado" ? "Acumulado" : "Por Orden";
+                    const periodText = r.dias_evaluacion > 0 ? `${r.dias_evaluacion} días` : "Histórico Total";
                     row.innerHTML = `
                         <td><strong>${r.regla_id}</strong></td>
                         <td>${r.marca}</td>
                         <td>${r.categoria}</td>
                         <td><strong>${r.litros_minimo} L</strong></td>
                         <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><span class="state-badge" style="background:${r.tipo_evaluacion === 'acumulado' ? '#fef3c7' : '#f3f4f6'}; color:${r.tipo_evaluacion === 'acumulado' ? '#92400e' : '#374151'};">${evalText}</span></td>
+                        <td><strong>${periodText}</strong></td>
                         <td>${r.vigencia_desde || 'N/A'}</td>
                         <td>${r.vigencia_hasta || 'N/A'}</td>
                         <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
@@ -2185,6 +2194,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 categoria: cfgDescVolCat.value,
                 litros_minimo: parseFloat(cfgDescVolLitros.value),
                 porcentaje: parseFloat(cfgDescVolPorcentaje.value),
+                tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
+                dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: cfgDescVolHasta.value || null,
                 listas_aplicables: cfgDescVolListas.value

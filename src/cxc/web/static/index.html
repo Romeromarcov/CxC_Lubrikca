@@ -1012,6 +1012,17 @@
                                 <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.05" required>
                             </div>
                             <div class="form-group" style="flex:1">
+                                <label>Mínimo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="1" placeholder="Ej: 2" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="9999" placeholder="Ej: 4" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
                                 <label>Máximo Usos / Mes</label>
                                 <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="2" required>
                             </div>
@@ -1019,9 +1030,6 @@
                                 <label>Días Ventana Recompra</label>
                                 <input type="number" id="cfg-rec-ventana" min="1" step="1" value="30" required>
                             </div>
-                        </div>
-
-                        <div class="form-group-row">
                             <div class="form-group" style="flex:1">
                                 <label>Fecha de Inicio</label>
                                 <input type="date" id="cfg-rec-desde" required>
@@ -1041,6 +1049,7 @@
                             <thead>
                                 <tr>
                                     <th>% Recompra</th>
+                                    <th>Tramo Cajas</th>
                                     <th>Max Usos/Mes</th>
                                     <th>Ventana Días</th>
                                     <th>Desde</th>
@@ -1343,6 +1352,17 @@
                         </div>
                         <div class="form-group-row" style="margin-top: 1rem;">
                             <div class="form-group" style="flex:1;">
+                                <label>Tipo de Evaluación</label>
+                                <select id="cfg-desc-vol-tipo-eval" required>
+                                    <option value="orden">Por Orden Individual (Compra en 1 factura)</option>
+                                    <option value="acumulado">Acumulado en el Periodo (Suma de litros en N días)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label>Días Evaluación (si es Acumulado)</label>
+                                <input type="number" id="cfg-desc-vol-dias-eval" min="0" value="30" placeholder="Ej: 30 o 90 (0 = Histórico Total)">
+                            </div>
+                            <div class="form-group" style="flex:1;">
                                 <label>Fecha de Inicio</label>
                                 <input type="date" id="cfg-desc-vol-desde" required>
                             </div>
@@ -1372,6 +1392,8 @@
                                     <th>Categoría</th>
                                     <th>Litros Mínimos</th>
                                     <th>Descuento (%)</th>
+                                    <th>Tipo Evaluación</th>
+                                    <th>Periodo (Días)</th>
                                     <th>Fecha de Inicio</th>
                                     <th>Fecha de Finalización</th>
                                     <th>Listas</th>
@@ -1380,7 +1402,7 @@
                             </thead>
                             <tbody id="descuentos-volumen-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando descuentos por volumen...</td>
+                                    <td colspan="11" class="table-empty">Cargando descuentos por volumen...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1657,6 +1679,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260721_01"></script>
+    <script src="/static/app.js?v=20260721_02"></script>
 </body>
 </html>

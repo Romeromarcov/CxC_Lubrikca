@@ -179,6 +179,8 @@ class DescuentoVolumen:
     categoria: str
     litros_minimo: Decimal
     porcentaje: Decimal
+    tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
+    dias_evaluacion: int = 30       # días para acumulado (0 = histórico total)
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     listas_aplicables: str = "*"

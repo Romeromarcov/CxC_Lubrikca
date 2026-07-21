@@ -118,6 +118,8 @@ class RecompraRequest(BaseModel):
     porcentaje: float = 0.05
     max_usos_mes: int = 2
     dias_ventana: int = 30
+    min_cajas: int = 1
+    max_cajas: int = 9999
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -154,6 +156,8 @@ class DescuentoVolumenRequest(BaseModel):
     categoria: str
     litros_minimo: float
     porcentaje: float
+    tipo_evaluacion: str = "orden"
+    dias_evaluacion: int = 30
     vigencia_desde: str
     vigencia_hasta: str | None = None
     listas_aplicables: str = "*"
@@ -2163,6 +2167,8 @@ async def get_config_descuentos_volumen():
                 "categoria": r.categoria,
                 "litros_minimo": float(r.litros_minimo),
                 "porcentaje": float(r.porcentaje),
+                "tipo_evaluacion": getattr(r, "tipo_evaluacion", "orden"),
+                "dias_evaluacion": getattr(r, "dias_evaluacion", 30),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "listas_aplicables": r.listas_aplicables,
@@ -2184,20 +2190,6 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
 
-        # Check date overlap with active volume rules of same brand, category, list
-        existing = repo.descuentos_volumen()
-        for r in existing:
-            if r.activo and r.marca == req.marca and r.categoria == req.categoria:
-                lists_overlap = (r.listas_aplicables == "*" or req.listas_aplicables == "*" or r.listas_aplicables == req.listas_aplicables)
-                if lists_overlap:
-                    h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
-                    h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
-                    if max(v_desde, r.vigencia_desde) <= min(h1, h2):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Conflicto: ya existe la regla de volumen activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'}) para esta marca/categoría/lista."
-                        )
-
         regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoVolumen(
             regla_id=regla_id,
@@ -2205,6 +2197,8 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             categoria=req.categoria,
             litros_minimo=Decimal(str(req.litros_minimo)),
             porcentaje=Decimal(str(req.porcentaje)),
+            tipo_evaluacion=req.tipo_evaluacion,
+            dias_evaluacion=req.dias_evaluacion,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             listas_aplicables=req.listas_aplicables,
@@ -2284,6 +2278,8 @@ async def get_config_recompra():
                 "porcentaje": float(r.porcentaje),
                 "max_usos_mes": r.max_usos_mes,
                 "dias_ventana": r.dias_ventana,
+                "min_cajas": getattr(r, "min_cajas", 1),
+                "max_cajas": getattr(r, "max_cajas", 9999),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo
@@ -2310,6 +2306,8 @@ async def post_config_recompra(req: RecompraRequest):
             porcentaje=Decimal(str(req.porcentaje)),
             max_usos_mes=req.max_usos_mes,
             dias_ventana=req.dias_ventana,
+            min_cajas=req.min_cajas,
+            max_cajas=req.max_cajas,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo
