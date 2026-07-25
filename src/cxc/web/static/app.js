@@ -2710,6 +2710,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const elKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
 
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
 
         try {
             if (bodyDisc) bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
