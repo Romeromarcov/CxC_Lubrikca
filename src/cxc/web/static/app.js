@@ -980,7 +980,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (criticaItems.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="12" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="20" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
             return;
         }
 
@@ -999,19 +999,62 @@ document.addEventListener("DOMContentLoaded", () => {
                 odooHtml = '<span class="state-badge facturada">Facturado en Odoo</span>';
             }
 
+            let closeHtml = '<span class="state-badge">Abierta</span>';
+            if (item.candidata_a_cierre) {
+                closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
+            }
+
+            const baseTotal = item.monto_total || 0;
+            const totalDesc = item.total_descuentos_monto || 0;
+            const pctTotal = baseTotal > 0 ? (totalDesc / baseTotal * 100) : 0;
+            let descuentosHtml = '<span style="color:#94a3b8">$0.00 (0%)</span>';
+
+            if (totalDesc > 0) {
+                let itemsList = '';
+                if (item.descuentos_desglose && item.descuentos_desglose.length > 0) {
+                    itemsList = item.descuentos_desglose.map(d => {
+                        const itemPct = baseTotal > 0 ? (d.monto / baseTotal * 100) : (d.porcentaje || 0);
+                        const label = d.descripcion || d.origen;
+                        return `<div>• ${label}: <strong>${fmt(d.monto)}</strong> (${itemPct.toFixed(1)}%)</div>`;
+                    }).join("");
+                } else {
+                    itemsList = `<div>• Descuentos: <strong>${fmt(totalDesc)}</strong> (${pctTotal.toFixed(1)}%)</div>`;
+                }
+
+                descuentosHtml = `
+                    <div>
+                        <strong style="color: #059669">${fmt(totalDesc)} (${pctTotal.toFixed(1)}%)</strong>
+                        <div style="font-size:0.72rem; color:#475569; margin-top:2px; line-height:1.3">
+                            ${itemsList}
+                        </div>
+                    </div>
+                `;
+            }
+
+            const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
+            const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
-                <td><strong>${item.cliente_nombre}</strong></td>
-                <td><small>${item.vendedor || 'Sin Vendedor'}</small></td>
+                <td>${item.cliente_nombre}</td>
+                <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
                 <td><small>${item.fecha_entrega || item.fecha}</small></td>
+                <td><small>${item.terminos_pago || 'Contado'}</small></td>
                 <td><small>${item.fecha_vencimiento || '-'}</small></td>
                 <td>${agingBadge}</td>
                 <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
                 <td><strong style="color: #475569;">${fmt(item.monto_total)}</strong></td>
                 <td><small><span class="state-badge" style="background:#f1f5f9;color:#334155;font-weight:600;">${item.lista_precios || item.lista_origen || 'Sin Lista (Odoo)'}</span></small></td>
-                <td><strong style="color: #d97706;">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
-                <td><strong style="color: #b91c1c; font-size: 0.95rem;">${fmt(item.saldo_con_descuento_lista_usd)}</strong></td>
+                <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
+                <td>${fmt(item.abono_usd_bcv || item.monto_pagado)}</td>
+                <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
+                <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
+                <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
+                <td>${descuentosHtml}</td>
+                <td><strong style="color: ${saldoDescBCV > 0 ? '#b91c1c' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
+                <td><strong style="color: ${saldoDescUSD > 0 ? '#b91c1c' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
                 <td>${odooHtml}</td>
+                <td>${closeHtml}</td>
             `;
             tbody.appendChild(row);
         });
