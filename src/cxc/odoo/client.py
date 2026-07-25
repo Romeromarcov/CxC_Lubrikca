@@ -293,10 +293,23 @@ class OdooXmlRpcReader(OdooReader):
             return set()
         pickings = self._search_read(
             self.MODEL_PICKING,
-            [["sale_id", "in", so_ids], ["state", "=", "done"], "|", ["return_id", "!=", False], ["picking_type_code", "=", "incoming"]],
-            ["sale_id"],
+            [["state", "=", "done"], "|", ["return_id", "!=", False], ["picking_type_code", "=", "incoming"]],
+            ["id", "sale_id", "return_id", "origin"],
         )
-        return {int(_m2o_id(p.get("sale_id"))) for p in pickings if _m2o_id(p.get("sale_id"))}
+        p_by_id = {p["id"]: p for p in pickings}
+        res = set()
+        for p in pickings:
+            sid = _m2o_id(p.get("sale_id"))
+            if sid and int(sid) in so_ids:
+                res.add(int(sid))
+            elif p.get("return_id"):
+                ret_parent_id = p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                if ret_parent_id and ret_parent_id in p_by_id:
+                    parent_p = p_by_id[ret_parent_id]
+                    parent_sid = _m2o_id(parent_p.get("sale_id"))
+                    if parent_sid and int(parent_sid) in so_ids:
+                        res.add(int(parent_sid))
+        return res
 
     def _fechas_entrega(self, so_ids: list[int]) -> dict[int, str]:
         """Mapa id de SO → fecha de entrega (date_done del despacho saliente)."""

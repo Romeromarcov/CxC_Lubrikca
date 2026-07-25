@@ -929,23 +929,39 @@ async def get_reporte_saldos():
                     "stock.picking",
                     "search_read",
                     [[["state", "=", "done"]]],
-                    {"fields": ["origin", "date_done", "scheduled_date", "picking_type_code", "return_id"]}
+                    {"fields": ["id", "origin", "sale_id", "date_done", "scheduled_date", "picking_type_code", "return_id"]}
                 )
+                p_by_id = {p["id"]: p for p in pickings}
                 for p in pickings:
-                    origin = str(p.get("origin") or "").strip()
+                    so_name = None
+                    s_info = p.get("sale_id")
+                    if isinstance(s_info, (list, tuple)) and len(s_info) > 1:
+                        so_name = s_info[1]
+                    elif p.get("origin"):
+                        for name in so_ids_names:
+                            if name and name in str(p["origin"]):
+                                so_name = name
+                                break
+                    if not so_name and p.get("return_id"):
+                        ret_parent_id = p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                        if ret_parent_id and ret_parent_id in p_by_id:
+                            parent_p = p_by_id[ret_parent_id]
+                            ps_info = parent_p.get("sale_id")
+                            if isinstance(ps_info, (list, tuple)) and len(ps_info) > 1:
+                                so_name = ps_info[1]
+
                     p_code = str(p.get("picking_type_code") or "")
-                    is_return = bool(p.get("return_id")) or (p_code == "incoming") or ("Devolución" in origin) or ("Return" in origin)
-                    
-                    for so_name in so_ids_names:
-                        if so_name and so_name in origin:
-                            if is_return:
-                                picking_return_set.add(so_name)
-                            elif p_code == "outgoing":
-                                dt_done = p.get("date_done") or p.get("scheduled_date")
-                                if dt_done:
-                                    dt_str = str(dt_done).split(" ")[0]
-                                    if so_name not in picking_delivery_map or dt_str > picking_delivery_map[so_name]:
-                                        picking_delivery_map[so_name] = dt_str
+                    is_return = bool(p.get("return_id")) or (p_code == "incoming") or ("Devolución" in str(p.get("origin") or "")) or ("Return" in str(p.get("origin") or ""))
+
+                    if so_name:
+                        if is_return:
+                            picking_return_set.add(so_name)
+                        elif p_code == "outgoing":
+                            dt_done = p.get("date_done") or p.get("scheduled_date")
+                            if dt_done:
+                                dt_str = str(dt_done).split(" ")[0]
+                                if so_name not in picking_delivery_map or dt_str > picking_delivery_map[so_name]:
+                                    picking_delivery_map[so_name] = dt_str
             except Exception as e_pic:
                 logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
 
@@ -1035,12 +1051,12 @@ async def get_reporte_saldos():
             if st in ["draft", "sent"] and not has_done_outgoing:
                 continue
 
-            # 2. Excluir órdenes canceladas con devolución procesada o sin despachos realizados
-            if st == "cancel" and (has_done_return or not has_done_outgoing):
+            # 2. Excluir TODAS las órdenes canceladas en Odoo
+            if st == "cancel":
                 continue
 
-            # 3. Excluir cualquier orden devuelta en estado no activo
-            if has_done_return and st in ["cancel", "draft", "sent"]:
+            # 3. Excluir cualquier orden con devolución procesada en Odoo
+            if has_done_return:
                 continue
 
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")

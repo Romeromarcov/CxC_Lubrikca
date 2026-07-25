@@ -231,3 +231,24 @@ def test_changed_pagos_resuelve_vendedor_y_journal() -> None:
 def test_changed_ordenes_vacio_no_falla() -> None:
     reader = OdooXmlRpcReader(_config(), execute=FakeExecute({}))
     assert reader.changed_ordenes(None) == []
+
+
+def test_ordenes_con_devolucion_resuelve_parent_picking() -> None:
+    fake = FakeExecute({
+        "ordenes": [{"id": 6, "name": "S00006", "partner_id": [181, "UNIFRENOS"], "date_order": "2026-02-26", "amount_total": 83.42, "pricelist_id": [1, "VES"], "user_id": [13, "TORO"], "invoice_status": "no", "delivery_status": "full", "state": "cancel"}],
+        "partners_read": [{"id": 181, "user_id": [13, "TORO"]}],
+        "users": [{"id": 13, "login": "rep@x.com"}],
+        "pickings": [
+            {"id": 95, "sale_id": [6, "S00006"], "date_done": "2026-03-16", "scheduled_date": "2026-03-16", "state": "done", "picking_type_code": "outgoing"},
+        ],
+        "devoluciones": [
+            {"id": 95, "sale_id": [6, "S00006"], "date_done": "2026-03-16", "scheduled_date": "2026-03-16", "state": "done", "picking_type_code": "outgoing"},
+            {"id": 311, "sale_id": False, "return_id": [95, "ALM/OUT/00004"], "state": "done", "picking_type_code": "incoming", "origin": "Devolución de ALM/OUT/00004"}
+        ]
+    })
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    res = reader.changed_ordenes(None)
+    assert len(res) == 1
+    assert res[0].so_id == "S00006"
+    assert res[0].estado_orden == "cancel"
+    assert res[0].tiene_devolucion is True
