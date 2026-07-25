@@ -1097,8 +1097,19 @@ async def get_reporte_saldos():
                 price_usd = Decimal(str(prices_usd.get(pt_id))) if pt_id in prices_usd else Decimal(str(ln.get("precio_unitario", "0")))
                 total_proyectado_usd += qty * price_usd
                 
-            lista_name = "Lista USD (#4)" if o.lista_precios == "4" else f"Precio VES (#{o.lista_precios})"
-            monto_total_proyectado_usd = float(total_proyectado_usd) if o.lista_precios != "4" else float(o.monto_total)
+            lista_id_str = str(o.lista_precios or "").strip()
+            if not lista_id_str or lista_id_str in ("0", "None"):
+                lista_name = "Sin Lista (Odoo)"
+                monto_total_proyectado_usd = float(o.monto_total)
+            elif lista_id_str == "4":
+                lista_name = "Lista USD (#4)"
+                monto_total_proyectado_usd = float(o.monto_total)
+            elif lista_id_str == "5":
+                lista_name = "Precio VES (#5)"
+                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
+            else:
+                lista_name = f"Lista #{lista_id_str}"
+                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
             
             # Engine calculation data
             b = bandeja_map.get(o.so_id)
@@ -1176,8 +1187,10 @@ async def get_reporte_saldos():
                 "dias_vencido": dias_vencido,
                 "fecha_ultimo_abono": fecha_ultimo_abono,
                 "lista_precios": lista_name,
+                "lista_origen": lista_name,
                 "subtotal": float(subtotal),
                 "monto_total": monto_orig,
+                "monto_odoo": monto_orig,
                 "monto_total_proyectado_usd": monto_total_proyectado_usd,
                 "abono_usd_bcv": abono_bcv,
                 "abono_usd_binance": abono_binance,

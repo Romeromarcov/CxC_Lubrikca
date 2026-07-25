@@ -980,7 +980,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (criticaItems.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
             return;
         }
 
@@ -1007,6 +1007,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><small>${item.fecha_vencimiento || '-'}</small></td>
                 <td>${agingBadge}</td>
                 <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
+                <td><strong style="color: #475569;">${fmt(item.monto_total)}</strong></td>
+                <td><small><span class="state-badge" style="background:#f1f5f9;color:#334155;font-weight:600;">${item.lista_precios || item.lista_origen || 'Sin Lista (Odoo)'}</span></small></td>
                 <td><strong style="color: #d97706;">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
                 <td><strong style="color: #b91c1c; font-size: 0.95rem;">${fmt(item.saldo_con_descuento_lista_usd)}</strong></td>
                 <td>${odooHtml}</td>
@@ -1018,7 +1020,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderReporteTable(data) {
         const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : []);
         if (!list || list.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="20" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
 
@@ -1092,6 +1094,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><small>${item.fecha_vencimiento || '-'}</small></td>
                 <td>${agingBadge}</td>
                 <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
+                <td><strong style="color: #475569;">${fmt(item.monto_total)}</strong></td>
+                <td><small><span class="state-badge" style="background:#f1f5f9;color:#334155;font-weight:600;">${item.lista_precios || item.lista_origen || 'Sin Lista (Odoo)'}</span></small></td>
                 <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
                 <td>${fmt(item.abono_usd_bcv || item.monto_pagado)}</td>
                 <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
