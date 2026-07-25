@@ -269,31 +269,33 @@
         <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
-                <!-- Fila 1: Totales Principales (Total General por Cobrar y Total Vencido General) -->
-                <div class="kpi-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
-                    <!-- Card 1: TOTAL GENERAL POR COBRAR -->
-                    <div class="kpi-card card border-indigo interactive-kpi" data-antiguedad="*" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #f5f3ff); border: 2px solid #8b5cf6; padding: 1.1rem;">
-                        <div style="font-weight: 700; color: #6d28d9; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between;">
+                <!-- Fila 1: TOTAL GENERAL POR COBRAR (Sola arriba del todo) -->
+                <div style="margin-bottom: 1.25rem;">
+                    <div class="kpi-card card border-indigo interactive-kpi" data-antiguedad="*" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #f5f3ff); border: 2px solid #8b5cf6; padding: 1.15rem;">
+                        <div style="font-weight: 700; color: #6d28d9; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
                             <span>📊 TOTAL GENERAL POR COBRAR</span>
-                            <span style="font-size: 0.72rem; background: #ede9fe; color: #6d28d9; padding: 3px 8px; border-radius: 12px; font-weight:600;">Vigente + Vencido</span>
+                            <span style="font-size: 0.75rem; background: #ede9fe; color: #6d28d9; padding: 4px 12px; border-radius: 12px; font-weight:600;">Vigente + Vencido</span>
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
-                                <span style="color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
-                                <strong style="color: #1f2937;" id="kpi-total-general-deudor-bcv">$0.00</strong>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-top: 10px;">
+                            <div style="background: #ffffff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #e9d5ff; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size: 0.8rem; color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
+                                <strong style="color: #1f2937; font-size: 1.1rem;" id="kpi-total-general-deudor-bcv">$0.00</strong>
                             </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
-                                <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
-                                <strong style="color: #0284c7;" id="kpi-total-general-desc-bcv">$0.00</strong>
+                            <div style="background: #ffffff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #e9d5ff; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size: 0.8rem; color: #0369a1;">2. Con Desc. Lista BCV:</span>
+                                <strong style="color: #0284c7; font-size: 1.1rem;" id="kpi-total-general-desc-bcv">$0.00</strong>
                             </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #ddd6fe; padding-top: 4px; margin-top: 2px;">
-                                <span style="color: #6d28d9; font-weight: 700;">3. Con Desc. Lista USD:</span>
-                                <strong style="color: #6d28d9; font-size: 1.05rem;" id="kpi-total-general-desc-usd">$0.00</strong>
+                            <div style="background: #f3e8ff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #c084fc; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size: 0.82rem; color: #6d28d9; font-weight: 700;">3. Con Desc. Lista USD:</span>
+                                <strong style="color: #6d28d9; font-size: 1.25rem;" id="kpi-total-general-desc-usd">$0.00</strong>
                             </div>
                         </div>
-                        <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #7c3aed;">💡 Clic para ver todas las órdenes</div>
+                        <div class="kpi-subtext" style="margin-top: 8px; font-size: 0.72rem; color: #7c3aed; text-align: right;">💡 Clic para ver todas las órdenes</div>
                     </div>
+                </div>
 
+                <!-- Fila 2: TOTAL VENCIDO GENERAL y TOTAL VIGENTE (SIN VENCER) (Las 2 intermedias) -->
+                <div class="kpi-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
                     <!-- Card 2: TOTAL VENCIDO GENERAL -->
                     <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="vencido_total" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #fff1f2); border: 2px solid #f43f5e; padding: 1.1rem;">
                         <div style="font-weight: 700; color: #be123c; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between;">
@@ -316,25 +318,33 @@
                         </div>
                         <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #e11d48;">💡 Clic para ver todas las vencidas</div>
                     </div>
+
+                    <!-- Card 3: VIGENTES (SIN VENCER) -->
+                    <div class="kpi-card card border-emerald interactive-kpi" data-antiguedad="vigentes" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #f0fdf4); border: 2px solid #10b981; padding: 1.1rem;">
+                        <div style="font-weight: 700; color: #047857; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between;">
+                            <span>🟢 VIGENTES (SIN VENCER)</span>
+                            <span style="font-size: 0.72rem; background: #dcfce7; color: #047857; padding: 3px 8px; border-radius: 12px; font-weight:600;">Sin Vencer</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
+                                <strong style="color: #1f2937;" id="kpi-vigentes-deudor-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
+                                <strong style="color: #0284c7;" id="kpi-vigentes-desc-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #a7f3d0; padding-top: 4px; margin-top: 2px;">
+                                <span style="color: #047857; font-weight: 700;">3. Con Desc. Lista USD:</span>
+                                <strong style="color: #047857; font-size: 1.05rem;" id="kpi-vigentes-desc-usd">$0.00</strong>
+                            </div>
+                        </div>
+                        <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #059669;">💡 Clic para filtrar vigentes</div>
+                    </div>
                 </div>
 
-                <!-- Fila 2: 5 Tarjetas Interactivas por Antigüedad con 3 Saldos Internos -->
+                <!-- Fila 3: Las 4 Tarjetas Pequeñas de Vencimientos por Antigüedad -->
                 <div class="kpi-grid aging-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.85rem; margin-bottom: 1.5rem;">
-                    <!-- Vigentes -->
-                    <div class="kpi-card card border-emerald interactive-kpi" data-antiguedad="vigentes" style="cursor: pointer; padding: 0.85rem;">
-                        <div class="kpi-label" style="color: #047857; font-weight: 700; font-size: 0.85rem;">Vigentes (Sin Vencer)</div>
-                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
-                            <span>Deudor BCV:</span> <strong id="kpi-vigentes-deudor-bcv" style="color:#0f172a">$0.00</strong>
-                        </div>
-                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
-                            <span>Desc. BCV:</span> <strong id="kpi-vigentes-desc-bcv">$0.00</strong>
-                        </div>
-                        <div style="font-size: 0.88rem; color: #047857; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
-                            <span>Desc. USD:</span> <strong id="kpi-vigentes-desc-usd">$0.00</strong>
-                        </div>
-                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar vigentes</div>
-                    </div>
-
                     <!-- 1-30 Días -->
                     <div class="kpi-card card border-amber interactive-kpi" data-antiguedad="1_30" style="cursor: pointer; padding: 0.85rem;">
                         <div class="kpi-label" style="color: #b45309; font-weight: 700; font-size: 0.85rem;">Vencidas 1 - 30 Días</div>
@@ -1802,6 +1812,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260725_03"></script>
+    <script src="/static/app.js?v=20260725_04"></script>
 </body>
 </html>
