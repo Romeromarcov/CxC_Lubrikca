@@ -2955,6 +2955,30 @@ async def get_tasas_historicas():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/reglas-descuento")
+async def get_reglas_descuento():
+    try:
+        repo = get_repo()
+        primera = repo._g.read_rows("PromocionPrimeraCompra")
+        recompra = repo._g.read_rows("DescuentosRecompra")
+        pronto_pago = repo._g.read_rows("DescuentosProntoPago")
+        volumen = repo._g.read_rows("DescuentosVolumen")
+        producto = repo._g.read_rows("DescuentosProducto")
+        diferencial = repo._g.read_rows("DescuentosDiferencialCambiario")
+        
+        return {
+            "primera_compra": primera,
+            "recompra": recompra,
+            "pronto_pago": pronto_pago,
+            "volumen": volumen,
+            "producto": producto,
+            "diferencial_cambiario": diferencial
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
