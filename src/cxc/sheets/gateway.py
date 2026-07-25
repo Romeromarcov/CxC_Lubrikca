@@ -121,29 +121,41 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
 
     @classmethod
     def from_env_vars(cls, spreadsheet_id: str) -> GspreadGateway:
-        """Autentica utilizando las variables de entorno de OAuth token y secrets."""
+        """Autentica utilizando las variables de entorno de Service Account u OAuth token y secrets."""
         import gspread
         import json
         import os
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
 
-        token_str = os.environ.get("GOOGLE_TOKEN_JSON")
-        secret_str = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
+        service_account_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        if service_account_str and service_account_str.strip():
+            from google.oauth2.service_account import Credentials as SACredentials
+            sa_info = json.loads(service_account_str)
+            scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            creds = SACredentials.from_service_account_info(sa_info, scopes=scopes)
+        else:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+            from google.auth.exceptions import RefreshError
 
-        if not token_str:
-            raise ValueError("Falta GOOGLE_TOKEN_JSON en las variables de entorno.")
+            token_str = os.environ.get("GOOGLE_TOKEN_JSON")
+            secret_str = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
 
-        token_info = json.loads(token_str)
-        if secret_str:
-            secret_info = json.loads(secret_str)
-            client_config = secret_info.get("installed") or secret_info.get("web") or {}
-            token_info["client_id"] = client_config.get("client_id")
-            token_info["client_secret"] = client_config.get("client_secret")
+            if not token_str:
+                raise ValueError("Falta GOOGLE_TOKEN_JSON o GOOGLE_SERVICE_ACCOUNT_JSON en las variables de entorno.")
 
-        creds = Credentials.from_authorized_user_info(token_info, scopes=['https://www.googleapis.com/auth/drive'])
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            token_info = json.loads(token_str)
+            if secret_str:
+                secret_info = json.loads(secret_str)
+                client_config = secret_info.get("installed") or secret_info.get("web") or {}
+                token_info["client_id"] = client_config.get("client_id")
+                token_info["client_secret"] = client_config.get("client_secret")
+
+            creds = Credentials.from_authorized_user_info(token_info, scopes=['https://www.googleapis.com/auth/drive'])
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except RefreshError as re:
+                    raise RuntimeError("El token de Google OAuth expiró o fue revocado (invalid_grant). Es necesario actualizar GOOGLE_TOKEN_JSON en Railway.") from re
 
         self = cls.__new__(cls)
         self._gc = gspread.Client(auth=creds)
