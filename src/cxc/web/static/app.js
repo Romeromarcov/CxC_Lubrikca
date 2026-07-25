@@ -858,6 +858,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/reporte-saldos");
             if (res.ok) {
                 const data = await res.json();
+                const kpis = data.kpis || {};
+                fullReporteItems = data.items || (Array.isArray(data) ? data : []);
+                const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
                 // Helper to update 3 sub-balances in a KPI card
                 const setKpiSubBalances = (prefix, kpiObj) => {
                     const obj = kpiObj || { deudor_bcv: 0, desc_bcv: 0, desc_usd: 0 };
