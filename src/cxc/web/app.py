@@ -114,6 +114,100 @@ class ProntoPagoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+class ProductoPromoRequest(BaseModel):
+    productos: str = "*"
+    marca: str = "*"
+    categoria: str = "*"
+    compra_minima_cajas: int = 1
+    porcentaje_descuento: float = 0.05
+    monedas_aplicables: str = "*"
+    listas_aplicables: str = "*"
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
+
+def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
+    try:
+        rows = repo._g.read_rows("_Meta")
+        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
+        
+        def _parse(val_str: str, default_val: int) -> list[int]:
+            if not val_str:
+                return [default_val]
+            if "," in val_str:
+                parts = [p.strip() for p in val_str.split(",") if p.strip()]
+            else:
+                parts = [c for c in val_str.strip() if c.isdigit()]
+            res = [int(p) for p in parts if p.isdigit()]
+            return res if res else [default_val]
+            
+        usd_ids = _parse(meta.get("valid_pricelists_usd"), int(os.environ.get("ODOO_PRICELIST_USD", "4")))
+        ves_ids = _parse(meta.get("valid_pricelists_ves"), int(os.environ.get("ODOO_PRICELIST_BCV", "5")))
+        return usd_ids, ves_ids
+    except Exception as e:
+        logger.warning("Error reading pricelists from _Meta: %s", e)
+        return [int(os.environ.get("ODOO_PRICELIST_USD", "4"))], [int(os.environ.get("ODOO_PRICELIST_BCV", "5"))]
+
+
+def resolve_effective_pricelist_price(
+    product_tmpl_id: int,
+    order_date: date,
+    candidate_pricelist_ids: list[int],
+    pricelist_items: list[dict]
+) -> Decimal | None:
+    if not candidate_pricelist_ids or not pricelist_items:
+        return None
+    matched = []
+    for r in pricelist_items:
+        pl_id = r["pricelist_id"][0] if isinstance(r["pricelist_id"], (list, tuple)) else r["pricelist_id"]
+        if candidate_pricelist_ids and pl_id not in candidate_pricelist_ids:
+            continue
+            
+        pt_raw = r.get("product_tmpl_id")
+        pt_id = pt_raw[0] if isinstance(pt_raw, (list, tuple)) else pt_raw
+        if pt_id != product_tmpl_id:
+            continue
+            
+        d_start_str = r.get("date_start")
+        d_end_str = r.get("date_end")
+        
+        d_start = datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
+        d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
+        
+        if d_start and order_date < d_start:
+            continue
+        if d_end and order_date > d_end:
+            continue
+            
+        price = Decimal(str(r.get("fixed_price") or "0"))
+        matched.append((d_start or date.min, price))
+        
+    if matched:
+        matched.sort(key=lambda x: x[0], reverse=True)
+        return matched[0][1]
+        
+    return None
+
+
+def extract_product_tmpl_id(prod_raw: Any) -> int | None:
+    if isinstance(prod_raw, (int, float)):
+        return int(prod_raw)
+    if isinstance(prod_raw, str):
+        if prod_raw.startswith("["):
+            try:
+                import json
+                parsed = json.loads(prod_raw.replace("'", '"'))
+                return int(parsed[0])
+            except Exception:
+                import re
+                m = re.search(r'\d+', prod_raw)
+                if m:
+                    return int(m.group())
+        elif prod_raw.isdigit():
+            return int(prod_raw)
+    return None
+
 class RecompraRequest(BaseModel):
     porcentaje: float = 0.05
     max_usos_mes: int = 2
@@ -993,20 +1087,14 @@ async def get_reporte_saldos():
                 if not curr_last or dt_pago_str > curr_last:
                     pagos_by_so[v.so_id]["ultimo_abono"] = dt_pago_str
 
-        # Fetch product fixed prices for list 4 once
-        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
-        rules = execute(
+        # Load UI configured pricelist IDs (USD & VES) from _Meta
+        usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+        rules_usd = execute(
             "product.pricelist.item",
             "search_read",
-            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
-            {"fields": ["product_tmpl_id", "fixed_price"]}
-        )
-        prices_usd = {}
-        for r in rules:
-            prod_tmpl_id = r.get("product_tmpl_id")
-            pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
-            if pt_id:
-                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+            [[["pricelist_id", "in", usd_ids], ["compute_price", "=", "fixed"]]],
+            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price", "date_start", "date_end"]}
+        ) if execute else []
 
         all_lines = repo._g.read_rows("LineasOrden")
         lines_by_so = {}
@@ -1072,40 +1160,26 @@ async def get_reporte_saldos():
 
             subtotal = monto_entregado_neto_usd
             
-            # Compute projected USD subtotal and total under List 4 (USD)
+            # Compute projected USD subtotal and total using UI candidate USD pricelists effective on order date (o.fecha)
             total_proyectado_usd = Decimal("0.0")
             for ln in order_lines:
                 qty = max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0"))))
                 prod_raw = ln.get("producto", "")
-                pt_id = None
-                if isinstance(prod_raw, str):
-                    if prod_raw.startswith("["):
-                        try:
-                            import json
-                            parsed = json.loads(prod_raw.replace("'", '"'))
-                            pt_id = int(parsed[0])
-                        except:
-                            import re
-                            match = re.search(r'\d+', prod_raw)
-                            if match:
-                                pt_id = int(match.group())
-                    elif prod_raw.isdigit():
-                        pt_id = int(prod_raw)
-                elif isinstance(prod_raw, (int, float)):
-                    pt_id = int(prod_raw)
-                    
-                price_usd = Decimal(str(prices_usd.get(pt_id))) if pt_id in prices_usd else Decimal(str(ln.get("precio_unitario", "0")))
+                pt_id = extract_product_tmpl_id(prod_raw)
+                
+                eff_price = resolve_effective_pricelist_price(pt_id, o.fecha, usd_ids, rules_usd) if pt_id else None
+                price_usd = eff_price if eff_price is not None else Decimal(str(ln.get("precio_unitario", "0")))
                 total_proyectado_usd += qty * price_usd
                 
             lista_id_str = str(o.lista_precios or "").strip()
             if not lista_id_str or lista_id_str in ("0", "None"):
                 lista_name = "Sin Lista (Odoo)"
                 monto_total_proyectado_usd = float(o.monto_total)
-            elif lista_id_str == "4":
-                lista_name = "Lista USD (#4)"
+            elif lista_id_str in [str(x) for x in usd_ids]:
+                lista_name = f"Lista USD (#{lista_id_str})"
                 monto_total_proyectado_usd = float(o.monto_total)
-            elif lista_id_str == "5":
-                lista_name = "Precio VES (#5)"
+            elif lista_id_str in [str(x) for x in ves_ids]:
+                lista_name = f"Precio VES (#{lista_id_str})"
                 monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
             else:
                 lista_name = f"Lista #{lista_id_str}"
@@ -2706,37 +2780,18 @@ async def get_auditoria():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
 
-        # Load pricelist 4 (USD) and pricelist 5 (VES) prices from Odoo
+        # Load UI configured pricelists (USD & VES) from _Meta
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
-        lista_ves_id = int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+        usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+        all_candidate_ids = list(set(usd_ids + ves_ids))
 
-        rules_usd = execute(
+        rules_all = execute(
             "product.pricelist.item",
             "search_read",
-            [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
-            {"fields": ["product_tmpl_id", "fixed_price"]}
-        )
-        prices_usd = {}
-        for r in rules_usd:
-            pt = r.get("product_tmpl_id")
-            pt_id = pt[0] if isinstance(pt, list) else pt
-            if pt_id:
-                prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
-
-        rules_ves = execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "=", lista_ves_id], ["compute_price", "=", "fixed"]]],
-            {"fields": ["product_tmpl_id", "fixed_price"]}
-        )
-        prices_ves = {}
-        for r in rules_ves:
-            pt = r.get("product_tmpl_id")
-            pt_id = pt[0] if isinstance(pt, list) else pt
-            if pt_id:
-                prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
+            [[["pricelist_id", "in", all_candidate_ids], ["compute_price", "=", "fixed"]]],
+            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price", "date_start", "date_end"]}
+        ) if execute else []
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo._g.read_rows("AnomaliasAceptadas")
@@ -2757,9 +2812,10 @@ async def get_auditoria():
             so_lines = lines_by_so.get(o.so_id, [])
 
             has_discrepancy = False
-            is_ves = (o.lista_precios == "5") or (o.lista_precios != "4")
-            official_prices_map = prices_ves if is_ves else prices_usd
-            pricelist_label = "Lista VES (#5)" if is_ves else "Lista USD (#4)"
+            lista_id_str = str(o.lista_precios or "").strip()
+            is_ves = lista_id_str in [str(x) for x in ves_ids]
+            candidate_list_ids = ves_ids if is_ves else usd_ids
+            pricelist_label = f"Lista VES (#{lista_id_str})" if is_ves else f"Lista USD (#{lista_id_str})"
 
             # Check 1: Unit prices vs correct official pricelist (VES or USD)
             for ln in so_lines:
@@ -2771,26 +2827,10 @@ async def get_auditoria():
                 if qty <= Decimal("0") or price_order <= Decimal("0") or qty_delivered <= Decimal("0"):
                     continue
 
-                prod_raw = ln.get("producto", "")
-                pt_id = None
-                if isinstance(prod_raw, str):
-                    if prod_raw.startswith("["):
-                        try:
-                            import json
-                            parsed = json.loads(prod_raw.replace("'", '"'))
-                            pt_id = int(parsed[0])
-                        except:
-                            import re
-                            m = re.search(r'\d+', prod_raw)
-                            if m:
-                                pt_id = int(m.group())
-                    elif prod_raw.isdigit():
-                        pt_id = int(prod_raw)
-                elif isinstance(prod_raw, (int, float)):
-                    pt_id = int(prod_raw)
+                pt_id = extract_product_tmpl_id(ln.get("producto", ""))
+                price_official = resolve_effective_pricelist_price(pt_id, o.fecha, candidate_list_ids, rules_all) if pt_id else None
 
-                if pt_id in official_prices_map:
-                    price_official = Decimal(str(official_prices_map[pt_id]))
+                if price_official is not None:
                     if price_order < price_official - Decimal("0.01"):
                         has_discrepancy = True
                         diff_unit = price_official - price_order
