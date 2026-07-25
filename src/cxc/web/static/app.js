@@ -156,8 +156,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         navLinks.forEach(link => {
             const page = link.dataset.page;
-            if (isAdm || perms.includes(page)) {
-                link.style.display = "inline-flex";
+            const isDashboardCard = link.parentElement && link.parentElement.id === "dashboard-quick-actions";
+            
+            if (!page || page === "dashboard" || isAdm || perms.includes(page)) {
+                link.style.display = isDashboardCard ? "block" : "inline-flex";
             } else {
                 link.style.display = "none";
             }
@@ -1480,12 +1482,14 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 const d = await res.json();
                 const bcvLbl = document.getElementById("lbl-rate-bcv-actual");
+                const vigLbl = document.getElementById("lbl-rate-binance-vigente");
                 const mLbl = document.getElementById("lbl-rate-binance-manana");
                 const tLbl = document.getElementById("lbl-rate-binance-tarde");
                 const dLbl = document.getElementById("lbl-rate-binance-diario");
                 const diffLbl = document.getElementById("lbl-rate-diferencial-pct");
 
                 if (bcvLbl) bcvLbl.textContent = d.tasa_bcv_actual ? `Bs. ${d.tasa_bcv_actual.toFixed(2)}` : "-";
+                if (vigLbl) vigLbl.textContent = d.tasa_binance_vigente ? `Bs. ${d.tasa_binance_vigente.toFixed(2)}` : "-";
                 if (mLbl) mLbl.textContent = d.tasa_binance_manana ? `Bs. ${d.tasa_binance_manana.toFixed(2)}` : "N/A";
                 if (tLbl) tLbl.textContent = d.tasa_binance_tarde ? `Bs. ${d.tasa_binance_tarde.toFixed(2)}` : "N/A";
                 if (dLbl) dLbl.textContent = d.tasa_binance_diario ? `Bs. ${d.tasa_binance_diario.toFixed(2)}` : "N/A";

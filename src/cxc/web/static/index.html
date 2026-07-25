@@ -68,6 +68,10 @@
                             <span style="font-size:0.75rem; color:#64748b; display:block">BCV Oficial</span>
                             <strong style="font-size:1.1rem; color:#0f172a" id="lbl-rate-bcv-actual">-</strong>
                         </div>
+                        <div style="background:#eff6ff; border:1px solid #93c5fd; border-radius:6px; padding:0.75rem; text-align:center">
+                            <span style="font-size:0.75rem; color:#1d4ed8; font-weight:700; display:block">Binance Vigente</span>
+                            <strong style="font-size:1.1rem; color:#1e40af" id="lbl-rate-binance-vigente">-</strong>
+                        </div>
                         <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
                             <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Mañana (6am-9am)</span>
                             <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-manana">-</strong>
@@ -87,18 +91,30 @@
                     </div>
                 </section>
 
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
-                    <a href="/facturacion" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #2563eb; display:block;">
+                <div id="dashboard-quick-actions" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem;">
+                    <a href="/facturacion" data-page="facturacion" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #2563eb; display:block;">
                         <h3 style="margin:0 0 0.4rem 0; color:#1e40af;">🧾 Gestión de Facturación</h3>
                         <p style="margin:0; font-size:0.83rem; color:#64748b;">3 Bandejas de Aprobación de Órdenes por Facturar, N/C y Comprobantes de IVA.</p>
                     </a>
-                    <a href="/conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #059669; display:block;">
+                    <a href="/conciliaciones" data-page="conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #059669; display:block;">
                         <h3 style="margin:0 0 0.4rem 0; color:#065f46;">🤝 Conciliación y Asignación</h3>
                         <p style="margin:0; font-size:0.83rem; color:#64748b;">Asigne pagos recibidos a órdenes abiertas y consulte el mapa de vinculación.</p>
                     </a>
-                    <a href="/cobranza" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #d97706; display:block;">
+                    <a href="/cobranza" data-page="cobranza" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #d97706; display:block;">
                         <h3 style="margin:0 0 0.4rem 0; color:#92400e;">💵 Registro de Cobranzas</h3>
                         <p style="margin:0; font-size:0.83rem; color:#64748b;">Gestione la entrega de dinero por vendedores y emita recibos de entrega en PDF.</p>
+                    </a>
+                    <a href="/reporte" data-page="reporte" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #7c3aed; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#5b21b6;">📑 Reporte General de Saldos</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Consolidado de cuentas por cobrar, antigüedad de saldos y órdenes vigentes/vencidas.</p>
+                    </a>
+                    <a href="/auditoria" data-page="auditoria" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #0284c7; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#0369a1;">🔍 Auditoría de Precios</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Inspección de precios inferiores a lista, descuentos no autorizados y anomalías.</p>
+                    </a>
+                    <a href="/configuracion" data-page="configuracion" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #475569; display:block;">
+                        <h3 style="margin:0 0 0.4rem 0; color:#334155;">⚙️ Configuración del Motor</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Mapeo de listas de precios, reglas de descuento, feriados y usuarios.</p>
                     </a>
                 </div>
 

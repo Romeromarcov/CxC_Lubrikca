@@ -2698,6 +2698,18 @@ async def get_tasas_promedios():
         tarde_all = []
         diario = []
         last_bcv = Decimal("0")
+        last_binance = Decimal("0")
+
+        # Find most recent valid Binance & BCV rates from all rows
+        for r in reversed(rows):
+            tb_val = parse_decimal_safe(r.get("tasa_binance", "0"))
+            if tb_val > Decimal("0") and last_binance <= Decimal("0"):
+                last_binance = tb_val
+            tbcv_val = parse_decimal_safe(r.get("tasa_bcv", "0"))
+            if tbcv_val > Decimal("0") and last_bcv <= Decimal("0"):
+                last_bcv = tbcv_val
+            if last_binance > Decimal("0") and last_bcv > Decimal("0"):
+                break
 
         for r in target_rows:
             try:
@@ -2717,10 +2729,6 @@ async def get_tasas_promedios():
                         manana_all.append(tb)
                     else:
                         tarde_all.append(tb)
-
-                t_bcv = Decimal(str(r.get("tasa_bcv", "0")))
-                if t_bcv > Decimal("0"):
-                    last_bcv = t_bcv
             except:
                 pass
 
@@ -2738,6 +2746,7 @@ async def get_tasas_promedios():
         return {
             "fecha": today_str,
             "tasa_bcv_actual": float(last_bcv),
+            "tasa_binance_vigente": float(last_binance),
             "tasa_binance_manana": round(avg_m, 2) if avg_m else None,
             "tasa_binance_tarde": round(avg_t, 2) if avg_t else None,
             "tasa_binance_diario": round(avg_d, 2) if avg_d else None,
