@@ -627,20 +627,35 @@ async def get_resumen():
         ordenes = repo.all_ordenes()
         total_por_cobrar = sum(o.monto_total for o in ordenes if not o.facturada)
         
-        # 2. Pagos sin asignar (not in Vinculaciones)
+        # 2. Pagos sin asignar (convert VES payments to USD at BCV rate)
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         linked_pago_ids = {v.pago_id for v in vincs}
+        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_map = {r.get("fecha"): parse_decimal_safe(r.get("tasa_bcv", "0")) for r in tasas_rows}
         
         pagos_pendientes_monto = Decimal("0")
         for p in pagos:
             pid = str(p.get("pago_id", ""))
             if pid and pid not in linked_pago_ids:
                 try:
-                    # Let's count them in USD (if VES, convert or count original)
                     monto = parse_decimal_safe(p.get("monto", "0"))
-                    pagos_pendientes_monto += monto
-                except:
+                    moneda = str(p.get("moneda", "USD")).upper().strip()
+                    fecha_pago = str(p.get("fecha_pago", ""))[:10]
+                    
+                    if "VES" in moneda or "BS" in moneda or "BOLIVAR" in moneda:
+                        tasa = parse_decimal_safe(p.get("tasa_bcv", "0"))
+                        if tasa <= Decimal("0"):
+                            tasa = tasas_map.get(fecha_pago, Decimal("0"))
+                        if tasa > Decimal("0"):
+                            monto_usd = monto / tasa
+                        else:
+                            monto_usd = Decimal("0")
+                    else:
+                        monto_usd = monto
+                        
+                    pagos_pendientes_monto += monto_usd
+                except Exception:
                     pass
                     
         # 3. Alertas rojas in Conciliación
