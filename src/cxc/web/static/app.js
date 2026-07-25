@@ -1238,12 +1238,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (recompraForm) {
         recompraForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const marcaVal = document.getElementById("cfg-rec-marca") ? document.getElementById("cfg-rec-marca").value : "GLOBAL OIL";
+            const catVal = document.getElementById("cfg-rec-categoria") ? document.getElementById("cfg-rec-categoria").value : "CAJA";
             const payload = {
+                marca: marcaVal,
+                categoria: catVal,
                 porcentaje: parseFloat(document.getElementById("cfg-rec-porcentaje").value),
                 min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas").value || 1),
                 max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas").value || 9999),
-                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos").value),
-                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana").value),
+                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos").value || 1),
+                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana").value || 30),
                 vigencia_desde: document.getElementById("cfg-rec-desde").value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-rec-hasta").value || null,
                 activo: true
@@ -1263,7 +1267,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
                 }
             } catch (err) {
-                alert("❌ Error de red.");
+                console.error("Error saving recompra:", err);
             }
         });
     }
@@ -1582,12 +1586,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("recompra-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando reglas de recompra...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reglas de recompra...</td></tr>';
             const res = await fetch("/api/config/descuentos-recompra");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay reglas de recompra.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de recompra.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
@@ -1599,23 +1603,27 @@ document.addEventListener("DOMContentLoaded", () => {
                     statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
                     statusBtn.onclick = () => toggleRuleActive("DescuentosRecompra", r.regla_id, r.activo);
 
-                    const tramoText = (r.max_cajas && r.max_cajas < 9000) ? `${r.min_cajas || 1} a ${r.max_cajas} cajas` : `${r.min_cajas || 1}+ cajas`;
+                    const rawPct = parseFloat(r.porcentaje || 0);
+                    const pctFormatted = rawPct > 1 ? rawPct.toFixed(2) + "%" : (rawPct * 100).toFixed(2) + "%";
+                    const tramoText = (r.max_cajas && parseInt(r.max_cajas) < 9000) ? `${r.min_cajas || 1} a ${r.max_cajas} cajas` : `${r.min_cajas || 1}+ cajas`;
 
                     row.innerHTML = `
-                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td><strong>${r.marca || 'GLOBAL OIL'}</strong></td>
+                        <td>${r.categoria || 'CAJA'}</td>
+                        <td><strong style="color:#059669">${pctFormatted}</strong></td>
                         <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1;">${tramoText}</span></td>
-                        <td><strong>${r.max_usos_mes}</strong></td>
-                        <td><strong>${r.dias_ventana} días</strong></td>
+                        <td><strong>${r.max_usos_mes || 1}</strong></td>
+                        <td><strong>${r.dias_ventana || 30} días</strong></td>
                         <td><small>${r.vigencia_desde}</small></td>
                         <td><small>${r.vigencia_hasta || 'N/A'}</small></td>
                         <td></td>
                     `;
-                    row.children[6].appendChild(statusBtn);
+                    row.children[8].appendChild(statusBtn);
                     tbody.appendChild(row);
                 });
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar recompra.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar recompra.</td></tr>';
         }
     }
 

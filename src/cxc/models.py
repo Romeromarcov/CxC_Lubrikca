@@ -218,14 +218,16 @@ class PromocionPrimeraCompra:
 @dataclass
 class DescuentoRecompra:
     regla_id: str
-    porcentaje: Decimal = Decimal("0.05")
-    max_usos_mes: int = 2
+    marca: str = "GLOBAL OIL"
+    categoria: str = "CAJA"
+    min_cajas: int = 2
+    max_cajas: int = 4
+    porcentaje: Decimal = Decimal("0.03")
+    max_usos_mes: int = 1
     dias_ventana: int = 30
-    vigencia_desde: date = date(2026, 1, 1)
+    vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
-    min_cajas: int = 1
-    max_cajas: int = 9999
 
 
 # --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------

@@ -197,7 +197,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 "PromocionPrimeraCompra": ["regla_id", "tipo_beneficio", "productos", "valor", "compra_minima", "regalo_tipo", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
                 "DescuentosProntoPago": ["regla_id", "marca", "categoria", "dias_gracia", "porcentaje", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosRecompra": ["regla_id", "porcentaje", "max_usos_mes", "dias_ventana", "vigencia_desde", "vigencia_hasta", "activo"],
+                "DescuentosRecompra": ["regla_id", "marca", "categoria", "min_cajas", "max_cajas", "porcentaje", "max_usos_mes", "dias_ventana", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosProducto": ["regla_id", "productos", "marca", "categoria", "porcentaje", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
                 "DescuentosDiferencialCambiario": ["regla_id", "nombre", "tipo_diferencial", "tipo_calculo", "porcentaje_fijo", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
                 "Feriados": ["fecha", "descripcion", "tipo"],
