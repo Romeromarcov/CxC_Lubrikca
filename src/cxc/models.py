@@ -189,6 +189,10 @@ class DescuentoProntoPago:
     regla_id: str
     marca: str = "*"
     categoria: str = "*"
+    min_cantidad: Decimal = Decimal("0")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "USD"
+    tipo_beneficio: str = "descuento"
     dias_gracia: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"
@@ -207,10 +211,14 @@ DescuentoMarcaCategoria = DescuentoProntoPago
 @dataclass
 class DescuentoVolumen:
     regla_id: str
-    marca: str
-    categoria: str
-    litros_minimo: Decimal
-    porcentaje: Decimal
+    marca: str = "*"
+    categoria: str = "*"
+    litros_minimo: Decimal = Decimal("0")
+    porcentaje: Decimal = Decimal("0.05")
+    min_cantidad: Decimal = Decimal("0")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "LITROS"
+    tipo_beneficio: str = "descuento"
     tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
     dias_evaluacion: int = 30       # días para acumulado (0 = histórico total)
     vigencia_desde: date = date(2026, 1, 1)
@@ -232,15 +240,21 @@ class DescuentoBCVCompleto:
 @dataclass
 class PromocionPrimeraCompra:
     regla_id: str
-    tipo_beneficio: str  # "producto" o "porcentaje"
-    productos: str  # Comma-separated list of product IDs/names
-    valor: Decimal  # quantity for product, or percentage for porcentaje (e.g. 0.02)
-    compra_minima: Decimal  # Comercial units threshold
-    regalo_tipo: str  # "conjunto" o "solo_uno"
-    vigencia_desde: date
+    tipo_beneficio: str = "producto"  # "producto" o "porcentaje"
+    productos: str = ""  # Comma-separated list of product IDs/names
+    valor: Decimal = Decimal("1")  # quantity for product, or percentage for porcentaje (e.g. 0.02)
+    compra_minima: Decimal = Decimal("3")  # Comercial units threshold
+    regalo_tipo: str = "solo_uno"  # "conjunto" o "solo_uno"
+    vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
-    descuento_fallback: Decimal = Decimal("0")
+    descuento_fallback: Decimal = Decimal("0.02")
     categorias_aplica: str = "Comercial"
+    marca: str = "GLOBAL OIL"
+    categoria: str = "CAJA"
+    min_cantidad: Decimal = Decimal("3")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "CAJAS"
+    listas_aplicables: str = "*"
     activo: bool = True
 
 
@@ -252,9 +266,14 @@ class DescuentoRecompra:
     categoria: str = "CAJA"
     min_cajas: int = 2
     max_cajas: int = 4
+    min_cantidad: Decimal = Decimal("2")
+    max_cantidad: Decimal = Decimal("4")
+    unidad_medida: str = "CAJAS"
+    tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.03")
     max_usos_mes: int = 1
     dias_ventana: int = 30
+    listas_aplicables: str = "*"
     vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -265,9 +284,15 @@ class DescuentoRecompra:
 class DescuentoFidelizacion:
     regla_id: str
     nombre: str
-    marca: str
-    min_litros_acumulados: Decimal
-    porcentaje: Decimal
+    marca: str = "*"
+    min_litros_acumulados: Decimal = Decimal("0")
+    porcentaje: Decimal = Decimal("0.05")
+    categoria: str = "*"
+    min_cantidad: Decimal = Decimal("0")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "LITROS"
+    tipo_beneficio: str = "descuento"
+    listas_aplicables: str = "*"
     ventana_dias: int = 90
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
@@ -278,9 +303,13 @@ class DescuentoFidelizacion:
 @dataclass
 class DescuentoProducto:
     regla_id: str
-    productos: str  # CSV de SKUs/IDs de producto o '*'
+    productos: str = "*"  # CSV de SKUs/IDs de producto o '*'
     marca: str = "*"
     categoria: str = "*"
+    min_cantidad: Decimal = Decimal("0")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "CAJAS"
+    tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
@@ -294,9 +323,15 @@ class DescuentoProducto:
 class DescuentoDiferencialCambiario:
     regla_id: str
     nombre: str
-    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
-    tipo_calculo: str  # 'fijo' | 'variable'
+    tipo_diferencial: str = "fijo_35_ves_usd" # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    tipo_calculo: str = "fijo" # 'fijo' | 'variable'
     porcentaje_fijo: Decimal = Decimal("0.35")
+    marca: str = "*"
+    categoria: str = "*"
+    min_cantidad: Decimal = Decimal("0")
+    max_cantidad: Decimal = Decimal("999999")
+    unidad_medida: str = "USD"
+    tipo_beneficio: str = "descuento"
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
     vigencia_desde: date = date(2026, 1, 1)
