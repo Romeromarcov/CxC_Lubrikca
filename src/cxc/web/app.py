@@ -1137,11 +1137,43 @@ async def get_reporte_saldos():
         # Read discount rules for theoretical evaluation when order is not in BandejaFacturacion
         descuentos_mc = repo.descuentos_marca_categoria()
 
+        # Read rates series to convert VES invoice residual to USD
+        tasas_rows = repo._g.read_rows("SerieTasas")
+        rates_map = {}
+        for r in tasas_rows:
+            ts = str(r.get("timestamp", ""))[:10]
+            tbcv = r.get("tasa_bcv")
+            if ts and tbcv:
+                try:
+                    rates_map[ts] = float(tbcv)
+                except Exception:
+                    pass
+        last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
+
+        # Fetch posted invoices from Odoo in batch for all orders
+        so_ids = [o.so_id for o in ordenes]
+        invoices_by_so = {}
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            invoices = execute(
+                "account.move",
+                "search_read",
+                [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
+                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
+            )
+            for inv in invoices:
+                so = str(inv.get("invoice_origin", "")).strip()
+                if so:
+                    invoices_by_so.setdefault(so, []).append(inv)
+        except Exception as e:
+            logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
+
         reporte = []
         vendedores_set = set()
 
         def empty_kpi():
-            return {"deudor_bcv": 0.0, "desc_bcv": 0.0, "desc_usd": 0.0}
+            return {"deudor_bcv": 0.0, "desc_bcv": 0.0, "desc_usd": 0.0, "factura_odoo": 0.0}
 
         kpi_total_general = empty_kpi()
         kpi_total_vencido = empty_kpi()
@@ -1209,6 +1241,28 @@ async def get_reporte_saldos():
                 lista_name = f"Lista #{lista_id_str}"
                 monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
             
+            # Calculate Odoo Invoice residual balance for posted invoices (converted to USD if VES)
+            inv_list = invoices_by_so.get(o.so_id, [])
+            if inv_list:
+                tot_res_usd = 0.0
+                inv_names_list = []
+                for inv in inv_list:
+                    inv_names_list.append(str(inv.get("name", "")))
+                    res_val = float(inv.get("amount_residual", 0.0))
+                    curr = inv.get("currency_id")
+                    c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
+                    rate = rates_map.get(inv_dt, last_bcv_val)
+                    if c_name == "VES" and rate > 0:
+                        tot_res_usd += res_val / rate
+                    else:
+                        tot_res_usd += res_val
+                saldo_factura_odoo = max(0.0, float(tot_res_usd))
+                factura_odoo_nombre = ", ".join(inv_names_list)
+            else:
+                saldo_factura_odoo = None
+                factura_odoo_nombre = "Sin Factura"
+
             # Engine calculation data
             b = bandeja_map.get(o.so_id)
             if b:
@@ -1280,39 +1334,47 @@ async def get_reporte_saldos():
             if today_date > dt_venc:
                 dias_vencido = (today_date - dt_venc).days
 
-            # Accumulate Aging KPIs with 3 distinct sub-balances per bucket
-            if saldo_deudor_bcv > 0.05 or saldo_con_descuento_lista_usd > 0.05:
+            # Accumulate Aging KPIs with 4 distinct sub-balances per bucket
+            s_inv = saldo_factura_odoo if saldo_factura_odoo is not None else 0.0
+            if saldo_deudor_bcv > 0.05 or saldo_con_descuento_lista_usd > 0.05 or s_inv > 0.05:
                 # 1. Total General por Cobrar (Always accumulate)
                 kpi_total_general["deudor_bcv"] += saldo_deudor_bcv
                 kpi_total_general["desc_bcv"] += saldo_con_descuento_bcv
                 kpi_total_general["desc_usd"] += saldo_con_descuento_lista_usd
+                kpi_total_general["factura_odoo"] += s_inv
 
                 if dias_vencido <= 0:
                     kpi_vigentes["deudor_bcv"] += saldo_deudor_bcv
                     kpi_vigentes["desc_bcv"] += saldo_con_descuento_bcv
                     kpi_vigentes["desc_usd"] += saldo_con_descuento_lista_usd
+                    kpi_vigentes["factura_odoo"] += s_inv
                 else:
                     # 2. Total Vencido General (All overdue orders)
                     kpi_total_vencido["deudor_bcv"] += saldo_deudor_bcv
                     kpi_total_vencido["desc_bcv"] += saldo_con_descuento_bcv
                     kpi_total_vencido["desc_usd"] += saldo_con_descuento_lista_usd
+                    kpi_total_vencido["factura_odoo"] += s_inv
 
                     if 1 <= dias_vencido <= 30:
                         kpi_1_30["deudor_bcv"] += saldo_deudor_bcv
                         kpi_1_30["desc_bcv"] += saldo_con_descuento_bcv
                         kpi_1_30["desc_usd"] += saldo_con_descuento_lista_usd
+                        kpi_1_30["factura_odoo"] += s_inv
                     elif 31 <= dias_vencido <= 60:
                         kpi_31_60["deudor_bcv"] += saldo_deudor_bcv
                         kpi_31_60["desc_bcv"] += saldo_con_descuento_bcv
                         kpi_31_60["desc_usd"] += saldo_con_descuento_lista_usd
+                        kpi_31_60["factura_odoo"] += s_inv
                     elif 61 <= dias_vencido <= 90:
                         kpi_61_90["deudor_bcv"] += saldo_deudor_bcv
                         kpi_61_90["desc_bcv"] += saldo_con_descuento_bcv
                         kpi_61_90["desc_usd"] += saldo_con_descuento_lista_usd
+                        kpi_61_90["factura_odoo"] += s_inv
                     else:
                         kpi_mas_90["deudor_bcv"] += saldo_deudor_bcv
                         kpi_mas_90["desc_bcv"] += saldo_con_descuento_bcv
                         kpi_mas_90["desc_usd"] += saldo_con_descuento_lista_usd
+                        kpi_mas_90["factura_odoo"] += s_inv
 
             conc = concs.get(o.so_id)
 
@@ -1344,6 +1406,8 @@ async def get_reporte_saldos():
                 "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
                 "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
                 "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
+                "saldo_factura_odoo": saldo_factura_odoo,
+                "factura_odoo_nombre": factura_odoo_nombre,
                 "descuentos_desglose": descuentos_desglose,
                 "facturada": o.facturada,
                 "candidata_a_cierre": saldo_deudor_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05,
@@ -2877,15 +2941,52 @@ async def get_auditoria():
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo._g.read_rows("AnomaliasAceptadas")
         aceptadas_map = {r.get("anomalia_id"): r for r in anomalias_aceptadas_rows}
-
         lines_by_so = {}
         for r in lines_rows:
             so = r.get("so_id", "")
             if so:
                 lines_by_so.setdefault(so, []).append(r)
 
+        # Fetch posted invoices from Odoo in batch for audit comparison
+        so_ids = [o.so_id for o in ordenes]
+        invoices_by_so = {}
+        try:
+            invoices = execute(
+                "account.move",
+                "search_read",
+                [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
+                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
+            ) if execute else []
+            for inv in invoices:
+                so = str(inv.get("invoice_origin", "")).strip()
+                if so:
+                    invoices_by_so.setdefault(so, []).append(inv)
+        except Exception as e:
+            logger.warning("Error al consultar facturas Odoo en get_auditoria: %s", e)
+
+        # Read rates series to convert VES invoice residual to USD
+        tasas_rows = repo._g.read_rows("SerieTasas")
+        rates_map = {}
+        for r in tasas_rows:
+            ts = str(r.get("timestamp", ""))[:10]
+            tbcv = r.get("tasa_bcv")
+            if ts and tbcv:
+                try:
+                    rates_map[ts] = float(tbcv)
+                except Exception:
+                    pass
+        last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
+
+        # Load payments map by SO for net debt comparison
+        vincs = repo.all_vinculaciones()
+        pagos_by_so = {}
+        for v in vincs:
+            if v.estado == EstadoVinculacion.CONCILIADO:
+                pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(v.monto_aplicado)
+
         operaciones_conformes = []
         raw_discrepancias = []
+        discrepancias_facturas_odoo = []
 
         for o in ordenes:
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
@@ -2970,6 +3071,42 @@ async def get_auditoria():
                         "diferencia_porcentaje": round(pct_inv, 2)
                     })
 
+            # Check 4: Discrepancia entre Saldo Deudor CxC vs Saldo Residual Factura Odoo
+            inv_list = invoices_by_so.get(o.so_id, [])
+            if inv_list:
+                tot_res_usd = 0.0
+                inv_names_list = []
+                for inv in inv_list:
+                    inv_names_list.append(str(inv.get("name", "")))
+                    res_val = float(inv.get("amount_residual", 0.0))
+                    curr = inv.get("currency_id")
+                    c_name_inv = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
+                    rate = rates_map.get(inv_dt, last_bcv_val)
+                    if c_name_inv == "VES" and rate > 0:
+                        tot_res_usd += res_val / rate
+                    else:
+                        tot_res_usd += res_val
+                
+                saldo_factura_odoo = max(0.0, float(tot_res_usd))
+                factura_nombre = ", ".join(inv_names_list)
+                abono_conc = pagos_by_so.get(o.so_id, 0.0)
+                saldo_cxc = max(0.0, float(o.monto_total) - abono_conc)
+
+                diff_cxc_inv = abs(saldo_cxc - saldo_factura_odoo)
+                if diff_cxc_inv > 0.50:
+                    discrepancias_facturas_odoo.append({
+                        "so_id": o.so_id,
+                        "factura_id": factura_nombre,
+                        "cliente_nombre": c_name,
+                        "vendedor": o.vendedor_email or "Sin Vendedor",
+                        "fecha": o.fecha.isoformat(),
+                        "saldo_cxc": round(saldo_cxc, 2),
+                        "saldo_factura_odoo": round(saldo_factura_odoo, 2),
+                        "diferencia": round(diff_cxc_inv, 2),
+                        "causa_probable": "Abono / Pago registrado en CxC pero pendiente de aplicar en Odoo" if saldo_factura_odoo > saldo_cxc else "Diferencia por retenciones o ajustes en factura Odoo"
+                    })
+
             if not has_discrepancy and (o.facturada or (b and b.candidata_a_cierre)):
                 neto = float(b.total_motor) if b else float(o.monto_total)
                 desc_tot = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
@@ -3005,6 +3142,7 @@ async def get_auditoria():
         return {
             "operaciones_conformes": operaciones_conformes,
             "discrepancias": discrepancias_pendientes,
+            "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
             "anomalias_aceptadas": anomalias_aceptadas,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),

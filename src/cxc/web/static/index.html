@@ -276,18 +276,22 @@
                             <span>📊 TOTAL GENERAL POR COBRAR</span>
                             <span style="font-size: 0.75rem; background: #ede9fe; color: #6d28d9; padding: 4px 12px; border-radius: 12px; font-weight:600;">Vigente + Vencido</span>
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-top: 10px;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.85rem; margin-top: 10px;">
                             <div style="background: #ffffff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #e9d5ff; display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-size: 0.8rem; color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
-                                <strong style="color: #1f2937; font-size: 1.1rem;" id="kpi-total-general-deudor-bcv">$0.00</strong>
+                                <span style="font-size: 0.78rem; color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
+                                <strong style="color: #1f2937; font-size: 1.05rem;" id="kpi-total-general-deudor-bcv">$0.00</strong>
                             </div>
                             <div style="background: #ffffff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #e9d5ff; display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-size: 0.8rem; color: #0369a1;">2. Con Desc. Lista BCV:</span>
-                                <strong style="color: #0284c7; font-size: 1.1rem;" id="kpi-total-general-desc-bcv">$0.00</strong>
+                                <span style="font-size: 0.78rem; color: #0369a1;">2. Con Desc. Lista BCV:</span>
+                                <strong style="color: #0284c7; font-size: 1.05rem;" id="kpi-total-general-desc-bcv">$0.00</strong>
                             </div>
                             <div style="background: #f3e8ff; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #c084fc; display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-size: 0.82rem; color: #6d28d9; font-weight: 700;">3. Con Desc. Lista USD:</span>
-                                <strong style="color: #6d28d9; font-size: 1.25rem;" id="kpi-total-general-desc-usd">$0.00</strong>
+                                <span style="font-size: 0.8rem; color: #6d28d9; font-weight: 700;">3. Con Desc. Lista USD:</span>
+                                <strong style="color: #6d28d9; font-size: 1.15rem;" id="kpi-total-general-desc-usd">$0.00</strong>
+                            </div>
+                            <div style="background: #f8fafc; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size: 0.78rem; color: #475569; font-weight: 600;">4. Saldo Facturas Odoo:</span>
+                                <strong style="color: #0f172a; font-size: 1.05rem;" id="kpi-total-general-factura-odoo">$0.00</strong>
                             </div>
                         </div>
                         <div class="kpi-subtext" style="margin-top: 8px; font-size: 0.72rem; color: #7c3aed; text-align: right;">💡 Clic para ver todas las órdenes</div>
@@ -311,9 +315,13 @@
                                 <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
                                 <strong style="color: #0284c7;" id="kpi-total-vencido-desc-bcv">$0.00</strong>
                             </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #fecdd3; padding-top: 4px; margin-top: 2px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; border-top: 1px dashed #fecdd3; padding-top: 4px; margin-top: 2px;">
                                 <span style="color: #be123c; font-weight: 700;">3. Con Desc. Lista USD:</span>
                                 <strong style="color: #be123c; font-size: 1.05rem;" id="kpi-total-vencido-desc-usd">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; border-top: 1px solid #fee2e2; padding-top: 3px; margin-top: 2px;">
+                                <span style="color: #64748b; font-weight: 600;">4. Saldo Facturas Odoo:</span>
+                                <strong style="color: #0f172a;" id="kpi-total-vencido-factura-odoo">$0.00</strong>
                             </div>
                         </div>
                         <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #e11d48;">💡 Clic para ver todas las vencidas</div>
@@ -334,9 +342,13 @@
                                 <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
                                 <strong style="color: #0284c7;" id="kpi-vigentes-desc-bcv">$0.00</strong>
                             </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #a7f3d0; padding-top: 4px; margin-top: 2px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; border-top: 1px dashed #a7f3d0; padding-top: 4px; margin-top: 2px;">
                                 <span style="color: #047857; font-weight: 700;">3. Con Desc. Lista USD:</span>
                                 <strong style="color: #047857; font-size: 1.05rem;" id="kpi-vigentes-desc-usd">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; border-top: 1px solid #d1fae5; padding-top: 3px; margin-top: 2px;">
+                                <span style="color: #64748b; font-weight: 600;">4. Saldo Facturas Odoo:</span>
+                                <strong style="color: #0f172a;" id="kpi-vigentes-factura-odoo">$0.00</strong>
                             </div>
                         </div>
                         <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #059669;">💡 Clic para filtrar vigentes</div>
@@ -348,14 +360,17 @@
                     <!-- 1-30 Días -->
                     <div class="kpi-card card border-amber interactive-kpi" data-antiguedad="1_30" style="cursor: pointer; padding: 0.85rem;">
                         <div class="kpi-label" style="color: #b45309; font-weight: 700; font-size: 0.85rem;">Vencidas 1 - 30 Días</div>
-                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
                             <span>Deudor BCV:</span> <strong id="kpi-1-30-deudor-bcv" style="color:#0f172a">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #0284c7; display:flex; justify-content:space-between;">
                             <span>Desc. BCV:</span> <strong id="kpi-1-30-desc-bcv">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.88rem; color: #b45309; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.85rem; color: #b45309; font-weight: 700; margin-top: 2px; border-top: 1px solid #e2e8f0; padding-top: 2px; display:flex; justify-content:space-between;">
                             <span>Desc. USD:</span> <strong id="kpi-1-30-desc-usd">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 2px; display:flex; justify-content:space-between;">
+                            <span>Fact. Odoo:</span> <strong id="kpi-1-30-factura-odoo" style="color:#0f172a">$0.00</strong>
                         </div>
                         <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 1-30 días</div>
                     </div>
@@ -363,14 +378,17 @@
                     <!-- 31-60 Días -->
                     <div class="kpi-card card border-orange interactive-kpi" data-antiguedad="31_60" style="cursor: pointer; padding: 0.85rem;">
                         <div class="kpi-label" style="color: #c2410c; font-weight: 700; font-size: 0.85rem;">Vencidas 31 - 60 Días</div>
-                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
                             <span>Deudor BCV:</span> <strong id="kpi-31-60-deudor-bcv" style="color:#0f172a">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #0284c7; display:flex; justify-content:space-between;">
                             <span>Desc. BCV:</span> <strong id="kpi-31-60-desc-bcv">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.88rem; color: #c2410c; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.85rem; color: #c2410c; font-weight: 700; margin-top: 2px; border-top: 1px solid #e2e8f0; padding-top: 2px; display:flex; justify-content:space-between;">
                             <span>Desc. USD:</span> <strong id="kpi-31-60-desc-usd">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 2px; display:flex; justify-content:space-between;">
+                            <span>Fact. Odoo:</span> <strong id="kpi-31-60-factura-odoo" style="color:#0f172a">$0.00</strong>
                         </div>
                         <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 31-60 días</div>
                     </div>
@@ -378,14 +396,17 @@
                     <!-- 61-90 Días -->
                     <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="61_90" style="cursor: pointer; padding: 0.85rem;">
                         <div class="kpi-label" style="color: #be123c; font-weight: 700; font-size: 0.85rem;">Vencidas 61 - 90 Días</div>
-                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
                             <span>Deudor BCV:</span> <strong id="kpi-61-90-deudor-bcv" style="color:#0f172a">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #0284c7; display:flex; justify-content:space-between;">
                             <span>Desc. BCV:</span> <strong id="kpi-61-90-desc-bcv">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.88rem; color: #be123c; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.85rem; color: #be123c; font-weight: 700; margin-top: 2px; border-top: 1px solid #e2e8f0; padding-top: 2px; display:flex; justify-content:space-between;">
                             <span>Desc. USD:</span> <strong id="kpi-61-90-desc-usd">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 2px; display:flex; justify-content:space-between;">
+                            <span>Fact. Odoo:</span> <strong id="kpi-61-90-factura-odoo" style="color:#0f172a">$0.00</strong>
                         </div>
                         <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 61-90 días</div>
                     </div>
@@ -393,14 +414,17 @@
                     <!-- +90 Días -->
                     <div class="kpi-card card border-purple interactive-kpi" data-antiguedad="mas_90" style="cursor: pointer; padding: 0.85rem;">
                         <div class="kpi-label" style="color: #6b21a8; font-weight: 700; font-size: 0.85rem;">Vencidas +90 Días</div>
-                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
                             <span>Deudor BCV:</span> <strong id="kpi-mas-90-deudor-bcv" style="color:#0f172a">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.72rem; color: #0284c7; display:flex; justify-content:space-between;">
                             <span>Desc. BCV:</span> <strong id="kpi-mas-90-desc-bcv">$0.00</strong>
                         </div>
-                        <div style="font-size: 0.88rem; color: #6b21a8; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                        <div style="font-size: 0.85rem; color: #6b21a8; font-weight: 700; margin-top: 2px; border-top: 1px solid #e2e8f0; padding-top: 2px; display:flex; justify-content:space-between;">
                             <span>Desc. USD:</span> <strong id="kpi-mas-90-desc-usd">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #475569; margin-top: 2px; display:flex; justify-content:space-between;">
+                            <span>Fact. Odoo:</span> <strong id="kpi-mas-90-factura-odoo" style="color:#0f172a">$0.00</strong>
                         </div>
                         <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar +90 días</div>
                     </div>
@@ -409,12 +433,12 @@
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
                         <div>
-                            <h2>Reporte General y Consolidado de Cuentas por Cobrar</h2>
-                            <p>Análisis de saldos en lista USD y tasa BCV, vendedores, fecha de entrega y días de vencimiento</p>
+                            <h2 id="reporte-table-title">Reporte General y Consolidado de Cuentas por Cobrar</h2>
+                            <p>Desglose por cliente, vendedor, días de crédito, facturación y saldos deudores teóricos</p>
                         </div>
                         <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
                             <select id="reporte-antiguedad-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white; font-weight: 500;">
-                                <option value="*">Todas las Órdenes (Total General)</option>
+                                <option value="*">Todas las Antigüedades</option>
                                 <option value="vencido_total">Total Vencidas (Todas las Vencidas)</option>
                                 <option value="vigentes">Vigentes (Sin Vencer)</option>
                                 <option value="1_30">Vencidas 1 - 30 Días</option>
@@ -450,6 +474,7 @@
                                     <th>Abonos Binance ($)</th>
                                     <th>Saldo Deudor BCV ($)</th>
                                     <th>Saldo Deudor Lista USD ($)</th>
+                                    <th>Saldo Factura Odoo ($)</th>
                                     <th>Total Descuentos ($)</th>
                                     <th>Saldo Desc. BCV ($)</th>
                                     <th>Saldo Desc. Lista USD ($)</th>
@@ -459,7 +484,7 @@
                             </thead>
                             <tbody id="reporte-table-body">
                                 <tr>
-                                    <td colspan="20" class="table-empty">Cargando reporte de saldos...</td>
+                                    <td colspan="21" class="table-empty">Cargando reporte de saldos...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -806,6 +831,37 @@
                             <tbody id="discrepancias-table-body">
                                 <tr>
                                     <td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- SECCIÓN 2B: Discrepancias Saldo CxC vs Residual Factura Odoo -->
+                <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                    <div class="panel-header">
+                        <h2>Discrepancias de Saldo Deudor: Motor CxC vs. Facturas Odoo</h2>
+                        <p>Órdenes facturadas donde el saldo deudor según el motor CxC difiere del saldo residual mostrado en Odoo para la factura</p>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Fecha Orden</th>
+                                    <th>Saldo CxC ($)</th>
+                                    <th>Saldo Residual Factura Odoo ($)</th>
+                                    <th>Diferencia ($)</th>
+                                    <th>Causa Probable / Diagnóstico</th>
+                                </tr>
+                            </thead>
+                            <tbody id="discrepancias-facturas-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1812,6 +1868,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260725_04"></script>
+    <script src="/static/app.js?v=20260725_05"></script>
 </body>
 </html>

@@ -862,16 +862,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 fullReporteItems = data.items || (Array.isArray(data) ? data : []);
                 const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
-                // Helper to update 3 sub-balances in a KPI card
+                // Helper to update 4 sub-balances in a KPI card
                 const setKpiSubBalances = (prefix, kpiObj) => {
-                    const obj = kpiObj || { deudor_bcv: 0, desc_bcv: 0, desc_usd: 0 };
+                    const obj = kpiObj || { deudor_bcv: 0, desc_bcv: 0, desc_usd: 0, factura_odoo: 0 };
                     const elDeudorBCV = document.getElementById(`${prefix}-deudor-bcv`);
                     const elDescBCV = document.getElementById(`${prefix}-desc-bcv`);
                     const elDescUSD = document.getElementById(`${prefix}-desc-usd`);
+                    const elFacturaOdoo = document.getElementById(`${prefix}-factura-odoo`);
 
                     if (elDeudorBCV) elDeudorBCV.textContent = fmt(obj.deudor_bcv);
                     if (elDescBCV) elDescBCV.textContent = fmt(obj.desc_bcv);
                     if (elDescUSD) elDescUSD.textContent = fmt(obj.desc_usd);
+                    if (elFacturaOdoo) elFacturaOdoo.textContent = fmt(obj.factura_odoo);
                 };
 
                 setKpiSubBalances("kpi-total-general", kpis.total_general);
@@ -1139,6 +1141,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
             const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
 
+            let cellFacturaOdoo = '<span style="color:#94a3b8; font-size:0.75rem;">Sin Factura</span>';
+            if (item.factura_odoo_nombre && item.factura_odoo_nombre !== "Sin Factura") {
+                const saldoInv = item.saldo_factura_odoo !== null ? fmt(item.saldo_factura_odoo) : "$0.00";
+                cellFacturaOdoo = `<div style="font-size:0.78rem;"><span style="color:#0369a1; font-weight:600;">${item.factura_odoo_nombre}</span><br><strong style="color:${item.saldo_factura_odoo > 0.05 ? '#0f172a' : '#059669'};">${saldoInv}</strong></div>`;
+            }
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
@@ -1155,6 +1163,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
                 <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
                 <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
+                <td>${cellFacturaOdoo}</td>
                 <td>${descuentosHtml}</td>
                 <td><strong style="color: ${saldoDescBCV > 0.05 ? '#2563eb' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
                 <td><strong style="color: ${saldoDescUSD > 0.05 ? '#7e22ce' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
@@ -2688,6 +2697,153 @@ document.addEventListener("DOMContentLoaded", () => {
     // Initial Load for Dashboard
     loadTasasPromedios();
     
+    // --- Load Auditoría Data & Invoice Residual Discrepancies ---
+    async function loadAuditoria() {
+        const bodyDisc = document.getElementById("discrepancias-table-body");
+        const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
+        const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
+        const bodyConformes = document.getElementById("conformes-table-body");
+
+        const elKpiConformes = document.getElementById("audit-kpi-conformes");
+        const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
+        const elKpiAceptadas = document.getElementById("audit-kpi-aceptadas");
+        const elKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+        try {
+            if (bodyDisc) bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
+            if (bodyFacturas) bodyFacturas.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando discrepancias con facturas Odoo...</td></tr>';
+
+            const res = await fetch("/api/auditoria");
+            if (res.ok) {
+                const data = await res.json();
+                
+                const conformes = data.operaciones_conformes || [];
+                const discrepancias = data.discrepancias || [];
+                const discFacturas = data.discrepancias_facturas_odoo || [];
+                const aceptadas = data.anomalias_aceptadas || [];
+
+                if (elKpiConformes) elKpiConformes.textContent = conformes.length;
+                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length;
+                if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
+
+                const montoTotDisc = discrepancias.reduce((acc, x) => acc + (x.diferencia_monto || 0), 0) + discFacturas.reduce((acc, x) => acc + (x.diferencia || 0), 0);
+                if (elKpiMontoDiscrepancia) elKpiMontoDiscrepancia.textContent = fmt(montoTotDisc);
+
+                // Render Discrepancias de Precios / Reglas
+                if (bodyDisc) {
+                    if (discrepancias.length === 0) {
+                        bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias de precios ni descuentos en el sistema.</td></tr>';
+                    } else {
+                        bodyDisc.innerHTML = discrepancias.map(d => `
+                            <tr>
+                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
+                                <td><span class="state-badge">${escapeHtml(d.factura_id || 'N/A')}</span></td>
+                                <td>${escapeHtml(d.cliente_nombre)}</td>
+                                <td><small>${escapeHtml(d.vendedor)}</small></td>
+                                <td><span class="state-badge" style="background:#fef2f2; color:#dc2626; font-weight:600;">${escapeHtml(d.tipo)}</span></td>
+                                <td><small>${escapeHtml(d.detalle)}</small></td>
+                                <td>${fmt(d.esperado)}</td>
+                                <td>${fmt(d.actual)}</td>
+                                <td><strong style="color:#dc2626;">${fmt(d.diferencia_monto)}</strong></td>
+                                <td>${(d.diferencia_porcentaje || 0).toFixed(1)}%</td>
+                                <td>
+                                    <button class="btn btn-secondary" onclick="aceptarAnomalia('${d.anomalia_id}', '${d.so_id}', '${d.tipo}')" style="padding:0.25rem 0.6rem; font-size:0.75rem;">Aceptar Anomalía</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Discrepancias Saldo CxC vs Residual Factura Odoo
+                if (bodyFacturas) {
+                    if (discFacturas.length === 0) {
+                        bodyFacturas.innerHTML = '<tr><td colspan="9" class="table-empty" style="color:#059669">✅ Excelente: Todos los saldos de deudores en CxC coinciden con las facturas de Odoo.</td></tr>';
+                    } else {
+                        bodyFacturas.innerHTML = discFacturas.map(d => `
+                            <tr>
+                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
+                                <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${escapeHtml(d.factura_id)}</span></td>
+                                <td>${escapeHtml(d.cliente_nombre)}</td>
+                                <td><small>${escapeHtml(d.vendedor)}</small></td>
+                                <td><small>${d.fecha ? d.fecha.substring(0, 10) : ''}</small></td>
+                                <td><strong style="color:#6d28d9;">${fmt(d.saldo_cxc)}</strong></td>
+                                <td><strong style="color:#0369a1;">${fmt(d.saldo_factura_odoo)}</strong></td>
+                                <td><strong style="color:#dc2626;">${fmt(d.diferencia)}</strong></td>
+                                <td><span style="font-size:0.78rem; color:#475569;">${escapeHtml(d.causa_probable)}</span></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Anomalías Aceptadas
+                if (bodyAceptadas) {
+                    if (aceptadas.length === 0) {
+                        bodyAceptadas.innerHTML = '<tr><td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td></tr>';
+                    } else {
+                        bodyAceptadas.innerHTML = aceptadas.map(a => `
+                            <tr>
+                                <td><small><code>${escapeHtml(a.anomalia_id)}</code></small></td>
+                                <td><strong>${escapeHtml(a.so_id)}</strong></td>
+                                <td>${escapeHtml(a.factura_id)}</td>
+                                <td>${escapeHtml(a.cliente_nombre)}</td>
+                                <td><span class="state-badge">${escapeHtml(a.tipo)}</span></td>
+                                <td><strong>${fmt(a.diferencia_monto)}</strong></td>
+                                <td><small>${escapeHtml(a.justificacion || 'Aprobado sin comentario')}</small></td>
+                                <td><small>${escapeHtml(a.aceptada_por)}</small></td>
+                                <td><small>${a.fecha_aceptacion ? a.fecha_aceptacion.substring(0, 10) : '-'}</small></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Operaciones Conformes
+                if (bodyConformes) {
+                    if (conformes.length === 0) {
+                        bodyConformes.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes cargadas.</td></tr>';
+                    } else {
+                        bodyConformes.innerHTML = conformes.slice(0, 100).map(c => `
+                            <tr>
+                                <td><strong>${escapeHtml(c.so_id)}</strong></td>
+                                <td>${escapeHtml(c.factura_id)}</td>
+                                <td>${escapeHtml(c.cliente_nombre)}</td>
+                                <td><small>${c.fecha ? c.fecha.substring(0, 10) : ''}</small></td>
+                                <td>${fmt(c.monto_original)}</td>
+                                <td>${fmt(c.descuentos_aplicados)}</td>
+                                <td><strong style="color:#059669;">${fmt(c.monto_neto_conciliado)}</strong></td>
+                                <td><span class="state-badge cierre" style="background:#dcfce7; color:#15803d; font-weight:600;">${escapeHtml(c.estado)}</span></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Error al cargar la auditoría:", err);
+        }
+    }
+    window.loadAuditoria = loadAuditoria;
+
+    window.aceptarAnomalia = async function(anomaliaId, soId, tipo) {
+        const just = prompt(`Justificación para aceptar la anomalía (${soId} - ${tipo}):`, "Aceptado por gerencia");
+        if (just === null) return;
+        try {
+            const res = await fetch("/api/auditoria/aceptar-anomalia", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ anomalia_id: anomaliaId, justificacion: just })
+            });
+            if (res.ok) {
+                alert("✅ Anomalía aceptada e incluida en el historial de auditoría.");
+                loadAuditoria();
+            } else {
+                alert("❌ Error al aceptar la anomalía.");
+            }
+        } catch (err) {
+            console.error("Error aceptando anomalía:", err);
+        }
+    };
+
     // Auto-refresh Dashboard every 30 seconds
     setInterval(() => {
         const activeTab = document.querySelector(".tab-navigation .active");
