@@ -269,32 +269,130 @@
         <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
-                <!-- 5 Tarjetas Interactivas de Antigüedad de Saldos / Vencimientos -->
-                <div class="kpi-grid aging-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 1.5rem;">
-                    <div class="kpi-card card border-emerald interactive-kpi" data-antiguedad="vigentes" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
-                        <div class="kpi-label">Vigentes (Sin Vencer)</div>
-                        <div class="kpi-value text-emerald" id="reporte-kpi-vigentes">$0.00</div>
-                        <div class="kpi-subtext">💡 Clic para filtrar vigentes</div>
+                <!-- Fila 1: Totales Principales (Total General por Cobrar y Total Vencido General) -->
+                <div class="kpi-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
+                    <!-- Card 1: TOTAL GENERAL POR COBRAR -->
+                    <div class="kpi-card card border-indigo interactive-kpi" data-antiguedad="*" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #f5f3ff); border: 2px solid #8b5cf6; padding: 1.1rem;">
+                        <div style="font-weight: 700; color: #6d28d9; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between;">
+                            <span>📊 TOTAL GENERAL POR COBRAR</span>
+                            <span style="font-size: 0.72rem; background: #ede9fe; color: #6d28d9; padding: 3px 8px; border-radius: 12px; font-weight:600;">Vigente + Vencido</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
+                                <strong style="color: #1f2937;" id="kpi-total-general-deudor-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
+                                <strong style="color: #0284c7;" id="kpi-total-general-desc-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #ddd6fe; padding-top: 4px; margin-top: 2px;">
+                                <span style="color: #6d28d9; font-weight: 700;">3. Con Desc. Lista USD:</span>
+                                <strong style="color: #6d28d9; font-size: 1.05rem;" id="kpi-total-general-desc-usd">$0.00</strong>
+                            </div>
+                        </div>
+                        <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #7c3aed;">💡 Clic para ver todas las órdenes</div>
                     </div>
-                    <div class="kpi-card card border-amber interactive-kpi" data-antiguedad="1_30" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
-                        <div class="kpi-label">Vencidas 1 - 30 Días</div>
-                        <div class="kpi-value text-amber" id="reporte-kpi-1-30">$0.00</div>
-                        <div class="kpi-subtext">💡 Clic para ver 1-30 días</div>
+
+                    <!-- Card 2: TOTAL VENCIDO GENERAL -->
+                    <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="vencido_total" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #fff1f2); border: 2px solid #f43f5e; padding: 1.1rem;">
+                        <div style="font-weight: 700; color: #be123c; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between;">
+                            <span>⚠️ TOTAL VENCIDO GENERAL</span>
+                            <span style="font-size: 0.72rem; background: #ffe4e6; color: #be123c; padding: 3px 8px; border-radius: 12px; font-weight:600;">Todas las Vencidas</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #4b5563;">1. Saldo Deudor BCV (Odoo):</span>
+                                <strong style="color: #1f2937;" id="kpi-total-vencido-deudor-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.82rem;">
+                                <span style="color: #0369a1;">2. Con Desc. Lista BCV:</span>
+                                <strong style="color: #0284c7;" id="kpi-total-vencido-desc-bcv">$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.88rem; border-top: 1px dashed #fecdd3; padding-top: 4px; margin-top: 2px;">
+                                <span style="color: #be123c; font-weight: 700;">3. Con Desc. Lista USD:</span>
+                                <strong style="color: #be123c; font-size: 1.05rem;" id="kpi-total-vencido-desc-usd">$0.00</strong>
+                            </div>
+                        </div>
+                        <div class="kpi-subtext" style="margin-top: 6px; font-size: 0.72rem; color: #e11d48;">💡 Clic para ver todas las vencidas</div>
                     </div>
-                    <div class="kpi-card card border-orange interactive-kpi" data-antiguedad="31_60" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
-                        <div class="kpi-label">Vencidas 31 - 60 Días</div>
-                        <div class="kpi-value style-orange" id="reporte-kpi-31-60" style="color: #ea580c;">$0.00</div>
-                        <div class="kpi-subtext">💡 Clic para ver 31-60 días</div>
+                </div>
+
+                <!-- Fila 2: 5 Tarjetas Interactivas por Antigüedad con 3 Saldos Internos -->
+                <div class="kpi-grid aging-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.85rem; margin-bottom: 1.5rem;">
+                    <!-- Vigentes -->
+                    <div class="kpi-card card border-emerald interactive-kpi" data-antiguedad="vigentes" style="cursor: pointer; padding: 0.85rem;">
+                        <div class="kpi-label" style="color: #047857; font-weight: 700; font-size: 0.85rem;">Vigentes (Sin Vencer)</div>
+                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                            <span>Deudor BCV:</span> <strong id="kpi-vigentes-deudor-bcv" style="color:#0f172a">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                            <span>Desc. BCV:</span> <strong id="kpi-vigentes-desc-bcv">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.88rem; color: #047857; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                            <span>Desc. USD:</span> <strong id="kpi-vigentes-desc-usd">$0.00</strong>
+                        </div>
+                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar vigentes</div>
                     </div>
-                    <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="61_90" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
-                        <div class="kpi-label">Vencidas 61 - 90 Días</div>
-                        <div class="kpi-value text-rose" id="reporte-kpi-61-90">$0.00</div>
-                        <div class="kpi-subtext">💡 Clic para ver 61-90 días</div>
+
+                    <!-- 1-30 Días -->
+                    <div class="kpi-card card border-amber interactive-kpi" data-antiguedad="1_30" style="cursor: pointer; padding: 0.85rem;">
+                        <div class="kpi-label" style="color: #b45309; font-weight: 700; font-size: 0.85rem;">Vencidas 1 - 30 Días</div>
+                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                            <span>Deudor BCV:</span> <strong id="kpi-1-30-deudor-bcv" style="color:#0f172a">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                            <span>Desc. BCV:</span> <strong id="kpi-1-30-desc-bcv">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.88rem; color: #b45309; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                            <span>Desc. USD:</span> <strong id="kpi-1-30-desc-usd">$0.00</strong>
+                        </div>
+                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 1-30 días</div>
                     </div>
-                    <div class="kpi-card card border-purple interactive-kpi" data-antiguedad="mas_90" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;">
-                        <div class="kpi-label">Vencidas +90 Días</div>
-                        <div class="kpi-value style-purple" id="reporte-kpi-mas-90" style="color: #7e22ce;">$0.00</div>
-                        <div class="kpi-subtext">💡 Clic para ver +90 días</div>
+
+                    <!-- 31-60 Días -->
+                    <div class="kpi-card card border-orange interactive-kpi" data-antiguedad="31_60" style="cursor: pointer; padding: 0.85rem;">
+                        <div class="kpi-label" style="color: #c2410c; font-weight: 700; font-size: 0.85rem;">Vencidas 31 - 60 Días</div>
+                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                            <span>Deudor BCV:</span> <strong id="kpi-31-60-deudor-bcv" style="color:#0f172a">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                            <span>Desc. BCV:</span> <strong id="kpi-31-60-desc-bcv">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.88rem; color: #c2410c; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                            <span>Desc. USD:</span> <strong id="kpi-31-60-desc-usd">$0.00</strong>
+                        </div>
+                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 31-60 días</div>
+                    </div>
+
+                    <!-- 61-90 Días -->
+                    <div class="kpi-card card border-rose interactive-kpi" data-antiguedad="61_90" style="cursor: pointer; padding: 0.85rem;">
+                        <div class="kpi-label" style="color: #be123c; font-weight: 700; font-size: 0.85rem;">Vencidas 61 - 90 Días</div>
+                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                            <span>Deudor BCV:</span> <strong id="kpi-61-90-deudor-bcv" style="color:#0f172a">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                            <span>Desc. BCV:</span> <strong id="kpi-61-90-desc-bcv">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.88rem; color: #be123c; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                            <span>Desc. USD:</span> <strong id="kpi-61-90-desc-usd">$0.00</strong>
+                        </div>
+                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar 61-90 días</div>
+                    </div>
+
+                    <!-- +90 Días -->
+                    <div class="kpi-card card border-purple interactive-kpi" data-antiguedad="mas_90" style="cursor: pointer; padding: 0.85rem;">
+                        <div class="kpi-label" style="color: #6b21a8; font-weight: 700; font-size: 0.85rem;">Vencidas +90 Días</div>
+                        <div style="font-size: 0.73rem; color: #475569; margin-top: 4px; display:flex; justify-content:space-between;">
+                            <span>Deudor BCV:</span> <strong id="kpi-mas-90-deudor-bcv" style="color:#0f172a">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.73rem; color: #0284c7; display:flex; justify-content:space-between;">
+                            <span>Desc. BCV:</span> <strong id="kpi-mas-90-desc-bcv">$0.00</strong>
+                        </div>
+                        <div style="font-size: 0.88rem; color: #6b21a8; font-weight: 700; margin-top: 3px; border-top: 1px solid #e2e8f0; padding-top: 3px; display:flex; justify-content:space-between;">
+                            <span>Desc. USD:</span> <strong id="kpi-mas-90-desc-usd">$0.00</strong>
+                        </div>
+                        <div class="kpi-subtext" style="font-size: 0.68rem; margin-top: 4px;">💡 Filtrar +90 días</div>
                     </div>
                 </div>
 
@@ -306,7 +404,8 @@
                         </div>
                         <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
                             <select id="reporte-antiguedad-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white; font-weight: 500;">
-                                <option value="*">Todas las Antigüedades</option>
+                                <option value="*">Todas las Órdenes (Total General)</option>
+                                <option value="vencido_total">Total Vencidas (Todas las Vencidas)</option>
                                 <option value="vigentes">Vigentes (Sin Vencer)</option>
                                 <option value="1_30">Vencidas 1 - 30 Días</option>
                                 <option value="31_60">Vencidas 31 - 60 Días</option>

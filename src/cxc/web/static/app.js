@@ -858,22 +858,25 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/reporte-saldos");
             if (res.ok) {
                 const data = await res.json();
-                const kpis = data.kpis || { vigentes: 0, vencidas_1_30: 0, vencidas_31_60: 0, vencidas_61_90: 0, vencidas_mas_90: 0 };
-                fullReporteItems = data.items || (Array.isArray(data) ? data : []);
+                // Helper to update 3 sub-balances in a KPI card
+                const setKpiSubBalances = (prefix, kpiObj) => {
+                    const obj = kpiObj || { deudor_bcv: 0, desc_bcv: 0, desc_usd: 0 };
+                    const elDeudorBCV = document.getElementById(`${prefix}-deudor-bcv`);
+                    const elDescBCV = document.getElementById(`${prefix}-desc-bcv`);
+                    const elDescUSD = document.getElementById(`${prefix}-desc-usd`);
 
-                // Render KPI Cards
-                const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-                const kpiVigentes = document.getElementById("reporte-kpi-vigentes");
-                const kpi130 = document.getElementById("reporte-kpi-1-30");
-                const kpi3160 = document.getElementById("reporte-kpi-31-60");
-                const kpi6190 = document.getElementById("reporte-kpi-61-90");
-                const kpiMas90 = document.getElementById("reporte-kpi-mas-90");
+                    if (elDeudorBCV) elDeudorBCV.textContent = fmt(obj.deudor_bcv);
+                    if (elDescBCV) elDescBCV.textContent = fmt(obj.desc_bcv);
+                    if (elDescUSD) elDescUSD.textContent = fmt(obj.desc_usd);
+                };
 
-                if (kpiVigentes) kpiVigentes.textContent = fmt(kpis.vigentes);
-                if (kpi130) kpi130.textContent = fmt(kpis.vencidas_1_30);
-                if (kpi3160) kpi3160.textContent = fmt(kpis.vencidas_31_60);
-                if (kpi6190) kpi6190.textContent = fmt(kpis.vencidas_61_90);
-                if (kpiMas90) kpiMas90.textContent = fmt(kpis.vencidas_mas_90);
+                setKpiSubBalances("kpi-total-general", kpis.total_general);
+                setKpiSubBalances("kpi-total-vencido", kpis.total_vencido);
+                setKpiSubBalances("kpi-vigentes", kpis.vigentes);
+                setKpiSubBalances("kpi-1-30", kpis.vencidas_1_30);
+                setKpiSubBalances("kpi-31-60", kpis.vencidas_31_60);
+                setKpiSubBalances("kpi-61-90", kpis.vencidas_61_90);
+                setKpiSubBalances("kpi-mas-90", kpis.vencidas_mas_90);
 
                 // Attach Click Handlers to Interactive KPI Cards
                 document.querySelectorAll(".interactive-kpi").forEach(card => {
@@ -954,7 +957,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const matchVendedor = (vendedorVal === "*") || (item.vendedor === vendedorVal);
             
             let matchAntiguedad = true;
-            if (antiguedadVal === "vigentes") matchAntiguedad = (dv <= 0);
+            if (antiguedadVal === "vencido_total") matchAntiguedad = (dv > 0);
+            else if (antiguedadVal === "vigentes") matchAntiguedad = (dv <= 0);
             else if (antiguedadVal === "1_30") matchAntiguedad = (dv >= 1 && dv <= 30);
             else if (antiguedadVal === "31_60") matchAntiguedad = (dv >= 31 && dv <= 60);
             else if (antiguedadVal === "61_90") matchAntiguedad = (dv >= 61 && dv <= 90);

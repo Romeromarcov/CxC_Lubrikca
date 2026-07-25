@@ -1133,14 +1133,22 @@ async def get_reporte_saldos():
                 return int(m.group(1))
             return 0
 
+        # Read discount rules for theoretical evaluation when order is not in BandejaFacturacion
+        descuentos_mc = repo.descuentos_marca_categoria()
+
         reporte = []
         vendedores_set = set()
 
-        kpi_vigentes = 0.0
-        kpi_1_30 = 0.0
-        kpi_31_60 = 0.0
-        kpi_61_90 = 0.0
-        kpi_mas_90 = 0.0
+        def empty_kpi():
+            return {"deudor_bcv": 0.0, "desc_bcv": 0.0, "desc_usd": 0.0}
+
+        kpi_total_general = empty_kpi()
+        kpi_total_vencido = empty_kpi()
+        kpi_vigentes = empty_kpi()
+        kpi_1_30 = empty_kpi()
+        kpi_31_60 = empty_kpi()
+        kpi_61_90 = empty_kpi()
+        kpi_mas_90 = empty_kpi()
 
         today_date = date.today()
 
@@ -1219,9 +1227,31 @@ async def get_reporte_saldos():
                         "monto": float(b.ncs_calculadas)
                     })
             else:
-                total_descuentos_monto = 0.0
-                total_con_descuentos = float(o.monto_total)
+                # Evaluate theoretical discounts for order o in memory using active rules
+                desc_calc_monto = Decimal("0.0")
                 descuentos_desglose = []
+                
+                for ln in order_lines:
+                    cant = Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0")))
+                    precio = Decimal(str(ln.get("precio_unitario", "0")))
+                    subt_linea = cant * precio
+                    
+                    prod_raw = ln.get("producto", "")
+                    marca = str(ln.get("marca") or "*")
+                    cat = str(ln.get("categoria") or "*")
+                    
+                    r_desc = descuento_vigente(descuentos_mc, marca=marca, categoria=cat, tipo=TipoDescuento.CONTADO, fecha=o.fecha)
+                    if r_desc and r_desc.porcentaje > Decimal("0"):
+                        m_linea = subt_linea * (r_desc.porcentaje / Decimal("100"))
+                        desc_calc_monto += m_linea
+                        descuentos_desglose.append({
+                            "origen": "descuento_marca_categoria",
+                            "descripcion": f"Desc. {r_desc.marca}/{r_desc.categoria} ({r_desc.porcentaje}%)",
+                            "monto": float(m_linea)
+                        })
+
+                total_descuentos_monto = float(desc_calc_monto)
+                total_con_descuentos = float(o.monto_total) - total_descuentos_monto
 
             # Debt columns
             monto_orig = float(o.monto_total)
@@ -1249,18 +1279,39 @@ async def get_reporte_saldos():
             if today_date > dt_venc:
                 dias_vencido = (today_date - dt_venc).days
 
-            # Accumulate Aging KPIs for active debt
-            if saldo_con_descuento_lista_usd > 0.05:
+            # Accumulate Aging KPIs with 3 distinct sub-balances per bucket
+            if saldo_deudor_bcv > 0.05 or saldo_con_descuento_lista_usd > 0.05:
+                # 1. Total General por Cobrar (Always accumulate)
+                kpi_total_general["deudor_bcv"] += saldo_deudor_bcv
+                kpi_total_general["desc_bcv"] += saldo_con_descuento_bcv
+                kpi_total_general["desc_usd"] += saldo_con_descuento_lista_usd
+
                 if dias_vencido <= 0:
-                    kpi_vigentes += saldo_con_descuento_lista_usd
-                elif 1 <= dias_vencido <= 30:
-                    kpi_1_30 += saldo_con_descuento_lista_usd
-                elif 31 <= dias_vencido <= 60:
-                    kpi_31_60 += saldo_con_descuento_lista_usd
-                elif 61 <= dias_vencido <= 90:
-                    kpi_61_90 += saldo_con_descuento_lista_usd
+                    kpi_vigentes["deudor_bcv"] += saldo_deudor_bcv
+                    kpi_vigentes["desc_bcv"] += saldo_con_descuento_bcv
+                    kpi_vigentes["desc_usd"] += saldo_con_descuento_lista_usd
                 else:
-                    kpi_mas_90 += saldo_con_descuento_lista_usd
+                    # 2. Total Vencido General (All overdue orders)
+                    kpi_total_vencido["deudor_bcv"] += saldo_deudor_bcv
+                    kpi_total_vencido["desc_bcv"] += saldo_con_descuento_bcv
+                    kpi_total_vencido["desc_usd"] += saldo_con_descuento_lista_usd
+
+                    if 1 <= dias_vencido <= 30:
+                        kpi_1_30["deudor_bcv"] += saldo_deudor_bcv
+                        kpi_1_30["desc_bcv"] += saldo_con_descuento_bcv
+                        kpi_1_30["desc_usd"] += saldo_con_descuento_lista_usd
+                    elif 31 <= dias_vencido <= 60:
+                        kpi_31_60["deudor_bcv"] += saldo_deudor_bcv
+                        kpi_31_60["desc_bcv"] += saldo_con_descuento_bcv
+                        kpi_31_60["desc_usd"] += saldo_con_descuento_lista_usd
+                    elif 61 <= dias_vencido <= 90:
+                        kpi_61_90["deudor_bcv"] += saldo_deudor_bcv
+                        kpi_61_90["desc_bcv"] += saldo_con_descuento_bcv
+                        kpi_61_90["desc_usd"] += saldo_con_descuento_lista_usd
+                    else:
+                        kpi_mas_90["deudor_bcv"] += saldo_deudor_bcv
+                        kpi_mas_90["desc_bcv"] += saldo_con_descuento_bcv
+                        kpi_mas_90["desc_usd"] += saldo_con_descuento_lista_usd
 
             conc = concs.get(o.so_id)
 
@@ -1302,6 +1353,8 @@ async def get_reporte_saldos():
 
         return {
             "kpis": {
+                "total_general": kpi_total_general,
+                "total_vencido": kpi_total_vencido,
                 "vigentes": kpi_vigentes,
                 "vencidas_1_30": kpi_1_30,
                 "vencidas_31_60": kpi_31_60,
