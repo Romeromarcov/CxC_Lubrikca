@@ -483,17 +483,17 @@ def recompra_to_row(d: DescuentoRecompra) -> Row:
 
 def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
     return DescuentoRecompra(
-        regla_id=r.get("regla_id", "RECOMPRA_DEFAULT"),
-        marca=r.get("marca", "GLOBAL OIL"),
-        categoria=r.get("categoria", "CAJA"),
-        min_cajas=int(r.get("min_cajas", r.get("min_unidades", "2"))),
-        max_cajas=int(r.get("max_cajas", r.get("max_unidades", "4"))),
-        porcentaje=p_dec(r.get("porcentaje", "0.03")),
-        max_usos_mes=int(r.get("max_usos_mes", "1")),
-        dias_ventana=int(r.get("dias_ventana", "30")),
-        vigencia_desde=p_date(r.get("vigencia_desde", "2026-04-01")),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
-        activo=p_bool(r.get("activo", "TRUE")),
+        regla_id=r.get("regla_id") or "RECOMPRA_DEFAULT",
+        marca=r.get("marca") or "GLOBAL OIL",
+        categoria=r.get("categoria") or "CAJA",
+        min_cajas=int(r.get("min_cajas") or r.get("min_unidades") or "2"),
+        max_cajas=int(r.get("max_cajas") or r.get("max_unidades") or "4"),
+        porcentaje=p_dec(r.get("porcentaje") or "0.03"),
+        max_usos_mes=int(r.get("max_usos_mes") or "1"),
+        dias_ventana=int(r.get("dias_ventana") or "30"),
+        vigencia_desde=p_date(r.get("vigencia_desde") or "2026-04-01"),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta") or ""),
+        activo=p_bool(r.get("activo") or "TRUE"),
     )
 
 
