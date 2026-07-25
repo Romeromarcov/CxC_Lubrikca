@@ -1197,28 +1197,48 @@
                     <form id="recompra-form" class="cxc-form">
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
-                                <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.05" required>
+                                <label>Marca</label>
+                                <select id="cfg-rec-marca" required>
+                                    <option value="GLOBAL OIL" selected>GLOBAL OIL</option>
+                                    <option value="SINOCO">SINOCO</option>
+                                    <option value="*">Todas (*)</option>
+                                </select>
                             </div>
                             <div class="form-group" style="flex:1">
-                                <label>Mínimo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="1" placeholder="Ej: 2" required>
+                                <label>Categoría</label>
+                                <select id="cfg-rec-categoria" required>
+                                    <option value="CAJA" selected>CAJA (Comercial)</option>
+                                    <option value="PAILA">PAILA</option>
+                                    <option value="TAMBOR">TAMBOR</option>
+                                    <option value="*">Todas (*)</option>
+                                </select>
                             </div>
                             <div class="form-group" style="flex:1">
-                                <label>Máximo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="9999" placeholder="Ej: 4" required>
+                                <label>Porcentaje (%) (ej: 0.03 = 3%)</label>
+                                <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.03" required>
                             </div>
                         </div>
 
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
+                                <label>Mínimo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="2" placeholder="Ej: 2" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="4" placeholder="Ej: 4" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
                                 <label>Máximo Usos / Mes</label>
-                                <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="2" required>
+                                <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="1" required>
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Días Ventana Recompra</label>
                                 <input type="number" id="cfg-rec-ventana" min="1" step="1" value="30" required>
                             </div>
+                        </div>
+
+                        <div class="form-group-row">
                             <div class="form-group" style="flex:1">
                                 <label>Fecha de Inicio</label>
                                 <input type="date" id="cfg-rec-desde" required>
@@ -1237,6 +1257,8 @@
                         <table class="cxc-table mini">
                             <thead>
                                 <tr>
+                                    <th>Marca</th>
+                                    <th>Categoría</th>
                                     <th>% Recompra</th>
                                     <th>Tramo Cajas</th>
                                     <th>Max Usos/Mes</th>
@@ -1247,7 +1269,7 @@
                                 </tr>
                             </thead>
                             <tbody id="recompra-table-body">
-                                <tr><td colspan="6" class="table-empty">Cargando reglas de recompra...</td></tr>
+                                <tr><td colspan="9" class="table-empty">Cargando reglas de recompra...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1868,6 +1890,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260725_06"></script>
+    <script src="/static/app.js?v=20260725_07"></script>
 </body>
 </html>

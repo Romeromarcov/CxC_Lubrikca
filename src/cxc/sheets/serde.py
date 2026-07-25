@@ -459,9 +459,41 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         tipo_evaluacion=r.get("tipo_evaluacion", "orden"),
         dias_evaluacion=int(r.get("dias_evaluacion", "30")),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         listas_aplicables=r.get("listas_aplicables", "*"),
         activo=p_bool(r.get("activo", "TRUE"))
+    )
+
+
+# --- DescuentosRecompra ------------------------------------------------------
+def recompra_to_row(d: DescuentoRecompra) -> Row:
+    return {
+        "regla_id": d.regla_id,
+        "marca": d.marca,
+        "categoria": d.categoria,
+        "min_cajas": str(d.min_cajas),
+        "max_cajas": str(d.max_cajas),
+        "porcentaje": str(d.porcentaje),
+        "max_usos_mes": str(d.max_usos_mes),
+        "dias_ventana": str(d.dias_ventana),
+        "vigencia_desde": d.vigencia_desde.isoformat(),
+        "vigencia_hasta": s_optdate(d.vigencia_hasta),
+        "activo": s_bool(d.activo),
+    }
+
+
+def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
+    return DescuentoRecompra(
+        regla_id=r.get("regla_id", "RECOMPRA_DEFAULT"),
+        marca=r.get("marca", "GLOBAL OIL"),
+        categoria=r.get("categoria", "CAJA"),
+        min_cajas=int(r.get("min_cajas", r.get("min_unidades", "2"))),
+        max_cajas=int(r.get("max_cajas", r.get("max_unidades", "4"))),
+        porcentaje=p_dec(r.get("porcentaje", "0.03")),
+        max_usos_mes=int(r.get("max_usos_mes", "1")),
+        dias_ventana=int(r.get("dias_ventana", "30")),
+        vigencia_desde=p_date(r.get("vigencia_desde", "2026-04-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
+        activo=p_bool(r.get("activo", "TRUE")),
     )
 
 

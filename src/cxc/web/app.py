@@ -210,11 +210,13 @@ def extract_product_tmpl_id(prod_raw: Any) -> int | None:
     return None
 
 class RecompraRequest(BaseModel):
-    porcentaje: float = 0.05
-    max_usos_mes: int = 2
+    marca: str = "GLOBAL OIL"
+    categoria: str = "CAJA"
+    porcentaje: float = 0.03
+    max_usos_mes: int = 1
     dias_ventana: int = 30
-    min_cajas: int = 1
-    max_cajas: int = 9999
+    min_cajas: int = 2
+    max_cajas: int = 4
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -2569,11 +2571,13 @@ async def get_config_recompra():
         return [
             {
                 "regla_id": r.regla_id,
+                "marca": getattr(r, "marca", "GLOBAL OIL"),
+                "categoria": getattr(r, "categoria", "CAJA"),
                 "porcentaje": float(r.porcentaje),
                 "max_usos_mes": r.max_usos_mes,
                 "dias_ventana": r.dias_ventana,
-                "min_cajas": getattr(r, "min_cajas", 1),
-                "max_cajas": getattr(r, "max_cajas", 9999),
+                "min_cajas": getattr(r, "min_cajas", 2),
+                "max_cajas": getattr(r, "max_cajas", 4),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo
@@ -2597,6 +2601,8 @@ async def post_config_recompra(req: RecompraRequest):
         regla_id = f"REC_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoRecompra(
             regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
             max_usos_mes=req.max_usos_mes,
             dias_ventana=req.dias_ventana,
