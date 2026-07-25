@@ -17,8 +17,8 @@ gw = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
 
 # 1. PromocionPrimeraCompra
 data_primera = [
-    ['producto', 'vigencia_desde', 'vigencia_hasta', 'activo'],
-    ['GLOBAL OIL', '2026-01-01', '2099-12-31', 'TRUE']
+    ['regla_id', 'tipo_beneficio', 'productos', 'valor', 'compra_minima', 'regalo_tipo', 'vigencia_desde', 'vigencia_hasta', 'descuento_fallback', 'categorias_aplica', 'activo'],
+    ['PROMO_PRIMERA_COMPRA_GLOBAL', 'producto', 'GLOBAL OIL (Liga de frenos DOT 3 1x12 / Elevador de octanaje)', '1', '3', 'solo_uno', '2026-01-01', '2099-12-31', '0.02', 'Comercial', 'TRUE']
 ]
 
 # 2. DescuentosRecompra
