@@ -114,6 +114,36 @@ class LineaOrden:
     cantidad_entregada: Decimal = Decimal("0")
     descuento: Decimal = Decimal("0")
 
+    @property
+    def presentacion(self) -> str:
+        """
+        Retorna la presentación clasificada según la descripción/nombre del producto:
+        'CAJA', 'PAILA' o 'TAMBOR'.
+        """
+        if not self.producto:
+            return "CAJA" if str(self.categoria).upper() == "COMERCIAL" else ("PAILA" if "PAILA" in str(self.categoria).upper() else "CAJA")
+        nu = str(self.producto).upper()
+        import re
+        if 'PAILA' in nu or 'CARBOYA' in nu or '18,92' in nu or '18.92' in nu or '5 GAL' in nu or '5GAL' in nu:
+            return "PAILA"
+        if 'TAMBOR' in nu or '208 L' in nu or '208L' in nu or '55 GAL' in nu or '55GAL' in nu:
+            return "TAMBOR"
+        if re.search(r'\(?\b\d+X\d+\b\)?', nu) or 'CAJA' in nu:
+            return "CAJA"
+        return "CAJA" if str(self.categoria).upper() == "COMERCIAL" else "PAILA"
+
+    @property
+    def categoria_madre(self) -> str:
+        """
+        Retorna la categoría madre ('Comercial' o 'Industrial') asociada.
+        """
+        p = self.presentacion
+        if p == "CAJA":
+            return "Comercial"
+        elif p in ("PAILA", "TAMBOR"):
+            return "Industrial"
+        return self.categoria or "Comercial"
+
 
 # --- 3.4 Pagos (espejo) ------------------------------------------------------
 @dataclass

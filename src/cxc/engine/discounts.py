@@ -22,6 +22,7 @@ from ..models import (
     DescuentoAplicado,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoRecompra,
     DescuentoVolumen,
     EstadoBandeja,
     ExclusionRegla,
@@ -37,6 +38,7 @@ from ..models import (
 )
 from .business_days import fin_ventana_contado
 from .effective_dating import (
+    _match_categoria,
     _vigente,
     descuento_vigente,
     descuento_volumen_vigente,
@@ -181,7 +183,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     detalle_recompra: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     if inp.orden.es_primera_compra:
-        unidades_comercial = sum(_cantidad_efectiva(inp, ln) for ln in inp.lineas if ln.categoria == "Comercial")
+        unidades_comercial = sum(_cantidad_efectiva(inp, ln) for ln in inp.lineas if ln.categoria_madre == "Comercial" or ln.presentacion == "CAJA")
         promos_activas = [
             p
             for p in inp.promociones_primera_compra
@@ -196,7 +198,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 units = sum(
                     _cantidad_efectiva(inp, ln)
                     for ln in inp.lineas
-                    if p.categorias_aplica == "*" or ln.categoria in cats
+                    if p.categorias_aplica == "*" or ln.categoria in cats or ln.categoria_madre in cats or ln.presentacion in cats
                 )
                 if units >= p.compra_minima:
                     prod_promos_califican.append(p)
@@ -267,32 +269,64 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         monto=q2(nc),
                     )
     else:
-        regla = regla_recurrencia_vigente(
-            inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
-        )
-        if regla is not None and regla.tipo_beneficio == TipoBeneficio.PORCENTAJE:
-            # Check monthly first purchase condition for recompra
+        recompras_activas = [
+            r for r in getattr(inp, 'descuentos_recompra', [])
+            if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
+        ]
+        if not recompras_activas and inp.reglas_recurrencia:
+            regla = regla_recurrencia_vigente(
+                inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
+            )
+            if regla is not None and regla.tipo_beneficio == TipoBeneficio.PORCENTAJE:
+                recompras_activas = [
+                    DescuentoRecompra(
+                        regla_id="REC_LEGACY",
+                        marca="*",
+                        categoria="*",
+                        min_cajas=1,
+                        max_cajas=9999,
+                        porcentaje=regla.valor,
+                        max_usos_mes=1,
+                        dias_ventana=30,
+                        vigencia_desde=regla.vigencia_desde,
+                        vigencia_hasta=regla.vigencia_hasta,
+                        activo=regla.activo
+                    )
+                ]
+
+        if recompras_activas:
             is_first_in_month = True
             current_year_month = (fecha_orden.year, fecha_orden.month)
             for o in inp.all_ordenes:
                 if o.cliente_id == inp.orden.cliente_id and o.so_id != inp.orden.so_id:
                     o_ym = (o.fecha.year, o.fecha.month)
                     if o_ym == current_year_month:
-                        # Break tie by date, then by order ID if same day
-                        if o.fecha < fecha_orden:
-                            is_first_in_month = False
-                            break
-                        elif o.fecha == fecha_orden and o.so_id < inp.orden.so_id:
+                        if o.fecha < fecha_orden or (o.fecha == fecha_orden and o.so_id < inp.orden.so_id):
                             is_first_in_month = False
                             break
             
             if is_first_in_month:
-                pct_recompra = precio_base * regla.valor
-                detalle_recompra = DescuentoAplicado(
-                    origen="recurrencia",
-                    descripcion=f"recompra {regla.valor}",
-                    monto=q2(pct_recompra),
-                )
+                recompra_monto = Decimal("0")
+                for ln in inp.lineas:
+                    cajas_linea = _cantidad_efectiva(inp, ln)
+                    best_r = None
+                    for r in recompras_activas:
+                        marca_ok = (r.marca == "*" or r.marca.upper() in ln.marca.upper() or ln.marca.upper() in r.marca.upper())
+                        cat_ok = _match_categoria(r.categoria, ln.categoria) or _match_categoria(r.categoria, ln.presentacion) or _match_categoria(r.categoria, ln.categoria_madre)
+                        if marca_ok and cat_ok:
+                            if r.min_cajas <= cajas_linea <= r.max_cajas:
+                                if best_r is None or r.porcentaje > best_r.porcentaje:
+                                    best_r = r
+                    if best_r is not None:
+                        recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
+                
+                if recompra_monto > 0:
+                    pct_recompra = recompra_monto
+                    detalle_recompra = DescuentoAplicado(
+                        origen="recurrencia",
+                        descripcion="Recompra recurrencia",
+                        monto=q2(recompra_monto),
+                    )
 
     # (b) Contado por marca×categoría — proyección (sección 4.3b).
     # El método NO determina el contado: lo determina pagar el neto total dentro
