@@ -93,7 +93,8 @@ class OrdenVenta:
     facturada: bool = False
     factura_id: str | None = None
     monto_facturado: Decimal | None = None
-    # Seguimiento de entrega/devoluciones (sección 4.6 — ampliación).
+    # Seguimiento de entrega/devoluciones y estado de orden en Odoo.
+    estado_orden: str = "sale"  # Odoo state: draft/sent/sale/done/cancel
     estado_entrega: str = ""  # delivery_status de Odoo: pending/partial/full
     entregada_completa: bool = False
     tiene_devolucion: bool = False

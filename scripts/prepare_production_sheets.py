@@ -32,6 +32,14 @@ OPERATIONAL_TABLES_TO_CLEAR = [
     "SerieTasas"
 ]
 
+# Legacy / Obsolete tables that will be removed from Google Sheets
+OBSOLETE_TABLES_TO_DELETE = [
+    "Ventas",
+    "Inventario",
+    "Facturación",
+    "MetodosPago"
+]
+
 # Tables containing platform users and business rules that MUST BE PRESERVED
 PROTECTED_TABLES = [
     "UsuariosPlataforma",
@@ -63,7 +71,7 @@ def main():
 
     logger.info("Iniciando verificación de conexión con Google Sheets...")
     config = AppConfig.from_env()
-    if os.environ.get("GOOGLE_TOKEN_JSON"):
+    if os.environ.get("GOOGLE_TOKEN_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE"):
         gw = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
     else:
         gw = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
@@ -90,7 +98,17 @@ def main():
         logger.info("Modo DRY-RUN completado. Ningún dato fue borrado de Google Sheets.")
         sys.exit(0)
 
-    logger.warning("PROCESANDO PURGA REAL EN GOOGLE SHEETS PARA PRODUCCIÓN...")
+    logger.warning("PROCESANDO ELIMINACIÓN DE PESTAÑAS OBSOLETAS Y PURGA PARA PRODUCCIÓN...")
+    for tbl in OBSOLETE_TABLES_TO_DELETE:
+        if tbl not in sheet_names:
+            continue
+        try:
+            ws = gw._sh.worksheet(tbl)
+            gw._sh.del_worksheet(ws)
+            logger.info(f"🗑️ Pestaña obsoleta '{tbl}' eliminada exitosamente.")
+        except Exception as err:
+            logger.error(f"❌ Error eliminando pestaña obsoleta {tbl}: {err}")
+
     for tbl in OPERATIONAL_TABLES_TO_CLEAR:
         if tbl not in sheet_names:
             logger.info(f"Pestaña {tbl} no existe. Omitiendo...")
@@ -107,7 +125,7 @@ def main():
         except Exception as err:
             logger.error(f"❌ Error purgando pestaña {tbl}: {err}")
 
-    logger.info("🎉 ¡PROCESO DE PREPARACIÓN DE GOOGLE SHEETS COMPLETADO EXITOSAMENTE!")
+    logger.info("🎉 ¡PROCESO DE PREPARACIÓN Y PURGA DE GOOGLE SHEETS COMPLETADO EXITOSAMENTE!")
 
 if __name__ == "__main__":
     main()

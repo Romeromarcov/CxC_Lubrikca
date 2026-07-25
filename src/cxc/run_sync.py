@@ -17,7 +17,7 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
     logging.basicConfig(level=logging.INFO)
     config = AppConfig.from_env()
 
-    if os.environ.get("GOOGLE_TOKEN_JSON"):
+    if os.environ.get("GOOGLE_TOKEN_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE"):
         gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
     else:
         gateway = GspreadGateway(

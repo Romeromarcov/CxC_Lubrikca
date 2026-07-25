@@ -901,7 +901,7 @@ async def get_reporte_saldos():
                     "sale.order",
                     "search_read",
                     [[["name", "in", so_ids_names]]],
-                    {"fields": ["name", "user_id", "payment_term_id", "date_order"]}
+                    {"fields": ["name", "user_id", "payment_term_id", "date_order", "state", "delivery_status", "invoice_status"]}
                 )
                 for s in so_records:
                     s_name = s.get("name")
@@ -912,7 +912,10 @@ async def get_reporte_saldos():
                     so_odoo_data[s_name] = {
                         "vendedor": vendedor_name,
                         "payment_term_name": term_name,
-                        "date_order": s.get("date_order")
+                        "date_order": s.get("date_order"),
+                        "state": s.get("state"),
+                        "delivery_status": s.get("delivery_status"),
+                        "invoice_status": s.get("invoice_status")
                     }
             except Exception as e_so:
                 logger.warning("Error consultando sale.order en Odoo: %s", e_so)
@@ -1014,8 +1017,19 @@ async def get_reporte_saldos():
         today_date = date.today()
 
         for o in ordenes:
-            client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             odoo_info = so_odoo_data.get(o.so_id, {})
+            st = odoo_info.get("state") or getattr(o, "estado_orden", "sale")
+            has_picking = (o.so_id in picking_delivery_map) or o.entregada_completa or bool(o.fecha_entrega)
+
+            # Exclude cancelled orders without completed deliveries, or unconfirmed draft/sent quotes without delivery
+            if st in ["cancel", "draft", "sent"] and not has_picking:
+                continue
+
+            # Exclude returned orders if cancelled or without active delivery
+            if getattr(o, "tiene_devolucion", False) and st == "cancel" and not has_picking:
+                continue
+
+            client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             vendedor = odoo_info.get("vendedor", "Sin Vendedor")
             vendedores_set.add(vendedor)
 
@@ -3008,6 +3022,9 @@ async def get_reporte_diario():
         # 1. Ventas por Día (USD y Litros)
         ventas_por_dia = {}
         for o in ordenes:
+            st = getattr(o, "estado_orden", "sale")
+            if st in ["cancel", "draft", "sent"] and not (o.entregada_completa or bool(o.fecha_entrega)):
+                continue
             fecha_key = o.fecha.isoformat()[:10]
             if fecha_key not in ventas_por_dia:
                 ventas_por_dia[fecha_key] = {"fecha": fecha_key, "total_usd": Decimal("0"), "litros_totales": Decimal("0"), "ordenes_count": 0}

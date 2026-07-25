@@ -137,6 +137,7 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
         facturada=str(rec.get("invoice_status", "")) == "invoiced",
         factura_id=str(rec["factura_id"]) if rec.get("factura_id") else None,
         monto_facturado=None,  # lo computa la conciliación (USD vía tasa de factura)
+        estado_orden=str(rec.get("state", "sale") or ""),
         estado_entrega=estado_entrega,
         entregada_completa=entregada_completa,
         tiene_devolucion=bool(rec.get("tiene_devolucion", False)),
@@ -259,7 +260,7 @@ class OdooXmlRpcReader(OdooReader):
             self.MODEL_ORDEN,
             self._delta(since),
             ["id", "name", "partner_id", "date_order", "amount_total",
-             "pricelist_id", "user_id", "invoice_status", "delivery_status"],
+             "pricelist_id", "user_id", "invoice_status", "delivery_status", "state"],
         )
         if not recs:
             return []
