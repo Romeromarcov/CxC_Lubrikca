@@ -112,3 +112,26 @@ def test_rates_scraper_run():
     now_tarde = datetime(2026, 1, 1, 11, 0, 0)
     fila_tarde = scraper.run(now_tarde)
     assert fila_tarde.tasa_binance_tarde == Decimal("38.5")
+
+def test_linea_orden_presentation_classification():
+    from cxc.models import LineaOrden
+    l1 = LineaOrden("L1", "SO1", "ALTA CILINDRADA (1x6)", "GLOBAL OIL", "Comercial", Decimal("2"), Decimal("10"))
+    assert l1.presentacion == "CAJA"
+    assert l1.categoria_madre == "Comercial"
+
+    l2 = LineaOrden("L2", "SO1", "API SL 20W-50 Paila 18,92 L", "GLOBAL OIL", "Industrial", Decimal("1"), Decimal("50"))
+    assert l2.presentacion == "PAILA"
+    assert l2.categoria_madre == "Industrial"
+
+    l3 = LineaOrden("L3", "SO1", "API SL 20W-50 Tambor 208 L", "GLOBAL OIL", "Industrial", Decimal("1"), Decimal("200"))
+    assert l3.presentacion == "TAMBOR"
+    assert l3.categoria_madre == "Industrial"
+
+def test_effective_dating_match_categoria():
+    from cxc.engine.effective_dating import _match_categoria
+    assert _match_categoria("CAJA", "CAJA")
+    assert _match_categoria("CAJA", "Comercial")
+    assert _match_categoria("PAILA", "PAILA")
+    assert _match_categoria("PAILA", "Industrial")
+    assert _match_categoria("TAMBOR", "Industrial")
+    assert _match_categoria("*", "Comercial")

@@ -48,6 +48,22 @@ def _especificidad(regla: DescuentoMarcaCategoria) -> int:
     return score
 
 
+def _match_categoria(regla_cat: str, target_cat: str) -> bool:
+    if not regla_cat or regla_cat == "*":
+        return True
+    rc = regla_cat.strip().upper()
+    tc = (target_cat or "").strip().upper()
+    if rc == tc:
+        return True
+    if rc in ("CAJA", "COMERCIAL") and tc in ("CAJA", "COMERCIAL"):
+        return True
+    if rc in ("PAILA", "INDUSTRIAL") and tc in ("PAILA", "INDUSTRIAL"):
+        return True
+    if rc in ("TAMBOR", "INDUSTRIAL") and tc in ("TAMBOR", "INDUSTRIAL"):
+        return True
+    return False
+
+
 def descuento_vigente(
     reglas: list[DescuentoMarcaCategoria],
     *,
@@ -63,7 +79,7 @@ def descuento_vigente(
         for r in reglas
         if r.tipo_descuento == tipo
         and (r.marca == marca or r.marca == "*")
-        and (r.categoria == categoria or r.categoria == "*")
+        and _match_categoria(r.categoria, categoria)
         and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
         and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
     ]
@@ -154,7 +170,7 @@ def descuento_volumen_vigente(
         r
         for r in reglas
         if (r.marca == marca or r.marca == "*")
-        and (r.categoria == categoria or r.categoria == "*")
+        and _match_categoria(r.categoria, categoria)
         and litros >= r.litros_minimo
         and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
         and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
