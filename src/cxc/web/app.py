@@ -2944,6 +2944,17 @@ async def get_pagos_historial():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/tasas-historicas")
+async def get_tasas_historicas():
+    try:
+        repo = get_repo()
+        rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        return {"items": rows, "count": len(rows)}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
