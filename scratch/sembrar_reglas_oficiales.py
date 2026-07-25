@@ -46,6 +46,7 @@ data_volumen = [
     ['regla_id', 'marca', 'categoria', 'litros_minimo', 'porcentaje', 'activo'],
     ['VOL_FIDELIDAD_GLOBAL_2500', 'GLOBAL OIL', '*', '2500', '5.0', 'TRUE'],
     ['VOL_FIDELIDAD_GLOBAL_5000', 'GLOBAL OIL', '*', '5000', '12.0', 'TRUE'],
+    ['VOL_FIDELIDAD_SINOCO_5000', 'SINOCO', '*', '5000', '12.0', 'TRUE'],
     ['VOL_SINOCO_PAILAS_10_19', 'SINOCO', 'PAILA', '190', '4.52', 'TRUE'],
     ['VOL_SINOCO_PAILAS_20_99', 'SINOCO', 'PAILA', '380', '12.04', 'TRUE'],
     ['VOL_SINOCO_PAILAS_100', 'SINOCO', 'PAILA', '1900', '19.28', 'TRUE']
