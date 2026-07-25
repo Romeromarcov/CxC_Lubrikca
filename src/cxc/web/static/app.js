@@ -1545,172 +1545,88 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("pronto-pago-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando pronto pago...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando pronto pago...</td></tr>';
             const res = await fetch("/api/config/descuentos-pronto-pago");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de pronto pago.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de pronto pago.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
-                rules.forEach(r => {
-                    const row = document.createElement("tr");
-                    const statusBtn = document.createElement("button");
-                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
-                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
-                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
-                    statusBtn.onclick = () => toggleRuleActive("DescuentosProntoPago", r.regla_id, r.activo);
-
-                    row.innerHTML = `
-                        <td><strong>${r.regla_id}</strong></td>
-                        <td>${r.marca}</td>
-                        <td>${r.categoria}</td>
-                        <td><strong>${r.dias_gracia} días</strong></td>
-                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
-                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
-                        <td><span class="state-badge">${r.listas_aplicables}</span></td>
-                        <td><small>Desde: ${r.vigencia_desde}</small></td>
-                        <td></td>
-                    `;
-                    row.children[8].appendChild(statusBtn);
-                    tbody.appendChild(row);
-                });
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosProntoPago")));
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar pronto pago.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar pronto pago.</td></tr>';
         }
     }
+    window.loadDescuentosProntoPago = loadProntoPago;
 
     // --- Load Recompra Rules ---
     async function loadRecompra() {
         const tbody = document.getElementById("recompra-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reglas de recompra...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando reglas de recompra...</td></tr>';
             const res = await fetch("/api/config/descuentos-recompra");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de recompra.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de recompra.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
-                rules.forEach(r => {
-                    const row = document.createElement("tr");
-                    const statusBtn = document.createElement("button");
-                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
-                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
-                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
-                    statusBtn.onclick = () => toggleRuleActive("DescuentosRecompra", r.regla_id, r.activo);
-
-                    const rawPct = parseFloat(r.porcentaje || 0);
-                    const pctFormatted = rawPct > 1 ? rawPct.toFixed(2) + "%" : (rawPct * 100).toFixed(2) + "%";
-                    const tramoText = (r.max_cajas && parseInt(r.max_cajas) < 9000) ? `${r.min_cajas || 1} a ${r.max_cajas} cajas` : `${r.min_cajas || 1}+ cajas`;
-
-                    row.innerHTML = `
-                        <td><strong>${r.marca || 'GLOBAL OIL'}</strong></td>
-                        <td>${r.categoria || 'CAJA'}</td>
-                        <td><strong style="color:#059669">${pctFormatted}</strong></td>
-                        <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1;">${tramoText}</span></td>
-                        <td><strong>${r.max_usos_mes || 1}</strong></td>
-                        <td><strong>${r.dias_ventana || 30} días</strong></td>
-                        <td><small>${r.vigencia_desde}</small></td>
-                        <td><small>${r.vigencia_hasta || 'N/A'}</small></td>
-                        <td></td>
-                    `;
-                    row.children[8].appendChild(statusBtn);
-                    tbody.appendChild(row);
-                });
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosRecompra")));
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar recompra.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar recompra.</td></tr>';
         }
     }
+    window.loadRecompra = loadRecompra;
 
     // --- Load Producto Promo Rules ---
     async function loadProductoPromo() {
         const tbody = document.getElementById("producto-promo-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando promociones de productos...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando promociones de productos...</td></tr>';
             const res = await fetch("/api/config/descuentos-producto");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay promociones por producto.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay promociones por producto.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
-                rules.forEach(r => {
-                    const row = document.createElement("tr");
-                    const statusBtn = document.createElement("button");
-                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
-                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
-                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
-                    statusBtn.onclick = () => toggleRuleActive("DescuentosProducto", r.regla_id, r.activo);
-
-                    row.innerHTML = `
-                        <td><strong>${r.regla_id}</strong></td>
-                        <td><small>${r.productos}</small></td>
-                        <td>${r.marca}</td>
-                        <td>${r.categoria}</td>
-                        <td><strong style="color:#059669">${(r.porcentaje * 100).toFixed(2)}%</strong></td>
-                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
-                        <td><span class="state-badge">${r.listas_aplicables}</span></td>
-                        <td><small>Desde: ${r.vigencia_desde}</small></td>
-                        <td></td>
-                    `;
-                    row.children[8].appendChild(statusBtn);
-                    tbody.appendChild(row);
-                });
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosProducto")));
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar promociones de producto.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar promociones de producto.</td></tr>';
         }
     }
+    window.loadDescuentosProducto = loadProductoPromo;
 
     // --- Load Diferencial Rules ---
     async function loadDiferencial() {
         const tbody = document.getElementById("diferencial-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando reglas de diferencial...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando reglas de diferencial...</td></tr>';
             const res = await fetch("/api/config/descuentos-diferencial-cambiario");
             if (res.ok) {
                 const rules = await res.json();
                 if (rules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
-                rules.forEach(r => {
-                    const row = document.createElement("tr");
-                    const statusBtn = document.createElement("button");
-                    statusBtn.className = `state-badge ${r.activo ? 'cierre' : 'abiertas'}`;
-                    statusBtn.style.cssText = `cursor:pointer; border:none; background:${r.activo ? '#dcfce7' : '#fee2e2'}; color:${r.activo ? '#15803d' : '#b91c1c'}; font-weight:600;`;
-                    statusBtn.textContent = r.activo ? "Activo" : "Inactivo";
-                    statusBtn.onclick = () => toggleRuleActive("DescuentosDiferencialCambiario", r.regla_id, r.activo);
-
-                    row.innerHTML = `
-                        <td><strong>${r.regla_id}</strong></td>
-                        <td>${r.nombre}</td>
-                        <td><span class="state-badge">${r.tipo_diferencial}</span></td>
-                        <td><span class="state-badge">${r.tipo_calculo}</span></td>
-                        <td><strong>${(r.porcentaje_fijo * 100).toFixed(1)}%</strong></td>
-                        <td><span class="state-badge">${r.monedas_aplicables}</span></td>
-                        <td><span class="state-badge">${r.listas_aplicables || '*'}</span></td>
-                        <td><small>Desde: ${r.vigencia_desde}</small></td>
-                        <td></td>
-                    `;
-                    row.children[8].appendChild(statusBtn);
-                    tbody.appendChild(row);
-                });
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosDiferencialCambiario")));
             }
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
         }
     }
+    window.loadDescuentosDiferencial = loadDiferencial;
 
     async function loadFeriados() {
         try {
@@ -2168,6 +2084,71 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // --- Helper to extract M2M Checkbox Values ---
+    function getM2MCheckedValues(parentForm, selectorClass) {
+        if (!parentForm) return "*";
+        const cbs = parentForm.querySelectorAll(selectorClass);
+        if (!cbs || cbs.length === 0) return "*";
+        const checked = Array.from(cbs).filter(cb => cb.checked).map(cb => cb.value);
+        if (checked.length === 0 || checked.includes("*")) return "*";
+        return checked.join(",");
+    }
+
+    // --- Helper to Render Standardized 10-Column Rule Row ---
+    function renderStandardRuleRow(r, tabla) {
+        const row = document.createElement("tr");
+        
+        let beneficioText = "";
+        if (r.tipo_beneficio === "producto" || r.tipo_beneficio === "obsequio") {
+            beneficioText = `🎁 Obsequio (${r.productos || r.campos_especiales?.productos || 'Producto'})`;
+        } else {
+            const val = r.porcentaje !== undefined ? r.porcentaje : (r.porcentaje_fijo !== undefined ? r.porcentaje_fijo : (r.valor !== undefined ? r.valor : 0));
+            const pctVal = (parseFloat(val || 0) * 100).toFixed(2);
+            beneficioText = `💲 ${pctVal}%`;
+        }
+
+        const minQ = r.min_cantidad !== undefined ? r.min_cantidad : (r.min_cajas !== undefined ? r.min_cajas : (r.litros_minimo !== undefined ? r.litros_minimo : (r.compra_minima !== undefined ? r.compra_minima : 0)));
+        const maxQ = r.max_cantidad !== undefined ? r.max_cantidad : (r.max_cajas !== undefined ? r.max_cajas : 999999);
+        const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
+
+        const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+
+        let espArr = [];
+        if (r.dias_gracia) espArr.push(`Gracia: ${r.dias_gracia}d`);
+        if (r.max_usos_mes) espArr.push(`Max Usos: ${r.max_usos_mes}/mes`);
+        if (r.dias_ventana) espArr.push(`Ventana: ${r.dias_ventana}d`);
+        if (r.tipo_evaluacion) espArr.push(`Eval: ${r.tipo_evaluacion} (${r.dias_evaluacion || 0}d)`);
+        if (r.descuento_fallback) espArr.push(`Fallback: ${(parseFloat(r.descuento_fallback)*100).toFixed(2)}%`);
+        if (r.regalo_tipo) espArr.push(`Modo: ${r.regalo_tipo}`);
+        if (r.monedas_aplicables && r.monedas_aplicables !== "*") espArr.push(`Monedas: ${r.monedas_aplicables}`);
+        if (r.tipo_diferencial) espArr.push(`Tipo: ${r.tipo_diferencial}`);
+
+        const espText = espArr.length > 0 ? espArr.join(" | ") : "—";
+        const vigText = `${r.vigencia_desde || 'N/A'}<br><small style="color:var(--text-muted)">hasta ${r.vigencia_hasta || 'Indefinida'}</small>`;
+
+        const switchHtml = `
+            <label class="switch" style="position:relative; display:inline-block; width:44px; height:22px;">
+                <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
+                <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:22px;"></span>
+            </label>
+            <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+        `;
+
+        row.innerHTML = `
+            <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>
+            <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
+            <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || r.categorias_aplica || '*'}</span></td>
+            <td><strong>${tramoText}</strong></td>
+            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${r.unidad_medida || 'CAJAS'}</span></td>
+            <td><strong style="color:#059669">${beneficioText}</strong></td>
+            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
+            <td>${vigText}</td>
+            <td><small style="color:var(--text-muted)">${espText}</small></td>
+            <td>${switchHtml}</td>
+        `;
+        return row;
+    }
+
     // Load Promociones Primera Compra
     const TIPO_LABELS = {
         "primera_compra": "Primera Compra", "recurrencia": "Recompra",
@@ -2177,59 +2158,34 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadPromociones() {
         if (!promosTableBody) return;
         try {
-            promosTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando promociones...</td></tr>';
+            promosTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando promociones...</td></tr>';
             const res = await fetch("/api/config/promociones");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    promosTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay promociones registradas.</td></tr>';
+                    promosTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay promociones registradas.</td></tr>';
                     return;
                 }
                 promosTableBody.innerHTML = "";
-                data.forEach(p => {
-                    const row = document.createElement("tr");
-                    const tipoLabel = p.tipo_beneficio === "producto" ? "🎁 Obsequio" : "💲 Porcentaje";
-                    const valorLabel = p.tipo_beneficio === "producto"
-                        ? p.productos
-                        : (parseFloat(p.valor) * 100).toFixed(2) + "%";
-                    const fallbackPct = parseFloat(p.descuento_fallback || 0);
-                    const fallbackLabel = fallbackPct > 0 ? (fallbackPct * 100).toFixed(2) + "%" : "—";
-                    row.innerHTML = `
-                        <td>${tipoLabel}</td>
-                        <td><strong>${valorLabel}</strong></td>
-                        <td>${p.compra_minima || "—"}</td>
-                        <td>${fallbackLabel}</td>
-                        <td>${p.categorias_aplica || "Comercial"}</td>
-                        <td>${p.vigencia_desde}</td>
-                        <td>${p.vigencia_hasta || "N/A"}</td>
-                        <td><span class="semaphore ${p.activo ? 'verde' : 'rojo'}">${p.activo ? 'Activa' : 'Inactiva'}</span></td>
-                    `;
-                    promosTableBody.appendChild(row);
-                });
+                data.forEach(p => promosTableBody.appendChild(renderStandardRuleRow(p, "PromocionPrimeraCompra")));
             }
         } catch (err) {
             console.error(err);
         }
     }
+    window.loadPromociones = loadPromociones;
 
     // Save Promotion Rule
     if (promoForm) {
         promoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
+            const cats = getM2MCheckedValues(promoForm, ".m2m-promo-cat");
+            const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
             const tipoBenef = cfgPromoTipoBeneficio.value;
             const productosSeleccionados = tipoBenef === "producto"
                 ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
                 : "";
-            const cats = ["cat-comercial", "cat-industrial", "cat-todos"]
-                .map(id => document.getElementById(id))
-                .filter(cb => cb && cb.checked)
-                .map(cb => cb.value);
-            const categoriasAplica = cats.includes("*") ? "*" : cats.join(",") || "Comercial";
-
-            if (tipoBenef === "producto" && productosSeleccionados === "") {
-                alert("⚠️ Selecciona al menos un producto de obsequio.");
-                return;
-            }
 
             const payload = {
                 tipo_beneficio: tipoBenef,
@@ -2238,7 +2194,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
                 descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
                 regalo_tipo: cfgPromoRegaloTipo.value,
-                categorias_aplica: categoriasAplica,
+                categorias_aplica: cats,
+                marca: marcas,
+                listas_aplicables: listas,
+                unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
                 vigencia_desde: cfgPromoDesde.value,
                 vigencia_hasta: cfgPromoHasta.value || null
             };
@@ -2253,6 +2212,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     promoForm.reset();
                     if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = "0";
                     loadPromociones();
+                    loadReglasConsolidadas();
                 } else {
                     const err = await res.json();
                     alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
@@ -2331,55 +2291,43 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadDescuentosVolumen() {
         if (!descuentosVolumenTableBody) return;
         try {
-            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando descuentos por volumen...</td></tr>';
+            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando descuentos por volumen...</td></tr>';
             const res = await fetch("/api/config/descuentos-volumen");
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
-                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
+                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
                     return;
                 }
                 descuentosVolumenTableBody.innerHTML = "";
-                data.forEach(r => {
-                    const row = document.createElement("tr");
-                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
-                    const evalText = r.tipo_evaluacion === "acumulado" ? "Acumulado" : "Por Orden";
-                    const periodText = r.dias_evaluacion > 0 ? `${r.dias_evaluacion} días` : "Histórico Total";
-                    row.innerHTML = `
-                        <td><strong>${r.regla_id}</strong></td>
-                        <td>${r.marca}</td>
-                        <td>${r.categoria}</td>
-                        <td><strong>${r.litros_minimo} L</strong></td>
-                        <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
-                        <td><span class="state-badge" style="background:${r.tipo_evaluacion === 'acumulado' ? '#fef3c7' : '#f3f4f6'}; color:${r.tipo_evaluacion === 'acumulado' ? '#92400e' : '#374151'};">${evalText}</span></td>
-                        <td><strong>${periodText}</strong></td>
-                        <td>${r.vigencia_desde || 'N/A'}</td>
-                        <td>${r.vigencia_hasta || 'N/A'}</td>
-                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
-                        <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
-                    `;
-                    descuentosVolumenTableBody.appendChild(row);
-                });
+                data.forEach(r => descuentosVolumenTableBody.appendChild(renderStandardRuleRow(r, "DescuentosVolumen")));
             }
         } catch (err) {
             console.error(err);
         }
     }
+    window.loadDescuentosVolumen = loadDescuentosVolumen;
 
     // Save Volume Discount Rule
     if (descuentoVolumenForm) {
         descuentoVolumenForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const marcas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-marca");
+            const cats = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-cat");
+            const listas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-lista");
             const payload = {
-                marca: cfgDescVolMarca.value,
-                categoria: cfgDescVolCat.value,
-                litros_minimo: parseFloat(cfgDescVolLitros.value),
-                porcentaje: parseFloat(cfgDescVolPorcentaje.value),
+                marca: marcas,
+                categoria: cats,
+                listas_aplicables: listas,
+                litros_minimo: parseFloat(cfgDescVolLitros.value || 0),
+                max_cantidad: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
+                porcentaje: parseFloat(cfgDescVolPorcentaje.value || 0.05),
                 tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
                 dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
+                unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "LITROS",
+                tipo_beneficio: document.getElementById("cfg-desc-vol-tipo-benef")?.value || "descuento",
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: cfgDescVolHasta.value || null,
-                listas_aplicables: cfgDescVolListas.value
+                vigencia_hasta: cfgDescVolHasta.value || null
             };
             try {
                 const res = await fetch("/api/config/descuentos-volumen", {
@@ -2391,6 +2339,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("✅ Regla de volumen registrada exitosamente.");
                     descuentoVolumenForm.reset();
                     loadDescuentosVolumen();
+                    loadReglasConsolidadas();
                 } else {
                     alert("❌ Error al registrar la regla de volumen.");
                 }

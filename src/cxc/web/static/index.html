@@ -1053,77 +1053,417 @@
                     </div>
                 </section>
 
-                <!-- Promociones Primera Compra -->
-                <section class="config-card card">
+                <!-- PANEL 1: Descuento por Recompra / Recurrencia -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #0284c7;">
                     <div class="panel-header">
-                        <h2>Promociones de Primera Compra</h2>
-                        <p>Configura productos de obsequio, descuentos fallback, compra mínima y categorías aplicables</p>
+                        <h2>🔄 Descuento por Recompra / Recurrencia</h2>
+                        <p>Configura porcentaje por recompras consecutivas, tramo de cajas, ventana de días y uso por mes</p>
+                    </div>
+
+                    <form id="recompra-form" class="cxc-form">
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-rec-marca" value="GLOBAL OIL" checked> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-rec-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-rec-marca" value="*"> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-rec-cat" value="CAJA" checked> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-rec-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-rec-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-rec-cat" value="*"> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="2" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Cajas/Unidades</label>
+                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="4" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-rec-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo Beneficio</label>
+                                <select id="cfg-rec-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Porcentaje (%) (ej: 0.03 = 3%)</label>
+                                <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.03" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Usos / Mes</label>
+                                <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="1" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Días Ventana Recompra</label>
+                                <input type="number" id="cfg-rec-ventana" min="1" step="1" value="30" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha de Inicio</label>
+                                <input type="date" id="cfg-rec-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha de Finalización</label>
+                                <input type="date" id="cfg-rec-hasta">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-primary">Registrar Regla Recompra</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Recompra Registradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recompra-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando reglas de recompra...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- PANEL 2: Descuento por Pronto Pago (con Días de Gracia) -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #10b981;">
+                    <div class="panel-header">
+                        <h2>⏱️ Descuento por Pronto Pago (Días de Gracia)</h2>
+                        <p>Configura días de gracia, marcas, categorías, listas y porcentaje de pronto pago</p>
+                    </div>
+
+                    <form id="pronto-pago-form" class="cxc-form">
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-pp-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-pp-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-pp-marca" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-pp-cat" value="CAJA"> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-pp-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-pp-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-pp-cat" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Compra</label>
+                                <input type="number" id="cfg-pp-min" min="0" value="0">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Compra</label>
+                                <input type="number" id="cfg-pp-max" min="0" value="999999">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-pp-unidad"><option value="USD" selected>USD</option><option value="CAJAS">CAJAS</option><option value="LITROS">LITROS</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo Beneficio</label>
+                                <select id="cfg-pp-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
+                                <input type="number" id="cfg-pp-porcentaje" step="0.0001" value="0.05" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Días de Gracia</label>
+                                <input type="number" id="cfg-pp-dias-gracia" min="0" value="3" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Monedas Aplicables</label>
+                                <select id="cfg-pp-monedas"><option value="*" selected>Todas (*)</option><option value="USD">Solo USD</option><option value="VES">Solo VES</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Inicio</label>
+                                <input type="date" id="cfg-pp-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Finalización</label>
+                                <input type="date" id="cfg-pp-hasta">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-primary">Registrar Pronto Pago</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Pronto Pago Configuradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pronto-pago-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando pronto pago...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- PANEL 3: Reglas de Descuentos por Volumen -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #f59e0b;">
+                    <div class="panel-header">
+                        <h2>📊 Reglas de Descuentos por Volumen (Litros / Cajas)</h2>
+                        <p>Define descuentos basados en la cantidad acumulada o por orden comprada por marca y categoría</p>
+                    </div>
+
+                    <form id="descuento-volumen-form" class="cxc-form">
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-vol-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-vol-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-vol-marca" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-vol-cat" value="CAJA"> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-vol-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-vol-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-vol-cat" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Volumen (Mínimo)</label>
+                                <input type="number" id="cfg-desc-vol-litros" min="1" required placeholder="Ej: 5000">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Volumen (Máximo)</label>
+                                <input type="number" id="cfg-desc-vol-max" min="1" value="999999">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-desc-vol-unidad"><option value="LITROS" selected>LITROS</option><option value="CAJAS">CAJAS</option><option value="USD">USD</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo Beneficio</label>
+                                <select id="cfg-desc-vol-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Porcentaje Descuento (%)</label>
+                                <input type="number" id="cfg-desc-vol-porcentaje" step="0.0001" min="0" max="1" required placeholder="Ej: 0.12 para 12%">
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo de Evaluación</label>
+                                <select id="cfg-desc-vol-tipo-eval" required>
+                                    <option value="orden">Por Orden Individual (Compra en 1 factura)</option>
+                                    <option value="acumulado">Acumulado en el Periodo (Suma de litros en N días)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Días Evaluación (si es Acumulado)</label>
+                                <input type="number" id="cfg-desc-vol-dias-eval" min="0" value="30">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha de Inicio</label>
+                                <input type="date" id="cfg-desc-vol-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha de Finalización</label>
+                                <input type="date" id="cfg-desc-vol-hasta">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Regla de Volumen</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Volumen Registradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="descuentos-volumen-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando descuentos por volumen...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- PANEL 4: Promociones Primera Compra -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #8b5cf6;">
+                    <div class="panel-header">
+                        <h2>🎁 Promociones de Primera Compra</h2>
+                        <p>Configura productos de obsequio, marca, categorías, tramo mínimo, listas y descuento fallback</p>
                     </div>
 
                     <form id="promo-form" class="cxc-form">
-                        <!-- Tipo de beneficio -->
-                        <div class="form-group">
-                            <label>Tipo de Beneficio</label>
-                            <select id="cfg-promo-tipo-beneficio" required>
-                                <option value="producto">Obsequio de Producto (99.99% descuento)</option>
-                                <option value="porcentaje">Descuento Porcentual (ej. 2%)</option>
-                            </select>
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-promo-marca" value="GLOBAL OIL" checked> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-promo-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-promo-marca" value="*"> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-promo-cat" value="CAJA" checked> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-promo-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-promo-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-promo-cat" value="*"> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
-                        <!-- Productos de regalo (solo visible si tipo=producto) -->
-                        <div id="promo-productos-section" class="form-group">
-                            <label>Productos de Obsequio <small style="color:var(--text-muted)">(selecciona uno o varios; Ctrl+clic para múltiples)</small></label>
-                            <select id="cfg-promo-productos" multiple style="min-height:90px">
-                            </select>
-                            <small style="color:var(--text-muted); margin-top:4px; display:block">
-                                Productos seleccionados: <span id="promo-productos-count">0</span>
-                            </small>
-                        </div>
-
-                        <!-- Modo de entrega (solo visible si tipo=producto y hay varios productos) -->
-                        <div id="promo-regalo-tipo-section" class="form-group">
-                            <label>Modo de Entrega del Obsequio</label>
-                            <select id="cfg-promo-regalo-tipo">
-                                <option value="solo_uno">Solo uno del catálogo (cliente elige)</option>
-                                <option value="conjunto">Todos juntos (conjunto completo)</option>
-                            </select>
-                        </div>
-
-                        <!-- Valor (pct, visible si tipo=porcentaje) -->
-                        <div id="promo-porcentaje-section" class="form-group" style="display:none">
-                            <label>Porcentaje de Descuento (ej. 0.02 = 2%)</label>
-                            <input type="number" id="cfg-promo-valor" step="0.0001" min="0" max="1" placeholder="Ej: 0.02">
-                        </div>
-
-                        <!-- Condición de compra mínima + fallback -->
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label>Compra Mínima (und. Comercial para recibir el obsequio)</label>
+                                <label>Tipo de Beneficio</label>
+                                <select id="cfg-promo-tipo-beneficio" required>
+                                    <option value="producto" selected>Obsequio de Producto (99.99% descuento)</option>
+                                    <option value="porcentaje">Descuento Porcentual (ej. 2%)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Compra (Tramo Mínimo)</label>
                                 <input type="number" id="cfg-promo-compra-minima" min="0" step="1" value="3" placeholder="Ej: 3">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Compra (Tramo Máximo)</label>
+                                <input type="number" id="cfg-promo-max" min="0" step="1" value="999999">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-promo-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
+                            </div>
+                        </div>
+
+                        <div id="promo-productos-section" class="form-group">
+                            <label>Productos de Obsequio <small style="color:var(--text-muted)">(selecciona uno o varios)</small></label>
+                            <select id="cfg-promo-productos" multiple style="min-height:90px"></select>
+                            <small style="color:var(--text-muted); margin-top:4px; display:block">Productos seleccionados: <span id="promo-productos-count">0</span></small>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div id="promo-regalo-tipo-section" class="form-group" style="flex:1">
+                                <label>Modo de Entrega del Obsequio</label>
+                                <select id="cfg-promo-regalo-tipo">
+                                    <option value="solo_uno" selected>Solo uno del catálogo (cliente elige)</option>
+                                    <option value="conjunto">Todos juntos (conjunto completo)</option>
+                                </select>
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Descuento Fallback si no alcanza mínimo (%)</label>
                                 <input type="number" id="cfg-promo-fallback" step="0.0001" min="0" max="1" value="0.02" placeholder="Ej: 0.02 = 2%">
                             </div>
-                        </div>
-
-                        <!-- Categorías que califican -->
-                        <div class="form-group">
-                            <label>Categorías que califican para la promoción</label>
-                            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:6px">
-                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
-                                    <input type="checkbox" id="cat-comercial" value="Comercial" checked> Comercial
-                                </label>
-                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
-                                    <input type="checkbox" id="cat-industrial" value="Industrial"> Industrial
-                                </label>
-                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
-                                    <input type="checkbox" id="cat-todos" value="*"> Todas las categorías
-                                </label>
+                            <div id="promo-porcentaje-section" class="form-group" style="flex:1; display:none;">
+                                <label>Porcentaje Beneficio (%)</label>
+                                <input type="number" id="cfg-promo-valor" step="0.0001" min="0" max="1" placeholder="Ej: 0.02">
                             </div>
                         </div>
 
-                        <!-- Fechas de vigencia -->
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
                                 <label>Fecha de Inicio</label>
@@ -1135,37 +1475,270 @@
                             </div>
                         </div>
 
-                        <button type="submit" class="btn-primary">Registrar Promoción</button>
+                        <button type="submit" class="btn-primary">Registrar Promoción Primera Compra</button>
                     </form>
 
                     <div class="mini-table-wrapper">
-                        <h3>Promociones Activas</h3>
+                        <h3>Promociones Primera Compra Registradas</h3>
                         <table class="cxc-table mini">
                             <thead>
                                 <tr>
-                                    <th>Tipo</th>
-                                    <th>Productos / Valor</th>
-                                    <th>Compra Mín.</th>
-                                    <th>Fallback</th>
-                                    <th>Categorías</th>
-                                    <th>Desde</th>
-                                    <th>Hasta</th>
-                                    <th>Estado</th>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
                                 </tr>
                             </thead>
                             <tbody id="promos-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando promociones...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- PANEL 5: Descuento por Producto / Marca / Categoría -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #ec4899;">
+                    <div class="panel-header">
+                        <h2>🏷️ Descuento por Producto / Marca / Categoría (Promoción Específica)</h2>
+                        <p>Promociona SKUs específicos fijando marcas, categorías, tramos, porcentaje y vigencia commercial</p>
+                    </div>
+
+                    <form id="producto-promo-form" class="cxc-form">
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-prod-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-prod-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-prod-marca" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-prod-cat" value="CAJA"> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-prod-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-prod-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-prod-cat" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:2">
+                                <label>Productos / SKUs (selecciona o deja vacio para todos)</label>
+                                <select id="cfg-prod-select" multiple style="min-height:80px"></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Compra</label>
+                                <input type="number" id="cfg-prod-min" min="0" value="0">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Compra</label>
+                                <input type="number" id="cfg-prod-max" min="0" value="999999">
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-prod-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo Beneficio</label>
+                                <select id="cfg-prod-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
+                                <input type="number" id="cfg-prod-porcentaje" step="0.0001" value="0.05" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Monedas Aplicables</label>
+                                <select id="cfg-prod-monedas"><option value="*" selected>Todas (*)</option><option value="USD">Solo USD</option><option value="VES">Solo VES</option></select>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Inicio</label>
+                                <input type="date" id="cfg-prod-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Finalización</label>
+                                <input type="date" id="cfg-prod-hasta">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-primary">Registrar Promoción Producto</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Promociones por Producto Registradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
                                 <tr>
-                                    <td colspan="8" class="table-empty">Cargando promociones...</td>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
                                 </tr>
+                            </thead>
+                            <tbody id="producto-promo-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando promociones de productos...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- PANEL 6: Descuento por Diferencial Cambiario -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #3b82f6;">
+                    <div class="panel-header">
+                        <h2>💱 Descuentos por Diferencial Cambiario</h2>
+                        <p>35% Fijo VES a USD, Equiparación a Tasa Binance N/C y Diferencial BCV vs Binance al Cierre</p>
+                    </div>
+
+                    <form id="diferencial-form" class="cxc-form">
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Marcas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-dif-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
+                                        <label><input type="checkbox" class="m2m-dif-marca" value="SINOCO"> SINOCO</label>
+                                        <label><input type="checkbox" class="m2m-dif-marca" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                    <label>Categorías / Presentaciones (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-dif-cat" value="CAJA"> CAJA (Comercial)</label>
+                                        <label><input type="checkbox" class="m2m-dif-cat" value="PAILA"> PAILA (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-dif-cat" value="TAMBOR"> TAMBOR (Industrial)</label>
+                                        <label><input type="checkbox" class="m2m-dif-cat" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Listas Aplicables (M2M)</label>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                        <label><input type="checkbox" class="m2m-dif-lista" value="4"> Lista USD (#4)</label>
+                                        <label><input type="checkbox" class="m2m-dif-lista" value="5"> Lista VES (#5)</label>
+                                        <label><input type="checkbox" class="m2m-dif-lista" value="*" checked> Todas (*)</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:2">
+                                <label>Nombre del Descuento</label>
+                                <input type="text" id="cfg-dif-nombre" placeholder="Ej: 35% Fijo por Pago USD en Lista VES" required>
+                            </div>
+                            <div class="form-group" style="flex:2">
+                                <label>Tipo de Diferencial</label>
+                                <select id="cfg-dif-tipo-diferencial" required>
+                                    <option value="fijo_35_ves_usd">35% Fijo (Factura Lista VES pagada en USD)</option>
+                                    <option value="equiparar_binance">Equiparar Tasa Binance N/C (Pagos acumulados VES a Binance vs Lista USD)</option>
+                                    <option value="diferencial_bcv_binance">Diferencial BCV vs. Binance Cierre (100% pagado en orden)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Tipo de Cálculo</label>
+                                <select id="cfg-dif-tipo-calculo" required>
+                                    <option value="fijo">Porcentaje Fijo</option>
+                                    <option value="variable">Diferencial Variable (Dinamico)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Porcentaje Fijo (%) (si aplica)</label>
+                                <input type="number" id="cfg-dif-porcentaje-fijo" step="0.0001" value="0.35">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Monedas Aplicables</label>
+                                <select id="cfg-dif-monedas"><option value="*" selected>Todas (*)</option><option value="USD">USD</option><option value="VES">VES</option></select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de Medida</label>
+                                <select id="cfg-dif-unidad"><option value="USD" selected>USD</option><option value="CAJAS">CAJAS</option><option value="LITROS">LITROS</option></select>
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Mínimo Compra</label>
+                                <input type="number" id="cfg-dif-min" min="0" value="0">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Máximo Compra</label>
+                                <input type="number" id="cfg-dif-max" min="0" value="999999">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Inicio</label>
+                                <input type="date" id="cfg-dif-desde" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Fecha Finalización</label>
+                                <input type="date" id="cfg-dif-hasta">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-primary">Registrar Regla Diferencial</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Diferencial Cambiario Registradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>ID / Regla</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas (M2M)</th>
+                                    <th>Vigencia</th>
+                                    <th>Campos Especiales</th>
+                                    <th>Estado (Switch)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="diferencial-table-body">
+                                <tr><td colspan="10" class="table-empty">Cargando reglas de diferencial...</td></tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
 
                 <!-- Exclusiones Mutuas entre Descuentos/Promociones -->
-                <section class="config-card card">
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #64748b;">
                     <div class="panel-header">
-                        <h2>Exclusiones Mutuas de Descuentos</h2>
+                        <h2>🚫 Exclusiones Mutuas de Descuentos</h2>
                         <p>Define pares de descuentos/promociones que no pueden aplicarse simultáneamente. Se aplica el de mayor valor.</p>
                     </div>
 
@@ -1200,9 +1773,6 @@
 
                     <div class="mini-table-wrapper">
                         <h3>Exclusiones Configuradas</h3>
-                        <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:8px">
-                            Cuando ambos descuentos aplican a una orden, solo se tomará el de mayor valor monetario.
-                        </p>
                         <table class="cxc-table mini">
                             <thead>
                                 <tr>
@@ -1213,354 +1783,7 @@
                                 </tr>
                             </thead>
                             <tbody id="exclusiones-table-body">
-                                <tr>
-                                    <td colspan="4" class="table-empty">Cargando exclusiones...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-
-                <!-- PANEL 1: Descuento por Recompra / Recurrencia -->
-                <section class="config-card card">
-                    <div class="panel-header">
-                        <h2>Descuento por Recompra / Recurrencia</h2>
-                        <p>Configura el porcentaje de beneficio por recompras consecutivas, límite de usos por mes y ventana de días</p>
-                    </div>
-
-                    <form id="recompra-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Marca</label>
-                                <select id="cfg-rec-marca" required>
-                                    <option value="GLOBAL OIL" selected>GLOBAL OIL</option>
-                                    <option value="SINOCO">SINOCO</option>
-                                    <option value="*">Todas (*)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Categoría</label>
-                                <select id="cfg-rec-categoria" required>
-                                    <option value="CAJA" selected>CAJA (Comercial)</option>
-                                    <option value="PAILA">PAILA</option>
-                                    <option value="TAMBOR">TAMBOR</option>
-                                    <option value="*">Todas (*)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.03 = 3%)</label>
-                                <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.03" required>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="2" placeholder="Ej: 2" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="4" placeholder="Ej: 4" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Usos / Mes</label>
-                                <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="1" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Días Ventana Recompra</label>
-                                <input type="number" id="cfg-rec-ventana" min="1" step="1" value="30" required>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Inicio</label>
-                                <input type="date" id="cfg-rec-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Finalización</label>
-                                <input type="date" id="cfg-rec-hasta">
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Regla Recompra</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Reglas de Recompra Registradas</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>Marca</th>
-                                    <th>Categoría</th>
-                                    <th>% Recompra</th>
-                                    <th>Tramo Cajas</th>
-                                    <th>Max Usos/Mes</th>
-                                    <th>Ventana Días</th>
-                                    <th>Desde</th>
-                                    <th>Hasta</th>
-                                    <th>Estado</th>
-                                </tr>
-                            </thead>
-                            <tbody id="recompra-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando reglas de recompra...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- PANEL 2: Descuento por Pronto Pago (con Días de Gracia) -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
-                    <div class="panel-header">
-                        <h2>Descuento por Pronto Pago (Días de Gracia)</h2>
-                        <p>Configura días de gracia, marcas, categorías, listas y porcentaje de pronto pago</p>
-                    </div>
-
-                    <form id="pronto-pago-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Días de Gracia</label>
-                                <input type="number" id="cfg-pp-dias-gracia" min="0" value="3" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Marca</label>
-                                <select id="cfg-pp-marca" required><option value="*">Todas las marcas (*)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Categoría</label>
-                                <select id="cfg-pp-categoria" required><option value="*">Todas las categorías (*)</option></select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
-                                <input type="number" id="cfg-pp-porcentaje" step="0.0001" value="0.05" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-pp-monedas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="USD">Solo USD</option>
-                                    <option value="VES">Solo VES</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Listas Aplicables</label>
-                                <select id="cfg-pp-listas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="4">Lista USD (#4)</option>
-                                    <option value="5">Lista VES (#5)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-pp-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-pp-hasta">
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Pronto Pago</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Reglas de Pronto Pago Configuradas</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Marca</th>
-                                    <th>Categoría</th>
-                                    <th>Días Gracia</th>
-                                    <th>% Descuento</th>
-                                    <th>Monedas</th>
-                                    <th>Listas</th>
-                                    <th>Vigencia</th>
-                                    <th>Estado (Switch)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="pronto-pago-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando pronto pago...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- PANEL 3: Descuento por Producto / Marca / Categoría -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
-                    <div class="panel-header">
-                        <h2>Descuento por Producto / Marca / Categoría (Promoción Específica)</h2>
-                        <p>Promociona productos o líneas específicas fijando un porcentaje y vigencia comercial</p>
-                    </div>
-
-                    <form id="producto-promo-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:2">
-                                <label>Productos / SKUs (selecciona o deja * para todos)</label>
-                                <select id="cfg-prod-select" multiple style="min-height:80px"></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Marca</label>
-                                <select id="cfg-prod-marca"><option value="*">Todas (*)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Categoría</label>
-                                <select id="cfg-prod-cat"><option value="*">Todas (*)</option></select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
-                                <input type="number" id="cfg-prod-porcentaje" step="0.0001" value="0.05" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-prod-monedas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="USD">Solo USD</option>
-                                    <option value="VES">Solo VES</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Listas Aplicables</label>
-                                <select id="cfg-prod-listas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="4">Lista USD (#4)</option>
-                                    <option value="5">Lista VES (#5)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-prod-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-prod-hasta">
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Promoción Producto</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Promociones por Producto Registradas</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Productos / SKUs</th>
-                                    <th>Marca</th>
-                                    <th>Categoría</th>
-                                    <th>% Descuento</th>
-                                    <th>Monedas</th>
-                                    <th>Listas</th>
-                                    <th>Vigencia</th>
-                                    <th>Estado (Switch)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="producto-promo-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando promociones de productos...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- PANEL 4: Descuento por Diferencial Cambiario -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
-                    <div class="panel-header">
-                        <h2>Descuentos por Diferencial Cambiario</h2>
-                        <p>35% Fijo VES a USD, Equiparación a Tasa Binance N/C y Diferencial BCV vs Binance al Cierre</p>
-                    </div>
-
-                    <form id="diferencial-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:2">
-                                <label>Nombre del Descuento</label>
-                                <input type="text" id="cfg-dif-nombre" placeholder="Ej: 35% Fijo por Pago USD en Lista VES" required>
-                            </div>
-                            <div class="form-group" style="flex:2">
-                                <label>Tipo de Diferencial</label>
-                                <select id="cfg-dif-tipo-diferencial" required>
-                                    <option value="fijo_35_ves_usd">35% Fijo (Factura Lista VES pagada en USD)</option>
-                                    <option value="equiparar_binance">Equiparar Tasa Binance N/C (Pagos acumulados VES a Binance vs Lista USD)</option>
-                                    <option value="diferencial_bcv_binance">Diferencial BCV vs. Binance Cierre (100% pagado en orden)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo de Cálculo</label>
-                                <select id="cfg-dif-tipo-calculo" required>
-                                    <option value="fijo">Porcentaje Fijo</option>
-                                    <option value="variable">Diferencial Variable (Dinamico)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje Fijo (%) (si aplica)</label>
-                                <input type="number" id="cfg-dif-porcentaje-fijo" step="0.0001" value="0.35">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-dif-monedas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="USD">USD</option>
-                                    <option value="VES">VES</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Listas Aplicables</label>
-                                <select id="cfg-dif-listas">
-                                    <option value="*">Todas (*)</option>
-                                    <option value="4">Lista USD (#4)</option>
-                                    <option value="5">Lista VES (#5)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-dif-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-dif-hasta">
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Regla Diferencial</button>
-                    </form>
-
-                    <div class="mini-table-wrapper">
-                        <h3>Reglas de Diferencial Cambiario</h3>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Nombre</th>
-                                    <th>Tipo Diferencial</th>
-                                    <th>Cálculo</th>
-                                    <th>% Fijo</th>
-                                    <th>Monedas</th>
-                                    <th>Listas</th>
-                                    <th>Vigencia</th>
-                                    <th>Estado (Switch)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="diferencial-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando reglas de diferencial...</td></tr>
+                                <tr><td colspan="4" class="table-empty">Cargando exclusiones...</td></tr>
                             </tbody>
                         </table>
                     </div>
