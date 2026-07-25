@@ -920,23 +920,32 @@ async def get_reporte_saldos():
             except Exception as e_so:
                 logger.warning("Error consultando sale.order en Odoo: %s", e_so)
 
-        # Query Odoo Pickings for Delivery Date (stock.picking done)
+        # Query Odoo Pickings for Delivery Date and Returns (stock.picking done)
         picking_delivery_map = {}
+        picking_return_set = set()
         if execute and so_ids_names:
             try:
                 pickings = execute(
                     "stock.picking",
                     "search_read",
-                    [[["state", "=", "done"], ["origin", "in", so_ids_names]]],
-                    {"fields": ["origin", "date_done", "scheduled_date"]}
+                    [[["state", "=", "done"]]],
+                    {"fields": ["origin", "date_done", "scheduled_date", "picking_type_code", "return_id"]}
                 )
                 for p in pickings:
                     origin = str(p.get("origin") or "").strip()
-                    dt_done = p.get("date_done") or p.get("scheduled_date")
-                    if origin and dt_done:
-                        dt_str = str(dt_done).split(" ")[0]
-                        if origin not in picking_delivery_map or dt_str > picking_delivery_map[origin]:
-                            picking_delivery_map[origin] = dt_str
+                    p_code = str(p.get("picking_type_code") or "")
+                    is_return = bool(p.get("return_id")) or (p_code == "incoming") or ("Devolución" in origin) or ("Return" in origin)
+                    
+                    for so_name in so_ids_names:
+                        if so_name and so_name in origin:
+                            if is_return:
+                                picking_return_set.add(so_name)
+                            elif p_code == "outgoing":
+                                dt_done = p.get("date_done") or p.get("scheduled_date")
+                                if dt_done:
+                                    dt_str = str(dt_done).split(" ")[0]
+                                    if so_name not in picking_delivery_map or dt_str > picking_delivery_map[so_name]:
+                                        picking_delivery_map[so_name] = dt_str
             except Exception as e_pic:
                 logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
 
@@ -1019,14 +1028,19 @@ async def get_reporte_saldos():
         for o in ordenes:
             odoo_info = so_odoo_data.get(o.so_id, {})
             st = odoo_info.get("state") or getattr(o, "estado_orden", "sale")
-            has_picking = (o.so_id in picking_delivery_map) or o.entregada_completa or bool(o.fecha_entrega)
+            has_done_outgoing = (o.so_id in picking_delivery_map) or o.entregada_completa or bool(o.fecha_entrega)
+            has_done_return = (o.so_id in picking_return_set) or getattr(o, "tiene_devolucion", False)
 
-            # Exclude cancelled orders without completed deliveries, or unconfirmed draft/sent quotes without delivery
-            if st in ["cancel", "draft", "sent"] and not has_picking:
+            # 1. Excluir cotizaciones borrador o enviadas sin despachos realizados
+            if st in ["draft", "sent"] and not has_done_outgoing:
                 continue
 
-            # Exclude returned orders if cancelled or without active delivery
-            if getattr(o, "tiene_devolucion", False) and st == "cancel" and not has_picking:
+            # 2. Excluir órdenes canceladas con devolución procesada o sin despachos realizados
+            if st == "cancel" and (has_done_return or not has_done_outgoing):
+                continue
+
+            # 3. Excluir cualquier orden devuelta en estado no activo
+            if has_done_return and st in ["cancel", "draft", "sent"]:
                 continue
 
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")

@@ -288,12 +288,12 @@ class OdooXmlRpcReader(OdooReader):
         return [map_orden(r) for r in recs]
 
     def _ordenes_con_devolucion(self, so_ids: list[int]) -> set[int]:
-        """Ids de SO con al menos un picking de devolución (``return_id`` seteado)."""
+        """Ids de SO con al menos un picking de devolución procesado (state == 'done')."""
         if not so_ids:
             return set()
         pickings = self._search_read(
             self.MODEL_PICKING,
-            [["sale_id", "in", so_ids], ["return_id", "!=", False]],
+            [["sale_id", "in", so_ids], ["state", "=", "done"], "|", ["return_id", "!=", False], ["picking_type_code", "=", "incoming"]],
             ["sale_id"],
         )
         return {int(_m2o_id(p.get("sale_id"))) for p in pickings if _m2o_id(p.get("sale_id"))}
