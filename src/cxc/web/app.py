@@ -2702,14 +2702,17 @@ async def get_tasas_promedios():
 
         # Find most recent valid Binance & BCV rates from all rows
         for r in reversed(rows):
-            tb_val = parse_decimal_safe(r.get("tasa_binance", "0"))
-            if tb_val > Decimal("0") and last_binance <= Decimal("0"):
-                last_binance = tb_val
-            tbcv_val = parse_decimal_safe(r.get("tasa_bcv", "0"))
-            if tbcv_val > Decimal("0") and last_bcv <= Decimal("0"):
-                last_bcv = tbcv_val
-            if last_binance > Decimal("0") and last_bcv > Decimal("0"):
-                break
+            try:
+                tb_val = Decimal(str(r.get("tasa_binance", "0")))
+                if tb_val > Decimal("0") and last_binance <= Decimal("0"):
+                    last_binance = tb_val
+                tbcv_val = Decimal(str(r.get("tasa_bcv", "0")))
+                if tbcv_val > Decimal("0") and last_bcv <= Decimal("0"):
+                    last_bcv = tbcv_val
+                if last_binance > Decimal("0") and last_bcv > Decimal("0"):
+                    break
+            except Exception:
+                pass
 
         for r in target_rows:
             try:
