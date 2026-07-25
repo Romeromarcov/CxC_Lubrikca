@@ -24,8 +24,9 @@ from cxc.odoo.client import OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.sync.incremental import IncrementalSync
 from cxc.engine.runner import EngineRunner
+from cxc.engine.effective_dating import descuento_vigente
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
-from cxc.models import Vinculacion, EstadoVinculacion, Moneda, TipoTasa
+from cxc.models import Vinculacion, EstadoVinculacion, Moneda, TipoTasa, TipoDescuento
 
 app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 
