@@ -2507,6 +2507,166 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Unified Discount Rules Endpoint ---
+@app.get("/api/reglas-descuento")
+async def get_todas_reglas_descuento():
+    try:
+        repo = get_repo()
+        todas = []
+
+        # 1. Recompra
+        for r in repo.descuentos_recompra():
+            todas.append({
+                "tabla": "DescuentosRecompra",
+                "tipo_regla": "recurrencia",
+                "tipo_nombre": "Recompra / Recurrencia",
+                "regla_id": r.regla_id,
+                "marca": getattr(r, "marca", "GLOBAL OIL"),
+                "categoria": getattr(r, "categoria", "CAJA"),
+                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "min_cajas", 2))),
+                "max_cantidad": float(getattr(r, "max_cantidad", getattr(r, "max_cajas", 4))),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "porcentaje": float(r.porcentaje),
+                "listas_aplicables": getattr(r, "listas_aplicables", "*"),
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "max_usos_mes": r.max_usos_mes,
+                    "dias_ventana": r.dias_ventana
+                },
+                "activo": r.activo
+            })
+
+        # 2. Pronto Pago
+        for r in repo.descuentos_pronto_pago():
+            todas.append({
+                "tabla": "DescuentosProntoPago",
+                "tipo_regla": "contado",
+                "tipo_nombre": "Pronto Pago / Contado",
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "USD"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "porcentaje": float(r.porcentaje),
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "dias_gracia": r.dias_gracia,
+                    "monedas_aplicables": r.monedas_aplicables
+                },
+                "activo": r.activo
+            })
+
+        # 3. Volumen
+        for r in repo.descuentos_volumen():
+            todas.append({
+                "tabla": "DescuentosVolumen",
+                "tipo_regla": "volumen",
+                "tipo_nombre": "Descuento por Volumen",
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "litros_minimo", 0))),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "LITROS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "porcentaje": float(r.porcentaje),
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "tipo_evaluacion": r.tipo_evaluacion,
+                    "dias_evaluacion": r.dias_evaluacion
+                },
+                "activo": r.activo
+            })
+
+        # 4. Primera Compra
+        for r in repo.promociones_primera_compra():
+            todas.append({
+                "tabla": "PromocionPrimeraCompra",
+                "tipo_regla": "primera_compra",
+                "tipo_nombre": "Promoción Primera Compra",
+                "regla_id": r.regla_id,
+                "marca": getattr(r, "marca", "GLOBAL OIL"),
+                "categoria": getattr(r, "categoria", getattr(r, "categorias_aplica", "Comercial")),
+                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "compra_minima", 3))),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": r.tipo_beneficio,
+                "porcentaje": float(r.valor) if r.tipo_beneficio == "porcentaje" else float(getattr(r, "descuento_fallback", 0.02)),
+                "listas_aplicables": getattr(r, "listas_aplicables", "*"),
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "productos": r.productos,
+                    "regalo_tipo": r.regalo_tipo,
+                    "descuento_fallback": float(getattr(r, "descuento_fallback", 0))
+                },
+                "activo": r.activo
+            })
+
+        # 5. Producto / Marca / Categoría Promo
+        for r in repo.descuentos_producto():
+            todas.append({
+                "tabla": "DescuentosProducto",
+                "tipo_regla": "producto",
+                "tipo_nombre": "Promoción por Producto",
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "porcentaje": float(r.porcentaje),
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "productos": r.productos,
+                    "monedas_aplicables": r.monedas_aplicables
+                },
+                "activo": r.activo
+            })
+
+        # 6. Diferencial Cambiario
+        for r in repo.descuentos_diferencial_cambiario():
+            todas.append({
+                "tabla": "DescuentosDiferencialCambiario",
+                "tipo_regla": "diferencial_cambiario",
+                "tipo_nombre": "Diferencial Cambiario",
+                "regla_id": r.regla_id,
+                "marca": getattr(r, "marca", "*"),
+                "categoria": getattr(r, "categoria", "*"),
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "USD"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "porcentaje": float(r.porcentaje_fijo),
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "campos_especiales": {
+                    "nombre": r.nombre,
+                    "tipo_diferencial": r.tipo_diferencial,
+                    "tipo_calculo": r.tipo_calculo,
+                    "monedas_aplicables": r.monedas_aplicables
+                },
+                "activo": r.activo
+            })
+
+        return todas
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Pronto Pago Endpoints ---
 @app.get("/api/config/descuentos-pronto-pago")
 async def get_config_pronto_pago():

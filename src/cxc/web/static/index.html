@@ -934,6 +934,41 @@
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <div id="tab-config" class="tab-panel">
             <div class="config-grid">
+                <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
+                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                        <div>
+                            <h2>⚡ Matriz Consolidada de Reglas de Descuento (Motor CxC)</h2>
+                            <p>Visión unificada de todas las estrategias comerciales activas e inactivas registradas en el sistema (Marca, Categoría, Tramo, Unidad, Beneficio, Listas y Vigencia)</p>
+                        </div>
+                        <button type="button" class="btn-primary" onclick="window.loadReglasConsolidadas()" style="background:#2563eb; display:inline-flex; align-items:center; gap:6px;">🔄 Actualizar Matriz Consolidada</button>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>ID / Estrategia</th>
+                                    <th>Marcas (M2M)</th>
+                                    <th>Categorías / Pres. (M2M)</th>
+                                    <th>Tramo (Min - Max)</th>
+                                    <th>Unidad</th>
+                                    <th>Beneficio / %</th>
+                                    <th>Listas Aplicables</th>
+                                    <th>Vigencia</th>
+                                    <th>Parámetros Especiales</th>
+                                    <th>Estado (Switch)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reglas-consolidadas-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando matriz consolidada de reglas de descuento...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Días Feriados -->
                 <section class="config-card card">
                     <div class="panel-header">
@@ -1890,6 +1925,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260725_08"></script>
+    <script src="/static/app.js?v=20260725_09"></script>
 </body>
 </html>

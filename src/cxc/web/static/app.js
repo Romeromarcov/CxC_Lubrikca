@@ -233,6 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else if (path === "configuracion") {
             loadConfigData();
             loadListasMapeo();
+            loadReglasConsolidadas();
             if (currentUserSession && currentUserSession.rol === "admin") {
                 loadAdminUsuarios();
             }
@@ -1981,6 +1982,109 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error(err);
         }
     });
+
+    // --- Load Master Consolidated Rules Matrix ---
+    async function loadReglasConsolidadas() {
+        const tbody = document.getElementById("reglas-consolidadas-table-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando matriz consolidada de reglas de descuento...</td></tr>';
+        try {
+            const res = await fetch("/api/reglas-descuento");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de descuento registradas.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.forEach(r => {
+                    const row = document.createElement("tr");
+                    
+                    // Format Beneficio
+                    let beneficioText = "";
+                    if (r.tipo_beneficio === "producto" || r.tipo_beneficio === "obsequio") {
+                        beneficioText = `🎁 Obsequio (${r.campos_especiales?.productos || 'Producto'})`;
+                    } else {
+                        const pctVal = (parseFloat(r.porcentaje || 0) * 100).toFixed(2);
+                        beneficioText = `💲 ${pctVal}%`;
+                    }
+
+                    // Format Tramo
+                    const minQ = r.min_cantidad !== undefined ? r.min_cantidad : 0;
+                    const maxQ = r.max_cantidad !== undefined ? r.max_cantidad : 999999;
+                    const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
+
+                    // Format Listas
+                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+
+                    // Format Campos Especiales
+                    let espArr = [];
+                    if (r.campos_especiales) {
+                        for (const [k, v] of Object.entries(r.campos_especiales)) {
+                            if (v !== null && v !== undefined && v !== "" && v !== 0) {
+                                espArr.push(`<small style="display:block; color:var(--text-muted)"><strong>${k}:</strong> ${v}</small>`);
+                            }
+                        }
+                    }
+                    const espText = espArr.length > 0 ? espArr.join("") : "—";
+
+                    // Format Vigencia
+                    const vigText = `${r.vigencia_desde || 'N/A'}<br><small style="color:var(--text-muted)">hasta ${r.vigencia_hasta || 'Indefinida'}</small>`;
+
+                    // Format Interactive Switch
+                    const switchHtml = `
+                        <label class="switch" style="position:relative; display:inline-block; width:44px; height:22px;">
+                            <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${r.tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
+                            <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:22px;"></span>
+                        </label>
+                        <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+                    `;
+
+                    row.innerHTML = `
+                        <td><strong>${r.tipo_nombre}</strong><br><small style="color:var(--text-muted)">${r.regla_id}</small></td>
+                        <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
+                        <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || '*'}</span></td>
+                        <td><strong>${tramoText}</strong></td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${r.unidad_medida || 'CAJAS'}</span></td>
+                        <td><strong style="color:#059669">${beneficioText}</strong></td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
+                        <td>${vigText}</td>
+                        <td>${espText}</td>
+                        <td>${switchHtml}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar la matriz de reglas.</td></tr>';
+            console.error("Error cargando reglas consolidadas:", err);
+        }
+    }
+    window.loadReglasConsolidadas = loadReglasConsolidadas;
+
+    window.toggleReglaActiva = async function(tabla, reglaId, activo) {
+        try {
+            const res = await fetch("/api/config/toggle-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: activo })
+            });
+            if (res.ok) {
+                loadReglasConsolidadas();
+                if (window.loadRecompra) window.loadRecompra();
+                if (window.loadDescuentosProntoPago) window.loadDescuentosProntoPago();
+                if (window.loadDescuentosVolumen) window.loadDescuentosVolumen();
+                if (window.loadPromociones) window.loadPromociones();
+                if (window.loadDescuentosProducto) window.loadDescuentosProducto();
+                if (window.loadDescuentosDiferencial) window.loadDescuentosDiferencial();
+            } else {
+                alert("❌ No se pudo actualizar el estado de la regla.");
+            }
+        } catch (err) {
+            console.error("Error toggle regla:", err);
+            alert("❌ Error de comunicación al alternar estado.");
+        }
+    };
 
     // Save custom holiday
     if (feriadoForm) {
