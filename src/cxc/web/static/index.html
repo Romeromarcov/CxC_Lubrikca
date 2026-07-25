@@ -388,8 +388,21 @@
 
         <!-- PESTAÑA 3: CONCILIACIONES Y ASIGNACIÓN DE PAGOS -->
         <div id="tab-conciliaciones" class="tab-panel">
+            <div class="conciliaciones-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- Tarjetas KPI Principales de Conciliación al Inicio de la Página -->
+                <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 0.5rem;">
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Pagos Sin Asignar</span>
+                        <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
+                    </div>
+                    <div class="kpi-card card">
+                        <span class="kpi-label">Alertas Rojas</span>
+                        <span class="kpi-value danger" id="kpi-alertas">0</span>
+                    </div>
+                </section>
+
                 <!-- SUGERENCIAS INTELIGENTES DE CONCILIACIÓN (FIFO) -->
-                <section class="card" style="margin-bottom: 2rem; border-left: 5px solid #3b82f6;">
+                <section class="card" style="border-left: 5px solid #3b82f6;">
                     <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <div>
                             <h2 style="color: #1d4ed8; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
@@ -429,23 +442,6 @@
                                 </tr>
                             </tbody>
                         </table>
-                    </div>
-                </section>
-
-            <div class="conciliaciones-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <!-- Tarjeta de Estadísticas (KPIs) -->
-                <section class="kpi-panel">
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Por Cobrar en Órdenes</span>
-                        <span class="kpi-value" id="kpi-cobrables">$0.00</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Pagos Sin Asignar</span>
-                        <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Alertas Rojas</span>
-                        <span class="kpi-value danger" id="kpi-alertas">0</span>
                     </div>
                 </section>
 

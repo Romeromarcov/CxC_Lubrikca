@@ -330,14 +330,15 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/resumen");
             if (res.ok) {
                 const data = await res.json();
-                kpiCobrables.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.total_por_cobrar_usd);
-                kpiSinAsignar.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.pagos_sin_asignar_usd);
-                kpiAlertas.textContent = data.alertas_reconciliacion;
-                
-                if (data.alertas_reconciliacion > 0) {
-                    kpiAlertas.classList.add("danger");
-                } else {
-                    kpiAlertas.classList.remove("danger");
+                if (kpiCobrables) kpiCobrables.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.total_por_cobrar_usd);
+                if (kpiSinAsignar) kpiSinAsignar.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.pagos_sin_asignar_usd);
+                if (kpiAlertas) {
+                    kpiAlertas.textContent = data.alertas_reconciliacion;
+                    if (data.alertas_reconciliacion > 0) {
+                        kpiAlertas.classList.add("danger");
+                    } else {
+                        kpiAlertas.classList.remove("danger");
+                    }
                 }
             }
         } catch (err) {
