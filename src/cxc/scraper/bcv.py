@@ -30,6 +30,16 @@ def _parse_decimal_local(texto: str) -> Decimal:
         raise ValueError(f"Tasa BCV no parseable: {texto!r}") from exc
 
 
+def parse_bcv_rates(html: str) -> tuple[Decimal, Decimal]:
+    """Extrae las tasas USD y EUR del HTML del BCV."""
+    m_usd = re.search(r'id=["\']dolar["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
+    m_eur = re.search(r'id=["\']euro["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
+
+    usd_val = q6(_parse_decimal_local(m_usd.group(1))) if m_usd else Decimal("0")
+    eur_val = q6(_parse_decimal_local(m_eur.group(1))) if m_eur else Decimal("0")
+    return usd_val, eur_val
+
+
 def parse_bcv_html(html: str, regex: str) -> Decimal:
     """Extrae la tasa USD del HTML del BCV con el patrón configurado."""
     match = re.search(regex, html, flags=re.DOTALL | re.IGNORECASE)
@@ -55,6 +65,10 @@ class BcvClient:
         html = self._get(self._config.url, self._config.timeout_seconds)
         return parse_bcv_html(html, self._config.usd_regex)
 
+    def fetch_rates(self) -> tuple[Decimal, Decimal]:
+        html = self._get(self._config.url, self._config.timeout_seconds)
+        return parse_bcv_rates(html)
+
 
 def _default_get(url: str, timeout: int) -> str:  # pragma: no cover - red externa
     import requests
@@ -71,18 +85,30 @@ class OdooBcvClient:
         self._config = odoo_config
 
     def fetch_rate(self) -> Decimal:
+        rates_usd, _ = self.fetch_rates()
+        if rates_usd > Decimal("0"):
+            return rates_usd
+        raise ValueError("No se pudo obtener la tasa BCV desde Odoo")
+
+    def fetch_rates(self) -> tuple[Decimal, Decimal]:
         from ..odoo.client import _connect
         execute = _connect(self._config)
         
-        # Query the latest USD exchange rate in Odoo (USD ID = 1)
         rates = execute(
             "res.currency.rate",
             "search_read",
-            [[["name", ">=", "2026-01-01"], ["currency_id", "=", 1]]],
-            {"fields": ["name", "inverse_company_rate"], "limit": 1, "order": "name desc"}
+            [[["name", ">=", "2026-01-01"], ["currency_id", "in", [1, 125]]]],
+            {"fields": ["name", "currency_id", "inverse_company_rate"], "order": "name desc"}
         )
-        if rates:
-            val = rates[0].get("inverse_company_rate")
+        rate_usd = Decimal("0")
+        rate_eur = Decimal("0")
+        for r in rates:
+            curr = r.get("currency_id")
+            c_id = curr[0] if isinstance(curr, (list, tuple)) else curr
+            val = r.get("inverse_company_rate")
             if val:
-                return Decimal(str(val))
-        raise ValueError("No se pudo obtener la tasa BCV desde Odoo")
+                if c_id == 1 and rate_usd == Decimal("0"):
+                    rate_usd = Decimal(str(val))
+                elif c_id == 125 and rate_eur == Decimal("0"):
+                    rate_eur = Decimal(str(val))
+        return rate_usd, rate_eur

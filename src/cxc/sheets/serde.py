@@ -221,6 +221,7 @@ def serie_to_row(s: SerieTasa) -> Row:
         "tasa_binance_tarde": str(s.tasa_binance_tarde) if s.tasa_binance_tarde else "",
         "tasa_binance_diario": str(s.tasa_binance_diario) if s.tasa_binance_diario else "",
         "diferencial_bcv_binance_pct": str(s.diferencial_bcv_binance_pct) if s.diferencial_bcv_binance_pct else "",
+        "tasa_bcv_euro": str(s.tasa_bcv_euro) if s.tasa_bcv_euro else "",
     }
 
 
@@ -234,6 +235,7 @@ def serie_from_row(r: Mapping[str, str]) -> SerieTasa:
         tasa_binance_tarde=p_dec(r.get("tasa_binance_tarde", "")) if r.get("tasa_binance_tarde") else None,
         tasa_binance_diario=p_dec(r.get("tasa_binance_diario", "")) if r.get("tasa_binance_diario") else None,
         diferencial_bcv_binance_pct=p_dec(r.get("diferencial_bcv_binance_pct", "")) if r.get("diferencial_bcv_binance_pct") else None,
+        tasa_bcv_euro=p_dec(r.get("tasa_bcv_euro", "")) if r.get("tasa_bcv_euro") else None,
     )
 
 

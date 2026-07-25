@@ -48,13 +48,14 @@ class RatesScraper:
 
     def run(self, now: datetime) -> SerieTasa:
         """Captura un bucket horario y lo agrega a SerieTasas. Devuelve la fila."""
-        tasa_binance, tasa_bcv = self._intentar_captura()
+        tasa_binance, tasa_bcv, tasa_bcv_euro = self._intentar_captura()
 
         if tasa_binance is not None and tasa_bcv is not None:
             fila = SerieTasa(
                 timestamp=now,
                 tasa_bcv=tasa_bcv,
                 tasa_binance=tasa_binance,
+                tasa_bcv_euro=tasa_bcv_euro,
                 fuente=self._fuente,
                 es_heredada=False,
                 capturada_ok=True,
@@ -110,18 +111,22 @@ class RatesScraper:
         self._chequear_alerta(fila)
         return fila
 
-    def _intentar_captura(self) -> tuple[Decimal | None, Decimal | None]:
+    def _intentar_captura(self) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
         tasa_binance: Decimal | None = None
         tasa_bcv: Decimal | None = None
+        tasa_bcv_euro: Decimal | None = None
         try:
             tasa_binance = self._binance.fetch_rate()
         except Exception as exc:  # noqa: BLE001 - cualquier fallo => fallback
             logger.warning("Fallo captura Binance: %s", exc)
         try:
-            tasa_bcv = self._bcv.fetch_rate()
+            if hasattr(self._bcv, "fetch_rates"):
+                tasa_bcv, tasa_bcv_euro = self._bcv.fetch_rates()
+            else:
+                tasa_bcv = self._bcv.fetch_rate()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Fallo captura BCV: %s", exc)
-        return tasa_binance, tasa_bcv
+        return tasa_binance, tasa_bcv, tasa_bcv_euro
 
     def _heredar(self, now: datetime) -> SerieTasa:
         ultima = self._repo.last_serie_tasa()
@@ -135,6 +140,7 @@ class RatesScraper:
             timestamp=now,
             tasa_bcv=ultima.tasa_bcv,
             tasa_binance=ultima.tasa_binance,
+            tasa_bcv_euro=ultima.tasa_bcv_euro,
             fuente=f"heredada de {ultima.timestamp.isoformat()}",
             es_heredada=True,
             capturada_ok=False,

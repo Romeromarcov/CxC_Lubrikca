@@ -150,6 +150,7 @@ class SerieTasa:
     tasa_binance_tarde: Decimal | None = None
     tasa_binance_diario: Decimal | None = None
     diferencial_bcv_binance_pct: Decimal | None = None
+    tasa_bcv_euro: Decimal | None = None
 
 
 # --- 3.7 DescuentosProntoPago (configurable, pronto pago con días de gracia) ---

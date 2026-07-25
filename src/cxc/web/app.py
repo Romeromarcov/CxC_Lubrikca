@@ -1169,6 +1169,22 @@ async def get_reporte_saldos():
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
 
+        # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
+        hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
+        hist_map = {}
+        for r in hist_rows:
+            code = str(r.get("codigo", "")).strip()
+            if code:
+                try:
+                    hist_map[code] = {
+                        "nombre": r.get("producto_nombre", ""),
+                        "usd": Decimal(str(r.get("precio_usd", "0") or "0")),
+                        "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
+                    }
+                except Exception:
+                    pass
+
+        cutoff_historical = date(2026, 3, 12)
         reporte = []
         vendedores_set = set()
 
@@ -1216,19 +1232,33 @@ async def get_reporte_saldos():
 
             subtotal = monto_entregado_neto_usd
             
-            # Compute projected USD subtotal and total using UI candidate USD pricelists effective on order date (o.fecha)
+            lista_id_str = str(o.lista_precios or "").strip()
+            is_historical = (not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical)
+
+            # Compute projected USD subtotal and total using UI candidate USD pricelists or Historical List
             total_proyectado_usd = Decimal("0.0")
             for ln in order_lines:
                 qty = max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0"))))
                 prod_raw = ln.get("producto", "")
                 pt_id = extract_product_tmpl_id(prod_raw)
                 
-                eff_price = resolve_effective_pricelist_price(pt_id, o.fecha, usd_ids, rules_usd) if pt_id else None
-                price_usd = eff_price if eff_price is not None else Decimal(str(ln.get("precio_unitario", "0")))
+                if is_historical:
+                    code_key = str(pt_id) if pt_id else prod_raw.strip()
+                    hist_info = hist_map.get(code_key)
+                    if hist_info and hist_info["usd"] > Decimal("0"):
+                        price_usd = hist_info["usd"]
+                    else:
+                        price_usd = Decimal(str(ln.get("precio_unitario", "0")))
+                else:
+                    eff_price = resolve_effective_pricelist_price(pt_id, o.fecha, usd_ids, rules_usd) if pt_id else None
+                    price_usd = eff_price if eff_price is not None else Decimal(str(ln.get("precio_unitario", "0")))
+                
                 total_proyectado_usd += qty * price_usd
                 
-            lista_id_str = str(o.lista_precios or "").strip()
-            if not lista_id_str or lista_id_str in ("0", "None"):
+            if is_historical:
+                lista_name = "Lista Histórica Auditoría" if o.fecha < cutoff_historical else "Lista Histórica (Sin Lista)"
+                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
+            elif not lista_id_str or lista_id_str in ("0", "None"):
                 lista_name = "Sin Lista (Odoo)"
                 monto_total_proyectado_usd = float(o.monto_total)
             elif lista_id_str in [str(x) for x in usd_ids]:
@@ -2998,8 +3028,9 @@ async def get_auditoria():
             is_ves = lista_id_str in [str(x) for x in ves_ids]
             candidate_list_ids = ves_ids if is_ves else usd_ids
             pricelist_label = f"Lista VES (#{lista_id_str})" if is_ves else f"Lista USD (#{lista_id_str})"
+            is_historical = (not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical)
 
-            # Check 1: Unit prices vs correct official pricelist (VES or USD)
+            # Check 1: Unit prices vs correct official pricelist or Historical List
             for ln in so_lines:
                 qty = parse_decimal_safe(ln.get("cantidad", "0"))
                 qty_delivered = parse_decimal_safe(ln.get("cantidad_entregada", ln.get("qty_delivered", "0")))
@@ -3010,7 +3041,14 @@ async def get_auditoria():
                     continue
 
                 pt_id = extract_product_tmpl_id(ln.get("producto", ""))
-                price_official = resolve_effective_pricelist_price(pt_id, o.fecha, candidate_list_ids, rules_all) if pt_id else None
+                if is_historical:
+                    code_key = str(pt_id) if pt_id else str(ln.get("producto", "")).strip()
+                    hist_info = hist_map.get(code_key)
+                    price_official = hist_info["usd"] if hist_info and hist_info["usd"] > Decimal("0") else None
+                    cur_label = "Lista Histórica Auditoría (Pre-12-Mar)" if o.fecha < cutoff_historical else "Lista Histórica Auditoría (Sin Lista)"
+                else:
+                    price_official = resolve_effective_pricelist_price(pt_id, o.fecha, candidate_list_ids, rules_all) if pt_id else None
+                    cur_label = pricelist_label
 
                 if price_official is not None:
                     if price_order < price_official - Decimal("0.01"):
@@ -3024,7 +3062,7 @@ async def get_auditoria():
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
                             "tipo": "Precio Inferior a Lista",
-                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < {pricelist_label} (${float(price_official):.2f}) [Entregado: {float(qty_delivered):.0f} und]",
+                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < {cur_label} (${float(price_official):.2f}) [Entregado: {float(qty_delivered):.0f} und]",
                             "esperado": float(price_official * qty),
                             "actual": float(price_order * qty),
                             "diferencia_monto": round(diff_monto, 2),
