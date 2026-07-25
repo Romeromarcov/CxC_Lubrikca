@@ -1042,21 +1042,23 @@ async def get_reporte_saldos():
         today_date = date.today()
 
         for o in ordenes:
+            order_lines = lines_by_so.get(o.so_id, [])
             odoo_info = so_odoo_data.get(o.so_id, {})
-            st = odoo_info.get("state") or getattr(o, "estado_orden", "sale")
-            has_done_outgoing = (o.so_id in picking_delivery_map) or o.entregada_completa or bool(o.fecha_entrega)
-            has_done_return = (o.so_id in picking_return_set) or getattr(o, "tiene_devolucion", False)
+            
+            # Compute actual net delivered subtotal per product line (cantidad_entregada * precio_unitario)
+            if order_lines:
+                monto_entregado_neto_usd = sum(
+                    max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0")))) * Decimal(str(ln.get("precio_unitario", "0")))
+                    for ln in order_lines
+                )
+            else:
+                st_fallback = odoo_info.get("state") or getattr(o, "estado_orden", "sale")
+                monto_entregado_neto_usd = o.monto_total if st_fallback not in ["cancel", "draft"] else Decimal("0")
 
-            # 1. Excluir cotizaciones borrador o enviadas sin despachos realizados
-            if st in ["draft", "sent"] and not has_done_outgoing:
-                continue
-
-            # 2. Excluir TODAS las órdenes canceladas en Odoo
-            if st == "cancel":
-                continue
-
-            # 3. Excluir cualquier orden con devolución procesada en Odoo
-            if has_done_return:
+            # REGLA DE AUDITORÍA POR CANTIDADES ENTREGADAS Y DEVOLUCIONES (SIN HARDCODING):
+            # Si el valor de mercancía efectivamente despachada y retenida por el cliente es 0
+            # (sin despachar o devuelta a almacén 100%), no genera saldo deudor por cobrar.
+            if monto_entregado_neto_usd <= Decimal("0"):
                 continue
 
             client_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
@@ -1068,14 +1070,12 @@ async def get_reporte_saldos():
             abono_binance = float(p_data["abono_binance"])
             fecha_ultimo_abono = p_data["ultimo_abono"]
 
-            # Compute actual subtotal from lines
-            order_lines = lines_by_so.get(o.so_id, [])
-            subtotal = sum(Decimal(str(ln.get("cantidad", "0"))) * Decimal(str(ln.get("precio_unitario", "0"))) for ln in order_lines)
+            subtotal = monto_entregado_neto_usd
             
             # Compute projected USD subtotal and total under List 4 (USD)
             total_proyectado_usd = Decimal("0.0")
             for ln in order_lines:
-                qty = Decimal(str(ln.get("cantidad", "0")))
+                qty = max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0"))))
                 prod_raw = ln.get("producto", "")
                 pt_id = None
                 if isinstance(prod_raw, str):
