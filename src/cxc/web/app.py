@@ -1744,12 +1744,15 @@ async def get_config_listas_precio():
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         
-        # Fetch all pricelists including archived
+        # IMPORTANTE: pasar context={'active_test': False} para que Odoo devuelva
+        # las listas archivadas con sus nombres ACTUALES (sin este contexto, Odoo
+        # las filtra aunque el dominio las incluya explícitamente).
         pricelists = execute(
             "product.pricelist",
             "search_read",
             [[["active", "in", [True, False]]]],
-            {"fields": ["id", "name", "currency_id", "active"]}
+            {"fields": ["id", "name", "currency_id", "active"],
+             "context": {"active_test": False}, "order": "id asc"}
         )
         
         # Fetch items/rules for these pricelists
@@ -1758,40 +1761,57 @@ async def get_config_listas_precio():
             "product.pricelist.item",
             "search_read",
             [[["pricelist_id", "in", list_ids]]],
-            {"fields": ["pricelist_id", "fixed_price", "percent_price", "date_start", "date_end", "product_tmpl_id"]}
+            {"fields": ["pricelist_id", "fixed_price", "percent_price", "date_start", "date_end", "product_tmpl_id"],
+             "context": {"active_test": False}}
         )
         
-        # Group items by pricelist ID
-        items_by_list = {}
+        items_by_list: dict[int, list] = {}
         for item in items:
-            pl_id = item["pricelist_id"][0]
+            pl_id = item["pricelist_id"][0] if isinstance(item["pricelist_id"], (list, tuple)) else item["pricelist_id"]
             items_by_list.setdefault(pl_id, []).append(item)
             
         resultado = []
         for pl in pricelists:
             pl_items = items_by_list.get(pl["id"], [])
             rules = []
+            dates_start = []
+            dates_end = []
             for item in pl_items:
                 prod = item.get("product_tmpl_id")
                 prod_name = prod[1] if isinstance(prod, list) and len(prod) > 1 else "Todos los productos"
-                
+                ds = item.get("date_start") or None
+                de = item.get("date_end") or None
+                if ds:
+                    dates_start.append(str(ds)[:10])
+                if de:
+                    dates_end.append(str(de)[:10])
                 rules.append({
                     "producto": prod_name,
                     "precio_fijo": float(item.get("fixed_price") or 0.0),
                     "descuento_porcentaje": float(item.get("percent_price") or 0.0),
-                    "fecha_inicio": item.get("date_start") or "N/A",
-                    "fecha_fin": item.get("date_end") or "N/A"
+                    "fecha_inicio": str(ds)[:10] if ds else "N/A",
+                    "fecha_fin": str(de)[:10] if de else "N/A",
                 })
-                
+
             resultado.append({
                 "id": pl["id"],
                 "name": pl["name"],
-                "moneda": pl["currency_id"][1] if isinstance(pl["currency_id"], list) else "USD",
+                "moneda": pl["currency_id"][1] if isinstance(pl["currency_id"], (list, tuple)) and len(pl["currency_id"]) > 1 else "USD",
                 "active": pl["active"],
-                "reglas": rules
+                "reglas": rules,
+                # Fechas mínima/máxima de las reglas para mostrar rango de vigencia real
+                "fecha_desde": min(dates_start) if dates_start else "N/A",
+                "fecha_hasta": max(dates_end) if dates_end else "N/A",
             })
-            
-        return resultado
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content=resultado,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            }
+        )
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

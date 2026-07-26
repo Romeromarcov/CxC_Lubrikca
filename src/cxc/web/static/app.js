@@ -1876,7 +1876,8 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadListasPrecio() {
         try {
             listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando listas de precios de Odoo...</td></tr>';
-            const res = await fetch("/api/config/listas-precio");
+            // Añadir timestamp para evitar que el browser cachee la respuesta
+            const res = await fetch(`/api/config/listas-precio?_t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.length === 0) {
@@ -1888,14 +1889,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 data.forEach(pl => {
                     const row = document.createElement("tr");
 
-                    let startVal = "N/A";
-                    let endVal = "N/A";
-                    if (pl.reglas && pl.reglas.length > 0) {
-                        const nonNaStarts = pl.reglas.map(r => r.fecha_inicio).filter(d => d !== "N/A");
-                        const nonNaEnds = pl.reglas.map(r => r.fecha_fin).filter(d => d !== "N/A");
-                        if (nonNaStarts.length > 0) startVal = nonNaStarts[0].split(" ")[0];
-                        if (nonNaEnds.length > 0) endVal = nonNaEnds[0].split(" ")[0];
-                    }
+                    // Usar fechas pre-calculadas del servidor (más precisas que buscar en reglas)
+                    const startVal = pl.fecha_desde || "N/A";
+                    const endVal = pl.fecha_hasta || "N/A";
 
                     row.innerHTML = `
                         <td><strong>#${pl.id}</strong></td>
