@@ -47,6 +47,9 @@ class SheetGateway(ABC):
             self.upsert_row(table, pk_field, row)
 
     @abstractmethod
+    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool: ...
+
+    @abstractmethod
     def get_meta(self, key: str) -> str | None: ...
 
     @abstractmethod
@@ -77,6 +80,14 @@ class InMemorySheetGateway(SheetGateway):
                 filas[i] = dict(row)
                 return
         filas.append(dict(row))
+
+    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool:
+        filas = self._tables.get(table, [])
+        clave = str(pk_value).strip().lower()
+        nuevas = [r for r in filas if str(r.get(pk_field, "")).strip().lower() != clave]
+        eliminado = len(nuevas) < len(filas)
+        self._tables[table] = nuevas
+        return eliminado
 
     def get_meta(self, key: str) -> str | None:
         return self._meta.get(key)
@@ -287,6 +298,21 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 indice[clave] = len(matriz)
                 matriz.append(valores)
         ws.update(values=matriz, range_name="A2")
+
+    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool:
+        self.invalidate_cache(table)
+        ws = self._ws(table)
+        header = ws.row_values(1)
+        if not header or pk_field not in header:
+            return False
+        col_idx = header.index(pk_field) + 1
+        celdas = ws.col_values(col_idx)
+        target_pk_val = str(pk_value).strip().lower()
+        for fila_num, valor in enumerate(celdas[1:], start=2):
+            if str(valor).strip().lower() == target_pk_val:
+                ws.delete_rows(fila_num)
+                return True
+        return False
 
     def get_meta(self, key: str) -> str | None:
         for rec in self.read_rows(T_META):

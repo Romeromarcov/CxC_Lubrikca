@@ -1524,15 +1524,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Helper for interactive toggle switch
-    async function toggleRuleActive(tabla, reglaId, currentActive) {
+    async function toggleRuleActive(tabla, reglaId, newActive) {
         try {
             const res = await fetch("/api/config/toggle-descuento", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: !currentActive })
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: newActive })
             });
             if (res.ok) {
-                loadConfigData();
+                if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
             } else {
                 alert("❌ Error al cambiar estado de la regla.");
             }
@@ -1540,6 +1540,33 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("Error toggling rule:", err);
         }
     }
+    window.toggleReglaActiva = toggleRuleActive;
+
+    window.eliminarRegla = async function(tabla, reglaId) {
+        if (!confirm(`⚠️ ¿Estás seguro de que deseas ELIMINAR permanentemente la regla ${reglaId}?`)) return;
+        try {
+            const res = await fetch("/api/config/eliminar-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("🗑️ " + (data.message || "Regla eliminada permanentemente."));
+                if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                if (window.loadDescuentosVolumen) window.loadDescuentosVolumen();
+                if (window.loadDescuentosProntoPago) window.loadDescuentosProntoPago();
+                if (window.loadRecompra) window.loadRecompra();
+                if (window.loadDescuentosProducto) window.loadDescuentosProducto();
+                if (window.loadDescuentosDiferencial) window.loadDescuentosDiferencial();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo eliminar la regla."));
+            }
+        } catch (err) {
+            console.error("Error eliminando regla:", err);
+            alert("❌ Error de red al eliminar la regla.");
+        }
+    };
 
     // --- Load Pronto Pago Rules ---
     async function loadProntoPago() {
@@ -2096,8 +2123,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const cbs = parentForm.querySelectorAll(selectorClass);
         if (!cbs || cbs.length === 0) return "*";
         const checked = Array.from(cbs).filter(cb => cb.checked).map(cb => cb.value);
-        if (checked.length === 0 || checked.includes("*")) return "*";
-        return checked.join(",");
+        const specific = checked.filter(val => val !== "*");
+        if (specific.length > 0) {
+            return specific.join(",");
+        }
+        return "*";
     }
 
     // --- Helper to Render Standardized 10-Column Rule Row ---
@@ -2135,12 +2165,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const espText = espArr.length > 0 ? espArr.join(" | ") : "—";
         const vigText = `${r.vigencia_desde || 'N/A'}<br><small style="color:var(--text-muted)">hasta ${r.vigencia_hasta || 'Indefinida'}</small>`;
 
-        const switchHtml = `
-            <label class="switch" style="position:relative; display:inline-block; width:44px; height:22px;">
-                <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
-                <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:22px;"></span>
-            </label>
-            <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+        const actionsHtml = `
+            <div style="display:flex; align-items:center; gap:8px;">
+                <div>
+                    <label class="switch" style="position:relative; display:inline-block; width:38px; height:20px;">
+                        <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
+                        <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:20px;"></span>
+                    </label>
+                    <span style="font-size:0.7rem; font-weight:600; display:block; text-align:center; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+                </div>
+                <button type="button" class="btn btn-sm" onclick="window.eliminarRegla('${tabla}', '${r.regla_id}')" style="background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; padding:4px 8px; border-radius:6px; font-size:0.8rem; cursor:pointer;" title="Eliminar regla permanentemente">🗑️</button>
+            </div>
         `;
 
         const unidadStd = r.unidad_medida || (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen" ? "LITROS" : "UNIDADES");
@@ -2155,7 +2190,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
             <td>${vigText}</td>
             <td><small style="color:var(--text-muted)">${espText}</small></td>
-            <td>${switchHtml}</td>
+            <td>${actionsHtml}</td>
         `;
         return row;
     }
