@@ -1478,23 +1478,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- Tab 3: Configuration Panels ---
     async function loadConfigData() {
-        loadTasasPromedios();
-        loadProntoPago();
-        loadRecompra();
-        loadProductoPromo();
-        loadDiferencial();
-        loadTasas();
-        loadFeriados();
-        populateBrandsAndCategories();
-        loadDescuentosMarca();
-        loadDescuentosVolumen();
-        loadPromociones();
-        loadExclusiones();
-        loadListasPrecio();
-        loadListasMapeo();
-        loadOdooProductos();
-        loadClientesAuditoria();
-        loadSettingsMeta();
+        const loaders = [
+            loadTasasPromedios,
+            loadProntoPago,
+            loadRecompra,
+            loadProductoPromo,
+            loadDiferencial,
+            loadTasas,
+            loadFeriados,
+            populateBrandsAndCategories,
+            loadDescuentosMarca,
+            loadDescuentosVolumen,
+            loadPromociones,
+            loadExclusiones,
+            loadListasPrecio,
+            loadListasMapeo,
+            loadOdooProductos,
+            loadClientesAuditoria,
+            loadSettingsMeta
+        ];
+        for (const fn of loaders) {
+            try {
+                if (typeof fn === "function") await fn();
+            } catch (err) {
+                console.error(`Error ejecutando ${fn.name || 'loader'}:`, err);
+            }
+        }
     }
 
     // Load general Settings meta variables
