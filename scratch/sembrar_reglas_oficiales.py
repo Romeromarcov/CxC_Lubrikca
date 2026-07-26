@@ -31,31 +31,31 @@ data_recompra = [
 # 3. DescuentosProntoPago
 data_pronto_pago = [
     ['regla_id', 'marca', 'categoria', 'dias_gracia', 'porcentaje', 'monedas_aplicables', 'listas_aplicables', 'vigencia_desde', 'vigencia_hasta', 'activo'],
-    ['PP_GLOBAL_ELITE_SS_10', 'GLOBAL OIL', 'ELITE,SS', '0', '10.0', 'USD,VES', '*', '2026-01-01', '2026-03-30', 'FALSE'],
-    ['PP_GLOBAL_VISCOSIDADES_8', 'GLOBAL OIL', '*', '0', '8.0', 'USD,VES', '*', '2026-01-01', '2026-03-30', 'FALSE'],
-    ['PP_GLOBAL_PAILAS_8', 'GLOBAL OIL', 'PAILA', '0', '8.0', 'USD,VES', '*', '2026-01-01', '2026-03-30', 'FALSE'],
-    ['PP_GLOBAL_TAMBORES_6', 'GLOBAL OIL', 'TAMBOR', '0', '6.0', 'USD,VES', '*', '2026-01-01', '2026-03-30', 'FALSE'],
-    ['PP_GLOBAL_CAJAS_8', 'GLOBAL OIL', 'CAJA', '0', '8.0', 'USD,VES', '*', '2026-03-01', '2099-12-31', 'TRUE'],
-    ['PP_GLOBAL_PAILAS_6', 'GLOBAL OIL', 'PAILA', '0', '6.0', 'USD,VES', '*', '2026-03-01', '2099-12-31', 'TRUE'],
-    ['PP_GLOBAL_TAMBORES_VIG_6', 'GLOBAL OIL', 'TAMBOR', '0', '6.0', 'USD,VES', '*', '2026-03-01', '2099-12-31', 'TRUE'],
-    ['PP_SINOCO_CAJAS_3', 'SINOCO', 'CAJA', '0', '3.0', 'USD,VES', '*', '2026-03-01', '2099-12-31', 'TRUE']
+    ['PP_GLOBAL_ELITE_SS_10', 'GLOBAL OIL', 'CAJA', '0', '0.10', 'USD', '*', '2026-01-01', '2026-03-30', 'FALSE'],
+    ['PP_GLOBAL_VISCOSIDADES_8', 'GLOBAL OIL', 'CAJA', '0', '0.08', 'USD', '*', '2026-01-01', '2026-03-30', 'FALSE'],
+    ['PP_GLOBAL_PAILAS_8', 'GLOBAL OIL', 'PAILA', '0', '0.08', 'USD', '*', '2026-01-01', '2026-03-30', 'FALSE'],
+    ['PP_GLOBAL_TAMBORES_6', 'GLOBAL OIL', 'TAMBOR', '0', '0.06', 'USD', '*', '2026-01-01', '2026-03-30', 'FALSE'],
+    ['PP_GLOBAL_CAJAS_8', 'GLOBAL OIL', 'CAJA', '0', '0.08', 'USD', '*', '2026-03-01', '2099-12-31', 'TRUE'],
+    ['PP_GLOBAL_PAILAS_6', 'GLOBAL OIL', 'PAILA', '0', '0.06', 'USD', '*', '2026-03-01', '2099-12-31', 'TRUE'],
+    ['PP_GLOBAL_TAMBORES_VIG_6', 'GLOBAL OIL', 'TAMBOR', '0', '0.06', 'USD', '*', '2026-03-01', '2099-12-31', 'TRUE'],
+    ['PP_SINOCO_CAJAS_3', 'SINOCO', 'CAJA', '0', '0.03', 'USD', '*', '2026-03-01', '2099-12-31', 'TRUE']
 ]
 
 # 4. DescuentosVolumen
 data_volumen = [
     ['regla_id', 'marca', 'categoria', 'litros_minimo', 'porcentaje', 'activo'],
-    ['VOL_FIDELIDAD_GLOBAL_2500', 'GLOBAL OIL', '*', '2500', '5.0', 'TRUE'],
-    ['VOL_FIDELIDAD_GLOBAL_5000', 'GLOBAL OIL', '*', '5000', '12.0', 'TRUE'],
-    ['VOL_FIDELIDAD_SINOCO_5000', 'SINOCO', '*', '5000', '12.0', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_10_19', 'SINOCO', 'PAILA', '190', '4.52', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_20_99', 'SINOCO', 'PAILA', '380', '12.04', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_100', 'SINOCO', 'PAILA', '1900', '19.28', 'TRUE']
+    ['VOL_FIDELIDAD_GLOBAL_2500', 'GLOBAL OIL', '*', '2500', '0.05', 'TRUE'],
+    ['VOL_FIDELIDAD_GLOBAL_5000', 'GLOBAL OIL', '*', '5000', '0.12', 'TRUE'],
+    ['VOL_FIDELIDAD_SINOCO_5000', 'SINOCO', '*', '5000', '0.12', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_10_19', 'SINOCO', 'PAILA', '190', '0.0452', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_20_99', 'SINOCO', 'PAILA', '380', '0.1204', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_100', 'SINOCO', 'PAILA', '1900', '0.1928', 'TRUE']
 ]
 
 # 5. DescuentosProducto
 data_producto = [
     ['regla_id', 'productos', 'marca', 'categoria', 'porcentaje', 'monedas_aplicables', 'listas_aplicables', 'vigencia_desde', 'vigencia_hasta', 'activo'],
-    ['PROMO_12_MAS_1', '*', 'GLOBAL OIL', 'CAJA', '8.33', 'USD,VES', '*', '2026-03-01', '2099-12-31', 'TRUE']
+    ['PROMO_12_MAS_1', '*', 'GLOBAL OIL', 'CAJA', '0.0833', 'USD', '*', '2026-03-01', '2099-12-31', 'TRUE']
 ]
 
 seed_map = {

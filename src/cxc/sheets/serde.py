@@ -67,6 +67,13 @@ def p_dec(s: str) -> Decimal:
     return Decimal(s)
 
 
+def p_pct(s: str) -> Decimal:
+    val = Decimal(s)
+    if val > Decimal("1.0"):
+        val = val / Decimal("100.0")
+    return val
+
+
 def p_optdec(s: str) -> Decimal | None:
     s = s.strip()
     return None if s in ("", "None") else Decimal(s)
@@ -258,7 +265,7 @@ def pronto_pago_from_row(r: Mapping[str, str]) -> DescuentoProntoPago:
         marca=r.get("marca", "*"),
         categoria=r.get("categoria", "*"),
         dias_gracia=int(r.get("dias_gracia", "3")),
-        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        porcentaje=p_pct(r.get("porcentaje", "0.05")),
         monedas_aplicables=r.get("monedas_aplicables", "*"),
         listas_aplicables=r.get("listas_aplicables", "*"),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
@@ -291,7 +298,7 @@ def recompra_to_row(d: DescuentoRecompra) -> Row:
 def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
     return DescuentoRecompra(
         regla_id=r.get("regla_id", "RECOMPRA_DEFAULT"),
-        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        porcentaje=p_pct(r.get("porcentaje", "0.05")),
         max_usos_mes=int(r.get("max_usos_mes", "2")),
         dias_ventana=int(r.get("dias_ventana", "30")),
         min_cajas=int(r.get("min_cajas", "1")),
@@ -324,7 +331,7 @@ def producto_from_row(r: Mapping[str, str]) -> DescuentoProducto:
         productos=r.get("productos", "*"),
         marca=r.get("marca", "*"),
         categoria=r.get("categoria", "*"),
-        porcentaje=p_dec(r.get("porcentaje", "0.05")),
+        porcentaje=p_pct(r.get("porcentaje", "0.05")),
         monedas_aplicables=r.get("monedas_aplicables", "*"),
         listas_aplicables=r.get("listas_aplicables", "*"),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
@@ -455,7 +462,7 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         marca=r.get("marca", "*"),
         categoria=r.get("categoria", "*"),
         litros_minimo=p_dec(r.get("litros_minimo", "0")),
-        porcentaje=p_dec(r.get("porcentaje", "0")),
+        porcentaje=p_pct(r.get("porcentaje", "0")),
         tipo_evaluacion=r.get("tipo_evaluacion", "orden"),
         dias_evaluacion=int(r.get("dias_evaluacion", "30")),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),

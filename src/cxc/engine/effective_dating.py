@@ -48,20 +48,35 @@ def _especificidad(regla: DescuentoMarcaCategoria) -> int:
     return score
 
 
-def _match_categoria(regla_cat: str, target_cat: str) -> bool:
+def _match_categoria(regla_cat: str, target_cat: str, presentacion: str = "") -> bool:
     if not regla_cat or regla_cat == "*":
         return True
-    rc = regla_cat.strip().upper()
+    rcs = [x.strip().upper() for x in regla_cat.split(",") if x.strip()]
     tc = (target_cat or "").strip().upper()
-    if rc == tc:
+    pres = (presentacion or "").strip().upper()
+    if "*" in rcs or tc in rcs or pres in rcs or any(rc in tc for rc in rcs) or any(tc in rc for rc in rcs):
         return True
-    if rc in ("CAJA", "COMERCIAL") and tc in ("CAJA", "COMERCIAL"):
+    if any(rc in ("CAJA", "COMERCIAL") for rc in rcs) and (tc in ("CAJA", "COMERCIAL") or "COMERCIAL" in tc or "CAJA" in tc or pres == "CAJA"):
         return True
-    if rc in ("PAILA", "INDUSTRIAL") and tc in ("PAILA", "INDUSTRIAL"):
+    if any(rc in ("PAILA", "INDUSTRIAL") for rc in rcs) and (tc in ("PAILA", "INDUSTRIAL") or "INDUSTRIAL" in tc or "PAILA" in tc or pres == "PAILA"):
         return True
-    if rc in ("TAMBOR", "INDUSTRIAL") and tc in ("TAMBOR", "INDUSTRIAL"):
+    if any(rc in ("TAMBOR", "INDUSTRIAL") for rc in rcs) and (tc in ("TAMBOR", "INDUSTRIAL") or "INDUSTRIAL" in tc or "TAMBOR" in tc or pres == "TAMBOR"):
         return True
     return False
+
+
+def _match_producto_especial(regla: DescuentoMarcaCategoria, producto_nombre: str, categoria: str) -> bool:
+    regla_id = (regla.regla_id or "").upper()
+    rc = (regla.categoria or "").upper()
+
+    # If the rule specifically targets ELITE or SS
+    if "ELITE" in regla_id or "SS" in regla_id or "ELITE" in rc or "SS" in rc:
+        p_upper = (producto_nombre or "").upper()
+        c_upper = (categoria or "").upper()
+        keywords = ["ELITE", "SS", "EXTRA PROTECCION", "EXTRA PROTECCIÓN"]
+        if not any(k in p_upper or k in c_upper for k in keywords):
+            return False
+    return True
 
 
 def descuento_vigente(
@@ -72,22 +87,36 @@ def descuento_vigente(
     tipo: TipoDescuento,
     fecha: date,
     lista_precios: str = "*",
+    producto: str = "",
+    moneda_pago: str = "USD",
+    presentacion: str = "",
 ) -> DescuentoMarcaCategoria | None:
-    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha`` y lista."""
-    candidatas = [
-        r
-        for r in reglas
-        if r.tipo_descuento == tipo
-        and (r.marca == marca or r.marca == "*")
-        and _match_categoria(r.categoria, categoria)
-        and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
-        and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
-    ]
+    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha``, lista y moneda."""
+    candidatas = []
+    for r in reglas:
+        if r.tipo_descuento != tipo:
+            continue
+        if r.marca != "*" and r.marca != marca:
+            continue
+        if not _match_categoria(r.categoria, categoria, presentacion):
+            continue
+        if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
+            continue
+        if r.listas_aplicables != "*" and r.listas_aplicables != lista_precios:
+            continue
+        if r.monedas_aplicables and r.monedas_aplicables != "*":
+            valid_monedas = [m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()]
+            if moneda_pago.upper() not in valid_monedas:
+                continue
+        if not _match_producto_especial(r, producto, categoria):
+            continue
+        candidatas.append(r)
+
     if not candidatas:
         return None
     return min(
         candidatas,
-        key=lambda r: (-_especificidad(r), r.porcentaje, r.regla_id),
+        key=lambda r: (-_especificidad(r), -r.porcentaje, r.regla_id),
     )
 
 
