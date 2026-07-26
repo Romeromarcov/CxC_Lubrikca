@@ -1394,6 +1394,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadPromociones();
         loadExclusiones();
         loadListasPrecio();
+        loadListasMapeo();
         loadOdooProductos();
         loadClientesAuditoria();
         loadSettingsMeta();
@@ -1931,7 +1932,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
 
                     // Format Listas
-                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+                    const rawListasCons = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
+                        ? String(r.listas_aplicables)
+                        : "*";
+                    const listasText = rawListasCons === "*" ? "Todas (*)" : (rawListasCons === "4" ? "Lista USD (#4)" : (rawListasCons === "5" ? "Lista VES (#5)" : rawListasCons));
 
                     // Format Campos Especiales
                     let espArr = [];
@@ -2111,7 +2115,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const maxQ = r.max_cantidad !== undefined ? r.max_cantidad : (r.max_cajas !== undefined ? r.max_cajas : 999999);
         const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
 
-        const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+        const rawListasStd = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
+            ? String(r.listas_aplicables)
+            : "*";
+        const listasText = rawListasStd === "*" ? "Todas (*)" : (rawListasStd === "4" ? "Lista USD (#4)" : (rawListasStd === "5" ? "Lista VES (#5)" : rawListasStd));
 
         let espArr = [];
         if (r.dias_gracia) espArr.push(`Gracia: ${r.dias_gracia}d`);
@@ -2613,6 +2620,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (res.ok) {
                 alert("✅ Configuración guardada exitosamente: " + data.message);
+                loadListasMapeo();
             } else {
                 alert("❌ Error: " + (data.detail || "No se pudo guardar."));
             }
