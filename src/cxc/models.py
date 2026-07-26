@@ -255,6 +255,7 @@ class PromocionPrimeraCompra:
     max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     listas_aplicables: str = "*"
+    solo_primera_compra: bool = False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
     activo: bool = True
 
 

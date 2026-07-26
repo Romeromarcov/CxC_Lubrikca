@@ -188,6 +188,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             p
             for p in inp.promociones_primera_compra
             if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha_orden)
+            and (not getattr(p, "solo_primera_compra", False) or inp.orden.es_primera_compra)
         ]
 
         # Calculate quantities for each promo based on its specific categorias_aplica

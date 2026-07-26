@@ -403,6 +403,7 @@ def promocion_to_row(p: PromocionPrimeraCompra) -> Row:
         "vigencia_hasta": s_optdate(p.vigencia_hasta),
         "descuento_fallback": str(p.descuento_fallback),
         "categorias_aplica": p.categorias_aplica,
+        "solo_primera_compra": s_bool(getattr(p, 'solo_primera_compra', False)),
         "activo": s_bool(p.activo),
     }
 
@@ -419,6 +420,7 @@ def promocion_from_row(r: Mapping[str, str]) -> PromocionPrimeraCompra:
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         descuento_fallback=p_dec(r.get("descuento_fallback", "0")),
         categorias_aplica=r.get("categorias_aplica", "Comercial"),
+        solo_primera_compra=p_bool(r.get("solo_primera_compra", "FALSE")),
         activo=p_bool(r.get("activo", "TRUE")),
     )
 

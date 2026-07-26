@@ -95,6 +95,7 @@ class PromocionRequest(BaseModel):
     descuento_fallback: float = 0.0        # pct si no alcanza compra_minima
     regalo_tipo: str = "solo_uno"          # 'solo_uno' | 'conjunto'
     categorias_aplica: str = "Comercial"   # CSV de categorías que califican
+    solo_primera_compra: bool = False      # False = Recurrente (cada compra >= min), True = Solo 1era compra
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -2443,6 +2444,7 @@ async def get_config_promociones():
                 "descuento_fallback": str(getattr(p, 'descuento_fallback', '0')),
                 "regalo_tipo": p.regalo_tipo,
                 "categorias_aplica": getattr(p, 'categorias_aplica', 'Comercial'),
+                "solo_primera_compra": getattr(p, 'solo_primera_compra', False),
                 "vigencia_desde": p.vigencia_desde.isoformat(),
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
                 "activo": p.activo
@@ -2465,7 +2467,7 @@ async def post_config_promociones(req: PromocionRequest):
         # Check date overlap with active first purchase promos
         existing = repo.promociones_primera_compra()
         for r in existing:
-            if r.activo:
+            if r.activo and r.solo_primera_compra == req.solo_primera_compra:
                 h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
                 h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
                 if max(v_desde, r.vigencia_desde) <= min(h1, h2):
@@ -2487,6 +2489,7 @@ async def post_config_promociones(req: PromocionRequest):
             vigencia_hasta=v_hasta,
             descuento_fallback=Decimal(str(req.descuento_fallback)),
             categorias_aplica=req.categorias_aplica,
+            solo_primera_compra=req.solo_primera_compra,
             activo=req.activo
         )
         row = serde.promocion_to_row(promo)
