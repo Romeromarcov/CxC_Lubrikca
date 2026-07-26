@@ -179,7 +179,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Page Route Initialization
     function initCurrentPage() {
-        let path = window.location.pathname.replace("/", "").trim();
+        let rawPath = window.location.pathname.toLowerCase();
+        let path = rawPath.replace(/^\/+|\/+$/g, '').split('/')[0].split('?')[0].split('#')[0].trim();
         if (!path || path === "index.html") path = "dashboard";
 
         const pageToTabMap = {
@@ -204,6 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         // Active Tab Panel Show
+        const tabPanels = document.querySelectorAll(".tab-panel");
         tabPanels.forEach(panel => {
             if (panel.id === targetTabId) {
                 panel.classList.add("active");
@@ -212,33 +214,38 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        // Load data for active page
-        if (path === "dashboard") {
-            loadTasasPromedios();
-            loadReporteDiario();
-        } else if (path === "facturacion") {
-            loadBandeja();
-        } else if (path === "conciliaciones") {
-            loadKPIs();
-            loadPayments();
-            loadSugerenciasConciliacion();
-            loadMapa();
-            loadHistorialPagos();
-        } else if (path === "cobranza") {
-            loadCobranza();
-        } else if (path === "reporte") {
-            loadReporte();
-        } else if (path === "auditoria") {
-            loadAuditoria();
-        } else if (path === "configuracion") {
-            loadConfigData();
-            loadListasMapeo();
-            loadReglasConsolidadas();
-            if (currentUserSession && currentUserSession.rol === "admin") {
-                loadAdminUsuarios();
+        // Load data for active page safely
+        try {
+            if (path === "dashboard") {
+                if (typeof loadTasasPromedios === "function") loadTasasPromedios();
+                if (typeof loadReporteDiario === "function") loadReporteDiario();
+            } else if (path === "facturacion") {
+                if (typeof loadBandeja === "function") loadBandeja();
+            } else if (path === "conciliaciones") {
+                if (typeof loadKPIs === "function") loadKPIs();
+                if (typeof loadPayments === "function") loadPayments();
+                if (typeof loadSugerenciasConciliacion === "function") loadSugerenciasConciliacion();
+                if (typeof loadMapa === "function") loadMapa();
+                if (typeof loadHistorialPagos === "function") loadHistorialPagos();
+            } else if (path === "cobranza") {
+                if (typeof loadCobranza === "function") loadCobranza();
+            } else if (path === "reporte") {
+                if (typeof loadReporte === "function") loadReporte();
+            } else if (path === "auditoria") {
+                if (typeof loadAuditoria === "function") loadAuditoria();
+            } else if (path === "configuracion") {
+                if (typeof loadConfigData === "function") loadConfigData();
+                if (typeof loadListasMapeo === "function") loadListasMapeo();
+                if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
+                if (currentUserSession && currentUserSession.rol === "admin" && typeof loadAdminUsuarios === "function") {
+                    loadAdminUsuarios();
+                }
             }
+        } catch (err) {
+            console.error("Error cargando datos para la página " + path + ":", err);
         }
     }
+    window.initCurrentPage = initCurrentPage;
 
     window.loadAdminUsuarios = async function() {
         const tbody = document.getElementById("admin-usuarios-table-body");
@@ -322,10 +329,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    // Run user session and page setup
-    initUserSession().then(() => {
-        initCurrentPage();
-    });
+    // Run user session setup
+    initUserSession();
 
     // Fetch and render KPIs
     async function loadKPIs() {
@@ -3054,7 +3059,10 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(() => {
         const activeTab = document.querySelector(".tab-navigation .active");
         if (activeTab && activeTab.dataset.page === "dashboard") {
-            loadTasasPromedios();
+            if (typeof loadTasasPromedios === "function") loadTasasPromedios();
         }
     }, 30000);
+
+    // Initialize current page tab and load its data after all functions are declared
+    initCurrentPage();
 });
