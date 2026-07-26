@@ -74,6 +74,7 @@ class EngineInputs:
     fecha_calculo: date
     all_ordenes: list[OrdenVenta] = field(default_factory=list)
     exclusiones: list[ExclusionRegla] = field(default_factory=list)
+    descuentos_recompra: list[DescuentoRecompra] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -165,7 +166,7 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
 
 
 def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
-    return inp.price_resolver.precio(linea.producto, lista) * _cantidad_efectiva(
+    return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha) * _cantidad_efectiva(
         inp, linea
     )
 
@@ -262,7 +263,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                     )
             else:
                 # Si no hay promos, el 2% aplica únicamente a productos de la categoría Industrial
-                nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas if ln.categoria == "Industrial") * pct_general
+                nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas if (ln.categoria or "").upper() == "INDUSTRIAL") * pct_general
                 if nc > 0:
                     detalle_nc = DescuentoAplicado(
                         origen="primera_compra",
@@ -271,7 +272,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                     )
     else:
         recompras_activas = [
-            r for r in getattr(inp, 'descuentos_recompra', [])
+            r for r in inp.descuentos_recompra
             if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
         ]
         if not recompras_activas and inp.reglas_recurrencia:

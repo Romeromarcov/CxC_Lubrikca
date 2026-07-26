@@ -1840,6 +1840,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function loadDescuentosMarca() {
+        if (!descuentosTableBody) return;
         try {
             descuentosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos...</td></tr>';
             const res = await fetch("/api/config/descuentos-marca");
@@ -1874,6 +1875,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function loadListasPrecio() {
+        if (!listasPrecioTableBody) return;
         try {
             listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando listas de precios de Odoo...</td></tr>';
             // Añadir timestamp para evitar que el browser cachee la respuesta
@@ -1912,6 +1914,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Load Odoo Product catalog with USD & VES pricelists prices & litros (Public price removed)
     async function loadOdooProductos() {
+        if (!productosTableBody) return;
         try {
             productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
             const res = await fetch("/api/odoo/productos");
@@ -1958,6 +1961,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Load Odoo Client Sales stats for recurrence audit
     async function loadClientesAuditoria() {
+        if (!clientesAuditoriaTableBody) return;
         try {
             clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando auditoría de clientes desde Odoo...</td></tr>';
             const res = await fetch("/api/odoo/clientes-auditoria");
