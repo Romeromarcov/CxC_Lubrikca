@@ -1850,40 +1850,76 @@ async def post_config_meta(req: MetaRequest):
 
 MAPEO_LISTAS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json")
 
+# In-process cache for pricelist mapping — survives page refreshes within same process lifetime
+_PRICELIST_MAPEO_CACHE: dict[str, list[str]] = {}
+
+def _load_mapeo_from_json() -> tuple[list[str], list[str]] | None:
+    """Lee mapeo desde el archivo JSON local. Retorna None si no existe o falla."""
+    try:
+        if os.path.exists(MAPEO_LISTAS_FILE):
+            with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
+                j_data = json.load(f)
+                usd = [str(x) for x in j_data.get("valid_pricelists_usd", [])]
+                ves = [str(x) for x in j_data.get("valid_pricelists_ves", [])]
+                if usd:
+                    return usd, ves
+    except Exception:
+        pass
+    return None
+
+def _save_mapeo_to_json(usd_list: list[str], ves_list: list[str]) -> None:
+    """Persiste el mapeo en el archivo JSON local."""
+    try:
+        os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
+        with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}, f, indent=2)
+    except Exception:
+        pass
+
 def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
-    """Obtiene las listas de precios USD y VES configuradas en _Meta (o env/JSON fallback)."""
+    """Obtiene las listas de precios USD y VES configuradas.
+    Orden de prioridad:
+    1. In-process memory cache (más rápido, persiste entre requests del mismo proceso)
+    2. Archivo JSON local (persiste entre requests, no entre deploys en Railway)
+    3. Google Sheets _Meta (más lento pero persistente entre deploys)
+    4. Variables de entorno (fallback final)
+    """
+    global _PRICELIST_MAPEO_CACHE
+    # 1. In-process memory cache
+    if _PRICELIST_MAPEO_CACHE.get("usd") and _PRICELIST_MAPEO_CACHE.get("ves"):
+        return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
+    
+    # 2. JSON file
+    json_result = _load_mapeo_from_json()
+    if json_result:
+        usd_list, ves_list = json_result
+        _PRICELIST_MAPEO_CACHE["usd"] = usd_list
+        _PRICELIST_MAPEO_CACHE["ves"] = ves_list
+        return usd_list, ves_list
+    
+    # 3. Google Sheets _Meta
     try:
         if repo is None:
             repo = get_repo()
-        rows = repo._g.read_rows("_Meta")
-        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
-        usd_str = meta.get("valid_pricelists_usd")
-        ves_str = meta.get("valid_pricelists_ves")
+        usd_str = repo._g.get_meta("valid_pricelists_usd")
+        ves_str = repo._g.get_meta("valid_pricelists_ves")
         
         usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
         ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
         
-        if not usd_list and os.path.exists(MAPEO_LISTAS_FILE):
-            try:
-                with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
-                    j_data = json.load(f)
-                    usd_list = [str(x) for x in j_data.get("valid_pricelists_usd", [])]
-                    ves_list = [str(x) for x in j_data.get("valid_pricelists_ves", [])]
-            except Exception:
-                pass
-
-        if not usd_list:
-            usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
-            usd_list = [x.strip() for x in usd_env.split(",") if x.strip()]
-        if not ves_list:
-            ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
-            ves_list = [x.strip() for x in ves_env.split(",") if x.strip()]
-            
-        return usd_list, ves_list
-    except Exception as e:
-        usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
-        ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
-        return [x.strip() for x in usd_env.split(",") if x.strip()], [x.strip() for x in ves_env.split(",") if x.strip()]
+        if usd_list:
+            _PRICELIST_MAPEO_CACHE["usd"] = usd_list
+            _PRICELIST_MAPEO_CACHE["ves"] = ves_list or [os.environ.get("ODOO_PRICELIST_BCV", "5")]
+            # Also write to JSON so next cold start loads instantly
+            _save_mapeo_to_json(usd_list, _PRICELIST_MAPEO_CACHE["ves"])
+            return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
+    except Exception:
+        pass
+    
+    # 4. Environment variable fallback
+    usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
+    ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
+    return [x.strip() for x in usd_env.split(",") if x.strip()], [x.strip() for x in ves_env.split(",") if x.strip()]
 
 @app.get("/api/config/listas-precio-mapeo")
 async def get_config_listas_precio_mapeo():
@@ -1900,27 +1936,32 @@ async def get_config_listas_precio_mapeo():
 
 @app.post("/api/config/listas-precio-mapeo")
 async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
+    global _PRICELIST_MAPEO_CACHE
     try:
-        repo = get_repo()
-        usd_val = ",".join(req.valid_pricelists_usd) if req.valid_pricelists_usd else "4"
-        ves_val = ",".join(req.valid_pricelists_ves) if req.valid_pricelists_ves else "5"
+        usd_list = [str(x) for x in req.valid_pricelists_usd] if req.valid_pricelists_usd else ["4"]
+        ves_list = [str(x) for x in req.valid_pricelists_ves] if req.valid_pricelists_ves else ["5"]
         
-        repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_usd", "value": usd_val})
-        repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_ves", "value": ves_val})
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("_Meta", None)
-            
+        # 1. Update in-process memory cache immediately (fastest — no I/O required)
+        _PRICELIST_MAPEO_CACHE["usd"] = usd_list
+        _PRICELIST_MAPEO_CACHE["ves"] = ves_list
+        
+        # 2. Write to JSON file (persists across requests, lost on Railway deploy)
+        _save_mapeo_to_json(usd_list, ves_list)
+        
+        # 3. Write to Google Sheets _Meta (true persistent storage across deploys)
         try:
-            os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
-            with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
-                json.dump({
-                    "valid_pricelists_usd": req.valid_pricelists_usd,
-                    "valid_pricelists_ves": req.valid_pricelists_ves
-                }, f, indent=2)
-        except Exception:
-            pass
-
-        return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
+            repo = get_repo()
+            repo._g.set_meta("valid_pricelists_usd", ",".join(usd_list))
+            repo._g.set_meta("valid_pricelists_ves", ",".join(ves_list))
+        except Exception as sheets_err:
+            logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
+        
+        return {
+            "status": "success",
+            "message": "Mapeo de listas de precios actualizado correctamente.",
+            "valid_pricelists_usd": usd_list,
+            "valid_pricelists_ves": ves_list
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
