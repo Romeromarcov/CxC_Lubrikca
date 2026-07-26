@@ -1960,12 +1960,14 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
                     `;
 
+                    const unidadCons = r.unidad_medida || (r.tipo_regla === "volumen" ? "LITROS" : "CAJAS");
+
                     row.innerHTML = `
                         <td><strong>${r.tipo_nombre}</strong><br><small style="color:var(--text-muted)">${r.regla_id}</small></td>
                         <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
                         <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || '*'}</span></td>
                         <td><strong>${tramoText}</strong></td>
-                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${r.unidad_medida || 'CAJAS'}</span></td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${unidadCons}</span></td>
                         <td><strong style="color:#059669">${beneficioText}</strong></td>
                         <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
                         <td>${vigText}</td>
@@ -2141,12 +2143,14 @@ document.addEventListener("DOMContentLoaded", () => {
             <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
         `;
 
+        const unidadStd = r.unidad_medida || (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen" ? "LITROS" : "CAJAS");
+
         row.innerHTML = `
             <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>
             <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
             <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || r.categorias_aplica || '*'}</span></td>
             <td><strong>${tramoText}</strong></td>
-            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${r.unidad_medida || 'CAJAS'}</span></td>
+            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${unidadStd}</span></td>
             <td><strong style="color:#059669">${beneficioText}</strong></td>
             <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
             <td>${vigText}</td>
