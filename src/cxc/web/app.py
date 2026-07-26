@@ -907,15 +907,16 @@ async def get_bandeja():
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
         
         prices_usd = {}
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        cand_usd_ids = [int(x) for x in usd_lists if str(x).isdigit()]
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
-            if execute:
-                lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+            if execute and cand_usd_ids:
                 rules = execute(
                     "product.pricelist.item",
                     "search_read",
-                    [[["pricelist_id", "=", lista_usd_id], ["compute_price", "=", "fixed"]]],
+                    [[["pricelist_id", "in", cand_usd_ids], ["compute_price", "=", "fixed"]]],
                     {"fields": ["product_tmpl_id", "fixed_price"]}
                 )
                 for r in rules:
@@ -939,9 +940,9 @@ async def get_bandeja():
             
             # Find order to check its original pricelist
             ord_row = repo.get_orden(b.so_id)
-            lista_precios_orig = ord_row.lista_precios if ord_row else "4"
+            lista_precios_orig = str(ord_row.lista_precios) if ord_row else (usd_lists[0] if usd_lists else "4")
             
-            # Compute total proyectado USD under List 4
+            # Compute total proyectado USD
             order_lines = lines_by_so.get(b.so_id, [])
             total_proyectado_usd = Decimal("0.0")
             for ln in order_lines:
@@ -974,7 +975,9 @@ async def get_bandeja():
             total_descuentos_proy = total_proyectado_usd * pct
             total_motor_proy = total_proyectado_usd - total_descuentos_proy
             
-            lista_name = "Lista USD (#4)" if b.lista_aplicada == "4" else f"Precio VES (#{b.lista_aplicada})"
+            is_applied_usd = str(b.lista_aplicada) in usd_lists
+            lista_name = f"Lista USD (#{b.lista_aplicada})" if is_applied_usd else f"Lista VES (#{b.lista_aplicada})"
+            is_orig_usd = lista_precios_orig in usd_lists
             
             resultados.append({
                 "so_id": b.so_id,
@@ -982,7 +985,7 @@ async def get_bandeja():
                 "precio_base": float(b.precio_base_calculado),
                 "total_descuentos": float(b.total_descuentos),
                 "total_motor": float(b.total_motor),
-                "total_proyectado_usd": float(total_motor_proy) if lista_precios_orig != "4" else float(b.total_motor),
+                "total_proyectado_usd": float(b.total_motor) if is_orig_usd else float(total_motor_proy),
                 "candidata_a_cierre": b.candidata_a_cierre,
                 "estado": b.estado.value,
                 "reconciliacion": {
@@ -1009,9 +1012,12 @@ def recalculate_all(so_id: str):
             )
         repo = SheetsRepository(gateway)
         execute = _connect(config.odoo)
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
+        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
         pricelist_ids = {
-            config.engine.lista_usd: int(os.environ.get("ODOO_PRICELIST_USD", "4")),
-            config.engine.lista_bcv: int(os.environ.get("ODOO_PRICELIST_BCV", "5")),
+            config.engine.lista_usd: primary_usd_id,
+            config.engine.lista_bcv: primary_ves_id,
         }
         resolver = OdooPriceResolver(execute, pricelist_ids)
         runner = EngineRunner(repo, resolver, config.engine)
@@ -1841,21 +1847,48 @@ async def post_config_meta(req: MetaRequest):
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
+MAPEO_LISTAS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json")
+
+def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
+    """Obtiene las listas de precios USD y VES configuradas en _Meta (o env/JSON fallback)."""
+    try:
+        if repo is None:
+            repo = get_repo()
+        rows = repo._g.read_rows("_Meta")
+        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
+        usd_str = meta.get("valid_pricelists_usd")
+        ves_str = meta.get("valid_pricelists_ves")
+        
+        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
+        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
+        
+        if not usd_list and os.path.exists(MAPEO_LISTAS_FILE):
+            try:
+                with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
+                    j_data = json.load(f)
+                    usd_list = [str(x) for x in j_data.get("valid_pricelists_usd", [])]
+                    ves_list = [str(x) for x in j_data.get("valid_pricelists_ves", [])]
+            except Exception:
+                pass
+
+        if not usd_list:
+            usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
+            usd_list = [x.strip() for x in usd_env.split(",") if x.strip()]
+        if not ves_list:
+            ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
+            ves_list = [x.strip() for x in ves_env.split(",") if x.strip()]
+            
+        return usd_list, ves_list
+    except Exception as e:
+        usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
+        ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
+        return [x.strip() for x in usd_env.split(",") if x.strip()], [x.strip() for x in ves_env.split(",") if x.strip()]
+
 @app.get("/api/config/listas-precio-mapeo")
 async def get_config_listas_precio_mapeo():
     try:
         repo = get_repo()
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("_Meta", None)
-        rows = repo._g.read_rows("_Meta")
-        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
-        
-        usd_str = meta.get("valid_pricelists_usd", "4")
-        ves_str = meta.get("valid_pricelists_ves", "5")
-        
-        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] or ["4"]
-        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] or ["5"]
-        
+        usd_list, ves_list = get_valid_pricelists_usd_and_ves(repo)
         return {
             "valid_pricelists_usd": usd_list,
             "valid_pricelists_ves": ves_list
@@ -1875,7 +1908,17 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
         repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_ves", "value": ves_val})
         if hasattr(repo._g, "_read_cache"):
             repo._g._read_cache.pop("_Meta", None)
-        
+            
+        try:
+            os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
+            with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "valid_pricelists_usd": req.valid_pricelists_usd,
+                    "valid_pricelists_ves": req.valid_pricelists_ves
+                }, f, indent=2)
+        except Exception:
+            pass
+
         return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -2215,16 +2258,18 @@ async def get_odoo_productos():
             {"fields": ["id", "name", "default_code", "list_price", "product_volume"], "limit": 100}
         )
         
-        lista_usd_id = int(os.environ.get("ODOO_PRICELIST_USD", "4"))
-        lista_ves_id = int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        cand_usd_ids = [int(x) for x in usd_lists if str(x).isdigit()]
+        cand_ves_ids = [int(x) for x in ves_lists if str(x).isdigit()]
+        all_cand_ids = cand_usd_ids + cand_ves_ids
         
         # Query rules directly from product.pricelist.item to get exact raw pricing entered
         rules = execute(
             "product.pricelist.item",
             "search_read",
-            [[["pricelist_id", "in", [lista_usd_id, lista_ves_id]], ["compute_price", "=", "fixed"]]],
+            [[["pricelist_id", "in", all_cand_ids], ["compute_price", "=", "fixed"]]],
             {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"]}
-        )
+        ) if all_cand_ids else []
         
         prices_usd = {}
         prices_ves = {}
@@ -2235,9 +2280,9 @@ async def get_odoo_productos():
             pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
             
             if pt_id:
-                if p_id == lista_usd_id:
+                if p_id in cand_usd_ids:
                     prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
-                elif p_id == lista_ves_id:
+                elif p_id in cand_ves_ids:
                     prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
                     
         resultado = []
@@ -2755,44 +2800,6 @@ async def get_todas_reglas_descuento():
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-MAPEO_LISTAS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json")
-
-class ListasMapeoRequest(BaseModel):
-    valid_pricelists_usd: list[str]
-    valid_pricelists_ves: list[str]
-
-@app.get("/api/config/listas-precio-mapeo")
-async def get_config_listas_mapeo():
-    try:
-        if os.path.exists(MAPEO_LISTAS_FILE):
-            with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {
-            "valid_pricelists_usd": ["4", "8", "3"],
-            "valid_pricelists_ves": ["5"]
-        }
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        return {
-            "valid_pricelists_usd": ["4", "8", "3"],
-            "valid_pricelists_ves": ["5"]
-        }
-
-@app.post("/api/config/listas-precio-mapeo")
-async def post_config_listas_mapeo(req: ListasMapeoRequest):
-    try:
-        os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
-        data = {
-            "valid_pricelists_usd": [str(x) for x in req.valid_pricelists_usd],
-            "valid_pricelists_ves": [str(x) for x in req.valid_pricelists_ves]
-        }
-        with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Pronto Pago Endpoints ---
 @app.get("/api/config/descuentos-pronto-pago")
