@@ -17,12 +17,14 @@ logger = logging.getLogger("cxc.auth")
 T_USUARIOS = "UsuariosPlataforma"
 
 # Matriz de Permisos por Rol
+ALL_PAGES = ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte", "auditoria", "configuracion"]
+
 ROLES_PERMISOS: dict[str, list[str]] = {
-    "admin": ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte", "auditoria", "configuracion"],
-    "gerente_ventas": ["dashboard", "cobranza", "reporte", "facturacion", "conciliaciones"],
-    "tesoreria": ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte"],
-    "auditor": ["dashboard", "reporte", "auditoria", "facturacion"],
-    "ventas": ["dashboard", "cobranza", "conciliaciones", "reporte"],
+    "admin": ALL_PAGES,
+    "gerente_ventas": ALL_PAGES,
+    "tesoreria": ALL_PAGES,
+    "auditor": ALL_PAGES,
+    "ventas": ALL_PAGES,
 }
 
 NOMBRES_ROLES: dict[str, str] = {
