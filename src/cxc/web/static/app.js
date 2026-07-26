@@ -3063,6 +3063,22 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }, 30000);
 
+    // SPA navigation click handling for nav links and dashboard cards
+    document.querySelectorAll(".nav-link").forEach(link => {
+        link.addEventListener("click", (e) => {
+            const targetPage = link.dataset.page;
+            if (targetPage) {
+                e.preventDefault();
+                history.pushState(null, "", "/" + targetPage);
+                initCurrentPage();
+            }
+        });
+    });
+
+    window.addEventListener("popstate", () => {
+        initCurrentPage();
+    });
+
     // Initialize current page tab and load its data after all functions are declared
     initCurrentPage();
 });
