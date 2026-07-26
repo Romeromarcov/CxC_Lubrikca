@@ -2326,16 +2326,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const marcas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-marca");
             const cats = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-cat");
             const listas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-lista");
+            const minQty = parseFloat(cfgDescVolLitros.value || 0);
             const payload = {
                 marca: marcas,
                 categoria: cats,
                 listas_aplicables: listas,
-                litros_minimo: parseFloat(cfgDescVolLitros.value || 0),
+                litros_minimo: minQty,
+                min_cantidad: minQty,
                 max_cantidad: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
                 porcentaje: parseFloat(cfgDescVolPorcentaje.value || 0.05),
                 tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
                 dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
-                unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "LITROS",
+                unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "UNIDADES",
                 tipo_beneficio: document.getElementById("cfg-desc-vol-tipo-benef")?.value || "descuento",
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: cfgDescVolHasta.value || null
