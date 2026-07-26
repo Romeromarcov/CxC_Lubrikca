@@ -109,6 +109,10 @@ class ProntoPagoRequest(BaseModel):
     categoria: str = "*"
     dias_gracia: int = 3
     porcentaje: float = 0.05
+    min_cantidad: float | None = 0.0
+    max_cantidad: float | None = 999999.0
+    unidad_medida: str | None = "CAJAS"
+    tipo_beneficio: str | None = "descuento"
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
     vigencia_desde: str = ""
@@ -2771,11 +2775,17 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
 
         regla_id = f"PP_{uuid.uuid4().hex[:8].upper()}"
+        min_q = Decimal(str(req.min_cantidad or 0))
+        max_q = Decimal(str(req.max_cantidad or 999999))
         rule = DescuentoProntoPago(
             regla_id=regla_id,
             marca=req.marca,
             categoria=req.categoria,
             dias_gracia=req.dias_gracia,
+            min_cantidad=min_q,
+            max_cantidad=max_q,
+            unidad_medida=req.unidad_medida or "CAJAS",
+            tipo_beneficio=req.tipo_beneficio or "descuento",
             porcentaje=Decimal(str(req.porcentaje)),
             monedas_aplicables=req.monedas_aplicables,
             listas_aplicables=req.listas_aplicables,
@@ -2784,6 +2794,8 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             activo=req.activo
         )
         repo._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(rule))
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("DescuentosProntoPago", None)
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)

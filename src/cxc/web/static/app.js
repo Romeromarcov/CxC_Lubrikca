@@ -1277,15 +1277,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (prontoPagoForm) {
         prontoPagoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const marcas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-marca");
+            const cats = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-cat");
+            const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
+            const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
             const payload = {
-                dias_gracia: parseInt(document.getElementById("cfg-pp-dias-gracia").value),
-                marca: document.getElementById("cfg-pp-marca").value,
-                categoria: document.getElementById("cfg-pp-categoria").value,
-                porcentaje: parseFloat(document.getElementById("cfg-pp-porcentaje").value),
-                monedas_aplicables: document.getElementById("cfg-pp-monedas").value,
-                listas_aplicables: document.getElementById("cfg-pp-listas").value,
-                vigencia_desde: document.getElementById("cfg-pp-desde").value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-pp-hasta").value || null,
+                dias_gracia: parseInt(document.getElementById("cfg-pp-dias-gracia")?.value || 0),
+                marca: marcas,
+                categoria: cats,
+                min_cantidad: parseFloat(document.getElementById("cfg-pp-min")?.value || 0),
+                max_cantidad: parseFloat(document.getElementById("cfg-pp-max")?.value || 999999),
+                unidad_medida: document.getElementById("cfg-pp-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-pp-tipo-benef")?.value || "descuento",
+                porcentaje: parseFloat(rawPct),
+                monedas_aplicables: document.getElementById("cfg-pp-monedas")?.value || "*",
+                listas_aplicables: listas,
+                vigencia_desde: document.getElementById("cfg-pp-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
                 activo: true
             };
             try {
@@ -1298,12 +1306,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("✅ Regla de pronto pago registrada correctamente.");
                     prontoPagoForm.reset();
                     loadProntoPago();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
                     const err = await res.json();
                     alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
                 }
             } catch (err) {
-                alert("❌ Error de red.");
+                console.error("Error guardando pronto pago:", err);
+                alert("❌ Error de red al registrar pronto pago.");
             }
         });
     }
