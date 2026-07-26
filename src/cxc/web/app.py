@@ -2577,8 +2577,13 @@ async def get_todas_reglas_descuento():
                 "activo": r.activo
             })
 
+        # Clear read cache so fresh rules from Google Sheets are always returned
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.clear()
+
         # 3. Volumen
         for r in repo.descuentos_volumen():
+            min_q = r.min_cantidad if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0) else getattr(r, "litros_minimo", 0)
             todas.append({
                 "tabla": "DescuentosVolumen",
                 "tipo_regla": "volumen",
@@ -2586,9 +2591,9 @@ async def get_todas_reglas_descuento():
                 "regla_id": r.regla_id,
                 "marca": r.marca,
                 "categoria": r.categoria,
-                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "litros_minimo", 0))),
+                "min_cantidad": float(min_q),
                 "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "LITROS"),
+                "unidad_medida": getattr(r, "unidad_medida", "UNIDADES"),
                 "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
                 "listas_aplicables": r.listas_aplicables,
@@ -2742,16 +2747,20 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
 async def get_config_volumen():
     try:
         repo = get_repo()
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.clear()
         rules = repo.descuentos_volumen()
-        return [
-            {
+        res = []
+        for r in rules:
+            min_q = r.min_cantidad if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0) else getattr(r, "litros_minimo", 0)
+            res.append({
                 "regla_id": r.regla_id,
                 "marca": r.marca,
                 "categoria": r.categoria,
                 "litros_minimo": float(r.litros_minimo),
-                "min_cantidad": float(getattr(r, "min_cantidad", r.litros_minimo)),
+                "min_cantidad": float(min_q),
                 "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "LITROS"),
+                "unidad_medida": getattr(r, "unidad_medida", "UNIDADES"),
                 "porcentaje": float(r.porcentaje),
                 "tipo_evaluacion": r.tipo_evaluacion,
                 "dias_evaluacion": r.dias_evaluacion,
@@ -2759,8 +2768,8 @@ async def get_config_volumen():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo
-            } for r in rules
-        ]
+            })
+        return res
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
