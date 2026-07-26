@@ -1330,7 +1330,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    const promoForm = document.getElementById("promo-form");
     if (promoForm) {
         promoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
