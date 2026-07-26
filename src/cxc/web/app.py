@@ -2756,6 +2756,44 @@ async def get_todas_reglas_descuento():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+MAPEO_LISTAS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json")
+
+class ListasMapeoRequest(BaseModel):
+    valid_pricelists_usd: list[str]
+    valid_pricelists_ves: list[str]
+
+@app.get("/api/config/listas-precio-mapeo")
+async def get_config_listas_mapeo():
+    try:
+        if os.path.exists(MAPEO_LISTAS_FILE):
+            with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {
+            "valid_pricelists_usd": ["4", "8", "3"],
+            "valid_pricelists_ves": ["5"]
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return {
+            "valid_pricelists_usd": ["4", "8", "3"],
+            "valid_pricelists_ves": ["5"]
+        }
+
+@app.post("/api/config/listas-precio-mapeo")
+async def post_config_listas_mapeo(req: ListasMapeoRequest):
+    try:
+        os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
+        data = {
+            "valid_pricelists_usd": [str(x) for x in req.valid_pricelists_usd],
+            "valid_pricelists_ves": [str(x) for x in req.valid_pricelists_ves]
+        }
+        with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Pronto Pago Endpoints ---
 @app.get("/api/config/descuentos-pronto-pago")
 async def get_config_pronto_pago():

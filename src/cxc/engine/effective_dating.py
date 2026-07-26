@@ -65,6 +65,25 @@ def _match_categoria(regla_cat: str, target_cat: str, presentacion: str = "") ->
     return False
 
 
+def _match_marca(regla_marca: str, target_marca: str) -> bool:
+    if not regla_marca or regla_marca == "*":
+        return True
+    if not target_marca:
+        return True
+    valid_marcas = [m.strip().upper() for m in str(regla_marca).split(",") if m.strip()]
+    target_u = str(target_marca).strip().upper()
+    return "*" in valid_marcas or target_u in valid_marcas or any(vm in target_u or target_u in vm for vm in valid_marcas)
+
+
+def _match_lista(regla_listas: str, target_lista: str) -> bool:
+    if not regla_listas or regla_listas == "*":
+        return True
+    if not target_lista:
+        return True
+    valid_listas = [l.strip() for l in str(regla_listas).split(",") if l.strip()]
+    return "*" in valid_listas or str(target_lista).strip() in valid_listas
+
+
 def _match_producto_especial(regla: DescuentoMarcaCategoria, producto_nombre: str, categoria: str) -> bool:
     regla_id = (regla.regla_id or "").upper()
     rc = (regla.categoria or "").upper()
@@ -96,13 +115,13 @@ def descuento_vigente(
     for r in reglas:
         if r.tipo_descuento != tipo:
             continue
-        if r.marca != "*" and r.marca != marca:
+        if not _match_marca(r.marca, marca):
             continue
         if not _match_categoria(r.categoria, categoria, presentacion):
             continue
         if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
             continue
-        if r.listas_aplicables != "*" and r.listas_aplicables != lista_precios:
+        if not _match_lista(r.listas_aplicables, lista_precios):
             continue
         if r.monedas_aplicables and r.monedas_aplicables != "*":
             valid_monedas = [m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()]

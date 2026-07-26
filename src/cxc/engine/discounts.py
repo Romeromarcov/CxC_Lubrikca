@@ -357,9 +357,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
 
-    # (c) BCV-completo (sección 4.3c) — solo si ruta BCV pura y no generada a Lista USD (#4)
+    # (c) BCV-completo (sección 4.3c) — solo si ruta BCV pura y no generada a Lista USD
     bcv_completo = Decimal("0")
-    if pura_bcv and inp.orden.lista_precios != "4":
+    if pura_bcv and str(inp.orden.lista_precios) != str(inp.engine_config.lista_usd):
         vincs = [v for v, _ in inp.abonos]
         bcv_completo = _bcv_completo_monto(
             vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
