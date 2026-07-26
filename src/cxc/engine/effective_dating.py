@@ -69,7 +69,7 @@ def _match_marca(regla_marca: str, target_marca: str) -> bool:
     if not regla_marca or regla_marca == "*":
         return True
     if not target_marca:
-        return True
+        return False
     valid_marcas = [m.strip().upper() for m in str(regla_marca).split(",") if m.strip()]
     target_u = str(target_marca).strip().upper()
     return "*" in valid_marcas or target_u in valid_marcas or any(vm in target_u or target_u in vm for vm in valid_marcas)
@@ -217,11 +217,11 @@ def descuento_volumen_vigente(
     candidatas = [
         r
         for r in reglas
-        if (r.marca == marca or r.marca == "*")
+        if _match_marca(r.marca, marca)
         and _match_categoria(r.categoria, categoria)
         and litros >= r.litros_minimo
         and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
-        and (r.listas_aplicables == "*" or r.listas_aplicables == lista_precios)
+        and _match_lista(r.listas_aplicables, lista_precios)
     ]
     if not candidatas:
         return None

@@ -340,13 +340,6 @@ class DescuentoDiferencialCambiario:
     activo: bool = True
 
 
-# --- 3.7g ExclusionRegla (configurable) --------------------------------------
-@dataclass
-class ExclusionRegla:
-    regla_tipo_a: str
-    regla_tipo_b: str
-    activo: bool = True
-
 
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
 @dataclass

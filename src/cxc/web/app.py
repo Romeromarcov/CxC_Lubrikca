@@ -2320,7 +2320,7 @@ async def get_odoo_productos():
             {"fields": ["id", "name", "default_code", "list_price", "product_volume"], "limit": 100}
         )
         
-        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves()
         cand_usd_ids = [int(x) for x in usd_lists if str(x).isdigit()]
         cand_ves_ids = [int(x) for x in ves_lists if str(x).isdigit()]
         all_cand_ids = cand_usd_ids + cand_ves_ids

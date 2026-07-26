@@ -30,6 +30,7 @@ def clasificar_diferencia(
     monto_odoo: Decimal,
     ncs_odoo: Decimal,
     config: ReconciliationConfig,
+    so_id: str = "",
 ) -> Conciliacion:
     """Compara el neto del motor contra el neto real de Odoo y aplica el semáforo."""
     neto_odoo = monto_odoo - ncs_odoo
@@ -42,7 +43,7 @@ def clasificar_diferencia(
     else:
         resultado = ResultadoConciliacion.ROJO
     return Conciliacion(
-        so_id="",  # lo fija el runner
+        so_id=so_id,
         total_motor=q2(total_motor),
         monto_odoo=q2(monto_odoo),
         ncs_odoo=q2(ncs_odoo),
@@ -115,9 +116,8 @@ class Reconciler:
         for bandeja in self._repo.all_bandeja():
             neto = self._facturas.neto_facturado(bandeja.so_id)
             conc = clasificar_diferencia(
-                bandeja.total_motor, neto.monto_facturado, neto.ncs, self._config
+                bandeja.total_motor, neto.monto_facturado, neto.ncs, self._config, so_id=bandeja.so_id
             )
-            conc.so_id = bandeja.so_id
             self._repo.upsert_conciliacion(conc)
             resultados.append(conc)
         return resultados

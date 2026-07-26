@@ -12,9 +12,12 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 
 
+from datetime import date
+
+
 class PriceResolver(ABC):
     @abstractmethod
-    def precio(self, producto: str, lista: str) -> Decimal:
+    def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
         """Precio unitario del producto en la lista indicada."""
 
     @abstractmethod
@@ -29,7 +32,7 @@ class DictPriceResolver(PriceResolver):
         self._precios = dict(precios)
         self._volumenes = dict(volumenes or {})
 
-    def precio(self, producto: str, lista: str) -> Decimal:
+    def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
         try:
             return self._precios[(producto, lista)]
         except KeyError as exc:

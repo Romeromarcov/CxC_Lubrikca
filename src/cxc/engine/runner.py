@@ -8,6 +8,7 @@ los equivalentes congelados de cada abono (una sola vez).
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import date
 
@@ -68,8 +69,8 @@ class EngineRunner:
                 rows = self._repo._g.read_rows("_Meta")
                 for r in rows:
                     if r.get("key") == "cash_window_business_days" and r.get("value"):
-                        import dataclasses
                         self._cfg = dataclasses.replace(self._cfg, cash_window_business_days=int(r.get("value")))
+                        break
         except Exception as e:
             logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)
 
@@ -88,6 +89,7 @@ class EngineRunner:
             fecha_calculo=fecha_calculo,
             all_ordenes=self._repo.all_ordenes(),
             exclusiones=self._repo.exclusiones(),
+            descuentos_recompra=self._repo.descuentos_recompra(),
         )
         bandeja = calcular_factura(inputs)
         self._repo.upsert_bandeja(bandeja)

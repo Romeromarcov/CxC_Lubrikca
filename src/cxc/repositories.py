@@ -22,6 +22,7 @@ from .models import (
     Conciliacion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoRecompra,
     DescuentoVolumen,
     ExclusionRegla,
     Feriado,
@@ -100,6 +101,9 @@ class Repository(ABC):
 
     @abstractmethod
     def descuentos_volumen(self) -> list[DescuentoVolumen]: ...
+
+    @abstractmethod
+    def descuentos_recompra(self) -> list[DescuentoRecompra]: ...
 
     @abstractmethod
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]: ...
@@ -243,6 +247,9 @@ class InMemoryRepository(Repository):
 
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
         return list(self._descuentos_volumen)
+
+    def descuentos_recompra(self) -> list[DescuentoRecompra]:
+        return getattr(self, "_descuentos_recompra", [])
 
     def add_descuento_volumen(self, regla: DescuentoVolumen) -> None:
         self._descuentos_volumen.append(regla)
