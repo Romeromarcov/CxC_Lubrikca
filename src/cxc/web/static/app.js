@@ -1,4 +1,9 @@
 document.addEventListener("DOMContentLoaded", () => {
+    function formatListasDisplay(raw) {
+        if (!raw || raw === "*") return "Todas (*)";
+        return raw.split(",").map(x => `#${x.trim()}`).join(", ");
+    }
+
     // State
     let selectedPayment = null;
     let reporteData = []; // Cache for live filtering
@@ -1848,7 +1853,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 descuentosTableBody.innerHTML = "";
                 data.forEach(r => {
                     const row = document.createElement("tr");
-                    const listasText = r.listas_aplicables === "*" ? "Todas (*)" : (r.listas_aplicables === "4" ? "Lista USD (#4)" : (r.listas_aplicables === "5" ? "Lista VES (#5)" : r.listas_aplicables));
+                    const listasText = formatListasDisplay(r.listas_aplicables);
                     row.innerHTML = `
                         <td><strong>${r.regla_id}</strong></td>
                         <td>${r.marca}</td>
@@ -2242,7 +2247,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawListasStd = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
             ? String(r.listas_aplicables)
             : "*";
-        const listasText = rawListasStd === "*" ? "Todas (*)" : (rawListasStd === "4" ? "Lista USD (#4)" : (rawListasStd === "5" ? "Lista VES (#5)" : rawListasStd));
+        const listasText = formatListasDisplay(rawListasStd);
 
         let espArr = [];
         if (r.dias_gracia) espArr.push(`Gracia: ${r.dias_gracia}d`);
