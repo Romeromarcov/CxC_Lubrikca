@@ -1062,7 +1062,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
                 <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
-                <td><small>${item.fecha_entrega || item.fecha}</small></td>
+                <td><small>${item.fecha_entrega ? `<span style="color:#0369a1; font-weight:600;" title="Fecha de Entrega Efectiva (ALM/OUT)">🚚 ${item.fecha_entrega}</span>` : `<span style="color:#64748b">${item.fecha || 'Sin entrega'}</span>`}</small></td>
                 <td><small>${item.terminos_pago || 'Contado'}</small></td>
                 <td><small>${item.fecha_vencimiento || '-'}</small></td>
                 <td>${agingBadge}</td>
@@ -1162,7 +1162,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
                 <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
-                <td><small>${item.fecha_entrega || item.fecha}</small></td>
+                <td><small>${item.fecha_entrega ? `<span style="color:#0369a1; font-weight:600;" title="Fecha de Entrega Efectiva (ALM/OUT)">🚚 ${item.fecha_entrega}</span>` : `<span style="color:#64748b">${item.fecha || 'Sin entrega'}</span>`}</small></td>
                 <td><small>${item.terminos_pago || 'Contado'}</small></td>
                 <td><small>${item.fecha_vencimiento || '-'}</small></td>
                 <td>${agingBadge}</td>
