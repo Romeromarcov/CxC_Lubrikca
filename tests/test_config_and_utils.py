@@ -156,6 +156,20 @@ def test_descuento_sin_match_devuelve_none() -> None:
     ) is None
 
 
+def test_effective_dating_match_marca_y_lista() -> None:
+    from cxc.engine.effective_dating import _match_marca, _match_lista, _match_producto_especial
+    assert _match_marca("*", "GLOBAL OIL") is True
+    assert _match_marca("GLOBAL OIL, SINOCO", "GLOBAL OIL") is True
+    assert _match_marca("GLOBAL OIL, SINOCO", "Mobil") is False
+    assert _match_lista("*", "4") is True
+    assert _match_lista("4,5,8", "5") is True
+    assert _match_lista("4,5", "8") is False
+
+    regla_elite = _d("PP_ELITE", "GLOBAL OIL", "ELITE", "0.10")
+    assert _match_producto_especial(regla_elite, "ACEITE LUBRIKCA ELITE 20W50", "CAJA") is True
+    assert _match_producto_especial(regla_elite, "ACEITE BASICO MULTIGRADO", "CAJA") is False
+
+
 def test_recurrencia_vigente_selecciona_mas_reciente() -> None:
     vieja = b.regla_recompra("0.03", desde=date(2026, 1, 1))
     nueva = b.regla_recompra("0.04", desde=date(2026, 5, 1))

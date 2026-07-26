@@ -2729,6 +2729,31 @@ document.addEventListener("DOMContentLoaded", () => {
                     </label>
                 `;
             }).join('');
+
+            // Dynamically populate M2M Listas checkboxes in all rule forms
+            const ruleFormListContainers = [
+                { selector: ".m2m-rec-lista", parent: "m2m-rec-listas-box" },
+                { selector: ".m2m-pp-lista", parent: "m2m-pp-listas-box" },
+                { selector: ".m2m-vol-lista", parent: "m2m-vol-listas-box" },
+                { selector: ".m2m-promo-lista", parent: "m2m-promo-listas-box" },
+                { selector: ".m2m-prod-lista", parent: "m2m-prod-listas-box" },
+                { selector: ".m2m-dif-lista", parent: "m2m-dif-listas-box" }
+            ];
+
+            ruleFormListContainers.forEach(cfg => {
+                const elClass = cfg.selector.replace('.', '');
+                const inputs = document.querySelectorAll(cfg.selector);
+                if (inputs.length > 0) {
+                    const parent = inputs[0].parentElement?.parentElement;
+                    if (parent) {
+                        const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
+                        parent.innerHTML = pricelists.map(pl => {
+                            const isChecked = currentChecked.includes(String(pl.id)) ? 'checked' : '';
+                            return `<label><input type="checkbox" class="${elClass}" value="${pl.id}" ${isChecked}> #${pl.id} ${pl.name}</label>`;
+                        }).join(' ') + ` <label><input type="checkbox" class="${elClass}" value="*" ${currentChecked.includes('*') || currentChecked.length === 0 ? 'checked' : ''}> Todas (*)</label>`;
+                    }
+                }
+            });
         } catch (err) {
             console.error("Error cargando mapeo de listas:", err);
             usdBox.innerHTML = '<span style="color:#ef4444; font-size:0.85rem;">Error al cargar listas.</span>';
