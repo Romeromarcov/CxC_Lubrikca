@@ -1239,18 +1239,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (recompraForm) {
         recompraForm.addEventListener("submit", async (e) => {
             e.preventDefault();
-            const marcaVal = document.getElementById("cfg-rec-marca") ? document.getElementById("cfg-rec-marca").value : "GLOBAL OIL";
-            const catVal = document.getElementById("cfg-rec-categoria") ? document.getElementById("cfg-rec-categoria").value : "CAJA";
+            const marcas = getM2MCheckedValues(recompraForm, ".m2m-rec-marca");
+            const cats = getM2MCheckedValues(recompraForm, ".m2m-rec-cat");
+            const listas = getM2MCheckedValues(recompraForm, ".m2m-rec-lista");
+            const rawPct = (document.getElementById("cfg-rec-porcentaje")?.value || "0.03").replace(',', '.');
             const payload = {
-                marca: marcaVal,
-                categoria: catVal,
-                porcentaje: parseFloat(document.getElementById("cfg-rec-porcentaje").value),
-                min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas").value || 1),
-                max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas").value || 9999),
-                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos").value || 1),
-                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana").value || 30),
-                vigencia_desde: document.getElementById("cfg-rec-desde").value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-rec-hasta").value || null,
+                marca: marcas,
+                categoria: cats,
+                listas_aplicables: listas,
+                porcentaje: parseFloat(rawPct),
+                min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas")?.value || 1),
+                max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
+                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos")?.value || 1),
+                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana")?.value || 30),
+                unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
+                vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
                 activo: true
             };
             try {
@@ -1263,12 +1268,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("✅ Regla de recompra registrada correctamente.");
                     recompraForm.reset();
                     loadRecompra();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
                     const err = await res.json();
                     alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
                 }
             } catch (err) {
-                console.error("Error saving recompra:", err);
+                console.error("Error guardando recompra:", err);
+                alert("❌ Error de red al guardar regla de recompra.");
             }
         });
     }
@@ -1318,20 +1325,77 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const promoForm = document.getElementById("promo-form");
+    if (promoForm) {
+        promoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
+            const cats = getM2MCheckedValues(promoForm, ".m2m-promo-cat");
+            const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
+            const selProds = Array.from(document.getElementById("cfg-promo-productos")?.selectedOptions || []).map(o => o.value).join(",");
+            const rawFallback = (document.getElementById("cfg-promo-fallback")?.value || "0.02").replace(',', '.');
+            const rawValor = (document.getElementById("cfg-promo-valor")?.value || "0").replace(',', '.');
+            const payload = {
+                marca: marcas,
+                categoria: cats,
+                listas_aplicables: listas,
+                tipo_beneficio: document.getElementById("cfg-promo-tipo-beneficio")?.value || "producto",
+                productos: selProds || "*",
+                compra_minima: parseFloat(document.getElementById("cfg-promo-compra-minima")?.value || 0),
+                max_cantidad: parseFloat(document.getElementById("cfg-promo-max")?.value || 999999),
+                unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
+                regalo_tipo: document.getElementById("cfg-promo-regalo-tipo")?.value || "solo_uno",
+                descuento_fallback: parseFloat(rawFallback),
+                valor: parseFloat(rawValor),
+                categorias_aplica: cats,
+                vigencia_desde: document.getElementById("cfg-promo-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/promociones", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Promoción de primera compra registrada correctamente.");
+                    promoForm.reset();
+                    loadPromociones();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando promoción primera compra:", err);
+                alert("❌ Error de red al registrar promoción.");
+            }
+        });
+    }
+
     const productoPromoForm = document.getElementById("producto-promo-form");
     if (productoPromoForm) {
         productoPromoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
-            const selProds = Array.from(document.getElementById("cfg-prod-select").selectedOptions).map(o => o.value).join(",");
+            const marcas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-marca");
+            const cats = getM2MCheckedValues(productoPromoForm, ".m2m-prod-cat");
+            const listas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-lista");
+            const selProds = Array.from(document.getElementById("cfg-prod-select")?.selectedOptions || []).map(o => o.value).join(",");
+            const rawPct = (document.getElementById("cfg-prod-porcentaje")?.value || "0.05").replace(',', '.');
             const payload = {
                 productos: selProds || "*",
-                marca: document.getElementById("cfg-prod-marca").value,
-                categoria: document.getElementById("cfg-prod-cat").value,
-                porcentaje: parseFloat(document.getElementById("cfg-prod-porcentaje").value),
-                monedas_aplicables: document.getElementById("cfg-prod-monedas").value,
-                listas_aplicables: document.getElementById("cfg-prod-listas").value,
-                vigencia_desde: document.getElementById("cfg-prod-desde").value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-prod-hasta").value || null,
+                marca: marcas,
+                categoria: cats,
+                min_cantidad: parseFloat(document.getElementById("cfg-prod-min")?.value || 0),
+                max_cantidad: parseFloat(document.getElementById("cfg-prod-max")?.value || 999999),
+                unidad_medida: document.getElementById("cfg-prod-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-prod-tipo-benef")?.value || "descuento",
+                porcentaje: parseFloat(rawPct),
+                monedas_aplicables: document.getElementById("cfg-prod-monedas")?.value || "*",
+                listas_aplicables: listas,
+                vigencia_desde: document.getElementById("cfg-prod-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
                 activo: true
             };
             try {
@@ -1344,11 +1408,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("✅ Regla de promoción por producto registrada.");
                     productoPromoForm.reset();
                     loadProductoPromo();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
                     const err = await res.json();
                     alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
                 }
             } catch (err) {
+                console.error("Error guardando descuento producto:", err);
                 alert("❌ Error de red.");
             }
         });
@@ -1358,15 +1424,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (diferencialForm) {
         diferencialForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const marcas = getM2MCheckedValues(diferencialForm, ".m2m-dif-marca");
+            const cats = getM2MCheckedValues(diferencialForm, ".m2m-dif-cat");
+            const listas = getM2MCheckedValues(diferencialForm, ".m2m-dif-lista");
+            const rawPct = (document.getElementById("cfg-dif-porcentaje-fijo")?.value || "0.35").replace(',', '.');
             const payload = {
-                nombre: document.getElementById("cfg-dif-nombre").value,
-                tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial").value,
-                tipo_calculo: document.getElementById("cfg-dif-tipo-calculo").value,
-                porcentaje_fijo: parseFloat(document.getElementById("cfg-dif-porcentaje-fijo").value || 0),
-                monedas_aplicables: document.getElementById("cfg-dif-monedas").value,
-                listas_aplicables: document.getElementById("cfg-dif-listas") ? document.getElementById("cfg-dif-listas").value : "*",
-                vigencia_desde: document.getElementById("cfg-dif-desde").value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-dif-hasta").value || null,
+                nombre: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
+                tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
+                tipo_calculo: document.getElementById("cfg-dif-tipo-calculo")?.value || "fijo",
+                porcentaje_fijo: parseFloat(rawPct),
+                marca: marcas,
+                categoria: cats,
+                monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
+                listas_aplicables: listas,
+                unidad_medida: document.getElementById("cfg-dif-unidad")?.value || "USD",
+                min_cantidad: parseFloat(document.getElementById("cfg-dif-min")?.value || 0),
+                max_cantidad: parseFloat(document.getElementById("cfg-dif-max")?.value || 999999),
+                vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
                 activo: true
             };
             try {
@@ -1379,11 +1454,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("✅ Regla de diferencial cambiario registrada.");
                     diferencialForm.reset();
                     loadDiferencial();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
                     const err = await res.json();
                     alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
                 }
             } catch (err) {
+                console.error("Error guardando diferencial cambiario:", err);
                 alert("❌ Error de red.");
             }
         });
