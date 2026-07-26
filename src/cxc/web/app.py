@@ -240,11 +240,14 @@ def extract_product_tmpl_id(prod_raw: Any) -> int | None:
 class RecompraRequest(BaseModel):
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
+    listas_aplicables: str = "*"
     porcentaje: float = 0.03
     max_usos_mes: int = 1
     dias_ventana: int = 30
     min_cajas: int = 2
     max_cajas: int = 4
+    unidad_medida: str | None = "CAJAS"
+    tipo_beneficio: str | None = "descuento"
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -253,6 +256,10 @@ class ProductoPromoRequest(BaseModel):
     productos: str = "*"
     marca: str = "*"
     categoria: str = "*"
+    min_cantidad: float | None = 0.0
+    max_cantidad: float | None = 999999.0
+    unidad_medida: str | None = "CAJAS"
+    tipo_beneficio: str | None = "descuento"
     porcentaje: float = 0.05
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
@@ -265,8 +272,13 @@ class DiferencialCambiarioRequest(BaseModel):
     tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
     tipo_calculo: str      # 'fijo' | 'variable'
     porcentaje_fijo: float = 0.35
+    marca: str = "*"
+    categoria: str = "*"
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
+    unidad_medida: str | None = "USD"
+    min_cantidad: float | None = 0.0
+    max_cantidad: float | None = 999999.0
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -2479,6 +2491,8 @@ async def post_config_promociones(req: PromocionRequest):
         )
         row = serde.promocion_to_row(promo)
         repo._g.append_row(g.T_PROMO_PRIMERA, row)
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop(g.T_PROMO_PRIMERA, None)
         return {"status": "success", "message": "Promoción registrada correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -2864,6 +2878,8 @@ async def post_config_volumen(req: VolumenRequest):
             activo=req.activo
         )
         repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("DescuentosVolumen", None)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -2921,6 +2937,8 @@ async def post_config_recompra(req: RecompraRequest):
             activo=req.activo
         )
         repo._g.append_row("DescuentosRecompra", serde.recompra_to_row(rule))
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("DescuentosRecompra", None)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -2976,6 +2994,8 @@ async def post_config_producto(req: ProductoPromoRequest):
             activo=req.activo
         )
         repo._g.append_row("DescuentosProducto", serde.producto_to_row(rule))
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("DescuentosProducto", None)
         return {"status": "success", "message": "Regla de descuento por producto registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -3031,6 +3051,8 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             activo=req.activo
         )
         repo._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(rule))
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("DescuentosDiferencialCambiario", None)
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
