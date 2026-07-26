@@ -2771,6 +2771,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const usdChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_usd"]:checked')).map(el => el.value);
         const vesChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_ves"]:checked')).map(el => el.value);
 
+        if (usdChecked.length === 0 && vesChecked.length === 0) {
+            alert("⚠️ Debes seleccionar al menos una lista de precios USD y una VES.");
+            return;
+        }
+
         try {
             const res = await fetch('/api/config/listas-precio-mapeo', {
                 method: 'POST',
@@ -2782,8 +2787,20 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const data = await res.json();
             if (res.ok) {
-                alert("✅ Configuración guardada exitosamente: " + data.message);
-                loadListasMapeo();
+                // Use the saved values directly from the response to re-check boxes
+                // This avoids stale cache issues from re-fetching
+                const savedUSD = (data.valid_pricelists_usd || usdChecked).map(String);
+                const savedVES = (data.valid_pricelists_ves || vesChecked).map(String);
+
+                // Re-render with the confirmed saved values
+                document.querySelectorAll('input[name="cfg_listas_usd"]').forEach(cb => {
+                    cb.checked = savedUSD.includes(String(cb.value));
+                });
+                document.querySelectorAll('input[name="cfg_listas_ves"]').forEach(cb => {
+                    cb.checked = savedVES.includes(String(cb.value));
+                });
+
+                alert("✅ Configuración guardada exitosamente.\nUSD: " + savedUSD.join(", ") + "\nVES: " + savedVES.join(", "));
             } else {
                 alert("❌ Error: " + (data.detail || "No se pudo guardar."));
             }

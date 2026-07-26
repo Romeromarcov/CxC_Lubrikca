@@ -257,18 +257,23 @@ def test_e2e_08_executive_daily_report():
 
 def test_e2e_09_listas_precio_mapeo():
     """Test 9: Configuración y lectura de mapeo de Listas de Precios por vigencia."""
-    mock_repo = MagicMock()
-    mock_repo._g.read_rows.return_value = [
-        {"key": "valid_pricelists_usd", "value": "4,6"},
-        {"key": "valid_pricelists_ves", "value": "5,7"}
-    ]
+    import cxc.web.app as app_module
+    # Clear in-process pricelist cache so mock data is actually read from Sheets
+    app_module._PRICELIST_MAPEO_CACHE.clear()
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+    mock_repo = MagicMock()
+    mock_repo._g.get_meta.side_effect = lambda key: "4,6" if key == "valid_pricelists_usd" else ("5,7" if key == "valid_pricelists_ves" else None)
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), \
+         patch("cxc.web.app._load_mapeo_from_json", return_value=None):
         res_get = client.get("/api/config/listas-precio-mapeo")
         assert res_get.status_code == 200
         data_get = res_get.json()
         assert data_get["valid_pricelists_usd"] == ["4", "6"]
         assert data_get["valid_pricelists_ves"] == ["5", "7"]
+
+        # Clear cache again before POST test
+        app_module._PRICELIST_MAPEO_CACHE.clear()
 
         payload = {
             "valid_pricelists_usd": ["4", "8"],
@@ -276,8 +281,11 @@ def test_e2e_09_listas_precio_mapeo():
         }
         res_post = client.post("/api/config/listas-precio-mapeo", json=payload)
         assert res_post.status_code == 200
-        assert res_post.json()["status"] == "success"
-        assert mock_repo._g.upsert_row.call_count == 2
+        resp_data = res_post.json()
+        assert resp_data["status"] == "success"
+        assert resp_data["valid_pricelists_usd"] == ["4", "8"]
+        assert resp_data["valid_pricelists_ves"] == ["5", "9"]
+        mock_repo._g.set_meta.assert_called()
 
 def test_e2e_10_conciliaciones_sugerencias_and_bulk_approval():
     """Test 10: Sugerencias Inteligentes de Conciliación (FIFO por cliente) y Aprobación Masiva."""
