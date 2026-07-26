@@ -2572,8 +2572,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const pricelists = await plRes.json();
             const mapData = await mapRes.json();
 
-            const validUSD = mapData.valid_pricelists_usd || ["4"];
-            const validVES = mapData.valid_pricelists_ves || ["5"];
+            const validUSD = (Array.isArray(mapData.valid_pricelists_usd) && mapData.valid_pricelists_usd.length > 0) ? mapData.valid_pricelists_usd.map(String) : ["4"];
+            const validVES = (Array.isArray(mapData.valid_pricelists_ves) && mapData.valid_pricelists_ves.length > 0) ? mapData.valid_pricelists_ves.map(String) : ["5"];
 
             if (!Array.isArray(pricelists) || pricelists.length === 0) {
                 usdBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';

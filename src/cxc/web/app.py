@@ -1819,14 +1819,16 @@ async def post_config_meta(req: MetaRequest):
 async def get_config_listas_precio_mapeo():
     try:
         repo = get_repo()
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("_Meta", None)
         rows = repo._g.read_rows("_Meta")
         meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
         
         usd_str = meta.get("valid_pricelists_usd", "4")
         ves_str = meta.get("valid_pricelists_ves", "5")
         
-        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()]
-        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()]
+        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] or ["4"]
+        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] or ["5"]
         
         return {
             "valid_pricelists_usd": usd_list,
@@ -1845,6 +1847,8 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
         
         repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_usd", "value": usd_val})
         repo._g.upsert_row("_Meta", "key", {"key": "valid_pricelists_ves", "value": ves_val})
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop("_Meta", None)
         
         return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
     except Exception as e:
