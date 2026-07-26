@@ -606,3 +606,47 @@ def test_primera_compra_regalo_conjunto() -> None:
     # Both LIGA (5) and OCT (8) have 0% discount → NC = 5 + 8 = 13
     assert res.ncs_calculadas == Decimal("13.00")
 
+
+def test_descuento_vigente_elite_y_moneda_usd() -> None:
+    from cxc.engine.effective_dating import descuento_vigente
+    from cxc.models import DescuentoProntoPago, TipoDescuento
+    from datetime import date
+
+    reglas = [
+        DescuentoProntoPago(
+            regla_id="PP_GLOBAL_ELITE_SS_10", marca="GLOBAL OIL", categoria="CAJA",
+            porcentaje=Decimal("0.10"), monedas_aplicables="USD", vigencia_desde=date(2026, 1, 1),
+            vigencia_hasta=date(2026, 3, 30), activo=True, tipo_descuento=TipoDescuento.CONTADO
+        ),
+        DescuentoProntoPago(
+            regla_id="PP_GLOBAL_VISCOSIDADES_8", marca="GLOBAL OIL", categoria="CAJA",
+            porcentaje=Decimal("0.08"), monedas_aplicables="USD", vigencia_desde=date(2026, 1, 1),
+            vigencia_hasta=date(2026, 3, 30), activo=True, tipo_descuento=TipoDescuento.CONTADO
+        )
+    ]
+
+    # Matching ELITE product in USD -> gets 10% rule
+    d_elite = descuento_vigente(
+        reglas, marca="GLOBAL OIL", categoria="CAJA", tipo=TipoDescuento.CONTADO,
+        fecha=date(2026, 2, 1), producto="GLOBAL OIL ELITE 20W50", moneda_pago="USD"
+    )
+    assert d_elite is not None
+    assert d_elite.regla_id == "PP_GLOBAL_ELITE_SS_10"
+    assert d_elite.porcentaje == Decimal("0.10")
+
+    # Non-ELITE product in USD -> falls back to 8% rule
+    d_norm = descuento_vigente(
+        reglas, marca="GLOBAL OIL", categoria="CAJA", tipo=TipoDescuento.CONTADO,
+        fecha=date(2026, 2, 1), producto="GLOBAL OIL MULTIGRADO 20W50", moneda_pago="USD"
+    )
+    assert d_norm is not None
+    assert d_norm.regla_id == "PP_GLOBAL_VISCOSIDADES_8"
+    assert d_norm.porcentaje == Decimal("0.08")
+
+    # Payment in VES -> no rule matched because monedas_aplicables is USD
+    d_ves = descuento_vigente(
+        reglas, marca="GLOBAL OIL", categoria="CAJA", tipo=TipoDescuento.CONTADO,
+        fecha=date(2026, 2, 1), producto="GLOBAL OIL ELITE 20W50", moneda_pago="VES"
+    )
+    assert d_ves is None
+

@@ -335,6 +335,12 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     contado_evaluable = bool(inp.abonos) and inp.orden.fecha_entrega is not None
     contado_proy = Decimal("0")
     if contado_evaluable:
+        moneda_pago = "USD"
+        if inp.abonos:
+            monedas_usadas = {pago.moneda.value for _, pago in inp.abonos if hasattr(pago, "moneda") and pago.moneda}
+            if "VES" in monedas_usadas:
+                moneda_pago = "VES"
+
         for ln in inp.lineas:
             d = descuento_vigente(
                 inp.descuentos,
@@ -343,6 +349,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 tipo=TipoDescuento.CONTADO,
                 fecha=fecha_orden,
                 lista_precios=lista,
+                producto=ln.producto,
+                moneda_pago=moneda_pago,
+                presentacion=ln.presentacion,
             )
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
