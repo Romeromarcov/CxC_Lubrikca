@@ -127,6 +127,21 @@ class ProductoPromoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+class VolumenRequest(BaseModel):
+    marca: str = "*"
+    categoria: str = "*"
+    litros_minimo: float = 0.0
+    min_cantidad: float | None = None
+    max_cantidad: float = 999999.0
+    unidad_medida: str = "LITROS"
+    porcentaje: float = 0.05
+    tipo_evaluacion: str = "orden"
+    dias_evaluacion: int = 30
+    listas_aplicables: str = "*"
+    vigencia_desde: str = ""
+    vigencia_hasta: str | None = None
+    activo: bool = True
+
 
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
@@ -2717,6 +2732,70 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         )
         repo._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(rule))
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Volumen Endpoints ---
+@app.get("/api/config/descuentos-volumen")
+async def get_config_volumen():
+    try:
+        repo = get_repo()
+        rules = repo.descuentos_volumen()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "marca": r.marca,
+                "categoria": r.categoria,
+                "litros_minimo": float(r.litros_minimo),
+                "min_cantidad": float(getattr(r, "min_cantidad", r.litros_minimo)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "LITROS"),
+                "porcentaje": float(r.porcentaje),
+                "tipo_evaluacion": r.tipo_evaluacion,
+                "dias_evaluacion": r.dias_evaluacion,
+                "listas_aplicables": r.listas_aplicables,
+                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                "activo": r.activo
+            } for r in rules
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/descuentos-volumen")
+async def post_config_volumen(req: VolumenRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoVolumen
+        from cxc.sheets import serde
+        import uuid
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+
+        regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
+        min_q = Decimal(str(req.min_cantidad)) if req.min_cantidad is not None else Decimal(str(req.litros_minimo))
+        rule = DescuentoVolumen(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            litros_minimo=Decimal(str(req.litros_minimo)),
+            min_cantidad=min_q,
+            max_cantidad=Decimal(str(req.max_cantidad)),
+            unidad_medida=req.unidad_medida,
+            porcentaje=Decimal(str(req.porcentaje)),
+            tipo_evaluacion=req.tipo_evaluacion,
+            dias_evaluacion=req.dias_evaluacion,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo
+        )
+        repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
+        return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

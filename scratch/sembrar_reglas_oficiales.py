@@ -43,13 +43,12 @@ data_pronto_pago = [
 
 # 4. DescuentosVolumen
 data_volumen = [
-    ['regla_id', 'marca', 'categoria', 'litros_minimo', 'porcentaje', 'activo'],
-    ['VOL_FIDELIDAD_GLOBAL_2500', 'GLOBAL OIL', '*', '2500', '0.05', 'TRUE'],
-    ['VOL_FIDELIDAD_GLOBAL_5000', 'GLOBAL OIL', '*', '5000', '0.12', 'TRUE'],
-    ['VOL_FIDELIDAD_SINOCO_5000', 'SINOCO', '*', '5000', '0.12', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_10_19', 'SINOCO', 'PAILA', '190', '0.0452', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_20_99', 'SINOCO', 'PAILA', '380', '0.1204', 'TRUE'],
-    ['VOL_SINOCO_PAILAS_100', 'SINOCO', 'PAILA', '1900', '0.1928', 'TRUE']
+    ['regla_id', 'marca', 'categoria', 'litros_minimo', 'porcentaje', 'min_cantidad', 'max_cantidad', 'unidad_medida', 'vigencia_desde', 'vigencia_hasta', 'listas_aplicables', 'activo'],
+    ['VOL_FIDELIDAD_GLOBAL_2500', 'GLOBAL OIL', '*', '2500', '0.05', '2500', '999999', 'LITROS', '2026-01-01', '2099-12-31', '*', 'TRUE'],
+    ['VOL_FIDELIDAD_SINOCO_5000', 'SINOCO', '*', '5000', '0.12', '5000', '999999', 'LITROS', '2026-01-01', '2099-12-31', '*', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_10_19', 'SINOCO', 'PAILA', '190', '0.0452', '10', '19', 'PAILAS', '2026-01-01', '2099-12-31', '*', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_20_99', 'SINOCO', 'PAILA', '380', '0.1204', '20', '99', 'PAILAS', '2026-01-01', '2099-12-31', '*', 'TRUE'],
+    ['VOL_SINOCO_PAILAS_100', 'SINOCO', 'PAILA', '1900', '0.1928', '100', '999999', 'PAILAS', '2026-01-01', '2099-12-31', '*', 'TRUE']
 ]
 
 # 5. DescuentosProducto
