@@ -142,6 +142,15 @@ class VolumenRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+class ToggleDescuentoRequest(BaseModel):
+    tabla: str
+    regla_id: str
+    activo: bool
+
+class EliminarDescuentoRequest(BaseModel):
+    tabla: str
+    regla_id: str
+
 
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
@@ -1851,6 +1860,41 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
             repo._g._read_cache.pop("_Meta", None)
         
         return {"status": "success", "message": "Mapeo de listas de precios actualizado correctamente."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/toggle-descuento")
+async def post_toggle_descuento(req: ToggleDescuentoRequest):
+    try:
+        repo = get_repo()
+        rows = repo._g.read_rows(req.tabla)
+        found = False
+        for r in rows:
+            if str(r.get("regla_id", "")).strip().lower() == req.regla_id.strip().lower():
+                r["activo"] = "TRUE" if req.activo else "FALSE"
+                repo._g.upsert_row(req.tabla, "regla_id", r)
+                found = True
+                break
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop(req.tabla, None)
+        if not found:
+            raise HTTPException(status_code=404, detail="Regla no encontrada.")
+        return {"status": "success", "message": f"Estado de regla {req.regla_id} actualizado."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/eliminar-descuento")
+async def post_eliminar_descuento(req: EliminarDescuentoRequest):
+    try:
+        repo = get_repo()
+        deleted = repo._g.delete_row(req.tabla, "regla_id", req.regla_id)
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.pop(req.tabla, None)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Regla no encontrada o no se pudo eliminar.")
+        return {"status": "success", "message": f"Regla {req.regla_id} eliminada permanentemente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
