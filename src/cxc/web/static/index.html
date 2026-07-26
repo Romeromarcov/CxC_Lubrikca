@@ -1379,11 +1379,11 @@
                     </div>
                 </section>
 
-                <!-- PANEL 4: Promociones Primera Compra -->
+                <!-- PANEL 4: Reglas de Obsequio y Promociones -->
                 <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #8b5cf6;">
                     <div class="panel-header">
-                        <h2>🎁 Promociones de Primera Compra</h2>
-                        <p>Configura productos de obsequio, marca, categorías, tramo mínimo, listas y descuento fallback</p>
+                        <h2>🎁 Reglas de Obsequio y Promociones (12+1, Recurrente o Primera Compra)</h2>
+                        <p>Configura obsequios de producto por compra (ej: por 12 cajas 1 de regalo), recurrencia por cliente, marca, tramo mínimo y listas</p>
                     </div>
 
                     <form id="promo-form" class="cxc-form">
@@ -1420,6 +1420,13 @@
 
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
+                                <label>Frecuencia / Aplicación</label>
+                                <select id="cfg-promo-solo-primera">
+                                    <option value="false" selected>Recurrente (En cada compra que cumpla la condición, ej: 12+1)</option>
+                                    <option value="true">Solo 1 vez por Cliente (Únicamente en Primera Compra)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
                                 <label>Tipo de Beneficio</label>
                                 <select id="cfg-promo-tipo-beneficio" required>
                                     <option value="producto" selected>Obsequio de Producto (99.99% descuento)</option>
@@ -1428,7 +1435,7 @@
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Mínimo Compra (Tramo Mínimo)</label>
-                                <input type="number" id="cfg-promo-compra-minima" min="0" step="1" value="3" placeholder="Ej: 3">
+                                <input type="number" id="cfg-promo-compra-minima" min="0" step="1" value="12" placeholder="Ej: 12">
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Máximo Compra (Tramo Máximo)</label>
@@ -1456,7 +1463,7 @@
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Descuento Fallback si no alcanza mínimo (%)</label>
-                                <input type="number" id="cfg-promo-fallback" step="0.0001" min="0" max="1" value="0.02" placeholder="Ej: 0.02 = 2%">
+                                <input type="number" id="cfg-promo-fallback" step="0.0001" min="0" max="1" value="0.00" placeholder="Ej: 0.00 = sin fallback">
                             </div>
                             <div id="promo-porcentaje-section" class="form-group" style="flex:1; display:none;">
                                 <label>Porcentaje Beneficio (%)</label>
@@ -1475,11 +1482,11 @@
                             </div>
                         </div>
 
-                        <button type="submit" class="btn-primary">Registrar Promoción Primera Compra</button>
+                        <button type="submit" class="btn-primary">Registrar Regla de Obsequio / Promoción</button>
                     </form>
 
                     <div class="mini-table-wrapper">
-                        <h3>Promociones Primera Compra Registradas</h3>
+                        <h3>Promociones y Reglas de Obsequio Registradas</h3>
                         <table class="cxc-table mini">
                             <thead>
                                 <tr>

@@ -1352,6 +1352,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 descuento_fallback: parseFloat(rawFallback),
                 valor: parseFloat(rawValor),
                 categorias_aplica: cats,
+                solo_primera_compra: (document.getElementById("cfg-promo-solo-primera")?.value === "true"),
                 vigencia_desde: document.getElementById("cfg-promo-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
                 activo: true
@@ -1363,7 +1364,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Promoción de primera compra registrada correctamente.");
+                    alert("✅ Regla de obsequio / promoción registrada correctamente.");
                     promoForm.reset();
                     loadPromociones();
                     if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
