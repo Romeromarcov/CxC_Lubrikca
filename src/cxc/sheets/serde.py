@@ -448,6 +448,9 @@ def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
         "categoria": d.categoria,
         "litros_minimo": str(d.litros_minimo),
         "porcentaje": str(d.porcentaje),
+        "min_cantidad": str(d.min_cantidad),
+        "max_cantidad": str(d.max_cantidad),
+        "unidad_medida": d.unidad_medida,
         "tipo_evaluacion": d.tipo_evaluacion,
         "dias_evaluacion": str(d.dias_evaluacion),
         "vigencia_desde": d.vigencia_desde.isoformat(),
@@ -463,9 +466,13 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         categoria=r.get("categoria", "*"),
         litros_minimo=p_dec(r.get("litros_minimo", "0")),
         porcentaje=p_pct(r.get("porcentaje", "0")),
+        min_cantidad=p_dec(r.get("min_cantidad", r.get("litros_minimo", "0"))),
+        max_cantidad=p_dec(r.get("max_cantidad", "999999")),
+        unidad_medida=r.get("unidad_medida", "UNIDADES"),
         tipo_evaluacion=r.get("tipo_evaluacion", "orden"),
         dias_evaluacion=int(r.get("dias_evaluacion", "30")),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         listas_aplicables=r.get("listas_aplicables", "*"),
         activo=p_bool(r.get("activo", "TRUE"))
     )
