@@ -981,6 +981,7 @@ async def get_bandeja():
             
             resultados.append({
                 "so_id": b.so_id,
+                "fecha_entrega": ord_row.fecha_entrega.isoformat() if (ord_row and ord_row.fecha_entrega) else None,
                 "lista_aplicada": lista_name,
                 "precio_base": float(b.precio_base_calculado),
                 "total_descuentos": float(b.total_descuentos),

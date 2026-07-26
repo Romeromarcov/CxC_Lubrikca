@@ -40,8 +40,8 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         self._pricelist_ids = pricelist_ids
         self._cache: dict[tuple[str, str], Decimal] = {}
 
-    def precio(self, producto: str, lista: str) -> Decimal:
-        clave = (producto, lista)
+    def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
+        clave = (producto, lista, fecha.isoformat() if fecha else "sin_fecha")
         if clave in self._cache:
             return self._cache[clave]
             
@@ -50,21 +50,41 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         else:
             pricelist_id = self._pricelist_ids.get(lista)
             if not pricelist_id:
-                # If key not found, fallback to lista directly
                 try:
                     pricelist_id = int(lista)
                 except:
-                    pricelist_id = 4 # default to USD
+                    pricelist_id = self._pricelist_ids.get("USD", 4)
             
-        # Search rules for this product template in Odoo
+        # Search rules for this product template in Odoo including vigencia dates
         rules = self._execute(
             "product.pricelist.item",
             "search_read",
             [[["pricelist_id", "=", pricelist_id], ["product_tmpl_id", "=", int(producto)], ["compute_price", "=", "fixed"]]],
-            {"fields": ["fixed_price"], "limit": 1}
+            {"fields": ["fixed_price", "date_start", "date_end"]}
         )
+        
         if rules:
-            precio = to_decimal(str(rules[0]["fixed_price"]))
+            matched = []
+            from datetime import datetime
+            for r in rules:
+                d_start_str = r.get("date_start")
+                d_end_str = r.get("date_end")
+                d_start = datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
+                d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
+                
+                if fecha:
+                    if d_start and fecha < d_start:
+                        continue
+                    if d_end and fecha > d_end:
+                        continue
+                p_val = to_decimal(str(r.get("fixed_price") or "0"))
+                matched.append((d_start or date.min, p_val))
+                
+            if matched:
+                matched.sort(key=lambda x: x[0], reverse=True)
+                precio = matched[0][1]
+            else:
+                precio = to_decimal(str(rules[0]["fixed_price"]))
         else:
             # Fallback to product.template list_price
             prod = self._execute(
