@@ -1275,6 +1275,7 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Setup engine objects for on-the-fly calculation when order is not in BandejaFacturacion
         from cxc.engine.discounts import EngineInputs, calcular_factura
+        from cxc.engine.price_resolver import PriceResolver
         from cxc.odoo.price import OdooPriceResolver
         from cxc.sheets import serde
 
@@ -1291,6 +1292,43 @@ async def get_reporte_saldos(refresh: bool = False):
             so_id_key = l_row.get("so_id", "")
             if so_id_key:
                 all_lines_map.setdefault(so_id_key, []).append(serde.linea_from_row(l_row))
+
+        class FastPriceResolver(PriceResolver):
+            def __init__(self, lines_map, fallback_resolver=None):
+                self._prices = {}
+                for lines in lines_map.values():
+                    for line in lines:
+                        if line.producto and line.precio_unitario is not None:
+                            p_str = str(line.producto).strip()
+                            d_pu = line.precio_unitario
+                            self._prices[(p_str, "5")] = d_pu
+                            self._prices[(p_str, "Precio USD Pago VES")] = d_pu
+                            self._prices[(p_str, "4")] = d_pu
+                            self._prices[(p_str, "Precio USD")] = d_pu
+                self._fallback = fallback_resolver
+
+            def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
+                p_str = str(producto).strip()
+                if (p_str, str(lista)) in self._prices:
+                    return self._prices[(p_str, str(lista))]
+                if (p_str, "5") in self._prices:
+                    return self._prices[(p_str, "5")]
+                if self._fallback:
+                    try:
+                        return self._fallback.precio(producto, lista, fecha)
+                    except Exception:
+                        pass
+                return Decimal("0")
+
+            def volumen(self, producto: str) -> Decimal:
+                if self._fallback:
+                    try:
+                        return self._fallback.volumen(producto)
+                    except Exception:
+                        pass
+                return Decimal("0")
+
+        fast_resolver = FastPriceResolver(all_lines_map, price_resolver_engine)
 
         all_desc_mc = repo.descuentos_marca_categoria()
         all_desc_vol = repo.descuentos_volumen()
@@ -1400,7 +1438,7 @@ async def get_reporte_saldos(refresh: bool = False):
 
             # Engine calculation data
             b = bandeja_map.get(o.so_id)
-            if not b and price_resolver_engine:
+            if not b and fast_resolver:
                 try:
                     inputs = EngineInputs(
                         orden=o,
@@ -1412,7 +1450,7 @@ async def get_reporte_saldos(refresh: bool = False):
                         descuento_bcv_diario=all_desc_bcv,
                         promociones_primera_compra=all_promo_1st,
                         feriados_tabla=all_feriados,
-                        price_resolver=price_resolver_engine,
+                        price_resolver=fast_resolver,
                         engine_config=engine_cfg_obj,
                         fecha_calculo=o.fecha,
                         all_ordenes=ordenes,
