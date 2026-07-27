@@ -2760,6 +2760,9 @@ async def get_todas_reglas_descuento():
             min_q = getattr(r, "min_cantidad", None)
             if min_q is None or float(min_q) == 0:
                 min_q = getattr(r, "litros_minimo", 0)
+            u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+            if not u_med or u_med == "None":
+                u_med = "LITROS" if (float(r.litros_minimo) > 0 and (getattr(r, "min_cantidad", None) is None or float(r.min_cantidad) == 0)) else "CAJAS"
             todas.append({
                 "tabla": "DescuentosVolumen",
                 "tipo_regla": "volumen",
@@ -2769,8 +2772,7 @@ async def get_todas_reglas_descuento():
                 "categoria": r.categoria,
                 "min_cantidad": float(min_q),
                 "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
-                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "unidad_medida": u_med,
                 "porcentaje": float(r.porcentaje),
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
@@ -2937,6 +2939,9 @@ async def get_config_volumen():
         res = []
         for r in rules:
             min_q = r.min_cantidad if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0) else getattr(r, "litros_minimo", 0)
+            u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+            if not u_med:
+                u_med = "LITROS" if (float(r.litros_minimo) > 0 and float(min_q) == 0) else "UNIDADES"
             res.append({
                 "regla_id": r.regla_id,
                 "marca": r.marca,
@@ -2944,7 +2949,7 @@ async def get_config_volumen():
                 "litros_minimo": float(r.litros_minimo),
                 "min_cantidad": float(min_q),
                 "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "UNIDADES"),
+                "unidad_medida": u_med,
                 "porcentaje": float(r.porcentaje),
                 "tipo_evaluacion": r.tipo_evaluacion,
                 "dias_evaluacion": r.dias_evaluacion,
