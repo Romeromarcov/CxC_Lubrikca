@@ -185,9 +185,9 @@ class SheetsRepository(Repository):
         rows = self._g.read_rows("DescuentosDiferencialCambiario")
         if not rows:
             return [
-                DescuentoDiferencialCambiario(regla_id="DIF_35_VES", nombre="35% Fijo VES a USD", tipo_diferencial="fijo_35_ves_usd", tipo_calculo="fijo", porcentaje_fijo=Decimal("0.35")),
-                DescuentoDiferencialCambiario(regla_id="DIF_EQUIPARAR", nombre="Equiparar Binance N/C", tipo_diferencial="equiparar_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0")),
-                DescuentoDiferencialCambiario(regla_id="DIF_BRECHA_CIERRE", nombre="Brecha BCV vs Binance Cierre", tipo_diferencial="diferencial_bcv_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"))
+                DescuentoDiferencialCambiario(regla_id="DIF_35_VES", nombre="35% Fijo VES a USD", tipo_diferencial="fijo_35_ves_usd", tipo_calculo="fijo", porcentaje_fijo=Decimal("0.35"), unidad_medida="USD", monedas_aplicables="USD", listas_aplicables="5"),
+                DescuentoDiferencialCambiario(regla_id="DIF_EQUIPARAR", nombre="Equiparar Binance N/C", tipo_diferencial="equiparar_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"), unidad_medida="USD", monedas_aplicables="*", listas_aplicables="5"),
+                DescuentoDiferencialCambiario(regla_id="DIF_BRECHA_CIERRE", nombre="Brecha BCV vs Binance Cierre", tipo_diferencial="diferencial_bcv_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"), unidad_medida="USD", monedas_aplicables="*", listas_aplicables="5")
             ]
         return [serde.diferencial_from_row(r) for r in rows]
 

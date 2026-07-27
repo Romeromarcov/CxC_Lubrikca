@@ -2093,7 +2093,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
                     `;
 
-                    const unidadCons = r.unidad_medida || (r.tipo_regla === "volumen" ? "LITROS" : "UNIDADES");
+                    const unidadCons = r.unidad_medida || (r.tipo_regla === "volumen" ? "LITROS" : (r.tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_regla === "diferencial" || r.tipo_diferencial ? "USD" : "UNIDADES"));
 
                     row.innerHTML = `
                         <td><strong>${r.tipo_nombre}</strong><br><small style="color:var(--text-muted)">${r.regla_id}</small></td>
@@ -2284,7 +2284,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
         `;
 
-        const unidadStd = r.unidad_medida || (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen" ? "LITROS" : "UNIDADES");
+        const unidadStd = r.unidad_medida || (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen" ? "LITROS" : (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial ? "USD" : "UNIDADES"));
 
         row.innerHTML = `
             <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>

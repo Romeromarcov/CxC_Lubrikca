@@ -413,7 +413,11 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     bcv_completo = Decimal("0")
     detalle_bcv: DescuentoAplicado | None = None
 
-    if inp.abonos:
+    es_lista_usd = (
+        str(inp.orden.lista_precios) == str(inp.engine_config.lista_usd)
+        or str(inp.orden.lista_precios) in ("4", "8", "USD")
+    )
+    if inp.abonos and not es_lista_usd:
         vincs = [v for v, _ in inp.abonos]
         # 1. Per-abono fixed discount
         bcv_per_abono = Decimal("0")

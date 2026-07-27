@@ -348,6 +348,11 @@ def diferencial_to_row(d: DescuentoDiferencialCambiario) -> Row:
         "tipo_diferencial": d.tipo_diferencial,
         "tipo_calculo": d.tipo_calculo,
         "porcentaje_fijo": str(d.porcentaje_fijo),
+        "marca": d.marca,
+        "categoria": d.categoria,
+        "min_cantidad": str(d.min_cantidad),
+        "max_cantidad": str(d.max_cantidad),
+        "unidad_medida": d.unidad_medida or "USD",
         "monedas_aplicables": d.monedas_aplicables,
         "listas_aplicables": d.listas_aplicables,
         "vigencia_desde": d.vigencia_desde.isoformat(),
@@ -357,14 +362,21 @@ def diferencial_to_row(d: DescuentoDiferencialCambiario) -> Row:
 
 
 def diferencial_from_row(r: Mapping[str, str]) -> DescuentoDiferencialCambiario:
+    tipo_dif = r.get("tipo_diferencial", "fijo_35_ves_usd")
+    default_monedas = "USD" if tipo_dif == "fijo_35_ves_usd" else "*"
     return DescuentoDiferencialCambiario(
         regla_id=r.get("regla_id", "DIF_DEFAULT"),
         nombre=r.get("nombre", "Descuento Diferencial Cambiario"),
-        tipo_diferencial=r.get("tipo_diferencial", "fijo_35_ves_usd"),
+        tipo_diferencial=tipo_dif,
         tipo_calculo=r.get("tipo_calculo", "fijo"),
         porcentaje_fijo=p_dec(r.get("porcentaje_fijo", "0.35")),
-        monedas_aplicables=r.get("monedas_aplicables", "*"),
-        listas_aplicables=r.get("listas_aplicables", "*"),
+        marca=r.get("marca", "*"),
+        categoria=r.get("categoria", "*"),
+        min_cantidad=p_dec(r.get("min_cantidad", "0")),
+        max_cantidad=p_dec(r.get("max_cantidad", "999999")),
+        unidad_medida=r.get("unidad_medida", "USD"),
+        monedas_aplicables=r.get("monedas_aplicables", default_monedas),
+        listas_aplicables=r.get("listas_aplicables", "5"),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
