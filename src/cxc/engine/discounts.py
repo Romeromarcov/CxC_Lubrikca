@@ -50,6 +50,8 @@ from .effective_dating import (
 from .equivalents import (
     congelar_en_vinculacion,
     es_ruta_bcv_pura,
+    valor_pagado_bcv_usd,
+    valor_pagado_binance_usd,
     valor_pagado_usd,
 )
 from .price_resolver import PriceResolver
@@ -399,7 +401,15 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             monto=q2(volumen_desc)
         )
 
-    # (c) BCV-completo / Diferencial Cambiario Brecha Cierre (sección 4.3c)
+    lista_usd_name = str(inp.engine_config.lista_usd)
+    try:
+        precio_target_usd = sum(
+            (_precio_linea(inp, ln, lista_usd_name) for ln in inp.lineas), Decimal("0")
+        )
+    except KeyError:
+        precio_target_usd = precio_base
+
+    # (c) BCV-completo / Diferencial Cambiario / Equiparación Binance / USD Cash (sección 4.3c)
     bcv_completo = Decimal("0")
     detalle_bcv: DescuentoAplicado | None = None
 
@@ -412,7 +422,18 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
             )
 
-        # 2. Diferencial Brecha Cierre Variable (evaluado a la fecha del último pago)
+        # 2. Valuaciones duales: Abonos Binance vs Abonos BCV
+        val_binance = valor_pagado_binance_usd(vincs)
+        val_bcv = valor_pagado_bcv_usd(vincs)
+
+        # 3. Equiparación Tasa Binance / USD Cash
+        # Si los abonos en Binance / USD Cash cubren el 100% de la meta en Lista USD
+        nc_equiparar = Decimal("0")
+        if val_binance >= (precio_target_usd or Decimal("0")) - _EPS and precio_base > val_bcv:
+            otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
+            nc_equiparar = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
+
+        # 4. Diferencial Brecha Cierre Variable (evaluado a la fecha del último pago)
         fechas_pago = [v.hora_pago_confirmada.date() for v, _ in inp.abonos if v.hora_pago_confirmada]
         fecha_ultimo_pago = max(fechas_pago) if fechas_pago else fecha_orden
 
@@ -423,9 +444,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         if tasa_binance_ult > 0:
             brecha_pct = max(Decimal("0"), (tasa_binance_ult - tasa_bcv_ult) / tasa_binance_ult)
 
-        val_pagado = valor_pagado_usd(vincs)
         otros_descuentos = nc + pct_recompra + contado_proy + volumen_desc
-        unpaid_usd = precio_base - otros_descuentos - val_pagado
+        unpaid_usd = precio_base - otros_descuentos - val_bcv
         max_brecha_usd = precio_base * brecha_pct
 
         bcv_cierre = Decimal("0")
@@ -433,11 +453,15 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             # El cliente ha pagado >= 100% - brecha% de la orden
             bcv_cierre = min(unpaid_usd, max_brecha_usd)
 
-        bcv_completo = max(bcv_per_abono, bcv_cierre)
+        bcv_completo = max(bcv_per_abono, bcv_cierre, nc_equiparar)
         if bcv_completo > 0:
+            if nc_equiparar >= bcv_cierre and nc_equiparar > bcv_per_abono:
+                desc_str = f"Equiparación Binance / USD Cash (NC sugerida por ${q2(bcv_completo)})"
+            else:
+                desc_str = f"Diferencial brecha cierre ({brecha_pct * 100:.1f}% brecha al {fecha_ultimo_pago.isoformat()})"
             detalle_bcv = DescuentoAplicado(
                 origen="bcv_completo",
-                descripcion=f"Diferencial brecha cierre ({brecha_pct * 100:.1f}% brecha al {fecha_ultimo_pago.isoformat()})",
+                descripcion=desc_str,
                 monto=q2(bcv_completo),
             )
 

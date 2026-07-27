@@ -48,7 +48,9 @@ def _inputs(
     resolver,
     fecha_calculo=date(2026, 6, 8),
     all_ordenes=None,
+    engine_config=None,
 ) -> EngineInputs:
+    cfg = engine_config or CFG
     return EngineInputs(
         orden=orden,
         lineas=list(lineas),
@@ -60,7 +62,7 @@ def _inputs(
         promociones_primera_compra=list(promociones),
         feriados_tabla=list(feriados),
         price_resolver=resolver,
-        engine_config=CFG,
+        engine_config=cfg,
         fecha_calculo=fecha_calculo,
         all_ordenes=list(all_ordenes) if all_ordenes is not None else [],
     )
@@ -714,5 +716,47 @@ def test_diferencial_brecha_cierre_no_aplica_si_falta_mas_de_brecha() -> None:
     assert res.candidata_a_cierre is False
     assert res.total_descuentos == Decimal("0.00")
     assert res.total_motor == Decimal("1000.00")
+
+
+def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
+    """Ejemplo real del usuario:
+    Monto Odoo (Lista VES): $58.46
+    Monto Meta (Lista USD): $32.76
+    Pagos: $10 USD cash + 19560.85 VES (859.44 Binance = $22.76 USD; 742.23 BCV = $26.35 USD)
+    Abonos Binance = $32.76 USD >= $32.76 USD (Lista USD) -> Cumplido 100%!
+    Abonos BCV = $36.35 USD
+    NC Sugerida = $58.46 - $36.35 = $22.11 USD.
+    """
+    orden = b.orden(primera=False, lista="5") # Lista VES #5
+    linea = b.linea(linea_id="L1", producto="P1", marca="GLOBAL OIL", categoria="CAJA", cantidad="1", precio="58.46")
+    
+    # Abono 1: $10.00 USD cash
+    m_usd = b.metodo(moneda=Moneda.USD, es_contado=False)
+    v_usd = b.vinculacion(monto_aplicado="10.00", moneda_abono=Moneda.USD, tipo_tasa_abono=TipoTasa.BCV,
+                          tasa_bcv="1.0", tasa_binance="1.0", hora=datetime(2026, 4, 15, 10, 0))
+    
+    # Abono 2: 19560.85 VES
+    m_ves = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    v_ves = b.vinculacion(monto_aplicado="19560.85", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
+                          tasa_bcv="742.23", tasa_binance="859.44", hora=datetime(2026, 4, 15, 11, 0))
+    
+    # Resolver que tiene P1 a $58.46 en Lista 5 (VES) y $32.76 en Lista 4 (USD)
+    resolver = _resolver(**{"P1@5": "58.46", "P1@4": "32.76"})
+    
+    from cxc.config import EngineConfig
+    cfg = EngineConfig(lista_usd="4", lista_bcv="5", cash_window_business_days=3, bcv_complete_formula="differential_over_binance")
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(v_usd, m_usd), (v_ves, m_ves)],
+        resolver=resolver, engine_config=cfg
+    )
+    res = calcular_factura(inp)
+    
+    assert res.candidata_a_cierre is True
+    assert res.requiere_revision is True
+    # NC calculada debe ser exactamente $22.11 ($58.46 - $36.35)
+    assert res.total_descuentos == Decimal("22.11")
+    assert res.total_motor == Decimal("36.35")
+    assert any("Equiparación Binance" in d.descripcion for d in res.descuentos_detalle)
+
 
 

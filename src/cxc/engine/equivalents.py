@@ -98,3 +98,25 @@ def valor_pagado_usd(vinculaciones: list[Vinculacion]) -> Decimal:
             )
         total += eq
     return total
+
+
+def valor_pagado_binance_usd(vinculaciones: list[Vinculacion]) -> Decimal:
+    """Σ de los equivalentes USD valuados a Tasa Binance o USD Cash directo."""
+    total = Decimal("0")
+    for v in vinculaciones:
+        eq = v.equiv_usd_binance
+        if eq is None:
+            eq = v.monto_aplicado
+        total += eq
+    return total
+
+
+def valor_pagado_bcv_usd(vinculaciones: list[Vinculacion]) -> Decimal:
+    """Σ de los equivalentes USD valuados a Tasa BCV oficial o USD Cash directo."""
+    total = Decimal("0")
+    for v in vinculaciones:
+        eq = v.equiv_usd_bcv
+        if eq is None:
+            eq = v.monto_aplicado
+        total += eq
+    return total
