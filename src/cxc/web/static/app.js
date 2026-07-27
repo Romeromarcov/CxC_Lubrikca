@@ -2284,7 +2284,17 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
         `;
 
-        const unidadStd = r.unidad_medida || (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial ? "USD" : "UNIDADES");
+        let unidadStd = r.unidad_medida;
+        if (!unidadStd || String(unidadStd).trim() === "" || String(unidadStd) === "undefined") {
+            const minVal = parseFloat(r.min_cantidad !== undefined ? r.min_cantidad : r.litros_minimo || 0);
+            if (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen") {
+                unidadStd = (minVal >= 500 || (r.regla_id && String(r.regla_id).includes("FID_"))) ? "LITROS" : "UNIDADES";
+            } else if (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial) {
+                unidadStd = "USD";
+            } else {
+                unidadStd = "UNIDADES";
+            }
+        }
 
         row.innerHTML = `
             <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>
