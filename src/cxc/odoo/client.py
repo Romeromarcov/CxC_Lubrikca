@@ -422,6 +422,65 @@ class OdooXmlRpcReader(OdooReader):
             r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
         return [map_pago(r) for r in recs]
 
+    def pagos_reconciliados_por_so(self, so_names: list[str] | None = None) -> dict[str, list[dict]]:
+        """Resuelve la cadena account.payment → invoice_ids → account.move.invoice_origin → sale.order.name.
+
+        Retorna un mapa {so_name: [lista de pagos aplicados a sus facturas]}.
+        Esto permite mostrar en el reporte los pagos que ya fueron reconciliados en Odoo
+        aunque no tengan una Vinculacion manual en Google Sheets.
+
+        Args:
+            so_names: Si se provee, filtra solo los pagos asociados a esas órdenes.
+                      Si es None, trae todos los pagos reconciliados.
+        """
+        # 1. Leer pagos reconciliados de Odoo
+        pagos = self._search_read(
+            self.MODEL_PAGO,
+            [["payment_type", "=", "inbound"], ["state", "=", "posted"], ["is_reconciled", "=", True]],
+            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "invoice_ids"],
+        )
+        if not pagos:
+            return {}
+
+        # 2. Recolectar todos los invoice IDs referenciados por esos pagos
+        all_inv_ids: list[int] = []
+        pago_inv_map: dict[int, list[int]] = {}
+        for p in pagos:
+            inv_ids = p.get("invoice_ids") or []
+            if isinstance(inv_ids, (list, tuple)) and inv_ids:
+                all_inv_ids.extend(inv_ids)
+                pago_inv_map[p["id"]] = list(inv_ids)
+
+        if not all_inv_ids:
+            return {}
+
+        # 3. Leer facturas para obtener invoice_origin (SO name)
+        facturas = self._read(
+            self.MODEL_MOVE,
+            list(set(all_inv_ids)),
+            ["id", "invoice_origin", "move_type", "state"],
+        )
+        inv_to_so: dict[int, str] = {
+            f["id"]: str(f.get("invoice_origin", "") or "").strip()
+            for f in facturas
+            if f.get("state") == "posted"
+            and f.get("move_type") == "out_invoice"
+            and f.get("invoice_origin")
+        }
+
+        # 4. Construir mapa so_name → [pagos]
+        result: dict[str, list[dict]] = {}
+        for p in pagos:
+            inv_ids_for_p = pago_inv_map.get(p["id"], [])
+            so_names_for_p = {inv_to_so[i] for i in inv_ids_for_p if i in inv_to_so}
+            for so_name in so_names_for_p:
+                if so_names is not None and so_name not in so_names:
+                    continue
+                result.setdefault(so_name, []).append(p)
+
+        return result
+
+
     def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
         if not partner_ids:
             return {}

@@ -354,18 +354,44 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
 import traceback
 
 async def run_sync_in_background():
+    """Daemon de sincronización incremental Odoo → Sheets.
+
+    Primera iteración: siempre hace lookback de 7 días para capturar
+    órdenes/pagos que llegaron mientras el servidor estuvo caído (downtime).
+    Iteraciones siguientes: usa el cursor incremental normal (delta 48h solapado).
+    """
+    _first_run = True
     while True:
         try:
-            print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
             config = AppConfig.from_env()
             repo = get_repo()
             reader = OdooXmlRpcReader(config.odoo)
-            sync = IncrementalSync(repo, reader)
-            result = sync.run(datetime.now())
-            if result.total > 0:
+
+            if _first_run:
+                print("FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas perdidas...")
+                since_override = datetime.now() - timedelta(days=7)
+                clientes = reader.changed_clientes(since_override)
+                ordenes = reader.changed_ordenes(since_override)
+                lineas = reader.changed_lineas(since_override)
+                pagos = reader.changed_pagos(since_override)
+                repo.upsert_clientes(clientes)
+                repo.upsert_ordenes(ordenes)
+                repo.upsert_lineas(lineas)
+                repo.upsert_pagos(pagos)
+                repo.set_last_sync(datetime.now())
+                total_first = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
-            print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
+                print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas actualizadas (7-day lookback).")
+                _first_run = False
+            else:
+                print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
+                sync = IncrementalSync(repo, reader)
+                result = sync.run(datetime.now())
+                if result.total > 0:
+                    _REPORTE_SALDOS_CACHE["data"] = None
+                    _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+                print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -1095,8 +1121,8 @@ async def get_reporte_saldos(refresh: bool = False):
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         
         execute = None
+        config = AppConfig.from_env()
         try:
-            config = AppConfig.from_env()
             execute = _connect(config.odoo)
         except Exception as e_conn:
             logger.warning("No se pudo conectar a Odoo en get_reporte_saldos: %s", e_conn)
@@ -1184,14 +1210,15 @@ async def get_reporte_saldos(refresh: bool = False):
             except Exception as e_pic:
                 logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
 
-        # Compute payments per SO (BCV and Binance equivalents)
+        # Compute payments per SO from manual Vinculaciones (Google Sheets)
         pagos_by_so = {}
         for v in vincs:
             if v.so_id not in pagos_by_so:
                 pagos_by_so[v.so_id] = {
                     "abono_bcv": Decimal("0"),
                     "abono_binance": Decimal("0"),
-                    "ultimo_abono": None
+                    "ultimo_abono": None,
+                    "tiene_vinc_manual": True,
                 }
             
             # BCV equivalent
@@ -1211,6 +1238,21 @@ async def get_reporte_saldos(refresh: bool = False):
                 curr_last = pagos_by_so[v.so_id]["ultimo_abono"]
                 if not curr_last or dt_pago_str > curr_last:
                     pagos_by_so[v.so_id]["ultimo_abono"] = dt_pago_str
+
+        # Enriquecer con pagos ya reconciliados en Odoo (account.payment → invoice_ids → invoice_origin → SO)
+        # Esto captura pagos aplicados a facturas en Odoo que aún no tienen Vinculacion manual en Sheets.
+        # Se usan como fuente complementaria: si ya existe vinculación manual para esa SO, no se duplica.
+        pagos_reconciliados_odoo: dict[str, list[dict]] = {}
+        if execute and so_ids_names:
+            try:
+                odoo_reader_temp = OdooXmlRpcReader(config.odoo, execute)
+                pagos_reconciliados_odoo = odoo_reader_temp.pagos_reconciliados_por_so(so_names=so_ids_names)
+                logger.info("Pagos reconciliados de Odoo: %d órdenes con pagos asociados", len(pagos_reconciliados_odoo))
+            except Exception as e_pr:
+                logger.warning("Error consultando pagos reconciliados de Odoo: %s", e_pr)
+
+        # Nota: la suma de pagos reconciliados de Odoo a pagos_by_so se hace DESPUÉS
+        # de definir rates_map y last_bcv_val (ver bloque más abajo)
 
         # Load UI configured pricelist IDs (USD & VES) from _Meta
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
@@ -1259,24 +1301,66 @@ async def get_reporte_saldos(refresh: bool = False):
                     pass
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
-        # Fetch posted invoices from Odoo in batch for all orders
+        # Sumar pagos reconciliados de Odoo a pagos_by_so SOLO si la SO no tiene vinculaciones manuales
+        # (para no duplicar si el usuario ya registró manualmente la vinculación)
+        # Nota: este bloque requiere rates_map y last_bcv_val, por eso va aquí.
+        for so_name, recon_pagos in pagos_reconciliados_odoo.items():
+            existing = pagos_by_so.get(so_name, {})
+            has_manual = existing.get("tiene_vinc_manual", False)
+            if has_manual:
+                # Ya tiene vinculaciones manuales — los pagos reconciliados de Odoo
+                # ya deberían estar reflejados. El campo saldo_factura_odoo sirve como
+                # verificación cruzada. No duplicamos.
+                continue
+            # Sin vinculación manual: usar los pagos reconciliados de Odoo para computar abono
+            if so_name not in pagos_by_so:
+                pagos_by_so[so_name] = {
+                    "abono_bcv": Decimal("0"),
+                    "abono_binance": Decimal("0"),
+                    "ultimo_abono": None,
+                    "tiene_vinc_manual": False,
+                    "desde_odoo": True,
+                }
+            for rp in recon_pagos:
+                # El monto del pago en Odoo puede ser USD o VES
+                rp_amount = Decimal(str(rp.get("amount", "0") or "0"))
+                rp_currency = rp.get("currency_id")
+                rp_curr_name = rp_currency[1] if isinstance(rp_currency, (list, tuple)) and len(rp_currency) > 1 else "USD"
+                rp_date = str(rp.get("date", "") or "")[:10]
+
+                # Convertir a USD si es VES usando la tasa más cercana a la fecha del pago
+                if rp_curr_name == "VES":
+                    rate = rates_map.get(rp_date, last_bcv_val)
+                    rp_amount_usd = rp_amount / Decimal(str(rate)) if rate and float(rate) > 0 else Decimal("0")
+                else:
+                    rp_amount_usd = rp_amount
+
+                pagos_by_so[so_name]["abono_bcv"] += rp_amount_usd
+                pagos_by_so[so_name]["abono_binance"] += rp_amount_usd
+
+                if rp_date:
+                    curr_last = pagos_by_so[so_name]["ultimo_abono"]
+                    if not curr_last or rp_date > curr_last:
+                        pagos_by_so[so_name]["ultimo_abono"] = rp_date
+
+        # Fetch posted invoices from Odoo in batch for all orders (usa execute ya establecido)
         so_ids = [o.so_id for o in ordenes]
         invoices_by_so = {}
         try:
-            config = AppConfig.from_env()
-            execute = _connect(config.odoo)
-            invoices = execute(
-                "account.move",
-                "search_read",
-                [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
-                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
-            )
-            for inv in invoices:
-                so = str(inv.get("invoice_origin", "")).strip()
-                if so:
-                    invoices_by_so.setdefault(so, []).append(inv)
+            if execute:
+                invoices = execute(
+                    "account.move",
+                    "search_read",
+                    [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
+                    {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
+                )
+                for inv in invoices:
+                    so = str(inv.get("invoice_origin", "")).strip()
+                    if so:
+                        invoices_by_so.setdefault(so, []).append(inv)
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
+
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
         hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
@@ -1409,6 +1493,9 @@ async def get_reporte_saldos(refresh: bool = False):
             abono_bcv = float(p_data["abono_bcv"])
             abono_binance = float(p_data["abono_binance"])
             fecha_ultimo_abono = p_data["ultimo_abono"]
+            # Indica si el abono proviene de reconciliación automática de Odoo (sin vinculación manual en Sheets)
+            pago_desde_odoo = bool(p_data.get("desde_odoo", False)) and not bool(p_data.get("tiene_vinc_manual", False))
+
 
             subtotal = monto_entregado_neto_usd
             
@@ -1623,6 +1710,7 @@ async def get_reporte_saldos(refresh: bool = False):
                 "descuentos_desglose": descuentos_desglose,
                 "facturada": o.facturada,
                 "candidata_a_cierre": saldo_deudor_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05,
+                "pago_desde_odoo": pago_desde_odoo,
                 "reconciliacion": {
                     "resultado": conc.resultado.value if conc else "pendiente"
                 } if conc else None
