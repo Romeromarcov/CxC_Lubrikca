@@ -9,6 +9,7 @@ documenta en SETUP.md (es específico del entorno, como las credenciales).
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
