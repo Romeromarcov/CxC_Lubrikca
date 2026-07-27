@@ -2703,6 +2703,8 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
 async def get_todas_reglas_descuento():
     try:
         repo = get_repo()
+        if hasattr(repo._g, "_read_cache"):
+            repo._g._read_cache.clear()
         todas = []
 
         # 1. Recompra
@@ -2753,13 +2755,11 @@ async def get_todas_reglas_descuento():
                 "activo": r.activo
             })
 
-        # Clear read cache so fresh rules from Google Sheets are always returned
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.clear()
-
         # 3. Volumen
         for r in repo.descuentos_volumen():
-            min_q = r.min_cantidad if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0) else getattr(r, "litros_minimo", 0)
+            min_q = getattr(r, "min_cantidad", None)
+            if min_q is None or float(min_q) == 0:
+                min_q = getattr(r, "litros_minimo", 0)
             todas.append({
                 "tabla": "DescuentosVolumen",
                 "tipo_regla": "volumen",
@@ -2769,7 +2769,7 @@ async def get_todas_reglas_descuento():
                 "categoria": r.categoria,
                 "min_cantidad": float(min_q),
                 "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "UNIDADES"),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                 "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
                 "listas_aplicables": r.listas_aplicables,
