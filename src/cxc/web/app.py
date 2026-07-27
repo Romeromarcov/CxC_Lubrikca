@@ -3234,11 +3234,6 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
 
         # If not found in Sheet, handle Default Fallback Rules by persisting them into Google Sheets
         DEFAULT_RULES_SEED = {
-            "RECOMPRA_DEFAULT": ("DescuentosRecompra", {
-                "regla_id": "RECOMPRA_DEFAULT", "porcentaje": "0.05", "max_usos_mes": "2",
-                "dias_ventana": "30", "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
-                "activo": "TRUE" if req.activo else "FALSE"
-            }),
             "DIF_35_VES": ("DescuentosDiferencialCambiario", {
                 "regla_id": "DIF_35_VES", "nombre": "35% Fijo VES a USD", "tipo_diferencial": "fijo_35_ves_usd",
                 "tipo_calculo": "fijo", "porcentaje_fijo": "0.35", "unidad_medida": "USD", "monedas_aplicables": "USD", "listas_aplicables": "LISTAS_VES",

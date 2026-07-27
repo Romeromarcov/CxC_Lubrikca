@@ -174,8 +174,6 @@ class SheetsRepository(Repository):
 
     def descuentos_recompra(self) -> list[DescuentoRecompra]:
         rows = self._g.read_rows("DescuentosRecompra")
-        if not rows:
-            return [DescuentoRecompra(regla_id="RECOMPRA_DEFAULT", porcentaje=Decimal("0.05"), max_usos_mes=2, dias_ventana=30)]
         return [serde.recompra_from_row(r) for r in rows]
 
     def descuentos_producto(self) -> list[DescuentoProducto]:
