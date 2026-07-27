@@ -253,3 +253,26 @@ class SheetsRepository(Repository):
             serde.conciliacion_from_row(r)
             for r in self._g.read_rows(g.T_CONCILIACION)
         ]
+
+    # --- Bandeja de Auditoría de Descuentos (append-only, inmutable) ---------
+    def append_auditoria(self, fila: dict) -> None:
+        """Registra una discrepancia en la bandeja de auditoría (solo append).
+        
+        fila debe contener: audit_id, so_id, tipo_auditoria, motor_calcula_usd,
+        odoo_registrado_usd, diferencia_usd, detalle_odoo, detalle_motor,
+        estado (pendiente), revisado_por, timestamp_audit.
+        """
+        row = {k: str(v) if v is not None else "" for k, v in fila.items()}
+        self._g.append_row(g.T_BANDEJA_AUDITORIA, row)
+
+    def all_auditoria(self) -> list[dict]:
+        """Lee todas las filas de la bandeja de auditoría."""
+        return self._g.read_rows(g.T_BANDEJA_AUDITORIA)
+
+    def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None:
+        """Actualiza el estado de una fila de auditoría (revisado/aprobado)."""
+        self._g.upsert_row(
+            g.T_BANDEJA_AUDITORIA,
+            "audit_id",
+            {"audit_id": audit_id, "estado": estado, "revisado_por": revisado_por}
+        )

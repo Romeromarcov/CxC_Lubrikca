@@ -25,6 +25,7 @@ T_FERIADOS = "Feriados"
 T_VINCULACIONES = "Vinculaciones"
 T_BANDEJA = "BandejaFacturacion"
 T_CONCILIACION = "Conciliacion"
+T_BANDEJA_AUDITORIA = "BandejaAuditoria"
 T_FECHAS_HISTORICAS = "FechasHistoricas"
 T_META = "_Meta"  # cursor de sync y otros estados internos
 

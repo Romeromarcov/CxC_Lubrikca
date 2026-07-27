@@ -1102,6 +1102,69 @@ _REPORTE_SALDOS_CACHE: dict[str, Any] = {
 }
 _REPORTE_CACHE_TTL = 60.0
 
+
+@app.get("/api/auditoria-descuentos")
+async def get_auditoria_descuentos(
+    cxc_session: str | None = Cookie(default=None),
+    estado: str | None = None,
+    tipo: str | None = None,
+):
+    """Devuelve la bandeja de auditoría de descuentos y NCs.
+
+    Parámetros opcionales de filtro:
+    - estado: 'pendiente' | 'revisado' | 'aprobado'
+    - tipo: 'descuento_orden' | 'descuento_factura' | 'nota_credito'
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        repo = get_repo()
+        rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+        if estado:
+            rows = [r for r in rows if r.get("estado", "") == estado]
+        if tipo:
+            rows = [r for r in rows if r.get("tipo_auditoria", "") == tipo]
+        return {"items": rows, "total": len(rows)}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AuditoriaEstadoRequest(BaseModel):
+    audit_id: str
+    estado: str   # 'revisado' | 'aprobado' | 'rechazado'
+
+
+@app.patch("/api/auditoria-descuentos/{audit_id}")
+async def patch_auditoria_estado(
+    audit_id: str,
+    req: AuditoriaEstadoRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Actualiza el estado de una fila de auditoría (revisado/aprobado/rechazado).
+    Solo accesible por usuarios con rol 'admin' o 'contabilidad'.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    if user.get("rol") not in ("admin", "contabilidad"):
+        raise HTTPException(status_code=403, detail="Sin permisos para actualizar auditoría")
+    try:
+        repo = get_repo()
+        if hasattr(repo, "update_auditoria_estado"):
+            repo.update_auditoria_estado(
+                audit_id=audit_id,
+                estado=req.estado,
+                revisado_por=user.get("nombre") or user.get("email") or "desconocido",
+            )
+        return {"status": "ok", "audit_id": audit_id, "nuevo_estado": req.estado}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
     try:
@@ -1291,7 +1354,9 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Fetch posted invoices from Odoo in batch for all orders (usa execute ya establecido)
         so_ids = [o.so_id for o in ordenes]
-        invoices_by_so = {}
+        invoices_by_so = {}   # out_invoice only
+        ncs_by_so: dict[str, list[dict]] = {}   # out_refund (notas de crédito)
+        invoice_ids_all: list[int] = []  # for fetching move lines
         try:
             if execute:
                 invoices = execute(
@@ -1303,10 +1368,83 @@ async def get_reporte_saldos(refresh: bool = False):
                 )
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
-                    if so:
+                    if not so:
+                        continue
+                    m_type = inv.get("move_type", "out_invoice")
+                    if m_type == "out_refund":
+                        ncs_by_so.setdefault(so, []).append(inv)
+                    else:
                         invoices_by_so.setdefault(so, []).append(inv)
+                    invoice_ids_all.append(int(inv["id"]))
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
+
+        # ── Descuentos en líneas de FACTURAS (account.move.line.discount) ──────
+        # Acumulamos el monto de descuento aplicado en cada factura para poder
+        # compararlo contra el motor en la auditoría.
+        inv_line_discounts_by_so: dict[str, float] = {}
+        inv_line_discount_detail_by_so: dict[str, str] = {}
+        if execute and invoice_ids_all:
+            try:
+                inv_lines = execute(
+                    "account.move.line",
+                    "search_read",
+                    [[["move_id", "in", invoice_ids_all], ["display_type", "in", ["product", False]], ["discount", ">", 0]]],
+                    {"fields": ["move_id", "name", "quantity", "price_unit", "discount", "currency_id"]}
+                )
+                # Rebuild move_id → so mapping from already-fetched invoices
+                inv_id_to_so: dict[int, str] = {}
+                for so_name, inv_list in invoices_by_so.items():
+                    for inv in inv_list:
+                        inv_id_to_so[int(inv["id"])] = so_name
+                for nc_list in ncs_by_so.values():
+                    pass  # NCs don't count for invoice-line discounts
+                for il in inv_lines:
+                    move_raw = il.get("move_id")
+                    move_id = move_raw[0] if isinstance(move_raw, (list, tuple)) else int(move_raw or 0)
+                    so_name = inv_id_to_so.get(move_id, "")
+                    if not so_name:
+                        continue
+                    qty = float(il.get("quantity") or 0)
+                    price = float(il.get("price_unit") or 0)
+                    disc_pct = float(il.get("discount") or 0) / 100.0
+                    disc_monto = qty * price * disc_pct
+                    inv_line_discounts_by_so[so_name] = inv_line_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    label = str(il.get("name") or "línea")[:40]
+                    detail_existing = inv_line_discount_detail_by_so.get(so_name, "")
+                    new_frag = f"{label}: {il.get('discount',0):.1f}%"
+                    inv_line_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
+            except Exception as e_il:
+                logger.warning("Error al consultar account.move.line discounts: %s", e_il)
+
+        # ── Descuentos en líneas de la ORDEN (sale.order.line.discount) ─────────
+        sol_discounts_by_so: dict[str, float] = {}
+        sol_discount_detail_by_so: dict[str, str] = {}
+        if execute and so_ids_names:
+            try:
+                sol_lines = execute(
+                    "sale.order.line",
+                    "search_read",
+                    [[["order_id.name", "in", so_ids_names], ["discount", ">", 0]]],
+                    {"fields": ["order_id", "name", "product_uom_qty", "price_unit", "discount"]}
+                )
+                for sol in sol_lines:
+                    order_raw = sol.get("order_id")
+                    so_name = order_raw[1] if isinstance(order_raw, (list, tuple)) and len(order_raw) > 1 else str(order_raw or "")
+                    if not so_name:
+                        continue
+                    qty = float(sol.get("product_uom_qty") or 0)
+                    price = float(sol.get("price_unit") or 0)
+                    disc_pct = float(sol.get("discount") or 0) / 100.0
+                    disc_monto = qty * price * disc_pct
+                    sol_discounts_by_so[so_name] = sol_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    label = str(sol.get("name") or "línea")[:40]
+                    disc_pct_display = float(sol.get("discount") or 0)
+                    detail_existing = sol_discount_detail_by_so.get(so_name, "")
+                    new_frag = f"{label}: {disc_pct_display:.1f}%"
+                    sol_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
+            except Exception as e_sol:
+                logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
         # ─── ABONOS DESDE ODOO (fuente de verdad para SOs sin vinculación manual) ───
         # Lógica: paid = amount_total - amount_residual en cada factura de Odoo.
@@ -1323,12 +1461,6 @@ async def get_reporte_saldos(refresh: bool = False):
             latest_inv_date: str | None = None
 
             for inv in inv_list:
-                m_type = inv.get("move_type", "out_invoice")
-                if m_type == "out_refund":
-                    # Notas de crédito: reducen el saldo total, no son abonos del cliente.
-                    # El motor de descuentos las maneja por separado.
-                    continue
-
                 tot = Decimal(str(inv.get("amount_total") or "0"))
                 res = Decimal(str(inv.get("amount_residual") or "0"))
                 paid_inv = max(Decimal("0"), tot - res)
@@ -1465,6 +1597,29 @@ async def get_reporte_saldos(refresh: bool = False):
         all_exclusiones = repo.exclusiones()
         all_desc_recompra = repo.descuentos_recompra()
         all_desc_diferencial = repo.descuentos_diferencial_cambiario()
+
+        # Import audit logic
+        from cxc.engine.discount_audit import (
+            auditar_descuento_orden, auditar_descuento_factura,
+            auditar_nota_credito, EstadoAuditoria
+        )
+        recon_cfg = config.reconciliation
+        tol_round = recon_cfg.tolerance_rounding
+        tol_red = recon_cfg.tolerance_red
+
+        # Load existing audit rows to avoid duplicate appends on every cache refresh
+        try:
+            existing_audit_rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+        except Exception:
+            existing_audit_rows = []
+        # Key: (so_id, tipo_auditoria) — only append if not already recorded today
+        from datetime import date as _date
+        _today_str = _date.today().isoformat()
+        existing_audit_keys: set[tuple[str, str]] = {
+            (r.get("so_id", ""), r.get("tipo_auditoria", ""))
+            for r in existing_audit_rows
+            if str(r.get("timestamp_audit", ""))[:10] == _today_str
+        }
 
         for o in ordenes:
             st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
@@ -1612,12 +1767,111 @@ async def get_reporte_saldos(refresh: bool = False):
                 total_con_descuentos = float(o.monto_total)
                 descuentos_desglose = []
 
-            # Debt columns
+            # ── Notas de Crédito reales de Odoo para esta orden ──────────────────
+            nc_list_odoo = ncs_by_so.get(o.so_id, [])
+            ncs_odoo_monto_usd = 0.0
+            ncs_odoo_nombres: list[str] = []
+            for nc in nc_list_odoo:
+                nc_tot = float(nc.get("amount_total") or 0)
+                nc_curr = nc.get("currency_id")
+                nc_c_name = nc_curr[1] if isinstance(nc_curr, (list, tuple)) and len(nc_curr) > 1 else "USD"
+                nc_dt = str(nc.get("invoice_date") or o.fecha.isoformat())[:10]
+                nc_rate = rates_map.get(nc_dt, last_bcv_val)
+                if nc_c_name == "VES" and nc_rate > 0:
+                    ncs_odoo_monto_usd += nc_tot / nc_rate
+                else:
+                    ncs_odoo_monto_usd += nc_tot
+                ncs_odoo_nombres.append(str(nc.get("name", "")))
+
+            # ── Descuentos en línea de la orden Odoo ─────────────────────────────
+            desc_orden_odoo_monto = sol_discounts_by_so.get(o.so_id, 0.0)
+            desc_orden_odoo_detalle = sol_discount_detail_by_so.get(o.so_id, "")
+
+            # ── Descuentos en línea de facturas Odoo ─────────────────────────────
+            desc_factura_odoo_monto = inv_line_discounts_by_so.get(o.so_id, 0.0)
+            desc_factura_odoo_detalle = inv_line_discount_detail_by_so.get(o.so_id, "")
+
+            # ── Debt columns (including NCs from Odoo) ────────────────────────────
             monto_orig = float(o.monto_total)
             saldo_deudor_bcv = max(0.0, monto_orig - abono_bcv)
             saldo_deudor_lista_usd = max(0.0, monto_total_proyectado_usd - abono_binance)
-            saldo_con_descuento_bcv = max(0.0, saldo_deudor_bcv - total_descuentos_monto)
-            saldo_con_descuento_lista_usd = max(0.0, saldo_deudor_lista_usd - total_descuentos_monto)
+            # NCs reducen el saldo con descuento (son hechos contables reales)
+            saldo_con_descuento_bcv = max(0.0, saldo_deudor_bcv - total_descuentos_monto - ncs_odoo_monto_usd)
+            saldo_con_descuento_lista_usd = max(0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd)
+
+            # ── Auditoría de descuentos: motor vs Odoo ────────────────────────────
+            motor_desc_usd = Decimal(str(total_descuentos_monto))
+            motor_ncs_usd = Decimal(str(b.ncs_calculadas if b else 0))
+
+            audit_orden = auditar_descuento_orden(
+                so_id=o.so_id,
+                motor_total_descuentos=motor_desc_usd,
+                odoo_descuento_aplicado=Decimal(str(desc_orden_odoo_monto)),
+                tolerance_rounding=tol_round,
+                tolerance_red=tol_red,
+                detalle_odoo=desc_orden_odoo_detalle,
+                detalle_motor="; ".join(f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose),
+            )
+            audit_factura = auditar_descuento_factura(
+                so_id=o.so_id,
+                motor_total_descuentos=motor_desc_usd,
+                odoo_descuento_factura=Decimal(str(desc_factura_odoo_monto)),
+                tolerance_rounding=tol_round,
+                tolerance_red=tol_red,
+                detalle_odoo=desc_factura_odoo_detalle,
+                detalle_motor="; ".join(f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose),
+            )
+            audit_nc = auditar_nota_credito(
+                so_id=o.so_id,
+                motor_ncs_calculadas=motor_ncs_usd,
+                odoo_nc_monto=Decimal(str(ncs_odoo_monto_usd)),
+                tolerance_rounding=tol_round,
+                tolerance_red=tol_red,
+                detalle_odoo=", ".join(ncs_odoo_nombres) if ncs_odoo_nombres else "Sin NC",
+                detalle_motor=f"NCs motor: ${float(motor_ncs_usd):.2f}",
+            )
+
+            # Persist to BandejaAuditoria only for real discrepancies & once per day
+            _now_iso = datetime.now().isoformat()
+            for _ar in [audit_orden, audit_factura, audit_nc]:
+                if _ar.enviar_a_bandeja and hasattr(repo, "append_auditoria"):
+                    _key = (o.so_id, _ar.tipo.value)
+                    if _key not in existing_audit_keys:
+                        try:
+                            repo.append_auditoria({
+                                "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
+                                "so_id": o.so_id,
+                                "tipo_auditoria": _ar.tipo.value,
+                                "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
+                                "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
+                                "diferencia_usd": round(float(_ar.diferencia_usd), 4),
+                                "detalle_odoo": _ar.detalle_odoo,
+                                "detalle_motor": _ar.detalle_motor,
+                                "estado": "pendiente",
+                                "revisado_por": "",
+                                "timestamp_audit": _now_iso,
+                            })
+                            existing_audit_keys.add(_key)
+                        except Exception as e_aud:
+                            logger.warning("Error registrando auditoría %s: %s", _key, e_aud)
+
+            # Build audit summary for the report row
+            has_any_discrepancy = any(
+                a.enviar_a_bandeja for a in [audit_orden, audit_factura, audit_nc]
+            )
+            audit_descuentos_summary = {
+                "tiene_discrepancia": has_any_discrepancy,
+                "estado_orden": audit_orden.estado.value,
+                "estado_factura": audit_factura.estado.value,
+                "estado_nc": audit_nc.estado.value,
+                "motor_calcula_usd": float(motor_desc_usd),
+                "odoo_orden_usd": desc_orden_odoo_monto,
+                "odoo_factura_usd": desc_factura_odoo_monto,
+                "diferencia_orden": float(audit_orden.diferencia_usd),
+                "diferencia_factura": float(audit_factura.diferencia_usd),
+                "diferencia_nc": float(audit_nc.diferencia_usd),
+                "descuento_adicional": float(audit_orden.descuento_adicional_a_aplicar),
+            }
 
             # Dates & aging calculation
             fecha_delivery = picking_delivery_map.get(o.so_id)
@@ -1716,6 +1970,21 @@ async def get_reporte_saldos(refresh: bool = False):
                 "facturada": o.facturada,
                 "candidata_a_cierre": saldo_deudor_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05,
                 "pago_desde_odoo": pago_desde_odoo,
+                "descuentos_odoo_orden": {
+                    "monto_usd": round(desc_orden_odoo_monto, 2),
+                    "detalle": desc_orden_odoo_detalle,
+                    "pct_sobre_total": round(desc_orden_odoo_monto / monto_orig * 100, 2) if monto_orig > 0 else 0.0,
+                },
+                "descuentos_odoo_factura": {
+                    "monto_usd": round(desc_factura_odoo_monto, 2),
+                    "detalle": desc_factura_odoo_detalle,
+                },
+                "ncs_odoo": {
+                    "monto_usd": round(ncs_odoo_monto_usd, 2),
+                    "nombres": ncs_odoo_nombres,
+                    "auditoria_estado": audit_nc.estado.value,
+                },
+                "auditoria_descuentos": audit_descuentos_summary,
                 "reconciliacion": {
                     "resultado": conc.resultado.value if conc else "pendiente"
                 } if conc else None

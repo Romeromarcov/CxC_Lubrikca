@@ -943,9 +943,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 applyReporteFilters();
                 renderCriticaTable(fullReporteItems);
+                // Load audit panel alongside the report
+                if (typeof loadAuditoriaDescuentos === "function") loadAuditoriaDescuentos();
             }
         } catch (err) {
-            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Error de red al cargar el reporte.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">Error de red al cargar el reporte.</td></tr>';
             console.error(err);
         }
     }
@@ -1087,7 +1089,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderReporteTable(data) {
         const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : []);
         if (!list || list.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="20" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
+            reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
 
@@ -1121,7 +1123,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
             }
 
-            // Format Descuentos Aplicados Breakdown
+            // Format Descuentos Aplicados Breakdown (motor)
             const baseTotal = item.monto_total || 0;
             const totalDesc = item.total_descuentos_monto || 0;
             const pctTotal = baseTotal > 0 ? (totalDesc / baseTotal * 100) : 0;
@@ -1158,8 +1160,58 @@ document.addEventListener("DOMContentLoaded", () => {
                 cellFacturaOdoo = `<div style="font-size:0.78rem;"><span style="color:#0369a1; font-weight:600;">${item.factura_odoo_nombre}</span><br><strong style="color:${item.saldo_factura_odoo > 0.05 ? '#0f172a' : '#059669'};">${saldoInv}</strong></div>`;
             }
 
+            // ── Nueva columna 1: Descuentos en líneas de ORDEN Odoo ─────────────
+            const dOO = item.descuentos_odoo_orden || {};
+            let cellDescOrden = '<span style="color:#94a3b8;font-size:0.75rem;">Sin desc.</span>';
+            if (dOO.monto_usd > 0.005) {
+                const auditStatus = item.auditoria_descuentos?.estado_orden || 'ok';
+                const auditColor = auditStatus === 'ok' ? '#059669' : (auditStatus === 'discrepancia' ? '#dc2626' : '#d97706');
+                const auditIcon = auditStatus === 'ok' ? '✅' : (auditStatus === 'discrepancia' ? '❌' : '⚠️');
+                cellDescOrden = `<div style="font-size:0.78rem;">
+                    <strong style="color:#0369a1;">${fmt(dOO.monto_usd)}</strong>
+                    <span style="color:${auditColor}; margin-left:4px;">${auditIcon}</span>
+                    ${dOO.pct_sobre_total > 0 ? `<br><span style="color:#64748b;">${dOO.pct_sobre_total.toFixed(1)}% s/total</span>` : ''}
+                    ${dOO.detalle ? `<br><span style="color:#94a3b8;font-size:0.7rem;" title="${dOO.detalle}">${dOO.detalle.substring(0,40)}${dOO.detalle.length > 40 ? '…' : ''}</span>` : ''}
+                </div>`;
+            }
+
+            // ── Nueva columna 2: Descuentos en líneas de FACTURA Odoo ───────────
+            const dFO = item.descuentos_odoo_factura || {};
+            let cellDescFactura = '<span style="color:#94a3b8;font-size:0.75rem;">Sin desc.</span>';
+            if (dFO.monto_usd > 0.005) {
+                const auditStatus = item.auditoria_descuentos?.estado_factura || 'ok';
+                const auditColor = auditStatus === 'ok' ? '#059669' : (auditStatus === 'discrepancia' ? '#dc2626' : '#d97706');
+                const auditIcon = auditStatus === 'ok' ? '✅' : (auditStatus === 'discrepancia' ? '❌' : '⚠️');
+                cellDescFactura = `<div style="font-size:0.78rem;">
+                    <strong style="color:#7c3aed;">${fmt(dFO.monto_usd)}</strong>
+                    <span style="color:${auditColor}; margin-left:4px;">${auditIcon}</span>
+                    ${dFO.detalle ? `<br><span style="color:#94a3b8;font-size:0.7rem;" title="${dFO.detalle}">${dFO.detalle.substring(0,40)}${dFO.detalle.length > 40 ? '…' : ''}</span>` : ''}
+                </div>`;
+            }
+
+            // ── Nueva columna 3: Notas de Crédito (NC) Odoo ─────────────────────
+            const ncO = item.ncs_odoo || {};
+            let cellNCs = '<span style="color:#94a3b8;font-size:0.75rem;">Sin NCs</span>';
+            if (ncO.monto_usd > 0.005) {
+                const ncEstado = ncO.auditoria_estado || 'ok';
+                const ncColor = ncEstado === 'ok' ? '#059669' : (ncEstado === 'discrepancia' ? '#dc2626' : '#d97706');
+                const ncIcon = ncEstado === 'ok' ? '✅' : (ncEstado === 'discrepancia' ? '❌' : '⚠️');
+                const ncNombres = (ncO.nombres || []).join(', ') || 'NC';
+                cellNCs = `<div style="font-size:0.78rem;">
+                    <strong style="color:#dc2626;">${fmt(ncO.monto_usd)}</strong>
+                    <span style="color:${ncColor}; margin-left:4px;">${ncIcon}</span>
+                    <br><span style="color:#64748b;font-size:0.7rem;" title="${ncNombres}">${ncNombres.substring(0,35)}${ncNombres.length > 35 ? '…' : ''}</span>
+                </div>`;
+            }
+
+            // Audit warning on SO cell
+            const hasAuditWarn = item.auditoria_descuentos?.tiene_discrepancia;
+            const soCell = hasAuditWarn
+                ? `<strong>${item.so_id}</strong> <span style="color:#f59e0b;" title="Discrepancia en auditoría">⚠️</span>`
+                : `<strong>${item.so_id}</strong>`;
+
             row.innerHTML = `
-                <td><strong>${item.so_id}</strong></td>
+                <td>${soCell}</td>
                 <td>${item.cliente_nombre}</td>
                 <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
                 <td><small>${item.fecha_entrega ? `<span style="color:#0369a1; font-weight:600;" title="Fecha de Entrega Efectiva (ALM/OUT)">🚚 ${item.fecha_entrega}</span>` : `<span style="color:#64748b">${item.fecha || 'Sin entrega'}</span>`}</small></td>
@@ -1175,6 +1227,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
                 <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
                 <td>${cellFacturaOdoo}</td>
+                <td>${cellDescOrden}</td>
+                <td>${cellDescFactura}</td>
+                <td>${cellNCs}</td>
                 <td>${descuentosHtml}</td>
                 <td><strong style="color: ${saldoDescBCV > 0.05 ? '#2563eb' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
                 <td><strong style="color: ${saldoDescUSD > 0.05 ? '#7e22ce' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
@@ -1186,6 +1241,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Load Cross-Referenced Mapping (Pago ↔ SO ↔ Invoice)
+
     async function loadMapa() {
         try {
             mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando mapa de vinculación...</td></tr>';
@@ -1235,6 +1291,115 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error(err);
         }
     }
+
+    // ── Bandeja Auditoría de Descuentos y NCs ─────────────────────────────────
+    async function loadAuditoriaDescuentos() {
+        const tbody = document.getElementById("auditoria-descuentos-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando...</td></tr>';
+
+        const tipoVal = document.getElementById("audit-tipo-filter")?.value || "";
+        const estadoVal = document.getElementById("audit-estado-filter")?.value || "";
+        const params = new URLSearchParams();
+        if (tipoVal) params.set("tipo", tipoVal);
+        if (estadoVal) params.set("estado", estadoVal);
+
+        try {
+            const res = await fetch(`/api/auditoria-descuentos?${params.toString()}`);
+            if (!res.ok) {
+                tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar la bandeja de auditoría.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            const items = data.items || [];
+
+            const badge = document.getElementById("audit-count-badge");
+            if (badge) {
+                if (items.length > 0) {
+                    badge.textContent = `${items.length} discrepancia${items.length !== 1 ? 's' : ''}`;
+                    badge.style.display = "inline";
+                } else {
+                    badge.style.display = "none";
+                }
+            }
+
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669;">✅ Sin discrepancias detectadas</td></tr>';
+                return;
+            }
+
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+            const tipoLabel = { descuento_orden: '📋 Desc. Orden', descuento_factura: '🧾 Desc. Factura', nota_credito: '📄 Nota de Crédito' };
+            const estadoBadge = {
+                pendiente: '<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">⏳ Pendiente</span>',
+                revisado: '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">👁 Revisado</span>',
+                aprobado: '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">✅ Aprobado</span>',
+                rechazado: '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">❌ Rechazado</span>',
+            };
+
+            tbody.innerHTML = "";
+            items.forEach(item => {
+                const tr = document.createElement("tr");
+                const dif = parseFloat(item.diferencia_usd || 0);
+                const difColor = dif > 0 ? '#dc2626' : (dif < 0 ? '#d97706' : '#059669');
+                const difIcon = dif > 0 ? '▲' : (dif < 0 ? '▼' : '=');
+                const ts = (item.timestamp_audit || '').substring(0, 16).replace('T', ' ');
+                const auditId = item.audit_id || '';
+                const estado = item.estado || 'pendiente';
+
+                tr.innerHTML = `
+                    <td><strong>${item.so_id || '-'}</strong></td>
+                    <td>${tipoLabel[item.tipo_auditoria] || item.tipo_auditoria || '-'}</td>
+                    <td><strong style="color:#2563eb;">${fmt(item.motor_calcula_usd)}</strong></td>
+                    <td><strong style="color:#475569;">${fmt(item.odoo_registrado_usd)}</strong></td>
+                    <td><strong style="color:${difColor};">${difIcon} ${fmt(Math.abs(dif))}</strong></td>
+                    <td><small style="color:#64748b;" title="${item.detalle_odoo || ''}">${(item.detalle_odoo || '-').substring(0,50)}${(item.detalle_odoo || '').length > 50 ? '…' : ''}</small></td>
+                    <td><small style="color:#64748b;" title="${item.detalle_motor || ''}">${(item.detalle_motor || '-').substring(0,50)}${(item.detalle_motor || '').length > 50 ? '…' : ''}</small></td>
+                    <td>${estadoBadge[estado] || estado}</td>
+                    <td><small>${ts}</small></td>
+                    <td>
+                        ${estado === 'pendiente' ? `
+                        <button onclick="marcarAuditoria('${auditId}','revisado')" style="padding:3px 8px;border-radius:5px;background:#dbeafe;color:#1d4ed8;border:none;cursor:pointer;font-size:0.75rem;margin-bottom:3px;">Marcar Revisado</button>
+                        <button onclick="marcarAuditoria('${auditId}','aprobado')" style="padding:3px 8px;border-radius:5px;background:#dcfce7;color:#15803d;border:none;cursor:pointer;font-size:0.75rem;">Aprobar</button>
+                        ` : `<span style="color:#94a3b8;font-size:0.75rem;">${item.revisado_por || '-'}</span>`}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar la bandeja de auditoría.</td></tr>';
+            console.error("Error loadAuditoriaDescuentos:", err);
+        }
+    }
+
+    // Exposed globally so inline onclick buttons can call it
+    window.marcarAuditoria = async function(auditId, nuevoEstado) {
+        try {
+            const res = await fetch(`/api/auditoria-descuentos/${encodeURIComponent(auditId)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audit_id: auditId, estado: nuevoEstado }),
+            });
+            if (res.ok) {
+                loadAuditoriaDescuentos();
+            } else {
+                const data = await res.json();
+                alert(`Error al actualizar: ${data.detail || res.statusText}`);
+            }
+        } catch (err) {
+            console.error("Error marcarAuditoria:", err);
+        }
+    };
+
+    // Wire up audit filters and refresh button
+    const auditRefreshBtn = document.getElementById("audit-refresh-btn");
+    if (auditRefreshBtn) {
+        auditRefreshBtn.addEventListener("click", loadAuditoriaDescuentos);
+    }
+    ["audit-tipo-filter", "audit-estado-filter"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", loadAuditoriaDescuentos);
+    });
 
     // Filter report table in real-time
     const reporteSearchEl = document.getElementById("reporte-search");
