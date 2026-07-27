@@ -137,19 +137,17 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         import json
         import os
 
-        service_account_val = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
-        if service_account_val and service_account_val.strip():
+        sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+        sa_file = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+        scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+
+        if sa_json and sa_json.startswith("{"):
             from google.oauth2.service_account import Credentials as SACredentials
-            val = service_account_val.strip()
-            if val.startswith("{"):
-                sa_info = json.loads(val)
-            elif os.path.exists(val):
-                with open(val, "r", encoding="utf-8") as f:
-                    sa_info = json.load(f)
-            else:
-                sa_info = json.loads(val)
-            scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            sa_info = json.loads(sa_json)
             creds = SACredentials.from_service_account_info(sa_info, scopes=scopes)
+        elif sa_file and os.path.exists(sa_file):
+            from google.oauth2.service_account import Credentials as SACredentials
+            creds = SACredentials.from_service_account_file(sa_file, scopes=scopes)
         else:
             from google.oauth2.credentials import Credentials
             from google.auth.transport.requests import Request

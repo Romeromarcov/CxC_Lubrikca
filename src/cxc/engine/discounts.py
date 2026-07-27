@@ -400,6 +400,17 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             descripcion="Dcto volumen " + ", ".join(detalles_vol),
             monto=q2(volumen_desc)
         )
+        # Apply dynamic exclusions (e.g., volumen excludes recompra)
+        exclusiones_activas = set()
+        for ex in inp.exclusiones:
+            if getattr(ex, "activo", True):
+                ta = (ex.regla_tipo_a or "").lower().strip()
+                tb = (ex.regla_tipo_b or "").lower().strip()
+                exclusiones_activas.add((ta, tb))
+                exclusiones_activas.add((tb, ta))
+        if ("volumen", "recompra") in exclusiones_activas:
+            pct_recompra = Decimal("0")
+            detalle_recompra = None
 
     lista_usd_name = str(inp.engine_config.lista_usd)
     try:
