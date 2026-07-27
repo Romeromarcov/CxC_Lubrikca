@@ -1254,13 +1254,31 @@ async def get_reporte_saldos():
         # Setup engine objects for on-the-fly calculation when order is not in BandejaFacturacion
         from cxc.engine.discounts import EngineInputs, calcular_factura
         from cxc.odoo.price import OdooPriceResolver
+        from cxc.sheets import serde
 
         engine_cfg_obj = config.engine
         pricelist_ids_map = {
-            engine_cfg_obj.lista_usd: int(usd_ids[0]) if usd_ids else 4,
-            engine_cfg_obj.lista_bcv: int(ves_ids[0]) if ves_ids else 5,
+            engine_cfg_obj.lista_usd: int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
+            engine_cfg_obj.lista_bcv: int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
         }
         price_resolver_engine = OdooPriceResolver(execute, pricelist_ids_map) if execute else None
+
+        # Pre-fetch all collections once outside loop to eliminate N+1 I/O overhead
+        all_lines_map = {}
+        for l_row in repo._g.read_rows("LineasOrden"):
+            so_id_key = l_row.get("so_id", "")
+            if so_id_key:
+                all_lines_map.setdefault(so_id_key, []).append(serde.linea_from_row(l_row))
+
+        all_desc_mc = repo.descuentos_marca_categoria()
+        all_desc_vol = repo.descuentos_volumen()
+        all_reg_rec = repo.reglas_recurrencia()
+        all_desc_bcv = repo.descuento_bcv_completo()
+        all_promo_1st = repo.promociones_primera_compra()
+        all_feriados = repo.feriados()
+        all_exclusiones = repo.exclusiones()
+        all_desc_recompra = repo.descuentos_recompra()
+        all_desc_diferencial = repo.descuentos_diferencial_cambiario()
 
         for o in ordenes:
             st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
@@ -1364,21 +1382,21 @@ async def get_reporte_saldos():
                 try:
                     inputs = EngineInputs(
                         orden=o,
-                        lineas=repo.lineas_de_orden(o.so_id),
+                        lineas=all_lines_map.get(o.so_id, []),
                         abonos=[],
-                        descuentos=repo.descuentos_marca_categoria(),
-                        descuentos_volumen=repo.descuentos_volumen(),
-                        reglas_recurrencia=repo.reglas_recurrencia(),
-                        descuento_bcv_diario=repo.descuento_bcv_completo(),
-                        promociones_primera_compra=repo.promociones_primera_compra(),
-                        feriados_tabla=repo.feriados(),
+                        descuentos=all_desc_mc,
+                        descuentos_volumen=all_desc_vol,
+                        reglas_recurrencia=all_reg_rec,
+                        descuento_bcv_diario=all_desc_bcv,
+                        promociones_primera_compra=all_promo_1st,
+                        feriados_tabla=all_feriados,
                         price_resolver=price_resolver_engine,
                         engine_config=engine_cfg_obj,
                         fecha_calculo=o.fecha,
                         all_ordenes=ordenes,
-                        exclusiones=repo.exclusiones(),
-                        descuentos_recompra=repo.descuentos_recompra(),
-                        descuentos_diferencial=repo.descuentos_diferencial_cambiario(),
+                        exclusiones=all_exclusiones,
+                        descuentos_recompra=all_desc_recompra,
+                        descuentos_diferencial=all_desc_diferencial,
                     )
                     b = calcular_factura(inputs)
                 except Exception as e_calc:
@@ -2049,6 +2067,42 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         ordenes = repo.all_ordenes()
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+
+        # Live Odoo batch verification for reconciled payments and cancelled orders
+        reconciled_pagos_set = set()
+        so_states_map = {}
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                p_names = [str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")]
+                if p_names:
+                    odoo_pagos = execute(
+                        "account.payment",
+                        "search_read",
+                        [[["name", "in", p_names]]],
+                        {"fields": ["name", "is_reconciled", "state", "reconciled_invoices_count"]}
+                    )
+                    for op in odoo_pagos:
+                        pname = str(op.get("name", "")).strip()
+                        is_rec = bool(op.get("is_reconciled")) or int(op.get("reconciled_invoices_count") or 0) > 0 or str(op.get("state")) != "posted"
+                        if is_rec and pname:
+                            reconciled_pagos_set.add(pname)
+
+                so_names = [o.so_id for o in ordenes]
+                if so_names:
+                    odoo_sos = execute(
+                        "sale.order",
+                        "search_read",
+                        [[["name", "in", so_names]]],
+                        {"fields": ["name", "state"]}
+                    )
+                    for os_item in odoo_sos:
+                        sname = str(os_item.get("name", "")).strip()
+                        if sname:
+                            so_states_map[sname] = str(os_item.get("state", "")).strip().lower()
+        except Exception as e_odoo:
+            logger.warning("Error consultando Odoo en get_conciliaciones_sugerencias: %s", e_odoo)
         
         linked_pago = {}
         linked_so = {}
@@ -2059,7 +2113,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
-            if not pid:
+            if not pid or pid in reconciled_pagos_set:
                 continue
             monto_orig = parse_decimal_safe(p.get("monto", "0"))
             monto_vinculado = linked_pago.get(pid, Decimal("0"))
@@ -2083,7 +2137,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 
         open_orders_by_client = {}
         for o in ordenes:
-            st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            st = so_states_map.get(o.so_id) or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
             if not o.facturada:
@@ -2144,6 +2198,111 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 o["saldo_pendiente"] -= monto_aplicar
                 
         return sugerencias
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/bandeja")
+async def get_bandeja_facturacion():
+    try:
+        repo = get_repo()
+        ordenes = repo.all_ordenes()
+        bandeja_rows = repo.all_bandeja()
+        bandeja_map = {b.so_id: b for b in bandeja_rows}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {str(r.get("cliente_id", "")): r for r in clientes_rows}
+        vincs = repo.all_vinculaciones()
+
+        # Batch query live Odoo state
+        so_odoo_states = {}
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                so_names = [o.so_id for o in ordenes]
+                if so_names:
+                    so_recs = execute(
+                        "sale.order",
+                        "search_read",
+                        [[["name", "in", so_names]]],
+                        {"fields": ["name", "state"]}
+                    )
+                    for s in so_recs:
+                        sname = str(s.get("name", "")).strip()
+                        if sname:
+                            so_odoo_states[sname] = str(s.get("state", "")).strip().lower()
+        except Exception as e_odoo:
+            logger.warning("Error consultando Odoo en get_bandeja: %s", e_odoo)
+
+        pagos_by_so = {}
+        for v in vincs:
+            eq = v.equiv_usd_binance if v.equiv_usd_binance is not None else (v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado)
+            pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, Decimal("0")) + eq
+
+        ordenes_por_facturar = []
+        notas_credito_pendientes = []
+        iva_pendiente_agentes = []
+
+        for o in ordenes:
+            st = so_odoo_states.get(o.so_id) or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            if st in ("cancel", "cancelled", "draft", "sent"):
+                continue
+
+            c_info = clientes_map.get(str(o.cliente_id), {})
+            c_name = c_info.get("nombre") or f"Cliente {o.cliente_id}"
+            wh_agent = bool(c_info.get("wh_iva_agent")) or (str(c_info.get("agente_retencion", "")).upper() == "TRUE")
+            wh_rate = float(parse_decimal_safe(str(c_info.get("wh_iva_rate", "75")))) if c_info.get("wh_iva_rate") else 75.0
+
+            b = bandeja_map.get(o.so_id)
+            abono = float(pagos_by_so.get(o.so_id, Decimal("0")))
+            monto_orig = float(o.monto_total)
+
+            tot_motor = float(b.total_motor) if b else monto_orig
+            desc_monto = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
+            desc_pct = (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
+
+            if not o.facturada:
+                ordenes_por_facturar.append({
+                    "so_id": o.so_id,
+                    "cliente_nombre": c_name,
+                    "wh_iva_agent": wh_agent,
+                    "wh_iva_rate": wh_rate,
+                    "fecha": o.fecha.isoformat() if hasattr(o.fecha, "isoformat") else str(o.fecha),
+                    "monto_pagado": abono,
+                    "subtotal_neto": monto_orig,
+                    "total_motor": tot_motor,
+                    "descuento_aplicar_monto": desc_monto,
+                    "descuento_aplicar_pct": desc_pct,
+                    "precio_base": monto_orig
+                })
+            else:
+                nc_calc = float(b.ncs_calculadas) if b else 0.0
+                if nc_calc > 0.01:
+                    notas_credito_pendientes.append({
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "factura_id": o.factura_id or "Odoo",
+                        "monto_pagado": abono,
+                        "nc_monto": nc_calc,
+                        "nc_porcentaje": (nc_calc / monto_orig * 100.0) if monto_orig > 0 else 0.0,
+                        "concepto": "Obsequio / Descuento diferido no aplicado en factura"
+                    })
+                if wh_agent and abono > 0:
+                    iva_pendiente_agentes.append({
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "factura_id": o.factura_id or "Odoo",
+                        "monto_factura": monto_orig,
+                        "monto_iva_retenido_est": monto_orig * 0.16 * (wh_rate / 100.0),
+                        "estado": "Pendiente Comprobante IVA"
+                    })
+
+        return {
+            "ordenes_por_facturar": ordenes_por_facturar,
+            "notas_credito_pendientes": notas_credito_pendientes,
+            "iva_pendiente_agentes": iva_pendiente_agentes
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))

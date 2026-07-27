@@ -407,11 +407,11 @@ class OdooXmlRpcReader(OdooReader):
 
     # --- Pagos ---------------------------------------------------------------
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
-        domain = self._delta(since) + [["payment_type", "=", "inbound"], ["state", "=", "posted"]]
+        domain = self._delta(since) + [["payment_type", "=", "inbound"], ["state", "=", "posted"], ["is_reconciled", "=", False]]
         recs = self._search_read(
             self.MODEL_PAGO,
             domain,
-            ["id", "partner_id", "amount", "currency_id", "journal_id", "date"],
+            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "is_reconciled"],
         )
         partner_ids = _ids_of(recs, "partner_id")
         vendedores = self._vendedor_por_partner(partner_ids)
