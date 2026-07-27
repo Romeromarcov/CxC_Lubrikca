@@ -75,13 +75,31 @@ def _match_marca(regla_marca: str, target_marca: str) -> bool:
     return "*" in valid_marcas or target_u in valid_marcas or any(vm in target_u or target_u in vm for vm in valid_marcas)
 
 
-def _match_lista(regla_listas: str, target_lista: str) -> bool:
+def _match_lista(
+    regla_listas: str,
+    target_lista: str,
+    valid_ves: list[str] | None = None,
+    valid_usd: list[str] | None = None,
+) -> bool:
     if not regla_listas or regla_listas == "*":
         return True
     if not target_lista:
         return True
     valid_listas = [l.strip() for l in str(regla_listas).split(",") if l.strip()]
-    return "*" in valid_listas or str(target_lista).strip() in valid_listas
+    if "*" in valid_listas:
+        return True
+    target_str = str(target_lista).strip()
+    if target_str in valid_listas:
+        return True
+    if "LISTAS_VES" in valid_listas:
+        ves_lists = [str(v) for v in (valid_ves or ["5", "3"])]
+        if target_str in ves_lists:
+            return True
+    if "LISTAS_USD" in valid_listas:
+        usd_lists = [str(u) for u in (valid_usd or ["4", "7", "8", "USD"])]
+        if target_str in usd_lists:
+            return True
+    return False
 
 
 def _match_producto_especial(regla: DescuentoMarcaCategoria, producto_nombre: str, categoria: str) -> bool:
@@ -109,6 +127,8 @@ def descuento_vigente(
     producto: str = "",
     moneda_pago: str = "USD",
     presentacion: str = "",
+    valid_ves: list[str] | None = None,
+    valid_usd: list[str] | None = None,
 ) -> DescuentoMarcaCategoria | None:
     """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha``, lista y moneda."""
     candidatas = []
@@ -121,7 +141,7 @@ def descuento_vigente(
             continue
         if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
             continue
-        if not _match_lista(r.listas_aplicables, lista_precios):
+        if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
             continue
         if r.monedas_aplicables and r.monedas_aplicables != "*":
             valid_monedas = [m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()]
