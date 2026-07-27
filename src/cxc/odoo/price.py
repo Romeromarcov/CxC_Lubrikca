@@ -52,16 +52,25 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             if not pricelist_id:
                 try:
                     pricelist_id = int(lista)
-                except:
+                except Exception:
                     pricelist_id = self._pricelist_ids.get("USD", 4)
             
-        # Search rules for this product template in Odoo including vigencia dates
-        rules = self._execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "=", pricelist_id], ["product_tmpl_id", "=", int(producto)], ["compute_price", "=", "fixed"]]],
-            {"fields": ["fixed_price", "date_start", "date_end"]}
-        )
+        try:
+            prod_id = int(producto)
+        except (ValueError, TypeError):
+            prod_id = None
+
+        rules = []
+        if prod_id:
+            try:
+                rules = self._execute(
+                    "product.pricelist.item",
+                    "search_read",
+                    [[["pricelist_id", "=", pricelist_id], ["product_tmpl_id", "=", prod_id], ["compute_price", "=", "fixed"]]],
+                    {"fields": ["fixed_price", "date_start", "date_end"]}
+                )
+            except Exception:
+                rules = []
         
         if rules:
             matched = []
@@ -87,16 +96,19 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                 precio = to_decimal(str(rules[0]["fixed_price"]))
         else:
             # Fallback to product.template list_price
-            prod = self._execute(
-                "product.template",
-                "read",
-                [int(producto)],
-                ["list_price"]
-            )
-            if prod:
-                precio = to_decimal(str(prod[0]["list_price"]))
-            else:
-                precio = Decimal("0.0")
+            precio = Decimal("0.0")
+            if prod_id:
+                try:
+                    prod = self._execute(
+                        "product.template",
+                        "read",
+                        [[prod_id]],
+                        {"fields": ["list_price"]}
+                    )
+                    if prod and isinstance(prod, list) and len(prod) > 0:
+                        precio = to_decimal(str(prod[0].get("list_price") or "0.0"))
+                except Exception:
+                    precio = Decimal("0.0")
                 
         self._cache[clave] = precio
         return precio
@@ -106,15 +118,18 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         if clave in self._cache:
             return self._cache[clave]
             
-        prod = self._execute(
-            "product.template",
-            "read",
-            [int(producto)],
-            ["product_volume"]
-        )
-        if prod:
-            vol = to_decimal(str(prod[0].get("product_volume") or "0.0"))
-        else:
+        vol = Decimal("0.0")
+        try:
+            prod_id = int(producto)
+            prod = self._execute(
+                "product.template",
+                "read",
+                [[prod_id]],
+                {"fields": ["product_volume"]}
+            )
+            if prod and isinstance(prod, list) and len(prod) > 0:
+                vol = to_decimal(str(prod[0].get("product_volume") or "0.0"))
+        except Exception:
             vol = Decimal("0.0")
             
         self._cache[clave] = vol
