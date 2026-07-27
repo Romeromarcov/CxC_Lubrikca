@@ -144,9 +144,15 @@ class EngineConfig:
     bcv_complete_formula: str
     lista_usd: str
     lista_bcv: str
+    valid_pricelists_ves: list[str] = field(default_factory=lambda: ["5", "3"])
+    valid_pricelists_usd: list[str] = field(default_factory=lambda: ["4", "8", "USD"])
 
     @classmethod
     def from_env(cls) -> EngineConfig:
+        raw_ves = os.environ.get("ENGINE_VALID_PRICELISTS_VES", "5,3")
+        raw_usd = os.environ.get("ENGINE_VALID_PRICELISTS_USD", "4,8,USD")
+        valid_ves = [x.strip() for x in raw_ves.split(",") if x.strip()]
+        valid_usd = [x.strip() for x in raw_usd.split(",") if x.strip()]
         return cls(
             cash_window_business_days=_get_int("CASH_WINDOW_BUSINESS_DAYS", 3),
             bcv_complete_formula=_get(
@@ -154,6 +160,8 @@ class EngineConfig:
             ),
             lista_usd=_get("ENGINE_LISTA_USD", "USD"),
             lista_bcv=_get("ENGINE_LISTA_BCV", "BCV"),
+            valid_pricelists_ves=valid_ves,
+            valid_pricelists_usd=valid_usd,
         )
 
 

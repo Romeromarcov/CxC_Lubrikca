@@ -3241,19 +3241,19 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
             }),
             "DIF_35_VES": ("DescuentosDiferencialCambiario", {
                 "regla_id": "DIF_35_VES", "nombre": "35% Fijo VES a USD", "tipo_diferencial": "fijo_35_ves_usd",
-                "tipo_calculo": "fijo", "porcentaje_fijo": "0.35", "unidad_medida": "USD", "monedas_aplicables": "USD", "listas_aplicables": "5",
+                "tipo_calculo": "fijo", "porcentaje_fijo": "0.35", "unidad_medida": "USD", "monedas_aplicables": "USD", "listas_aplicables": "LISTAS_VES",
                 "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
                 "activo": "TRUE" if req.activo else "FALSE"
             }),
             "DIF_EQUIPARAR": ("DescuentosDiferencialCambiario", {
                 "regla_id": "DIF_EQUIPARAR", "nombre": "Equiparar Binance N/C", "tipo_diferencial": "equiparar_binance",
-                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "5",
+                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "LISTAS_VES",
                 "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
                 "activo": "TRUE" if req.activo else "FALSE"
             }),
             "DIF_BRECHA_CIERRE": ("DescuentosDiferencialCambiario", {
                 "regla_id": "DIF_BRECHA_CIERRE", "nombre": "Brecha BCV vs Binance Cierre", "tipo_diferencial": "diferencial_bcv_binance",
-                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "5",
+                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "LISTAS_VES",
                 "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
                 "activo": "TRUE" if req.activo else "FALSE"
             }),

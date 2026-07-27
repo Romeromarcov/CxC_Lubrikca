@@ -2068,7 +2068,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     const rawListasCons = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
                         ? String(r.listas_aplicables)
                         : "*";
-                    const listasText = rawListasCons === "*" ? "Todas (*)" : (rawListasCons === "4" ? "Lista USD (#4)" : (rawListasCons === "5" ? "Lista VES (#5)" : rawListasCons));
+                    const listasText = rawListasCons === "*" ? "Todas (*)" : (rawListasCons === "LISTAS_VES" ? "Listas VES (Mapeo)" : (rawListasCons === "LISTAS_USD" ? "Listas USD (Mapeo)" : (rawListasCons === "4" ? "Lista USD (#4)" : (rawListasCons === "5" ? "Lista VES (#5)" : rawListasCons))));
 
                     // Format Campos Especiales
                     let espArr = [];
@@ -2758,13 +2758,20 @@ document.addEventListener("DOMContentLoaded", () => {
                 const elClass = cfg.selector.replace('.', '');
                 const inputs = document.querySelectorAll(cfg.selector);
                 if (inputs.length > 0) {
-                    const parent = inputs[0].parentElement?.parentElement;
+                    const parent = inputs[0].parentElement?.parentElement || document.getElementById(cfg.parent);
                     if (parent) {
                         const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
-                        parent.innerHTML = pricelists.map(pl => {
+                        const isVesChecked = currentChecked.includes('LISTAS_VES') || (elClass === 'm2m-dif-lista' && currentChecked.length === 0);
+                        const isUsdChecked = currentChecked.includes('LISTAS_USD');
+                        
+                        let html = `<label><input type="checkbox" class="${elClass}" value="LISTAS_VES" ${isVesChecked ? 'checked' : ''}> Listas VES (Mapeo)</label> `;
+                        html += `<label><input type="checkbox" class="${elClass}" value="LISTAS_USD" ${isUsdChecked ? 'checked' : ''}> Listas USD (Mapeo)</label> `;
+                        html += pricelists.map(pl => {
                             const isChecked = currentChecked.includes(String(pl.id)) ? 'checked' : '';
                             return `<label><input type="checkbox" class="${elClass}" value="${pl.id}" ${isChecked}> #${pl.id} ${pl.name}</label>`;
-                        }).join(' ') + ` <label><input type="checkbox" class="${elClass}" value="*" ${currentChecked.includes('*') || currentChecked.length === 0 ? 'checked' : ''}> Todas (*)</label>`;
+                        }).join(' ');
+                        html += ` <label><input type="checkbox" class="${elClass}" value="*" ${currentChecked.includes('*') ? 'checked' : ''}> Todas (*)</label>`;
+                        parent.innerHTML = html;
                     }
                 }
             });

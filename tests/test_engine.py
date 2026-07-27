@@ -759,4 +759,13 @@ def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
     assert any("Equiparación Binance" in d.descripcion for d in res.descuentos_detalle)
 
 
+def test_match_lista_con_keywords_dinamicas_listas_ves_y_usd() -> None:
+    from cxc.engine.effective_dating import _match_lista
+    assert _match_lista("LISTAS_VES", "5", valid_ves=["5", "9"], valid_usd=["4"]) is True
+    assert _match_lista("LISTAS_VES", "9", valid_ves=["5", "9"], valid_usd=["4"]) is True
+    assert _match_lista("LISTAS_VES", "4", valid_ves=["5", "9"], valid_usd=["4"]) is False
+    assert _match_lista("LISTAS_USD", "4", valid_ves=["5", "9"], valid_usd=["4"]) is True
+    assert _match_lista("LISTAS_USD", "9", valid_ves=["5", "9"], valid_usd=["4"]) is False
+
+
 
