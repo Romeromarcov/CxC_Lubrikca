@@ -232,7 +232,7 @@ class DescuentoVolumen:
     porcentaje: Decimal = Decimal("0.05")
     min_cantidad: Decimal = Decimal("0")
     max_cantidad: Decimal = Decimal("999999")
-    unidad_medida: str = "LITROS"
+    unidad_medida: str = "UNIDADES"
     tipo_beneficio: str = "descuento"
     tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
     dias_evaluacion: int = 30       # días para acumulado (0 = histórico total)

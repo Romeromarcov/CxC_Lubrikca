@@ -514,6 +514,44 @@ def test_descuento_por_volumen_litros() -> None:
     assert res.total_motor == Decimal("950.00")
 
 
+def test_descuento_por_volumen_unidades_cajas() -> None:
+    orden = b.orden(primera=False)
+    linea1 = b.linea(producto="SINOCO SAE 20W-50 (PAILA)", marca="Sinoco", categoria="PAILA", cantidad="10", precio="100")
+
+    resolver = _resolver(**{"SINOCO SAE 20W-50 (PAILA)@USD": "100", "SINOCO SAE 20W-50 (PAILA)@BCV": "100"})
+    resolver.set_volumen("SINOCO SAE 20W-50 (PAILA)", Decimal("19.0"))
+
+    from cxc.models import DescuentoVolumen
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_SINOCO_PAILA_1",
+        marca="SINOCO",
+        categoria="PAILA",
+        min_cantidad=Decimal("10"),
+        max_cantidad=Decimal("19"),
+        unidad_medida="CAJAS",
+        porcentaje=Decimal("0.0452"),
+        activo=True
+    )
+
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea1],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+    )
+    res = calcular_factura(inp)
+
+    assert res.total_descuentos == Decimal("45.20")
+    assert res.total_motor == Decimal("954.80")
+
+    # Over max_cantidad (25 > 19) should not match VOL_SINOCO_PAILA_1
+    linea2 = b.linea(producto="SINOCO SAE 20W-50 (PAILA)", marca="Sinoco", categoria="PAILA", cantidad="25", precio="100")
+    inp2 = _inputs(orden=orden, lineas=[linea2], abonos=[], descuentos_volumen=[regla_vol], resolver=resolver)
+    res2 = calcular_factura(inp2)
+    assert res2.total_descuentos == Decimal("0.00")
+
+
 def test_recompra_aplica_solo_primera_compra_del_mes() -> None:
     # First purchase in month should get recompra, subsequent one should not
     orden1 = b.orden(primera=False, fecha=date(2026, 6, 5))

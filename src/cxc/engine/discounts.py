@@ -362,8 +362,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
 
-    # (d) Descuento por Volumen (Litros)
+    # (d) Descuento por Volumen (Litros o Unidades/Cajas)
     litros_por_mc: dict[tuple[str, str], Decimal] = {}
+    cajas_por_mc: dict[tuple[str, str], Decimal] = {}
     subtotal_por_mc: dict[tuple[str, str], Decimal] = {}
     for ln in inp.lineas:
         try:
@@ -373,6 +374,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         qty = _cantidad_efectiva(inp, ln)
         k = (ln.resolved_marca, ln.categoria)
         litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + (qty * vol_unit)
+        cajas_por_mc[k] = cajas_por_mc.get(k, Decimal("0")) + qty
         subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
         
     volumen_desc = Decimal("0.0")
@@ -380,11 +382,13 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     detalles_vol = []
     
     for (marca, categoria), total_litros in litros_por_mc.items():
+        total_cajas = cajas_por_mc.get((marca, categoria), Decimal("0"))
         regla_vol = descuento_volumen_vigente(
             inp.descuentos_volumen,
             marca=marca,
             categoria=categoria,
             litros=total_litros,
+            cantidad_unidades=total_cajas,
             fecha=fecha_orden,
             lista_precios=lista,
         )
@@ -392,7 +396,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             subt = subtotal_por_mc[(marca, categoria)]
             monto_desc = subt * regla_vol.porcentaje
             volumen_desc += monto_desc
-            detalles_vol.append(f"{marca}/{categoria} (>{regla_vol.litros_minimo}L): {regla_vol.porcentaje*100}%")
+            unidad_tag = "L" if str(regla_vol.unidad_medida).upper() == "LITROS" else " Unid"
+            min_tag = regla_vol.litros_minimo if str(regla_vol.unidad_medida).upper() == "LITROS" else regla_vol.min_cantidad
+            detalles_vol.append(f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje*100}%")
             
     if volumen_desc > 0:
         detalle_volumen = DescuentoAplicado(

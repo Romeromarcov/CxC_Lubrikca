@@ -226,23 +226,40 @@ def regla_recurrencia_vigente(
 
 def descuento_volumen_vigente(
     reglas: list[DescuentoVolumen],
-    *,
     marca: str,
     categoria: str,
     litros: Decimal,
+    cantidad_unidades: Decimal = Decimal("0"),
     fecha: date = date(2026, 1, 1),
     lista_precios: str = "*",
 ) -> DescuentoVolumen | None:
     """Retorna la regla de descuento por volumen aplicable para la marca/categoría."""
-    candidatas = [
-        r
-        for r in reglas
-        if _match_marca(r.marca, marca)
-        and _match_categoria(r.categoria, categoria)
-        and litros >= r.litros_minimo
-        and _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
-        and _match_lista(r.listas_aplicables, lista_precios)
-    ]
+    candidatas = []
+    for r in reglas:
+        if not _match_marca(r.marca, marca):
+            continue
+        if not _match_categoria(r.categoria, categoria):
+            continue
+        if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
+            continue
+        if not _match_lista(r.listas_aplicables, lista_precios):
+            continue
+
+        unidad = str(r.unidad_medida or "").upper()
+        is_liters_rule = (unidad == "LITROS") or (r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0))
+        if is_liters_rule:
+            if litros < r.litros_minimo:
+                continue
+        else:
+            val_eval = cantidad_unidades if cantidad_unidades > 0 else litros
+            thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
+            if val_eval < thresh:
+                continue
+            if r.max_cantidad and r.max_cantidad < 999999 and val_eval > r.max_cantidad:
+                continue
+
+        candidatas.append(r)
+
     if not candidatas:
         return None
 
