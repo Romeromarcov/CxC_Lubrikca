@@ -362,11 +362,48 @@ async def run_sync_in_background():
             reader = OdooXmlRpcReader(config.odoo)
             sync = IncrementalSync(repo, reader)
             result = sync.run(datetime.now())
+            if result.total > 0:
+                _REPORTE_SALDOS_CACHE["data"] = None
+                _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
             print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
         await asyncio.sleep(300)
+
+@app.api_route("/api/sync/manual", methods=["GET", "POST"])
+async def api_sync_manual(lookback_days: int = 7):
+    try:
+        config = AppConfig.from_env()
+        repo = get_repo()
+        reader = OdooXmlRpcReader(config.odoo)
+        
+        from datetime import timedelta
+        since = repo.get_last_sync()
+        if since and lookback_days > 0:
+            override_since = datetime.now() - timedelta(days=lookback_days)
+            clientes = reader.changed_clientes(override_since)
+            ordenes = reader.changed_ordenes(override_since)
+            lineas = reader.changed_lineas(override_since)
+            pagos = reader.changed_pagos(override_since)
+            repo.upsert_clientes(clientes)
+            repo.upsert_ordenes(ordenes)
+            repo.upsert_lineas(lineas)
+            repo.upsert_pagos(pagos)
+            repo.set_last_sync(datetime.now())
+            total = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
+        else:
+            sync = IncrementalSync(repo, reader)
+            res = sync.run(datetime.now())
+            total = res.total
+
+        _REPORTE_SALDOS_CACHE["data"] = None
+        _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+
+        return {"status": "ok", "total_actualizados": total, "mensaje": f"Sincronización completada. {total} registros actualizados."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def run_scraper_in_background():
     # Esperar 30 segundos tras el arranque inicial antes del primer scrape de tasas

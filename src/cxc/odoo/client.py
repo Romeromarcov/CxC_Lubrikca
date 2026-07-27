@@ -221,7 +221,9 @@ class OdooXmlRpcReader(OdooReader):
     def _delta(since: datetime | None) -> list[Any]:
         if since is None:
             return []
-        return [["write_date", ">", since.strftime(ODOO_DATETIME_FMT)]]
+        from datetime import timedelta
+        effective_since = since - timedelta(hours=48)
+        return [["write_date", ">", effective_since.strftime(ODOO_DATETIME_FMT)]]
 
     def _search_read(
         self, model: str, domain: list[Any], fields: list[str]
