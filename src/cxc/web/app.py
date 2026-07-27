@@ -1239,20 +1239,8 @@ async def get_reporte_saldos(refresh: bool = False):
                 if not curr_last or dt_pago_str > curr_last:
                     pagos_by_so[v.so_id]["ultimo_abono"] = dt_pago_str
 
-        # Enriquecer con pagos ya reconciliados en Odoo (account.payment → invoice_ids → invoice_origin → SO)
-        # Esto captura pagos aplicados a facturas en Odoo que aún no tienen Vinculacion manual en Sheets.
-        # Se usan como fuente complementaria: si ya existe vinculación manual para esa SO, no se duplica.
-        pagos_reconciliados_odoo: dict[str, list[dict]] = {}
-        if execute and so_ids_names:
-            try:
-                odoo_reader_temp = OdooXmlRpcReader(config.odoo, execute)
-                pagos_reconciliados_odoo = odoo_reader_temp.pagos_reconciliados_por_so(so_names=so_ids_names)
-                logger.info("Pagos reconciliados de Odoo: %d órdenes con pagos asociados", len(pagos_reconciliados_odoo))
-            except Exception as e_pr:
-                logger.warning("Error consultando pagos reconciliados de Odoo: %s", e_pr)
-
-        # Nota: la suma de pagos reconciliados de Odoo a pagos_by_so se hace DESPUÉS
-        # de definir rates_map y last_bcv_val (ver bloque más abajo)
+        # Los abonos de Odoo se calculan más abajo (post invoices_by_so) usando
+        # amount_total - amount_residual de cada factura. Ese campo siempre es exacto.
 
         # Load UI configured pricelist IDs (USD & VES) from _Meta
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
@@ -1301,48 +1289,6 @@ async def get_reporte_saldos(refresh: bool = False):
                     pass
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
-        # Sumar pagos reconciliados de Odoo a pagos_by_so SOLO si la SO no tiene vinculaciones manuales
-        # (para no duplicar si el usuario ya registró manualmente la vinculación)
-        # Nota: este bloque requiere rates_map y last_bcv_val, por eso va aquí.
-        for so_name, recon_pagos in pagos_reconciliados_odoo.items():
-            existing = pagos_by_so.get(so_name, {})
-            has_manual = existing.get("tiene_vinc_manual", False)
-            if has_manual:
-                # Ya tiene vinculaciones manuales — los pagos reconciliados de Odoo
-                # ya deberían estar reflejados. El campo saldo_factura_odoo sirve como
-                # verificación cruzada. No duplicamos.
-                continue
-            # Sin vinculación manual: usar los pagos reconciliados de Odoo para computar abono
-            if so_name not in pagos_by_so:
-                pagos_by_so[so_name] = {
-                    "abono_bcv": Decimal("0"),
-                    "abono_binance": Decimal("0"),
-                    "ultimo_abono": None,
-                    "tiene_vinc_manual": False,
-                    "desde_odoo": True,
-                }
-            for rp in recon_pagos:
-                # El monto del pago en Odoo puede ser USD o VES
-                rp_amount = Decimal(str(rp.get("amount", "0") or "0"))
-                rp_currency = rp.get("currency_id")
-                rp_curr_name = rp_currency[1] if isinstance(rp_currency, (list, tuple)) and len(rp_currency) > 1 else "USD"
-                rp_date = str(rp.get("date", "") or "")[:10]
-
-                # Convertir a USD si es VES usando la tasa más cercana a la fecha del pago
-                if rp_curr_name == "VES":
-                    rate = rates_map.get(rp_date, last_bcv_val)
-                    rp_amount_usd = rp_amount / Decimal(str(rate)) if rate and float(rate) > 0 else Decimal("0")
-                else:
-                    rp_amount_usd = rp_amount
-
-                pagos_by_so[so_name]["abono_bcv"] += rp_amount_usd
-                pagos_by_so[so_name]["abono_binance"] += rp_amount_usd
-
-                if rp_date:
-                    curr_last = pagos_by_so[so_name]["ultimo_abono"]
-                    if not curr_last or rp_date > curr_last:
-                        pagos_by_so[so_name]["ultimo_abono"] = rp_date
-
         # Fetch posted invoices from Odoo in batch for all orders (usa execute ya establecido)
         so_ids = [o.so_id for o in ordenes]
         invoices_by_so = {}
@@ -1352,7 +1298,8 @@ async def get_reporte_saldos(refresh: bool = False):
                     "account.move",
                     "search_read",
                     [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
-                    {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
+                    {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
+                                "currency_id", "invoice_date", "move_type", "payment_state"]}
                 )
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
@@ -1360,6 +1307,64 @@ async def get_reporte_saldos(refresh: bool = False):
                         invoices_by_so.setdefault(so, []).append(inv)
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
+
+        # ─── ABONOS DESDE ODOO (fuente de verdad para SOs sin vinculación manual) ───
+        # Lógica: paid = amount_total - amount_residual en cada factura de Odoo.
+        # amount_residual ya descuenta TODOS los pagos reconciliados en Odoo, sin importar
+        # el método de pago ni la versión de Odoo. No requiere acceder a account.payment.
+        # Solo se aplica si la SO NO tiene vinculaciones manuales en Sheets.
+        for so_name, inv_list in invoices_by_so.items():
+            existing = pagos_by_so.get(so_name, {})
+            if existing.get("tiene_vinc_manual", False):
+                # Ya tiene abonos manuales registrados en Sheets — no sobreescribir.
+                continue
+
+            total_paid_usd = Decimal("0")
+            latest_inv_date: str | None = None
+
+            for inv in inv_list:
+                m_type = inv.get("move_type", "out_invoice")
+                if m_type == "out_refund":
+                    # Notas de crédito: reducen el saldo total, no son abonos del cliente.
+                    # El motor de descuentos las maneja por separado.
+                    continue
+
+                tot = Decimal(str(inv.get("amount_total") or "0"))
+                res = Decimal(str(inv.get("amount_residual") or "0"))
+                paid_inv = max(Decimal("0"), tot - res)
+
+                curr = inv.get("currency_id")
+                c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                inv_dt = str(inv.get("invoice_date") or "")[:10]
+
+                if c_name == "VES":
+                    rate = rates_map.get(inv_dt, last_bcv_val)
+                    paid_inv_usd = paid_inv / Decimal(str(rate)) if rate and float(rate) > 0 else Decimal("0")
+                else:
+                    paid_inv_usd = paid_inv
+
+                total_paid_usd += paid_inv_usd
+
+                if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
+                    latest_inv_date = inv_dt
+
+            if total_paid_usd > Decimal("0"):
+                if so_name not in pagos_by_so:
+                    pagos_by_so[so_name] = {
+                        "abono_bcv": Decimal("0"),
+                        "abono_binance": Decimal("0"),
+                        "ultimo_abono": None,
+                        "tiene_vinc_manual": False,
+                        "desde_odoo": True,
+                    }
+                pagos_by_so[so_name]["abono_bcv"] = total_paid_usd
+                pagos_by_so[so_name]["abono_binance"] = total_paid_usd
+                pagos_by_so[so_name]["desde_odoo"] = True
+                if latest_inv_date:
+                    curr_last = pagos_by_so[so_name].get("ultimo_abono")
+                    if not curr_last or latest_inv_date > curr_last:
+                        pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
+                logger.debug("Abono Odoo para %s: USD %.2f (from invoices)", so_name, float(total_paid_usd))
 
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
