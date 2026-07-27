@@ -1033,9 +1033,21 @@ def recalculate_all(so_id: str):
     except Exception as e:
         print(f"Error al recalcular {so_id}: {e}", file=sys.stderr)
 
+_REPORTE_SALDOS_CACHE: dict[str, Any] = {
+    "data": None,
+    "timestamp": 0.0
+}
+_REPORTE_CACHE_TTL = 60.0
+
 @app.get("/api/reporte-saldos")
-async def get_reporte_saldos():
+async def get_reporte_saldos(refresh: bool = False):
     try:
+        import time
+        now_ts = time.time()
+        if not refresh and _REPORTE_SALDOS_CACHE["data"] is not None:
+            if now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL:
+                return _REPORTE_SALDOS_CACHE["data"]
+
         repo = get_repo()
         ordenes = repo.all_ordenes()
         vincs = repo.all_vinculaciones()
@@ -1052,16 +1064,17 @@ async def get_reporte_saldos():
         except Exception as e_conn:
             logger.warning("No se pudo conectar a Odoo en get_reporte_saldos: %s", e_conn)
 
-        # Query Odoo SOs for seller (user_id) & payment terms (payment_term_id)
+        # Query Odoo SOs for seller (user_id), payment terms & picking_ids
         so_ids_names = [o.so_id for o in ordenes]
         so_odoo_data = {}
+        all_picking_ids = set()
         if execute and so_ids_names:
             try:
                 so_records = execute(
                     "sale.order",
                     "search_read",
                     [[["name", "in", so_ids_names]]],
-                    {"fields": ["name", "user_id", "payment_term_id", "date_order", "state", "delivery_status", "invoice_status"]}
+                    {"fields": ["name", "user_id", "payment_term_id", "date_order", "state", "delivery_status", "invoice_status", "picking_ids"]}
                 )
                 for s in so_records:
                     s_name = s.get("name")
@@ -1077,18 +1090,27 @@ async def get_reporte_saldos():
                         "delivery_status": s.get("delivery_status"),
                         "invoice_status": s.get("invoice_status")
                     }
+                    p_ids = s.get("picking_ids")
+                    if p_ids and isinstance(p_ids, (list, tuple)):
+                        all_picking_ids.update(p_ids)
             except Exception as e_so:
                 logger.warning("Error consultando sale.order en Odoo: %s", e_so)
 
-        # Query Odoo Pickings for Delivery Date and Returns (stock.picking done)
+        # Query Odoo Pickings bound to active SOs or picking_ids (no full scan)
         picking_delivery_map = {}
         picking_return_set = set()
         if execute and so_ids_names:
             try:
+                domain_pickings = [["state", "=", "done"]]
+                if all_picking_ids:
+                    domain_pickings.append(["id", "in", list(all_picking_ids)])
+                else:
+                    domain_pickings.append(["origin", "in", so_ids_names])
+
                 pickings = execute(
                     "stock.picking",
                     "search_read",
-                    [[["state", "=", "done"]]],
+                    [domain_pickings],
                     {"fields": ["id", "origin", "sale_id", "date_done", "scheduled_date", "picking_type_code", "return_id"]}
                 )
                 p_by_id = {p["id"]: p for p in pickings}
@@ -1531,7 +1553,7 @@ async def get_reporte_saldos():
                 } if conc else None
             })
 
-        return {
+        res = {
             "kpis": {
                 "total_general": kpi_total_general,
                 "total_vencido": kpi_total_vencido,
@@ -1544,9 +1566,10 @@ async def get_reporte_saldos():
             "vendedores": sorted(list(vendedores_set)),
             "items": reporte
         }
+        _REPORTE_SALDOS_CACHE["data"] = res
+        _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
+        return res
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e))
 
