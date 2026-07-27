@@ -21,6 +21,7 @@ from .models import (
     Cliente,
     Conciliacion,
     DescuentoBCVCompleto,
+    DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoRecompra,
     DescuentoVolumen,
@@ -104,6 +105,9 @@ class Repository(ABC):
 
     @abstractmethod
     def descuentos_recompra(self) -> list[DescuentoRecompra]: ...
+
+    @abstractmethod
+    def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]: ...
 
     @abstractmethod
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]: ...
@@ -250,6 +254,9 @@ class InMemoryRepository(Repository):
 
     def descuentos_recompra(self) -> list[DescuentoRecompra]:
         return getattr(self, "_descuentos_recompra", [])
+
+    def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
+        return getattr(self, "_descuentos_diferencial", [])
 
     def add_descuento_volumen(self, regla: DescuentoVolumen) -> None:
         self._descuentos_volumen.append(regla)
