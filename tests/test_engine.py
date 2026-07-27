@@ -663,3 +663,56 @@ def test_in_memory_gateway_delete_row() -> None:
     not_deleted = gw.delete_row("TestTable", "regla_id", "NON_EXISTENT")
     assert not_deleted is False
 
+
+def test_diferencial_brecha_cierre_sugiere_nc_si_pagado_86pct_o_mas() -> None:
+    """Si el cliente paga 86% o mas (de una orden con 14% de brecha BCV/Binance),
+    el motor sugiere la NC exacta de brecha cierre para cerrar la factura (candidata_a_cierre=True).
+    """
+    from cxc.models import DescuentoDiferencialCambiario
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(linea_id="L1", producto="P1", marca="GLOBAL OIL", categoria="CAJA", cantidad="10", precio="100") # Total = $1000
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    # Abono de $860 equivalentes a BCV (86% pagado a tasa BCV 36, Binance 41.86 => 14% brecha)
+    # 860 * 36 = 30960 VES
+    vinc = b.vinculacion(monto_aplicado="30960", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
+                         tasa_bcv="36.0", tasa_binance="41.86", hora=datetime(2026, 4, 15, 10, 0))
+    rule_dif = DescuentoDiferencialCambiario(
+        regla_id="DIF1", nombre="Brecha Cierre", tipo_diferencial="diferencial_bcv_binance",
+        tipo_calculo="variable", porcentaje_fijo=Decimal("0.14")
+    )
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    # NC sugerida debe ser exactamente los $140 restantes (14% de brecha)
+    assert res.candidata_a_cierre is True
+    assert res.requiere_revision is True
+    assert res.total_descuentos in (Decimal("140.00"), Decimal("139.99"))
+    assert res.total_motor in (Decimal("860.00"), Decimal("860.01"))
+    assert any(d.origen == "bcv_completo" and "brecha cierre" in d.descripcion for d in res.descuentos_detalle)
+
+
+def test_diferencial_brecha_cierre_no_aplica_si_falta_mas_de_brecha() -> None:
+    """Si el cliente solo ha pagado el 50% (falta 50% > 14% brecha), no aplica brecha cierre."""
+    from cxc.models import DescuentoDiferencialCambiario
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(linea_id="L1", producto="P1", marca="GLOBAL OIL", categoria="CAJA", cantidad="10", precio="100") # Total = $1000
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    # Abono de solo 50% = $500 (500 * 36 = 18000 VES)
+    vinc = b.vinculacion(monto_aplicado="18000", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
+                         tasa_bcv="36.0", tasa_binance="41.86", hora=datetime(2026, 4, 15, 10, 0))
+    rule_dif = DescuentoDiferencialCambiario(
+        regla_id="DIF1", nombre="Brecha Cierre", tipo_diferencial="diferencial_bcv_binance",
+        tipo_calculo="variable", porcentaje_fijo=Decimal("0.14")
+    )
+    inp = _inputs(
+        orden=orden, lineas=[linea], abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    assert res.candidata_a_cierre is False
+    assert res.total_descuentos == Decimal("0.00")
+    assert res.total_motor == Decimal("1000.00")
+
+

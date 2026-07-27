@@ -21,6 +21,7 @@ from ..models import (
     Condicion,
     DescuentoAplicado,
     DescuentoBCVCompleto,
+    DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoRecompra,
     DescuentoVolumen,
@@ -75,6 +76,7 @@ class EngineInputs:
     all_ordenes: list[OrdenVenta] = field(default_factory=list)
     exclusiones: list[ExclusionRegla] = field(default_factory=list)
     descuentos_recompra: list[DescuentoRecompra] = field(default_factory=list)
+    descuentos_diferencial: list[DescuentoDiferencialCambiario] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -358,14 +360,6 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
 
-    # (c) BCV-completo (sección 4.3c) — solo si ruta BCV pura y no generada a Lista USD
-    bcv_completo = Decimal("0")
-    if pura_bcv and str(inp.orden.lista_precios) != str(inp.engine_config.lista_usd):
-        vincs = [v for v, _ in inp.abonos]
-        bcv_completo = _bcv_completo_monto(
-            vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
-        )
-
     # (d) Descuento por Volumen (Litros)
     litros_por_mc: dict[tuple[str, str], Decimal] = {}
     subtotal_por_mc: dict[tuple[str, str], Decimal] = {}
@@ -375,9 +369,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         except Exception:
             vol_unit = Decimal("0.0")
         qty = _cantidad_efectiva(inp, ln)
-        litros_linea = qty * vol_unit
         k = (ln.marca, ln.categoria)
-        litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + litros_linea
+        litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + (qty * vol_unit)
         subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
         
     volumen_desc = Decimal("0.0")
@@ -406,6 +399,48 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             monto=q2(volumen_desc)
         )
 
+    # (c) BCV-completo / Diferencial Cambiario Brecha Cierre (sección 4.3c)
+    bcv_completo = Decimal("0")
+    detalle_bcv: DescuentoAplicado | None = None
+
+    if inp.abonos:
+        vincs = [v for v, _ in inp.abonos]
+        # 1. Per-abono fixed discount
+        bcv_per_abono = Decimal("0")
+        if pura_bcv and str(inp.orden.lista_precios) != str(inp.engine_config.lista_usd):
+            bcv_per_abono = _bcv_completo_monto(
+                vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
+            )
+
+        # 2. Diferencial Brecha Cierre Variable (evaluado a la fecha del último pago)
+        fechas_pago = [v.hora_pago_confirmada.date() for v, _ in inp.abonos if v.hora_pago_confirmada]
+        fecha_ultimo_pago = max(fechas_pago) if fechas_pago else fecha_orden
+
+        ult_vinc = max(vincs, key=lambda v: v.hora_pago_confirmada if v.hora_pago_confirmada else datetime.min)
+        tasa_bcv_ult = ult_vinc.tasa_bcv_aplicada
+        tasa_binance_ult = ult_vinc.tasa_binance_aplicada
+        brecha_pct = Decimal("0")
+        if tasa_binance_ult > 0:
+            brecha_pct = max(Decimal("0"), (tasa_binance_ult - tasa_bcv_ult) / tasa_binance_ult)
+
+        val_pagado = valor_pagado_usd(vincs)
+        otros_descuentos = nc + pct_recompra + contado_proy + volumen_desc
+        unpaid_usd = precio_base - otros_descuentos - val_pagado
+        max_brecha_usd = precio_base * brecha_pct
+
+        bcv_cierre = Decimal("0")
+        if brecha_pct > 0 and unpaid_usd > 0 and unpaid_usd <= max_brecha_usd + _EPS:
+            # El cliente ha pagado >= 100% - brecha% de la orden
+            bcv_cierre = min(unpaid_usd, max_brecha_usd)
+
+        bcv_completo = max(bcv_per_abono, bcv_cierre)
+        if bcv_completo > 0:
+            detalle_bcv = DescuentoAplicado(
+                origen="bcv_completo",
+                descripcion=f"Diferencial brecha cierre ({brecha_pct * 100:.1f}% brecha al {fecha_ultimo_pago.isoformat()})",
+                monto=q2(bcv_completo),
+            )
+
     return _Componentes(
         precio_base=precio_base,
         pct_recompra=pct_recompra,
@@ -415,6 +450,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         nc=nc,
         detalle_recompra=detalle_recompra,
         detalle_volumen=detalle_volumen,
+        detalle_bcv=detalle_bcv,
         detalle_nc=detalle_nc,
         flags={
             "contado_evaluable": contado_evaluable,
@@ -529,13 +565,16 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             )
         )
     if final_bcv > 0:
-        detalle.append(
-            DescuentoAplicado(
-                origen="bcv_completo",
-                descripcion="BCV-completo (diferencial por abono)",
-                monto=q2(final_bcv),
+        if comp.detalle_bcv is not None:
+            detalle.append(comp.detalle_bcv)
+        else:
+            detalle.append(
+                DescuentoAplicado(
+                    origen="bcv_completo",
+                    descripcion="BCV-completo (diferencial por abono)",
+                    monto=q2(final_bcv),
+                )
             )
-        )
     if final_volumen > 0 and comp.detalle_volumen is not None:
         detalle.append(comp.detalle_volumen)
 

@@ -90,6 +90,7 @@ class EngineRunner:
             all_ordenes=self._repo.all_ordenes(),
             exclusiones=self._repo.exclusiones(),
             descuentos_recompra=self._repo.descuentos_recompra(),
+            descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
         )
         bandeja = calcular_factura(inputs)
         self._repo.upsert_bandeja(bandeja)
