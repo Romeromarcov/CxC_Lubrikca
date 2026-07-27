@@ -2284,7 +2284,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
         `;
 
-        const unidadStd = r.unidad_medida || (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen" ? "LITROS" : (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial ? "USD" : "UNIDADES"));
+        const unidadStd = r.unidad_medida || (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial ? "USD" : "UNIDADES");
 
         row.innerHTML = `
             <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>
