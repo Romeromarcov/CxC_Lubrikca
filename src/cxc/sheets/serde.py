@@ -476,6 +476,7 @@ def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
         "activo": s_bool(d.activo)
     }
 
+
 def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
     return DescuentoVolumen(
         regla_id=r.get("regla_id", "VOL_DEFAULT"),
@@ -485,7 +486,7 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         porcentaje=p_pct(r.get("porcentaje", "0")),
         min_cantidad=p_dec(r.get("min_cantidad", r.get("litros_minimo", "0"))),
         max_cantidad=p_dec(r.get("max_cantidad", "999999")),
-        unidad_medida=r.get("unidad_medida", "UNIDADES"),
+        unidad_medida=r.get("unidad_medida", "UNIDADES") or "UNIDADES",
         tipo_evaluacion=r.get("tipo_evaluacion", "orden"),
         dias_evaluacion=int(r.get("dias_evaluacion", "30")),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
