@@ -768,4 +768,15 @@ def test_match_lista_con_keywords_dinamicas_listas_ves_y_usd() -> None:
     assert _match_lista("LISTAS_USD", "9", valid_ves=["5", "9"], valid_usd=["4"]) is False
 
 
+def test_resolved_marca_fallback_sinoco_vs_global() -> None:
+    l_sinoco = b.linea(producto="SINOCO SAE 20W-50 (PAILA)", marca="")
+    l_global = b.linea(producto="SUPREMO API CI-4 SAE 15W-40 (PAILA)", marca="")
+    l_explicit = b.linea(producto="SUPREMO API CI-4", marca="MARCA_CUSTOM")
+
+    assert l_sinoco.resolved_marca == "SINOCO"
+    assert l_global.resolved_marca == "GLOBAL OIL"
+    assert l_explicit.resolved_marca == "MARCA_CUSTOM"
+
+
+
 

@@ -317,7 +317,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                     cajas_linea = _cantidad_efectiva(inp, ln)
                     best_r = None
                     for r in recompras_activas:
-                        marca_ok = (r.marca == "*" or r.marca.upper() in ln.marca.upper() or ln.marca.upper() in r.marca.upper())
+                        marca_ok = (r.marca == "*" or r.marca.upper() in ln.resolved_marca.upper() or ln.resolved_marca.upper() in r.marca.upper())
                         cat_ok = _match_categoria(r.categoria, ln.categoria) or _match_categoria(r.categoria, ln.presentacion) or _match_categoria(r.categoria, ln.categoria_madre)
                         if marca_ok and cat_ok:
                             if r.min_cajas <= cajas_linea <= r.max_cajas:
@@ -350,7 +350,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         for ln in inp.lineas:
             d = descuento_vigente(
                 inp.descuentos,
-                marca=ln.marca,
+                marca=ln.resolved_marca,
                 categoria=ln.categoria,
                 tipo=TipoDescuento.CONTADO,
                 fecha=fecha_orden,
@@ -371,7 +371,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         except Exception:
             vol_unit = Decimal("0.0")
         qty = _cantidad_efectiva(inp, ln)
-        k = (ln.marca, ln.categoria)
+        k = (ln.resolved_marca, ln.categoria)
         litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + (qty * vol_unit)
         subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
         

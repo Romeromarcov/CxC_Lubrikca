@@ -115,6 +115,21 @@ class LineaOrden:
     descuento: Decimal = Decimal("0")
 
     @property
+    def resolved_marca(self) -> str:
+        """
+        Retorna la marca de la línea. Si el campo marca viene vacío o es '*',
+        busca la palabra 'sinoco' en el nombre/descripción del producto (case-insensitive).
+        Si no se encuentra 'sinoco', asigna 'GLOBAL OIL'.
+        """
+        m = str(self.marca or "").strip()
+        if m and m != "*":
+            return m
+        prod_name = str(self.producto or "").strip().lower()
+        if "sinoco" in prod_name:
+            return "SINOCO"
+        return "GLOBAL OIL"
+
+    @property
     def presentacion(self) -> str:
         """
         Retorna la presentación clasificada según la descripción/nombre del producto:
