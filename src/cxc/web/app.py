@@ -1251,7 +1251,22 @@ async def get_reporte_saldos():
 
         today_date = date.today()
 
+        # Setup engine objects for on-the-fly calculation when order is not in BandejaFacturacion
+        from cxc.engine.discounts import EngineInputs, calcular_factura
+        from cxc.odoo.price import OdooPriceResolver
+
+        engine_cfg_obj = config.engine
+        pricelist_ids_map = {
+            engine_cfg_obj.lista_usd: int(usd_ids[0]) if usd_ids else 4,
+            engine_cfg_obj.lista_bcv: int(ves_ids[0]) if ves_ids else 5,
+        }
+        price_resolver_engine = OdooPriceResolver(execute, pricelist_ids_map) if execute else None
+
         for o in ordenes:
+            st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            if st_check in ("cancel", "cancelled", "draft", "sent"):
+                continue
+
             order_lines = lines_by_so.get(o.so_id, [])
             odoo_info = so_odoo_data.get(o.so_id, {})
             
@@ -1345,6 +1360,30 @@ async def get_reporte_saldos():
 
             # Engine calculation data
             b = bandeja_map.get(o.so_id)
+            if not b and price_resolver_engine:
+                try:
+                    inputs = EngineInputs(
+                        orden=o,
+                        lineas=repo.lineas_de_orden(o.so_id),
+                        abonos=[],
+                        descuentos=repo.descuentos_marca_categoria(),
+                        descuentos_volumen=repo.descuentos_volumen(),
+                        reglas_recurrencia=repo.reglas_recurrencia(),
+                        descuento_bcv_diario=repo.descuento_bcv_completo(),
+                        promociones_primera_compra=repo.promociones_primera_compra(),
+                        feriados_tabla=repo.feriados(),
+                        price_resolver=price_resolver_engine,
+                        engine_config=engine_cfg_obj,
+                        fecha_calculo=o.fecha,
+                        all_ordenes=ordenes,
+                        exclusiones=repo.exclusiones(),
+                        descuentos_recompra=repo.descuentos_recompra(),
+                        descuentos_diferencial=repo.descuentos_diferencial_cambiario(),
+                    )
+                    b = calcular_factura(inputs)
+                except Exception as e_calc:
+                    logger.warning("Error evaluando motor dinámico para %s: %s", o.so_id, e_calc)
+
             if b:
                 total_descuentos_monto = float(b.total_descuentos + b.ncs_calculadas)
                 total_con_descuentos = float(b.total_motor)
@@ -1362,31 +1401,9 @@ async def get_reporte_saldos():
                         "monto": float(b.ncs_calculadas)
                     })
             else:
-                # Evaluate theoretical discounts for order o in memory using active rules
-                desc_calc_monto = Decimal("0.0")
+                total_descuentos_monto = 0.0
+                total_con_descuentos = float(o.monto_total)
                 descuentos_desglose = []
-                
-                for ln in order_lines:
-                    cant = Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0")))
-                    precio = Decimal(str(ln.get("precio_unitario", "0")))
-                    subt_linea = cant * precio
-                    
-                    prod_raw = ln.get("producto", "")
-                    marca = str(ln.get("marca") or "*")
-                    cat = str(ln.get("categoria") or "*")
-                    
-                    r_desc = descuento_vigente(descuentos_mc, marca=marca, categoria=cat, tipo=TipoDescuento.CONTADO, fecha=o.fecha)
-                    if r_desc and r_desc.porcentaje > Decimal("0"):
-                        m_linea = subt_linea * (r_desc.porcentaje / Decimal("100"))
-                        desc_calc_monto += m_linea
-                        descuentos_desglose.append({
-                            "origen": "descuento_marca_categoria",
-                            "descripcion": f"Desc. {r_desc.marca}/{r_desc.categoria} ({r_desc.porcentaje}%)",
-                            "monto": float(m_linea)
-                        })
-
-                total_descuentos_monto = float(desc_calc_monto)
-                total_con_descuentos = float(o.monto_total) - total_descuentos_monto
 
             # Debt columns
             monto_orig = float(o.monto_total)
@@ -2066,6 +2083,9 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 
         open_orders_by_client = {}
         for o in ordenes:
+            st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            if st in ("cancel", "cancelled", "draft", "sent"):
+                continue
             if not o.facturada:
                 pagado = linked_so.get(o.so_id, Decimal("0"))
                 saldo = o.monto_total - pagado

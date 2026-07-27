@@ -42,6 +42,8 @@ def orden(
     primera: bool = False,
     monto_total: str = "1000",
     vendedor: str = "rep@lubrikca.com",
+    facturada: bool = False,
+    estado_orden: str = "sale",
 ) -> OrdenVenta:
     return OrdenVenta(
         so_id=so_id,
@@ -52,6 +54,8 @@ def orden(
         lista_precios=lista,
         vendedor_email=vendedor,
         es_primera_compra=primera,
+        facturada=facturada,
+        estado_orden=estado_orden,
     )
 
 

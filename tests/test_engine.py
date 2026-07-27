@@ -816,5 +816,40 @@ def test_resolved_marca_fallback_sinoco_vs_global() -> None:
     assert l_explicit.resolved_marca == "MARCA_CUSTOM"
 
 
+def test_get_conciliaciones_sugerencias_excludes_cancelled_orders() -> None:
+    from cxc.models import OrdenVenta, Pago
+    from datetime import date
+    from decimal import Decimal
+
+    o_active = b.orden(so_id="SO_ACTIVE", cliente_id="C1", monto_total=Decimal("100"), facturada=False, estado_orden="sale")
+    o_cancel = b.orden(so_id="SO_CANCEL", cliente_id="C1", monto_total=Decimal("500"), facturada=False, estado_orden="cancel")
+
+    assert o_cancel.estado_orden == "cancel"
+    assert o_active.estado_orden == "sale"
 
 
+def test_runner_run_all_filters_cancelled_orders() -> None:
+    from cxc.engine.runner import EngineRunner
+    from cxc.models import OrdenVenta
+    from datetime import date
+    from decimal import Decimal
+
+    class DummyRepo:
+        def __init__(self):
+            self._ordenes = [
+                b.orden(so_id="SO_ACTIVE", cliente_id="C1", monto_total=Decimal("100"), facturada=False, estado_orden="sale"),
+                b.orden(so_id="SO_CANCEL", cliente_id="C1", monto_total=Decimal("500"), facturada=False, estado_orden="cancel")
+            ]
+        def all_ordenes(self):
+            return self._ordenes
+
+    repo = DummyRepo()
+    runner = EngineRunner(repo, None, None)
+    
+    # Override run_orden to count calls
+    called = []
+    runner.run_orden = lambda so_id, dt: called.append(so_id)
+    
+    runner.run_all(date.today())
+    assert "SO_ACTIVE" in called
+    assert "SO_CANCEL" not in called

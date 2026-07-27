@@ -100,14 +100,16 @@ class EngineRunner:
         return bandeja
 
     def run_all(self, fecha_calculo: date) -> list[BandejaFacturacion]:
-        """Calcula la bandeja de toda orden no facturada con al menos un abono."""
+        """Calcula la bandeja de toda orden activa no facturada."""
         resultados: list[BandejaFacturacion] = []
-        so_con_abonos = {v.so_id for v in self._repo.all_vinculaciones()}
-        for so_id in sorted(so_con_abonos):
-            orden = self._repo.get_orden(so_id)
-            if orden is None or orden.facturada:
+        ordenes = self._repo.all_ordenes()
+        for o in ordenes:
+            st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
-            bandeja = self.run_orden(so_id, fecha_calculo)
+            if o.facturada:
+                continue
+            bandeja = self.run_orden(o.so_id, fecha_calculo)
             if bandeja is not None:
                 resultados.append(bandeja)
         return resultados
