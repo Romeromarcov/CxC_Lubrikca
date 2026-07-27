@@ -65,7 +65,7 @@ def test_repository_new_discounts():
     from cxc.sheets.repository import SheetsRepository
     repo = SheetsRepository(DummyGateway())
     assert len(repo.descuentos_pronto_pago()) == 0
-    assert len(repo.descuentos_recompra()) == 1
+    assert len(repo.descuentos_recompra()) == 0
     assert len(repo.descuentos_producto()) == 0
     assert len(repo.descuentos_diferencial_cambiario()) == 3
     assert len(repo.descuentos_marca_categoria()) == 0

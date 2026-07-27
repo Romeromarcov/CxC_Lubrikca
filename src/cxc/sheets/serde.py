@@ -297,15 +297,18 @@ def recompra_to_row(d: DescuentoRecompra) -> Row:
 
 def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
     return DescuentoRecompra(
-        regla_id=r.get("regla_id", "RECOMPRA_DEFAULT"),
-        porcentaje=p_pct(r.get("porcentaje", "0.05")),
-        max_usos_mes=int(r.get("max_usos_mes", "2")),
-        dias_ventana=int(r.get("dias_ventana", "30")),
-        min_cajas=int(r.get("min_cajas", "1")),
-        max_cajas=int(r.get("max_cajas", "9999")),
-        vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
-        activo=p_bool(r.get("activo", "TRUE")),
+        regla_id=r.get("regla_id") or "REC_1",
+        marca=r.get("marca") or "*",
+        categoria=r.get("categoria") or "*",
+        min_cajas=int(r.get("min_cajas") or r.get("min_unidades") or "0"),
+        max_cajas=int(r.get("max_cajas") or r.get("max_unidades") or "999999"),
+        porcentaje=p_dec(r.get("porcentaje") or "0.03"),
+        max_usos_mes=int(r.get("max_usos_mes") or "1"),
+        dias_ventana=int(r.get("dias_ventana") or "30"),
+        listas_aplicables=r.get("listas_aplicables") or "*",
+        vigencia_desde=p_date(r.get("vigencia_desde") or "2026-01-01"),
+        vigencia_hasta=p_optdate(r.get("vigencia_hasta") or ""),
+        activo=p_bool(r.get("activo") or "TRUE"),
     )
 
 
@@ -509,20 +512,7 @@ def recompra_to_row(d: DescuentoRecompra) -> Row:
     }
 
 
-def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
-    return DescuentoRecompra(
-        regla_id=r.get("regla_id") or "RECOMPRA_DEFAULT",
-        marca=r.get("marca") or "GLOBAL OIL",
-        categoria=r.get("categoria") or "CAJA",
-        min_cajas=int(r.get("min_cajas") or r.get("min_unidades") or "2"),
-        max_cajas=int(r.get("max_cajas") or r.get("max_unidades") or "4"),
-        porcentaje=p_dec(r.get("porcentaje") or "0.03"),
-        max_usos_mes=int(r.get("max_usos_mes") or "1"),
-        dias_ventana=int(r.get("dias_ventana") or "30"),
-        vigencia_desde=p_date(r.get("vigencia_desde") or "2026-04-01"),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta") or ""),
-        activo=p_bool(r.get("activo") or "TRUE"),
-    )
+
 
 
 # --- ReglasRecurrencia -------------------------------------------------------
