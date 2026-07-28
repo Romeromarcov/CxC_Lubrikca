@@ -3326,6 +3326,18 @@ async def get_bandeja_facturacion():
                 # ordenes ya facturadas en Odoo.
                 nc_calc = float(b.ncs_calculadas) if b else 0.0
                 if nc_calc > 0.01:
+                    # El concepto real (obsequio de producto vs. % de
+                    # descuento de primera compra) vive en el detalle que ya
+                    # calculó el motor -- se usa en vez de un texto generico.
+                    detalles_b = b.descuentos_detalle if b else []
+                    detalle_nc = next(
+                        (d for d in detalles_b if d.origen == "primera_compra"), None
+                    )
+                    concepto = (
+                        detalle_nc.descripcion
+                        if detalle_nc
+                        else "Obsequio / Descuento de primera compra no aplicado en factura"
+                    )
                     notas_credito_pendientes.append(
                         {
                             "so_id": o.so_id,
@@ -3336,7 +3348,7 @@ async def get_bandeja_facturacion():
                             "nc_porcentaje": (nc_calc / monto_orig * 100.0)
                             if monto_orig > 0
                             else 0.0,
-                            "concepto": "Obsequio / Descuento diferido no aplicado en factura",
+                            "concepto": concepto,
                         }
                     )
 

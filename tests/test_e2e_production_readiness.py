@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
+    BandejaFacturacion,
+    DescuentoAplicado,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
     EstadoVinculacion,
@@ -594,3 +596,56 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
         so_ids = {item["so_id"] for item in data["ordenes_por_facturar"]}
         assert "SO_AGENTE" in so_ids
         assert "SO_NORMAL" not in so_ids
+
+
+def test_e2e_13_bandeja2_concepto_real_de_nc():
+    """Bandeja 2: el "concepto" de la N/C debe venir del detalle real del
+
+    motor (obsequio de producto o % de primera compra), no de un texto
+    genérico fijo.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_NC", "nombre": "Cliente NC"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_NC",
+            cliente_id="C_NC",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=True,
+            facturada=True,
+            factura_id="FAC-001",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_NC",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("500.00"),
+            descuentos_detalle=[
+                DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion="NC obsequio (Aceite 20W50 Caja)",
+                    monto=Decimal("45.00"),
+                )
+            ],
+            total_descuentos=Decimal("0"),
+            ncs_calculadas=Decimal("45.00"),
+            total_motor=Decimal("455.00"),
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        nc_items = res.json()["notas_credito_pendientes"]
+        assert len(nc_items) == 1
+        assert nc_items[0]["so_id"] == "SO_NC"
+        assert nc_items[0]["concepto"] == "NC obsequio (Aceite 20W50 Caja)"
+        assert nc_items[0]["nc_monto"] == 45.0
