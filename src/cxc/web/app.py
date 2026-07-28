@@ -2850,7 +2850,12 @@ async def get_bandeja_facturacion():
                     "descuento_aplicar_pct": desc_pct,
                     "precio_base": monto_orig
                 })
-            else:
+            elif o.facturada:
+                # Nota: el bloque de arriba (not facturada) ya se sale con su
+                # propio "if"; este "elif o.facturada" evita que ordenes SIN
+                # factura pero con saldo pendiente (> $0.05) caigan aqui por
+                # error -- NC pendiente y retencion de IVA solo aplican a
+                # ordenes ya facturadas en Odoo.
                 nc_calc = float(b.ncs_calculadas) if b else 0.0
                 if nc_calc > 0.01:
                     notas_credito_pendientes.append({
@@ -2862,15 +2867,37 @@ async def get_bandeja_facturacion():
                         "nc_porcentaje": (nc_calc / monto_orig * 100.0) if monto_orig > 0 else 0.0,
                         "concepto": "Obsequio / Descuento diferido no aplicado en factura"
                     })
-                if wh_agent and abono > 0:
-                    iva_pendiente_agentes.append({
-                        "so_id": o.so_id,
-                        "cliente_nombre": c_name,
-                        "factura_id": o.factura_id or "Odoo",
-                        "monto_factura": monto_orig,
-                        "monto_iva_retenido_est": monto_orig * 0.16 * (wh_rate / 100.0),
-                        "estado": "Pendiente Comprobante IVA"
-                    })
+
+                # Tarea 5: retencion de IVA. El cliente-agente de retencion no
+                # paga en efectivo la porcion de IVA que retiene (wh_rate% del
+                # IVA); en su lugar entrega un comprobante de retencion. El
+                # saldo que el motor ve pendiente (tot_motor - abono, ya con
+                # descuentos aplicados) es "normal" si cabe dentro de esa
+                # porcion retenida -- no es que el cliente deba mas, es que
+                # falta el comprobante. IVA Venezuela = 16%; se estima el
+                # subtotal despejando el monto total facturado (asume que
+                # monto_orig ya incluye IVA).
+                if wh_agent:
+                    subtotal_est = monto_orig / 1.16
+                    iva_total_est = monto_orig - subtotal_est
+                    iva_retenido_est = iva_total_est * (wh_rate / 100.0)
+                    saldo_pendiente_motor = tot_motor - abono
+                    if 0 <= saldo_pendiente_motor <= iva_retenido_est + 0.05:
+                        iva_pendiente_agentes.append({
+                            "so_id": o.so_id,
+                            "cliente_nombre": c_name,
+                            "factura_id": o.factura_id or "Odoo",
+                            "monto_factura": monto_orig,
+                            "wh_iva_rate": wh_rate,
+                            "base_cobrada": round(subtotal_est, 2),
+                            "iva_total_estimado": round(iva_total_est, 2),
+                            "retencion_iva_est": round(iva_retenido_est, 2),
+                            "monto_iva_retenido_est": round(iva_retenido_est, 2),
+                            "monto_pagado": abono,
+                            "saldo_pendiente": round(saldo_pendiente_motor, 2),
+                            "estado_comprobante": "Pendiente Comprobante IVA",
+                            "estado": "Pendiente Comprobante IVA"
+                        })
 
         return {
             "ordenes_por_facturar": ordenes_por_facturar,
