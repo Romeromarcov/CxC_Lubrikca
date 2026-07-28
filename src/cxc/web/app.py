@@ -5371,15 +5371,44 @@ async def post_marcar_recibido(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _periodo_bounds(hoy: date) -> dict[str, str]:
+    """Fechas de inicio (YYYY-MM-DD) de mes/trimestre/año en curso, para acumulados."""
+    mes_inicio = hoy.replace(day=1)
+    trimestre_mes = ((hoy.month - 1) // 3) * 3 + 1
+    trimestre_inicio = hoy.replace(month=trimestre_mes, day=1)
+    anio_inicio = hoy.replace(month=1, day=1)
+    return {
+        "hoy": hoy.isoformat(),
+        "mes": mes_inicio.isoformat(),
+        "trimestre": trimestre_inicio.isoformat(),
+        "anio": anio_inicio.isoformat(),
+    }
+
+
 @app.get("/api/reporte/diario")
-async def get_reporte_diario():
+async def get_reporte_diario(
+    vendedor: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
         lineas = repo._g.read_rows("LineasOrden")
         pagos = repo._g.read_rows("Pagos")
+        tasas_rows = repo._g.read_rows("SerieTasas")
+
+        vendedor_f = (vendedor or "").strip().lower()
+        desde_f = (fecha_desde or "")[:10]
+        hasta_f = (fecha_hasta or "")[:10]
+
+        def in_range(fecha_key: str) -> bool:
+            if desde_f and fecha_key < desde_f:
+                return False
+            return not (hasta_f and fecha_key > hasta_f)
 
         prod_litros_map = {}
+        journal_name_map: dict[int, str] = {}
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -5396,15 +5425,28 @@ async def get_reporte_diario():
                     if vol == Decimal("0"):
                         vol = parse_decimal_safe(p.get("weight") or "1.0")
                     prod_litros_map[pid] = vol
-        except Exception as e_p:
-            logger.warning("Error leyendo litros de productos: %s", e_p)
 
-        # 1. Ventas por Día (USD y Litros)
-        ventas_por_dia = {}
+                journals = execute("account.journal", "search_read", [], {"fields": ["id", "name"]})
+                journal_name_map = {int(j["id"]): str(j.get("name") or "") for j in journals}
+        except Exception as e_p:
+            logger.warning("Error leyendo catálogos de Odoo (litros/métodos de pago): %s", e_p)
+
+        # Órdenes validas para este reporte: excluidas por regla global,
+        # y filtradas por vendedor si se pidió.
+        ordenes_validas = {}
         for o in ordenes:
             if orden_excluida(o):
                 continue
+            if vendedor_f and vendedor_f != str(o.vendedor_email or "").strip().lower():
+                continue
+            ordenes_validas[o.so_id] = o
+
+        # 1. Ventas por Día (USD -- Monto Bruto de la Orden -- y Litros)
+        ventas_por_dia = {}
+        for o in ordenes_validas.values():
             fecha_key = o.fecha.isoformat()[:10]
+            if not in_range(fecha_key):
+                continue
             if fecha_key not in ventas_por_dia:
                 ventas_por_dia[fecha_key] = {
                     "fecha": fecha_key,
@@ -5418,23 +5460,28 @@ async def get_reporte_diario():
         # Sum line liters
         for ln in lineas:
             so_id = ln.get("so_id")
+            o_match = ordenes_validas.get(so_id)
+            if not o_match:
+                continue
+            fk = o_match.fecha.isoformat()[:10]
+            if fk not in ventas_por_dia:
+                continue
             prod_id = int(ln.get("product_id") or 0)
             qty = parse_decimal_safe(
                 ln.get("cantidad_entregada") or ln.get("cantidad_ordenada") or "0"
             )
             l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
-            total_l = qty * l_per_unit
+            ventas_por_dia[fk]["litros_totales"] += qty * l_per_unit
 
-            o_match = next((o for o in ordenes if o.so_id == so_id), None)
-            if o_match and not orden_excluida(o_match):
-                fk = o_match.fecha.isoformat()[:10]
-                if fk in ventas_por_dia:
-                    ventas_por_dia[fk]["litros_totales"] += total_l
-
-        # 2. Cobranza por Día (Desglosada por Moneda y Método)
+        # 2. Cobranza por Día (Desglosada por Moneda y Método) -- TODA la
+        # cobranza, asociada o no a una orden (se lee la hoja Pagos completa).
         cobranza_por_dia = {}
         for p in pagos:
-            fecha_key = str(p.get("fecha", ""))[:10] or date.today().isoformat()
+            if vendedor_f and vendedor_f != str(p.get("vendedor_email", "")).strip().lower():
+                continue
+            fecha_key = str(p.get("fecha_pago", ""))[:10] or date.today().isoformat()
+            if not in_range(fecha_key):
+                continue
             if fecha_key not in cobranza_por_dia:
                 cobranza_por_dia[fecha_key] = {
                     "fecha": fecha_key,
@@ -5445,9 +5492,16 @@ async def get_reporte_diario():
                 }
             monto = parse_decimal_safe(p.get("monto", "0"))
             moneda = p.get("moneda", "VES")
-            metodo = p.get("metodo_pago") or p.get("forma_pago") or "Efectivo"
+            metodo_raw = str(p.get("metodo_pago") or p.get("forma_pago") or "").strip()
+            metodo = (
+                journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None
+            ) or metodo_raw or "Efectivo"
 
-            bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
+            try:
+                fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
+            except ValueError:
+                fecha_dt = datetime.now()
+            bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
             eq_bcv = (
                 monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
             )
@@ -5489,7 +5543,66 @@ async def get_reporte_diario():
             for k, v in sorted(cobranza_por_dia.items(), reverse=True)
         ]
 
-        return {"ventas_diarias": ventas_list, "cobranza_diaria": cobranza_list}
+        # 3. Acumulados (Hoy / Mes / Trimestre / Año) para las tarjetas del Dashboard
+        bounds = _periodo_bounds(date.today())
+
+        def suma_ventas_desde(inicio: str) -> dict:
+            en_rango = [v for k, v in ventas_por_dia.items() if k >= inicio]
+            total_usd = sum((v["total_usd"] for v in en_rango), Decimal("0"))
+            litros = sum((v["litros_totales"] for v in en_rango), Decimal("0"))
+            cnt = sum(v["ordenes_count"] for v in en_rango)
+            return {"total_usd": float(total_usd), "litros": float(litros), "ordenes_count": cnt}
+
+        def suma_cobranza_desde(inicio: str) -> dict:
+            en_rango = [v for k, v in cobranza_por_dia.items() if k >= inicio]
+            total_bcv = sum((v["total_eq_bcv"] for v in en_rango), Decimal("0"))
+            total_binance = sum((v["total_eq_binance"] for v in en_rango), Decimal("0"))
+            return {"total_eq_bcv": float(total_bcv), "total_eq_binance": float(total_binance)}
+
+        def suma_ventas_dia(dia: str) -> dict:
+            v = ventas_por_dia.get(dia)
+            if not v:
+                return {"total_usd": 0.0, "litros": 0.0, "ordenes_count": 0}
+            return {
+                "total_usd": float(v["total_usd"]),
+                "litros": float(v["litros_totales"]),
+                "ordenes_count": v["ordenes_count"],
+            }
+
+        def suma_cobranza_dia(dia: str) -> dict:
+            v = cobranza_por_dia.get(dia)
+            if not v:
+                return {"total_eq_bcv": 0.0, "total_eq_binance": 0.0}
+            return {
+                "total_eq_bcv": float(v["total_eq_bcv"]),
+                "total_eq_binance": float(v["total_eq_binance"]),
+            }
+
+        resumen = {
+            "ventas": {
+                "hoy": suma_ventas_dia(bounds["hoy"]),
+                "mes": suma_ventas_desde(bounds["mes"]),
+                "trimestre": suma_ventas_desde(bounds["trimestre"]),
+                "anio": suma_ventas_desde(bounds["anio"]),
+            },
+            "cobranza": {
+                "hoy": suma_cobranza_dia(bounds["hoy"]),
+                "mes": suma_cobranza_desde(bounds["mes"]),
+                "trimestre": suma_cobranza_desde(bounds["trimestre"]),
+                "anio": suma_cobranza_desde(bounds["anio"]),
+            },
+        }
+
+        vendedores = sorted(
+            {str(o.vendedor_email) for o in ordenes if o.vendedor_email and not orden_excluida(o)}
+        )
+
+        return {
+            "ventas_diarias": ventas_list,
+            "cobranza_diaria": cobranza_list,
+            "resumen": resumen,
+            "vendedores": vendedores,
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

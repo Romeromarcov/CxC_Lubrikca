@@ -224,6 +224,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (path === "dashboard") {
                 if (typeof loadTasasPromedios === "function") loadTasasPromedios();
                 if (typeof loadReporteDiario === "function") loadReporteDiario();
+                // Las tarjetas de saldos ahora viven en el Dashboard (movidas
+                // desde Reporte); loadReporte() las llena vía /api/reporte-saldos.
+                if (typeof loadReporte === "function") loadReporte();
             } else if (path === "facturacion") {
                 if (typeof loadBandeja === "function") loadBandeja();
             } else if (path === "conciliaciones") {
@@ -897,6 +900,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 setKpiSubBalances("kpi-mas-90", kpis.vencidas_mas_90);
 
                 // Attach Click Handlers to Interactive KPI Cards
+                // (las tarjetas viven en el Dashboard; la tabla filtrable vive
+                // en Reporte, así que un clic navega hacia allá si hace falta)
                 document.querySelectorAll(".interactive-kpi").forEach(card => {
                     if (!card.dataset.listenerAttached) {
                         card.addEventListener("click", () => {
@@ -905,6 +910,12 @@ document.addEventListener("DOMContentLoaded", () => {
                             if (selectEl) {
                                 selectEl.value = (selectEl.value === targetVal) ? "*" : targetVal;
                                 applyReporteFilters();
+                            }
+                            const currentPath = window.location.pathname.toLowerCase()
+                                .replace(/^\/+|\/+$/g, '').split('/')[0];
+                            if (currentPath !== "reporte") {
+                                history.pushState(null, "", "/reporte");
+                                initCurrentPage();
                             }
                         });
                         card.dataset.listenerAttached = "true";
@@ -2855,8 +2866,20 @@ document.addEventListener("DOMContentLoaded", () => {
         vTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de ventas...</td></tr>';
         cTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de cobranza...</td></tr>';
 
+        const vendedorSel = document.getElementById("dashboard-vendedor-filter");
+        const fechaDesdeEl = document.getElementById("dashboard-fecha-desde");
+        const fechaHastaEl = document.getElementById("dashboard-fecha-hasta");
+        const vendedorVal = vendedorSel && vendedorSel.value !== "*" ? vendedorSel.value : "";
+        const fechaDesdeVal = fechaDesdeEl ? fechaDesdeEl.value : "";
+        const fechaHastaVal = fechaHastaEl ? fechaHastaEl.value : "";
+
+        const params = new URLSearchParams();
+        if (vendedorVal) params.set("vendedor", vendedorVal);
+        if (fechaDesdeVal) params.set("fecha_desde", fechaDesdeVal);
+        if (fechaHastaVal) params.set("fecha_hasta", fechaHastaVal);
+
         try {
-            const res = await fetch("/api/reporte/diario");
+            const res = await fetch("/api/reporte/diario?" + params.toString());
             if (!res.ok) throw new Error("Error consultando reporte diario");
             const data = await res.json();
 
@@ -2890,6 +2913,55 @@ document.addEventListener("DOMContentLoaded", () => {
                         </tr>
                     `;
                 }).join('');
+            }
+
+            // Acumulados Hoy / Mes / Trimestre / Año
+            const r = data.resumen || {};
+            const fmtUsd = (val) => `$${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;
+            const fmtL = (val) => `${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:1})} L`;
+            ["hoy", "mes", "trimestre", "anio"].forEach(periodo => {
+                const vEl = document.getElementById(`dash-ventas-${periodo}-usd`);
+                const lEl = document.getElementById(`dash-ventas-${periodo}-litros`);
+                const cEl = document.getElementById(`dash-cobranza-${periodo}-usd`);
+                const ventas = (r.ventas || {})[periodo] || {};
+                const cobranza = (r.cobranza || {})[periodo] || {};
+                if (vEl) vEl.textContent = fmtUsd(ventas.total_usd);
+                if (lEl) lEl.textContent = fmtL(ventas.litros);
+                if (cEl) cEl.textContent = fmtUsd(cobranza.total_eq_bcv);
+            });
+
+            // Filtro de Vendedor (poblar dropdown una sola vez)
+            if (vendedorSel && data.vendedores && !vendedorSel.dataset.populated) {
+                const currentVal = vendedorSel.value || "*";
+                data.vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vendedorSel.appendChild(opt);
+                });
+                vendedorSel.value = currentVal;
+                vendedorSel.dataset.populated = "true";
+            }
+
+            if (vendedorSel && !vendedorSel.dataset.listenerAttached) {
+                vendedorSel.addEventListener("change", loadReporteDiario);
+                vendedorSel.dataset.listenerAttached = "true";
+            }
+            [fechaDesdeEl, fechaHastaEl].forEach(el => {
+                if (el && !el.dataset.listenerAttached) {
+                    el.addEventListener("change", loadReporteDiario);
+                    el.dataset.listenerAttached = "true";
+                }
+            });
+            const clearBtn = document.getElementById("dashboard-filter-clear");
+            if (clearBtn && !clearBtn.dataset.listenerAttached) {
+                clearBtn.addEventListener("click", () => {
+                    if (vendedorSel) vendedorSel.value = "*";
+                    if (fechaDesdeEl) fechaDesdeEl.value = "";
+                    if (fechaHastaEl) fechaHastaEl.value = "";
+                    loadReporteDiario();
+                });
+                clearBtn.dataset.listenerAttached = "true";
             }
         } catch (err) {
             console.error("Error cargando reporte diario:", err);

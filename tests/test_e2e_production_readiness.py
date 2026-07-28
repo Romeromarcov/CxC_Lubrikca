@@ -315,10 +315,11 @@ def test_e2e_08_executive_daily_report():
             [
                 {
                     "pago_id": "P_D1",
-                    "fecha": "2026-07-18",
+                    "fecha_pago": "2026-07-18",
                     "monto": "600.0",
                     "moneda": "USD",
                     "metodo_pago": "Efectivo",
+                    "vendedor_email": "v1",
                 }
             ]
             if sheet == "Pagos"
@@ -332,8 +333,19 @@ def test_e2e_08_executive_daily_report():
         data = res.json()
         assert "ventas_diarias" in data
         assert "cobranza_diaria" in data
+        assert "resumen" in data
         assert len(data["ventas_diarias"]) >= 1
         assert len(data["cobranza_diaria"]) >= 1
+        # La cobranza debe quedar en el día real del pago (fecha_pago), no en "hoy".
+        assert data["cobranza_diaria"][0]["fecha"] == "2026-07-18"
+        assert data["cobranza_diaria"][0]["total_eq_bcv"] == 600.0
+
+        # Filtro por vendedor: v1 sí tiene datos, v2 no debe traer nada.
+        res_v1 = client.get("/api/reporte/diario?vendedor=v1")
+        assert len(res_v1.json()["ventas_diarias"]) == 1
+        res_v2 = client.get("/api/reporte/diario?vendedor=v2")
+        assert len(res_v2.json()["ventas_diarias"]) == 0
+        assert len(res_v2.json()["cobranza_diaria"]) == 0
 
 
 def test_e2e_09_listas_precio_mapeo():
