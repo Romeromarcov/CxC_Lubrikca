@@ -15,6 +15,7 @@ from cxc.models import (
     Moneda,
     OrdenVenta,
     Pago,
+    SerieTasa,
     Vinculacion,
 )
 from cxc.web.app import SECRET_KEY, app, crear_session_token
@@ -950,3 +951,97 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
         assert item["origen"] == "Odoo (automático vía factura)"
         assert item["monto_aplicado"] == 250.0
         assert item["moneda"] == "VES"
+
+
+def test_e2e_18_editar_tasa_binance_valida_min_max_del_dia():
+    """Editar la tasa Binance de una Vinculación: debe rechazar valores
+
+    fuera del rango [mínimo, máximo] capturado ese día en SerieTasas, y
+    aceptar (recalculando equivalentes) un valor dentro del rango.
+    """
+    vinc = Vinculacion(
+        vinc_id="V_EDIT",
+        pago_id="P_EDIT",
+        so_id="SO_EDIT",
+        monto_aplicado=Decimal("1000.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        moneda_abono=Moneda.VES,
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo.serie_tasas_del_dia.return_value = [
+        SerieTasa(datetime(2026, 7, 10, 8, 0), Decimal("36"), Decimal("39.0"), "x"),
+        SerieTasa(datetime(2026, 7, 10, 12, 0), Decimal("36"), Decimal("41.0"), "x"),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        # Fuera de rango (máximo capturado es 41.0).
+        res_bad = client.post(
+            "/api/vinculacion/V_EDIT/tasa-binance", json={"tasa_binance": 45.0}
+        )
+        assert res_bad.status_code == 400
+        assert mock_repo.update_vinculacion.call_count == 0
+
+        # Dentro de rango.
+        res_ok = client.post(
+            "/api/vinculacion/V_EDIT/tasa-binance", json={"tasa_binance": 40.5}
+        )
+        assert res_ok.status_code == 200
+        data = res_ok.json()
+        assert data["tasa_binance_aplicada"] == 40.5
+        assert abs(data["equiv_usd_binance"] - 1000.0 / 40.5) < 1e-6
+        assert mock_repo.update_vinculacion.call_count == 1
+
+
+def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
+    """Selector de tasa BCV: alternar entre BCV-USD y BCV-EUR debe
+
+    recalcular la tasa aplicada y los equivalentes; sin dato de tasa_bcv_euro
+    capturado, seleccionar EUR debe rechazarse con un error claro.
+    """
+    vinc = Vinculacion(
+        vinc_id="V_BCV",
+        pago_id="P_BCV",
+        so_id="SO_BCV",
+        monto_aplicado=Decimal("500.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        moneda_abono=Moneda.VES,
+        bcv_variante="USD",
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo._g.read_rows.return_value = []  # sin tasa_bcv_euro capturada
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        res_no_eur = client.post(
+            "/api/vinculacion/V_BCV/tasa-bcv-tipo", json={"variante": "EUR"}
+        )
+        assert res_no_eur.status_code == 400
+
+    mock_repo._g.read_rows.return_value = [
+        {"timestamp": "2026-07-10 10:00:00", "tasa_bcv": "36.0", "tasa_bcv_euro": "39.8"},
+    ]
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        res_eur = client.post(
+            "/api/vinculacion/V_BCV/tasa-bcv-tipo", json={"variante": "EUR"}
+        )
+        assert res_eur.status_code == 200
+        data = res_eur.json()
+        assert data["bcv_variante"] == "EUR"
+        assert data["tasa_bcv_aplicada"] == 39.8
+        assert abs(data["equiv_usd_bcv"] - 500.0 / 39.8) < 1e-6

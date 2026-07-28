@@ -219,6 +219,23 @@ def test_serie_tasas_es_append_only_y_trailing_fail() -> None:
     assert last is not None and last.timestamp == datetime(2026, 6, 27, 11, 0)
 
 
+def test_serie_tasas_del_dia_filtra_por_fecha() -> None:
+    repo, _ = _repo()
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 27, 9, 0), Decimal("36"), Decimal("40"), "ok")
+    )
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 27, 13, 0), Decimal("36.2"), Decimal("41"), "ok")
+    )
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 28, 9, 0), Decimal("36.5"), Decimal("42"), "ok")
+    )
+    del_27 = repo.serie_tasas_del_dia(date(2026, 6, 27))
+    assert len(del_27) == 2
+    assert {f.tasa_binance for f in del_27} == {Decimal("40"), Decimal("41")}
+    assert repo.serie_tasas_del_dia(date(2026, 6, 29)) == []
+
+
 def test_cursor_sync_roundtrip() -> None:
     repo, _ = _repo()
     assert repo.get_last_sync() is None

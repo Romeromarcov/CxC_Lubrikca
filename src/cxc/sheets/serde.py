@@ -599,6 +599,7 @@ def vinculacion_to_row(v: Vinculacion) -> Row:
         "estado": v.estado.value,
         "moneda_abono": v.moneda_abono.value,
         "tipo_tasa_abono": v.tipo_tasa_abono.value,
+        "bcv_variante": v.bcv_variante,
     }
 
 
@@ -622,6 +623,7 @@ def vinculacion_from_row(r: Mapping[str, str]) -> Vinculacion:
         estado=EstadoVinculacion(r.get("estado", "pendiente")),
         moneda_abono=Moneda(r.get("moneda_abono", "VES")),
         tipo_tasa_abono=TipoTasa(r.get("tipo_tasa_abono", "N_A")),
+        bcv_variante=r.get("bcv_variante", "").strip() or "USD",
     )
 
 

@@ -689,12 +689,12 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadHistorialPagos() {
         if (!historialTableBody) return;
         try {
-            historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando pagos conciliados...</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">Cargando pagos conciliados...</td></tr>';
             const res = await fetch("/api/pagos-historial");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos conciliados.</td></tr>';
+                    historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">No hay pagos conciliados.</td></tr>';
                     return;
                 }
                 const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
@@ -705,6 +705,21 @@ document.addEventListener("DOMContentLoaded", () => {
                     const origenBadge = (item.origen || '').startsWith('Odoo')
                         ? `<span class="state-badge" style="background:#e0f2fe;color:#0369a1">${item.origen}</span>`
                         : `<span class="state-badge">${item.origen || 'Sistema'}</span>`;
+                    const editCell = item.editable && item.vinc_id ? `
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <div style="display:flex; gap:3px; align-items:center;">
+                                <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${item.vinc_id}" value="${item.tasa_binance ?? ''}" style="width:80px; padding:2px 4px; font-size:0.75rem;">
+                                <button class="btn btn-sm" onclick="guardarTasaBinance('${item.vinc_id}')" style="padding:2px 6px; font-size:0.7rem;">Bin.</button>
+                            </div>
+                            <div style="display:flex; gap:3px; align-items:center;">
+                                <select class="select-bcv-variante" data-vinc="${item.vinc_id}" style="width:65px; padding:2px; font-size:0.72rem;">
+                                    <option value="USD" ${item.bcv_variante === 'USD' ? 'selected' : ''}>BCV USD</option>
+                                    <option value="EUR" ${item.bcv_variante === 'EUR' ? 'selected' : ''}>BCV EUR</option>
+                                </select>
+                                <button class="btn btn-sm" onclick="guardarTipoTasaBcv('${item.vinc_id}')" style="padding:2px 6px; font-size:0.7rem;">BCV</button>
+                            </div>
+                        </div>
+                    ` : '<span style="font-size:0.72rem; color:#94a3b8;">No editable</span>';
                     row.innerHTML = `
                         <td><strong>#${item.pago_id}</strong></td>
                         <td>${item.cliente_nombre}</td>
@@ -715,6 +730,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><span class="state-badge">${item.factura_id}</span></td>
                         <td>${fmtTasa(item.tasa_bcv)}</td>
                         <td>${fmtTasa(item.tasa_binance)}</td>
+                        <td>${editCell}</td>
                         <td>${origenBadge}</td>
                         <td>${item.confirmado_por}</td>
                         <td><span class="state-badge cierre">${item.estado}</span></td>
@@ -723,10 +739,57 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Error al cargar el historial.</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">Error al cargar el historial.</td></tr>';
             console.error("Error loading historial:", err);
         }
     }
+
+    window.guardarTasaBinance = async function(vincId) {
+        const input = document.querySelector(`.input-tasa-binance[data-vinc="${vincId}"]`);
+        if (!input) return;
+        const tasa = parseFloat(input.value);
+        if (!tasa || tasa <= 0) {
+            alert("Ingresa una tasa Binance válida.");
+            return;
+        }
+        try {
+            const res = await fetch(`/api/vinculacion/${vincId}/tasa-binance`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tasa_binance: tasa }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.detail || "No se pudo actualizar la tasa Binance.");
+                return;
+            }
+            loadHistorialPagos();
+        } catch (err) {
+            alert("Error de red al actualizar la tasa Binance.");
+            console.error(err);
+        }
+    };
+
+    window.guardarTipoTasaBcv = async function(vincId) {
+        const select = document.querySelector(`.select-bcv-variante[data-vinc="${vincId}"]`);
+        if (!select) return;
+        try {
+            const res = await fetch(`/api/vinculacion/${vincId}/tasa-bcv-tipo`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ variante: select.value }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.detail || "No se pudo cambiar el tipo de tasa BCV.");
+                return;
+            }
+            loadHistorialPagos();
+        } catch (err) {
+            alert("Error de red al cambiar el tipo de tasa BCV.");
+            console.error(err);
+        }
+    };
 
     // Load Auditoría Panel Data
     async function loadAuditoria() {

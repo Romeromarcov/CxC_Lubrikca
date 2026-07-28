@@ -125,6 +125,14 @@ class VincularMasivoRequest(BaseModel):
     items: list[VinculacionRequest]
 
 
+class TasaBinanceEditRequest(BaseModel):
+    tasa_binance: float
+
+
+class TasaBcvVarianteRequest(BaseModel):
+    variante: str  # "USD" | "EUR"
+
+
 class PromocionRequest(BaseModel):
     tipo_beneficio: str = "producto"  # 'producto' | 'porcentaje'
     productos: str = ""  # CSV de SKUs de regalo
@@ -367,13 +375,7 @@ def get_repo() -> SheetsRepository:
     return _repo_cache
 
 
-def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
-    if rows is None:
-        repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
-    if not rows:
-        return Decimal("36.5"), Decimal("38.0")
-
+def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
     closest_row = None
     min_diff = None
 
@@ -397,12 +399,36 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
             min_diff = diff
             closest_row = r
 
+    return closest_row
+
+
+def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
+    if rows is None:
+        repo = get_repo()
+        rows = repo._g.read_rows("SerieTasas")
+    if not rows:
+        return Decimal("36.5"), Decimal("38.0")
+
+    closest_row = _closest_serie_row(dt, rows)
     if closest_row:
         return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
             closest_row.get("tasa_binance")
         )
 
     return Decimal("36.5"), Decimal("38.0")
+
+
+def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
+    """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`.
+
+    None si no hay ninguna fila con esa columna capturada (huérfana en la
+    mayoría de los despliegues -- el scraper la captura pero nada la usaba).
+    """
+    candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
+    closest_row = _closest_serie_row(dt, candidatas)
+    if closest_row:
+        return parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
+    return None
 
 
 async def run_sync_in_background():
@@ -3565,6 +3591,122 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _get_vinculacion_or_404(repo: Any, vinc_id: str) -> Vinculacion:
+    vinc = next((v for v in repo.all_vinculaciones() if v.vinc_id == vinc_id), None)
+    if not vinc:
+        raise HTTPException(status_code=404, detail=f"Vinculación {vinc_id} no encontrada.")
+    return vinc
+
+
+@app.post("/api/vinculacion/{vinc_id}/tasa-binance")
+async def post_editar_tasa_binance(
+    vinc_id: str, req: TasaBinanceEditRequest, background_tasks: BackgroundTasks
+):
+    try:
+        repo = get_repo()
+        vinc = _get_vinculacion_or_404(repo, vinc_id)
+        nueva_tasa = Decimal(str(req.tasa_binance))
+        if nueva_tasa <= Decimal("0"):
+            raise HTTPException(status_code=400, detail="La tasa Binance debe ser positiva.")
+
+        # Validación estricta: no puede superar el máximo ni caer bajo el
+        # mínimo capturado ese día en SerieTasas.
+        fecha = vinc.hora_pago_confirmada.date()
+        dia_rows = repo.serie_tasas_del_dia(fecha)
+        binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
+        if binance_vals:
+            minimo, maximo = min(binance_vals), max(binance_vals)
+            if nueva_tasa < minimo or nueva_tasa > maximo:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"La tasa Binance ({nueva_tasa}) debe estar entre {minimo} y "
+                        f"{maximo} -- rango capturado el {fecha.isoformat()}."
+                    ),
+                )
+
+        vinc.tasa_binance_aplicada = nueva_tasa
+        if vinc.moneda_abono == Moneda.USD:
+            vinc.equiv_usd_binance = vinc.monto_aplicado
+            vinc.equiv_ves_binance = vinc.monto_aplicado * nueva_tasa
+        else:
+            vinc.equiv_usd_binance = vinc.monto_aplicado / nueva_tasa
+            vinc.equiv_ves_binance = vinc.monto_aplicado
+
+        repo.update_vinculacion(vinc)
+        background_tasks.add_task(recalculate_all, vinc.so_id)
+
+        return {
+            "status": "success",
+            "vinc_id": vinc_id,
+            "tasa_binance_aplicada": float(nueva_tasa),
+            "equiv_usd_binance": float(vinc.equiv_usd_binance),
+            "equiv_ves_binance": float(vinc.equiv_ves_binance),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/vinculacion/{vinc_id}/tasa-bcv-tipo")
+async def post_cambiar_tipo_tasa_bcv(
+    vinc_id: str, req: TasaBcvVarianteRequest, background_tasks: BackgroundTasks
+):
+    try:
+        variante = req.variante.strip().upper()
+        if variante not in ("USD", "EUR"):
+            raise HTTPException(
+                status_code=400, detail="La variante de tasa BCV debe ser 'USD' o 'EUR'."
+            )
+
+        repo = get_repo()
+        vinc = _get_vinculacion_or_404(repo, vinc_id)
+        tasas_rows = repo._g.read_rows("SerieTasas")
+
+        if variante == "EUR":
+            tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            if tasa_bcv_nueva is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No hay tasa BCV-EUR capturada en SerieTasas para usar esta variante.",
+                )
+        else:
+            tasa_bcv_nueva, _ = get_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+
+        if tasa_bcv_nueva <= Decimal("0"):
+            raise HTTPException(
+                status_code=400, detail=f"Tasa BCV-{variante} inválida (<= 0)."
+            )
+
+        vinc.bcv_variante = variante
+        vinc.tasa_bcv_aplicada = tasa_bcv_nueva
+        if vinc.moneda_abono == Moneda.USD:
+            vinc.equiv_usd_bcv = vinc.monto_aplicado
+            vinc.equiv_ves_bcv = vinc.monto_aplicado * tasa_bcv_nueva
+        else:
+            vinc.equiv_usd_bcv = vinc.monto_aplicado / tasa_bcv_nueva
+            vinc.equiv_ves_bcv = vinc.monto_aplicado
+
+        repo.update_vinculacion(vinc)
+        background_tasks.add_task(recalculate_all, vinc.so_id)
+
+        return {
+            "status": "success",
+            "vinc_id": vinc_id,
+            "bcv_variante": variante,
+            "tasa_bcv_aplicada": float(tasa_bcv_nueva),
+            "equiv_usd_bcv": float(vinc.equiv_usd_bcv),
+            "equiv_ves_bcv": float(vinc.equiv_ves_bcv),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/odoo/marcas")
 async def get_odoo_marcas():
     try:
@@ -4905,6 +5047,7 @@ async def get_pagos_historial():
 
             historial.append(
                 {
+                    "vinc_id": v.vinc_id,
                     "pago_id": v.pago_id,
                     "cliente_nombre": c_name,
                     "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d")
@@ -4921,6 +5064,8 @@ async def get_pagos_historial():
                     "tasa_binance": float(v.tasa_binance_aplicada)
                     if v.tasa_binance_aplicada
                     else None,
+                    "bcv_variante": v.bcv_variante or "USD",
+                    "editable": True,
                 }
             )
 
@@ -4968,6 +5113,7 @@ async def get_pagos_historial():
                         )
                         historial.append(
                             {
+                                "vinc_id": None,
                                 "pago_id": pago_id,
                                 "cliente_nombre": c_name,
                                 "fecha_pago": fecha_str,
@@ -4980,6 +5126,8 @@ async def get_pagos_historial():
                                 "origen": "Odoo (automático vía factura)",
                                 "tasa_bcv": float(bcv_rate),
                                 "tasa_binance": float(binance_rate),
+                                "bcv_variante": "USD",
+                                "editable": False,
                             }
                         )
         except Exception as e_odoo:
