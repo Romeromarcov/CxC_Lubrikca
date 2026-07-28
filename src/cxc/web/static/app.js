@@ -944,11 +944,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 applyReporteFilters();
                 renderCriticaTable(fullReporteItems);
+                renderSaldoMinimoTable(data.saldo_minimo_pendientes || []);
             }
         } catch (err) {
             reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">Error de red al cargar el reporte.</td></tr>';
             console.error(err);
         }
+    }
+
+    function renderSaldoMinimoTable(items) {
+        const tbody = document.getElementById("reporte-saldo-minimo-table-body");
+        if (!tbody) return;
+
+        if (!items || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay facturas con saldo ≤ $1 pendientes por cerrar.</td></tr>';
+            return;
+        }
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const esc = (v) => (v === null || v === undefined ? '' : String(v).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
+        tbody.innerHTML = items.map(item => `
+            <tr>
+                <td><strong>${esc(item.so_id)}</strong></td>
+                <td>${esc(item.cliente_nombre)}</td>
+                <td>${esc(item.vendedor)}</td>
+                <td>${esc(item.factura_id)}</td>
+                <td>${fmt(item.saldo_con_descuento_bcv)}</td>
+                <td>${fmt(item.saldo_con_descuento_lista_usd)}</td>
+                <td>${item.saldo_factura_odoo !== null && item.saldo_factura_odoo !== undefined ? fmt(item.saldo_factura_odoo) : '-'}</td>
+            </tr>
+        `).join('');
     }
 
     function applyReporteFilters() {
