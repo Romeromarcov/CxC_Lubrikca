@@ -1352,17 +1352,20 @@ async def get_reporte_saldos(refresh: bool = False):
                     pass
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
-        # Fetch posted invoices from Odoo in batch for all orders (usa execute ya establecido)
+        # Fetch posted invoices & credit notes from Odoo in batch for all orders
         so_ids = [o.so_id for o in ordenes]
-        invoices_by_so = {}   # out_invoice only
-        ncs_by_so: dict[str, list[dict]] = {}   # out_refund (notas de crédito)
-        invoice_ids_all: list[int] = []  # for fetching move lines
+        invoices_by_so: dict[str, list[dict]] = {}   # out_invoice only
+        ncs_by_so: dict[str, list[dict]] = {}        # out_refund (notas de crédito)
+        invoice_ids_all: list[int] = []               # for fetching move lines
+        inv_name_to_so: dict[str, str] = {}
+        inv_id_to_so: dict[int, str] = {}
         try:
             if execute:
+                # 1. Fetch out_invoice records
                 invoices = execute(
                     "account.move",
                     "search_read",
-                    [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
+                    [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "=", "out_invoice"]]],
                     {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
                                 "currency_id", "invoice_date", "move_type", "payment_state"]}
                 )
@@ -1370,18 +1373,64 @@ async def get_reporte_saldos(refresh: bool = False):
                     so = str(inv.get("invoice_origin", "")).strip()
                     if not so:
                         continue
-                    m_type = inv.get("move_type", "out_invoice")
-                    if m_type == "out_refund":
-                        ncs_by_so.setdefault(so, []).append(inv)
-                    else:
-                        invoices_by_so.setdefault(so, []).append(inv)
+                    invoices_by_so.setdefault(so, []).append(inv)
                     invoice_ids_all.append(int(inv["id"]))
+                    inv_id_to_so[int(inv["id"])] = so
+                    inv_name = str(inv.get("name", "")).strip()
+                    if inv_name:
+                        inv_name_to_so[inv_name] = so
+
+                # 2. Fetch out_refund (Credit Notes) matching SO name, invoice name, or reversed_entry_id
+                inv_names = list(inv_name_to_so.keys())
+                nc_domain = [["state", "=", "posted"], ["move_type", "=", "out_refund"]]
+                sub_domain = []
+                if so_ids:
+                    sub_domain.append(["invoice_origin", "in", so_ids])
+                if inv_names:
+                    sub_domain.append(["invoice_origin", "in", inv_names])
+                    sub_domain.append(["ref", "in", inv_names])
+                if invoice_ids_all:
+                    sub_domain.append(["reversed_entry_id", "in", invoice_ids_all])
+
+                if sub_domain:
+                    if len(sub_domain) == 1:
+                        full_nc_domain = sub_domain + nc_domain
+                    else:
+                        ors = [["|"]] * (len(sub_domain) - 1)
+                        # Flat list of OR operators followed by clauses and state/move_type
+                        flat_sub = [clause for sub in sub_domain for clause in sub]
+                        # In Odoo domain syntax: '|', '|', c1, c2, c3, ['state', '=', 'posted'], ['move_type', '=', 'out_refund']
+                        full_nc_domain = ["|"] * (len(sub_domain) - 1) + sub_domain + nc_domain
+
+                    ncs = execute(
+                        "account.move",
+                        "search_read",
+                        full_nc_domain,
+                        {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
+                                    "currency_id", "invoice_date", "move_type", "payment_state", "reversed_entry_id", "ref"]}
+                    )
+                    for nc in ncs:
+                        so = None
+                        orig = str(nc.get("invoice_origin", "")).strip()
+                        ref = str(nc.get("ref", "")).strip()
+                        rev_raw = nc.get("reversed_entry_id")
+                        rev_id = rev_raw[0] if isinstance(rev_raw, (list, tuple)) else None
+
+                        if orig in invoices_by_so:
+                            so = orig
+                        elif orig in inv_name_to_so:
+                            so = inv_name_to_so[orig]
+                        elif ref in inv_name_to_so:
+                            so = inv_name_to_so[ref]
+                        elif rev_id and rev_id in inv_id_to_so:
+                            so = inv_id_to_so[rev_id]
+
+                        if so:
+                            ncs_by_so.setdefault(so, []).append(nc)
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
 
         # ── Descuentos en líneas de FACTURAS (account.move.line.discount) ──────
-        # Acumulamos el monto de descuento aplicado en cada factura para poder
-        # compararlo contra el motor en la auditoría.
         inv_line_discounts_by_so: dict[str, float] = {}
         inv_line_discount_detail_by_so: dict[str, str] = {}
         if execute and invoice_ids_all:
@@ -1392,13 +1441,6 @@ async def get_reporte_saldos(refresh: bool = False):
                     [[["move_id", "in", invoice_ids_all], ["display_type", "in", ["product", False]], ["discount", ">", 0]]],
                     {"fields": ["move_id", "name", "quantity", "price_unit", "discount", "currency_id"]}
                 )
-                # Rebuild move_id → so mapping from already-fetched invoices
-                inv_id_to_so: dict[int, str] = {}
-                for so_name, inv_list in invoices_by_so.items():
-                    for inv in inv_list:
-                        inv_id_to_so[int(inv["id"])] = so_name
-                for nc_list in ncs_by_so.values():
-                    pass  # NCs don't count for invoice-line discounts
                 for il in inv_lines:
                     move_raw = il.get("move_id")
                     move_id = move_raw[0] if isinstance(move_raw, (list, tuple)) else int(move_raw or 0)
@@ -1447,18 +1489,17 @@ async def get_reporte_saldos(refresh: bool = False):
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
         # ─── ABONOS DESDE ODOO (fuente de verdad para SOs sin vinculación manual) ───
-        # Lógica: paid = amount_total - amount_residual en cada factura de Odoo.
-        # amount_residual ya descuenta TODOS los pagos reconciliados en Odoo, sin importar
-        # el método de pago ni la versión de Odoo. No requiere acceder a account.payment.
-        # Solo se aplica si la SO NO tiene vinculaciones manuales en Sheets.
         for so_name, inv_list in invoices_by_so.items():
             existing = pagos_by_so.get(so_name, {})
             if existing.get("tiene_vinc_manual", False):
-                # Ya tiene abonos manuales registrados en Sheets — no sobreescribir.
                 continue
 
             total_paid_usd = Decimal("0")
             latest_inv_date: str | None = None
+
+            # Look up order object to get original total USD
+            o_obj = next((o for o in ordenes if o.so_id == so_name), None)
+            order_usd_total = o_obj.monto_total if o_obj else Decimal("0")
 
             for inv in inv_list:
                 tot = Decimal(str(inv.get("amount_total") or "0"))
@@ -1470,8 +1511,15 @@ async def get_reporte_saldos(refresh: bool = False):
                 inv_dt = str(inv.get("invoice_date") or "")[:10]
 
                 if c_name == "VES":
-                    rate = rates_map.get(inv_dt, last_bcv_val)
-                    paid_inv_usd = paid_inv / Decimal(str(rate)) if rate and float(rate) > 0 else Decimal("0")
+                    # If order was generated in USD (monto_total > 0), convert using the exact issuance exchange rate
+                    # (tot / order_usd_total) so paid amounts match original USD prices without rate distortion.
+                    if order_usd_total > Decimal("0") and tot > Decimal("0"):
+                        effective_rate = tot / order_usd_total
+                    else:
+                        rate_val = rates_map.get(inv_dt, last_bcv_val)
+                        effective_rate = Decimal(str(rate_val)) if rate_val and float(rate_val) > 0 else Decimal("1")
+                    
+                    paid_inv_usd = paid_inv / effective_rate if effective_rate > Decimal("0") else Decimal("0")
                 else:
                     paid_inv_usd = paid_inv
 
