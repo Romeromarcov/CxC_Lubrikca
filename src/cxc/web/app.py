@@ -462,7 +462,12 @@ async def run_sync_in_background():
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas.")
                 if total_first > 0:
-                    recalculate_all_orders()
+                    # En un hilo aparte: Reconciler hace una llamada XML-RPC a
+                    # Odoo POR ORDEN -- con cientos de órdenes puede tardar
+                    # minutos. Ejecutarlo inline bloquearía el event loop
+                    # entero (incluido el health check de Railway), causando
+                    # 502 "Application failed to respond" en el servidor.
+                    await asyncio.to_thread(recalculate_all_orders)
                 _first_run = False
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
@@ -474,8 +479,9 @@ async def run_sync_in_background():
                     # Sincronización bidireccional: si Odoo reportó cambios
                     # (ej. un pago editado en monto/fecha/cliente), se
                     # recalculan motor y reconciliación para reflejarlo sin
-                    # esperar a que un humano vincule algo manualmente.
-                    recalculate_all_orders()
+                    # esperar a que un humano vincule algo manualmente. En
+                    # hilo aparte por la misma razón que arriba.
+                    await asyncio.to_thread(recalculate_all_orders)
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
