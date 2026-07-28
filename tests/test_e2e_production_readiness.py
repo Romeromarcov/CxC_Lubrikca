@@ -449,3 +449,55 @@ def test_e2e_10_conciliaciones_sugerencias_and_bulk_approval():
         assert res_bulk.status_code == 200
         assert res_bulk.json()["procesados"] == 2
         assert mock_repo.update_vinculacion.call_count == 2
+
+
+def test_e2e_11_regla_global_excluye_ordenes_no_confirmadas():
+    """Regla global: /api/resumen no debe contar cotizaciones (draft/sent) ni
+
+    órdenes canceladas como "Total por Cobrar" — solo órdenes confirmadas.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_CONFIRMADA",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("1000.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+        ),
+        OrdenVenta(
+            so_id="SO_COTIZACION",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 2),
+            fecha_entrega=None,
+            monto_total=Decimal("3_800_000.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="draft",
+        ),
+        OrdenVenta(
+            so_id="SO_CANCELADA",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 3),
+            fecha_entrega=None,
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="cancel",
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        # Solo SO_CONFIRMADA (sale) debe contarse; draft y cancel quedan fuera.
+        assert res.json()["total_por_cobrar_usd"] == 1000.0

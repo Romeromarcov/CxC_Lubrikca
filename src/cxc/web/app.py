@@ -68,6 +68,22 @@ def parse_decimal_safe(val) -> Decimal:
         return Decimal("0")
 
 
+# Estados de sale.order que NUNCA deben entrar a un reporte, bandeja o
+# cálculo de cobranza: Cancelada (cancel), Cotización en cualquiera de sus
+# dos sub-estados Odoo (draft/sent). Regla global — ver auditoría.
+ESTADOS_ORDEN_EXCLUIDOS = frozenset({"cancel", "cancelled", "draft", "sent"})
+
+
+def orden_excluida(o: Any, live_state: str | None = None) -> bool:
+    """True si la orden debe excluirse de cualquier reporte/bandeja/cálculo.
+
+    Usa el estado en vivo de Odoo si se provee (más fresco que el mirror);
+    si no, cae al `estado_orden` ya sincronizado en la orden.
+    """
+    st = live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or "")
+    return st.strip().lower() in ESTADOS_ORDEN_EXCLUIDOS
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -832,7 +848,9 @@ async def get_resumen():
         repo = get_repo()
         # 1. Total por cobrar (Orders not invoiced)
         ordenes = repo.all_ordenes()
-        total_por_cobrar = sum(o.monto_total for o in ordenes if not o.facturada)
+        total_por_cobrar = sum(
+            o.monto_total for o in ordenes if not o.facturada and not orden_excluida(o)
+        )
 
         # 2. Pagos sin asignar (convert VES payments to USD at BCV rate)
         pagos = repo._g.read_rows("Pagos")
@@ -984,6 +1002,8 @@ async def get_ordenes_pendientes(cliente_id: str):
         # Filter outstanding orders for this client
         pendientes = []
         for o in ordenes:
+            if orden_excluida(o):
+                continue
             if o.cliente_id == cliente_id and not o.facturada:
                 pagado = linked_by_so.get(o.so_id, Decimal("0"))
                 saldo = o.monto_total - pagado
@@ -1935,8 +1955,7 @@ async def get_reporte_saldos(refresh: bool = False):
 
         new_audit_rows: list[dict] = []
         for o in ordenes:
-            st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            if st_check in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o):
                 continue
 
             # Tarea 2: orden facturada cuya factura Odoo ya esta 'Pagada' o
@@ -3119,11 +3138,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
         open_orders_by_client = {}
         for o in ordenes:
-            st = (
-                so_states_map.get(o.so_id)
-                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            )
-            if st in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
                 continue
             if not o.facturada:
                 pagado = linked_so.get(o.so_id, Decimal("0"))
@@ -3241,11 +3256,7 @@ async def get_bandeja_facturacion():
         iva_pendiente_agentes = []
 
         for o in ordenes:
-            st = (
-                so_odoo_states.get(o.so_id)
-                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            )
-            if st in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o, live_state=so_odoo_states.get(o.so_id)):
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id), {})
@@ -3742,6 +3753,8 @@ async def get_odoo_clientes_auditoria():
 
             so_partner_map = {}
             for o in ordenes:
+                if orden_excluida(o):
+                    continue
                 pid = str(o.cliente_id)
                 so_partner_map[o.so_id] = pid
                 date_str = o.fecha.isoformat()
@@ -4955,6 +4968,8 @@ async def get_auditoria():
         discrepancias_facturas_odoo = []
 
         for o in ordenes:
+            if orden_excluida(o):
+                continue
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             b = bandeja_map.get(o.so_id)
             so_lines = lines_by_so.get(o.so_id, [])
@@ -5387,10 +5402,7 @@ async def get_reporte_diario():
         # 1. Ventas por Día (USD y Litros)
         ventas_por_dia = {}
         for o in ordenes:
-            st = getattr(o, "estado_orden", "sale")
-            if st in ["cancel", "draft", "sent"] and not (
-                o.entregada_completa or bool(o.fecha_entrega)
-            ):
+            if orden_excluida(o):
                 continue
             fecha_key = o.fecha.isoformat()[:10]
             if fecha_key not in ventas_por_dia:
@@ -5414,7 +5426,7 @@ async def get_reporte_diario():
             total_l = qty * l_per_unit
 
             o_match = next((o for o in ordenes if o.so_id == so_id), None)
-            if o_match:
+            if o_match and not orden_excluida(o_match):
                 fk = o_match.fecha.isoformat()[:10]
                 if fk in ventas_por_dia:
                     ventas_por_dia[fk]["litros_totales"] += total_l
