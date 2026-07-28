@@ -30,8 +30,6 @@ def sumar_dias_habiles(inicio: date, n: int, feriados: frozenset[date]) -> date:
     return actual
 
 
-def fin_ventana_contado(
-    fecha_entrega: date, dias_habiles: int, feriados: frozenset[date]
-) -> date:
+def fin_ventana_contado(fecha_entrega: date, dias_habiles: int, feriados: frozenset[date]) -> date:
     """Último día de la ventana [entrega, entrega + N días hábiles]."""
     return sumar_dias_habiles(fecha_entrega, dias_habiles, feriados)

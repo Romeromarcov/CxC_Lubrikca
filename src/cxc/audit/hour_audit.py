@@ -18,13 +18,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from ..config import HourAuditConfig
 from ..models import Vinculacion
 
 
-class Prioridad(str, Enum):
+class Prioridad(StrEnum):
     ALTA = "alta"
     MEDIA = "media"
 
@@ -53,9 +53,7 @@ class AuditFinding:
 RateLookup = Callable[[datetime], Decimal | None]
 
 
-def _emparejar(
-    vinc: Vinculacion, movimientos: list[BankMovement]
-) -> BankMovement | None:
+def _emparejar(vinc: Vinculacion, movimientos: list[BankMovement]) -> BankMovement | None:
     """Empareja por monto exacto; si hay varios, el más cercano a la hora declarada."""
     candidatos = [m for m in movimientos if m.monto == vinc.monto_aplicado]
     if not candidatos:
@@ -67,9 +65,7 @@ def _emparejar(
 
 
 class HourAuditor:
-    def __init__(
-        self, config: HourAuditConfig, rate_lookup: RateLookup | None = None
-    ) -> None:
+    def __init__(self, config: HourAuditConfig, rate_lookup: RateLookup | None = None) -> None:
         self._config = config
         self._rate_lookup = rate_lookup
 
@@ -91,9 +87,7 @@ class HourAuditor:
         )
         return hallazgos
 
-    def _auditar_una(
-        self, v: Vinculacion, movimientos: list[BankMovement]
-    ) -> AuditFinding | None:
+    def _auditar_una(self, v: Vinculacion, movimientos: list[BankMovement]) -> AuditFinding | None:
         motivos: list[str] = []
         prioridad = Prioridad.MEDIA
 
@@ -113,9 +107,7 @@ class HourAuditor:
                 motivos=motivos,
             )
 
-        delta_min = int(
-            abs((mov.fecha_hora - v.hora_pago_confirmada).total_seconds()) // 60
-        )
+        delta_min = int(abs((mov.fecha_hora - v.hora_pago_confirmada).total_seconds()) // 60)
         if delta_min > self._config.threshold_minutes:
             motivos.append(
                 f"hora declarada difiere {delta_min} min de la real "

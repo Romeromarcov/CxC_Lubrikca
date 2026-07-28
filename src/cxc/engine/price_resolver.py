@@ -9,10 +9,8 @@ aritmética (×0.65 ≠ ÷1.35).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from decimal import Decimal
-
-
 from datetime import date
+from decimal import Decimal
 
 
 class PriceResolver(ABC):
@@ -28,7 +26,9 @@ class PriceResolver(ABC):
 class DictPriceResolver(PriceResolver):
     """Resolver en memoria — ``{(producto, lista): precio}``."""
 
-    def __init__(self, precios: dict[tuple[str, str], Decimal], volumenes: dict[str, Decimal] | None = None) -> None:
+    def __init__(
+        self, precios: dict[tuple[str, str], Decimal], volumenes: dict[str, Decimal] | None = None
+    ) -> None:
         self._precios = dict(precios)
         self._volumenes = dict(volumenes or {})
 
@@ -36,9 +36,7 @@ class DictPriceResolver(PriceResolver):
         try:
             return self._precios[(producto, lista)]
         except KeyError as exc:
-            raise KeyError(
-                f"Sin precio para producto={producto!r} en lista={lista!r}"
-            ) from exc
+            raise KeyError(f"Sin precio para producto={producto!r} en lista={lista!r}") from exc
 
     def volumen(self, producto: str) -> Decimal:
         return self._volumenes.get(producto, Decimal("0"))

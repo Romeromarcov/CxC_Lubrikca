@@ -17,16 +17,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 
-class EstadoAuditoria(str, Enum):
+class EstadoAuditoria(StrEnum):
     OK = "ok"
     DISCREPANCIA_MENOR = "discrepancia_menor"
     DISCREPANCIA = "discrepancia"
 
 
-class TipoAuditoria(str, Enum):
+class TipoAuditoria(StrEnum):
     DESCUENTO_ORDEN = "descuento_orden"
     DESCUENTO_FACTURA = "descuento_factura"
     NOTA_CREDITO = "nota_credito"
@@ -35,11 +35,12 @@ class TipoAuditoria(str, Enum):
 @dataclass
 class ResultadoAuditoria:
     """Resultado de la comparación motor vs Odoo para un campo concreto."""
+
     so_id: str
     tipo: TipoAuditoria
     motor_calcula_usd: Decimal
     odoo_registrado_usd: Decimal
-    diferencia_usd: Decimal          # motor - odoo  (positivo = motor > odoo)
+    diferencia_usd: Decimal  # motor - odoo  (positivo = motor > odoo)
     estado: EstadoAuditoria
     enviar_a_bandeja: bool
     descuento_adicional_a_aplicar: Decimal  # solo para descuentos: max(0, motor - odoo)

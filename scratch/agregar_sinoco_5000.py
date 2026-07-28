@@ -1,13 +1,17 @@
-import sys, os, subprocess, json
+import json
+import os
+import subprocess
+import sys
+
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str): os.environ[k] = v
-except Exception as e: pass
+except Exception: pass
 
 from cxc.config import AppConfig
 from cxc.sheets.gateway import GspreadGateway

@@ -14,8 +14,10 @@ from cxc.repositories import InMemoryRepository
 from . import builders as b
 
 CFG = EngineConfig(
-    cash_window_business_days=3, bcv_complete_formula="differential_over_binance",
-    lista_usd="USD", lista_bcv="BCV",
+    cash_window_business_days=3,
+    bcv_complete_formula="differential_over_binance",
+    lista_usd="USD",
+    lista_bcv="BCV",
 )
 
 
@@ -23,17 +25,21 @@ def _seed() -> InMemoryRepository:
     repo = InMemoryRepository()
     repo.upsert_clientes([b.cliente("C1")])
     repo.upsert_ordenes([b.orden("SO1", cliente_id="C1", primera=False)])
-    repo.upsert_lineas([b.linea("L1", so_id="SO1", marca="Sinoco", categoria="*",
-                                precio="100")])
+    repo.upsert_lineas([b.linea("L1", so_id="SO1", marca="Sinoco", categoria="*", precio="100")])
     repo.add_metodo_pago(b.metodo("M1", moneda=Moneda.USD, es_contado=True))
     repo.upsert_pagos([b.pago("PG1", cliente_id="C1", monto="94", metodo_id="M1")])
     repo.add_vinculacion(
-        b.vinculacion("V1", pago_id="PG1", so_id="SO1", monto_aplicado="94",
-                      moneda_abono=Moneda.USD, tipo_tasa_abono=TipoTasa.N_A,
-                      hora=datetime(2026, 6, 5, 10, 0))
+        b.vinculacion(
+            "V1",
+            pago_id="PG1",
+            so_id="SO1",
+            monto_aplicado="94",
+            moneda_abono=Moneda.USD,
+            tipo_tasa_abono=TipoTasa.N_A,
+            hora=datetime(2026, 6, 5, 10, 0),
+        )
     )
-    repo.add_descuento(b.descuento("D1", marca="Sinoco", categoria="*",
-                                   porcentaje="0.03"))
+    repo.add_descuento(b.descuento("D1", marca="Sinoco", categoria="*", porcentaje="0.03"))
     repo.add_regla_recurrencia(b.regla_recompra("0.03"))
     return repo
 

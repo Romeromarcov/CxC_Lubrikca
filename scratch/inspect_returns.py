@@ -1,17 +1,17 @@
-import sys
-import os
 import json
+import os
 import subprocess
+import sys
 
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str):
             os.environ[k] = v
-except Exception as e:
+except Exception:
     pass
 
 from cxc.config import AppConfig
@@ -44,7 +44,7 @@ for p in pickings:
     sid = p.get('sale_id')
     so_id = sid[0] if isinstance(sid, (list, tuple)) else None
     origin = str(p.get('origin') or '').strip()
-    
+
     # Try matching by sale_id or origin (e.g. S00006 or Devolución de ALM/OUT/00004)
     target_so_name = None
     if so_id and so_id in so_map:
@@ -66,9 +66,8 @@ def es_orden_cancelada_o_devuelta(so_name: str, state: str, p_list: list[dict]) 
     done_out = [p for p in p_list if p.get('state') == 'done' and p.get('picking_type_code') == 'outgoing']
     done_in_returns = [p for p in p_list if p.get('state') == 'done' and (p.get('return_id') or p.get('picking_type_code') == 'incoming' or 'Devolución' in str(p.get('origin', '')))]
 
-    if state in ['draft', 'sent']:
-        if not done_out:
-            return True, "Cotización no confirmada y sin despacho realizado"
+    if state in ['draft', 'sent'] and not done_out:
+        return True, "Cotización no confirmada y sin despacho realizado"
 
     # 2. Orden cancelada
     if state == 'cancel':

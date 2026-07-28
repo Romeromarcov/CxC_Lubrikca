@@ -1,15 +1,18 @@
-import sys, os, subprocess, json
+import json
+import os
+import subprocess
+import sys
 from datetime import date, timedelta
-from decimal import Decimal
+
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str): os.environ[k] = v
-except Exception as e: pass
+except Exception: pass
 
 from cxc.config import AppConfig
 from cxc.odoo.client import _connect
@@ -72,15 +75,15 @@ while curr_d <= end_d:
     d_str = curr_d.isoformat()
     usd = bcv_usd_map.get(d_str, last_usd)
     eur = bcv_eur_map.get(d_str, last_eur)
-    
+
     if d_str in binance_avg_captured:
         binance = round(binance_avg_captured[d_str], 4)
     else:
         # Estimate historical Binance average rate based on standard 17.2% market differential
         binance = round(usd * 1.172, 4)
-        
+
     diff_pct = round(((binance - usd) / binance) * 100, 2)
-    
+
     table_rows.append([
         d_str,
         round(usd, 4),
@@ -90,7 +93,7 @@ while curr_d <= end_d:
         'Odoo res.currency.rate / SerieTasas',
         'Historico oficial auditoría desde 2026-02-01'
     ])
-    
+
     last_usd = usd
     last_eur = eur
     last_bin = binance

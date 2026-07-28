@@ -1,33 +1,45 @@
+import asyncio
+import contextlib
+import json
+import logging
 import os
 import re
 import sys
-import json
-import asyncio
-import logging
-from datetime import datetime, date, timedelta
+import traceback
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+
+from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+from cxc.auth import (
+    NOMBRES_ROLES,
+    ROLES_PERMISOS,
+    autenticar_usuario,
+    buscar_usuario_plataforma,
+    crear_session_token,
+    obtener_usuarios_plataforma,
+    registrar_o_actualizar_usuario,
+    verificar_session_token,
+    verificar_usuario_odoo_activo,
+)
+from cxc.config import AppConfig
+from cxc.engine.runner import EngineRunner
+from cxc.models import EstadoVinculacion, Moneda, TipoTasa, Vinculacion
+from cxc.odoo.client import OdooXmlRpcReader, _connect
+from cxc.odoo.price import OdooPriceResolver
+from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
+from cxc.sheets.gateway import GspreadGateway
+from cxc.sheets.repository import SheetsRepository
+from cxc.sync.incremental import IncrementalSync
 
 logger = logging.getLogger("cxc.web.app")
 
 # Reconfigure stdout to use UTF-8
-if sys.version_info >= (3, 7):
-    sys.stdout.reconfigure(encoding='utf-8')
-
-from cxc.config import AppConfig
-from cxc.sheets.gateway import GspreadGateway
-from cxc.sheets.repository import SheetsRepository
-from cxc.odoo.client import OdooXmlRpcReader, _connect
-from cxc.odoo.price import OdooPriceResolver
-from cxc.sync.incremental import IncrementalSync
-from cxc.engine.runner import EngineRunner
-from cxc.engine.effective_dating import descuento_vigente
-from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
-from cxc.models import Vinculacion, EstadoVinculacion, Moneda, TipoTasa, TipoDescuento
+sys.stdout.reconfigure(encoding="utf-8")
 
 app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 
@@ -35,6 +47,7 @@ app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
 
 def parse_decimal_safe(val) -> Decimal:
     if not val:
@@ -51,8 +64,9 @@ def parse_decimal_safe(val) -> Decimal:
             s = s.replace(",", ".")
     try:
         return Decimal(s)
-    except:
+    except Exception:
         return Decimal("0")
+
 
 # Models for POST requests
 class VinculacionRequest(BaseModel):
@@ -60,13 +74,16 @@ class VinculacionRequest(BaseModel):
     so_id: str
     monto_aplicado: float
 
+
 class TasaRequest(BaseModel):
     tasa_bcv: float
     tasa_binance: float
 
+
 class FeriadoRequest(BaseModel):
     fecha: str
     descripcion: str
+
 
 class DescuentoMarcaRequest(BaseModel):
     marca: str
@@ -77,34 +94,42 @@ class DescuentoMarcaRequest(BaseModel):
     vigencia_hasta: str | None = None
     listas_aplicables: str = "*"
 
+
 class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
+
 
 class PricelistMapRequest(BaseModel):
     valid_pricelists_usd: list[str]
     valid_pricelists_ves: list[str]
 
+
 class VincularMasivoRequest(BaseModel):
     items: list[VinculacionRequest]
 
+
 class PromocionRequest(BaseModel):
-    tipo_beneficio: str = "producto"       # 'producto' | 'porcentaje'
-    productos: str = ""                    # CSV de SKUs de regalo
-    valor: float = 1.0                     # cantidad o pct (0.02 = 2%)
-    compra_minima: float = 0.0             # unidades Comercial mínimas para el regalo
-    descuento_fallback: float = 0.0        # pct si no alcanza compra_minima
-    regalo_tipo: str = "solo_uno"          # 'solo_uno' | 'conjunto'
-    categorias_aplica: str = "Comercial"   # CSV de categorías que califican
-    solo_primera_compra: bool = False      # False = Recurrente (cada compra >= min), True = Solo 1era compra
+    tipo_beneficio: str = "producto"  # 'producto' | 'porcentaje'
+    productos: str = ""  # CSV de SKUs de regalo
+    valor: float = 1.0  # cantidad o pct (0.02 = 2%)
+    compra_minima: float = 0.0  # unidades Comercial mínimas para el regalo
+    descuento_fallback: float = 0.0  # pct si no alcanza compra_minima
+    regalo_tipo: str = "solo_uno"  # 'solo_uno' | 'conjunto'
+    categorias_aplica: str = "Comercial"  # CSV de categorías que califican
+    solo_primera_compra: bool = (
+        False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
+    )
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+
 
 class ExclusionRequest(BaseModel):
     regla_tipo_a: str
     regla_tipo_b: str
     activo: bool = True
+
 
 class ProntoPagoRequest(BaseModel):
     marca: str = "*"
@@ -121,17 +146,6 @@ class ProntoPagoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
-class ProductoPromoRequest(BaseModel):
-    productos: str = "*"
-    marca: str = "*"
-    categoria: str = "*"
-    compra_minima_cajas: int = 1
-    porcentaje_descuento: float = 0.05
-    monedas_aplicables: str = "*"
-    listas_aplicables: str = "*"
-    vigencia_desde: str = ""
-    vigencia_hasta: str | None = None
-    activo: bool = True
 
 class VolumenRequest(BaseModel):
     marca: str = "*"
@@ -148,10 +162,6 @@ class VolumenRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
-class ToggleDescuentoRequest(BaseModel):
-    tabla: str
-    regla_id: str
-    activo: bool
 
 class EliminarDescuentoRequest(BaseModel):
     tabla: str
@@ -162,7 +172,7 @@ def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
         rows = repo._g.read_rows("_Meta")
         meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
-        
+
         def _parse(val_str: str, default_val: int) -> list[int]:
             if not val_str:
                 return [default_val]
@@ -172,52 +182,62 @@ def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
                 parts = [c for c in val_str.strip() if c.isdigit()]
             res = [int(p) for p in parts if p.isdigit()]
             return res if res else [default_val]
-            
-        usd_ids = _parse(meta.get("valid_pricelists_usd"), int(os.environ.get("ODOO_PRICELIST_USD", "4")))
-        ves_ids = _parse(meta.get("valid_pricelists_ves"), int(os.environ.get("ODOO_PRICELIST_BCV", "5")))
+
+        usd_ids = _parse(
+            meta.get("valid_pricelists_usd"), int(os.environ.get("ODOO_PRICELIST_USD", "4"))
+        )
+        ves_ids = _parse(
+            meta.get("valid_pricelists_ves"), int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+        )
         return usd_ids, ves_ids
     except Exception as e:
         logger.warning("Error reading pricelists from _Meta: %s", e)
-        return [int(os.environ.get("ODOO_PRICELIST_USD", "4"))], [int(os.environ.get("ODOO_PRICELIST_BCV", "5"))]
+        return [int(os.environ.get("ODOO_PRICELIST_USD", "4"))], [
+            int(os.environ.get("ODOO_PRICELIST_BCV", "5"))
+        ]
 
 
 def resolve_effective_pricelist_price(
     product_tmpl_id: int,
     order_date: date,
     candidate_pricelist_ids: list[int],
-    pricelist_items: list[dict]
+    pricelist_items: list[dict],
 ) -> Decimal | None:
     if not candidate_pricelist_ids or not pricelist_items:
         return None
     matched = []
     for r in pricelist_items:
-        pl_id = r["pricelist_id"][0] if isinstance(r["pricelist_id"], (list, tuple)) else r["pricelist_id"]
+        pl_id = (
+            r["pricelist_id"][0]
+            if isinstance(r["pricelist_id"], (list, tuple))
+            else r["pricelist_id"]
+        )
         if candidate_pricelist_ids and pl_id not in candidate_pricelist_ids:
             continue
-            
+
         pt_raw = r.get("product_tmpl_id")
         pt_id = pt_raw[0] if isinstance(pt_raw, (list, tuple)) else pt_raw
         if pt_id != product_tmpl_id:
             continue
-            
+
         d_start_str = r.get("date_start")
         d_end_str = r.get("date_end")
-        
+
         d_start = datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
         d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
-        
+
         if d_start and order_date < d_start:
             continue
         if d_end and order_date > d_end:
             continue
-            
+
         price = Decimal(str(r.get("fixed_price") or "0"))
         matched.append((d_start or date.min, price))
-        
+
     if matched:
         matched.sort(key=lambda x: x[0], reverse=True)
         return matched[0][1]
-        
+
     return None
 
 
@@ -228,16 +248,19 @@ def extract_product_tmpl_id(prod_raw: Any) -> int | None:
         if prod_raw.startswith("["):
             try:
                 import json
+
                 parsed = json.loads(prod_raw.replace("'", '"'))
                 return int(parsed[0])
             except Exception:
                 import re
-                m = re.search(r'\d+', prod_raw)
+
+                m = re.search(r"\d+", prod_raw)
                 if m:
                     return int(m.group())
         elif prod_raw.isdigit():
             return int(prod_raw)
     return None
+
 
 class RecompraRequest(BaseModel):
     marca: str = "GLOBAL OIL"
@@ -254,6 +277,7 @@ class RecompraRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+
 class ProductoPromoRequest(BaseModel):
     productos: str = "*"
     marca: str = "*"
@@ -269,10 +293,11 @@ class ProductoPromoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+
 class DiferencialCambiarioRequest(BaseModel):
     nombre: str
     tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
-    tipo_calculo: str      # 'fijo' | 'variable'
+    tipo_calculo: str  # 'fijo' | 'variable'
     porcentaje_fijo: float = 0.35
     marca: str = "*"
     categoria: str = "*"
@@ -285,10 +310,12 @@ class DiferencialCambiarioRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
 
+
 class ToggleDescuentoRequest(BaseModel):
     tabla: str
     regla_id: str
     activo: bool
+
 
 class DescuentoVolumenRequest(BaseModel):
     marca: str
@@ -301,13 +328,19 @@ class DescuentoVolumenRequest(BaseModel):
     vigencia_hasta: str | None = None
     listas_aplicables: str = "*"
 
+
 _repo_cache: SheetsRepository | None = None
+
 
 def get_repo() -> SheetsRepository:
     global _repo_cache
     if _repo_cache is None:
         config = AppConfig.from_env()
-        print(f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(config.sheets.spreadsheet_id)}, repr={repr(config.sheets.spreadsheet_id)}", file=sys.stderr)
+        _sid = config.sheets.spreadsheet_id
+        print(
+            f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(_sid)}, repr={_sid!r}",
+            file=sys.stderr,
+        )
         if os.environ.get("GOOGLE_TOKEN_JSON"):
             gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
         else:
@@ -317,16 +350,17 @@ def get_repo() -> SheetsRepository:
         _repo_cache = SheetsRepository(gateway)
     return _repo_cache
 
+
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     if rows is None:
         repo = get_repo()
         rows = repo._g.read_rows("SerieTasas")
     if not rows:
         return Decimal("36.5"), Decimal("38.0")
-    
+
     closest_row = None
     min_diff = None
-    
+
     for r in rows:
         ts_str = r.get("timestamp")
         if not ts_str:
@@ -336,23 +370,24 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
             if "." in ts_str:
                 ts_str = ts_str.split(".")[0]
             row_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-        except:
+        except Exception:
             try:
                 row_dt = datetime.strptime(ts_str[:16], "%Y-%m-%d %H:%M")
-            except:
+            except Exception:
                 continue
-                
+
         diff = abs((dt - row_dt).total_seconds())
         if min_diff is None or diff < min_diff:
             min_diff = diff
             closest_row = r
-            
+
     if closest_row:
-        return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(closest_row.get("tasa_binance"))
-        
+        return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
+            closest_row.get("tasa_binance")
+        )
+
     return Decimal("36.5"), Decimal("38.0")
 
-import traceback
 
 async def run_sync_in_background():
     """Daemon de sincronización incremental Odoo → Sheets.
@@ -369,7 +404,7 @@ async def run_sync_in_background():
             reader = OdooXmlRpcReader(config.odoo)
 
             if _first_run:
-                print("FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas perdidas...")
+                print("FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas.")
                 since_override = datetime.now() - timedelta(days=7)
                 clientes = reader.changed_clientes(since_override)
                 ordenes = reader.changed_ordenes(since_override)
@@ -383,7 +418,7 @@ async def run_sync_in_background():
                 total_first = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
-                print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas actualizadas (7-day lookback).")
+                print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas.")
                 _first_run = False
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
@@ -398,14 +433,16 @@ async def run_sync_in_background():
             traceback.print_exc(file=sys.stderr)
         await asyncio.sleep(300)
 
+
 @app.api_route("/api/sync/manual", methods=["GET", "POST"])
 async def api_sync_manual(lookback_days: int = 7):
     try:
         config = AppConfig.from_env()
         repo = get_repo()
         reader = OdooXmlRpcReader(config.odoo)
-        
+
         from datetime import timedelta
+
         since = repo.get_last_sync()
         if since and lookback_days > 0:
             override_since = datetime.now() - timedelta(days=lookback_days)
@@ -427,10 +464,15 @@ async def api_sync_manual(lookback_days: int = 7):
         _REPORTE_SALDOS_CACHE["data"] = None
         _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
 
-        return {"status": "ok", "total_actualizados": total, "mensaje": f"Sincronización completada. {total} registros actualizados."}
+        return {
+            "status": "ok",
+            "total_actualizados": total,
+            "mensaje": f"Sincronización completada. {total} registros actualizados.",
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 async def run_scraper_in_background():
     # Esperar 30 segundos tras el arranque inicial antes del primer scrape de tasas
@@ -438,10 +480,10 @@ async def run_scraper_in_background():
     while True:
         try:
             print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
+            from cxc.alerts import build_alerter
             from cxc.scraper.bcv import OdooBcvClient
             from cxc.scraper.binance import BinanceClient
             from cxc.scraper.rates_scraper import RatesScraper
-            from cxc.alerts import build_alerter
 
             config = AppConfig.from_env()
             repo = get_repo()
@@ -452,16 +494,21 @@ async def run_scraper_in_background():
                 build_alerter(config.alert),
                 config.scraper_policy,
             )
-            from datetime import timezone, timedelta
-            now_utc = datetime.now(timezone.utc)
+            from datetime import timedelta
+
+            now_utc = datetime.now(UTC)
             now_caracas = (now_utc - timedelta(hours=4)).replace(tzinfo=None)
             fila = scraper.run(now_caracas)
-            print(f"FastAPI Daemon: Tasas de cambio actualizadas. BCV: {fila.tasa_bcv}, Binance: {fila.tasa_binance}")
+            print(
+                f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
+                f"Binance={fila.tasa_binance}"
+            )
         except Exception as e:
             print(f"Error en daemon de scraping de tasas: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
         # Repetir cada 1 hora (3600 segundos)
         await asyncio.sleep(3600)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -469,28 +516,24 @@ async def startup_event():
     asyncio.create_task(run_sync_in_background())
     asyncio.create_task(run_scraper_in_background())
 
-from fastapi import Cookie, Request, Response, Depends
-from fastapi.responses import RedirectResponse
-from cxc.auth import (
-    ROLES_PERMISOS, NOMBRES_ROLES, hash_password, verificar_password,
-    verificar_usuario_odoo_activo, obtener_usuarios_plataforma,
-    buscar_usuario_plataforma, registrar_o_actualizar_usuario,
-    autenticar_usuario, crear_session_token, verificar_session_token
-)
 
 SECRET_KEY = os.environ.get("SESSION_SECRET", "lubrikca_cxc_secret_key_2026")
+
 
 class LoginRequest(BaseModel):
     email: str
     password: str
 
+
 class RegisterPasswordRequest(BaseModel):
     email: str
     password: str
 
+
 class ResetPasswordRequest(BaseModel):
     email: str
     password: str
+
 
 class CambiarRolRequest(BaseModel):
     email: str
@@ -514,7 +557,7 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
             "nombre": u_row.get("nombre_odoo") or email,
             "rol": rol,
             "nombre_rol": NOMBRES_ROLES.get(rol, "Ventas"),
-            "permisos": ROLES_PERMISOS.get(rol, ["reporte"])
+            "permisos": ROLES_PERMISOS.get(rol, ["reporte"]),
         }
     except Exception as e:
         logger.warning("Error buscando usuario de sesión %s: %s", email, e)
@@ -522,6 +565,7 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
 
 
 # --- MULTI-PAGE & AUTH ROUTES ---
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(cxc_session: str | None = Cookie(default=None)):
@@ -531,6 +575,7 @@ async def read_root(cxc_session: str | None = Cookie(default=None)):
     first_perm = user["permisos"][0] if user["permisos"] else "reporte"
     return RedirectResponse(url=f"/{first_perm}")
 
+
 @app.get("/login", response_class=HTMLResponse)
 async def serve_login(cxc_session: str | None = Cookie(default=None)):
     user = get_current_user_from_cookie(cxc_session)
@@ -539,9 +584,12 @@ async def serve_login(cxc_session: str | None = Cookie(default=None)):
         return RedirectResponse(url=f"/{first_perm}")
     login_path = os.path.join(static_dir, "login.html")
     if not os.path.exists(login_path):
-        return HTMLResponse("<html><body><h1>Error</h1><p>Archivo static/login.html no encontrado</p></body></html>")
-    with open(login_path, 'r', encoding='utf-8') as f:
+        return HTMLResponse(
+            "<html><body><h1>Error</h1><p>Archivo static/login.html no encontrado</p></body></html>"
+        )
+    with open(login_path, encoding="utf-8") as f:
         return f.read()
+
 
 @app.get("/logout")
 async def handle_logout_get(response: Response):
@@ -549,11 +597,16 @@ async def handle_logout_get(response: Response):
     res.delete_cookie(key="cxc_session")
     return res
 
+
 @app.post("/api/auth/logout")
 async def handle_logout_post():
-    res = Response(content=json.dumps({"status": "success", "message": "Sesión cerrada"}), media_type="application/json")
+    res = Response(
+        content=json.dumps({"status": "success", "message": "Sesión cerrada"}),
+        media_type="application/json",
+    )
     res.delete_cookie(key="cxc_session")
     return res
+
 
 def render_page_or_login(page_name: str, cxc_session: str | None):
     user = get_current_user_from_cookie(cxc_session)
@@ -562,42 +615,53 @@ def render_page_or_login(page_name: str, cxc_session: str | None):
     if page_name not in user["permisos"] and user["rol"] != "admin":
         first_perm = user["permisos"][0] if user["permisos"] else "reporte"
         return RedirectResponse(url=f"/{first_perm}")
-    
+
     index_path = os.path.join(static_dir, "index.html")
     if not os.path.exists(index_path):
-        return HTMLResponse("<html><body><h1>Servidor Iniciado</h1><p>Frontend no encontrado</p></body></html>")
-    with open(index_path, 'r', encoding='utf-8') as f:
+        return HTMLResponse(
+            "<html><body><h1>Servidor Iniciado</h1><p>Frontend no encontrado</p></body></html>"
+        )
+    with open(index_path, encoding="utf-8") as f:
         return f.read()
+
 
 @app.get("/facturacion", response_class=HTMLResponse)
 async def page_facturacion(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("facturacion", cxc_session)
 
+
 @app.get("/cobranza", response_class=HTMLResponse)
 async def page_cobranza(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("cobranza", cxc_session)
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("dashboard", cxc_session)
 
+
 @app.get("/conciliaciones", response_class=HTMLResponse)
 async def page_conciliaciones(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("conciliaciones", cxc_session)
+
 
 @app.get("/reporte", response_class=HTMLResponse)
 async def page_reporte(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("reporte", cxc_session)
 
+
 @app.get("/auditoria", response_class=HTMLResponse)
 async def page_auditoria(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("auditoria", cxc_session)
+
 
 @app.get("/configuracion", response_class=HTMLResponse)
 async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("configuracion", cxc_session)
 
+
 # --- AUTH & ADMIN API ENDPOINTS ---
+
 
 @app.post("/api/auth/login")
 async def api_auth_login(req: LoginRequest):
@@ -605,25 +669,30 @@ async def api_auth_login(req: LoginRequest):
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
-        
+
         user_info, err_msg = autenticar_usuario(execute, repo, req.email, req.password)
         if not user_info:
             raise HTTPException(status_code=401, detail=err_msg or "Credenciales inválidas")
-        
+
         token = crear_session_token(req.email, SECRET_KEY)
         first_perm = user_info["permisos"][0] if user_info["permisos"] else "reporte"
-        
+
         res = Response(
-            content=json.dumps({"status": "success", "user": user_info, "redirect": f"/{first_perm}"}),
-            media_type="application/json"
+            content=json.dumps(
+                {"status": "success", "user": user_info, "redirect": f"/{first_perm}"}
+            ),
+            media_type="application/json",
         )
-        res.set_cookie(key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+        res.set_cookie(
+            key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax"
+        )
         return res
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/auth/register-password")
 async def api_auth_register_password(req: RegisterPasswordRequest):
@@ -631,35 +700,47 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
-        
+
         odoo_user = verificar_usuario_odoo_activo(execute, req.email)
         if not odoo_user:
-            raise HTTPException(status_code=400, detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.")
-        
+            raise HTTPException(
+                status_code=400,
+                detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.",
+            )
+
         u_row = registrar_o_actualizar_usuario(
             repo,
             email=req.email,
             password=req.password,
             nombre_odoo=odoo_user.get("name") or "",
-            activo=True
+            activo=True,
         )
-        
+
         token = crear_session_token(req.email, SECRET_KEY)
         rol = u_row.get("rol", "ventas")
         permisos = ROLES_PERMISOS.get(rol, ["reporte"])
         first_perm = permisos[0] if permisos else "reporte"
-        
+
         res = Response(
-            content=json.dumps({"status": "success", "message": "Contraseña creada exitosamente", "redirect": f"/{first_perm}"}),
-            media_type="application/json"
+            content=json.dumps(
+                {
+                    "status": "success",
+                    "message": "Contraseña creada exitosamente",
+                    "redirect": f"/{first_perm}",
+                }
+            ),
+            media_type="application/json",
         )
-        res.set_cookie(key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+        res.set_cookie(
+            key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax"
+        )
         return res
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/auth/reset-password")
 async def api_auth_reset_password(req: ResetPasswordRequest):
@@ -667,24 +748,28 @@ async def api_auth_reset_password(req: ResetPasswordRequest):
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
-        
+
         odoo_user = verificar_usuario_odoo_activo(execute, req.email)
         if not odoo_user:
-            raise HTTPException(status_code=400, detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.")
-        
+            raise HTTPException(
+                status_code=400,
+                detail="El correo ingresado no pertenece a un usuario activo en Odoo ERP.",
+            )
+
         registrar_o_actualizar_usuario(
             repo,
             email=req.email,
             password=req.password,
             nombre_odoo=odoo_user.get("name") or "",
-            activo=True
+            activo=True,
         )
         return {"status": "success", "message": "Contraseña restablecida exitosamente."}
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/auth/me")
 async def api_auth_me(cxc_session: str | None = Cookie(default=None)):
@@ -693,30 +778,40 @@ async def api_auth_me(cxc_session: str | None = Cookie(default=None)):
         raise HTTPException(status_code=401, detail="No autenticado")
     return user
 
+
 @app.get("/api/admin/usuarios")
 async def api_admin_list_usuarios(cxc_session: str | None = Cookie(default=None)):
     user = get_current_user_from_cookie(cxc_session)
     if not user or user["rol"] != "admin":
-        raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol Administrador")
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
     repo = get_repo()
     rows = obtener_usuarios_plataforma(repo)
     clean_rows = []
     for r in rows:
-        clean_rows.append({
-            "email": r.get("email"),
-            "nombre_odoo": r.get("nombre_odoo"),
-            "rol": r.get("rol", "ventas"),
-            "nombre_rol": NOMBRES_ROLES.get(r.get("rol", "ventas"), "Ventas"),
-            "activo": r.get("activo") == "TRUE",
-            "fecha_registro": r.get("fecha_registro")
-        })
+        clean_rows.append(
+            {
+                "email": r.get("email"),
+                "nombre_odoo": r.get("nombre_odoo"),
+                "rol": r.get("rol", "ventas"),
+                "nombre_rol": NOMBRES_ROLES.get(r.get("rol", "ventas"), "Ventas"),
+                "activo": r.get("activo") == "TRUE",
+                "fecha_registro": r.get("fecha_registro"),
+            }
+        )
     return clean_rows
 
+
 @app.post("/api/admin/cambiar-rol")
-async def api_admin_cambiar_rol(req: CambiarRolRequest, cxc_session: str | None = Cookie(default=None)):
+async def api_admin_cambiar_rol(
+    req: CambiarRolRequest, cxc_session: str | None = Cookie(default=None)
+):
     user = get_current_user_from_cookie(cxc_session)
     if not user or user["rol"] != "admin":
-        raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol Administrador")
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
     if req.nuevo_rol not in ROLES_PERMISOS:
         raise HTTPException(status_code=400, detail=f"Rol '{req.nuevo_rol}' no es válido.")
     repo = get_repo()
@@ -725,7 +820,11 @@ async def api_admin_cambiar_rol(req: CambiarRolRequest, cxc_session: str | None 
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
     u_row["rol"] = req.nuevo_rol
     repo._g.upsert_row("UsuariosPlataforma", "email", u_row)
-    return {"status": "success", "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}."}
+    return {
+        "status": "success",
+        "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}.",
+    }
+
 
 @app.get("/api/resumen")
 async def get_resumen():
@@ -734,14 +833,14 @@ async def get_resumen():
         # 1. Total por cobrar (Orders not invoiced)
         ordenes = repo.all_ordenes()
         total_por_cobrar = sum(o.monto_total for o in ordenes if not o.facturada)
-        
+
         # 2. Pagos sin asignar (convert VES payments to USD at BCV rate)
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         linked_pago_ids = {v.pago_id for v in vincs}
         tasas_rows = repo._g.read_rows("SerieTasas")
         tasas_map = {r.get("fecha"): parse_decimal_safe(r.get("tasa_bcv", "0")) for r in tasas_rows}
-        
+
         pagos_pendientes_monto = Decimal("0")
         for p in pagos:
             pid = str(p.get("pago_id", ""))
@@ -750,34 +849,32 @@ async def get_resumen():
                     monto = parse_decimal_safe(p.get("monto", "0"))
                     moneda = str(p.get("moneda", "USD")).upper().strip()
                     fecha_pago = str(p.get("fecha_pago", ""))[:10]
-                    
+
                     if "VES" in moneda or "BS" in moneda or "BOLIVAR" in moneda:
                         tasa = parse_decimal_safe(p.get("tasa_bcv", "0"))
                         if tasa <= Decimal("0"):
                             tasa = tasas_map.get(fecha_pago, Decimal("0"))
-                        if tasa > Decimal("0"):
-                            monto_usd = monto / tasa
-                        else:
-                            monto_usd = Decimal("0")
+                        monto_usd = monto / tasa if tasa > Decimal("0") else Decimal("0")
                     else:
                         monto_usd = monto
-                        
+
                     pagos_pendientes_monto += monto_usd
                 except Exception:
                     pass
-                    
+
         # 3. Alertas rojas in Conciliación
         concs = repo.all_conciliaciones()
         alertas_rojas = sum(1 for c in concs if c.resultado.value == "rojo")
-        
+
         return {
             "total_por_cobrar_usd": float(total_por_cobrar),
             "pagos_sin_asignar_usd": float(pagos_pendientes_monto),
-            "alertas_reconciliacion": alertas_rojas
+            "alertas_reconciliacion": alertas_rojas,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/pagos-pendientes")
 async def get_pagos_pendientes():
@@ -786,27 +883,28 @@ async def get_pagos_pendientes():
         # Read raw rows to preserve client names/emails
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
-        
+
         # Read SerieTasas once to avoid N+1 Sheets API quota errors
         tasas_rows = repo._g.read_rows("SerieTasas")
-        
+
         # Load all clients once to avoid N+1 queries to Google Sheets API
         clientes_rows = repo._g.read_rows("Clientes")
         from cxc.sheets import serde
+
         clientes_map = {}
         for r in clientes_rows:
             cid = str(r.get("cliente_id", ""))
             if cid:
-                try:
+                with contextlib.suppress(BaseException):
                     clientes_map[cid] = serde.cliente_from_row(r)
-                except:
-                    pass
-        
+
         # Gather amounts linked per pago_id
         linked_amounts = {}
         for v in vincs:
-            linked_amounts[v.pago_id] = linked_amounts.get(v.pago_id, Decimal("0")) + v.monto_aplicado
-            
+            linked_amounts[v.pago_id] = (
+                linked_amounts.get(v.pago_id, Decimal("0")) + v.monto_aplicado
+            )
+
         pendientes = []
         for p in pagos:
             pago_id = str(p.get("pago_id", ""))
@@ -814,55 +912,60 @@ async def get_pagos_pendientes():
                 continue
             monto_original = parse_decimal_safe(p.get("monto", "0"))
             monto_vinculado = linked_amounts.get(pago_id, Decimal("0"))
-            
+
             saldo_pendiente = monto_original - monto_vinculado
             if saldo_pendiente > Decimal("0.05"):
                 # Retrieve client name from cache map
                 cliente_id = str(p.get("cliente_id", ""))
                 cliente = clientes_map.get(cliente_id)
                 cliente_nombre = cliente.nombre if cliente else f"Cliente ID: {cliente_id}"
-                
+
                 moneda = p.get("moneda", "USD")
                 fecha_str = p.get("fecha_pago", "")
-                
+
                 dt_pago = datetime.now()
                 if fecha_str:
                     try:
                         if len(fecha_str) == 10:
-                            dt_pago = datetime.strptime(f"{fecha_str} 12:00:00", "%Y-%m-%d %H:%M:%S")
+                            dt_pago = datetime.strptime(
+                                f"{fecha_str} 12:00:00", "%Y-%m-%d %H:%M:%S"
+                            )
                         else:
                             fs = fecha_str.replace("T", " ")
                             if "." in fs:
                                 fs = fs.split(".")[0]
                             dt_pago = datetime.strptime(fs, "%Y-%m-%d %H:%M:%S")
-                    except:
+                    except Exception:
                         pass
-                
+
                 bcv, binance = get_rate_for_datetime(dt_pago, tasas_rows)
-                
+
                 if moneda == "VES":
                     equiv_usd_bcv = saldo_pendiente / bcv
                     equiv_usd_binance = saldo_pendiente / binance
                 else:
                     equiv_usd_bcv = saldo_pendiente
                     equiv_usd_binance = saldo_pendiente
-                
-                pendientes.append({
-                    "pago_id": pago_id,
-                    "cliente_id": cliente_id,
-                    "cliente_nombre": cliente_nombre,
-                    "monto": float(saldo_pendiente),
-                    "monto_original": float(monto_original),
-                    "moneda": moneda,
-                    "fecha": fecha_str,
-                    "metodo_pago": p.get("metodo_pago", ""),
-                    "equiv_usd_bcv": float(equiv_usd_bcv),
-                    "equiv_usd_binance": float(equiv_usd_binance)
-                })
+
+                pendientes.append(
+                    {
+                        "pago_id": pago_id,
+                        "cliente_id": cliente_id,
+                        "cliente_nombre": cliente_nombre,
+                        "monto": float(saldo_pendiente),
+                        "monto_original": float(monto_original),
+                        "moneda": moneda,
+                        "fecha": fecha_str,
+                        "metodo_pago": p.get("metodo_pago", ""),
+                        "equiv_usd_bcv": float(equiv_usd_bcv),
+                        "equiv_usd_binance": float(equiv_usd_binance),
+                    }
+                )
         return pendientes
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/ordenes-pendientes/{cliente_id}")
 async def get_ordenes_pendientes(cliente_id: str):
@@ -870,56 +973,55 @@ async def get_ordenes_pendientes(cliente_id: str):
         repo = get_repo()
         ordenes = repo.all_ordenes()
         vincs = repo.all_vinculaciones()
-        
+
         # Calculate sum of linked payment amounts per so_id
         linked_by_so = {}
         for v in vincs:
             # We assume linked amount is matching currency of the order (USD)
             # or in terms of the applied amount
             linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
-            
+
         # Filter outstanding orders for this client
         pendientes = []
         for o in ordenes:
             if o.cliente_id == cliente_id and not o.facturada:
                 pagado = linked_by_so.get(o.so_id, Decimal("0"))
                 saldo = o.monto_total - pagado
-                
+
                 # Show only orders that still have a outstanding balance (> $0.05)
                 if saldo > Decimal("0.05"):
-                    pendientes.append({
-                        "so_id": o.so_id,
-                        "fecha": o.fecha.isoformat(),
-                        "monto_total": float(o.monto_total),
-                        "saldo_pendiente": float(saldo),
-                        "vendedor": o.vendedor_email
-                    })
+                    pendientes.append(
+                        {
+                            "so_id": o.so_id,
+                            "fecha": o.fecha.isoformat(),
+                            "monto_total": float(o.monto_total),
+                            "saldo_pendiente": float(saldo),
+                            "vendedor": o.vendedor_email,
+                        }
+                    )
         return pendientes
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/vincular")
 async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTasks):
     try:
         repo = get_repo()
-        
-        # Load Odoo connection to get exchange rates
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
-        
-        # Fetch latest exchange rates from SerieTasas or Odoo
+
+        # Fetch latest exchange rates from SerieTasas
         last_tasa = repo.last_serie_tasa()
         tasa_bcv = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
         tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
-        
+
         # Fetch payment to get currency
         pago = repo.get_pago(req.pago_id)
         if not pago:
             raise HTTPException(status_code=404, detail="Pago no encontrado.")
-            
+
         monto_dec = Decimal(str(req.monto_aplicado))
-        
+
         # Calculate equivalents
         if pago.moneda == "USD":
             equiv_usd_bcv = monto_dec
@@ -950,18 +1052,22 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             timestamp_registro=datetime.now(),
             estado=EstadoVinculacion.PENDIENTE,
             moneda_abono=Moneda(pago.moneda),
-            tipo_tasa_abono=TipoTasa.BCV
+            tipo_tasa_abono=TipoTasa.BCV,
         )
-        
+
         # Write vinculacion row
         repo.update_vinculacion(vinc)
-        
+
         # Trigger background run of Engine and Reconciler to refresh totals in Sheets
         background_tasks.add_task(recalculate_all, req.so_id)
-        
-        return {"status": "success", "message": "Vinculación guardada. Recálculo en segundo plano iniciado."}
+
+        return {
+            "status": "success",
+            "message": "Vinculación guardada. Recálculo en segundo plano iniciado.",
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 def recalculate_all(so_id: str):
     try:
@@ -984,10 +1090,10 @@ def recalculate_all(so_id: str):
         }
         resolver = OdooPriceResolver(execute, pricelist_ids)
         runner = EngineRunner(repo, resolver, config.engine)
-        
+
         # Calculate this SO
         runner.run_orden(so_id, date.today())
-        
+
         # Run Reconciler to sync semaphores
         facturas = OdooFacturasReader(execute)
         Reconciler(repo, facturas, config.reconciliation).run()
@@ -995,10 +1101,8 @@ def recalculate_all(so_id: str):
     except Exception as e:
         print(f"Error al recalcular {so_id}: {e}", file=sys.stderr)
 
-_REPORTE_SALDOS_CACHE: dict[str, Any] = {
-    "data": None,
-    "timestamp": 0.0
-}
+
+_REPORTE_SALDOS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _REPORTE_CACHE_TTL = 0.0
 
 
@@ -1027,12 +1131,12 @@ async def get_auditoria_descuentos(
         return {"items": rows, "total": len(rows)}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class AuditoriaEstadoRequest(BaseModel):
     audit_id: str
-    estado: str   # 'revisado' | 'aprobado' | 'rechazado'
+    estado: str  # 'revisado' | 'aprobado' | 'rechazado'
 
 
 @app.patch("/api/auditoria-descuentos/{audit_id}")
@@ -1060,28 +1164,31 @@ async def patch_auditoria_estado(
         return {"status": "ok", "audit_id": audit_id, "nuevo_estado": req.estado}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
     try:
         import time
+
         now_ts = time.time()
-        if not refresh and _REPORTE_SALDOS_CACHE["data"] is not None:
-            if now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL:
-                return _REPORTE_SALDOS_CACHE["data"]
+        if (
+            not refresh
+            and _REPORTE_SALDOS_CACHE["data"] is not None
+            and now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL
+        ):
+            return _REPORTE_SALDOS_CACHE["data"]
 
         repo = get_repo()
         ordenes = repo.all_ordenes()
         vincs = repo.all_vinculaciones()
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
-        
+
         # Load clients once
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
-        
+
         execute = None
         config = AppConfig.from_env()
         try:
@@ -1099,21 +1206,40 @@ async def get_reporte_saldos(refresh: bool = False):
                     "sale.order",
                     "search_read",
                     [[["name", "in", so_ids_names]]],
-                    {"fields": ["name", "user_id", "payment_term_id", "date_order", "state", "delivery_status", "invoice_status", "picking_ids"]}
+                    {
+                        "fields": [
+                            "name",
+                            "user_id",
+                            "payment_term_id",
+                            "date_order",
+                            "state",
+                            "delivery_status",
+                            "invoice_status",
+                            "picking_ids",
+                        ]
+                    },
                 )
                 for s in so_records:
                     s_name = s.get("name")
                     u_info = s.get("user_id")
                     t_info = s.get("payment_term_id")
-                    vendedor_name = u_info[1] if isinstance(u_info, (list, tuple)) and len(u_info) > 1 else "Sin Vendedor"
-                    term_name = t_info[1] if isinstance(t_info, (list, tuple)) and len(t_info) > 1 else "Contado"
+                    vendedor_name = (
+                        u_info[1]
+                        if isinstance(u_info, (list, tuple)) and len(u_info) > 1
+                        else "Sin Vendedor"
+                    )
+                    term_name = (
+                        t_info[1]
+                        if isinstance(t_info, (list, tuple)) and len(t_info) > 1
+                        else "Contado"
+                    )
                     so_odoo_data[s_name] = {
                         "vendedor": vendedor_name,
                         "payment_term_name": term_name,
                         "date_order": s.get("date_order"),
                         "state": s.get("state"),
                         "delivery_status": s.get("delivery_status"),
-                        "invoice_status": s.get("invoice_status")
+                        "invoice_status": s.get("invoice_status"),
                     }
                     p_ids = s.get("picking_ids")
                     if p_ids and isinstance(p_ids, (list, tuple)):
@@ -1136,7 +1262,17 @@ async def get_reporte_saldos(refresh: bool = False):
                     "stock.picking",
                     "search_read",
                     [domain_pickings],
-                    {"fields": ["id", "origin", "sale_id", "date_done", "scheduled_date", "picking_type_code", "return_id"]}
+                    {
+                        "fields": [
+                            "id",
+                            "origin",
+                            "sale_id",
+                            "date_done",
+                            "scheduled_date",
+                            "picking_type_code",
+                            "return_id",
+                        ]
+                    },
                 )
                 p_by_id = {p["id"]: p for p in pickings}
                 for p in pickings:
@@ -1150,7 +1286,9 @@ async def get_reporte_saldos(refresh: bool = False):
                                 so_name = name
                                 break
                     if not so_name and p.get("return_id"):
-                        ret_parent_id = p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                        ret_parent_id = (
+                            p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                        )
                         if ret_parent_id and ret_parent_id in p_by_id:
                             parent_p = p_by_id[ret_parent_id]
                             ps_info = parent_p.get("sale_id")
@@ -1158,7 +1296,12 @@ async def get_reporte_saldos(refresh: bool = False):
                                 so_name = ps_info[1]
 
                     p_code = str(p.get("picking_type_code") or "")
-                    is_return = bool(p.get("return_id")) or (p_code == "incoming") or ("Devolución" in str(p.get("origin") or "")) or ("Return" in str(p.get("origin") or ""))
+                    is_return = (
+                        bool(p.get("return_id"))
+                        or (p_code == "incoming")
+                        or ("Devolución" in str(p.get("origin") or ""))
+                        or ("Return" in str(p.get("origin") or ""))
+                    )
 
                     if so_name:
                         if is_return:
@@ -1167,7 +1310,10 @@ async def get_reporte_saldos(refresh: bool = False):
                             dt_done = p.get("date_done") or p.get("scheduled_date")
                             if dt_done:
                                 dt_str = str(dt_done).split(" ")[0]
-                                if so_name not in picking_delivery_map or dt_str > picking_delivery_map[so_name]:
+                                if (
+                                    so_name not in picking_delivery_map
+                                    or dt_str > picking_delivery_map[so_name]
+                                ):
                                     picking_delivery_map[so_name] = dt_str
             except Exception as e_pic:
                 logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
@@ -1182,7 +1328,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     "ultimo_abono": None,
                     "tiene_vinc_manual": True,
                 }
-            
+
             # BCV equivalent
             eq_bcv = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
             pagos_by_so[v.so_id]["abono_bcv"] += eq_bcv
@@ -1206,12 +1352,24 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Load UI configured pricelist IDs (USD & VES) from _Meta
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
-        rules_usd = execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "in", usd_ids], ["compute_price", "=", "fixed"]]],
-            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price", "date_start", "date_end"]}
-        ) if execute else []
+        rules_usd = (
+            execute(
+                "product.pricelist.item",
+                "search_read",
+                [[["pricelist_id", "in", usd_ids], ["compute_price", "=", "fixed"]]],
+                {
+                    "fields": [
+                        "pricelist_id",
+                        "product_tmpl_id",
+                        "fixed_price",
+                        "date_start",
+                        "date_end",
+                    ]
+                },
+            )
+            if execute
+            else []
+        )
 
         all_lines = repo._g.read_rows("LineasOrden")
         lines_by_so = {}
@@ -1230,13 +1388,14 @@ async def get_reporte_saldos(refresh: bool = False):
             if "immediate" in t_low or "contado" in t_low:
                 return 0
             import re
-            m = re.search(r'(\d+)\s*(dias|días|days|day|día)', t_low)
+
+            m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
             if m:
                 return int(m.group(1))
             return 0
 
         # Read discount rules for theoretical evaluation when order is not in BandejaFacturacion
-        descuentos_mc = repo.descuentos_marca_categoria()
+        repo.descuentos_marca_categoria()
 
         # Read rates series to convert VES invoice residual to USD
         tasas_rows = repo._g.read_rows("SerieTasas")
@@ -1245,17 +1404,15 @@ async def get_reporte_saldos(refresh: bool = False):
             ts = str(r.get("timestamp", ""))[:10]
             tbcv = r.get("tasa_bcv")
             if ts and tbcv:
-                try:
+                with contextlib.suppress(Exception):
                     rates_map[ts] = float(tbcv)
-                except Exception:
-                    pass
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
         # Fetch posted invoices & credit notes from Odoo in batch for all orders
         so_ids = [o.so_id for o in ordenes]
-        invoices_by_so: dict[str, list[dict]] = {}   # out_invoice only
-        ncs_by_so: dict[str, list[dict]] = {}        # out_refund (notas de crédito)
-        invoice_ids_all: list[int] = []               # for fetching move lines
+        invoices_by_so: dict[str, list[dict]] = {}  # out_invoice only
+        ncs_by_so: dict[str, list[dict]] = {}  # out_refund (notas de crédito)
+        invoice_ids_all: list[int] = []  # for fetching move lines
         inv_name_to_so: dict[str, str] = {}
         inv_id_to_so: dict[int, str] = {}
         # SOs cuya(s) factura(s) Odoo ya estan "Pagada" (paid) o "En proceso de
@@ -1267,9 +1424,26 @@ async def get_reporte_saldos(refresh: bool = False):
                 invoices = execute(
                     "account.move",
                     "search_read",
-                    [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "=", "out_invoice"]]],
-                    {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
-                                "currency_id", "invoice_date", "move_type", "payment_state"]}
+                    [
+                        [
+                            ["invoice_origin", "in", so_ids],
+                            ["state", "=", "posted"],
+                            ["move_type", "=", "out_invoice"],
+                        ]
+                    ],
+                    {
+                        "fields": [
+                            "id",
+                            "name",
+                            "invoice_origin",
+                            "amount_total",
+                            "amount_residual",
+                            "currency_id",
+                            "invoice_date",
+                            "move_type",
+                            "payment_state",
+                        ]
+                    },
                 )
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
@@ -1282,7 +1456,8 @@ async def get_reporte_saldos(refresh: bool = False):
                     if inv_name:
                         inv_name_to_so[inv_name] = so
 
-                # 2. Fetch out_refund (Credit Notes) matching SO name, invoice name, or reversed_entry_id
+                # 2. Fetch out_refund (Credit Notes) matching SO name, invoice name, or
+                # reversed_entry_id
                 inv_names = list(inv_name_to_so.keys())
                 nc_domain = [["state", "=", "posted"], ["move_type", "=", "out_refund"]]
                 sub_domain = []
@@ -1306,8 +1481,21 @@ async def get_reporte_saldos(refresh: bool = False):
                         "account.move",
                         "search_read",
                         [full_nc_domain],
-                        {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
-                                    "currency_id", "invoice_date", "move_type", "payment_state", "reversed_entry_id", "ref"]}
+                        {
+                            "fields": [
+                                "id",
+                                "name",
+                                "invoice_origin",
+                                "amount_total",
+                                "amount_residual",
+                                "currency_id",
+                                "invoice_date",
+                                "move_type",
+                                "payment_state",
+                                "reversed_entry_id",
+                                "ref",
+                            ]
+                        },
                     )
                     for nc in ncs:
                         so = None
@@ -1349,18 +1537,34 @@ async def get_reporte_saldos(refresh: bool = False):
                 inv_lines = execute(
                     "account.move.line",
                     "search_read",
-                    [[
-                        ["move_id", "in", invoice_ids_all],
-                        ["display_type", "in", ["product", False]],
-                        "|",
-                        ["discount", ">", 0],
-                        "&", ["product_id.name", "ilike", "descuento"], ["price_subtotal", "<", 0],
-                    ]],
-                    {"fields": ["move_id", "name", "quantity", "price_unit", "discount", "price_subtotal", "currency_id"]}
+                    [
+                        [
+                            ["move_id", "in", invoice_ids_all],
+                            ["display_type", "in", ["product", False]],
+                            "|",
+                            ["discount", ">", 0],
+                            "&",
+                            ["product_id.name", "ilike", "descuento"],
+                            ["price_subtotal", "<", 0],
+                        ]
+                    ],
+                    {
+                        "fields": [
+                            "move_id",
+                            "name",
+                            "quantity",
+                            "price_unit",
+                            "discount",
+                            "price_subtotal",
+                            "currency_id",
+                        ]
+                    },
                 )
                 for il in inv_lines:
                     move_raw = il.get("move_id")
-                    move_id = move_raw[0] if isinstance(move_raw, (list, tuple)) else int(move_raw or 0)
+                    move_id = (
+                        move_raw[0] if isinstance(move_raw, (list, tuple)) else int(move_raw or 0)
+                    )
                     so_name = inv_id_to_so.get(move_id, "")
                     if not so_name:
                         continue
@@ -1374,9 +1578,15 @@ async def get_reporte_saldos(refresh: bool = False):
                         # Línea aparte de producto "Descuento" (price_subtotal negativo).
                         disc_monto = abs(float(il.get("price_subtotal") or 0))
                         new_frag = f"{str(il.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
-                    inv_line_discounts_by_so[so_name] = inv_line_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    inv_line_discounts_by_so[so_name] = (
+                        inv_line_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    )
                     detail_existing = inv_line_discount_detail_by_so.get(so_name, "")
-                    inv_line_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
+                    inv_line_discount_detail_by_so[so_name] = (
+                        (detail_existing + "; " + new_frag).lstrip("; ")
+                        if detail_existing
+                        else new_frag
+                    )
             except Exception as e_il:
                 logger.warning("Error al consultar account.move.line discounts: %s", e_il)
 
@@ -1389,17 +1599,34 @@ async def get_reporte_saldos(refresh: bool = False):
                 sol_lines = execute(
                     "sale.order.line",
                     "search_read",
-                    [[
-                        ["order_id.name", "in", so_ids_names],
-                        "|",
-                        ["discount", ">", 0],
-                        "&", ["product_id.name", "ilike", "descuento"], ["price_subtotal", "<", 0],
-                    ]],
-                    {"fields": ["order_id", "name", "product_uom_qty", "price_unit", "discount", "price_subtotal"]}
+                    [
+                        [
+                            ["order_id.name", "in", so_ids_names],
+                            "|",
+                            ["discount", ">", 0],
+                            "&",
+                            ["product_id.name", "ilike", "descuento"],
+                            ["price_subtotal", "<", 0],
+                        ]
+                    ],
+                    {
+                        "fields": [
+                            "order_id",
+                            "name",
+                            "product_uom_qty",
+                            "price_unit",
+                            "discount",
+                            "price_subtotal",
+                        ]
+                    },
                 )
                 for sol in sol_lines:
                     order_raw = sol.get("order_id")
-                    so_name = order_raw[1] if isinstance(order_raw, (list, tuple)) and len(order_raw) > 1 else str(order_raw or "")
+                    so_name = (
+                        order_raw[1]
+                        if isinstance(order_raw, (list, tuple)) and len(order_raw) > 1
+                        else str(order_raw or "")
+                    )
                     if not so_name:
                         continue
                     disc_pct_field = float(sol.get("discount") or 0)
@@ -1412,9 +1639,15 @@ async def get_reporte_saldos(refresh: bool = False):
                         # Línea aparte de producto "Descuento" (price_subtotal negativo).
                         disc_monto = abs(float(sol.get("price_subtotal") or 0))
                         new_frag = f"{str(sol.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
-                    sol_discounts_by_so[so_name] = sol_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    sol_discounts_by_so[so_name] = (
+                        sol_discounts_by_so.get(so_name, 0.0) + disc_monto
+                    )
                     detail_existing = sol_discount_detail_by_so.get(so_name, "")
-                    sol_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
+                    sol_discount_detail_by_so[so_name] = (
+                        (detail_existing + "; " + new_frag).lstrip("; ")
+                        if detail_existing
+                        else new_frag
+                    )
             except Exception as e_sol:
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
@@ -1430,13 +1663,22 @@ async def get_reporte_saldos(refresh: bool = False):
                 payments_raw = execute(
                     "account.payment",
                     "search_read",
-                    [[["reconciled_invoice_ids", "in", invoice_ids_all], ["state", "in", ["in_process", "paid"]]]],
-                    {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]}
+                    [
+                        [
+                            ["reconciled_invoice_ids", "in", invoice_ids_all],
+                            ["state", "in", ["in_process", "paid"]],
+                        ]
+                    ],
+                    {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
                 )
                 for p in payments_raw:
                     p_amt = Decimal(str(p.get("amount") or "0"))
                     p_curr_raw = p.get("currency_id")
-                    p_curr = p_curr_raw[1] if isinstance(p_curr_raw, (list, tuple)) and len(p_curr_raw) > 1 else "USD"
+                    p_curr = (
+                        p_curr_raw[1]
+                        if isinstance(p_curr_raw, (list, tuple)) and len(p_curr_raw) > 1
+                        else "USD"
+                    )
                     p_date = str(p.get("date") or "")[:10]
 
                     rec_invs = p.get("reconciled_invoice_ids", [])
@@ -1464,17 +1706,24 @@ async def get_reporte_saldos(refresh: bool = False):
                     # out_refund). Todo lo que llega aqui es, por definicion
                     # de Odoo, un pago real.
                     for so_m in matched_sos:
-                        p_info = payments_by_so.setdefault(so_m, {
-                            "abono_bcv": Decimal("0"),
-                            "abono_binance": Decimal("0"),
-                            "latest_date": None
-                        })
+                        p_info = payments_by_so.setdefault(
+                            so_m,
+                            {
+                                "abono_bcv": Decimal("0"),
+                                "abono_binance": Decimal("0"),
+                                "latest_date": None,
+                            },
+                        )
                         if p_curr == "USD":
                             p_bcv = p_amt
                             p_bin = p_amt
                         else:
                             rate_bcv = rates_map.get(p_date, last_bcv_val)
-                            p_bcv = p_amt / Decimal(str(rate_bcv)) if rate_bcv and float(rate_bcv) > 0 else Decimal("0")
+                            p_bcv = (
+                                p_amt / Decimal(str(rate_bcv))
+                                if rate_bcv and float(rate_bcv) > 0
+                                else Decimal("0")
+                            )
                             p_bin = p_bcv
 
                         p_info["abono_bcv"] += p_bcv
@@ -1515,8 +1764,16 @@ async def get_reporte_saldos(refresh: bool = False):
                             effective_rate = tot / order_usd_total
                         else:
                             rate_val = rates_map.get(inv_dt, last_bcv_val)
-                            effective_rate = Decimal(str(rate_val)) if rate_val and float(rate_val) > 0 else Decimal("1")
-                        paid_inv_usd = paid_inv / effective_rate if effective_rate > Decimal("0") else Decimal("0")
+                            effective_rate = (
+                                Decimal(str(rate_val))
+                                if rate_val and float(rate_val) > 0
+                                else Decimal("1")
+                            )
+                        paid_inv_usd = (
+                            paid_inv / effective_rate
+                            if effective_rate > Decimal("0")
+                            else Decimal("0")
+                        )
                     else:
                         paid_inv_usd = paid_inv
 
@@ -1532,17 +1789,21 @@ async def get_reporte_saldos(refresh: bool = False):
                         "abono_binance": total_paid_binance,
                         "ultimo_abono": latest_inv_date,
                         "desde_odoo": True,
-                        "tiene_vinc_manual": False
+                        "tiene_vinc_manual": False,
                     }
                 else:
-                    pagos_by_so[so_name]["abono_bcv"] = max(Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv)
-                    pagos_by_so[so_name]["abono_binance"] = max(Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))), total_paid_binance)
+                    pagos_by_so[so_name]["abono_bcv"] = max(
+                        Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv
+                    )
+                    pagos_by_so[so_name]["abono_binance"] = max(
+                        Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))),
+                        total_paid_binance,
+                    )
                     pagos_by_so[so_name]["desde_odoo"] = True
                     if latest_inv_date:
                         curr_last = pagos_by_so[so_name].get("ultimo_abono")
                         if not curr_last or latest_inv_date > curr_last:
                             pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
-
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
         hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
@@ -1550,14 +1811,12 @@ async def get_reporte_saldos(refresh: bool = False):
         for r in hist_rows:
             code = str(r.get("codigo", "")).strip()
             if code:
-                try:
+                with contextlib.suppress(Exception):
                     hist_map[code] = {
                         "nombre": r.get("producto_nombre", ""),
                         "usd": Decimal(str(r.get("precio_usd", "0") or "0")),
                         "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
                     }
-                except Exception:
-                    pass
 
         cutoff_historical = date(2026, 3, 12)
         reporte = []
@@ -1585,8 +1844,12 @@ async def get_reporte_saldos(refresh: bool = False):
 
         engine_cfg_obj = config.engine
         pricelist_ids_map = {
-            engine_cfg_obj.lista_usd: int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
-            engine_cfg_obj.lista_bcv: int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
+            engine_cfg_obj.lista_usd: int(usd_ids[0])
+            if usd_ids and str(usd_ids[0]).isdigit()
+            else 4,
+            engine_cfg_obj.lista_bcv: int(ves_ids[0])
+            if ves_ids and str(ves_ids[0]).isdigit()
+            else 5,
         }
         price_resolver_engine = OdooPriceResolver(execute, pricelist_ids_map) if execute else None
 
@@ -1646,9 +1909,11 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Import audit logic
         from cxc.engine.discount_audit import (
-            auditar_descuento_orden, auditar_descuento_factura,
-            auditar_nota_credito, EstadoAuditoria
+            auditar_descuento_factura,
+            auditar_descuento_orden,
+            auditar_nota_credito,
         )
+
         recon_cfg = config.reconciliation
         tol_round = recon_cfg.tolerance_rounding
         tol_red = recon_cfg.tolerance_red
@@ -1660,6 +1925,7 @@ async def get_reporte_saldos(refresh: bool = False):
             existing_audit_rows = []
         # Key: (so_id, tipo_auditoria) — only append if not already recorded today
         from datetime import date as _date
+
         _today_str = _date.today().isoformat()
         existing_audit_keys: set[tuple[str, str]] = {
             (r.get("so_id", ""), r.get("tipo_auditoria", ""))
@@ -1681,16 +1947,29 @@ async def get_reporte_saldos(refresh: bool = False):
 
             order_lines = lines_by_so.get(o.so_id, [])
             odoo_info = so_odoo_data.get(o.so_id, {})
-            
-            # Compute actual net delivered subtotal per product line (cantidad_entregada * precio_unitario)
+
+            # Compute actual net delivered subtotal per product line
+            # (cantidad_entregada * precio_unitario)
             if order_lines:
                 monto_entregado_neto_usd = sum(
-                    max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0")))) * Decimal(str(ln.get("precio_unitario", "0")))
+                    max(
+                        Decimal("0"),
+                        Decimal(
+                            str(
+                                ln.get("cantidad_entregada")
+                                if ln.get("cantidad_entregada") not in (None, "", "None")
+                                else ln.get("cantidad", "0")
+                            )
+                        ),
+                    )
+                    * Decimal(str(ln.get("precio_unitario", "0")))
                     for ln in order_lines
                 )
             else:
                 st_fallback = odoo_info.get("state") or getattr(o, "estado_orden", "sale")
-                monto_entregado_neto_usd = o.monto_total if st_fallback not in ["cancel", "draft"] else Decimal("0")
+                monto_entregado_neto_usd = (
+                    o.monto_total if st_fallback not in ["cancel", "draft"] else Decimal("0")
+                )
 
             # REGLA DE AUDITORÍA POR CANTIDADES ENTREGADAS Y DEVOLUCIONES (SIN HARDCODING):
             # Si el valor de mercancía efectivamente despachada y retenida por el cliente es 0
@@ -1702,26 +1981,43 @@ async def get_reporte_saldos(refresh: bool = False):
             vendedor = odoo_info.get("vendedor", "Sin Vendedor")
             vendedores_set.add(vendedor)
 
-            p_data = pagos_by_so.get(o.so_id, {"abono_bcv": Decimal("0"), "abono_binance": Decimal("0"), "ultimo_abono": None})
+            p_data = pagos_by_so.get(
+                o.so_id,
+                {"abono_bcv": Decimal("0"), "abono_binance": Decimal("0"), "ultimo_abono": None},
+            )
             abono_bcv = float(p_data["abono_bcv"])
             abono_binance = float(p_data["abono_binance"])
             fecha_ultimo_abono = p_data["ultimo_abono"]
-            # Indica si el abono proviene de reconciliación automática de Odoo (sin vinculación manual en Sheets)
-            pago_desde_odoo = bool(p_data.get("desde_odoo", False)) and not bool(p_data.get("tiene_vinc_manual", False))
-
+            # Indica si el abono proviene de reconciliación automática de Odoo
+            # (sin vinculación manual en Sheets)
+            pago_desde_odoo = bool(p_data.get("desde_odoo", False)) and not bool(
+                p_data.get("tiene_vinc_manual", False)
+            )
 
             subtotal = monto_entregado_neto_usd
-            
-            lista_id_str = str(o.lista_precios or "").strip()
-            is_historical = (not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical)
 
-            # Compute projected USD subtotal and total using UI candidate USD pricelists or Historical List
+            lista_id_str = str(o.lista_precios or "").strip()
+            is_historical = (
+                not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical
+            )
+
+            # Compute projected USD subtotal and total using UI candidate USD pricelists
+            # or Historical List
             total_proyectado_usd = Decimal("0.0")
             for ln in order_lines:
-                qty = max(Decimal("0"), Decimal(str(ln.get("cantidad_entregada") if ln.get("cantidad_entregada") not in (None, "", "None") else ln.get("cantidad", "0"))))
+                qty = max(
+                    Decimal("0"),
+                    Decimal(
+                        str(
+                            ln.get("cantidad_entregada")
+                            if ln.get("cantidad_entregada") not in (None, "", "None")
+                            else ln.get("cantidad", "0")
+                        )
+                    ),
+                )
                 prod_raw = ln.get("producto", "")
                 pt_id = extract_product_tmpl_id(prod_raw)
-                
+
                 if is_historical:
                     code_key = str(pt_id) if pt_id else prod_raw.strip()
                     hist_info = hist_map.get(code_key)
@@ -1730,14 +2026,30 @@ async def get_reporte_saldos(refresh: bool = False):
                     else:
                         price_usd = Decimal(str(ln.get("precio_unitario", "0")))
                 else:
-                    eff_price = resolve_effective_pricelist_price(pt_id, o.fecha, usd_ids, rules_usd) if pt_id else None
-                    price_usd = eff_price if eff_price is not None else Decimal(str(ln.get("precio_unitario", "0")))
-                
+                    eff_price = (
+                        resolve_effective_pricelist_price(pt_id, o.fecha, usd_ids, rules_usd)
+                        if pt_id
+                        else None
+                    )
+                    price_usd = (
+                        eff_price
+                        if eff_price is not None
+                        else Decimal(str(ln.get("precio_unitario", "0")))
+                    )
+
                 total_proyectado_usd += qty * price_usd
-                
+
             if is_historical:
-                lista_name = "Lista Histórica Auditoría" if o.fecha < cutoff_historical else "Lista Histórica (Sin Lista)"
-                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
+                lista_name = (
+                    "Lista Histórica Auditoría"
+                    if o.fecha < cutoff_historical
+                    else "Lista Histórica (Sin Lista)"
+                )
+                monto_total_proyectado_usd = (
+                    float(total_proyectado_usd)
+                    if total_proyectado_usd > Decimal("0")
+                    else float(o.monto_total)
+                )
             elif not lista_id_str or lista_id_str in ("0", "None"):
                 lista_name = "Sin Lista (Odoo)"
                 monto_total_proyectado_usd = float(o.monto_total)
@@ -1746,11 +2058,19 @@ async def get_reporte_saldos(refresh: bool = False):
                 monto_total_proyectado_usd = float(o.monto_total)
             elif lista_id_str in [str(x) for x in ves_ids]:
                 lista_name = f"Precio VES (#{lista_id_str})"
-                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
+                monto_total_proyectado_usd = (
+                    float(total_proyectado_usd)
+                    if total_proyectado_usd > Decimal("0")
+                    else float(o.monto_total)
+                )
             else:
                 lista_name = f"Lista #{lista_id_str}"
-                monto_total_proyectado_usd = float(total_proyectado_usd) if total_proyectado_usd > Decimal("0") else float(o.monto_total)
-            
+                monto_total_proyectado_usd = (
+                    float(total_proyectado_usd)
+                    if total_proyectado_usd > Decimal("0")
+                    else float(o.monto_total)
+                )
+
             # Calculate Odoo Invoice residual balance for posted invoices (converted to USD if VES)
             inv_list = invoices_by_so.get(o.so_id, [])
             if inv_list:
@@ -1804,17 +2124,19 @@ async def get_reporte_saldos(refresh: bool = False):
                 total_con_descuentos = float(b.total_motor)
                 descuentos_desglose = []
                 for d in b.descuentos_detalle:
-                    descuentos_desglose.append({
-                        "origen": d.origen,
-                        "descripcion": d.descripcion,
-                        "monto": float(d.monto)
-                    })
-                if b.ncs_calculadas > Decimal("0") and not any(d["origen"] == "primera_compra" for d in descuentos_desglose):
-                    descuentos_desglose.append({
-                        "origen": "primera_compra",
-                        "descripcion": "Obsequio / Promo Primera Compra",
-                        "monto": float(b.ncs_calculadas)
-                    })
+                    descuentos_desglose.append(
+                        {"origen": d.origen, "descripcion": d.descripcion, "monto": float(d.monto)}
+                    )
+                if b.ncs_calculadas > Decimal("0") and not any(
+                    d["origen"] == "primera_compra" for d in descuentos_desglose
+                ):
+                    descuentos_desglose.append(
+                        {
+                            "origen": "primera_compra",
+                            "descripcion": "Obsequio / Promo Primera Compra",
+                            "monto": float(b.ncs_calculadas),
+                        }
+                    )
             else:
                 total_descuentos_monto = 0.0
                 total_con_descuentos = float(o.monto_total)
@@ -1827,7 +2149,9 @@ async def get_reporte_saldos(refresh: bool = False):
             for nc in nc_list_odoo:
                 nc_tot = float(nc.get("amount_total") or 0)
                 nc_curr = nc.get("currency_id")
-                nc_c_name = nc_curr[1] if isinstance(nc_curr, (list, tuple)) and len(nc_curr) > 1 else "USD"
+                nc_c_name = (
+                    nc_curr[1] if isinstance(nc_curr, (list, tuple)) and len(nc_curr) > 1 else "USD"
+                )
                 nc_dt = str(nc.get("invoice_date") or o.fecha.isoformat())[:10]
                 nc_rate = rates_map.get(nc_dt, last_bcv_val)
                 if nc_c_name == "VES" and nc_rate > 0:
@@ -1849,24 +2173,34 @@ async def get_reporte_saldos(refresh: bool = False):
             saldo_deudor_bcv = max(0.0, monto_orig - abono_bcv)
             saldo_deudor_lista_usd = max(0.0, monto_total_proyectado_usd - abono_binance)
             # NCs reducen el saldo con descuento (son hechos contables reales)
-            saldo_con_descuento_bcv = max(0.0, saldo_deudor_bcv - total_descuentos_monto - ncs_odoo_monto_usd)
-            saldo_con_descuento_lista_usd = max(0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd)
+            saldo_con_descuento_bcv = max(
+                0.0, saldo_deudor_bcv - total_descuentos_monto - ncs_odoo_monto_usd
+            )
+            saldo_con_descuento_lista_usd = max(
+                0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd
+            )
 
             # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
             # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
             # se oculta del reporte general y pasa a la tabla de "pendientes
             # por cerrar (saldo <= $1)". No aplica a ordenes sin facturar
             # (esas se manejan por la Tarea 3.1 / bandeja de facturacion).
-            if o.facturada and (saldo_con_descuento_bcv <= 1.0 or saldo_con_descuento_lista_usd <= 1.0):
-                saldo_minimo_items.append({
-                    "so_id": o.so_id,
-                    "cliente_nombre": clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}"),
-                    "vendedor": odoo_info.get("vendedor", "Sin Vendedor"),
-                    "factura_id": o.factura_id or "N/A",
-                    "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
-                    "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
-                    "saldo_factura_odoo": saldo_factura_odoo,
-                })
+            if o.facturada and (
+                saldo_con_descuento_bcv <= 1.0 or saldo_con_descuento_lista_usd <= 1.0
+            ):
+                saldo_minimo_items.append(
+                    {
+                        "so_id": o.so_id,
+                        "cliente_nombre": clientes_map.get(
+                            o.cliente_id, f"Cliente ID: {o.cliente_id}"
+                        ),
+                        "vendedor": odoo_info.get("vendedor", "Sin Vendedor"),
+                        "factura_id": o.factura_id or "N/A",
+                        "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
+                        "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
+                        "saldo_factura_odoo": saldo_factura_odoo,
+                    }
+                )
                 continue
 
             # ── Auditoría de descuentos: motor vs Odoo ────────────────────────────
@@ -1880,7 +2214,9 @@ async def get_reporte_saldos(refresh: bool = False):
                 tolerance_rounding=tol_round,
                 tolerance_red=tol_red,
                 detalle_odoo=desc_orden_odoo_detalle,
-                detalle_motor="; ".join(f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose),
+                detalle_motor="; ".join(
+                    f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose
+                ),
             )
             audit_factura = auditar_descuento_factura(
                 so_id=o.so_id,
@@ -1889,7 +2225,9 @@ async def get_reporte_saldos(refresh: bool = False):
                 tolerance_rounding=tol_round,
                 tolerance_red=tol_red,
                 detalle_odoo=desc_factura_odoo_detalle,
-                detalle_motor="; ".join(f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose),
+                detalle_motor="; ".join(
+                    f"{d['descripcion']}: ${d['monto']:.2f}" for d in descuentos_desglose
+                ),
             )
             audit_nc = auditar_nota_credito(
                 so_id=o.so_id,
@@ -1907,19 +2245,21 @@ async def get_reporte_saldos(refresh: bool = False):
                 if _ar.enviar_a_bandeja:
                     _key = (o.so_id, _ar.tipo.value)
                     if _key not in existing_audit_keys:
-                        new_audit_rows.append({
-                            "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
-                            "so_id": o.so_id,
-                            "tipo_auditoria": _ar.tipo.value,
-                            "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
-                            "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
-                            "diferencia_usd": round(float(_ar.diferencia_usd), 4),
-                            "detalle_odoo": _ar.detalle_odoo,
-                            "detalle_motor": _ar.detalle_motor,
-                            "estado": "pendiente",
-                            "revisado_por": "",
-                            "timestamp_audit": _now_iso,
-                        })
+                        new_audit_rows.append(
+                            {
+                                "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
+                                "so_id": o.so_id,
+                                "tipo_auditoria": _ar.tipo.value,
+                                "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
+                                "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
+                                "diferencia_usd": round(float(_ar.diferencia_usd), 4),
+                                "detalle_odoo": _ar.detalle_odoo,
+                                "detalle_motor": _ar.detalle_motor,
+                                "estado": "pendiente",
+                                "revisado_por": "",
+                                "timestamp_audit": _now_iso,
+                            }
+                        )
                         existing_audit_keys.add(_key)
 
             # Build audit summary for the report row
@@ -1944,17 +2284,17 @@ async def get_reporte_saldos(refresh: bool = False):
             fecha_delivery = picking_delivery_map.get(o.so_id)
             if not fecha_delivery:
                 fecha_delivery = o.fecha.isoformat()
-            
+
             term_name = odoo_info.get("payment_term_name") or "Contado"
             dias_credito = parse_term_days(term_name)
-            
+
             try:
                 dt_del = datetime.strptime(fecha_delivery[:10], "%Y-%m-%d").date()
             except Exception:
                 dt_del = o.fecha
             dt_venc = dt_del + timedelta(days=dias_credito)
             fecha_vencimiento = dt_venc.isoformat()
-            
+
             dias_vencido = 0
             if today_date > dt_venc:
                 dias_vencido = (today_date - dt_venc).days
@@ -2003,65 +2343,70 @@ async def get_reporte_saldos(refresh: bool = False):
 
             conc = concs.get(o.so_id)
 
-            reporte.append({
-                "so_id": o.so_id,
-                "cliente_nombre": client_name,
-                "vendedor": vendedor,
-                "fecha": o.fecha.isoformat(),
-                "fecha_entrega": fecha_delivery[:10],
-                "terminos_pago": term_name,
-                "dias_credito": dias_credito,
-                "fecha_vencimiento": fecha_vencimiento,
-                "dias_vencido": dias_vencido,
-                "fecha_ultimo_abono": fecha_ultimo_abono,
-                "lista_precios": lista_name,
-                "lista_origen": lista_name,
-                "subtotal": float(subtotal),
-                "monto_total": monto_orig,
-                "monto_odoo": monto_orig,
-                "monto_total_proyectado_usd": monto_total_proyectado_usd,
-                "abono_usd_bcv": abono_bcv,
-                "abono_usd_binance": abono_binance,
-                "monto_pagado": abono_bcv,
-                "saldo_deudor": saldo_deudor_bcv,
-                "saldo_deudor_bcv": saldo_deudor_bcv,
-                "saldo_deudor_lista_usd": saldo_deudor_lista_usd,
-                "total_con_descuentos": total_con_descuentos,
-                "total_descuentos_monto": total_descuentos_monto,
-                "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
-                "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
-                "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
-                "saldo_factura_odoo": saldo_factura_odoo,
-                "factura_odoo_nombre": factura_odoo_nombre,
-                "descuentos_desglose": descuentos_desglose,
-                "facturada": o.facturada,
-                # Tarea 4, Caso B ("Listo para Cierre"): SOLO ordenes SIN
-                # factura cuyo saldo segun el motor ya es 0 (pagada, lista
-                # para que Administracion facture). El otro escenario de
-                # "Listo para Cierre" (facturada y pagada segun el motor pero
-                # no en Odoo -> falta aplicar NC) nunca llega a esta lista:
-                # ya sale del reporte general por el umbral de la Tarea 3.
-                "candidata_a_cierre": (not o.facturada) and (saldo_con_descuento_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05),
-                "pago_desde_odoo": pago_desde_odoo,
-                "descuentos_odoo_orden": {
-                    "monto_usd": round(desc_orden_odoo_monto, 2),
-                    "detalle": desc_orden_odoo_detalle,
-                    "pct_sobre_total": round(desc_orden_odoo_monto / monto_orig * 100, 2) if monto_orig > 0 else 0.0,
-                },
-                "descuentos_odoo_factura": {
-                    "monto_usd": round(desc_factura_odoo_monto, 2),
-                    "detalle": desc_factura_odoo_detalle,
-                },
-                "ncs_odoo": {
-                    "monto_usd": round(ncs_odoo_monto_usd, 2),
-                    "nombres": ncs_odoo_nombres,
-                    "auditoria_estado": audit_nc.estado.value,
-                },
-                "auditoria_descuentos": audit_descuentos_summary,
-                "reconciliacion": {
-                    "resultado": conc.resultado.value if conc else "pendiente"
-                } if conc else None
-            })
+            reporte.append(
+                {
+                    "so_id": o.so_id,
+                    "cliente_nombre": client_name,
+                    "vendedor": vendedor,
+                    "fecha": o.fecha.isoformat(),
+                    "fecha_entrega": fecha_delivery[:10],
+                    "terminos_pago": term_name,
+                    "dias_credito": dias_credito,
+                    "fecha_vencimiento": fecha_vencimiento,
+                    "dias_vencido": dias_vencido,
+                    "fecha_ultimo_abono": fecha_ultimo_abono,
+                    "lista_precios": lista_name,
+                    "lista_origen": lista_name,
+                    "subtotal": float(subtotal),
+                    "monto_total": monto_orig,
+                    "monto_odoo": monto_orig,
+                    "monto_total_proyectado_usd": monto_total_proyectado_usd,
+                    "abono_usd_bcv": abono_bcv,
+                    "abono_usd_binance": abono_binance,
+                    "monto_pagado": abono_bcv,
+                    "saldo_deudor": saldo_deudor_bcv,
+                    "saldo_deudor_bcv": saldo_deudor_bcv,
+                    "saldo_deudor_lista_usd": saldo_deudor_lista_usd,
+                    "total_con_descuentos": total_con_descuentos,
+                    "total_descuentos_monto": total_descuentos_monto,
+                    "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
+                    "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
+                    "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
+                    "saldo_factura_odoo": saldo_factura_odoo,
+                    "factura_odoo_nombre": factura_odoo_nombre,
+                    "descuentos_desglose": descuentos_desglose,
+                    "facturada": o.facturada,
+                    # Tarea 4, Caso B ("Listo para Cierre"): SOLO ordenes SIN
+                    # factura cuyo saldo segun el motor ya es 0 (pagada, lista
+                    # para que Administracion facture). El otro escenario de
+                    # "Listo para Cierre" (facturada y pagada segun el motor pero
+                    # no en Odoo -> falta aplicar NC) nunca llega a esta lista:
+                    # ya sale del reporte general por el umbral de la Tarea 3.
+                    "candidata_a_cierre": (not o.facturada)
+                    and (saldo_con_descuento_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05),
+                    "pago_desde_odoo": pago_desde_odoo,
+                    "descuentos_odoo_orden": {
+                        "monto_usd": round(desc_orden_odoo_monto, 2),
+                        "detalle": desc_orden_odoo_detalle,
+                        "pct_sobre_total": round(desc_orden_odoo_monto / monto_orig * 100, 2)
+                        if monto_orig > 0
+                        else 0.0,
+                    },
+                    "descuentos_odoo_factura": {
+                        "monto_usd": round(desc_factura_odoo_monto, 2),
+                        "detalle": desc_factura_odoo_detalle,
+                    },
+                    "ncs_odoo": {
+                        "monto_usd": round(ncs_odoo_monto_usd, 2),
+                        "nombres": ncs_odoo_nombres,
+                        "auditoria_estado": audit_nc.estado.value,
+                    },
+                    "auditoria_descuentos": audit_descuentos_summary,
+                    "reconciliacion": {"resultado": conc.resultado.value if conc else "pendiente"}
+                    if conc
+                    else None,
+                }
+            )
 
         # Single batch write for new audit rows to avoid Google Sheets API rate limits
         if new_audit_rows and hasattr(repo, "append_auditoria_rows"):
@@ -2089,16 +2434,17 @@ async def get_reporte_saldos(refresh: bool = False):
                 "vencidas_61_90": kpi_61_90,
                 "vencidas_mas_90": kpi_mas_90,
             },
-            "vendedores": sorted(list(vendedores_set)),
+            "vendedores": sorted(vendedores_set),
             "items": reporte,
-            "saldo_minimo_pendientes": saldo_minimo_items
+            "saldo_minimo_pendientes": saldo_minimo_items,
         }
         _REPORTE_SALDOS_CACHE["data"] = res
         _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
         return res
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/tasas")
 async def get_config_tasas():
@@ -2112,37 +2458,42 @@ async def get_config_tasas():
             tbin = float(parse_decimal_safe(f.get("tasa_binance", "0")))
             diff_bs = tbin - tbcv
             diff_pct = (diff_bs / tbin * 100) if tbin > 0 else 0.0
-            tasas.append({
-                "timestamp": f.get("timestamp", ""),
-                "tasa_bcv": tbcv,
-                "tasa_binance": tbin,
-                "diferencia_bs": round(diff_bs, 2),
-                "diferencia_pct": round(diff_pct, 2),
-                "fuente": f.get("fuente", "")
-            })
+            tasas.append(
+                {
+                    "timestamp": f.get("timestamp", ""),
+                    "tasa_bcv": tbcv,
+                    "tasa_binance": tbin,
+                    "diferencia_bs": round(diff_bs, 2),
+                    "diferencia_pct": round(diff_pct, 2),
+                    "fuente": f.get("fuente", ""),
+                }
+            )
         return tasas
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/tasas")
 async def post_config_tasas(req: TasaRequest):
     try:
         repo = get_repo()
         from cxc.models import SerieTasa
+
         tasa = SerieTasa(
             timestamp=datetime.now(),
             tasa_bcv=Decimal(str(req.tasa_bcv)),
             tasa_binance=Decimal(str(req.tasa_binance)),
             fuente="Carga Manual Web",
             es_heredada=False,
-            capturada_ok=True
+            capturada_ok=True,
         )
         repo.append_serie_tasa(tasa)
         return {"status": "success", "message": "Tasa manual registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/feriados")
 async def get_config_feriados():
@@ -2150,46 +2501,47 @@ async def get_config_feriados():
         repo = get_repo()
         feriados = repo.feriados()
         return [
-            {
-                "fecha": f.fecha.isoformat(),
-                "descripcion": f.descripcion,
-                "tipo": f.tipo.value
-            } for f in feriados
+            {"fecha": f.fecha.isoformat(), "descripcion": f.descripcion, "tipo": f.tipo.value}
+            for f in feriados
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/feriados")
 async def post_config_feriados(req: FeriadoRequest):
     try:
         repo = get_repo()
         from cxc.models import Feriado, TipoFeriado
-        from cxc.sheets import serde, gateway as g
+        from cxc.sheets import gateway as g
+        from cxc.sheets import serde
+
         feriado = Feriado(
             fecha=date.fromisoformat(req.fecha),
             descripcion=req.descripcion,
-            tipo=TipoFeriado.NACIONAL
+            tipo=TipoFeriado.NACIONAL,
         )
         repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
         return {"status": "success", "message": "Feriado registrado con éxito."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/mapa-vinculaciones")
 async def get_mapa_vinculaciones():
     try:
         repo = get_repo()
         vincs = repo.all_vinculaciones()
-        
+
         # Load clients once
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
-        
+
         # Load all orders
         ordenes = {o.so_id: o for o in repo.all_ordenes()}
-        
+
         # Fetch Odoo Invoices in batch
         so_ids = list(ordenes.keys())
         config = AppConfig.from_env()
@@ -2197,64 +2549,85 @@ async def get_mapa_vinculaciones():
         invoices = execute(
             "account.move",
             "search_read",
-            [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
-            {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_untaxed", "amount_tax", "amount_residual", "payment_state", "move_type"]}
+            [
+                [
+                    ["invoice_origin", "in", so_ids],
+                    ["state", "=", "posted"],
+                    ["move_type", "in", ["out_invoice", "out_refund"]],
+                ]
+            ],
+            {
+                "fields": [
+                    "id",
+                    "name",
+                    "invoice_origin",
+                    "amount_total",
+                    "amount_untaxed",
+                    "amount_tax",
+                    "amount_residual",
+                    "payment_state",
+                    "move_type",
+                ]
+            },
         )
         invoices_by_so = {}
         for inv in invoices:
             so = str(inv.get("invoice_origin", "")).strip()
             if so:
                 invoices_by_so.setdefault(so, []).append(inv)
-                
+
         resultado = []
         for v in vincs:
             o = ordenes.get(v.so_id)
             client_name = clientes_map.get(o.cliente_id, "Desconocido") if o else "Desconocido"
-            
+
             # Fetch invoice details for this SO
             inv_name = "N/A"
             inv_total = 0.0
             inv_subtotal = 0.0
             inv_tax = 0.0
             inv_residual = 0.0
-            
+
             if o and o.so_id in invoices_by_so:
                 inv_list = invoices_by_so[o.so_id]
                 inv_names = [inv.get("name", "") for inv in inv_list]
                 inv_name = ", ".join(inv_names)
-                
+
                 inv_total = sum(float(inv.get("amount_total", 0.0)) for inv in inv_list)
                 inv_subtotal = sum(float(inv.get("amount_untaxed", 0.0)) for inv in inv_list)
                 inv_tax = sum(float(inv.get("amount_tax", 0.0)) for inv in inv_list)
                 inv_residual = sum(float(inv.get("amount_residual", 0.0)) for inv in inv_list)
-                
-            resultado.append({
-                "vinc_id": v.vinc_id,
-                "pago_id": v.pago_id,
-                "so_id": v.so_id,
-                "cliente_nombre": client_name,
-                "monto_aplicado": float(v.monto_aplicado),
-                "moneda": v.moneda_abono.value,
-                "fecha_pago": v.hora_pago_confirmada.date().isoformat(),
-                "invoice_id": inv_name,
-                "order_details": {
-                    "total": float(o.monto_total) if o else 0.0,
-                    "subtotal": float(o.monto_total) / 1.16 if o else 0.0,
-                    "iva": float(o.monto_total) - (float(o.monto_total) / 1.16) if o else 0.0
-                },
-                "invoice_details": {
-                    "total": inv_total,
-                    "subtotal": inv_subtotal,
-                    "iva": inv_tax,
-                    "saldo_deudor": inv_residual,
-                    "retencion_iva_est": inv_tax * 0.75
+
+            resultado.append(
+                {
+                    "vinc_id": v.vinc_id,
+                    "pago_id": v.pago_id,
+                    "so_id": v.so_id,
+                    "cliente_nombre": client_name,
+                    "monto_aplicado": float(v.monto_aplicado),
+                    "moneda": v.moneda_abono.value,
+                    "fecha_pago": v.hora_pago_confirmada.date().isoformat(),
+                    "invoice_id": inv_name,
+                    "order_details": {
+                        "total": float(o.monto_total) if o else 0.0,
+                        "subtotal": float(o.monto_total) / 1.16 if o else 0.0,
+                        "iva": float(o.monto_total) - (float(o.monto_total) / 1.16) if o else 0.0,
+                    },
+                    "invoice_details": {
+                        "total": inv_total,
+                        "subtotal": inv_subtotal,
+                        "iva": inv_tax,
+                        "saldo_deudor": inv_residual,
+                        "retencion_iva_est": inv_tax * 0.75,
+                    },
                 }
-            })
-            
+            )
+
         return resultado
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/descuentos-marca")
 async def get_config_descuentos_marca():
@@ -2271,38 +2644,54 @@ async def get_config_descuentos_marca():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "listas_aplicables": r.listas_aplicables,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-marca")
 async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
     try:
         repo = get_repo()
-        from cxc.models import DescuentoMarcaCategoria
-        from cxc.sheets import serde, gateway as g
         import uuid
-        
+
+        from cxc.models import DescuentoMarcaCategoria
+        from cxc.sheets import gateway as g
+        from cxc.sheets import serde
+
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
-        
+
         # Check date overlap with active rules of same type, brand, category, list
         existing = repo.descuentos_marca_categoria()
         for r in existing:
-            if r.activo and r.tipo_descuento == req.tipo_descuento:
-                if r.marca == req.marca and r.categoria == req.categoria:
-                    lists_overlap = (r.listas_aplicables == "*" or req.listas_aplicables == "*" or r.listas_aplicables == req.listas_aplicables)
-                    if lists_overlap:
-                        h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
-                        h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
-                        if max(v_desde, r.vigencia_desde) <= min(h1, h2):
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Conflicto: ya existe la regla activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'}) para esta marca/categoría/lista."
-                            )
+            if (
+                r.activo
+                and r.tipo_descuento == req.tipo_descuento
+                and r.marca == req.marca
+                and r.categoria == req.categoria
+            ):
+                lists_overlap = (
+                    r.listas_aplicables == "*"
+                    or req.listas_aplicables == "*"
+                    or r.listas_aplicables == req.listas_aplicables
+                )
+                if lists_overlap:
+                    h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
+                    h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
+                    if max(v_desde, r.vigencia_desde) <= min(h1, h2):
+                        r_hasta = r.vigencia_hasta or "siempre"
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Conflicto: ya existe la regla activa {r.regla_id} "
+                                f"({r.vigencia_desde} a {r_hasta}) para esta marca/categoría/lista."
+                            ),
+                        )
 
         regla_id = f"REG_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoMarcaCategoria(
@@ -2314,13 +2703,14 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             listas_aplicables=req.listas_aplicables,
-            activo=True
+            activo=True,
         )
         repo._g.append_row(g.T_DESCUENTOS, serde.descuento_to_row(rule))
         return {"status": "success", "message": "Regla de descuento registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/listas-precio")
 @app.get("/api/odoo/listas-precio")
@@ -2328,7 +2718,7 @@ async def get_config_listas_precio():
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        
+
         # IMPORTANTE: pasar context={'active_test': False} para que Odoo devuelva
         # las listas archivadas con sus nombres ACTUALES (sin este contexto, Odoo
         # las filtra aunque el dominio las incluya explícitamente).
@@ -2336,25 +2726,41 @@ async def get_config_listas_precio():
             "product.pricelist",
             "search_read",
             [[["active", "in", [True, False]]]],
-            {"fields": ["id", "name", "currency_id", "active"],
-             "context": {"active_test": False}, "order": "id asc"}
+            {
+                "fields": ["id", "name", "currency_id", "active"],
+                "context": {"active_test": False},
+                "order": "id asc",
+            },
         )
-        
+
         # Fetch items/rules for these pricelists
         list_ids = [pl["id"] for pl in pricelists]
         items = execute(
             "product.pricelist.item",
             "search_read",
             [[["pricelist_id", "in", list_ids]]],
-            {"fields": ["pricelist_id", "fixed_price", "percent_price", "date_start", "date_end", "product_tmpl_id"],
-             "context": {"active_test": False}}
+            {
+                "fields": [
+                    "pricelist_id",
+                    "fixed_price",
+                    "percent_price",
+                    "date_start",
+                    "date_end",
+                    "product_tmpl_id",
+                ],
+                "context": {"active_test": False},
+            },
         )
-        
+
         items_by_list: dict[int, list] = {}
         for item in items:
-            pl_id = item["pricelist_id"][0] if isinstance(item["pricelist_id"], (list, tuple)) else item["pricelist_id"]
+            pl_id = (
+                item["pricelist_id"][0]
+                if isinstance(item["pricelist_id"], (list, tuple))
+                else item["pricelist_id"]
+            )
             items_by_list.setdefault(pl_id, []).append(item)
-            
+
         resultado = []
         for pl in pricelists:
             pl_items = items_by_list.get(pl["id"], [])
@@ -2363,43 +2769,53 @@ async def get_config_listas_precio():
             dates_end = []
             for item in pl_items:
                 prod = item.get("product_tmpl_id")
-                prod_name = prod[1] if isinstance(prod, list) and len(prod) > 1 else "Todos los productos"
+                prod_name = (
+                    prod[1] if isinstance(prod, list) and len(prod) > 1 else "Todos los productos"
+                )
                 ds = item.get("date_start") or None
                 de = item.get("date_end") or None
                 if ds:
                     dates_start.append(str(ds)[:10])
                 if de:
                     dates_end.append(str(de)[:10])
-                rules.append({
-                    "producto": prod_name,
-                    "precio_fijo": float(item.get("fixed_price") or 0.0),
-                    "descuento_porcentaje": float(item.get("percent_price") or 0.0),
-                    "fecha_inicio": str(ds)[:10] if ds else "N/A",
-                    "fecha_fin": str(de)[:10] if de else "N/A",
-                })
+                rules.append(
+                    {
+                        "producto": prod_name,
+                        "precio_fijo": float(item.get("fixed_price") or 0.0),
+                        "descuento_porcentaje": float(item.get("percent_price") or 0.0),
+                        "fecha_inicio": str(ds)[:10] if ds else "N/A",
+                        "fecha_fin": str(de)[:10] if de else "N/A",
+                    }
+                )
 
-            resultado.append({
-                "id": pl["id"],
-                "name": pl["name"],
-                "moneda": pl["currency_id"][1] if isinstance(pl["currency_id"], (list, tuple)) and len(pl["currency_id"]) > 1 else "USD",
-                "active": pl["active"],
-                "reglas": rules,
-                # Fechas mínima/máxima de las reglas para mostrar rango de vigencia real
-                "fecha_desde": min(dates_start) if dates_start else "N/A",
-                "fecha_hasta": max(dates_end) if dates_end else "N/A",
-            })
+            resultado.append(
+                {
+                    "id": pl["id"],
+                    "name": pl["name"],
+                    "moneda": pl["currency_id"][1]
+                    if isinstance(pl["currency_id"], (list, tuple)) and len(pl["currency_id"]) > 1
+                    else "USD",
+                    "active": pl["active"],
+                    "reglas": rules,
+                    # Fechas mínima/máxima de las reglas para mostrar rango de vigencia real
+                    "fecha_desde": min(dates_start) if dates_start else "N/A",
+                    "fecha_hasta": max(dates_end) if dates_end else "N/A",
+                }
+            )
 
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
             content=resultado,
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate",
                 "Pragma": "no-cache",
-            }
+            },
         )
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/meta")
 async def get_config_meta():
@@ -2419,16 +2835,22 @@ async def get_config_meta():
         return meta
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/meta")
 async def post_config_meta(req: MetaRequest):
     try:
         repo = get_repo()
-        from cxc.sheets import gateway as g
-        repo._g.upsert_row("_Meta", "key", {"key": "cash_window_business_days", "value": str(req.cash_window_business_days)})
-        repo._g.upsert_row("_Meta", "key", {"key": "descuento_recompra", "value": str(req.descuento_recompra)})
-        
+        repo._g.upsert_row(
+            "_Meta",
+            "key",
+            {"key": "cash_window_business_days", "value": str(req.cash_window_business_days)},
+        )
+        repo._g.upsert_row(
+            "_Meta", "key", {"key": "descuento_recompra", "value": str(req.descuento_recompra)}
+        )
+
         # Sync to ReglasRecurrencia sheet for RECOMPRA rule
         rules = repo._g.read_rows("ReglasRecurrencia")
         recompra_exists = False
@@ -2439,30 +2861,37 @@ async def post_config_meta(req: MetaRequest):
                 repo._g.upsert_row("ReglasRecurrencia", "regla_id", r)
                 break
         if not recompra_exists:
-            repo._g.append_row("ReglasRecurrencia", {
-                "regla_id": "REG_RECOMPRA",
-                "condicion": "recompra",
-                "porcentaje": str(req.descuento_recompra),
-                "vigencia_desde": date.today().isoformat(),
-                "vigencia_hasta": "",
-                "activo": "TRUE"
-            })
-            
+            repo._g.append_row(
+                "ReglasRecurrencia",
+                {
+                    "regla_id": "REG_RECOMPRA",
+                    "condicion": "recompra",
+                    "porcentaje": str(req.descuento_recompra),
+                    "vigencia_desde": date.today().isoformat(),
+                    "vigencia_hasta": "",
+                    "activo": "TRUE",
+                },
+            )
+
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-MAPEO_LISTAS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json")
+
+MAPEO_LISTAS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json"
+)
 
 # In-process cache for pricelist mapping — survives page refreshes within same process lifetime
 _PRICELIST_MAPEO_CACHE: dict[str, list[str]] = {}
+
 
 def _load_mapeo_from_json() -> tuple[list[str], list[str]] | None:
     """Lee mapeo desde el archivo JSON local. Retorna None si no existe o falla."""
     try:
         if os.path.exists(MAPEO_LISTAS_FILE):
-            with open(MAPEO_LISTAS_FILE, "r", encoding="utf-8") as f:
+            with open(MAPEO_LISTAS_FILE, encoding="utf-8") as f:
                 j_data = json.load(f)
                 usd = [str(x) for x in j_data.get("valid_pricelists_usd", [])]
                 ves = [str(x) for x in j_data.get("valid_pricelists_ves", [])]
@@ -2472,14 +2901,18 @@ def _load_mapeo_from_json() -> tuple[list[str], list[str]] | None:
         pass
     return None
 
+
 def _save_mapeo_to_json(usd_list: list[str], ves_list: list[str]) -> None:
     """Persiste el mapeo en el archivo JSON local."""
     try:
         os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
         with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}, f, indent=2)
+            json.dump(
+                {"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}, f, indent=2
+            )
     except Exception:
         pass
+
 
 def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     """Obtiene las listas de precios USD y VES configuradas.
@@ -2493,7 +2926,7 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     # 1. In-process memory cache
     if _PRICELIST_MAPEO_CACHE.get("usd") and _PRICELIST_MAPEO_CACHE.get("ves"):
         return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
-    
+
     # 2. JSON file
     json_result = _load_mapeo_from_json()
     if json_result:
@@ -2501,17 +2934,17 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
         _PRICELIST_MAPEO_CACHE["usd"] = usd_list
         _PRICELIST_MAPEO_CACHE["ves"] = ves_list
         return usd_list, ves_list
-    
+
     # 3. Google Sheets _Meta
     try:
         if repo is None:
             repo = get_repo()
         usd_str = repo._g.get_meta("valid_pricelists_usd")
         ves_str = repo._g.get_meta("valid_pricelists_ves")
-        
+
         usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
         ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
-        
+
         if usd_list:
             _PRICELIST_MAPEO_CACHE["usd"] = usd_list
             _PRICELIST_MAPEO_CACHE["ves"] = ves_list or [os.environ.get("ODOO_PRICELIST_BCV", "5")]
@@ -2520,24 +2953,25 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
             return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
     except Exception:
         pass
-    
+
     # 4. Environment variable fallback
     usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
     ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
-    return [x.strip() for x in usd_env.split(",") if x.strip()], [x.strip() for x in ves_env.split(",") if x.strip()]
+    return [x.strip() for x in usd_env.split(",") if x.strip()], [
+        x.strip() for x in ves_env.split(",") if x.strip()
+    ]
+
 
 @app.get("/api/config/listas-precio-mapeo")
 async def get_config_listas_precio_mapeo():
     try:
         repo = get_repo()
         usd_list, ves_list = get_valid_pricelists_usd_and_ves(repo)
-        return {
-            "valid_pricelists_usd": usd_list,
-            "valid_pricelists_ves": ves_list
-        }
+        return {"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/listas-precio-mapeo")
 async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
@@ -2545,14 +2979,14 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
     try:
         usd_list = [str(x) for x in req.valid_pricelists_usd] if req.valid_pricelists_usd else ["4"]
         ves_list = [str(x) for x in req.valid_pricelists_ves] if req.valid_pricelists_ves else ["5"]
-        
+
         # 1. Update in-process memory cache immediately (fastest — no I/O required)
         _PRICELIST_MAPEO_CACHE["usd"] = usd_list
         _PRICELIST_MAPEO_CACHE["ves"] = ves_list
-        
+
         # 2. Write to JSON file (persists across requests, lost on Railway deploy)
         _save_mapeo_to_json(usd_list, ves_list)
-        
+
         # 3. Write to Google Sheets _Meta (true persistent storage across deploys)
         try:
             repo = get_repo()
@@ -2560,37 +2994,17 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
             repo._g.set_meta("valid_pricelists_ves", ",".join(ves_list))
         except Exception as sheets_err:
             logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
-        
+
         return {
             "status": "success",
             "message": "Mapeo de listas de precios actualizado correctamente.",
             "valid_pricelists_usd": usd_list,
-            "valid_pricelists_ves": ves_list
+            "valid_pricelists_ves": ves_list,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-@app.post("/api/config/toggle-descuento")
-async def post_toggle_descuento(req: ToggleDescuentoRequest):
-    try:
-        repo = get_repo()
-        rows = repo._g.read_rows(req.tabla)
-        found = False
-        for r in rows:
-            if str(r.get("regla_id", "")).strip().lower() == req.regla_id.strip().lower():
-                r["activo"] = "TRUE" if req.activo else "FALSE"
-                repo._g.upsert_row(req.tabla, "regla_id", r)
-                found = True
-                break
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop(req.tabla, None)
-        if not found:
-            raise HTTPException(status_code=404, detail="Regla no encontrada.")
-        return {"status": "success", "message": f"Estado de regla {req.regla_id} actualizado."}
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/config/eliminar-descuento")
 async def post_eliminar_descuento(req: EliminarDescuentoRequest):
@@ -2600,18 +3014,21 @@ async def post_eliminar_descuento(req: EliminarDescuentoRequest):
         if hasattr(repo._g, "_read_cache"):
             repo._g._read_cache.pop(req.tabla, None)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Regla no encontrada o no se pudo eliminar.")
+            raise HTTPException(
+                status_code=404, detail="Regla no encontrada o no se pudo eliminar."
+            )
         return {"status": "success", "message": f"Regla {req.regla_id} eliminada permanentemente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/conciliaciones/sugerencias")
 async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
     try:
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
-        
+
         pagos_rows = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         ordenes = repo.all_ordenes()
@@ -2625,13 +3042,15 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                p_names = [str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")]
+                p_names = [
+                    str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")
+                ]
                 if p_names:
                     odoo_pagos = execute(
                         "account.payment",
                         "search_read",
                         [[["name", "in", p_names]]],
-                        {"fields": ["name", "is_reconciled", "state", "reconciled_invoices_count"]}
+                        {"fields": ["name", "is_reconciled", "state", "reconciled_invoices_count"]},
                     )
                     for op in odoo_pagos:
                         pname = str(op.get("name", "")).strip()
@@ -2652,7 +3071,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                         "sale.order",
                         "search_read",
                         [[["name", "in", so_names]]],
-                        {"fields": ["name", "state"]}
+                        {"fields": ["name", "state"]},
                     )
                     for os_item in odoo_sos:
                         sname = str(os_item.get("name", "")).strip()
@@ -2660,13 +3079,13 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                             so_states_map[sname] = str(os_item.get("state", "")).strip().lower()
         except Exception as e_odoo:
             logger.warning("Error consultando Odoo en get_conciliaciones_sugerencias: %s", e_odoo)
-        
+
         linked_pago = {}
         linked_so = {}
         for v in vincs:
             linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + v.monto_aplicado
             linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
-            
+
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
@@ -2675,26 +3094,35 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             monto_orig = parse_decimal_safe(p.get("monto", "0"))
             monto_vinculado = linked_pago.get(pid, Decimal("0"))
             saldo = monto_orig - monto_vinculado
-            
+
             if saldo > Decimal("0.05"):
                 vendedor = p.get("vendedor") or "Sin Vendedor"
                 cliente_id = str(p.get("cliente_id", "")).strip()
-                cliente_nombre = p.get("cliente_nombre") or clientes_map.get(cliente_id) or f"Cliente {cliente_id}"
-                
-                unallocated_pagos.append({
-                    "pago_id": pid,
-                    "fecha_pago": str(p.get("fecha_pago") or p.get("fecha") or "")[:10],
-                    "cliente_id": cliente_id,
-                    "cliente_nombre": cliente_nombre,
-                    "monto_original": monto_orig,
-                    "saldo_pendiente": saldo,
-                    "moneda": p.get("moneda", "USD"),
-                    "vendedor": vendedor
-                })
-                
+                cliente_nombre = (
+                    p.get("cliente_nombre")
+                    or clientes_map.get(cliente_id)
+                    or f"Cliente {cliente_id}"
+                )
+
+                unallocated_pagos.append(
+                    {
+                        "pago_id": pid,
+                        "fecha_pago": str(p.get("fecha_pago") or p.get("fecha") or "")[:10],
+                        "cliente_id": cliente_id,
+                        "cliente_nombre": cliente_nombre,
+                        "monto_original": monto_orig,
+                        "saldo_pendiente": saldo,
+                        "moneda": p.get("moneda", "USD"),
+                        "vendedor": vendedor,
+                    }
+                )
+
         open_orders_by_client = {}
         for o in ordenes:
-            st = so_states_map.get(o.so_id) or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            st = (
+                so_states_map.get(o.so_id)
+                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            )
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
             if not o.facturada:
@@ -2703,31 +3131,33 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 if saldo > Decimal("0.05"):
                     if o.cliente_id not in open_orders_by_client:
                         open_orders_by_client[o.cliente_id] = []
-                    open_orders_by_client[o.cliente_id].append({
-                        "so_id": o.so_id,
-                        "fecha": o.fecha,
-                        "monto_total": o.monto_total,
-                        "saldo_pendiente": saldo,
-                        "vendedor": o.vendedor_email
-                    })
-                    
+                    open_orders_by_client[o.cliente_id].append(
+                        {
+                            "so_id": o.so_id,
+                            "fecha": o.fecha,
+                            "monto_total": o.monto_total,
+                            "saldo_pendiente": saldo,
+                            "vendedor": o.vendedor_email,
+                        }
+                    )
+
         for cid in open_orders_by_client:
             open_orders_by_client[cid].sort(key=lambda x: x["fecha"])
-            
+
         sugerencias = []
         for p in unallocated_pagos:
             cid = p["cliente_id"]
             client_orders = open_orders_by_client.get(cid, [])
-            
+
             monto_pago_restante = p["saldo_pendiente"]
             for o in client_orders:
                 if monto_pago_restante <= Decimal("0.05"):
                     break
                 if o["saldo_pendiente"] <= Decimal("0.05"):
                     continue
-                    
+
                 monto_aplicar = min(monto_pago_restante, o["saldo_pendiente"])
-                
+
                 sug_id = f"SUG_{p['pago_id']}_{o['so_id']}"
                 item = {
                     "sugerencia_id": sug_id,
@@ -2738,26 +3168,31 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     "saldo_pago": float(p["saldo_pendiente"]),
                     "moneda_pago": p["moneda"],
                     "so_id": o["so_id"],
-                    "so_fecha": o["fecha"].isoformat() if hasattr(o["fecha"], "isoformat") else str(o["fecha"]),
+                    "so_fecha": o["fecha"].isoformat()
+                    if hasattr(o["fecha"], "isoformat")
+                    else str(o["fecha"]),
                     "so_monto_total": float(o["monto_total"]),
                     "so_saldo_pendiente": float(o["saldo_pendiente"]),
                     "monto_sugerido": float(monto_aplicar),
-                    "vendedor": p["vendedor"] or o["vendedor"]
+                    "vendedor": p["vendedor"] or o["vendedor"],
                 }
-                
+
                 if user and user["rol"] == "ventas":
                     u_name = (user["nombre"] or user["email"]).strip().lower()
-                    if item["vendedor"].strip().lower() != u_name and user["email"].strip().lower() not in item["vendedor"].lower():
+                    if (
+                        item["vendedor"].strip().lower() != u_name
+                        and user["email"].strip().lower() not in item["vendedor"].lower()
+                    ):
                         continue
-                        
+
                 sugerencias.append(item)
                 monto_pago_restante -= monto_aplicar
                 o["saldo_pendiente"] -= monto_aplicar
-                
+
         return sugerencias
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/bandeja")
@@ -2783,7 +3218,7 @@ async def get_bandeja_facturacion():
                         "sale.order",
                         "search_read",
                         [[["name", "in", so_names]]],
-                        {"fields": ["name", "state"]}
+                        {"fields": ["name", "state"]},
                     )
                     for s in so_recs:
                         sname = str(s.get("name", "")).strip()
@@ -2794,7 +3229,11 @@ async def get_bandeja_facturacion():
 
         pagos_by_so = {}
         for v in vincs:
-            eq = v.equiv_usd_binance if v.equiv_usd_binance is not None else (v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado)
+            eq = (
+                v.equiv_usd_binance
+                if v.equiv_usd_binance is not None
+                else (v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado)
+            )
             pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, Decimal("0")) + eq
 
         ordenes_por_facturar = []
@@ -2802,14 +3241,23 @@ async def get_bandeja_facturacion():
         iva_pendiente_agentes = []
 
         for o in ordenes:
-            st = so_odoo_states.get(o.so_id) or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            st = (
+                so_odoo_states.get(o.so_id)
+                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            )
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id), {})
             c_name = c_info.get("nombre") or f"Cliente {o.cliente_id}"
-            wh_agent = bool(c_info.get("wh_iva_agent")) or (str(c_info.get("agente_retencion", "")).upper() == "TRUE")
-            wh_rate = float(parse_decimal_safe(str(c_info.get("wh_iva_rate", "75")))) if c_info.get("wh_iva_rate") else 75.0
+            wh_agent = bool(c_info.get("wh_iva_agent")) or (
+                str(c_info.get("agente_retencion", "")).upper() == "TRUE"
+            )
+            wh_rate = (
+                float(parse_decimal_safe(str(c_info.get("wh_iva_rate", "75"))))
+                if c_info.get("wh_iva_rate")
+                else 75.0
+            )
 
             b = bandeja_map.get(o.so_id)
             abono = float(pagos_by_so.get(o.so_id, Decimal("0")))
@@ -2817,7 +3265,9 @@ async def get_bandeja_facturacion():
 
             tot_motor = float(b.total_motor) if b else monto_orig
             desc_monto = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
-            desc_pct = (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
+            desc_pct = (
+                (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
+            )
 
             # Tarea 3.1: a la bandeja de facturacion solo van las ordenes SIN
             # factura cuyo saldo segun el motor ya es 0 (cliente pago la
@@ -2826,19 +3276,23 @@ async def get_bandeja_facturacion():
             # visible en el reporte general de CxC (no entra aqui).
             saldo_motor = tot_motor - abono
             if not o.facturada and saldo_motor <= 0.05:
-                ordenes_por_facturar.append({
-                    "so_id": o.so_id,
-                    "cliente_nombre": c_name,
-                    "wh_iva_agent": wh_agent,
-                    "wh_iva_rate": wh_rate,
-                    "fecha": o.fecha.isoformat() if hasattr(o.fecha, "isoformat") else str(o.fecha),
-                    "monto_pagado": abono,
-                    "subtotal_neto": monto_orig,
-                    "total_motor": tot_motor,
-                    "descuento_aplicar_monto": desc_monto,
-                    "descuento_aplicar_pct": desc_pct,
-                    "precio_base": monto_orig
-                })
+                ordenes_por_facturar.append(
+                    {
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "wh_iva_agent": wh_agent,
+                        "wh_iva_rate": wh_rate,
+                        "fecha": o.fecha.isoformat()
+                        if hasattr(o.fecha, "isoformat")
+                        else str(o.fecha),
+                        "monto_pagado": abono,
+                        "subtotal_neto": monto_orig,
+                        "total_motor": tot_motor,
+                        "descuento_aplicar_monto": desc_monto,
+                        "descuento_aplicar_pct": desc_pct,
+                        "precio_base": monto_orig,
+                    }
+                )
             elif o.facturada:
                 # Nota: el bloque de arriba (not facturada) ya se sale con su
                 # propio "if"; este "elif o.facturada" evita que ordenes SIN
@@ -2847,15 +3301,19 @@ async def get_bandeja_facturacion():
                 # ordenes ya facturadas en Odoo.
                 nc_calc = float(b.ncs_calculadas) if b else 0.0
                 if nc_calc > 0.01:
-                    notas_credito_pendientes.append({
-                        "so_id": o.so_id,
-                        "cliente_nombre": c_name,
-                        "factura_id": o.factura_id or "Odoo",
-                        "monto_pagado": abono,
-                        "nc_monto": nc_calc,
-                        "nc_porcentaje": (nc_calc / monto_orig * 100.0) if monto_orig > 0 else 0.0,
-                        "concepto": "Obsequio / Descuento diferido no aplicado en factura"
-                    })
+                    notas_credito_pendientes.append(
+                        {
+                            "so_id": o.so_id,
+                            "cliente_nombre": c_name,
+                            "factura_id": o.factura_id or "Odoo",
+                            "monto_pagado": abono,
+                            "nc_monto": nc_calc,
+                            "nc_porcentaje": (nc_calc / monto_orig * 100.0)
+                            if monto_orig > 0
+                            else 0.0,
+                            "concepto": "Obsequio / Descuento diferido no aplicado en factura",
+                        }
+                    )
 
                 # Tarea 5: retencion de IVA. El cliente-agente de retencion no
                 # paga en efectivo la porcion de IVA que retiene (wh_rate% del
@@ -2872,30 +3330,33 @@ async def get_bandeja_facturacion():
                     iva_retenido_est = iva_total_est * (wh_rate / 100.0)
                     saldo_pendiente_motor = tot_motor - abono
                     if 0 <= saldo_pendiente_motor <= iva_retenido_est + 0.05:
-                        iva_pendiente_agentes.append({
-                            "so_id": o.so_id,
-                            "cliente_nombre": c_name,
-                            "factura_id": o.factura_id or "Odoo",
-                            "monto_factura": monto_orig,
-                            "wh_iva_rate": wh_rate,
-                            "base_cobrada": round(subtotal_est, 2),
-                            "iva_total_estimado": round(iva_total_est, 2),
-                            "retencion_iva_est": round(iva_retenido_est, 2),
-                            "monto_iva_retenido_est": round(iva_retenido_est, 2),
-                            "monto_pagado": abono,
-                            "saldo_pendiente": round(saldo_pendiente_motor, 2),
-                            "estado_comprobante": "Pendiente Comprobante IVA",
-                            "estado": "Pendiente Comprobante IVA"
-                        })
+                        iva_pendiente_agentes.append(
+                            {
+                                "so_id": o.so_id,
+                                "cliente_nombre": c_name,
+                                "factura_id": o.factura_id or "Odoo",
+                                "monto_factura": monto_orig,
+                                "wh_iva_rate": wh_rate,
+                                "base_cobrada": round(subtotal_est, 2),
+                                "iva_total_estimado": round(iva_total_est, 2),
+                                "retencion_iva_est": round(iva_retenido_est, 2),
+                                "monto_iva_retenido_est": round(iva_retenido_est, 2),
+                                "monto_pagado": abono,
+                                "saldo_pendiente": round(saldo_pendiente_motor, 2),
+                                "estado_comprobante": "Pendiente Comprobante IVA",
+                                "estado": "Pendiente Comprobante IVA",
+                            }
+                        )
 
         return {
             "ordenes_por_facturar": ordenes_por_facturar,
             "notas_credito_pendientes": notas_credito_pendientes,
-            "iva_pendiente_agentes": iva_pendiente_agentes
+            "iva_pendiente_agentes": iva_pendiente_agentes,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/vincular-masivo")
 async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: BackgroundTasks):
@@ -2904,19 +3365,19 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
         last_tasa = repo.last_serie_tasa()
         tasa_bcv = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
         tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
-        
+
         processed = 0
         so_ids_affected = set()
-        
+
         for item in req.items:
             pago = repo.get_pago(item.pago_id)
             if not pago:
                 continue
-                
+
             monto_dec = Decimal(str(item.monto_aplicado))
             if monto_dec <= Decimal("0"):
                 continue
-                
+
             if pago.moneda == "USD":
                 equiv_usd_bcv = monto_dec
                 equiv_usd_binance = monto_dec
@@ -2946,24 +3407,25 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
                 timestamp_registro=datetime.now(),
                 estado=EstadoVinculacion.PENDIENTE,
                 moneda_abono=Moneda(pago.moneda),
-                tipo_tasa_abono=TipoTasa.BCV
+                tipo_tasa_abono=TipoTasa.BCV,
             )
-            
+
             repo.update_vinculacion(vinc)
             processed += 1
             so_ids_affected.add(item.so_id)
-            
+
         for so_id in so_ids_affected:
             background_tasks.add_task(recalculate_all, so_id)
-            
+
         return {
             "status": "success",
             "message": f"Se procesaron {processed} vinculaciones exitosamente.",
-            "procesados": processed
+            "procesados": processed,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/odoo/marcas")
 async def get_odoo_marcas():
@@ -2974,11 +3436,13 @@ async def get_odoo_marcas():
         return [b["name"] for b in brands]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/odoo/categorias")
 async def get_odoo_categorias():
     return ["Comercial", "Industrial"]
+
 
 @app.get("/api/config/tasa-referencia")
 async def get_tasa_referencia(fecha: str, hora: str):
@@ -2986,28 +3450,26 @@ async def get_tasa_referencia(fecha: str, hora: str):
         dt_str = f"{fecha} {hora}:00"
         dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
         bcv, binance = get_rate_for_datetime(dt)
-        return {
-            "tasa_bcv": float(bcv),
-            "tasa_binance": float(binance)
-        }
+        return {"tasa_bcv": float(bcv), "tasa_binance": float(binance)}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
 
 @app.post("/api/config/tasas/sync-odoo")
 async def post_sync_odoo_rates():
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        
+
         # Fetch rates since 2026-01-01
         rates = execute(
             "res.currency.rate",
             "search_read",
             [[["name", ">=", "2026-01-01"], ["currency_id", "=", 1]]],
-            {"fields": ["name", "inverse_company_rate"]}
+            {"fields": ["name", "inverse_company_rate"]},
         )
-        
+
         repo = get_repo()
         existing_rows = repo._g.read_rows("SerieTasas")
         existing_dates = set()
@@ -3015,27 +3477,30 @@ async def post_sync_odoo_rates():
             ts = r.get("timestamp", "")
             if ts:
                 existing_dates.add(ts.split(" ")[0].split("T")[0])
-                
-        from cxc.sheets import serde, gateway as g
+
         from cxc.models import SerieTasa
-        
+        from cxc.sheets import gateway as g
+        from cxc.sheets import serde
+
         rates.sort(key=lambda x: x["name"])
         added_count = 0
         for rate in rates:
             date_str = rate["name"]
             if date_str not in existing_dates:
-                ts = datetime.combine(date.fromisoformat(date_str), datetime.min.time().replace(hour=8))
+                ts = datetime.combine(
+                    date.fromisoformat(date_str), datetime.min.time().replace(hour=8)
+                )
                 val = rate.get("inverse_company_rate")
                 bcv = Decimal(str(val)) if val else Decimal("1.0")
-                binance = bcv * Decimal("1.05") 
-                
+                binance = bcv * Decimal("1.05")
+
                 tasa = SerieTasa(
                     timestamp=ts,
                     tasa_bcv=bcv,
                     tasa_binance=binance,
                     fuente="Odoo Sync",
                     es_heredada=False,
-                    capturada_ok=True
+                    capturada_ok=True,
                 )
                 repo.append_serie_tasa(tasa)
                 added_count += 1
@@ -3043,65 +3508,75 @@ async def post_sync_odoo_rates():
         # Automated Holidays Detection Heuristics
         # Days where BCV didn't publish rates (except weekends and Mondays to avoid bank holidays)
         from datetime import timedelta
+
         start_date = date(2026, 1, 1)
         end_date = date.today() - timedelta(days=1)
-        
+
         odoo_rate_dates = {r["name"] for r in rates}
         existing_feriados = {f.fecha for f in repo.feriados()}
         detected_feriados_count = 0
-        
+
         current = start_date
         while current <= end_date:
             wday = current.weekday()
-            if wday not in (0, 5, 6): # Tuesday to Friday
+            if wday not in (0, 5, 6):  # Tuesday to Friday
                 date_str = current.isoformat()
                 if date_str not in odoo_rate_dates and current not in existing_feriados:
                     from cxc.models import Feriado, TipoFeriado
+
                     feriado = Feriado(
                         fecha=current,
                         descripcion="Feriado detectado por BCV (sin tasa)",
-                        tipo=TipoFeriado.NACIONAL
+                        tipo=TipoFeriado.NACIONAL,
                     )
                     repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
                     detected_feriados_count += 1
             current += timedelta(days=1)
-                
+
         msg = f"Sincronizados {added_count} registros de tasas desde Odoo."
         if detected_feriados_count > 0:
-            msg += f" Detectados y registrados {detected_feriados_count} nuevos feriados nacionales automáticos."
-            
+            msg += f" Detectados {detected_feriados_count} nuevos feriados automáticos."
+
         return {"status": "success", "message": msg}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/odoo/productos")
 async def get_odoo_productos():
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        
+
         # Fetch active products with product_volume (litros)
         prods = execute(
             "product.template",
             "search_read",
             [[["sale_ok", "=", True], ["active", "=", True]]],
-            {"fields": ["id", "name", "default_code", "list_price", "product_volume"], "limit": 100}
+            {
+                "fields": ["id", "name", "default_code", "list_price", "product_volume"],
+                "limit": 100,
+            },
         )
-        
+
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves()
         cand_usd_ids = [int(x) for x in usd_lists if str(x).isdigit()]
         cand_ves_ids = [int(x) for x in ves_lists if str(x).isdigit()]
         all_cand_ids = cand_usd_ids + cand_ves_ids
-        
+
         # Query rules directly from product.pricelist.item to get exact raw pricing entered
-        rules = execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "in", all_cand_ids], ["compute_price", "=", "fixed"]]],
-            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"]}
-        ) if all_cand_ids else []
-        
+        rules = (
+            execute(
+                "product.pricelist.item",
+                "search_read",
+                [[["pricelist_id", "in", all_cand_ids], ["compute_price", "=", "fixed"]]],
+                {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"]},
+            )
+            if all_cand_ids
+            else []
+        )
+
         prices_usd = {}
         prices_ves = {}
         for r in rules:
@@ -3109,29 +3584,32 @@ async def get_odoo_productos():
             p_id = pl_id[0] if isinstance(pl_id, list) else pl_id
             prod_tmpl_id = r.get("product_tmpl_id")
             pt_id = prod_tmpl_id[0] if isinstance(prod_tmpl_id, list) else prod_tmpl_id
-            
+
             if pt_id:
                 if p_id in cand_usd_ids:
                     prices_usd[pt_id] = float(r.get("fixed_price") or 0.0)
                 elif p_id in cand_ves_ids:
                     prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
-                    
+
         resultado = []
         for p in prods:
             pid = p["id"]
-            resultado.append({
-                "id": pid,
-                "nombre": p["name"],
-                "ref_interna": p.get("default_code") or "N/A",
-                "precio_publico": float(p.get("list_price") or 0.0),
-                "precio_usd": prices_usd.get(pid, float(p.get("list_price") or 0.0)),
-                "precio_ves_usd": prices_ves.get(pid, 0.0),
-                "litros": float(p.get("product_volume") or 0.0)
-            })
+            resultado.append(
+                {
+                    "id": pid,
+                    "nombre": p["name"],
+                    "ref_interna": p.get("default_code") or "N/A",
+                    "precio_publico": float(p.get("list_price") or 0.0),
+                    "precio_usd": prices_usd.get(pid, float(p.get("list_price") or 0.0)),
+                    "precio_ves_usd": prices_ves.get(pid, 0.0),
+                    "litros": float(p.get("product_volume") or 0.0),
+                }
+            )
         return resultado
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/odoo/clientes-auditoria")
 async def get_odoo_clientes_auditoria():
@@ -3142,7 +3620,10 @@ async def get_odoo_clientes_auditoria():
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
         except Exception as e_conn:
-            logger.warning("No se pudo conectar a Odoo para clientes-auditoria, usando fallback Sheets: %s", e_conn)
+            logger.warning(
+                "No se pudo conectar a Odoo para clientes-auditoria, usando fallback Sheets: %s",
+                e_conn,
+            )
 
         stats = {}
         partners_data = []
@@ -3152,28 +3633,28 @@ async def get_odoo_clientes_auditoria():
                 "res.partner",
                 "search_read",
                 [[["customer_rank", ">", 0]]],
-                {"fields": ["id", "name", "create_date"]}
+                {"fields": ["id", "name", "create_date"]},
             )
             orders = execute(
                 "sale.order",
                 "search_read",
                 [[["state", "in", ["sale", "done"]]]],
-                {"fields": ["id", "name", "partner_id", "date_order"]}
+                {"fields": ["id", "name", "partner_id", "date_order"]},
             )
             so_ids = [o["id"] for o in orders]
             lines = []
             if so_ids:
-                try:
+                with contextlib.suppress(Exception):
                     lines = execute(
                         "sale.order.line",
                         "search_read",
                         [[["order_id", "in", so_ids]]],
-                        {"fields": ["order_id", "product_uom_qty", "qty_delivered", "product_id"]}
+                        {"fields": ["order_id", "product_uom_qty", "qty_delivered", "product_id"]},
                     )
-                except Exception:
-                    pass
 
-            product_ids = list({l["product_id"][0] for l in lines if isinstance(l.get("product_id"), list)})
+            product_ids = list(
+                {ln["product_id"][0] for ln in lines if isinstance(ln.get("product_id"), list)}
+            )
             product_map = {}
             if product_ids:
                 try:
@@ -3181,7 +3662,7 @@ async def get_odoo_clientes_auditoria():
                         "product.product",
                         "search_read",
                         [[["id", "in", product_ids]]],
-                        {"fields": ["id", "volume", "weight", "brand_id"]}
+                        {"fields": ["id", "volume", "weight", "brand_id"]},
                     )
                     for p in prods:
                         b_info = p.get("brand_id")
@@ -3200,30 +3681,35 @@ async def get_odoo_clientes_auditoria():
                     pid = str(pid_info[0])
                     so_partner_map[o["id"]] = pid
                     date_str = str(o.get("date_order") or "")
-                    
-                    s = stats.setdefault(pid, {
-                        "count": 0,
-                        "count_mes": 0,
-                        "litros_global": Decimal("0"),
-                        "litros_sinoco": Decimal("0"),
-                        "last_date": ""
-                    })
+
+                    s = stats.setdefault(
+                        pid,
+                        {
+                            "count": 0,
+                            "count_mes": 0,
+                            "litros_global": Decimal("0"),
+                            "litros_sinoco": Decimal("0"),
+                            "last_date": "",
+                        },
+                    )
                     s["count"] += 1
                     if date_str and date_str.startswith(current_year_month):
                         s["count_mes"] += 1
                     if date_str and (not s["last_date"] or date_str > s["last_date"]):
                         s["last_date"] = date_str
 
-            for l in lines:
-                so_id = l["order_id"][0] if isinstance(l.get("order_id"), list) else None
+            for ln in lines:
+                so_id = ln["order_id"][0] if isinstance(ln.get("order_id"), list) else None
                 pid = so_partner_map.get(so_id)
                 if pid and pid in stats:
-                    p_info = l.get("product_id")
+                    p_info = ln.get("product_id")
                     p_id = p_info[0] if isinstance(p_info, list) else None
                     if p_id in product_map:
                         brand = product_map[p_id]["brand"]
                         vol = product_map[p_id]["volume"]
-                        qty = parse_decimal_safe(l.get("qty_delivered") or l.get("product_uom_qty") or "0")
+                        qty = parse_decimal_safe(
+                            ln.get("qty_delivered") or ln.get("product_uom_qty") or "0"
+                        )
                         total_l = qty * vol
                         if "GLOBAL" in brand.upper():
                             stats[pid]["litros_global"] += total_l
@@ -3231,11 +3717,13 @@ async def get_odoo_clientes_auditoria():
                             stats[pid]["litros_sinoco"] += total_l
 
             for p in partners:
-                partners_data.append({
-                    "id": str(p["id"]),
-                    "name": p["name"],
-                    "create_date": str(p.get("create_date") or "").split(" ")[0] or "N/A"
-                })
+                partners_data.append(
+                    {
+                        "id": str(p["id"]),
+                        "name": p["name"],
+                        "create_date": str(p.get("create_date") or "").split(" ")[0] or "N/A",
+                    }
+                )
 
         else:
             repo = get_repo()
@@ -3244,37 +3732,44 @@ async def get_odoo_clientes_auditoria():
             lineas = repo._g.read_rows("LineasOrden")
 
             for c in clientes_rows:
-                partners_data.append({
-                    "id": c.get("cliente_id", ""),
-                    "name": c.get("nombre", ""),
-                    "create_date": "N/A"
-                })
+                partners_data.append(
+                    {
+                        "id": c.get("cliente_id", ""),
+                        "name": c.get("nombre", ""),
+                        "create_date": "N/A",
+                    }
+                )
 
             so_partner_map = {}
             for o in ordenes:
                 pid = str(o.cliente_id)
                 so_partner_map[o.so_id] = pid
                 date_str = o.fecha.isoformat()
-                
-                s = stats.setdefault(pid, {
-                    "count": 0,
-                    "count_mes": 0,
-                    "litros_global": Decimal("0"),
-                    "litros_sinoco": Decimal("0"),
-                    "last_date": ""
-                })
+
+                s = stats.setdefault(
+                    pid,
+                    {
+                        "count": 0,
+                        "count_mes": 0,
+                        "litros_global": Decimal("0"),
+                        "litros_sinoco": Decimal("0"),
+                        "last_date": "",
+                    },
+                )
                 s["count"] += 1
                 if date_str.startswith(current_year_month):
                     s["count_mes"] += 1
                 if not s["last_date"] or date_str > s["last_date"]:
                     s["last_date"] = date_str
 
-            for l in lineas:
-                so_id = l.get("so_id")
+            for ln in lineas:
+                so_id = ln.get("so_id")
                 pid = so_partner_map.get(so_id)
                 if pid and pid in stats:
-                    brand = str(l.get("marca", "")).upper()
-                    qty = parse_decimal_safe(l.get("cantidad_entregada") or l.get("cantidad") or "0")
+                    brand = str(ln.get("marca", "")).upper()
+                    qty = parse_decimal_safe(
+                        ln.get("cantidad_entregada") or ln.get("cantidad") or "0"
+                    )
                     if "GLOBAL" in brand:
                         stats[pid]["litros_global"] += qty
                     elif "SINOCO" in brand:
@@ -3283,27 +3778,35 @@ async def get_odoo_clientes_auditoria():
         resultado = []
         for p in partners_data:
             pid = p["id"]
-            p_stats = stats.get(pid, {
-                "count": 0,
-                "count_mes": 0,
-                "litros_global": Decimal("0"),
-                "litros_sinoco": Decimal("0"),
-                "last_date": "N/A"
-            })
-            resultado.append({
-                "id": pid,
-                "nombre": p["name"],
-                "fecha_creacion": p["create_date"],
-                "ventas_cantidad": p_stats["count"],
-                "ventas_mes_actual": p_stats["count_mes"],
-                "litros_global": float(p_stats["litros_global"]),
-                "litros_sinoco": float(p_stats["litros_sinoco"]),
-                "fecha_ultima_venta": p_stats["last_date"].split(" ")[0] if p_stats["last_date"] != "N/A" else "N/A"
-            })
+            p_stats = stats.get(
+                pid,
+                {
+                    "count": 0,
+                    "count_mes": 0,
+                    "litros_global": Decimal("0"),
+                    "litros_sinoco": Decimal("0"),
+                    "last_date": "N/A",
+                },
+            )
+            resultado.append(
+                {
+                    "id": pid,
+                    "nombre": p["name"],
+                    "fecha_creacion": p["create_date"],
+                    "ventas_cantidad": p_stats["count"],
+                    "ventas_mes_actual": p_stats["count_mes"],
+                    "litros_global": float(p_stats["litros_global"]),
+                    "litros_sinoco": float(p_stats["litros_sinoco"]),
+                    "fecha_ultima_venta": p_stats["last_date"].split(" ")[0]
+                    if p_stats["last_date"] != "N/A"
+                    else "N/A",
+                }
+            )
         return resultado
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/promociones")
 async def get_config_promociones():
@@ -3317,25 +3820,30 @@ async def get_config_promociones():
                 "productos": p.productos,
                 "valor": str(p.valor),
                 "compra_minima": str(p.compra_minima),
-                "descuento_fallback": str(getattr(p, 'descuento_fallback', '0')),
+                "descuento_fallback": str(getattr(p, "descuento_fallback", "0")),
                 "regalo_tipo": p.regalo_tipo,
-                "categorias_aplica": getattr(p, 'categorias_aplica', 'Comercial'),
-                "solo_primera_compra": getattr(p, 'solo_primera_compra', False),
+                "categorias_aplica": getattr(p, "categorias_aplica", "Comercial"),
+                "solo_primera_compra": getattr(p, "solo_primera_compra", False),
                 "vigencia_desde": p.vigencia_desde.isoformat(),
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
-                "activo": p.activo
-            } for p in promos
+                "activo": p.activo,
+            }
+            for p in promos
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/promociones")
 async def post_config_promociones(req: PromocionRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import PromocionPrimeraCompra
-        from cxc.sheets import serde, gateway as g
+        from cxc.sheets import gateway as g
+        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde)
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3347,9 +3855,13 @@ async def post_config_promociones(req: PromocionRequest):
                 h1 = v_hasta if v_hasta is not None else date(9999, 12, 31)
                 h2 = r.vigencia_hasta if r.vigencia_hasta is not None else date(9999, 12, 31)
                 if max(v_desde, r.vigencia_desde) <= min(h1, h2):
+                    r_hasta = r.vigencia_hasta or "siempre"
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Conflicto: ya existe la promoción activa {r.regla_id} ({r.vigencia_desde} a {r.vigencia_hasta or 'siempre'})."
+                        detail=(
+                            f"Conflicto: ya existe la promoción activa {r.regla_id} "
+                            f"({r.vigencia_desde} a {r_hasta})."
+                        ),
                     )
 
         regla_id = f"PROMO_{uuid.uuid4().hex[:8].upper()}"
@@ -3366,7 +3878,7 @@ async def post_config_promociones(req: PromocionRequest):
             descuento_fallback=Decimal(str(req.descuento_fallback)),
             categorias_aplica=req.categorias_aplica,
             solo_primera_compra=req.solo_primera_compra,
-            activo=req.activo
+            activo=req.activo,
         )
         row = serde.promocion_to_row(promo)
         repo._g.append_row(g.T_PROMO_PRIMERA, row)
@@ -3375,7 +3887,7 @@ async def post_config_promociones(req: PromocionRequest):
         return {"status": "success", "message": "Promoción registrada correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/config/exclusiones")
@@ -3384,15 +3896,12 @@ async def get_config_exclusiones():
         repo = get_repo()
         excls = repo.exclusiones()
         return [
-            {
-                "regla_tipo_a": e.regla_tipo_a,
-                "regla_tipo_b": e.regla_tipo_b,
-                "activo": e.activo
-            } for e in excls
+            {"regla_tipo_a": e.regla_tipo_a, "regla_tipo_b": e.regla_tipo_b, "activo": e.activo}
+            for e in excls
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/config/exclusiones")
@@ -3400,16 +3909,16 @@ async def post_config_exclusiones(req: ExclusionRequest):
     try:
         repo = get_repo()
         from cxc.models import ExclusionRegla
+
         rule = ExclusionRegla(
-            regla_tipo_a=req.regla_tipo_a,
-            regla_tipo_b=req.regla_tipo_b,
-            activo=req.activo
+            regla_tipo_a=req.regla_tipo_a, regla_tipo_b=req.regla_tipo_b, activo=req.activo
         )
         repo.save_exclusion(rule)
         return {"status": "success", "message": "Exclusión registrada correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/config/descuentos-volumen")
 async def get_config_descuentos_volumen():
@@ -3428,21 +3937,24 @@ async def get_config_descuentos_volumen():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "listas_aplicables": r.listas_aplicables,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-volumen")
 async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoVolumen
         from cxc.sheets import serde
-        import uuid
-        
+
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
 
@@ -3458,13 +3970,13 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             listas_aplicables=req.listas_aplicables,
-            activo=True
+            activo=True,
         )
         repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Unified Discount Rules Endpoint ---
@@ -3478,51 +3990,55 @@ async def get_todas_reglas_descuento():
 
         # 1. Recompra
         for r in repo.descuentos_recompra():
-            todas.append({
-                "tabla": "DescuentosRecompra",
-                "tipo_regla": "recurrencia",
-                "tipo_nombre": "Recompra / Recurrencia",
-                "regla_id": r.regla_id,
-                "marca": getattr(r, "marca", "GLOBAL OIL"),
-                "categoria": getattr(r, "categoria", "CAJA"),
-                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "min_cajas", 2))),
-                "max_cantidad": float(getattr(r, "max_cantidad", getattr(r, "max_cajas", 4))),
-                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
-                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
-                "porcentaje": float(r.porcentaje),
-                "listas_aplicables": getattr(r, "listas_aplicables", "*"),
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "max_usos_mes": r.max_usos_mes,
-                    "dias_ventana": r.dias_ventana
-                },
-                "activo": r.activo
-            })
+            todas.append(
+                {
+                    "tabla": "DescuentosRecompra",
+                    "tipo_regla": "recurrencia",
+                    "tipo_nombre": "Recompra / Recurrencia",
+                    "regla_id": r.regla_id,
+                    "marca": getattr(r, "marca", "GLOBAL OIL"),
+                    "categoria": getattr(r, "categoria", "CAJA"),
+                    "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "min_cajas", 2))),
+                    "max_cantidad": float(getattr(r, "max_cantidad", getattr(r, "max_cajas", 4))),
+                    "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                    "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                    "porcentaje": float(r.porcentaje),
+                    "listas_aplicables": getattr(r, "listas_aplicables", "*"),
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "max_usos_mes": r.max_usos_mes,
+                        "dias_ventana": r.dias_ventana,
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         # 2. Pronto Pago
         for r in repo.descuentos_pronto_pago():
-            todas.append({
-                "tabla": "DescuentosProntoPago",
-                "tipo_regla": "contado",
-                "tipo_nombre": "Pronto Pago / Contado",
-                "regla_id": r.regla_id,
-                "marca": r.marca,
-                "categoria": r.categoria,
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "USD"),
-                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
-                "porcentaje": float(r.porcentaje),
-                "listas_aplicables": r.listas_aplicables,
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "dias_gracia": r.dias_gracia,
-                    "monedas_aplicables": r.monedas_aplicables
-                },
-                "activo": r.activo
-            })
+            todas.append(
+                {
+                    "tabla": "DescuentosProntoPago",
+                    "tipo_regla": "contado",
+                    "tipo_nombre": "Pronto Pago / Contado",
+                    "regla_id": r.regla_id,
+                    "marca": r.marca,
+                    "categoria": r.categoria,
+                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": getattr(r, "unidad_medida", "USD"),
+                    "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                    "porcentaje": float(r.porcentaje),
+                    "listas_aplicables": r.listas_aplicables,
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "dias_gracia": r.dias_gracia,
+                        "monedas_aplicables": r.monedas_aplicables,
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         # 3. Volumen
         for r in repo.descuentos_volumen():
@@ -3531,107 +4047,128 @@ async def get_todas_reglas_descuento():
                 min_q = getattr(r, "litros_minimo", 0)
             u_med = str(getattr(r, "unidad_medida", "") or "").strip()
             if not u_med or u_med == "None":
-                u_med = "LITROS" if (float(r.litros_minimo) > 0 and (getattr(r, "min_cantidad", None) is None or float(r.min_cantidad) == 0)) else "CAJAS"
-            todas.append({
-                "tabla": "DescuentosVolumen",
-                "tipo_regla": "volumen",
-                "tipo_nombre": "Descuento por Volumen",
-                "regla_id": r.regla_id,
-                "marca": r.marca,
-                "categoria": r.categoria,
-                "min_cantidad": float(min_q),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": u_med,
-                "porcentaje": float(r.porcentaje),
-                "listas_aplicables": r.listas_aplicables,
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "tipo_evaluacion": r.tipo_evaluacion,
-                    "dias_evaluacion": r.dias_evaluacion
-                },
-                "activo": r.activo
-            })
+                u_med = (
+                    "LITROS"
+                    if (
+                        float(r.litros_minimo) > 0
+                        and (getattr(r, "min_cantidad", None) is None or float(r.min_cantidad) == 0)
+                    )
+                    else "CAJAS"
+                )
+            todas.append(
+                {
+                    "tabla": "DescuentosVolumen",
+                    "tipo_regla": "volumen",
+                    "tipo_nombre": "Descuento por Volumen",
+                    "regla_id": r.regla_id,
+                    "marca": r.marca,
+                    "categoria": r.categoria,
+                    "min_cantidad": float(min_q),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": u_med,
+                    "porcentaje": float(r.porcentaje),
+                    "listas_aplicables": r.listas_aplicables,
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "tipo_evaluacion": r.tipo_evaluacion,
+                        "dias_evaluacion": r.dias_evaluacion,
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         # 4. Primera Compra
         for r in repo.promociones_primera_compra():
-            todas.append({
-                "tabla": "PromocionPrimeraCompra",
-                "tipo_regla": "primera_compra",
-                "tipo_nombre": "Promoción Primera Compra",
-                "regla_id": r.regla_id,
-                "marca": getattr(r, "marca", "GLOBAL OIL"),
-                "categoria": getattr(r, "categoria", getattr(r, "categorias_aplica", "Comercial")),
-                "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "compra_minima", 3))),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
-                "tipo_beneficio": r.tipo_beneficio,
-                "porcentaje": float(r.valor) if r.tipo_beneficio == "porcentaje" else float(getattr(r, "descuento_fallback", 0.02)),
-                "listas_aplicables": getattr(r, "listas_aplicables", "*"),
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "productos": r.productos,
-                    "regalo_tipo": r.regalo_tipo,
-                    "descuento_fallback": float(getattr(r, "descuento_fallback", 0))
-                },
-                "activo": r.activo
-            })
+            todas.append(
+                {
+                    "tabla": "PromocionPrimeraCompra",
+                    "tipo_regla": "primera_compra",
+                    "tipo_nombre": "Promoción Primera Compra",
+                    "regla_id": r.regla_id,
+                    "marca": getattr(r, "marca", "GLOBAL OIL"),
+                    "categoria": getattr(
+                        r, "categoria", getattr(r, "categorias_aplica", "Comercial")
+                    ),
+                    "min_cantidad": float(
+                        getattr(r, "min_cantidad", getattr(r, "compra_minima", 3))
+                    ),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                    "tipo_beneficio": r.tipo_beneficio,
+                    "porcentaje": float(r.valor)
+                    if r.tipo_beneficio == "porcentaje"
+                    else float(getattr(r, "descuento_fallback", 0.02)),
+                    "listas_aplicables": getattr(r, "listas_aplicables", "*"),
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "productos": r.productos,
+                        "regalo_tipo": r.regalo_tipo,
+                        "descuento_fallback": float(getattr(r, "descuento_fallback", 0)),
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         # 5. Producto / Marca / Categoría Promo
         for r in repo.descuentos_producto():
-            todas.append({
-                "tabla": "DescuentosProducto",
-                "tipo_regla": "producto",
-                "tipo_nombre": "Promoción por Producto",
-                "regla_id": r.regla_id,
-                "marca": r.marca,
-                "categoria": r.categoria,
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
-                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
-                "porcentaje": float(r.porcentaje),
-                "listas_aplicables": r.listas_aplicables,
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "productos": r.productos,
-                    "monedas_aplicables": r.monedas_aplicables
-                },
-                "activo": r.activo
-            })
+            todas.append(
+                {
+                    "tabla": "DescuentosProducto",
+                    "tipo_regla": "producto",
+                    "tipo_nombre": "Promoción por Producto",
+                    "regla_id": r.regla_id,
+                    "marca": r.marca,
+                    "categoria": r.categoria,
+                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                    "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                    "porcentaje": float(r.porcentaje),
+                    "listas_aplicables": r.listas_aplicables,
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "productos": r.productos,
+                        "monedas_aplicables": r.monedas_aplicables,
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         # 6. Diferencial Cambiario
         for r in repo.descuentos_diferencial_cambiario():
-            todas.append({
-                "tabla": "DescuentosDiferencialCambiario",
-                "tipo_regla": "diferencial_cambiario",
-                "tipo_nombre": "Diferencial Cambiario",
-                "regla_id": r.regla_id,
-                "marca": getattr(r, "marca", "*"),
-                "categoria": getattr(r, "categoria", "*"),
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": getattr(r, "unidad_medida", "USD"),
-                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
-                "porcentaje": float(r.porcentaje_fijo),
-                "listas_aplicables": r.listas_aplicables,
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "campos_especiales": {
-                    "nombre": r.nombre,
-                    "tipo_diferencial": r.tipo_diferencial,
-                    "tipo_calculo": r.tipo_calculo,
-                    "monedas_aplicables": r.monedas_aplicables
-                },
-                "activo": r.activo
-            })
+            todas.append(
+                {
+                    "tabla": "DescuentosDiferencialCambiario",
+                    "tipo_regla": "diferencial_cambiario",
+                    "tipo_nombre": "Diferencial Cambiario",
+                    "regla_id": r.regla_id,
+                    "marca": getattr(r, "marca", "*"),
+                    "categoria": getattr(r, "categoria", "*"),
+                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": getattr(r, "unidad_medida", "USD"),
+                    "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                    "porcentaje": float(r.porcentaje_fijo),
+                    "listas_aplicables": r.listas_aplicables,
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "campos_especiales": {
+                        "nombre": r.nombre,
+                        "tipo_diferencial": r.tipo_diferencial,
+                        "tipo_calculo": r.tipo_calculo,
+                        "monedas_aplicables": r.monedas_aplicables,
+                    },
+                    "activo": r.activo,
+                }
+            )
 
         return todas
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Pronto Pago Endpoints ---
@@ -3651,20 +4188,23 @@ async def get_config_pronto_pago():
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-pronto-pago")
 async def post_config_pronto_pago(req: ProntoPagoRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoProntoPago
         from cxc.sheets import serde
-        import uuid
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3686,7 +4226,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
-            activo=req.activo
+            activo=req.activo,
         )
         repo._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(rule))
         if hasattr(repo._g, "_read_cache"):
@@ -3694,7 +4234,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Volumen Endpoints ---
@@ -3707,44 +4247,58 @@ async def get_config_volumen():
         rules = repo.descuentos_volumen()
         res = []
         for r in rules:
-            min_q = r.min_cantidad if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0) else getattr(r, "litros_minimo", 0)
+            min_q = (
+                r.min_cantidad
+                if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0)
+                else getattr(r, "litros_minimo", 0)
+            )
             u_med = str(getattr(r, "unidad_medida", "") or "").strip()
             if not u_med:
-                u_med = "LITROS" if (float(r.litros_minimo) > 0 and float(min_q) == 0) else "UNIDADES"
-            res.append({
-                "regla_id": r.regla_id,
-                "marca": r.marca,
-                "categoria": r.categoria,
-                "litros_minimo": float(r.litros_minimo),
-                "min_cantidad": float(min_q),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
-                "unidad_medida": u_med,
-                "porcentaje": float(r.porcentaje),
-                "tipo_evaluacion": r.tipo_evaluacion,
-                "dias_evaluacion": r.dias_evaluacion,
-                "listas_aplicables": r.listas_aplicables,
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "activo": r.activo
-            })
+                u_med = (
+                    "LITROS" if (float(r.litros_minimo) > 0 and float(min_q) == 0) else "UNIDADES"
+                )
+            res.append(
+                {
+                    "regla_id": r.regla_id,
+                    "marca": r.marca,
+                    "categoria": r.categoria,
+                    "litros_minimo": float(r.litros_minimo),
+                    "min_cantidad": float(min_q),
+                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "unidad_medida": u_med,
+                    "porcentaje": float(r.porcentaje),
+                    "tipo_evaluacion": r.tipo_evaluacion,
+                    "dias_evaluacion": r.dias_evaluacion,
+                    "listas_aplicables": r.listas_aplicables,
+                    "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
+                    "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
+                    "activo": r.activo,
+                }
+            )
         return res
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-volumen")
 async def post_config_volumen(req: VolumenRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoVolumen
         from cxc.sheets import serde
-        import uuid
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
 
         regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
-        min_q = Decimal(str(req.min_cantidad)) if req.min_cantidad is not None else Decimal(str(req.litros_minimo))
+        min_q = (
+            Decimal(str(req.min_cantidad))
+            if req.min_cantidad is not None
+            else Decimal(str(req.litros_minimo))
+        )
         rule = DescuentoVolumen(
             regla_id=regla_id,
             marca=req.marca,
@@ -3759,7 +4313,7 @@ async def post_config_volumen(req: VolumenRequest):
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
-            activo=req.activo
+            activo=req.activo,
         )
         repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
         if hasattr(repo._g, "_read_cache"):
@@ -3767,7 +4321,7 @@ async def post_config_volumen(req: VolumenRequest):
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Recompra Endpoints ---
@@ -3788,20 +4342,23 @@ async def get_config_recompra():
                 "max_cajas": getattr(r, "max_cajas", 4),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-recompra")
 async def post_config_recompra(req: RecompraRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoRecompra
         from cxc.sheets import serde
-        import uuid
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3818,7 +4375,7 @@ async def post_config_recompra(req: RecompraRequest):
             max_cajas=req.max_cajas,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
-            activo=req.activo
+            activo=req.activo,
         )
         repo._g.append_row("DescuentosRecompra", serde.recompra_to_row(rule))
         if hasattr(repo._g, "_read_cache"):
@@ -3826,7 +4383,7 @@ async def post_config_recompra(req: RecompraRequest):
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Producto Promo Endpoints ---
@@ -3846,20 +4403,23 @@ async def get_config_producto():
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-producto")
 async def post_config_producto(req: ProductoPromoRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoProducto
         from cxc.sheets import serde
-        import uuid
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3875,7 +4435,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
-            activo=req.activo
+            activo=req.activo,
         )
         repo._g.append_row("DescuentosProducto", serde.producto_to_row(rule))
         if hasattr(repo._g, "_read_cache"):
@@ -3883,7 +4443,7 @@ async def post_config_producto(req: ProductoPromoRequest):
         return {"status": "success", "message": "Regla de descuento por producto registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Diferencial Cambiario Endpoints ---
@@ -3903,20 +4463,23 @@ async def get_config_diferencial():
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "activo": r.activo
-            } for r in rules
+                "activo": r.activo,
+            }
+            for r in rules
         ]
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/config/descuentos-diferencial-cambiario")
 async def post_config_diferencial(req: DiferencialCambiarioRequest):
     try:
         repo = get_repo()
+        import uuid
+
         from cxc.models import DescuentoDiferencialCambiario
         from cxc.sheets import serde
-        import uuid
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3932,7 +4495,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
-            activo=req.activo
+            activo=req.activo,
         )
         repo._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(rule))
         if hasattr(repo._g, "_read_cache"):
@@ -3940,7 +4503,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Toggle Rule Active Endpoint ---
@@ -3948,15 +4511,28 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
 async def post_toggle_descuento(req: ToggleDescuentoRequest):
     try:
         repo = get_repo()
-        
+
         TABLE_CANDIDATES = {
             "DescuentosProntoPago": ["DescuentosProntoPago", "DescuentosMarcaCategoria"],
             "DescuentosRecompra": ["DescuentosRecompra", "ReglasRecurrencia"],
             "DescuentosProducto": ["DescuentosProducto", "PromocionesPrimeraCompra"],
-            "DescuentosDiferencialCambiario": ["DescuentosDiferencialCambiario", "DescuentoBCVCompleto"],
+            "DescuentosDiferencialCambiario": [
+                "DescuentosDiferencialCambiario",
+                "DescuentoBCVCompleto",
+            ],
         }
-        
-        candidate_names = TABLE_CANDIDATES.get(req.tabla, [req.tabla, "DescuentosProntoPago", "DescuentosMarcaCategoria", "DescuentosRecompra", "DescuentosProducto", "DescuentosDiferencialCambiario"])
+
+        candidate_names = TABLE_CANDIDATES.get(
+            req.tabla,
+            [
+                req.tabla,
+                "DescuentosProntoPago",
+                "DescuentosMarcaCategoria",
+                "DescuentosRecompra",
+                "DescuentosProducto",
+                "DescuentosDiferencialCambiario",
+            ],
+        )
         target_id_str = str(req.regla_id).strip()
 
         # Handle GspreadGateway (Real Google Sheets)
@@ -3967,30 +4543,42 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
                     values = ws.get_all_values()
                     if not values or len(values) < 2:
                         continue
-                    
+
                     headers = [str(h).strip().lower() for h in values[0]]
                     activo_col_idx = None
                     for idx, h in enumerate(headers):
                         if h in ("activo", "active", "estado"):
                             activo_col_idx = idx + 1
                             break
-                    
+
                     if not activo_col_idx:
                         continue
-                    
+
                     for r_idx, row in enumerate(values[1:], start=2):
                         row_str_values = [str(val).strip() for val in row]
                         if target_id_str in row_str_values:
                             ws.update_cell(r_idx, activo_col_idx, "TRUE" if req.activo else "FALSE")
                             if hasattr(repo._g, "invalidate_cache"):
                                 repo._g.invalidate_cache(w_name)
-                            logger.info("Regla %s actualizada a %s en '%s', fila %d", target_id_str, req.activo, w_name, r_idx)
+                            logger.info(
+                                "Regla %s actualizada a %s en '%s', fila %d",
+                                target_id_str,
+                                req.activo,
+                                w_name,
+                                r_idx,
+                            )
+                            estado_str = "Activo" if req.activo else "Inactivo"
                             return {
                                 "status": "success",
-                                "message": f"Estado de la regla {target_id_str} actualizado a {'Activo' if req.activo else 'Inactivo'} en '{w_name}'."
+                                "message": (
+                                    f"Estado de la regla {target_id_str} actualizado a "
+                                    f"{estado_str} en '{w_name}'."
+                                ),
                             }
                 except Exception as inner_e:
-                    logger.warning("Error buscando regla %s en '%s': %s", target_id_str, w_name, inner_e)
+                    logger.warning(
+                        "Error buscando regla %s en '%s': %s", target_id_str, w_name, inner_e
+                    )
                     continue
         else:
             # InMemorySheetGateway fallback for tests
@@ -4001,47 +4589,77 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
                     if r_id == target_id_str:
                         r["activo"] = "TRUE" if req.activo else "FALSE"
                         repo._g.upsert_row(t_name, "regla_id", r)
-                        return {
-                            "status": "success",
-                            "message": f"Estado de la regla {target_id_str} actualizado a {'Activo' if req.activo else 'Inactivo'}."
-                        }
+                        estado_str = "Activo" if req.activo else "Inactivo"
+                        msg = f"Estado de la regla {target_id_str} actualizado a {estado_str}."
+                        return {"status": "success", "message": msg}
 
         # If not found in Sheet, handle Default Fallback Rules by persisting them into Google Sheets
         DEFAULT_RULES_SEED = {
-            "DIF_35_VES": ("DescuentosDiferencialCambiario", {
-                "regla_id": "DIF_35_VES", "nombre": "35% Fijo VES a USD", "tipo_diferencial": "fijo_35_ves_usd",
-                "tipo_calculo": "fijo", "porcentaje_fijo": "0.35", "unidad_medida": "USD", "monedas_aplicables": "USD", "listas_aplicables": "LISTAS_VES",
-                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
-                "activo": "TRUE" if req.activo else "FALSE"
-            }),
-            "DIF_EQUIPARAR": ("DescuentosDiferencialCambiario", {
-                "regla_id": "DIF_EQUIPARAR", "nombre": "Equiparar Binance N/C", "tipo_diferencial": "equiparar_binance",
-                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "LISTAS_VES",
-                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
-                "activo": "TRUE" if req.activo else "FALSE"
-            }),
-            "DIF_BRECHA_CIERRE": ("DescuentosDiferencialCambiario", {
-                "regla_id": "DIF_BRECHA_CIERRE", "nombre": "Brecha BCV vs Binance Cierre", "tipo_diferencial": "diferencial_bcv_binance",
-                "tipo_calculo": "variable", "porcentaje_fijo": "0", "unidad_medida": "USD", "monedas_aplicables": "*", "listas_aplicables": "LISTAS_VES",
-                "vigencia_desde": date.today().isoformat(), "vigencia_hasta": "",
-                "activo": "TRUE" if req.activo else "FALSE"
-            }),
+            "DIF_35_VES": (
+                "DescuentosDiferencialCambiario",
+                {
+                    "regla_id": "DIF_35_VES",
+                    "nombre": "35% Fijo VES a USD",
+                    "tipo_diferencial": "fijo_35_ves_usd",
+                    "tipo_calculo": "fijo",
+                    "porcentaje_fijo": "0.35",
+                    "unidad_medida": "USD",
+                    "monedas_aplicables": "USD",
+                    "listas_aplicables": "LISTAS_VES",
+                    "vigencia_desde": date.today().isoformat(),
+                    "vigencia_hasta": "",
+                    "activo": "TRUE" if req.activo else "FALSE",
+                },
+            ),
+            "DIF_EQUIPARAR": (
+                "DescuentosDiferencialCambiario",
+                {
+                    "regla_id": "DIF_EQUIPARAR",
+                    "nombre": "Equiparar Binance N/C",
+                    "tipo_diferencial": "equiparar_binance",
+                    "tipo_calculo": "variable",
+                    "porcentaje_fijo": "0",
+                    "unidad_medida": "USD",
+                    "monedas_aplicables": "*",
+                    "listas_aplicables": "LISTAS_VES",
+                    "vigencia_desde": date.today().isoformat(),
+                    "vigencia_hasta": "",
+                    "activo": "TRUE" if req.activo else "FALSE",
+                },
+            ),
+            "DIF_BRECHA_CIERRE": (
+                "DescuentosDiferencialCambiario",
+                {
+                    "regla_id": "DIF_BRECHA_CIERRE",
+                    "nombre": "Brecha BCV vs Binance Cierre",
+                    "tipo_diferencial": "diferencial_bcv_binance",
+                    "tipo_calculo": "variable",
+                    "porcentaje_fijo": "0",
+                    "unidad_medida": "USD",
+                    "monedas_aplicables": "*",
+                    "listas_aplicables": "LISTAS_VES",
+                    "vigencia_desde": date.today().isoformat(),
+                    "vigencia_hasta": "",
+                    "activo": "TRUE" if req.activo else "FALSE",
+                },
+            ),
         }
 
         if target_id_str in DEFAULT_RULES_SEED:
             target_table, seed_row = DEFAULT_RULES_SEED[target_id_str]
             repo._g.append_row(target_table, seed_row)
-            return {
-                "status": "success",
-                "message": f"Regla por defecto {target_id_str} registrada y actualizada a {'Activo' if req.activo else 'Inactivo'}."
-            }
+            estado_str = "Activo" if req.activo else "Inactivo"
+            msg = f"Regla por defecto {target_id_str} registrada y actualizada a {estado_str}."
+            return {"status": "success", "message": msg}
 
-        raise HTTPException(status_code=404, detail=f"Regla '{target_id_str}' no encontrada en Google Sheets.")
+        raise HTTPException(
+            status_code=404, detail=f"Regla '{target_id_str}' no encontrada en Google Sheets."
+        )
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # --- Rate Averages Endpoint ---
@@ -4051,7 +4669,7 @@ async def get_tasas_promedios():
         repo = get_repo()
         rows = repo._g.read_rows("SerieTasas")
         today_str = date.today().isoformat()
-        
+
         rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
         target_rows = rates_today if rates_today else rows[-24:]
 
@@ -4085,17 +4703,17 @@ async def get_tasas_promedios():
                     ts_str = str(r.get("timestamp", "00:00"))
                     time_part = ts_str.split("T")[-1].split(" ")[-1]
                     ts_hour = int(time_part.split(":")[0])
-                    
+
                     if 6 <= ts_hour <= 9:
                         manana_near_9.append(tb)
                     elif 10 <= ts_hour <= 13:
                         tarde_near_13.append(tb)
-                    
+
                     if ts_hour < 12:
                         manana_all.append(tb)
                     else:
                         tarde_all.append(tb)
-            except:
+            except Exception:
                 pass
 
         m_list = manana_near_9 if manana_near_9 else manana_all
@@ -4104,7 +4722,7 @@ async def get_tasas_promedios():
         avg_m = float(sum(m_list) / Decimal(len(m_list))) if m_list else None
         avg_t = float(sum(t_list) / Decimal(len(t_list))) if t_list else None
         avg_d = float(sum(diario) / Decimal(len(diario))) if diario else None
-        
+
         diff_pct = 0.0
         if avg_d and last_bcv > Decimal("0"):
             diff_pct = float(((Decimal(str(avg_d)) - last_bcv) / Decimal(str(avg_d))) * 100)
@@ -4116,11 +4734,11 @@ async def get_tasas_promedios():
             "tasa_binance_manana": round(avg_m, 2) if avg_m else None,
             "tasa_binance_tarde": round(avg_t, 2) if avg_t else None,
             "tasa_binance_diario": round(avg_d, 2) if avg_d else None,
-            "diferencial_bcv_binance_pct": round(diff_pct, 2)
+            "diferencial_bcv_binance_pct": round(diff_pct, 2),
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/pagos-historial")
@@ -4142,21 +4760,25 @@ async def get_pagos_historial():
             o = ordenes_map.get(v.so_id)
             factura_id = o.factura_id if o and o.factura_id else "N/A"
 
-            historial.append({
-                "pago_id": v.pago_id,
-                "cliente_nombre": c_name,
-                "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d") if v.hora_pago_confirmada else "",
-                "monto_aplicado": float(v.monto_aplicado),
-                "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
-                "so_id": v.so_id,
-                "factura_id": factura_id,
-                "confirmado_por": v.confirmado_por or "Sistema",
-                "estado": v.estado.value
-            })
+            historial.append(
+                {
+                    "pago_id": v.pago_id,
+                    "cliente_nombre": c_name,
+                    "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d")
+                    if v.hora_pago_confirmada
+                    else "",
+                    "monto_aplicado": float(v.monto_aplicado),
+                    "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
+                    "so_id": v.so_id,
+                    "factura_id": factura_id,
+                    "confirmado_por": v.confirmado_por or "Sistema",
+                    "estado": v.estado.value,
+                }
+            )
         return historial
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/tasas-historicas")
@@ -4167,7 +4789,7 @@ async def get_tasas_historicas():
         return {"items": rows, "count": len(rows)}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/reglas-descuento")
@@ -4180,18 +4802,18 @@ async def get_reglas_descuento():
         volumen = repo._g.read_rows("DescuentosVolumen")
         producto = repo._g.read_rows("DescuentosProducto")
         diferencial = repo._g.read_rows("DescuentosDiferencialCambiario")
-        
+
         return {
             "primera_compra": primera,
             "recompra": recompra,
             "pronto_pago": pronto_pago,
             "volumen": volumen,
             "producto": producto,
-            "diferencial_cambiario": diferencial
+            "diferencial_cambiario": diferencial,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/auditoria")
@@ -4209,14 +4831,12 @@ async def get_auditoria():
         for _hr in hist_rows:
             _code = str(_hr.get("codigo", "")).strip()
             if _code:
-                try:
+                with contextlib.suppress(Exception):
                     hist_map[_code] = {
                         "nombre": _hr.get("producto_nombre", ""),
                         "usd": Decimal(str(_hr.get("precio_usd", "0") or "0")),
                         "eur": Decimal(str(_hr.get("precio_bcv_euro", "0") or "0")),
                     }
-                except Exception:
-                    pass
 
         ordenes = repo.all_ordenes()
         lines_rows = repo._g.read_rows("LineasOrden")
@@ -4231,12 +4851,24 @@ async def get_auditoria():
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
         all_candidate_ids = list(set(usd_ids + ves_ids))
 
-        rules_all = execute(
-            "product.pricelist.item",
-            "search_read",
-            [[["pricelist_id", "in", all_candidate_ids], ["compute_price", "=", "fixed"]]],
-            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price", "date_start", "date_end"]}
-        ) if execute else []
+        rules_all = (
+            execute(
+                "product.pricelist.item",
+                "search_read",
+                [[["pricelist_id", "in", all_candidate_ids], ["compute_price", "=", "fixed"]]],
+                {
+                    "fields": [
+                        "pricelist_id",
+                        "product_tmpl_id",
+                        "fixed_price",
+                        "date_start",
+                        "date_end",
+                    ]
+                },
+            )
+            if execute
+            else []
+        )
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo._g.read_rows("AnomaliasAceptadas")
@@ -4252,12 +4884,34 @@ async def get_auditoria():
         invoices_by_so = {}
         so_pagada_en_odoo: set[str] = set()
         try:
-            invoices = execute(
-                "account.move",
-                "search_read",
-                [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
-                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date", "move_type", "payment_state"]}
-            ) if execute else []
+            invoices = (
+                execute(
+                    "account.move",
+                    "search_read",
+                    [
+                        [
+                            ["invoice_origin", "in", so_ids],
+                            ["state", "=", "posted"],
+                            ["move_type", "in", ["out_invoice", "out_refund"]],
+                        ]
+                    ],
+                    {
+                        "fields": [
+                            "id",
+                            "name",
+                            "invoice_origin",
+                            "amount_total",
+                            "amount_residual",
+                            "currency_id",
+                            "invoice_date",
+                            "move_type",
+                            "payment_state",
+                        ]
+                    },
+                )
+                if execute
+                else []
+            )
             for inv in invoices:
                 so = str(inv.get("invoice_origin", "")).strip()
                 if so:
@@ -4285,10 +4939,8 @@ async def get_auditoria():
             ts = str(r.get("timestamp", ""))[:10]
             tbcv = r.get("tasa_bcv")
             if ts and tbcv:
-                try:
+                with contextlib.suppress(Exception):
                     rates_map[ts] = float(tbcv)
-                except Exception:
-                    pass
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
         # Load payments map by SO for net debt comparison
@@ -4311,66 +4963,108 @@ async def get_auditoria():
             lista_id_str = str(o.lista_precios or "").strip()
             is_ves = lista_id_str in [str(x) for x in ves_ids]
             candidate_list_ids = ves_ids if is_ves else usd_ids
-            pricelist_label = f"Lista VES (#{lista_id_str})" if is_ves else f"Lista USD (#{lista_id_str})"
-            is_historical = (not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical)
+            pricelist_label = (
+                f"Lista VES (#{lista_id_str})" if is_ves else f"Lista USD (#{lista_id_str})"
+            )
+            is_historical = (
+                not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical
+            )
 
             # Check 1: Unit prices vs correct official pricelist or Historical List
             for ln in so_lines:
                 qty = parse_decimal_safe(ln.get("cantidad", "0"))
-                qty_delivered = parse_decimal_safe(ln.get("cantidad_entregada", ln.get("qty_delivered", "0")))
+                qty_delivered = parse_decimal_safe(
+                    ln.get("cantidad_entregada", ln.get("qty_delivered", "0"))
+                )
                 price_order = parse_decimal_safe(ln.get("precio_unitario", "0"))
 
                 # Skip returned/non-delivered/zero-qty lines (returns with price=0 or qty=0)
-                if qty <= Decimal("0") or price_order <= Decimal("0") or qty_delivered <= Decimal("0"):
+                if (
+                    qty <= Decimal("0")
+                    or price_order <= Decimal("0")
+                    or qty_delivered <= Decimal("0")
+                ):
                     continue
 
                 pt_id = extract_product_tmpl_id(ln.get("producto", ""))
                 if is_historical:
                     code_key = str(pt_id) if pt_id else str(ln.get("producto", "")).strip()
                     hist_info = hist_map.get(code_key)
-                    price_official = hist_info["usd"] if hist_info and hist_info["usd"] > Decimal("0") else None
-                    cur_label = "Lista Histórica Auditoría (Pre-12-Mar)" if o.fecha < cutoff_historical else "Lista Histórica Auditoría (Sin Lista)"
+                    price_official = (
+                        hist_info["usd"] if hist_info and hist_info["usd"] > Decimal("0") else None
+                    )
+                    cur_label = (
+                        "Lista Histórica Auditoría (Pre-12-Mar)"
+                        if o.fecha < cutoff_historical
+                        else "Lista Histórica Auditoría (Sin Lista)"
+                    )
                 else:
-                    price_official = resolve_effective_pricelist_price(pt_id, o.fecha, candidate_list_ids, rules_all) if pt_id else None
+                    price_official = (
+                        resolve_effective_pricelist_price(
+                            pt_id, o.fecha, candidate_list_ids, rules_all
+                        )
+                        if pt_id
+                        else None
+                    )
                     cur_label = pricelist_label
 
-                if price_official is not None:
-                    if price_order < price_official - Decimal("0.01"):
-                        has_discrepancy = True
-                        diff_unit = price_official - price_order
-                        diff_monto = float(diff_unit * qty)
-                        diff_pct = float((diff_unit / price_official) * 100) if price_official > 0 else 0.0
-                        raw_discrepancias.append({
+                if price_official is not None and price_order < price_official - Decimal("0.01"):
+                    has_discrepancy = True
+                    diff_unit = price_official - price_order
+                    diff_monto = float(diff_unit * qty)
+                    diff_pct = (
+                        float((diff_unit / price_official) * 100) if price_official > 0 else 0.0
+                    )
+                    detalle_precio = (
+                        f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < "
+                        f"{cur_label} (${float(price_official):.2f}) "
+                        f"[Entregado: {float(qty_delivered):.0f} und]"
+                    )
+                    raw_discrepancias.append(
+                        {
                             "so_id": o.so_id,
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
                             "tipo": "Precio Inferior a Lista",
-                            "detalle": f"Producto ID {pt_id}: Precio orden (${float(price_order):.2f}) < {cur_label} (${float(price_official):.2f}) [Entregado: {float(qty_delivered):.0f} und]",
+                            "detalle": detalle_precio,
                             "esperado": float(price_official * qty),
                             "actual": float(price_order * qty),
                             "diferencia_monto": round(diff_monto, 2),
-                            "diferencia_porcentaje": round(diff_pct, 2)
-                        })
+                            "diferencia_porcentaje": round(diff_pct, 2),
+                        }
+                    )
 
                 # Check 2: Manual unapproved line discounts
                 disc = parse_decimal_safe(ln.get("descuento", "0"))
-                if disc > Decimal("0"):
-                    if not b or (b and b.total_descuentos == Decimal("0") and b.ncs_calculadas == Decimal("0")):
-                        has_discrepancy = True
-                        disc_monto = float((price_order * qty) * (disc / Decimal("100")))
-                        raw_discrepancias.append({
+                if disc > Decimal("0") and (
+                    not b
+                    or (
+                        b
+                        and b.total_descuentos == Decimal("0")
+                        and b.ncs_calculadas == Decimal("0")
+                    )
+                ):
+                    has_discrepancy = True
+                    disc_monto = float((price_order * qty) * (disc / Decimal("100")))
+                    detalle_disc = (
+                        f"Descuento manual del {float(disc):.1f}% en línea sin regla activa "
+                        f"[Entregado: {float(qty_delivered):.0f} und]"
+                    )
+                    raw_discrepancias.append(
+                        {
                             "so_id": o.so_id,
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
                             "tipo": "Descuento Manual No Explicado",
-                            "detalle": f"Descuento manual del {float(disc):.1f}% en línea sin regla activa [Entregado: {float(qty_delivered):.0f} und]",
+                            "detalle": detalle_disc,
                             "esperado": float(price_order * qty),
                             "actual": float((price_order * qty) - Decimal(str(disc_monto))),
                             "diferencia_monto": round(disc_monto, 2),
-                            "diferencia_porcentaje": float(disc)
-                        })
+                            "diferencia_porcentaje": float(disc),
+                        }
+                    )
 
             # Check 3: Sub-facturación / Sobre-facturación / Orden vs Factura
             if o.facturada and o.monto_facturado:
@@ -4379,19 +5073,27 @@ async def get_auditoria():
                 if abs(diff_inv) > Decimal("0.05"):
                     has_discrepancy = True
                     tipo_str = "Sobre-facturación" if diff_inv > Decimal("0") else "Sub-facturación"
-                    pct_inv = float((abs(diff_inv) / net_expected) * 100) if net_expected > 0 else 0.0
-                    raw_discrepancias.append({
-                        "so_id": o.so_id,
-                        "factura_id": o.factura_id or "N/A",
-                        "cliente_nombre": c_name,
-                        "vendedor": o.vendedor_email or "N/A",
-                        "tipo": tipo_str,
-                        "detalle": f"Factura Odoo (${float(o.monto_facturado):.2f}) no coincide con Neto Orden Esperado (${float(net_expected):.2f})",
-                        "esperado": float(net_expected),
-                        "actual": float(o.monto_facturado),
-                        "diferencia_monto": round(float(abs(diff_inv)), 2),
-                        "diferencia_porcentaje": round(pct_inv, 2)
-                    })
+                    pct_inv = (
+                        float((abs(diff_inv) / net_expected) * 100) if net_expected > 0 else 0.0
+                    )
+                    detalle_inv = (
+                        f"Factura Odoo (${float(o.monto_facturado):.2f}) no coincide con "
+                        f"Neto Orden Esperado (${float(net_expected):.2f})"
+                    )
+                    raw_discrepancias.append(
+                        {
+                            "so_id": o.so_id,
+                            "factura_id": o.factura_id or "N/A",
+                            "cliente_nombre": c_name,
+                            "vendedor": o.vendedor_email or "N/A",
+                            "tipo": tipo_str,
+                            "detalle": detalle_inv,
+                            "esperado": float(net_expected),
+                            "actual": float(o.monto_facturado),
+                            "diferencia_monto": round(float(abs(diff_inv)), 2),
+                            "diferencia_porcentaje": round(pct_inv, 2),
+                        }
+                    )
 
             # Check 4: Discrepancia entre Saldo Deudor CxC vs Saldo Residual Factura Odoo
             inv_list = invoices_by_so.get(o.so_id, [])
@@ -4402,14 +5104,16 @@ async def get_auditoria():
                     inv_names_list.append(str(inv.get("name", "")))
                     res_val = float(inv.get("amount_residual", 0.0))
                     curr = inv.get("currency_id")
-                    c_name_inv = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    c_name_inv = (
+                        curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    )
                     inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
                     rate = rates_map.get(inv_dt, last_bcv_val)
                     if c_name_inv == "VES" and rate > 0:
                         tot_res_usd += res_val / rate
                     else:
                         tot_res_usd += res_val
-                
+
                 saldo_factura_odoo = max(0.0, float(tot_res_usd))
                 factura_nombre = ", ".join(inv_names_list)
                 abono_conc = pagos_by_so.get(o.so_id, 0.0)
@@ -4417,33 +5121,41 @@ async def get_auditoria():
 
                 diff_cxc_inv = abs(saldo_cxc - saldo_factura_odoo)
                 if diff_cxc_inv > 0.50:
-                    discrepancias_facturas_odoo.append({
-                        "so_id": o.so_id,
-                        "factura_id": factura_nombre,
-                        "cliente_nombre": c_name,
-                        "vendedor": o.vendedor_email or "Sin Vendedor",
-                        "fecha": o.fecha.isoformat(),
-                        "saldo_cxc": round(saldo_cxc, 2),
-                        "saldo_factura_odoo": round(saldo_factura_odoo, 2),
-                        "diferencia": round(diff_cxc_inv, 2),
-                        "causa_probable": "Abono / Pago registrado en CxC pero pendiente de aplicar en Odoo" if saldo_factura_odoo > saldo_cxc else "Diferencia por retenciones o ajustes en factura Odoo"
-                    })
+                    discrepancias_facturas_odoo.append(
+                        {
+                            "so_id": o.so_id,
+                            "factura_id": factura_nombre,
+                            "cliente_nombre": c_name,
+                            "vendedor": o.vendedor_email or "Sin Vendedor",
+                            "fecha": o.fecha.isoformat(),
+                            "saldo_cxc": round(saldo_cxc, 2),
+                            "saldo_factura_odoo": round(saldo_factura_odoo, 2),
+                            "diferencia": round(diff_cxc_inv, 2),
+                            "causa_probable": (
+                                "Abono / Pago registrado en CxC pero pendiente de aplicar en Odoo"
+                                if saldo_factura_odoo > saldo_cxc
+                                else "Diferencia por retenciones o ajustes en factura Odoo"
+                            ),
+                        }
+                    )
 
             # Tarea 2: la tabla de confirmacion es para lo ya PAGADO en Odoo
             # (paid/in_payment) y sin discrepancias -- no solo facturado.
             if not has_discrepancy and o.facturada and o.so_id in so_pagada_en_odoo:
                 neto = float(b.total_motor) if b else float(o.monto_total)
                 desc_tot = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
-                operaciones_conformes.append({
-                    "so_id": o.so_id,
-                    "factura_id": o.factura_id or "N/A",
-                    "cliente_nombre": c_name,
-                    "fecha": o.fecha.isoformat(),
-                    "monto_original": float(o.monto_total),
-                    "descuentos_aplicados": desc_tot,
-                    "monto_neto_conciliado": neto,
-                    "estado": "Conforme 100% (Pagada)"
-                })
+                operaciones_conformes.append(
+                    {
+                        "so_id": o.so_id,
+                        "factura_id": o.factura_id or "N/A",
+                        "cliente_nombre": c_name,
+                        "fecha": o.fecha.isoformat(),
+                        "monto_original": float(o.monto_total),
+                        "descuentos_aplicados": desc_tot,
+                        "monto_neto_conciliado": neto,
+                        "estado": "Conforme 100% (Pagada)",
+                    }
+                )
 
         # Separate into pending discrepancies and accepted anomalies
         discrepancias_pendientes = []
@@ -4472,12 +5184,14 @@ async def get_auditoria():
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
                 "total_aceptadas": len(anomalias_aceptadas),
-                "monto_discrepancia_total": round(sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2)
-            }
+                "monto_discrepancia_total": round(
+                    sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
+                ),
+            },
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class AceptarAnomaliaRequest(BaseModel):
@@ -4500,13 +5214,16 @@ async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
             "tipo_anomalia": req.tipo_anomalia,
             "motivo_aceptacion": req.motivo_aceptacion,
             "aprobado_por": req.aprobado_por,
-            "timestamp_aprobacion": datetime.now().isoformat()
+            "timestamp_aprobacion": datetime.now().isoformat(),
         }
         repo._g.append_row("AnomaliasAceptadas", row)
-        return {"status": "success", "message": "Anomalía aceptada y movida al historial de revisiones."}
+        return {
+            "status": "success",
+            "message": "Anomalía aceptada y movida al historial de revisiones.",
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class MarcarRecibidoRequest(BaseModel):
@@ -4522,36 +5239,48 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
         vinc_by_pago = {v.pago_id: v for v in vincs}
-        
+
         # Load clients and orders for vendor names
         ordenes = {o.so_id: o for o in repo.all_ordenes()}
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
-        
+
         resultados = []
         for p in pagos:
             pid = str(p.get("pago_id", "")).strip()
             if not pid:
                 continue
-            
+
             moneda = p.get("moneda", "VES")
             monto = parse_decimal_safe(p.get("monto", "0"))
             fecha_str = str(p.get("fecha", ""))[:10]
-            
+
             # Find rates for that date
             bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
-            
+
             # Compute BCV and Binance equivalents
-            eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
-            eq_binance = monto if moneda == "USD" else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
-            
+            eq_bcv = (
+                monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+            )
+            eq_binance = (
+                monto
+                if moneda == "USD"
+                else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
+            )
+
             v = vinc_by_pago.get(pid)
             so_id = v.so_id if v else "-"
             orden_obj = ordenes.get(so_id)
-            vendedor = p.get("vendedor") or (orden_obj.vendedor_email if orden_obj else "Sin Vendedor")
-            cliente_name_from_order = clientes_map.get(orden_obj.cliente_id, "Sin Cliente") if orden_obj else "Sin Cliente"
+            vendedor = p.get("vendedor") or (
+                orden_obj.vendedor_email if orden_obj else "Sin Vendedor"
+            )
+            cliente_name_from_order = (
+                clientes_map.get(orden_obj.cliente_id, "Sin Cliente")
+                if orden_obj
+                else "Sin Cliente"
+            )
             cliente = p.get("cliente_nombre") or cliente_name_from_order
-            
+
             item = {
                 "pago_id": pid,
                 "fecha": fecha_str,
@@ -4569,37 +5298,42 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
                 "recibido": p.get("recibido") == "TRUE",
                 "numero_recibido": p.get("numero_recibido") or "-",
                 "fecha_recibido": p.get("fecha_recibido") or "-",
-                "recibido_por": p.get("recibido_por") or "-"
+                "recibido_por": p.get("recibido_por") or "-",
             }
-            
+
             # Filter if user is vendor
             if user and user["rol"] == "ventas":
                 u_name = (user["nombre"] or user["email"]).strip().lower()
-                if item["vendedor"].strip().lower() != u_name and user["email"].strip().lower() not in item["vendedor"].lower():
+                if (
+                    item["vendedor"].strip().lower() != u_name
+                    and user["email"].strip().lower() not in item["vendedor"].lower()
+                ):
                     continue
-                    
+
             resultados.append(item)
-            
+
         return resultados
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/cobranza/marcar-recibido")
-async def post_marcar_recibido(req: MarcarRecibidoRequest, cxc_session: str | None = Cookie(default=None)):
+async def post_marcar_recibido(
+    req: MarcarRecibidoRequest, cxc_session: str | None = Cookie(default=None)
+):
     try:
         user = get_current_user_from_cookie(cxc_session)
         recibido_por = req.recibido_por or (user["nombre"] if user else "Administración")
         repo = get_repo()
         pagos_rows = repo._g.read_rows("Pagos")
-        
+
         now = datetime.now()
         recibo_num = f"REC-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
-        
+
         target_pago_ids = set(req.pago_ids)
         pagos_actualizados = []
-        
+
         for r in pagos_rows:
             pid = str(r.get("pago_id", "")).strip()
             if pid in target_pago_ids:
@@ -4609,17 +5343,17 @@ async def post_marcar_recibido(req: MarcarRecibidoRequest, cxc_session: str | No
                 r["recibido_por"] = recibido_por
                 repo._g.upsert_row("Pagos", "pago_id", r)
                 pagos_actualizados.append(r)
-                
+
         return {
             "status": "success",
             "numero_recibido": recibo_num,
             "fecha_recibido": now.strftime("%Y-%m-%d %H:%M"),
             "recibido_por": recibido_por,
-            "pagos": pagos_actualizados
+            "pagos": pagos_actualizados,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/reporte/diario")
@@ -4629,13 +5363,18 @@ async def get_reporte_diario():
         ordenes = repo.all_ordenes()
         lineas = repo._g.read_rows("LineasOrden")
         pagos = repo._g.read_rows("Pagos")
-        
+
         prod_litros_map = {}
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                prods = execute("product.product", "search_read", [], {"fields": ["id", "default_code", "name", "volume", "weight"]})
+                prods = execute(
+                    "product.product",
+                    "search_read",
+                    [],
+                    {"fields": ["id", "default_code", "name", "volume", "weight"]},
+                )
                 for p in prods:
                     pid = p.get("id")
                     vol = parse_decimal_safe(p.get("volume") or "0")
@@ -4644,27 +5383,36 @@ async def get_reporte_diario():
                     prod_litros_map[pid] = vol
         except Exception as e_p:
             logger.warning("Error leyendo litros de productos: %s", e_p)
-            
+
         # 1. Ventas por Día (USD y Litros)
         ventas_por_dia = {}
         for o in ordenes:
             st = getattr(o, "estado_orden", "sale")
-            if st in ["cancel", "draft", "sent"] and not (o.entregada_completa or bool(o.fecha_entrega)):
+            if st in ["cancel", "draft", "sent"] and not (
+                o.entregada_completa or bool(o.fecha_entrega)
+            ):
                 continue
             fecha_key = o.fecha.isoformat()[:10]
             if fecha_key not in ventas_por_dia:
-                ventas_por_dia[fecha_key] = {"fecha": fecha_key, "total_usd": Decimal("0"), "litros_totales": Decimal("0"), "ordenes_count": 0}
+                ventas_por_dia[fecha_key] = {
+                    "fecha": fecha_key,
+                    "total_usd": Decimal("0"),
+                    "litros_totales": Decimal("0"),
+                    "ordenes_count": 0,
+                }
             ventas_por_dia[fecha_key]["total_usd"] += o.monto_total
             ventas_por_dia[fecha_key]["ordenes_count"] += 1
 
         # Sum line liters
-        for l in lineas:
-            so_id = l.get("so_id")
-            prod_id = int(l.get("product_id") or 0)
-            qty = parse_decimal_safe(l.get("cantidad_entregada") or l.get("cantidad_ordenada") or "0")
+        for ln in lineas:
+            so_id = ln.get("so_id")
+            prod_id = int(ln.get("product_id") or 0)
+            qty = parse_decimal_safe(
+                ln.get("cantidad_entregada") or ln.get("cantidad_ordenada") or "0"
+            )
             l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
             total_l = qty * l_per_unit
-            
+
             o_match = next((o for o in ordenes if o.so_id == so_id), None)
             if o_match:
                 fk = o_match.fecha.isoformat()[:10]
@@ -4681,23 +5429,29 @@ async def get_reporte_diario():
                     "total_eq_bcv": Decimal("0"),
                     "total_eq_binance": Decimal("0"),
                     "por_moneda": {},
-                    "por_metodo": {}
+                    "por_metodo": {},
                 }
             monto = parse_decimal_safe(p.get("monto", "0"))
             moneda = p.get("moneda", "VES")
             metodo = p.get("metodo_pago") or p.get("forma_pago") or "Efectivo"
-            
+
             bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
-            eq_bcv = monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
-            eq_binance = monto if moneda == "USD" else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
+            eq_bcv = (
+                monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+            )
+            eq_binance = (
+                monto
+                if moneda == "USD"
+                else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
+            )
 
             cobranza_por_dia[fecha_key]["total_eq_bcv"] += eq_bcv
             cobranza_por_dia[fecha_key]["total_eq_binance"] += eq_binance
-            
+
             if moneda not in cobranza_por_dia[fecha_key]["por_moneda"]:
                 cobranza_por_dia[fecha_key]["por_moneda"][moneda] = Decimal("0")
             cobranza_por_dia[fecha_key]["por_moneda"][moneda] += monto
-            
+
             if metodo not in cobranza_por_dia[fecha_key]["por_metodo"]:
                 cobranza_por_dia[fecha_key]["por_metodo"][metodo] = Decimal("0")
             cobranza_por_dia[fecha_key]["por_metodo"][metodo] += eq_bcv
@@ -4707,24 +5461,23 @@ async def get_reporte_diario():
                 "fecha": k,
                 "total_usd": float(v["total_usd"]),
                 "litros_totales": float(v["litros_totales"]),
-                "ordenes_count": v["ordenes_count"]
-            } for k, v in sorted(ventas_por_dia.items(), reverse=True)
+                "ordenes_count": v["ordenes_count"],
+            }
+            for k, v in sorted(ventas_por_dia.items(), reverse=True)
         ]
-        
+
         cobranza_list = [
             {
                 "fecha": k,
                 "total_eq_bcv": float(v["total_eq_bcv"]),
                 "total_eq_binance": float(v["total_eq_binance"]),
                 "por_moneda": {m: float(val) for m, val in v["por_moneda"].items()},
-                "por_metodo": {m: float(val) for m, val in v["por_metodo"].items()}
-            } for k, v in sorted(cobranza_por_dia.items(), reverse=True)
+                "por_metodo": {m: float(val) for m, val in v["por_metodo"].items()},
+            }
+            for k, v in sorted(cobranza_por_dia.items(), reverse=True)
         ]
-        
-        return {
-            "ventas_diarias": ventas_list,
-            "cobranza_diaria": cobranza_list
-        }
+
+        return {"ventas_diarias": ventas_list, "cobranza_diaria": cobranza_list}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

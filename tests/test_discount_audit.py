@@ -1,11 +1,12 @@
 """Tests unitarios para la auditoría de descuentos y notas de crédito (discount_audit.py)."""
 
 from decimal import Decimal
+
 from cxc.engine.discount_audit import (
     EstadoAuditoria,
     TipoAuditoria,
-    auditar_descuento_orden,
     auditar_descuento_factura,
+    auditar_descuento_orden,
     auditar_nota_credito,
 )
 
@@ -40,7 +41,8 @@ def test_auditar_descuento_orden_motor_mayor():
 
 
 def test_auditar_descuento_orden_odoo_mayor():
-    # Odoo tiene 20$, Motor calcula 15$ -> dif -5.00$ -> DISCREPANCIA (enviar a bandeja, pero adicional=0)
+    # Odoo tiene 20$, Motor calcula 15$ -> dif -5.00$ -> DISCREPANCIA
+    # (enviar a bandeja, pero adicional=0)
     res = auditar_descuento_orden(
         so_id="SO003",
         motor_total_descuentos=Decimal("15.00"),
@@ -111,7 +113,7 @@ def test_sheets_repository_auditoria():
     ]
     repo.append_auditoria(filas[0])
     repo.append_auditoria_rows(filas)
-    
+
     audits = repo.all_auditoria()
     assert len(audits) >= 1
 

@@ -31,9 +31,7 @@ class EngineRunner:
         self._resolver = price_resolver
         self._cfg = engine_config
 
-    def _abonos(
-        self, vincs: list[Vinculacion]
-    ) -> list[tuple[Vinculacion, MetodoPago]]:
+    def _abonos(self, vincs: list[Vinculacion]) -> list[tuple[Vinculacion, MetodoPago]]:
         abonos: list[tuple[Vinculacion, MetodoPago]] = []
         for v in vincs:
             pago = self._repo.get_pago(v.pago_id)
@@ -44,7 +42,8 @@ class EngineRunner:
             if metodo is None:
                 logger.warning(
                     "Pago %s con método %s inexistente; se omite",
-                    pago.pago_id, pago.metodo_pago,
+                    pago.pago_id,
+                    pago.metodo_pago,
                 )
                 continue
             abonos.append((v, metodo))
@@ -62,14 +61,16 @@ class EngineRunner:
         from ..config import EngineConfig  # local para evitar ciclo de tipos
 
         assert isinstance(self._cfg, EngineConfig)
-        
+
         # Override cash_window_business_days with value from _Meta if available
         try:
             if hasattr(self._repo, "_g"):
                 rows = self._repo._g.read_rows("_Meta")
                 for r in rows:
                     if r.get("key") == "cash_window_business_days" and r.get("value"):
-                        self._cfg = dataclasses.replace(self._cfg, cash_window_business_days=int(r.get("value")))
+                        self._cfg = dataclasses.replace(
+                            self._cfg, cash_window_business_days=int(r.get("value"))
+                        )
                         break
         except Exception as e:
             logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)

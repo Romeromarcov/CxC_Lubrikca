@@ -6,7 +6,7 @@ Pensado para correr cada hora en Railway (cron/scheduler).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 def main() -> None:  # pragma: no cover - wiring de producción (red)
@@ -25,9 +25,7 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
     if os.environ.get("GOOGLE_TOKEN_JSON"):
         gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
     else:
-        gateway = GspreadGateway(
-            config.sheets.spreadsheet_id, config.sheets.service_account_file
-        )
+        gateway = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
 
     repo = SheetsRepository(gateway)
     scraper = RatesScraper(
@@ -37,13 +35,17 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
         build_alerter(config.alert),
         config.scraper_policy,
     )
-    from datetime import timezone, timedelta
-    now_utc = datetime.now(timezone.utc)
+    from datetime import timedelta
+
+    now_utc = datetime.now(UTC)
     now_caracas = (now_utc - timedelta(hours=4)).replace(tzinfo=None)
     fila = scraper.run(now_caracas)
     logging.getLogger("cxc").info(
         "SerieTasas += %s (bcv=%s binance=%s heredada=%s)",
-        fila.timestamp, fila.tasa_bcv, fila.tasa_binance, fila.es_heredada,
+        fila.timestamp,
+        fila.tasa_bcv,
+        fila.tasa_binance,
+        fila.es_heredada,
     )
 
 

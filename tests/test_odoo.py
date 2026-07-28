@@ -30,14 +30,22 @@ def test_map_cliente() -> None:
 
 
 def test_map_orden_usa_name_como_so_id() -> None:
-    o = map_orden({
-        "id": 553, "name": "S00553", "partner_id": [181, "ACME"],
-        "date_order": "2026-06-12 15:49:16", "fecha_entrega": "2026-06-13",
-        "amount_total": "1650.44", "pricelist_id": [5, "Precio USD Pago VES"],
-        "vendedor_email": "rep@x.com", "es_primera_compra": True,
-        "invoice_status": "invoiced", "factura_id": "3835",
-        "delivery_status": "full",
-    })
+    o = map_orden(
+        {
+            "id": 553,
+            "name": "S00553",
+            "partner_id": [181, "ACME"],
+            "date_order": "2026-06-12 15:49:16",
+            "fecha_entrega": "2026-06-13",
+            "amount_total": "1650.44",
+            "pricelist_id": [5, "Precio USD Pago VES"],
+            "vendedor_email": "rep@x.com",
+            "es_primera_compra": True,
+            "invoice_status": "invoiced",
+            "factura_id": "3835",
+            "delivery_status": "full",
+        }
+    )
     assert o.so_id == "S00553"
     assert o.cliente_id == "181"
     assert o.fecha.isoformat() == "2026-06-11"
@@ -46,26 +54,42 @@ def test_map_orden_usa_name_como_so_id() -> None:
     assert o.monto_total == Decimal("1650.44")
     assert o.lista_precios == "5"
 
+
 def test_map_orden_override_fecha_historica_csv() -> None:
     from datetime import date
-    o = map_orden({
-        "id": 4, "name": "S00004", "partner_id": [181, "ACME"],
-        "date_order": "2026-07-20 10:00:00", "fecha_entrega": "2026-07-20",
-        "amount_total": "232.98", "pricelist_id": [4, "USD"],
-        "vendedor_email": "rep@x.com", "es_primera_compra": False,
-        "invoice_status": "invoiced", "delivery_status": "full"
-    })
+
+    o = map_orden(
+        {
+            "id": 4,
+            "name": "S00004",
+            "partner_id": [181, "ACME"],
+            "date_order": "2026-07-20 10:00:00",
+            "fecha_entrega": "2026-07-20",
+            "amount_total": "232.98",
+            "pricelist_id": [4, "USD"],
+            "vendedor_email": "rep@x.com",
+            "es_primera_compra": False,
+            "invoice_status": "invoiced",
+            "delivery_status": "full",
+        }
+    )
     assert o.so_id == "S00004"
     assert o.fecha == date(2026, 3, 9)
     assert o.es_primera_compra is False
 
 
 def test_map_orden_no_facturada() -> None:
-    o = map_orden({
-        "id": 552, "name": "S00552", "partner_id": [1, "X"],
-        "date_order": "2026-06-11 20:11:51", "amount_total": "373.62",
-        "pricelist_id": [5, "x"], "invoice_status": "no",
-    })
+    o = map_orden(
+        {
+            "id": 552,
+            "name": "S00552",
+            "partner_id": [1, "X"],
+            "date_order": "2026-06-11 20:11:51",
+            "amount_total": "373.62",
+            "pricelist_id": [5, "x"],
+            "invoice_status": "no",
+        }
+    )
     assert o.facturada is False
     assert o.factura_id is None
     assert o.fecha_entrega is None
@@ -73,12 +97,20 @@ def test_map_orden_no_facturada() -> None:
 
 def test_map_orden_entrega_parcial_no_ancla_el_plazo() -> None:
     # Aunque haya una fecha de entrega, si no está completa no arranca el plazo.
-    o = map_orden({
-        "id": 1, "name": "S1", "partner_id": [1, "X"],
-        "date_order": "2026-06-01 10:00:00", "fecha_entrega": "2026-06-05",
-        "amount_total": "100", "pricelist_id": [5, "x"], "invoice_status": "no",
-        "delivery_status": "partial", "tiene_devolucion": True,
-    })
+    o = map_orden(
+        {
+            "id": 1,
+            "name": "S1",
+            "partner_id": [1, "X"],
+            "date_order": "2026-06-01 10:00:00",
+            "fecha_entrega": "2026-06-05",
+            "amount_total": "100",
+            "pricelist_id": [5, "x"],
+            "invoice_status": "no",
+            "delivery_status": "partial",
+            "tiene_devolucion": True,
+        }
+    )
     assert o.estado_entrega == "partial"
     assert o.entregada_completa is False
     assert o.fecha_entrega is None  # el plazo de contado no arrancó
@@ -86,11 +118,17 @@ def test_map_orden_entrega_parcial_no_ancla_el_plazo() -> None:
 
 
 def test_map_linea_usa_nombre_de_so() -> None:
-    ln = map_linea({
-        "id": 1463, "order_id": [553, "S00553"], "product_id": [906, "ELITE"],
-        "marca": "Global Oil", "categoria": "Comercial",
-        "product_uom_qty": "20", "price_unit": "71.13",
-    })
+    ln = map_linea(
+        {
+            "id": 1463,
+            "order_id": [553, "S00553"],
+            "product_id": [906, "ELITE"],
+            "marca": "Global Oil",
+            "categoria": "Comercial",
+            "product_uom_qty": "20",
+            "price_unit": "71.13",
+        }
+    )
     assert ln.so_id == "S00553"
     assert ln.producto == "906"
     assert ln.marca == "Global Oil"
@@ -99,11 +137,17 @@ def test_map_linea_usa_nombre_de_so() -> None:
 
 
 def test_map_pago_moneda_y_journal() -> None:
-    p = map_pago({
-        "id": 729, "partner_id": [181, "X"], "amount": "1650.44",
-        "currency_id": [1, "USD"], "journal_id": [29, "Efectivo USD"],
-        "date": "2026-06-30", "vendedor_email": "rep@x.com",
-    })
+    p = map_pago(
+        {
+            "id": 729,
+            "partner_id": [181, "X"],
+            "amount": "1650.44",
+            "currency_id": [1, "USD"],
+            "journal_id": [29, "Efectivo USD"],
+            "date": "2026-06-30",
+            "vendedor_email": "rep@x.com",
+        }
+    )
     assert p.moneda == Moneda.USD
     assert p.metodo_pago == "29"
     assert p.fecha_pago == datetime(2026, 6, 30, 0, 0)
@@ -111,15 +155,21 @@ def test_map_pago_moneda_y_journal() -> None:
 
 
 def test_map_factura_usd_y_nota_credito() -> None:
-    fact = map_factura({
-        "invoice_origin": "S00553", "amount_total_signed_usd": "1650.42",
-        "move_type": "out_invoice",
-    })
+    fact = map_factura(
+        {
+            "invoice_origin": "S00553",
+            "amount_total_signed_usd": "1650.42",
+            "move_type": "out_invoice",
+        }
+    )
     assert fact == ("S00553", Decimal("1650.42"), Decimal("0"))
-    nc = map_factura({
-        "invoice_origin": "S00553", "amount_total_signed_usd": "-50.00",
-        "move_type": "out_refund",
-    })
+    nc = map_factura(
+        {
+            "invoice_origin": "S00553",
+            "amount_total_signed_usd": "-50.00",
+            "move_type": "out_refund",
+        }
+    )
     assert nc == ("S00553", Decimal("0"), Decimal("50.00"))
 
 
@@ -158,30 +208,43 @@ class FakeExecute:
 
 
 def test_changed_clientes_resuelve_login() -> None:
-    fake = FakeExecute({
-        "partners": [{"id": 181, "name": "ACME", "user_id": [13, "TORO"]}],
-        "users": [{"id": 13, "login": "ruta07@gmail.com"}],
-    })
+    fake = FakeExecute(
+        {
+            "partners": [{"id": 181, "name": "ACME", "user_id": [13, "TORO"]}],
+            "users": [{"id": 13, "login": "ruta07@gmail.com"}],
+        }
+    )
     reader = OdooXmlRpcReader(_config(), execute=fake)
     clientes = reader.changed_clientes(None)
     assert clientes[0].vendedor_email == "ruta07@gmail.com"
 
 
 def test_changed_ordenes_enriquece_todo() -> None:
-    fake = FakeExecute({
-        "ordenes": [{
-            "id": 553, "name": "S00553", "partner_id": [181, "ACME"],
-            "date_order": "2026-06-12 15:49:16", "amount_total": 1650.44,
-            "pricelist_id": [5, "Precio USD Pago VES"], "user_id": [13, "TORO"],
-            "invoice_status": "invoiced", "delivery_status": "full",
-        }],
-        "users": [{"id": 13, "login": "ruta07@gmail.com"}],
-        "pickings": [{"sale_id": [553, "S00553"], "date_done": "2026-06-13 10:00:00",
-                      "state": "done"}],
-        "ordenes_primeras": [{"name": "S00553", "partner_id": [181, "ACME"],
-                              "date_order": "2026-06-12 15:49:16"}],
-        "facturas": [{"id": 3835, "invoice_origin": "S00553"}],
-    })
+    fake = FakeExecute(
+        {
+            "ordenes": [
+                {
+                    "id": 553,
+                    "name": "S00553",
+                    "partner_id": [181, "ACME"],
+                    "date_order": "2026-06-12 15:49:16",
+                    "amount_total": 1650.44,
+                    "pricelist_id": [5, "Precio USD Pago VES"],
+                    "user_id": [13, "TORO"],
+                    "invoice_status": "invoiced",
+                    "delivery_status": "full",
+                }
+            ],
+            "users": [{"id": 13, "login": "ruta07@gmail.com"}],
+            "pickings": [
+                {"sale_id": [553, "S00553"], "date_done": "2026-06-13 10:00:00", "state": "done"}
+            ],
+            "ordenes_primeras": [
+                {"name": "S00553", "partner_id": [181, "ACME"], "date_order": "2026-06-12 15:49:16"}
+            ],
+            "facturas": [{"id": 3835, "invoice_origin": "S00553"}],
+        }
+    )
     reader = OdooXmlRpcReader(_config(), execute=fake)
     o = reader.changed_ordenes(datetime(2026, 6, 1))[0]
     assert o.so_id == "S00553"
@@ -197,13 +260,27 @@ def test_changed_ordenes_enriquece_todo() -> None:
 
 
 def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
-    fake = FakeExecute({
-        "lineas": [{"id": 1463, "order_id": [553, "S00553"],
-                    "product_id": [906, "ELITE"], "product_uom_qty": 20.0,
-                    "price_unit": 71.13, "qty_delivered": 18.0}],
-        "productos": [{"id": 906, "brand_id": False,
-                       "categ_id": [506, "Comercial / Elite / Sintetico / Gasolina"]}],
-    })
+    fake = FakeExecute(
+        {
+            "lineas": [
+                {
+                    "id": 1463,
+                    "order_id": [553, "S00553"],
+                    "product_id": [906, "ELITE"],
+                    "product_uom_qty": 20.0,
+                    "price_unit": 71.13,
+                    "qty_delivered": 18.0,
+                }
+            ],
+            "productos": [
+                {
+                    "id": 906,
+                    "brand_id": False,
+                    "categ_id": [506, "Comercial / Elite / Sintetico / Gasolina"],
+                }
+            ],
+        }
+    )
     reader = OdooXmlRpcReader(_config(), execute=fake)
     ln = reader.changed_lineas(None)[0]
     assert ln.so_id == "S00553"
@@ -214,13 +291,22 @@ def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
 
 
 def test_changed_pagos_resuelve_vendedor_y_journal() -> None:
-    fake = FakeExecute({
-        "pagos": [{"id": 729, "partner_id": [181, "X"], "amount": 1650.44,
-                   "currency_id": [1, "USD"], "journal_id": [29, "Efectivo USD"],
-                   "date": "2026-06-30"}],
-        "partners_read": [{"id": 181, "user_id": [13, "TORO"]}],
-        "users": [{"id": 13, "login": "ruta07@gmail.com"}],
-    })
+    fake = FakeExecute(
+        {
+            "pagos": [
+                {
+                    "id": 729,
+                    "partner_id": [181, "X"],
+                    "amount": 1650.44,
+                    "currency_id": [1, "USD"],
+                    "journal_id": [29, "Efectivo USD"],
+                    "date": "2026-06-30",
+                }
+            ],
+            "partners_read": [{"id": 181, "user_id": [13, "TORO"]}],
+            "users": [{"id": 13, "login": "ruta07@gmail.com"}],
+        }
+    )
     reader = OdooXmlRpcReader(_config(), execute=fake)
     p = reader.changed_pagos(None)[0]
     assert p.metodo_pago == "29"
@@ -234,18 +320,54 @@ def test_changed_ordenes_vacio_no_falla() -> None:
 
 
 def test_ordenes_con_devolucion_resuelve_parent_picking() -> None:
-    fake = FakeExecute({
-        "ordenes": [{"id": 6, "name": "S00006", "partner_id": [181, "UNIFRENOS"], "date_order": "2026-02-26", "amount_total": 83.42, "pricelist_id": [1, "VES"], "user_id": [13, "TORO"], "invoice_status": "no", "delivery_status": "full", "state": "cancel"}],
-        "partners_read": [{"id": 181, "user_id": [13, "TORO"]}],
-        "users": [{"id": 13, "login": "rep@x.com"}],
-        "pickings": [
-            {"id": 95, "sale_id": [6, "S00006"], "date_done": "2026-03-16", "scheduled_date": "2026-03-16", "state": "done", "picking_type_code": "outgoing"},
-        ],
-        "devoluciones": [
-            {"id": 95, "sale_id": [6, "S00006"], "date_done": "2026-03-16", "scheduled_date": "2026-03-16", "state": "done", "picking_type_code": "outgoing"},
-            {"id": 311, "sale_id": False, "return_id": [95, "ALM/OUT/00004"], "state": "done", "picking_type_code": "incoming", "origin": "Devolución de ALM/OUT/00004"}
-        ]
-    })
+    fake = FakeExecute(
+        {
+            "ordenes": [
+                {
+                    "id": 6,
+                    "name": "S00006",
+                    "partner_id": [181, "UNIFRENOS"],
+                    "date_order": "2026-02-26",
+                    "amount_total": 83.42,
+                    "pricelist_id": [1, "VES"],
+                    "user_id": [13, "TORO"],
+                    "invoice_status": "no",
+                    "delivery_status": "full",
+                    "state": "cancel",
+                }
+            ],
+            "partners_read": [{"id": 181, "user_id": [13, "TORO"]}],
+            "users": [{"id": 13, "login": "rep@x.com"}],
+            "pickings": [
+                {
+                    "id": 95,
+                    "sale_id": [6, "S00006"],
+                    "date_done": "2026-03-16",
+                    "scheduled_date": "2026-03-16",
+                    "state": "done",
+                    "picking_type_code": "outgoing",
+                },
+            ],
+            "devoluciones": [
+                {
+                    "id": 95,
+                    "sale_id": [6, "S00006"],
+                    "date_done": "2026-03-16",
+                    "scheduled_date": "2026-03-16",
+                    "state": "done",
+                    "picking_type_code": "outgoing",
+                },
+                {
+                    "id": 311,
+                    "sale_id": False,
+                    "return_id": [95, "ALM/OUT/00004"],
+                    "state": "done",
+                    "picking_type_code": "incoming",
+                    "origin": "Devolución de ALM/OUT/00004",
+                },
+            ],
+        }
+    )
     reader = OdooXmlRpcReader(_config(), execute=fake)
     res = reader.changed_ordenes(None)
     assert len(res) == 1

@@ -1,5 +1,8 @@
-import sys, zipfile, xml.etree.ElementTree as ET, json
+import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date, timedelta
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 path = r'C:\Users\PC\Proyectos\CxC_Lubrikca\Info_Odoo\Estrategias Global-Lubrikca. (1).xlsx'
@@ -28,7 +31,7 @@ with zipfile.ZipFile(path) as z:
     tree = ET.parse(z.open('xl/worksheets/sheet1.xml'))
     root = tree.getroot()
     ns = {'ns': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-    
+
     rows = []
     for row in root.findall('.//ns:row', ns):
         r_num = int(row.get('r'))
@@ -56,7 +59,7 @@ for r_num, d in rows:
         current_brand = col_a
         print(f'\n================ MARCA: {current_brand} ================')
         continue
-    
+
     if col_a in ['CLIENTE NUEVO', 'RECOMPRA', 'INCENTIVO PAGO INMEDIATO', 'VOLUMEN', 'FIDELIZACION', 'PRECIO ESPECIAL POR VOLUMEN']:
         current_section = col_a
         print(f'\n--- Categoria: {current_section} ---')

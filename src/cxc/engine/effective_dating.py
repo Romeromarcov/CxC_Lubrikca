@@ -54,15 +54,31 @@ def _match_categoria(regla_cat: str, target_cat: str, presentacion: str = "") ->
     rcs = [x.strip().upper() for x in regla_cat.split(",") if x.strip()]
     tc = (target_cat or "").strip().upper()
     pres = (presentacion or "").strip().upper()
-    if "*" in rcs or tc in rcs or pres in rcs or any(rc in tc for rc in rcs) or any(tc in rc for rc in rcs):
+    if (
+        "*" in rcs
+        or tc in rcs
+        or pres in rcs
+        or any(rc in tc for rc in rcs)
+        or any(tc in rc for rc in rcs)
+    ):
         return True
-    if any(rc in ("CAJA", "COMERCIAL") for rc in rcs) and (tc in ("CAJA", "COMERCIAL") or "COMERCIAL" in tc or "CAJA" in tc or pres == "CAJA"):
+    if any(rc in ("CAJA", "COMERCIAL") for rc in rcs) and (
+        tc in ("CAJA", "COMERCIAL") or "COMERCIAL" in tc or "CAJA" in tc or pres == "CAJA"
+    ):
         return True
-    if any(rc in ("PAILA", "INDUSTRIAL") for rc in rcs) and (tc in ("PAILA", "INDUSTRIAL") or "INDUSTRIAL" in tc or "PAILA" in tc or pres == "PAILA"):
+    if any(rc in ("PAILA", "INDUSTRIAL") for rc in rcs) and (
+        tc in ("PAILA", "INDUSTRIAL") or "INDUSTRIAL" in tc or "PAILA" in tc or pres == "PAILA"
+    ):
         return True
-    if any(rc in ("TAMBOR", "INDUSTRIAL") for rc in rcs) and (tc in ("TAMBOR", "INDUSTRIAL") or "INDUSTRIAL" in tc or "TAMBOR" in tc or pres == "TAMBOR"):
-        return True
-    return False
+    return bool(
+        any(rc in ("TAMBOR", "INDUSTRIAL") for rc in rcs)
+        and (
+            tc in ("TAMBOR", "INDUSTRIAL")
+            or "INDUSTRIAL" in tc
+            or "TAMBOR" in tc
+            or pres == "TAMBOR"
+        )
+    )
 
 
 def _match_marca(regla_marca: str, target_marca: str) -> bool:
@@ -72,7 +88,11 @@ def _match_marca(regla_marca: str, target_marca: str) -> bool:
         return False
     valid_marcas = [m.strip().upper() for m in str(regla_marca).split(",") if m.strip()]
     target_u = str(target_marca).strip().upper()
-    return "*" in valid_marcas or target_u in valid_marcas or any(vm in target_u or target_u in vm for vm in valid_marcas)
+    return (
+        "*" in valid_marcas
+        or target_u in valid_marcas
+        or any(vm in target_u or target_u in vm for vm in valid_marcas)
+    )
 
 
 def _match_lista(
@@ -85,7 +105,7 @@ def _match_lista(
         return True
     if not target_lista:
         return True
-    valid_listas = [l.strip() for l in str(regla_listas).split(",") if l.strip()]
+    valid_listas = [ln.strip() for ln in str(regla_listas).split(",") if ln.strip()]
     if "*" in valid_listas:
         return True
     target_str = str(target_lista).strip()
@@ -102,7 +122,9 @@ def _match_lista(
     return False
 
 
-def _match_producto_especial(regla: DescuentoMarcaCategoria, producto_nombre: str, categoria: str) -> bool:
+def _match_producto_especial(
+    regla: DescuentoMarcaCategoria, producto_nombre: str, categoria: str
+) -> bool:
     regla_id = (regla.regla_id or "").upper()
     rc = (regla.categoria or "").upper()
 
@@ -130,7 +152,8 @@ def descuento_vigente(
     valid_ves: list[str] | None = None,
     valid_usd: list[str] | None = None,
 ) -> DescuentoMarcaCategoria | None:
-    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha``, lista y moneda."""
+    """Fila de DescuentosMarcaCategoria vigente para (marca, categoría) a ``fecha``, lista y
+    moneda."""
     candidatas = []
     for r in reglas:
         if r.tipo_descuento != tipo:
@@ -144,7 +167,9 @@ def descuento_vigente(
         if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
             continue
         if r.monedas_aplicables and r.monedas_aplicables != "*":
-            valid_monedas = [m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()]
+            valid_monedas = [
+                m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()
+            ]
             if moneda_pago.upper() not in valid_monedas:
                 continue
         if not _match_producto_especial(r, producto, categoria):
@@ -189,9 +214,7 @@ def tasa_bcv_completo_vigente(
     descuento (no se regala sin instrucción explícita).
     """
     candidatas = [
-        r
-        for r in reglas
-        if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
+        r for r in reglas if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha)
     ]
     if not candidatas:
         return None
@@ -246,7 +269,9 @@ def descuento_volumen_vigente(
             continue
 
         unidad = str(r.unidad_medida or "").upper()
-        is_liters_rule = (unidad == "LITROS") or (r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0))
+        is_liters_rule = (unidad == "LITROS") or (
+            r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
+        )
         if is_liters_rule:
             if litros < r.litros_minimo:
                 continue

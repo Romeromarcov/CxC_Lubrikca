@@ -66,11 +66,13 @@ class RatesScraper:
         # Compute morning, afternoon, and daily averages for the current day
         try:
             today_str = now.strftime("%Y-%m-%d")
+            # Acceso directo a la hoja (solo disponible en repos respaldados por Sheets).
             rows_today = [
-                r for r in self._repo._g.read_rows("SerieTasas")
+                r
+                for r in self._repo._g.read_rows("SerieTasas")  # type: ignore[attr-defined]
                 if r.get("timestamp", "").startswith(today_str)
             ]
-            
+
             manana_rates = []
             tarde_rates = []
             diario_rates = []
@@ -87,7 +89,7 @@ class RatesScraper:
                             manana_rates.append(tb)
                         elif 10 <= ts_hour <= 13:
                             tarde_rates.append(tb)
-                except:
+                except Exception:
                     pass
 
             if fila.tasa_binance > Decimal("0"):
@@ -97,13 +99,21 @@ class RatesScraper:
                 elif 10 <= now.hour <= 13:
                     tarde_rates.append(fila.tasa_binance)
 
-            avg = lambda lst: sum(lst) / Decimal(str(len(lst))) if lst else None
+            def avg(lst: list[Decimal]) -> Decimal | None:
+                return sum(lst) / Decimal(str(len(lst))) if lst else None
+
             fila.tasa_binance_manana = avg(manana_rates)
             fila.tasa_binance_tarde = avg(tarde_rates)
             fila.tasa_binance_diario = avg(diario_rates)
-            
-            if fila.tasa_binance_diario and fila.tasa_binance_diario > Decimal("0") and fila.tasa_bcv > Decimal("0"):
-                fila.diferencial_bcv_binance_pct = ((fila.tasa_binance_diario - fila.tasa_bcv) / fila.tasa_binance_diario) * Decimal("100")
+
+            if (
+                fila.tasa_binance_diario
+                and fila.tasa_binance_diario > Decimal("0")
+                and fila.tasa_bcv > Decimal("0")
+            ):
+                fila.diferencial_bcv_binance_pct = (
+                    (fila.tasa_binance_diario - fila.tasa_bcv) / fila.tasa_binance_diario
+                ) * Decimal("100")
         except Exception as e:
             logger.warning("Error calculando promedios de tasa Binance: %s", e)
 

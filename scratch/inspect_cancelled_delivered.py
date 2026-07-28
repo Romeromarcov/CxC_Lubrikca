@@ -1,18 +1,18 @@
-import sys
-import os
 import json
+import os
 import subprocess
+import sys
 from decimal import Decimal
 
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str):
             os.environ[k] = v
-except Exception as e:
+except Exception:
     pass
 
 from cxc.config import AppConfig
@@ -40,9 +40,9 @@ for oid, o in so_map.items():
         qty_del = Decimal(str(l.get('qty_delivered') or '0'))
         price = Decimal(str(l.get('price_unit') or '0'))
         monto_entregado_neto += qty_del * price
-        
+
     st = o.get('state')
-    
+
     if st == 'cancel' and monto_entregado_neto > Decimal('0'):
         p_name = o.get('partner_id')[1] if o.get('partner_id') else 'N/A'
         print(f"SO: {o['name']} | Cliente: {p_name} | State: {st} | Monto Entregado Neto: ${monto_entregado_neto} | Total Orden: ${o.get('amount_total')}")

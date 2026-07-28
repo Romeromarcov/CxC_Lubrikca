@@ -8,19 +8,21 @@ de trabajo humano.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from ..models import (
     BandejaFacturacion,
     Cliente,
     Conciliacion,
     DescuentoBCVCompleto,
+    DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoProntoPago,
     DescuentoRecompra,
-    DescuentoProducto,
-    DescuentoDiferencialCambiario,
     DescuentoVolumen,
     ExclusionRegla,
     Feriado,
@@ -49,11 +51,13 @@ class SheetsRepository(Repository):
         return [serde.serie_from_row(r) for r in self._g.read_rows(g.T_SERIE)]
 
     def fechas_historicas_map(self) -> dict[str, str]:
-        """Retorna {so_id_normalizado: fecha_iso} desde la pestaña FechasHistoricas de Google Sheets."""
+        """Retorna {so_id_normalizado: fecha_iso} desde la pestaña FechasHistoricas de Google
+        Sheets."""
         try:
             rows = self._g.read_rows(g.T_FECHAS_HISTORICAS)
             res = {}
             import re
+
             for r in rows:
                 so_id = str(r.get("so_id", "")).strip()
                 fecha = str(r.get("fecha_historica", "")).strip()
@@ -91,24 +95,16 @@ class SheetsRepository(Repository):
 
     # --- Espejo (upsert por PK) ---------------------------------------------
     def upsert_clientes(self, filas: list[Cliente]) -> None:
-        self._g.upsert_rows(
-            g.T_CLIENTES, "cliente_id", [serde.cliente_to_row(c) for c in filas]
-        )
+        self._g.upsert_rows(g.T_CLIENTES, "cliente_id", [serde.cliente_to_row(c) for c in filas])
 
     def upsert_ordenes(self, filas: list[OrdenVenta]) -> None:
-        self._g.upsert_rows(
-            g.T_ORDENES, "so_id", [serde.orden_to_row(o) for o in filas]
-        )
+        self._g.upsert_rows(g.T_ORDENES, "so_id", [serde.orden_to_row(o) for o in filas])
 
     def upsert_lineas(self, filas: list[LineaOrden]) -> None:
-        self._g.upsert_rows(
-            g.T_LINEAS, "linea_id", [serde.linea_to_row(ln) for ln in filas]
-        )
+        self._g.upsert_rows(g.T_LINEAS, "linea_id", [serde.linea_to_row(ln) for ln in filas])
 
     def upsert_pagos(self, filas: list[Pago]) -> None:
-        self._g.upsert_rows(
-            g.T_PAGOS, "pago_id", [serde.pago_to_row(p) for p in filas]
-        )
+        self._g.upsert_rows(g.T_PAGOS, "pago_id", [serde.pago_to_row(p) for p in filas])
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -153,15 +149,10 @@ class SheetsRepository(Repository):
         ]
 
     def all_vinculaciones(self) -> list[Vinculacion]:
-        return [
-            serde.vinculacion_from_row(r)
-            for r in self._g.read_rows(g.T_VINCULACIONES)
-        ]
+        return [serde.vinculacion_from_row(r) for r in self._g.read_rows(g.T_VINCULACIONES)]
 
     def update_vinculacion(self, vinc: Vinculacion) -> None:
-        self._g.upsert_row(
-            g.T_VINCULACIONES, "vinc_id", serde.vinculacion_to_row(vinc)
-        )
+        self._g.upsert_row(g.T_VINCULACIONES, "vinc_id", serde.vinculacion_to_row(vinc))
 
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         rows = self._g.read_rows("DescuentosProntoPago")
@@ -183,31 +174,50 @@ class SheetsRepository(Repository):
         rows = self._g.read_rows("DescuentosDiferencialCambiario")
         if not rows:
             return [
-                DescuentoDiferencialCambiario(regla_id="DIF_35_VES", nombre="35% Fijo VES a USD", tipo_diferencial="fijo_35_ves_usd", tipo_calculo="fijo", porcentaje_fijo=Decimal("0.35"), unidad_medida="USD", monedas_aplicables="USD", listas_aplicables="LISTAS_VES"),
-                DescuentoDiferencialCambiario(regla_id="DIF_EQUIPARAR", nombre="Equiparar Binance N/C", tipo_diferencial="equiparar_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"), unidad_medida="USD", monedas_aplicables="*", listas_aplicables="LISTAS_VES"),
-                DescuentoDiferencialCambiario(regla_id="DIF_BRECHA_CIERRE", nombre="Brecha BCV vs Binance Cierre", tipo_diferencial="diferencial_bcv_binance", tipo_calculo="variable", porcentaje_fijo=Decimal("0"), unidad_medida="USD", monedas_aplicables="*", listas_aplicables="LISTAS_VES")
+                DescuentoDiferencialCambiario(
+                    regla_id="DIF_35_VES",
+                    nombre="35% Fijo VES a USD",
+                    tipo_diferencial="fijo_35_ves_usd",
+                    tipo_calculo="fijo",
+                    porcentaje_fijo=Decimal("0.35"),
+                    unidad_medida="USD",
+                    monedas_aplicables="USD",
+                    listas_aplicables="LISTAS_VES",
+                ),
+                DescuentoDiferencialCambiario(
+                    regla_id="DIF_EQUIPARAR",
+                    nombre="Equiparar Binance N/C",
+                    tipo_diferencial="equiparar_binance",
+                    tipo_calculo="variable",
+                    porcentaje_fijo=Decimal("0"),
+                    unidad_medida="USD",
+                    monedas_aplicables="*",
+                    listas_aplicables="LISTAS_VES",
+                ),
+                DescuentoDiferencialCambiario(
+                    regla_id="DIF_BRECHA_CIERRE",
+                    nombre="Brecha BCV vs Binance Cierre",
+                    tipo_diferencial="diferencial_bcv_binance",
+                    tipo_calculo="variable",
+                    porcentaje_fijo=Decimal("0"),
+                    unidad_medida="USD",
+                    monedas_aplicables="*",
+                    listas_aplicables="LISTAS_VES",
+                ),
             ]
         return [serde.diferencial_from_row(r) for r in rows]
 
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
-        return [
-            serde.desc_volumen_from_row(r) for r in self._g.read_rows("DescuentosVolumen")
-        ]
+        return [serde.desc_volumen_from_row(r) for r in self._g.read_rows("DescuentosVolumen")]
 
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         return [serde.regla_from_row(r) for r in self._g.read_rows(g.T_REGLAS)]
 
     def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
-        return [
-            serde.bcv_completo_from_row(r)
-            for r in self._g.read_rows(g.T_BCV_COMPLETO)
-        ]
+        return [serde.bcv_completo_from_row(r) for r in self._g.read_rows(g.T_BCV_COMPLETO)]
 
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
-        return [
-            serde.promocion_from_row(r)
-            for r in self._g.read_rows(g.T_PROMO_PRIMERA)
-        ]
+        return [serde.promocion_from_row(r) for r in self._g.read_rows(g.T_PROMO_PRIMERA)]
 
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
@@ -216,20 +226,31 @@ class SheetsRepository(Repository):
         return [serde.exclusion_from_row(r) for r in self._g.read_rows("Exclusiones")]
 
     def save_exclusion(self, rule: ExclusionRegla) -> None:
-        ws = self._g._ws("Exclusiones")
+        # Requiere acceso directo a la hoja (solo GspreadGateway lo soporta).
+        ws = self._g._ws("Exclusiones")  # type: ignore[attr-defined]
         records = ws.get_all_records()
         row_idx = None
         for i, r in enumerate(records):
-            if (r.get("regla_tipo_a") == rule.regla_tipo_a and r.get("regla_tipo_b") == rule.regla_tipo_b) or \
-               (r.get("regla_tipo_a") == rule.regla_tipo_b and r.get("regla_tipo_b") == rule.regla_tipo_a):
+            if (
+                r.get("regla_tipo_a") == rule.regla_tipo_a
+                and r.get("regla_tipo_b") == rule.regla_tipo_b
+            ) or (
+                r.get("regla_tipo_a") == rule.regla_tipo_b
+                and r.get("regla_tipo_b") == rule.regla_tipo_a
+            ):
                 row_idx = i + 2
                 break
-        
+
         row_data = serde.exclusion_to_row(rule)
         if row_idx is not None:
-            ws.update(f"A{row_idx}:C{row_idx}", [[row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])]])
+            ws.update(
+                f"A{row_idx}:C{row_idx}",
+                [[row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])]],
+            )
         else:
-            ws.append_row([row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])])
+            ws.append_row(
+                [row_data["regla_tipo_a"], row_data["regla_tipo_b"], str(row_data["activo"])]
+            )
 
     # --- Bandeja -------------------------------------------------------------
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None:
@@ -249,15 +270,12 @@ class SheetsRepository(Repository):
         self._g.upsert_row(g.T_CONCILIACION, "so_id", serde.conciliacion_to_row(fila))
 
     def all_conciliaciones(self) -> list[Conciliacion]:
-        return [
-            serde.conciliacion_from_row(r)
-            for r in self._g.read_rows(g.T_CONCILIACION)
-        ]
+        return [serde.conciliacion_from_row(r) for r in self._g.read_rows(g.T_CONCILIACION)]
 
     # --- Bandeja de Auditoría de Descuentos (append-only, inmutable) ---------
-    def append_auditoria(self, fila: dict) -> None:
+    def append_auditoria(self, fila: dict[str, Any]) -> None:
         """Registra una discrepancia en la bandeja de auditoría (solo append).
-        
+
         fila debe contener: audit_id, so_id, tipo_auditoria, motor_calcula_usd,
         odoo_registrado_usd, diferencia_usd, detalle_odoo, detalle_motor,
         estado (pendiente), revisado_por, timestamp_audit.
@@ -265,14 +283,16 @@ class SheetsRepository(Repository):
         row = {k: str(v) if v is not None else "" for k, v in fila.items()}
         self._g.append_row(g.T_BANDEJA_AUDITORIA, row)
 
-    def append_auditoria_rows(self, filas: list[dict]) -> None:
+    def append_auditoria_rows(self, filas: list[dict[str, Any]]) -> None:
         """Agrega múltiples filas a la bandeja de auditoría en un solo lote (1 escritura)."""
         if not filas:
             return
-        rows = [{k: str(v) if v is not None else "" for k, v in f.items()} for f in filas]
+        rows: list[Mapping[str, str]] = [
+            {k: str(v) if v is not None else "" for k, v in f.items()} for f in filas
+        ]
         self._g.upsert_rows(g.T_BANDEJA_AUDITORIA, "audit_id", rows)
 
-    def all_auditoria(self) -> list[dict]:
+    def all_auditoria(self) -> list[dict[str, Any]]:
         """Lee todas las filas de la bandeja de auditoría."""
         return self._g.read_rows(g.T_BANDEJA_AUDITORIA)
 
@@ -281,5 +301,5 @@ class SheetsRepository(Repository):
         self._g.upsert_row(
             g.T_BANDEJA_AUDITORIA,
             "audit_id",
-            {"audit_id": audit_id, "estado": estado, "revisado_por": revisado_por}
+            {"audit_id": audit_id, "estado": estado, "revisado_por": revisado_por},
         )

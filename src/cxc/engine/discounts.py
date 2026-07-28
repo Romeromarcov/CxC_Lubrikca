@@ -11,7 +11,7 @@ El motor es una función PURA: recibe dataclasses, devuelve una
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from ..config import EngineConfig
@@ -43,7 +43,6 @@ from .effective_dating import (
     _vigente,
     descuento_vigente,
     descuento_volumen_vigente,
-    promocion_primera_compra_vigente,
     regla_recurrencia_vigente,
     tasa_bcv_completo_vigente,
 )
@@ -125,12 +124,8 @@ def _bcv_completo_monto(
         )
     total = Decimal("0")
     for v in vinculaciones:
-        diferencial = _diferencial_binance(
-            v.tasa_bcv_aplicada, v.tasa_binance_aplicada
-        )
-        tasa_gerencia = tasa_bcv_completo_vigente(
-            reglas_bcv, fecha=v.hora_pago_confirmada.date()
-        )
+        diferencial = _diferencial_binance(v.tasa_bcv_aplicada, v.tasa_binance_aplicada)
+        tasa_gerencia = tasa_bcv_completo_vigente(reglas_bcv, fecha=v.hora_pago_confirmada.date())
         if tasa_gerencia is None:
             rate = Decimal("0")
         else:
@@ -170,16 +165,14 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
 
 
 def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
-    return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha) * _cantidad_efectiva(
-        inp, linea
-    )
+    return inp.price_resolver.precio(
+        linea.producto, lista, fecha=inp.orden.fecha
+    ) * _cantidad_efectiva(inp, linea)
 
 
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
     fecha_orden = inp.orden.fecha
-    precio_base = sum(
-        (_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0")
-    )
+    precio_base = sum((_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0"))
 
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
@@ -188,7 +181,11 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     detalle_recompra: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     if inp.orden.es_primera_compra:
-        unidades_comercial = sum(_cantidad_efectiva(inp, ln) for ln in inp.lineas if ln.categoria_madre == "Comercial" or ln.presentacion == "CAJA")
+        sum(
+            _cantidad_efectiva(inp, ln)
+            for ln in inp.lineas
+            if ln.categoria_madre == "Comercial" or ln.presentacion == "CAJA"
+        )
         promos_activas = [
             p
             for p in inp.promociones_primera_compra
@@ -204,7 +201,10 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 units = sum(
                     _cantidad_efectiva(inp, ln)
                     for ln in inp.lineas
-                    if p.categorias_aplica == "*" or ln.categoria in cats or ln.categoria_madre in cats or ln.presentacion in cats
+                    if p.categorias_aplica == "*"
+                    or ln.categoria in cats
+                    or ln.categoria_madre in cats
+                    or ln.presentacion in cats
                 )
                 if units >= p.compra_minima:
                     prod_promos_califican.append(p)
@@ -229,11 +229,22 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         monto=q2(nc),
                     )
             else:  # "solo_uno"
-                gifted_in_lines = any(ln.descuento >= Decimal("99.9") for ln in inp.lineas if ln.producto in lista_prod)
+                gifted_in_lines = any(
+                    ln.descuento >= Decimal("99.9")
+                    for ln in inp.lineas
+                    if ln.producto in lista_prod
+                )
                 if not gifted_in_lines:
-                    matching_lines = [ln for ln in inp.lineas if ln.producto in lista_prod and ln.descuento < Decimal("99.9")]
+                    matching_lines = [
+                        ln
+                        for ln in inp.lineas
+                        if ln.producto in lista_prod and ln.descuento < Decimal("99.9")
+                    ]
                     if matching_lines:
-                        best_line = max(matching_lines, key=lambda ln: min(ln.cantidad, best_promo.valor) * ln.precio_unitario)
+                        best_line = max(
+                            matching_lines,
+                            key=lambda ln: min(ln.cantidad, best_promo.valor) * ln.precio_unitario,
+                        )
                         nc = min(best_line.cantidad, best_promo.valor) * best_line.precio_unitario
                         detalle_nc = DescuentoAplicado(
                             origen="primera_compra",
@@ -262,21 +273,29 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 if nc > 0:
                     detalle_nc = DescuentoAplicado(
                         origen="primera_compra",
-                        descripcion=f"Descuento primera compra {pct_general*100:.2f}%",
+                        descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
                         monto=q2(nc),
                     )
             else:
                 # Si no hay promos, el 2% aplica únicamente a productos de la categoría Industrial
-                nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas if (ln.categoria or "").upper() == "INDUSTRIAL") * pct_general
+                nc = (
+                    sum(
+                        _precio_linea(inp, ln, lista)
+                        for ln in inp.lineas
+                        if (ln.categoria or "").upper() == "INDUSTRIAL"
+                    )
+                    * pct_general
+                )
                 if nc > 0:
                     detalle_nc = DescuentoAplicado(
                         origen="primera_compra",
-                        descripcion=f"Descuento primera compra Industrial {pct_general*100:.2f}%",
+                        descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
                         monto=q2(nc),
                     )
     else:
         recompras_activas = [
-            r for r in inp.descuentos_recompra
+            r
+            for r in inp.descuentos_recompra
             if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
         ]
         if not recompras_activas and inp.reglas_recurrencia:
@@ -296,7 +315,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         dias_ventana=30,
                         vigencia_desde=regla.vigencia_desde,
                         vigencia_hasta=regla.vigencia_hasta,
-                        activo=regla.activo
+                        activo=regla.activo,
                     )
                 ]
 
@@ -306,26 +325,39 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             for o in inp.all_ordenes:
                 if o.cliente_id == inp.orden.cliente_id and o.so_id != inp.orden.so_id:
                     o_ym = (o.fecha.year, o.fecha.month)
-                    if o_ym == current_year_month:
-                        if o.fecha < fecha_orden or (o.fecha == fecha_orden and o.so_id < inp.orden.so_id):
-                            is_first_in_month = False
-                            break
-            
+                    if o_ym == current_year_month and (
+                        o.fecha < fecha_orden
+                        or (o.fecha == fecha_orden and o.so_id < inp.orden.so_id)
+                    ):
+                        is_first_in_month = False
+                        break
+
             if is_first_in_month:
                 recompra_monto = Decimal("0")
                 for ln in inp.lineas:
                     cajas_linea = _cantidad_efectiva(inp, ln)
                     best_r = None
                     for r in recompras_activas:
-                        marca_ok = (r.marca == "*" or r.marca.upper() in ln.resolved_marca.upper() or ln.resolved_marca.upper() in r.marca.upper())
-                        cat_ok = _match_categoria(r.categoria, ln.categoria) or _match_categoria(r.categoria, ln.presentacion) or _match_categoria(r.categoria, ln.categoria_madre)
-                        if marca_ok and cat_ok:
-                            if r.min_cajas <= cajas_linea <= r.max_cajas:
-                                if best_r is None or r.porcentaje > best_r.porcentaje:
-                                    best_r = r
+                        marca_ok = (
+                            r.marca == "*"
+                            or r.marca.upper() in ln.resolved_marca.upper()
+                            or ln.resolved_marca.upper() in r.marca.upper()
+                        )
+                        cat_ok = (
+                            _match_categoria(r.categoria, ln.categoria)
+                            or _match_categoria(r.categoria, ln.presentacion)
+                            or _match_categoria(r.categoria, ln.categoria_madre)
+                        )
+                        if (
+                            marca_ok
+                            and cat_ok
+                            and r.min_cajas <= cajas_linea <= r.max_cajas
+                            and (best_r is None or r.porcentaje > best_r.porcentaje)
+                        ):
+                            best_r = r
                     if best_r is not None:
                         recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
-                
+
                 if recompra_monto > 0:
                     pct_recompra = recompra_monto
                     detalle_recompra = DescuentoAplicado(
@@ -343,7 +375,11 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     if contado_evaluable:
         moneda_pago = "USD"
         if inp.abonos:
-            monedas_usadas = {pago.moneda.value for _, pago in inp.abonos if hasattr(pago, "moneda") and pago.moneda}
+            monedas_usadas = {
+                pago.moneda.value
+                for _, pago in inp.abonos
+                if hasattr(pago, "moneda") and pago.moneda
+            }
             if "VES" in monedas_usadas:
                 moneda_pago = "VES"
 
@@ -376,11 +412,11 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + (qty * vol_unit)
         cajas_por_mc[k] = cajas_por_mc.get(k, Decimal("0")) + qty
         subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
-        
+
     volumen_desc = Decimal("0.0")
     detalle_volumen: DescuentoAplicado | None = None
     detalles_vol = []
-    
+
     for (marca, categoria), total_litros in litros_por_mc.items():
         total_cajas = cajas_por_mc.get((marca, categoria), Decimal("0"))
         regla_vol = descuento_volumen_vigente(
@@ -397,14 +433,20 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             monto_desc = subt * regla_vol.porcentaje
             volumen_desc += monto_desc
             unidad_tag = "L" if str(regla_vol.unidad_medida).upper() == "LITROS" else " Unid"
-            min_tag = regla_vol.litros_minimo if str(regla_vol.unidad_medida).upper() == "LITROS" else regla_vol.min_cantidad
-            detalles_vol.append(f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje*100}%")
-            
+            min_tag = (
+                regla_vol.litros_minimo
+                if str(regla_vol.unidad_medida).upper() == "LITROS"
+                else regla_vol.min_cantidad
+            )
+            detalles_vol.append(
+                f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje * 100}%"
+            )
+
     if volumen_desc > 0:
         detalle_volumen = DescuentoAplicado(
             origen="volumen",
             descripcion="Dcto volumen " + ", ".join(detalles_vol),
-            monto=q2(volumen_desc)
+            monto=q2(volumen_desc),
         )
         # Apply dynamic exclusions (e.g., volumen excludes recompra)
         exclusiones_activas = set()
@@ -430,10 +472,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     bcv_completo = Decimal("0")
     detalle_bcv: DescuentoAplicado | None = None
 
-    es_lista_usd = (
-        str(inp.orden.lista_precios) == str(inp.engine_config.lista_usd)
-        or str(inp.orden.lista_precios) in ("4", "8", "USD")
-    )
+    es_lista_usd = str(inp.orden.lista_precios) == str(inp.engine_config.lista_usd) or str(
+        inp.orden.lista_precios
+    ) in ("4", "8", "USD")
     if inp.abonos and not es_lista_usd:
         vincs = [v for v, _ in inp.abonos]
         # 1. Per-abono fixed discount
@@ -455,10 +496,14 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             nc_equiparar = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
 
         # 4. Diferencial Brecha Cierre Variable (evaluado a la fecha del último pago)
-        fechas_pago = [v.hora_pago_confirmada.date() for v, _ in inp.abonos if v.hora_pago_confirmada]
+        fechas_pago = [
+            v.hora_pago_confirmada.date() for v, _ in inp.abonos if v.hora_pago_confirmada
+        ]
         fecha_ultimo_pago = max(fechas_pago) if fechas_pago else fecha_orden
 
-        ult_vinc = max(vincs, key=lambda v: v.hora_pago_confirmada if v.hora_pago_confirmada else datetime.min)
+        ult_vinc = max(
+            vincs, key=lambda v: v.hora_pago_confirmada if v.hora_pago_confirmada else datetime.min
+        )
         tasa_bcv_ult = ult_vinc.tasa_bcv_aplicada
         tasa_binance_ult = ult_vinc.tasa_binance_aplicada
         brecha_pct = Decimal("0")
@@ -479,7 +524,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             if nc_equiparar >= bcv_cierre and nc_equiparar > bcv_per_abono:
                 desc_str = f"Equiparación Binance / USD Cash (NC sugerida por ${q2(bcv_completo)})"
             else:
-                desc_str = f"Diferencial brecha cierre ({brecha_pct * 100:.1f}% brecha al {fecha_ultimo_pago.isoformat()})"
+                brecha_fecha = fecha_ultimo_pago.isoformat()
+                brecha_pct_str = f"{brecha_pct * 100:.1f}%"
+                desc_str = f"Diferencial brecha cierre ({brecha_pct_str} brecha al {brecha_fecha})"
             detalle_bcv = DescuentoAplicado(
                 origen="bcv_completo",
                 descripcion=desc_str,
@@ -535,7 +582,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "recurrencia": comp.pct_recompra,
         "contado": comp.contado_proy,
         "volumen": comp.volumen,
-        "bcv_completo": comp.bcv_completo
+        "bcv_completo": comp.bcv_completo,
     }
     for exc in inp.exclusiones:
         if exc.activo:
@@ -548,7 +595,9 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
                     else:
                         val_opt[ta] = Decimal("0")
 
-    descuentos_optimista = val_opt["recurrencia"] + val_opt["contado"] + val_opt["bcv_completo"] + val_opt["volumen"]
+    descuentos_optimista = (
+        val_opt["recurrencia"] + val_opt["contado"] + val_opt["bcv_completo"] + val_opt["volumen"]
+    )
     neto_optimista = comp.precio_base - descuentos_optimista - val_opt["primera_compra"]
     liquidado_optimista = valor_pagado >= neto_optimista - _EPS
 
@@ -573,7 +622,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "recurrencia": comp.pct_recompra,
         "contado": contado_aplicado_base,
         "volumen": comp.volumen,
-        "bcv_completo": comp.bcv_completo
+        "bcv_completo": comp.bcv_completo,
     }
     for exc in inp.exclusiones:
         if exc.activo:

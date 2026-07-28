@@ -48,10 +48,7 @@ class TelegramAlerter(Alerter):
     def send(self, mensaje: str) -> None:  # pragma: no cover - red externa
         import requests
 
-        url = (
-            f"{self._config.telegram_api_url}"
-            f"/bot{self._config.telegram_bot_token}/sendMessage"
-        )
+        url = f"{self._config.telegram_api_url}/bot{self._config.telegram_bot_token}/sendMessage"
         requests.post(
             url,
             json={"chat_id": self._config.telegram_chat_id, "text": mensaje},
