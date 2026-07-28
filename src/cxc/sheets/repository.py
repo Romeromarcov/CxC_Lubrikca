@@ -157,6 +157,13 @@ class SheetsRepository(Repository):
     def update_vinculacion(self, vinc: Vinculacion) -> None:
         self._g.upsert_row(g.T_VINCULACIONES, "vinc_id", serde.vinculacion_to_row(vinc))
 
+    def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
+        if not vincs:
+            return
+        self._g.upsert_rows(
+            g.T_VINCULACIONES, "vinc_id", [serde.vinculacion_to_row(v) for v in vincs]
+        )
+
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         rows = self._g.read_rows("DescuentosProntoPago")
         if not rows:
@@ -259,6 +266,11 @@ class SheetsRepository(Repository):
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None:
         self._g.upsert_row(g.T_BANDEJA, "so_id", serde.bandeja_to_row(fila))
 
+    def upsert_bandejas(self, filas: list[BandejaFacturacion]) -> None:
+        if not filas:
+            return
+        self._g.upsert_rows(g.T_BANDEJA, "so_id", [serde.bandeja_to_row(f) for f in filas])
+
     def get_bandeja(self, so_id: str) -> BandejaFacturacion | None:
         for r in self._g.read_rows(g.T_BANDEJA):
             if r.get("so_id") == so_id:
@@ -271,6 +283,13 @@ class SheetsRepository(Repository):
     # --- Conciliación --------------------------------------------------------
     def upsert_conciliacion(self, fila: Conciliacion) -> None:
         self._g.upsert_row(g.T_CONCILIACION, "so_id", serde.conciliacion_to_row(fila))
+
+    def upsert_conciliaciones(self, filas: list[Conciliacion]) -> None:
+        if not filas:
+            return
+        self._g.upsert_rows(
+            g.T_CONCILIACION, "so_id", [serde.conciliacion_to_row(f) for f in filas]
+        )
 
     def all_conciliaciones(self) -> list[Conciliacion]:
         return [serde.conciliacion_from_row(r) for r in self._g.read_rows(g.T_CONCILIACION)]

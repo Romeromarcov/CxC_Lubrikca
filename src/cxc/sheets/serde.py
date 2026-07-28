@@ -8,9 +8,10 @@ un único lugar para los formatos que viajan a la hoja.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ..models import (
     BandejaFacturacion,
@@ -45,6 +46,8 @@ from ..models import (
 
 Row = dict[str, str]
 
+logger = logging.getLogger("cxc.sheets.serde")
+
 # --- Conversores escalares ---------------------------------------------------
 _TRUE = {"TRUE", "1", "YES", "SI", "SÍ", "VERDADERO", "TRUE "}
 
@@ -62,11 +65,22 @@ def s_optdec(x: Decimal | None) -> str:
 
 
 def p_dec(s: str) -> Decimal:
-    return Decimal(s)
+    """Parsea un Decimal desde una celda de Sheets, tolerante a datos malos.
+
+    Una hoja editable a mano puede tener celdas vacías/corruptas en
+    cualquier columna numérica de cualquier fila; que UNA fila mala tumbe
+    con 500 un endpoint entero (que procesa cientos de filas) es peor que
+    tratarla como 0 y dejar rastro en el log para auditarla aparte.
+    """
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError, TypeError):
+        logger.warning("Valor decimal inválido en Sheets: %r -- se usa 0", s)
+        return Decimal("0")
 
 
 def p_pct(s: str) -> Decimal:
-    val = Decimal(s)
+    val = p_dec(s)
     if val > Decimal("1.0"):
         val = val / Decimal("100.0")
     return val
@@ -74,7 +88,7 @@ def p_pct(s: str) -> Decimal:
 
 def p_optdec(s: str) -> Decimal | None:
     s = s.strip()
-    return None if s in ("", "None") else Decimal(s)
+    return None if s in ("", "None") else p_dec(s)
 
 
 def s_optdate(x: date | None) -> str:

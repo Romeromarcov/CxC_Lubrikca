@@ -2991,15 +2991,26 @@ document.addEventListener("DOMContentLoaded", () => {
             const r = data.resumen || {};
             const fmtUsd = (val) => `$${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;
             const fmtL = (val) => `${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:1})} L`;
+            const fmtBs = (val) => `Bs. ${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;
             ["hoy", "mes", "trimestre", "anio"].forEach(periodo => {
                 const vEl = document.getElementById(`dash-ventas-${periodo}-usd`);
                 const lEl = document.getElementById(`dash-ventas-${periodo}-litros`);
                 const cEl = document.getElementById(`dash-cobranza-${periodo}-usd`);
+                const vesEl = document.getElementById(`dash-cobranza-${periodo}-ves`);
+                const metodosEl = document.getElementById(`dash-cobranza-${periodo}-metodos`);
                 const ventas = (r.ventas || {})[periodo] || {};
                 const cobranza = (r.cobranza || {})[periodo] || {};
                 if (vEl) vEl.textContent = fmtUsd(ventas.total_usd);
                 if (lEl) lEl.textContent = fmtL(ventas.litros);
                 if (cEl) cEl.textContent = fmtUsd(cobranza.total_eq_bcv);
+                if (vesEl) vesEl.textContent = `${fmtBs(cobranza.ves_monto)} (${fmtUsd(cobranza.ves_eq_usd)})`;
+                if (metodosEl) {
+                    const porMetodo = cobranza.por_metodo || {};
+                    const entries = Object.entries(porMetodo).sort((a, b) => b[1] - a[1]);
+                    metodosEl.innerHTML = entries.length === 0
+                        ? '<span style="color:#94a3b8;">Sin desglose por método.</span>'
+                        : entries.map(([metodo, monto]) => `<div style="display:flex; justify-content:space-between;"><span>${metodo}:</span> <strong>${fmtUsd(monto)}</strong></div>`).join('');
+                }
             });
 
             // Filtro de Vendedor (poblar dropdown una sola vez)

@@ -49,7 +49,10 @@ class EngineRunner:
             abonos.append((v, metodo))
         return abonos
 
-    def run_orden(self, so_id: str, fecha_calculo: date) -> BandejaFacturacion | None:
+    def _calcular(
+        self, so_id: str, fecha_calculo: date
+    ) -> tuple[BandejaFacturacion, list[Vinculacion]] | None:
+        """Calcula la bandeja de una orden SIN persistir (para batchear en run_all)."""
         orden = self._repo.get_orden(so_id)
         if orden is None:
             logger.warning("Orden %s inexistente", so_id)
@@ -94,15 +97,30 @@ class EngineRunner:
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
         )
         bandeja = calcular_factura(inputs)
+        # Equivalentes congelados estampados durante el cálculo -- se
+        # devuelven junto a la bandeja para que el llamador decida cómo
+        # persistirlos (uno por uno o en lote).
+        return bandeja, [v for v, _ in abonos]
+
+    def run_orden(self, so_id: str, fecha_calculo: date) -> BandejaFacturacion | None:
+        resultado = self._calcular(so_id, fecha_calculo)
+        if resultado is None:
+            return None
+        bandeja, vincs_actualizadas = resultado
         self._repo.upsert_bandeja(bandeja)
-        # Persistir los equivalentes congelados estampados durante el cálculo.
-        for v, _ in abonos:
+        for v in vincs_actualizadas:
             self._repo.update_vinculacion(v)
         return bandeja
 
     def run_all(self, fecha_calculo: date) -> list[BandejaFacturacion]:
-        """Calcula la bandeja de toda orden activa no facturada."""
+        """Calcula la bandeja de toda orden activa no facturada.
+
+        Persiste en LOTE (una sola escritura por tabla) en vez de una
+        escritura por orden -- con cientos de órdenes, escribir de a una
+        agota la cuota de la API de Sheets casi de inmediato.
+        """
         resultados: list[BandejaFacturacion] = []
+        todas_vincs: list[Vinculacion] = []
         ordenes = self._repo.all_ordenes()
         for o in ordenes:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
@@ -110,7 +128,13 @@ class EngineRunner:
                 continue
             if o.facturada:
                 continue
-            bandeja = self.run_orden(o.so_id, fecha_calculo)
-            if bandeja is not None:
-                resultados.append(bandeja)
+            resultado = self._calcular(o.so_id, fecha_calculo)
+            if resultado is None:
+                continue
+            bandeja, vincs_actualizadas = resultado
+            resultados.append(bandeja)
+            todas_vincs.extend(vincs_actualizadas)
+
+        self._repo.upsert_bandejas(resultados)
+        self._repo.update_vinculaciones(todas_vincs)
         return resultados

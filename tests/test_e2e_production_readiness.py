@@ -351,6 +351,52 @@ def test_e2e_08_executive_daily_report():
         assert len(res_v2.json()["cobranza_diaria"]) == 0
 
 
+def test_e2e_08b_reporte_diario_resumen_cobranza_desglose_metodo_y_ves():
+    """El resumen de cobranza (tarjetas Hoy/Mes/Trimestre/Año) debe
+
+    desglosar por método de pago y separar lo cobrado en VES con su
+    equivalente en USD a la tasa BCV -- no solo un total agregado.
+    """
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = []
+    hoy = date.today().isoformat()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_USD",
+                "fecha_pago": hoy,
+                "monto": "100.0",
+                "moneda": "USD",
+                "metodo_pago": "Efectivo",
+            },
+            {
+                "pago_id": "P_VES",
+                "fecha_pago": hoy,
+                "monto": "4000.0",
+                "moneda": "VES",
+                "metodo_pago": "Banco Bancamiga",
+            },
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"timestamp": f"{hoy} 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "42.0"}]
+            if sheet == "SerieTasas"
+            else []
+        )
+    )
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/reporte/diario")
+        assert res.status_code == 200
+        cobranza_hoy = res.json()["resumen"]["cobranza"]["hoy"]
+        # VES: 4000 Bs -> $100 equivalente a tasa 40.
+        assert cobranza_hoy["ves_monto"] == 4000.0
+        assert cobranza_hoy["ves_eq_usd"] == 100.0
+        assert cobranza_hoy["por_metodo"]["Efectivo"] == 100.0
+        assert cobranza_hoy["por_metodo"]["Banco Bancamiga"] == 100.0
+        assert cobranza_hoy["total_eq_bcv"] == 200.0
+
+
 def test_e2e_09_listas_precio_mapeo():
     """Test 9: Configuración y lectura de mapeo de Listas de Precios por vigencia."""
     import cxc.web.app as app_module

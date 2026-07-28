@@ -5834,6 +5834,8 @@ async def get_reporte_diario(
                     "total_eq_binance": Decimal("0"),
                     "por_moneda": {},
                     "por_metodo": {},
+                    "ves_monto": Decimal("0"),
+                    "ves_eq_usd": Decimal("0"),
                 }
             monto = parse_decimal_safe(p.get("monto", "0"))
             moneda = p.get("moneda", "VES")
@@ -5867,6 +5869,10 @@ async def get_reporte_diario(
                 cobranza_por_dia[fecha_key]["por_metodo"][metodo] = Decimal("0")
             cobranza_por_dia[fecha_key]["por_metodo"][metodo] += eq_bcv
 
+            if moneda != "USD":
+                cobranza_por_dia[fecha_key]["ves_monto"] += monto
+                cobranza_por_dia[fecha_key]["ves_eq_usd"] += eq_bcv
+
         ventas_list = [
             {
                 "fecha": k,
@@ -5884,6 +5890,8 @@ async def get_reporte_diario(
                 "total_eq_binance": float(v["total_eq_binance"]),
                 "por_moneda": {m: float(val) for m, val in v["por_moneda"].items()},
                 "por_metodo": {m: float(val) for m, val in v["por_metodo"].items()},
+                "ves_monto": float(v["ves_monto"]),
+                "ves_eq_usd": float(v["ves_eq_usd"]),
             }
             for k, v in sorted(cobranza_por_dia.items(), reverse=True)
         ]
@@ -5898,11 +5906,26 @@ async def get_reporte_diario(
             cnt = sum(v["ordenes_count"] for v in en_rango)
             return {"total_usd": float(total_usd), "litros": float(litros), "ordenes_count": cnt}
 
-        def suma_cobranza_desde(inicio: str) -> dict:
-            en_rango = [v for k, v in cobranza_por_dia.items() if k >= inicio]
+        def _merge_cobranza(en_rango: list[dict]) -> dict:
             total_bcv = sum((v["total_eq_bcv"] for v in en_rango), Decimal("0"))
             total_binance = sum((v["total_eq_binance"] for v in en_rango), Decimal("0"))
-            return {"total_eq_bcv": float(total_bcv), "total_eq_binance": float(total_binance)}
+            ves_monto = sum((v["ves_monto"] for v in en_rango), Decimal("0"))
+            ves_eq_usd = sum((v["ves_eq_usd"] for v in en_rango), Decimal("0"))
+            por_metodo: dict[str, Decimal] = {}
+            for v in en_rango:
+                for metodo, monto_m in v["por_metodo"].items():
+                    por_metodo[metodo] = por_metodo.get(metodo, Decimal("0")) + monto_m
+            return {
+                "total_eq_bcv": float(total_bcv),
+                "total_eq_binance": float(total_binance),
+                "ves_monto": float(ves_monto),
+                "ves_eq_usd": float(ves_eq_usd),
+                "por_metodo": {m: float(val) for m, val in por_metodo.items()},
+            }
+
+        def suma_cobranza_desde(inicio: str) -> dict:
+            en_rango = [v for k, v in cobranza_por_dia.items() if k >= inicio]
+            return _merge_cobranza(en_rango)
 
         def suma_ventas_dia(dia: str) -> dict:
             v = ventas_por_dia.get(dia)
@@ -5916,12 +5939,7 @@ async def get_reporte_diario(
 
         def suma_cobranza_dia(dia: str) -> dict:
             v = cobranza_por_dia.get(dia)
-            if not v:
-                return {"total_eq_bcv": 0.0, "total_eq_binance": 0.0}
-            return {
-                "total_eq_bcv": float(v["total_eq_bcv"]),
-                "total_eq_binance": float(v["total_eq_binance"]),
-            }
+            return _merge_cobranza([v] if v else [])
 
         resumen = {
             "ventas": {

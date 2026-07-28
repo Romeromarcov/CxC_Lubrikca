@@ -116,7 +116,12 @@ class Reconciler:
         self._config = config
 
     def run(self) -> list[Conciliacion]:
-        """Concilia toda la bandeja contra Odoo. Devuelve las filas conciliadas."""
+        """Concilia toda la bandeja contra Odoo. Devuelve las filas conciliadas.
+
+        Persiste en UNA sola escritura por lote (no una por orden) -- con
+        cientos de órdenes, escribir de a una agota la cuota de la API de
+        Sheets casi de inmediato.
+        """
         resultados: list[Conciliacion] = []
         for bandeja in self._repo.all_bandeja():
             neto = self._facturas.neto_facturado(bandeja.so_id)
@@ -127,6 +132,6 @@ class Reconciler:
                 self._config,
                 so_id=bandeja.so_id,
             )
-            self._repo.upsert_conciliacion(conc)
             resultados.append(conc)
+        self._repo.upsert_conciliaciones(resultados)
         return resultados
