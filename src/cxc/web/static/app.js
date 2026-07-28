@@ -348,6 +348,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 const data = await res.json();
                 if (kpiCobrables) kpiCobrables.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.total_por_cobrar_usd);
                 if (kpiSinAsignar) kpiSinAsignar.textContent = new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(data.pagos_sin_asignar_usd);
+                const kpiSinAsignarVes = document.getElementById("kpi-sin-asignar-ves");
+                if (kpiSinAsignarVes) kpiSinAsignarVes.textContent = "Bs. " + new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2 }).format(data.pagos_sin_asignar_ves || 0);
                 if (kpiAlertas) {
                     kpiAlertas.textContent = data.alertas_reconciliacion;
                     if (data.alertas_reconciliacion > 0) {

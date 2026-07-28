@@ -720,3 +720,83 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
         # de IVA sobre el total del motor ($16), aunque calculado sobre el
         # monto bruto ($300) sí hubiera "cabido" (bug que se corrige aquí).
         assert "SO_IVA2" not in so_ids
+
+
+def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
+    """Tarjeta "Pagos Sin Asignar": debe reportar USD y VES, y usar el
+
+    SALDO real (no todo-o-nada) -- un pago parcialmente vinculado sigue
+    contando por lo que le queda pendiente, y uno vinculado al 100% no
+    cuenta nada.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            # Sin vincular en absoluto: USD $200 completos pendientes.
+            {
+                "pago_id": "P_LIBRE",
+                "cliente_id": "C1",
+                "monto": "200.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+            },
+            # Vinculado parcialmente: de VES 6000, ya se asignaron 2000 ->
+            # quedan 4000 VES pendientes.
+            {
+                "pago_id": "P_PARCIAL",
+                "cliente_id": "C1",
+                "monto": "6000.0",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-01",
+            },
+            # Vinculado al 100%: no debe sumar nada.
+            {
+                "pago_id": "P_COMPLETO",
+                "cliente_id": "C1",
+                "monto": "50.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+            },
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"timestamp": "2026-07-01 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "42.0"}]
+            if sheet == "SerieTasas"
+            else []
+        )
+    )
+    mock_repo.all_ordenes.return_value = []
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_PARCIAL",
+            pago_id="P_PARCIAL",
+            so_id="SO1",
+            monto_aplicado=Decimal("2000.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("42.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+        Vinculacion(
+            vinc_id="V_COMPLETO",
+            pago_id="P_COMPLETO",
+            so_id="SO2",
+            monto_aplicado=Decimal("50.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("42.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_conciliaciones.return_value = []
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        data = res.json()
+        # USD: $200 (libre) + 4000 VES / 40 = $100 equivalente = $300.
+        assert data["pagos_sin_asignar_usd"] == 300.0
+        # VES: 200 USD * 40 = 8000 Bs + 4000 Bs restantes = 12000 Bs.
+        assert data["pagos_sin_asignar_ves"] == 12000.0

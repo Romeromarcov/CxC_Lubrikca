@@ -420,8 +420,19 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         matriz = [[str(rec.get(col, "")) for col in header] for rec in existentes]
         indice = {str(rec.get(pk_field)): i for i, rec in enumerate(existentes)}
         for row in rows:
-            valores = [row.get(col, "") for col in header]
             clave = row[pk_field]
+            # Columnas que la fila NO trae (ausentes del dict, no solo con
+            # valor vacio) se preservan tal cual estaban -- evita que un
+            # upsert parcial (ej. el sync de Pagos, que solo conoce sus 7
+            # campos espejo) borre en silencio columnas de trabajo humano
+            # (recibido, tasa_bcv, etc.) que otro flujo ya habia escrito.
+            fila_previa = matriz[indice[clave]] if clave in indice else None
+            valores = [
+                row[col]
+                if col in row
+                else (fila_previa[i] if fila_previa is not None else "")
+                for i, col in enumerate(header)
+            ]
             if clave in indice:
                 matriz[indice[clave]] = valores
             else:
