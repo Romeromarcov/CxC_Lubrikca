@@ -9,7 +9,7 @@ documenta en SETUP.md (es específico del entorno, como las credenciales).
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -39,13 +39,16 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
     ) -> None:
         self._execute = execute
         self._pricelist_ids = pricelist_ids
-        self._cache: dict[tuple[str, str], Decimal] = {}
+        # Claves de forma variable: (producto, lista, fecha) en precio(),
+        # (producto, "volumen") en volumen().
+        self._cache: dict[tuple[str, ...], Decimal] = {}
 
     def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
         clave = (producto, lista, fecha.isoformat() if fecha else "sin_fecha")
         if clave in self._cache:
             return self._cache[clave]
-            
+
+        pricelist_id: int | None
         if lista.isdigit():
             pricelist_id = int(lista)
         else:
@@ -55,7 +58,7 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                     pricelist_id = int(lista)
                 except Exception:
                     pricelist_id = self._pricelist_ids.get("USD", 4)
-            
+
         try:
             prod_id = int(producto)
         except (ValueError, TypeError):
@@ -67,21 +70,30 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                 rules = self._execute(
                     "product.pricelist.item",
                     "search_read",
-                    [[["pricelist_id", "=", pricelist_id], ["product_tmpl_id", "=", prod_id], ["compute_price", "=", "fixed"]]],
-                    {"fields": ["fixed_price", "date_start", "date_end"]}
+                    [
+                        [
+                            ["pricelist_id", "=", pricelist_id],
+                            ["product_tmpl_id", "=", prod_id],
+                            ["compute_price", "=", "fixed"],
+                        ]
+                    ],
+                    {"fields": ["fixed_price", "date_start", "date_end"]},
                 )
             except Exception:
                 rules = []
-        
+
         if rules:
             matched = []
             from datetime import datetime
+
             for r in rules:
                 d_start_str = r.get("date_start")
                 d_end_str = r.get("date_end")
-                d_start = datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
+                d_start = (
+                    datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
+                )
                 d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
-                
+
                 if fecha:
                     if d_start and fecha < d_start:
                         continue
@@ -89,7 +101,7 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                         continue
                 p_val = to_decimal(str(r.get("fixed_price") or "0"))
                 matched.append((d_start or date.min, p_val))
-                
+
             if matched:
                 matched.sort(key=lambda x: x[0], reverse=True)
                 precio = matched[0][1]
@@ -101,16 +113,13 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             if prod_id:
                 try:
                     prod = self._execute(
-                        "product.template",
-                        "read",
-                        [[prod_id]],
-                        {"fields": ["list_price"]}
+                        "product.template", "read", [[prod_id]], {"fields": ["list_price"]}
                     )
                     if prod and isinstance(prod, list) and len(prod) > 0:
                         precio = to_decimal(str(prod[0].get("list_price") or "0.0"))
                 except Exception:
                     precio = Decimal("0.0")
-                
+
         self._cache[clave] = precio
         return precio
 
@@ -118,20 +127,17 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         clave = (producto, "volumen")
         if clave in self._cache:
             return self._cache[clave]
-            
+
         vol = Decimal("0.0")
         try:
             prod_id = int(producto)
             prod = self._execute(
-                "product.template",
-                "read",
-                [[prod_id]],
-                {"fields": ["product_volume"]}
+                "product.template", "read", [[prod_id]], {"fields": ["product_volume"]}
             )
             if prod and isinstance(prod, list) and len(prod) > 0:
                 vol = to_decimal(str(prod[0].get("product_volume") or "0.0"))
         except Exception:
             vol = Decimal("0.0")
-            
+
         self._cache[clave] = vol
         return vol

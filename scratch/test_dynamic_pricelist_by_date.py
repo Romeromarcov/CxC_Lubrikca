@@ -1,19 +1,19 @@
-import sys
-import os
 import json
+import os
 import subprocess
-from datetime import datetime, date
+import sys
+from datetime import date, datetime
 from decimal import Decimal
 
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str):
             os.environ[k] = v
-except Exception as e:
+except Exception:
     pass
 
 from cxc.config import AppConfig
@@ -58,30 +58,30 @@ def resolve_effective_price(product_tmpl_id: int, order_date: date, candidate_id
         pl_id = r['pricelist_id'][0] if isinstance(r['pricelist_id'], list) else r['pricelist_id']
         if pl_id not in candidate_ids:
             continue
-            
+
         pt_raw = r.get('product_tmpl_id')
         pt_id = pt_raw[0] if isinstance(pt_raw, list) else pt_raw
         if pt_id != product_tmpl_id:
             continue
-            
+
         d_start_str = r.get('date_start')
         d_end_str = r.get('date_end')
-        
+
         d_start = datetime.strptime(d_start_str[:10], '%Y-%m-%d').date() if d_start_str else None
         d_end = datetime.strptime(d_end_str[:10], '%Y-%m-%d').date() if d_end_str else None
-        
+
         if d_start and order_date < d_start:
             continue
         if d_end and order_date > d_end:
             continue
-            
+
         price = Decimal(str(r.get('fixed_price') or '0'))
         matched_items.append((d_start or date.min, price, pl_id))
-        
+
     if matched_items:
         matched_items.sort(key=lambda x: x[0], reverse=True)
         return matched_items[0][1]
-        
+
     return None
 
 # Find a real template ID from all_rules

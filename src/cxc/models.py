@@ -14,54 +14,54 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 
-class Moneda(str, Enum):
+class Moneda(StrEnum):
     USD = "USD"
     VES = "VES"
 
 
-class TipoTasa(str, Enum):
+class TipoTasa(StrEnum):
     BCV = "BCV"
     BINANCE = "Binance"
     N_A = "N_A"
 
 
-class TipoDescuento(str, Enum):
+class TipoDescuento(StrEnum):
     CONTADO = "contado"
 
 
-class Condicion(str, Enum):
+class Condicion(StrEnum):
     PRIMERA_COMPRA = "primera_compra"
     RECOMPRA = "recompra"
 
 
-class TipoBeneficio(str, Enum):
+class TipoBeneficio(StrEnum):
     NOTA_CREDITO = "nota_credito"
     PORCENTAJE = "porcentaje"
 
 
-class TipoFeriado(str, Enum):
+class TipoFeriado(StrEnum):
     NACIONAL = "nacional"
     REGIONAL = "regional"
     BANCARIO = "bancario"
 
 
-class EstadoVinculacion(str, Enum):
+class EstadoVinculacion(StrEnum):
     PENDIENTE = "pendiente"
     APROBADO = "aprobado"
     FACTURADO = "facturado"
     CONCILIADO = "conciliado"
 
 
-class EstadoBandeja(str, Enum):
+class EstadoBandeja(StrEnum):
     CALCULADO = "calculado"
     APROBADO = "aprobado"
     FACTURADO = "facturado"
 
 
-class ResultadoConciliacion(str, Enum):
+class ResultadoConciliacion(StrEnum):
     VERDE = "verde"
     AMARILLO = "amarillo"
     ROJO = "rojo"
@@ -136,14 +136,26 @@ class LineaOrden:
         'CAJA', 'PAILA' o 'TAMBOR'.
         """
         if not self.producto:
-            return "CAJA" if str(self.categoria).upper() == "COMERCIAL" else ("PAILA" if "PAILA" in str(self.categoria).upper() else "CAJA")
+            return (
+                "CAJA"
+                if str(self.categoria).upper() == "COMERCIAL"
+                else ("PAILA" if "PAILA" in str(self.categoria).upper() else "CAJA")
+            )
         nu = str(self.producto).upper()
         import re
-        if 'PAILA' in nu or 'CARBOYA' in nu or '18,92' in nu or '18.92' in nu or '5 GAL' in nu or '5GAL' in nu:
+
+        if (
+            "PAILA" in nu
+            or "CARBOYA" in nu
+            or "18,92" in nu
+            or "18.92" in nu
+            or "5 GAL" in nu
+            or "5GAL" in nu
+        ):
             return "PAILA"
-        if 'TAMBOR' in nu or '208 L' in nu or '208L' in nu or '55 GAL' in nu or '55GAL' in nu:
+        if "TAMBOR" in nu or "208 L" in nu or "208L" in nu or "55 GAL" in nu or "55GAL" in nu:
             return "TAMBOR"
-        if re.search(r'\(?\b\d+X\d+\b\)?', nu) or 'CAJA' in nu:
+        if re.search(r"\(?\b\d+X\d+\b\)?", nu) or "CAJA" in nu:
             return "CAJA"
         return "CAJA" if str(self.categoria).upper() == "COMERCIAL" else "PAILA"
 
@@ -211,7 +223,7 @@ class DescuentoProntoPago:
     dias_gracia: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"
-    listas_aplicables: str = "*"   # "4", "5", "*"
+    listas_aplicables: str = "*"  # "4", "5", "*"
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -235,7 +247,7 @@ class DescuentoVolumen:
     unidad_medida: str = "UNIDADES"
     tipo_beneficio: str = "descuento"
     tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
-    dias_evaluacion: int = 30       # días para acumulado (0 = histórico total)
+    dias_evaluacion: int = 30  # días para acumulado (0 = histórico total)
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     listas_aplicables: str = "*"
@@ -270,7 +282,9 @@ class PromocionPrimeraCompra:
     max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     listas_aplicables: str = "*"
-    solo_primera_compra: bool = False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
+    solo_primera_compra: bool = (
+        False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
+    )
     activo: bool = True
 
 
@@ -339,8 +353,10 @@ class DescuentoProducto:
 class DescuentoDiferencialCambiario:
     regla_id: str
     nombre: str
-    tipo_diferencial: str = "fijo_35_ves_usd" # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
-    tipo_calculo: str = "fijo" # 'fijo' | 'variable'
+    tipo_diferencial: str = (
+        "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    )
+    tipo_calculo: str = "fijo"  # 'fijo' | 'variable'
     porcentaje_fijo: Decimal = Decimal("0.35")
     marca: str = "*"
     categoria: str = "*"
@@ -353,7 +369,6 @@ class DescuentoDiferencialCambiario:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
-
 
 
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
@@ -452,4 +467,3 @@ class ExclusionRegla:
     regla_tipo_a: str
     regla_tipo_b: str
     activo: bool = True
-

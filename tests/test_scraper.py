@@ -54,9 +54,7 @@ def _bcv_config() -> BcvConfig:
 # --- Binance: parsing parametrizado -----------------------------------------
 def test_parse_binance_toma_solo_las_primeras_n() -> None:
     payload = _load("binance_buy.json")
-    precios = parse_binance_prices(
-        payload, adv_list_path="data", price_path="adv.price", rows=5
-    )
+    precios = parse_binance_prices(payload, adv_list_path="data", price_path="adv.price", rows=5)
     assert precios == [Decimal(p) for p in ("40.10", "40.20", "40.30", "40.40", "40.50")]
 
 
@@ -70,16 +68,12 @@ def test_compute_binance_rate_promedio_5_compra_5_venta() -> None:
 def test_parse_binance_falla_si_faltan_anuncios() -> None:
     payload = {"data": [{"adv": {"price": "1"}}]}
     with pytest.raises(ValueError, match="se necesitan 5"):
-        parse_binance_prices(
-            payload, adv_list_path="data", price_path="adv.price", rows=5
-        )
+        parse_binance_prices(payload, adv_list_path="data", price_path="adv.price", rows=5)
 
 
 def test_dot_path_invalido_falla() -> None:
     with pytest.raises(KeyError):
-        parse_binance_prices(
-            {"otra": []}, adv_list_path="data", price_path="adv.price", rows=1
-        )
+        parse_binance_prices({"otra": []}, adv_list_path="data", price_path="adv.price", rows=1)
 
 
 def test_binance_client_usa_post_inyectado() -> None:
@@ -114,8 +108,9 @@ def test_bcv_client_usa_get_inyectado() -> None:
 
 
 # --- Orquestador: append, fallback y alerta ---------------------------------
-def _scraper(repo: InMemoryRepository, alerter: CollectingAlerter,
-             *, binance_post, bcv_get) -> RatesScraper:
+def _scraper(
+    repo: InMemoryRepository, alerter: CollectingAlerter, *, binance_post, bcv_get
+) -> RatesScraper:
     return RatesScraper(
         repo,
         BinanceClient(_binance_config(), post=binance_post),
@@ -131,7 +126,8 @@ def test_captura_exitosa_hace_append() -> None:
     buy, sell = _load("binance_buy.json"), _load("binance_sell.json")
     html = (FIXTURES / "bcv_page.html").read_text(encoding="utf-8")
     scraper = _scraper(
-        repo, alerter,
+        repo,
+        alerter,
         binance_post=lambda u, b, t: buy if b["tradeType"] == "BUY" else sell,
         bcv_get=lambda u, t: html,
     )
@@ -154,7 +150,8 @@ def test_fallback_hereda_ultima_tasa() -> None:
 
     # Primera corrida OK.
     ok = _scraper(
-        repo, alerter,
+        repo,
+        alerter,
         binance_post=lambda u, b, t: buy if b["tradeType"] == "BUY" else sell,
         bcv_get=lambda u, t: html,
     )
@@ -179,7 +176,8 @@ def test_tres_fallos_consecutivos_alertan() -> None:
         raise RuntimeError("caído")
 
     _scraper(
-        repo, alerter,
+        repo,
+        alerter,
         binance_post=lambda u, b, t: buy if b["tradeType"] == "BUY" else sell,
         bcv_get=lambda u, t: html,
     ).run(datetime(2026, 6, 27, 10, 0))

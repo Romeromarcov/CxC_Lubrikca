@@ -17,9 +17,12 @@ Diseño para testabilidad sin red:
 
 from __future__ import annotations
 
+import json
+import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -89,24 +92,24 @@ def map_cliente(rec: dict[str, Any]) -> Cliente:
         nombre=str(rec.get("name", "")),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
         wh_iva_agent=bool(rec.get("wh_iva_agent")),
-        wh_iva_rate=float(rec.get("wh_iva_rate") or 75.0) if rec.get("wh_iva_rate") is not None else 75.0,
+        wh_iva_rate=float(rec.get("wh_iva_rate") or 75.0)
+        if rec.get("wh_iva_rate") is not None
+        else 75.0,
     )
 
 
-import json
-import os
-import re
-from datetime import date
-
 _FECHAS_HISTORICAS_DATA: dict[str, str] = {}
 try:
-    _json_path = os.path.join(os.path.dirname(__file__), "..", "data", "fechas_historicas_ordenes.json")
+    _json_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "fechas_historicas_ordenes.json"
+    )
     if os.path.exists(_json_path):
-        with open(_json_path, "r", encoding="utf-8") as _f:
+        with open(_json_path, encoding="utf-8") as _f:
             _d = json.load(_f)
             _FECHAS_HISTORICAS_DATA = _d.get("fechas_por_numero", {})
 except Exception:
     pass
+
 
 def _resolve_fecha_orden(so_name: str, odoo_date_val: Any) -> date:
     """Retorna la fecha histórica del CSV si existe para la orden; si no, la fecha de Odoo."""
@@ -121,15 +124,16 @@ def _resolve_fecha_orden(so_name: str, odoo_date_val: Any) -> date:
                     pass
     return _to_datetime(odoo_date_val).date()
 
+
 def map_orden(rec: dict[str, Any]) -> OrdenVenta:
     estado_entrega = str(rec.get("delivery_status", "") or "")
     entregada_completa = estado_entrega == "full"
     # El plazo de contado solo arranca con la entrega completa.
     fecha_entrega = _to_date(rec.get("fecha_entrega")) if entregada_completa else None
-    
+
     so_name = str(rec.get("name", ""))
     fecha_orden = _resolve_fecha_orden(so_name, rec.get("date_order"))
-    
+
     return OrdenVenta(
         so_id=so_name,
         cliente_id=_m2o_id(rec.get("partner_id")),
@@ -227,6 +231,7 @@ class OdooXmlRpcReader(OdooReader):
         if since is None:
             return []
         from datetime import timedelta
+
         effective_since = since - timedelta(hours=48)
         return [["write_date", ">", effective_since.strftime(ODOO_DATETIME_FMT)]]
 
@@ -252,7 +257,9 @@ class OdooXmlRpcReader(OdooReader):
     # --- Clientes ------------------------------------------------------------
     def changed_clientes(self, since: datetime | None) -> list[Cliente]:
         recs = self._search_read(
-            self.MODEL_PARTNER, self._delta(since), ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate"]
+            self.MODEL_PARTNER,
+            self._delta(since),
+            ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate"],
         )
         uids = {int(_m2o_id(r.get("user_id"))) for r in recs if _m2o_id(r.get("user_id"))}
         logins = self._user_logins(uids)
@@ -266,8 +273,18 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_ORDEN,
             self._delta(since),
-            ["id", "name", "partner_id", "date_order", "amount_total",
-             "pricelist_id", "user_id", "invoice_status", "delivery_status", "state"],
+            [
+                "id",
+                "name",
+                "partner_id",
+                "date_order",
+                "amount_total",
+                "pricelist_id",
+                "user_id",
+                "invoice_status",
+                "delivery_status",
+                "state",
+            ],
         )
         if not recs:
             return []
@@ -287,9 +304,7 @@ class OdooXmlRpcReader(OdooReader):
             r["vendedor_email"] = logins.get(int(uid), "") if uid else ""
             r["fecha_entrega"] = entregas.get(int(r["id"]))
             partner = _m2o_id(r.get("partner_id"))
-            r["es_primera_compra"] = (
-                bool(partner) and primeras.get(int(partner)) == str(r["name"])
-            )
+            r["es_primera_compra"] = bool(partner) and primeras.get(int(partner)) == str(r["name"])
             r["factura_id"] = facturas.get(str(r["name"]))
             r["tiene_devolucion"] = int(r["id"]) in con_devolucion
         return [map_orden(r) for r in recs]
@@ -300,7 +315,12 @@ class OdooXmlRpcReader(OdooReader):
             return set()
         pickings = self._search_read(
             self.MODEL_PICKING,
-            [["state", "=", "done"], "|", ["return_id", "!=", False], ["picking_type_code", "=", "incoming"]],
+            [
+                ["state", "=", "done"],
+                "|",
+                ["return_id", "!=", False],
+                ["picking_type_code", "=", "incoming"],
+            ],
             ["id", "sale_id", "return_id", "origin"],
         )
         p_by_id = {p["id"]: p for p in pickings}
@@ -310,7 +330,9 @@ class OdooXmlRpcReader(OdooReader):
             if sid and int(sid) in so_ids:
                 res.add(int(sid))
             elif p.get("return_id"):
-                ret_parent_id = p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                ret_parent_id = (
+                    p["return_id"][0] if isinstance(p["return_id"], list | tuple) else None
+                )
                 if ret_parent_id and ret_parent_id in p_by_id:
                     parent_p = p_by_id[ret_parent_id]
                     parent_sid = _m2o_id(parent_p.get("sale_id"))
@@ -367,8 +389,11 @@ class OdooXmlRpcReader(OdooReader):
             return {}
         recs = self._search_read(
             self.MODEL_MOVE,
-            [["invoice_origin", "in", so_names], ["move_type", "=", "out_invoice"],
-             ["state", "=", "posted"]],
+            [
+                ["invoice_origin", "in", so_names],
+                ["move_type", "=", "out_invoice"],
+                ["state", "=", "posted"],
+            ],
             ["id", "invoice_origin"],
         )
         return {str(r["invoice_origin"]): str(r["id"]) for r in recs if r.get("invoice_origin")}
@@ -379,8 +404,15 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_LINEA,
             domain,
-            ["id", "order_id", "product_id", "product_uom_qty", "price_unit",
-             "qty_delivered", "discount"],
+            [
+                "id",
+                "order_id",
+                "product_id",
+                "product_uom_qty",
+                "price_unit",
+                "qty_delivered",
+                "discount",
+            ],
         )
         prod_ids = _ids_of(recs, "product_id")
         productos = self._productos(prod_ids)
@@ -431,8 +463,11 @@ class OdooXmlRpcReader(OdooReader):
             r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
         return [map_pago(r) for r in recs]
 
-    def pagos_reconciliados_por_orden(self, so_names: list[str] | None = None) -> dict[str, list[dict]]:  # pragma: no cover - red externa
-        """Resuelve la cadena account.payment → invoice_ids → account.move.invoice_origin → sale.order.name.
+    def pagos_reconciliados_por_orden(
+        self, so_names: list[str] | None = None
+    ) -> dict[str, list[dict[str, Any]]]:  # pragma: no cover - red externa
+        """Resuelve la cadena account.payment → invoice_ids →
+        account.move.invoice_origin → sale.order.name.
 
         Retorna un mapa {so_name: [lista de pagos aplicados a sus facturas]}.
         Esto permite mostrar en el reporte los pagos que ya fueron reconciliados en Odoo
@@ -445,7 +480,11 @@ class OdooXmlRpcReader(OdooReader):
         # 1. Leer pagos reconciliados de Odoo
         pagos = self._search_read(
             self.MODEL_PAGO,
-            [["payment_type", "=", "inbound"], ["state", "in", PAGO_ESTADOS_CONFIRMADOS], ["is_reconciled", "=", True]],
+            [
+                ["payment_type", "=", "inbound"],
+                ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+                ["is_reconciled", "=", True],
+            ],
             ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "invoice_ids"],
         )
         if not pagos:
@@ -456,7 +495,7 @@ class OdooXmlRpcReader(OdooReader):
         pago_inv_map: dict[int, list[int]] = {}
         for p in pagos:
             inv_ids = p.get("invoice_ids") or []
-            if isinstance(inv_ids, (list, tuple)) and inv_ids:
+            if isinstance(inv_ids, list | tuple) and inv_ids:
                 all_inv_ids.extend(inv_ids)
                 pago_inv_map[p["id"]] = list(inv_ids)
 
@@ -478,7 +517,7 @@ class OdooXmlRpcReader(OdooReader):
         }
 
         # 4. Construir mapa so_name → [pagos]
-        result: dict[str, list[dict]] = {}
+        result: dict[str, list[dict[str, Any]]] = {}
         for p in pagos:
             inv_ids_for_p = pago_inv_map.get(p["id"], [])
             so_names_for_p = {inv_to_so[i] for i in inv_ids_for_p if i in inv_to_so}
@@ -488,7 +527,6 @@ class OdooXmlRpcReader(OdooReader):
                 result.setdefault(so_name, []).append(p)
 
         return result
-
 
     def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
         if not partner_ids:
@@ -513,8 +551,6 @@ def _connect(config: OdooConfig) -> ExecuteFn:  # pragma: no cover - red externa
     models = xmlrpc.client.ServerProxy(f"{config.url}/xmlrpc/2/object")
 
     def execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
-        return models.execute_kw(
-            config.db, uid, config.password, model, method, args, kwargs
-        )
+        return models.execute_kw(config.db, uid, config.password, model, method, args, kwargs)
 
     return execute

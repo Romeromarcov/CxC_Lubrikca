@@ -106,14 +106,12 @@ def test_logging_alerter_no_explota() -> None:
 
 
 def test_build_alerter_sin_credenciales_es_logging() -> None:
-    cfg = AlertConfig(telegram_bot_token=None, telegram_chat_id=None,
-                      telegram_api_url="http://t")
+    cfg = AlertConfig(telegram_bot_token=None, telegram_chat_id=None, telegram_api_url="http://t")
     assert isinstance(build_alerter(cfg), LoggingAlerter)
 
 
 def test_telegram_alerter_requiere_credenciales() -> None:
-    cfg = AlertConfig(telegram_bot_token=None, telegram_chat_id=None,
-                      telegram_api_url="http://t")
+    cfg = AlertConfig(telegram_bot_token=None, telegram_chat_id=None, telegram_api_url="http://t")
     with pytest.raises(ValueError):
         TelegramAlerter(cfg)
 
@@ -121,8 +119,11 @@ def test_telegram_alerter_requiere_credenciales() -> None:
 # --- effective_dating --------------------------------------------------------
 def _d(regla_id: str, marca: str, categoria: str, pct: str) -> DescuentoMarcaCategoria:
     return DescuentoMarcaCategoria(
-        regla_id=regla_id, marca=marca, categoria=categoria,
-        tipo_descuento=TipoDescuento.CONTADO, porcentaje=Decimal(pct),
+        regla_id=regla_id,
+        marca=marca,
+        categoria=categoria,
+        tipo_descuento=TipoDescuento.CONTADO,
+        porcentaje=Decimal(pct),
         vigencia_desde=date(2026, 1, 1),
     )
 
@@ -133,8 +134,11 @@ def test_descuento_categoria_exacta_gana_sobre_comodin() -> None:
         _d("B", "Global Oil", "Comercial sintéticos", "0.08"),
     ]
     elegido = descuento_vigente(
-        reglas, marca="Global Oil", categoria="Comercial sintéticos",
-        tipo=TipoDescuento.CONTADO, fecha=date(2026, 6, 1),
+        reglas,
+        marca="Global Oil",
+        categoria="Comercial sintéticos",
+        tipo=TipoDescuento.CONTADO,
+        fecha=date(2026, 6, 1),
     )
     assert elegido is not None and elegido.regla_id == "B"
 
@@ -143,21 +147,31 @@ def test_descuento_fuera_de_vigencia_no_aplica() -> None:
     regla = _d("A", "Sinoco", "*", "0.03")
     regla.vigencia_hasta = date(2026, 3, 1)
     elegido = descuento_vigente(
-        [regla], marca="Sinoco", categoria="*", tipo=TipoDescuento.CONTADO,
+        [regla],
+        marca="Sinoco",
+        categoria="*",
+        tipo=TipoDescuento.CONTADO,
         fecha=date(2026, 6, 1),
     )
     assert elegido is None
 
 
 def test_descuento_sin_match_devuelve_none() -> None:
-    assert descuento_vigente(
-        [], marca="X", categoria="Y", tipo=TipoDescuento.CONTADO,
-        fecha=date(2026, 6, 1),
-    ) is None
+    assert (
+        descuento_vigente(
+            [],
+            marca="X",
+            categoria="Y",
+            tipo=TipoDescuento.CONTADO,
+            fecha=date(2026, 6, 1),
+        )
+        is None
+    )
 
 
 def test_effective_dating_match_marca_y_lista() -> None:
-    from cxc.engine.effective_dating import _match_marca, _match_lista, _match_producto_especial
+    from cxc.engine.effective_dating import _match_lista, _match_marca, _match_producto_especial
+
     assert _match_marca("*", "GLOBAL OIL") is True
     assert _match_marca("GLOBAL OIL, SINOCO", "GLOBAL OIL") is True
     assert _match_marca("GLOBAL OIL, SINOCO", "Mobil") is False
@@ -174,29 +188,30 @@ def test_recurrencia_vigente_selecciona_mas_reciente() -> None:
     vieja = b.regla_recompra("0.03", desde=date(2026, 1, 1))
     nueva = b.regla_recompra("0.04", desde=date(2026, 5, 1))
     elegido = regla_recurrencia_vigente(
-        [vieja, nueva], condicion=Condicion.RECOMPRA, fecha=date(2026, 6, 1),
+        [vieja, nueva],
+        condicion=Condicion.RECOMPRA,
+        fecha=date(2026, 6, 1),
     )
     assert elegido is not None and elegido.valor == Decimal("0.04")
 
 
 def test_recurrencia_sin_match_none() -> None:
-    assert regla_recurrencia_vigente(
-        [], condicion=Condicion.PRIMERA_COMPRA, fecha=date(2026, 6, 1)
-    ) is None
+    assert (
+        regla_recurrencia_vigente([], condicion=Condicion.PRIMERA_COMPRA, fecha=date(2026, 6, 1))
+        is None
+    )
 
 
 # --- equivalents -------------------------------------------------------------
 def test_equivalentes_ves() -> None:
-    eq = calcular_equivalentes(Decimal("3600"), Moneda.VES, Decimal("36"),
-                               Decimal("40"))
+    eq = calcular_equivalentes(Decimal("3600"), Moneda.VES, Decimal("36"), Decimal("40"))
     assert eq.equiv_usd_bcv == Decimal("100.000000")
     assert eq.equiv_usd_binance == Decimal("90.000000")
     assert eq.equiv_ves_bcv == Decimal("3600.000000")
 
 
 def test_equivalentes_usd() -> None:
-    eq = calcular_equivalentes(Decimal("100"), Moneda.USD, Decimal("36"),
-                               Decimal("40"))
+    eq = calcular_equivalentes(Decimal("100"), Moneda.USD, Decimal("36"), Decimal("40"))
     assert eq.equiv_usd_bcv == Decimal("100.000000")
     assert eq.equiv_ves_bcv == Decimal("3600.000000")
     assert eq.equiv_ves_binance == Decimal("4000.000000")
@@ -208,8 +223,13 @@ def test_equivalentes_tasa_invalida() -> None:
 
 
 def test_congelar_es_idempotente() -> None:
-    v = b.vinculacion(moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
-                      monto_aplicado="3600", tasa_bcv="36", tasa_binance="40")
+    v = b.vinculacion(
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV,
+        monto_aplicado="3600",
+        tasa_bcv="36",
+        tasa_binance="40",
+    )
     congelar_en_vinculacion(v)
     primero = v.equiv_usd_bcv
     v.tasa_bcv_aplicada = Decimal("99")  # cambiar tasa no debe recalcular
@@ -218,8 +238,14 @@ def test_congelar_es_idempotente() -> None:
 
 
 def test_ruta_bcv_pura_y_valor_pagado() -> None:
-    v1 = b.vinculacion("V1", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
-                       monto_aplicado="3600", tasa_bcv="36", tasa_binance="40")
+    v1 = b.vinculacion(
+        "V1",
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV,
+        monto_aplicado="3600",
+        tasa_bcv="36",
+        tasa_binance="40",
+    )
     congelar_en_vinculacion(v1)
     assert es_ruta_bcv_pura([v1]) is True
     assert es_ruta_bcv_pura([]) is False
@@ -227,8 +253,13 @@ def test_ruta_bcv_pura_y_valor_pagado() -> None:
 
 
 def test_valor_pagado_binance_route() -> None:
-    v = b.vinculacion(moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BINANCE,
-                      monto_aplicado="4000", tasa_bcv="36", tasa_binance="40")
+    v = b.vinculacion(
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BINANCE,
+        monto_aplicado="4000",
+        tasa_bcv="36",
+        tasa_binance="40",
+    )
     congelar_en_vinculacion(v)
     assert valor_pagado_usd([v]) == Decimal("100.000000")
 

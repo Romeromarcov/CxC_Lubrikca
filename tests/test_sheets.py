@@ -52,23 +52,29 @@ def test_roundtrip_vinculacion_con_equivalentes() -> None:
 
 def test_roundtrip_serie_tasa() -> None:
     s = SerieTasa(
-        timestamp=datetime(2026, 6, 27, 10, 0), tasa_bcv=Decimal("36.5"),
-        tasa_binance=Decimal("40.0"), fuente="binance+bcv",
-        es_heredada=True, capturada_ok=False,
+        timestamp=datetime(2026, 6, 27, 10, 0),
+        tasa_bcv=Decimal("36.5"),
+        tasa_binance=Decimal("40.0"),
+        fuente="binance+bcv",
+        es_heredada=True,
+        capturada_ok=False,
     )
     assert serde.serie_from_row(serde.serie_to_row(s)) == s
 
 
 def test_roundtrip_bandeja_con_detalle_json() -> None:
     bandeja = BandejaFacturacion(
-        so_id="SO1", lista_aplicada="USD",
+        so_id="SO1",
+        lista_aplicada="USD",
         precio_base_calculado=Decimal("100.00"),
         descuentos_detalle=[
             DescuentoAplicado("recurrencia", "recompra 0.03", Decimal("3.00")),
             DescuentoAplicado("contado", "contado", Decimal("3.00")),
         ],
-        total_descuentos=Decimal("6.00"), total_motor=Decimal("94.00"),
-        requiere_revision=True, candidata_a_cierre=True,
+        total_descuentos=Decimal("6.00"),
+        total_motor=Decimal("94.00"),
+        requiere_revision=True,
+        candidata_a_cierre=True,
     )
     rt = serde.bandeja_from_row(serde.bandeja_to_row(bandeja))
     assert rt == bandeja
@@ -77,16 +83,24 @@ def test_roundtrip_bandeja_con_detalle_json() -> None:
 
 def test_roundtrip_conciliacion() -> None:
     c = Conciliacion(
-        so_id="SO1", total_motor=Decimal("94.00"), monto_odoo=Decimal("120.00"),
-        ncs_odoo=Decimal("0.00"), diferencia=Decimal("-26.00"),
+        so_id="SO1",
+        total_motor=Decimal("94.00"),
+        monto_odoo=Decimal("120.00"),
+        ncs_odoo=Decimal("0.00"),
+        diferencia=Decimal("-26.00"),
         resultado=ResultadoConciliacion.ROJO,
     )
     assert serde.conciliacion_from_row(serde.conciliacion_to_row(c)) == c
 
 
 def test_roundtrip_descuento_y_regla_y_feriado_y_metodo() -> None:
-    d = b.descuento("D2", marca="Global Oil", categoria="Industrial",
-                    porcentaje="0.06", hasta=date(2026, 12, 31))
+    d = b.descuento(
+        "D2",
+        marca="Global Oil",
+        categoria="Industrial",
+        porcentaje="0.06",
+        hasta=date(2026, 12, 31),
+    )
     assert serde.descuento_from_row(serde.descuento_to_row(d)) == d
     r = b.regla_recompra("0.03")
     assert serde.regla_from_row(serde.regla_to_row(r)) == r
@@ -97,8 +111,7 @@ def test_roundtrip_descuento_y_regla_y_feriado_y_metodo() -> None:
 
 
 def test_roundtrip_bcv_completo() -> None:
-    d = b.regla_bcv_completo("0.10", desde=date(2026, 6, 27),
-                             hasta=date(2026, 6, 27))
+    d = b.regla_bcv_completo("0.10", desde=date(2026, 6, 27), hasta=date(2026, 6, 27))
     assert serde.bcv_completo_from_row(serde.bcv_completo_to_row(d)) == d
 
 
@@ -124,14 +137,29 @@ def _repo() -> tuple[SheetsRepository, InMemorySheetGateway]:
 
 def test_serie_tasas_es_append_only_y_trailing_fail() -> None:
     repo, _ = _repo()
-    repo.append_serie_tasa(SerieTasa(datetime(2026, 6, 27, 9, 0), Decimal("36"),
-                                     Decimal("40"), "ok"))
-    repo.append_serie_tasa(SerieTasa(datetime(2026, 6, 27, 10, 0), Decimal("36"),
-                                     Decimal("40"), "h", es_heredada=True,
-                                     capturada_ok=False))
-    repo.append_serie_tasa(SerieTasa(datetime(2026, 6, 27, 11, 0), Decimal("36"),
-                                     Decimal("40"), "h", es_heredada=True,
-                                     capturada_ok=False))
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 27, 9, 0), Decimal("36"), Decimal("40"), "ok")
+    )
+    repo.append_serie_tasa(
+        SerieTasa(
+            datetime(2026, 6, 27, 10, 0),
+            Decimal("36"),
+            Decimal("40"),
+            "h",
+            es_heredada=True,
+            capturada_ok=False,
+        )
+    )
+    repo.append_serie_tasa(
+        SerieTasa(
+            datetime(2026, 6, 27, 11, 0),
+            Decimal("36"),
+            Decimal("40"),
+            "h",
+            es_heredada=True,
+            capturada_ok=False,
+        )
+    )
     assert repo.trailing_failed_captures() == 2
     last = repo.last_serie_tasa()
     assert last is not None and last.timestamp == datetime(2026, 6, 27, 11, 0)
@@ -164,33 +192,37 @@ def test_upsert_y_lecturas_de_espejo() -> None:
 def test_bandeja_y_conciliacion_persisten() -> None:
     repo, _ = _repo()
     repo.upsert_bandeja(
-        BandejaFacturacion(so_id="SO1", lista_aplicada="USD",
-                           precio_base_calculado=Decimal("100"),
-                           total_motor=Decimal("94"))
+        BandejaFacturacion(
+            so_id="SO1",
+            lista_aplicada="USD",
+            precio_base_calculado=Decimal("100"),
+            total_motor=Decimal("94"),
+        )
     )
     assert repo.get_bandeja("SO1") is not None
     assert len(repo.all_bandeja()) == 1
     repo.upsert_conciliacion(
-        Conciliacion(so_id="SO1", total_motor=Decimal("94"),
-                     monto_odoo=Decimal("94"), ncs_odoo=Decimal("0"),
-                     diferencia=Decimal("0"), resultado=ResultadoConciliacion.VERDE)
+        Conciliacion(
+            so_id="SO1",
+            total_motor=Decimal("94"),
+            monto_odoo=Decimal("94"),
+            ncs_odoo=Decimal("0"),
+            diferencia=Decimal("0"),
+            resultado=ResultadoConciliacion.VERDE,
+        )
     )
     assert len(repo.all_conciliaciones()) == 1
 
 
 def test_config_y_vinculaciones_se_leen() -> None:
     repo, gw = _repo()
-    gw.seed("DescuentosMarcaCategoria",
-            [serde.descuento_to_row(b.descuento("D1"))])
+    gw.seed("DescuentosMarcaCategoria", [serde.descuento_to_row(b.descuento("D1"))])
     gw.seed("ReglasRecurrencia", [serde.regla_to_row(b.regla_recompra())])
-    gw.seed("DescuentoBCVCompleto",
-            [serde.bcv_completo_to_row(b.regla_bcv_completo("0.10"))])
-    gw.seed("PromocionPrimeraCompra",
-            [serde.promocion_to_row(b.promo_primera("LIGA"))])
+    gw.seed("DescuentoBCVCompleto", [serde.bcv_completo_to_row(b.regla_bcv_completo("0.10"))])
+    gw.seed("PromocionPrimeraCompra", [serde.promocion_to_row(b.promo_primera("LIGA"))])
     gw.seed("Feriados", [serde.feriado_to_row(b.feriado(date(2026, 5, 1)))])
     gw.seed("MetodosPago", [serde.metodo_to_row(b.metodo("M1"))])
-    gw.seed("Vinculaciones",
-            [serde.vinculacion_to_row(b.vinculacion("V1", so_id="SO1"))])
+    gw.seed("Vinculaciones", [serde.vinculacion_to_row(b.vinculacion("V1", so_id="SO1"))])
 
     assert len(repo.descuentos_marca_categoria()) == 1
     assert len(repo.reglas_recurrencia()) == 1

@@ -42,9 +42,7 @@ def parse_binance_prices(
     if not isinstance(lista, list):
         raise ValueError(f"{adv_list_path!r} no apunta a una lista de anuncios")
     if len(lista) < rows:
-        raise ValueError(
-            f"Binance devolvió {len(lista)} anuncios; se necesitan {rows}"
-        )
+        raise ValueError(f"Binance devolvió {len(lista)} anuncios; se necesitan {rows}")
     precios: list[Decimal] = []
     for anuncio in lista[:rows]:
         raw = _dig(anuncio, price_path)

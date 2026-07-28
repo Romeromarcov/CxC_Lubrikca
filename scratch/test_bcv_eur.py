@@ -1,5 +1,9 @@
-import urllib.request, re, ssl, sys
+import re
+import ssl
+import sys
+import urllib.request
 from decimal import Decimal
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 ctx = ssl.create_default_context()
@@ -10,10 +14,10 @@ req = urllib.request.Request('https://www.bcv.org.ve/', headers={'User-Agent': '
 try:
     with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
         html = resp.read().decode('utf-8', errors='ignore')
-        
+
         m_usd = re.search(r'id=["\']dolar["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
         m_eur = re.search(r'id=["\']euro["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
-        
+
         if m_usd and m_eur:
             u_str = m_usd.group(1).replace('.', '').replace(',', '.')
             e_str = m_eur.group(1).replace('.', '').replace(',', '.')

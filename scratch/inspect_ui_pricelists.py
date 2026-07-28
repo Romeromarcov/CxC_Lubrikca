@@ -1,18 +1,17 @@
-import sys
-import os
 import json
+import os
 import subprocess
-from datetime import datetime, date
+import sys
 
 sys.path.insert(0, 'src')
 
-res = subprocess.run('railway variables --json', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+res = subprocess.run('railway variables --json', shell=True, capture_output=True)
 try:
     data = json.loads(res.stdout.decode('utf-8', errors='ignore'))
     for k, v in data.items():
         if isinstance(v, str):
             os.environ[k] = v
-except Exception as e:
+except Exception:
     pass
 
 from cxc.config import AppConfig

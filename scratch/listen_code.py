@@ -1,8 +1,8 @@
 import http.server
 import socketserver
-import urllib.parse
-import json
 import subprocess
+import urllib.parse
+
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 PORT = 8090

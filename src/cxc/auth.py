@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
-import base64
-import secrets
 import logging
-from datetime import datetime, date
+import secrets
+from datetime import datetime
 from typing import Any
 
 from cxc.sheets.repository import SheetsRepository
@@ -17,7 +17,15 @@ logger = logging.getLogger("cxc.auth")
 T_USUARIOS = "UsuariosPlataforma"
 
 # Matriz de Permisos por Rol
-ALL_PAGES = ["dashboard", "facturacion", "conciliaciones", "cobranza", "reporte", "auditoria", "configuracion"]
+ALL_PAGES = [
+    "dashboard",
+    "facturacion",
+    "conciliaciones",
+    "cobranza",
+    "reporte",
+    "auditoria",
+    "configuracion",
+]
 
 ROLES_PERMISOS: dict[str, list[str]] = {
     "admin": ALL_PAGES,
@@ -61,13 +69,15 @@ def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any]
         users = execute_fn(
             "res.users",
             "search_read",
-            [[
-                ["active", "=", True],
-                "|",
-                ["login", "=", email_clean],
-                ["email", "=", email_clean],
-            ]],
-            {"fields": ["id", "name", "login", "email"]}
+            [
+                [
+                    ["active", "=", True],
+                    "|",
+                    ["login", "=", email_clean],
+                    ["email", "=", email_clean],
+                ]
+            ],
+            {"fields": ["id", "name", "login", "email"]},
         )
         if users and len(users) > 0:
             u = users[0]
@@ -185,7 +195,9 @@ def verificar_session_token(token: str, secret_key: str) -> str | None:
         return None
     try:
         email_b64, signature = token.split(".", 1)
-        expected_sig = hmac.new(secret_key.encode(), email_b64.encode(), hashlib.sha256).hexdigest()[:16]
+        expected_sig = hmac.new(
+            secret_key.encode(), email_b64.encode(), hashlib.sha256
+        ).hexdigest()[:16]
         if hmac.compare_digest(signature, expected_sig):
             return base64.urlsafe_b64decode(email_b64.encode()).decode()
     except Exception:

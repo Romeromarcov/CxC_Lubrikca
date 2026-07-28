@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from typing import Any
 
 # Nombres de las pestañas (deben coincidir con el Google Sheet real).
 T_CLIENTES = "Clientes"
@@ -40,9 +41,7 @@ class SheetGateway(ABC):
     @abstractmethod
     def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None: ...
 
-    def upsert_rows(
-        self, table: str, pk_field: str, rows: list[Mapping[str, str]]
-    ) -> None:
+    def upsert_rows(self, table: str, pk_field: str, rows: list[Mapping[str, str]]) -> None:
         """Upsert por lote. Default: fila por fila. gspread lo optimiza (1 escritura)."""
         for row in rows:
             self.upsert_row(table, pk_field, row)
@@ -100,6 +99,12 @@ class InMemorySheetGateway(SheetGateway):
 class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google API)
     """Binding real sobre gspread. Cada tabla es una pestaña con cabecera en fila 1."""
 
+    _gc: Any
+    _sh: Any
+    _ws_cache: dict[str, Any]
+    _read_cache: dict[str, Any]
+    _cache_ttl_seconds: float
+
     def __init__(self, spreadsheet_id: str, service_account_file: str) -> None:
         import gspread
 
@@ -133,32 +138,46 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
 
     @classmethod
     def from_env_vars(cls, spreadsheet_id: str) -> GspreadGateway:
-        """Autentica utilizando las variables de entorno de Service Account u OAuth token y secrets."""
-        import gspread
+        """Autentica utilizando las variables de entorno de Service Account u OAuth token y
+        secrets."""
         import json
         import os
 
+        import gspread
+
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
         sa_file = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
-        scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+        scopes = [
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets",
+        ]
 
         if sa_json and sa_json.startswith("{"):
             from google.oauth2.service_account import Credentials as SACredentials
+
             sa_info = json.loads(sa_json)
-            creds = SACredentials.from_service_account_info(sa_info, scopes=scopes)
+            creds = SACredentials.from_service_account_info(  # type: ignore[no-untyped-call]
+                sa_info, scopes=scopes
+            )
         elif sa_file and os.path.exists(sa_file):
             from google.oauth2.service_account import Credentials as SACredentials
-            creds = SACredentials.from_service_account_file(sa_file, scopes=scopes)
+
+            creds = SACredentials.from_service_account_file(  # type: ignore[no-untyped-call]
+                sa_file, scopes=scopes
+            )
         else:
-            from google.oauth2.credentials import Credentials
-            from google.auth.transport.requests import Request
             from google.auth.exceptions import RefreshError
+            from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
 
             token_str = os.environ.get("GOOGLE_TOKEN_JSON")
             secret_str = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
 
             if not token_str:
-                raise ValueError("Falta GOOGLE_TOKEN_JSON o GOOGLE_SERVICE_ACCOUNT_JSON en las variables de entorno.")
+                raise ValueError(
+                    "Falta GOOGLE_TOKEN_JSON o GOOGLE_SERVICE_ACCOUNT_JSON en las variables "
+                    "de entorno."
+                )
 
             token_info = json.loads(token_str)
             if secret_str:
@@ -167,15 +186,20 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 token_info["client_id"] = client_config.get("client_id")
                 token_info["client_secret"] = client_config.get("client_secret")
 
-            creds = Credentials.from_authorized_user_info(token_info, scopes=['https://www.googleapis.com/auth/drive'])
+            creds = Credentials.from_authorized_user_info(  # type: ignore[no-untyped-call]
+                token_info, scopes=["https://www.googleapis.com/auth/drive"]
+            )
             if creds.expired and creds.refresh_token:
                 try:
-                    creds.refresh(Request())
+                    creds.refresh(Request())  # type: ignore[no-untyped-call]
                 except RefreshError as re:
-                    raise RuntimeError("El token de Google OAuth expiró o fue revocado (invalid_grant). Es necesario actualizar GOOGLE_TOKEN_JSON en Railway.") from re
+                    raise RuntimeError(
+                        "El token de Google OAuth expiró o fue revocado (invalid_grant). "
+                        "Es necesario actualizar GOOGLE_TOKEN_JSON en Railway."
+                    ) from re
 
         self = cls.__new__(cls)
-        self._gc = gspread.Client(auth=creds)
+        self._gc = gspread.Client(auth=creds)  # type: ignore[attr-defined]
         self._sh = self._gc.open_by_key(spreadsheet_id)
         self._ws_cache = {}
         self._read_cache = {}
@@ -192,6 +216,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
 
     def _ws(self, table: str):  # type: ignore[no-untyped-def]
         import gspread
+
         if not hasattr(self, "_ws_cache"):
             self._ws_cache = {}
         if table in self._ws_cache:
@@ -202,17 +227,108 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         except gspread.exceptions.WorksheetNotFound:
             # Auto-create sheet with headers if missing
             headers = {
-                "UsuariosPlataforma": ["email", "nombre_odoo", "password_hash", "salt", "rol", "activo", "fecha_registro"],
-                "DescuentosVolumen": ["regla_id", "marca", "categoria", "litros_minimo", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
-                "PromocionPrimeraCompra": ["regla_id", "tipo_beneficio", "productos", "valor", "compra_minima", "regalo_tipo", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosMarcaCategoria": ["regla_id", "marca", "categoria", "tipo_descuento", "porcentaje", "vigencia_desde", "vigencia_hasta", "listas_aplicables", "activo"],
-                "DescuentosProntoPago": ["regla_id", "marca", "categoria", "dias_gracia", "porcentaje", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosRecompra": ["regla_id", "marca", "categoria", "min_cajas", "max_cajas", "porcentaje", "max_usos_mes", "dias_ventana", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosProducto": ["regla_id", "productos", "marca", "categoria", "porcentaje", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
-                "DescuentosDiferencialCambiario": ["regla_id", "nombre", "tipo_diferencial", "tipo_calculo", "porcentaje_fijo", "monedas_aplicables", "listas_aplicables", "vigencia_desde", "vigencia_hasta", "activo"],
+                "UsuariosPlataforma": [
+                    "email",
+                    "nombre_odoo",
+                    "password_hash",
+                    "salt",
+                    "rol",
+                    "activo",
+                    "fecha_registro",
+                ],
+                "DescuentosVolumen": [
+                    "regla_id",
+                    "marca",
+                    "categoria",
+                    "litros_minimo",
+                    "porcentaje",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "listas_aplicables",
+                    "activo",
+                ],
+                "PromocionPrimeraCompra": [
+                    "regla_id",
+                    "tipo_beneficio",
+                    "productos",
+                    "valor",
+                    "compra_minima",
+                    "regalo_tipo",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "activo",
+                ],
+                "DescuentosMarcaCategoria": [
+                    "regla_id",
+                    "marca",
+                    "categoria",
+                    "tipo_descuento",
+                    "porcentaje",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "listas_aplicables",
+                    "activo",
+                ],
+                "DescuentosProntoPago": [
+                    "regla_id",
+                    "marca",
+                    "categoria",
+                    "dias_gracia",
+                    "porcentaje",
+                    "monedas_aplicables",
+                    "listas_aplicables",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "activo",
+                ],
+                "DescuentosRecompra": [
+                    "regla_id",
+                    "marca",
+                    "categoria",
+                    "min_cajas",
+                    "max_cajas",
+                    "porcentaje",
+                    "max_usos_mes",
+                    "dias_ventana",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "activo",
+                ],
+                "DescuentosProducto": [
+                    "regla_id",
+                    "productos",
+                    "marca",
+                    "categoria",
+                    "porcentaje",
+                    "monedas_aplicables",
+                    "listas_aplicables",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "activo",
+                ],
+                "DescuentosDiferencialCambiario": [
+                    "regla_id",
+                    "nombre",
+                    "tipo_diferencial",
+                    "tipo_calculo",
+                    "porcentaje_fijo",
+                    "monedas_aplicables",
+                    "listas_aplicables",
+                    "vigencia_desde",
+                    "vigencia_hasta",
+                    "activo",
+                ],
                 "Feriados": ["fecha", "descripcion", "tipo"],
                 "Exclusiones": ["regla_tipo_a", "regla_tipo_b", "activo"],
-                "AnomaliasAceptadas": ["anomalia_id", "so_id", "factura_id", "tipo_anomalia", "motivo_aceptacion", "aprobado_por", "timestamp_aprobacion"]
+                "AnomaliasAceptadas": [
+                    "anomalia_id",
+                    "so_id",
+                    "factura_id",
+                    "tipo_anomalia",
+                    "motivo_aceptacion",
+                    "aprobado_por",
+                    "timestamp_aprobacion",
+                ],
             }
             cols = headers.get(table, ["id"])
             ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)
@@ -223,6 +339,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
 
     def read_rows(self, table: str) -> list[dict[str, str]]:
         import time
+
         if not hasattr(self, "_read_cache"):
             self._read_cache = {}
         now = time.time()
@@ -262,7 +379,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
             ws.clear()
             ws.append_row(header)
         else:
-            missing = [k for k in row.keys() if k not in header]
+            missing = [k for k in row if k not in header]
             if missing:
                 header.extend(missing)
                 ws.update("A1", [header])
@@ -278,9 +395,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 return
         ws.append_row(valores)
 
-    def upsert_rows(
-        self, table: str, pk_field: str, rows: list[Mapping[str, str]]
-    ) -> None:
+    def upsert_rows(self, table: str, pk_field: str, rows: list[Mapping[str, str]]) -> None:
         # Lectura + escritura por lote: 1 read + 1 update por tabla (cuota-seguro).
         if not rows:
             return
@@ -289,9 +404,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         header = ws.row_values(1)
         existentes = ws.get_all_records()
         matriz = [[str(rec.get(col, "")) for col in header] for rec in existentes]
-        indice = {
-            str(rec.get(pk_field)): i for i, rec in enumerate(existentes)
-        }
+        indice = {str(rec.get(pk_field)): i for i, rec in enumerate(existentes)}
         for row in rows:
             valores = [row.get(col, "") for col in header]
             clave = row[pk_field]

@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 
-from ..config import BcvConfig
+from ..config import BcvConfig, OdooConfig
 from ..decimal_utils import q6
 
 
@@ -32,8 +32,16 @@ def _parse_decimal_local(texto: str) -> Decimal:
 
 def parse_bcv_rates(html: str) -> tuple[Decimal, Decimal]:
     """Extrae las tasas USD y EUR del HTML del BCV."""
-    m_usd = re.search(r'id=["\']dolar["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
-    m_eur = re.search(r'id=["\']euro["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>', html, flags=re.DOTALL | re.IGNORECASE)
+    m_usd = re.search(
+        r'id=["\']dolar["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    m_eur = re.search(
+        r'id=["\']euro["\'].*?<strong[^>]*>\s*([\d\.,]+)\s*</strong>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
 
     usd_val = q6(_parse_decimal_local(m_usd.group(1))) if m_usd else Decimal("0")
     eur_val = q6(_parse_decimal_local(m_eur.group(1))) if m_eur else Decimal("0")
@@ -81,7 +89,7 @@ def _default_get(url: str, timeout: int) -> str:  # pragma: no cover - red exter
 class OdooBcvClient:
     """Consigue la tasa del BCV desde Odoo en lugar de hacer scraping del sitio web."""
 
-    def __init__(self, odoo_config: object) -> None:
+    def __init__(self, odoo_config: OdooConfig) -> None:
         self._config = odoo_config
 
     def fetch_rate(self) -> Decimal:
@@ -92,19 +100,20 @@ class OdooBcvClient:
 
     def fetch_rates(self) -> tuple[Decimal, Decimal]:
         from ..odoo.client import _connect
+
         execute = _connect(self._config)
-        
+
         rates = execute(
             "res.currency.rate",
             "search_read",
             [[["name", ">=", "2026-01-01"], ["currency_id", "in", [1, 125]]]],
-            {"fields": ["name", "currency_id", "inverse_company_rate"], "order": "name desc"}
+            {"fields": ["name", "currency_id", "inverse_company_rate"], "order": "name desc"},
         )
         rate_usd = Decimal("0")
         rate_eur = Decimal("0")
         for r in rates:
             curr = r.get("currency_id")
-            c_id = curr[0] if isinstance(curr, (list, tuple)) else curr
+            c_id = curr[0] if isinstance(curr, list | tuple) else curr
             val = r.get("inverse_company_rate")
             if val:
                 if c_id == 1 and rate_usd == Decimal("0"):

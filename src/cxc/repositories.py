@@ -80,6 +80,9 @@ class Repository(ABC):
     def get_orden(self, so_id: str) -> OrdenVenta | None: ...
 
     @abstractmethod
+    def all_ordenes(self) -> list[OrdenVenta]: ...
+
+    @abstractmethod
     def lineas_de_orden(self, so_id: str) -> list[LineaOrden]: ...
 
     @abstractmethod
@@ -291,8 +294,9 @@ class InMemoryRepository(Repository):
     def save_exclusion(self, rule: ExclusionRegla) -> None:
         # Check either order of rule type
         for i, r in enumerate(self._exclusiones):
-            if (r.regla_tipo_a == rule.regla_tipo_a and r.regla_tipo_b == rule.regla_tipo_b) or \
-               (r.regla_tipo_a == rule.regla_tipo_b and r.regla_tipo_b == rule.regla_tipo_a):
+            if (r.regla_tipo_a == rule.regla_tipo_a and r.regla_tipo_b == rule.regla_tipo_b) or (
+                r.regla_tipo_a == rule.regla_tipo_b and r.regla_tipo_b == rule.regla_tipo_a
+            ):
                 self._exclusiones[i] = rule
                 return
         self._exclusiones.append(rule)

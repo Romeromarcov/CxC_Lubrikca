@@ -87,8 +87,13 @@ class OdooFacturasReader(FacturasOdoo):
         registros: list[dict[str, Any]] = self._execute(
             self.MODEL,
             "search_read",
-            [[["invoice_origin", "=", so_id], ["state", "=", "posted"],
-              ["move_type", "in", ["out_invoice", "out_refund"]]]],
+            [
+                [
+                    ["invoice_origin", "=", so_id],
+                    ["state", "=", "posted"],
+                    ["move_type", "in", ["out_invoice", "out_refund"]],
+                ]
+            ],
             {"fields": self.FIELDS},
         )
         monto = Decimal("0")
@@ -116,7 +121,11 @@ class Reconciler:
         for bandeja in self._repo.all_bandeja():
             neto = self._facturas.neto_facturado(bandeja.so_id)
             conc = clasificar_diferencia(
-                bandeja.total_motor, neto.monto_facturado, neto.ncs, self._config, so_id=bandeja.so_id
+                bandeja.total_motor,
+                neto.monto_facturado,
+                neto.ncs,
+                self._config,
+                so_id=bandeja.so_id,
             )
             self._repo.upsert_conciliacion(conc)
             resultados.append(conc)

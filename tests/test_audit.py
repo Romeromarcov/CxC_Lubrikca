@@ -38,11 +38,15 @@ def test_sin_movimiento_bancario_es_alta_prioridad() -> None:
 
 def test_tasa_heredada_se_revisa_primero() -> None:
     heredada = b.vinculacion(
-        "VH", monto_aplicado="100", hora=datetime(2026, 6, 5, 10, 0),
+        "VH",
+        monto_aplicado="100",
+        hora=datetime(2026, 6, 5, 10, 0),
         es_heredada=True,
     )
     normal_desviada = b.vinculacion(
-        "VN", monto_aplicado="200", hora=datetime(2026, 6, 5, 10, 0),
+        "VN",
+        monto_aplicado="200",
+        hora=datetime(2026, 6, 5, 10, 0),
     )
     movs = [
         BankMovement(Decimal("100"), datetime(2026, 6, 5, 10, 5)),
@@ -56,7 +60,8 @@ def test_tasa_heredada_se_revisa_primero() -> None:
 
 def test_swing_de_tasa_se_marca() -> None:
     vinc = b.vinculacion(
-        monto_aplicado="100", hora=datetime(2026, 6, 5, 10, 0),
+        monto_aplicado="100",
+        hora=datetime(2026, 6, 5, 10, 0),
         tasa_binance="40.0",
     )
     mov = BankMovement(Decimal("100"), datetime(2026, 6, 5, 10, 10))
@@ -83,7 +88,9 @@ def test_finding_dataclass_basico() -> None:
 
 def test_moneda_y_tipo_no_afectan_emparejamiento_por_monto() -> None:
     vinc = b.vinculacion(
-        monto_aplicado="100", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV,
+        monto_aplicado="100",
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV,
         hora=datetime(2026, 6, 5, 10, 0),
     )
     mov = BankMovement(Decimal("100"), datetime(2026, 6, 5, 10, 5))

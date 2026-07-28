@@ -15,9 +15,7 @@ from cxc.reconciliation.reconcile import (
 )
 from cxc.repositories import InMemoryRepository
 
-CFG = ReconciliationConfig(
-    tolerance_rounding=Decimal("0.01"), tolerance_red=Decimal("1.00")
-)
+CFG = ReconciliationConfig(tolerance_rounding=Decimal("0.01"), tolerance_red=Decimal("1.00"))
 
 
 def test_verde_cuando_cuadra() -> None:
@@ -56,14 +54,18 @@ def test_reconciler_recorre_bandeja_y_persiste() -> None:
     repo = InMemoryRepository()
     repo.upsert_bandeja(
         BandejaFacturacion(
-            so_id="SO1", lista_aplicada="USD",
-            precio_base_calculado=Decimal("100"), total_motor=Decimal("94.00"),
+            so_id="SO1",
+            lista_aplicada="USD",
+            precio_base_calculado=Decimal("100"),
+            total_motor=Decimal("94.00"),
         )
     )
     repo.upsert_bandeja(
         BandejaFacturacion(
-            so_id="SO2", lista_aplicada="USD",
-            precio_base_calculado=Decimal("200"), total_motor=Decimal("180.00"),
+            so_id="SO2",
+            lista_aplicada="USD",
+            precio_base_calculado=Decimal("200"),
+            total_motor=Decimal("180.00"),
         )
     )
     facturas = _FakeFacturas(
@@ -83,10 +85,18 @@ def test_odoo_facturas_reader_suma_facturas_y_ncs_en_usd() -> None:
     # La compañía factura en VES; se usa el equivalente USD de la factura.
     def fake_execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
         return [
-            {"id": 1, "invoice_origin": "S00553",
-             "amount_total_signed_usd": "1650.42", "move_type": "out_invoice"},
-            {"id": 2, "invoice_origin": "S00553",
-             "amount_total_signed_usd": "-50.00", "move_type": "out_refund"},
+            {
+                "id": 1,
+                "invoice_origin": "S00553",
+                "amount_total_signed_usd": "1650.42",
+                "move_type": "out_invoice",
+            },
+            {
+                "id": 2,
+                "invoice_origin": "S00553",
+                "amount_total_signed_usd": "-50.00",
+                "move_type": "out_refund",
+            },
         ]
 
     reader = OdooFacturasReader(fake_execute)

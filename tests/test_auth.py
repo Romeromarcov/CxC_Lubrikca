@@ -1,19 +1,17 @@
 """Pruebas unitarias para el módulo de autenticación src/cxc/auth.py."""
 
 from unittest.mock import MagicMock
-import pytest
+
 from cxc.auth import (
-    hash_password,
-    verificar_password,
-    verificar_usuario_odoo_activo,
-    obtener_usuarios_plataforma,
-    buscar_usuario_plataforma,
-    registrar_o_actualizar_usuario,
     autenticar_usuario,
+    buscar_usuario_plataforma,
     crear_session_token,
+    hash_password,
+    obtener_usuarios_plataforma,
+    registrar_o_actualizar_usuario,
+    verificar_password,
     verificar_session_token,
-    ROLES_PERMISOS,
-    NOMBRES_ROLES,
+    verificar_usuario_odoo_activo,
 )
 
 
@@ -31,12 +29,16 @@ def test_verificar_usuario_odoo_activo():
     assert verificar_usuario_odoo_activo(None, "") is None
 
     # Test active Odoo user found
-    mock_execute = MagicMock(return_value=[{
-        "id": 12,
-        "name": "Marco Romero",
-        "login": "mromero@lubrikca.com",
-        "email": "mromero@lubrikca.com"
-    }])
+    mock_execute = MagicMock(
+        return_value=[
+            {
+                "id": 12,
+                "name": "Marco Romero",
+                "login": "mromero@lubrikca.com",
+                "email": "mromero@lubrikca.com",
+            }
+        ]
+    )
     user = verificar_usuario_odoo_activo(mock_execute, "mromero@lubrikca.com")
     assert user is not None
     assert user["user_id"] == 12
@@ -77,7 +79,7 @@ def test_repo_usuarios_management():
             "password_hash": "hash123",
             "salt": "salt123",
             "rol": "admin",
-            "activo": "TRUE"
+            "activo": "TRUE",
         }
     ]
     mock_gateway.read_rows.return_value = mock_rows
@@ -92,13 +94,13 @@ def test_repo_usuarios_management():
     # Test registrar_o_actualizar_usuario
     pwd_hash, salt = hash_password("admin123")
     mock_gateway.read_rows.return_value = []
-    
+
     new_u = registrar_o_actualizar_usuario(
         mock_repo,
         email="nuevo@lubrikca.com",
         password="password123",
         nombre_odoo="Nuevo Usuario",
-        rol="tesoreria"
+        rol="tesoreria",
     )
     assert new_u["email"] == "nuevo@lubrikca.com"
     assert new_u["rol"] == "tesoreria"
@@ -120,16 +122,20 @@ def test_autenticar_usuario():
             "password_hash": pwd_hash,
             "salt": salt,
             "rol": "tesoreria",
-            "activo": "TRUE"
+            "activo": "TRUE",
         }
     ]
 
-    mock_execute = MagicMock(return_value=[{
-        "id": 5,
-        "name": "User Test",
-        "login": "user@lubrikca.com",
-        "email": "user@lubrikca.com"
-    }])
+    mock_execute = MagicMock(
+        return_value=[
+            {
+                "id": 5,
+                "name": "User Test",
+                "login": "user@lubrikca.com",
+                "email": "user@lubrikca.com",
+            }
+        ]
+    )
 
     # Successful authentication
     u_info, err = autenticar_usuario(mock_execute, mock_repo, "user@lubrikca.com", pwd)
@@ -139,7 +145,9 @@ def test_autenticar_usuario():
     assert u_info["rol"] == "tesoreria"
 
     # Wrong password
-    u_info_err, err_msg = autenticar_usuario(mock_execute, mock_repo, "user@lubrikca.com", "wrong_pwd")
+    u_info_err, err_msg = autenticar_usuario(
+        mock_execute, mock_repo, "user@lubrikca.com", "wrong_pwd"
+    )
     assert u_info_err is None
     assert err_msg == "Contraseña incorrecta."
 
@@ -150,6 +158,8 @@ def test_autenticar_usuario():
 
     # Inactive in Odoo
     mock_execute_inactive = MagicMock(return_value=[])
-    u_info_inact, err_inact = autenticar_usuario(mock_execute_inactive, mock_repo, "user@lubrikca.com", pwd)
+    u_info_inact, err_inact = autenticar_usuario(
+        mock_execute_inactive, mock_repo, "user@lubrikca.com", pwd
+    )
     assert u_info_inact is None
     assert "no se encuentra activo en Odoo" in err_inact

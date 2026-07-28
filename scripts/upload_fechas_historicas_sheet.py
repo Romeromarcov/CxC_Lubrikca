@@ -3,10 +3,11 @@ Script para poblar la pestaña 'FechasHistoricas' en Google Sheets con las 554 �
 del archivo CSV para consulta y edición directamente en Google Drive.
 """
 
-import os
-import sys
 import csv
 import logging
+import os
+import sys
+
 from cxc.config import AppConfig
 from cxc.sheets.gateway import GspreadGateway
 
@@ -15,9 +16,9 @@ logger = logging.getLogger("cxc.upload_fechas_historicas")
 
 csv_path = r"C:\Users\PC\Downloads\Cuentas x Cobrar Nuevo - Ventas (2).csv"
 
+
 def main():
-    if sys.version_info >= (3, 7):
-        sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 
     logger.info("Iniciando conexión a Google Sheets...")
     config = AppConfig.from_env()
@@ -38,11 +39,11 @@ def main():
         ws = sh.add_worksheet(title=sheet_name, rows=1000, cols=5)
 
     headers = ["so_id", "fecha_historica", "vencimiento_historico", "terminos_pago"]
-    
+
     rows_to_insert = [headers]
     seen_ids = set()
 
-    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+    with open(csv_path, encoding="utf-8-sig", errors="replace") as f:
         reader = csv.DictReader(f)
         for row in reader:
             ref = row.get("Referencia de la orden", "").strip()
@@ -69,10 +70,12 @@ def main():
                 rows_to_insert.append([so_id, iso_date, vencimiento, terminos])
                 seen_ids.add(so_id)
 
-    logger.info(f"Subiendo {len(rows_to_insert)-1} registros de fechas históricas a la pestaña '{sheet_name}'...")
+    n_rows = len(rows_to_insert) - 1
+    logger.info(f"Subiendo {n_rows} registros de fechas históricas a la pestaña '{sheet_name}'...")
     ws.clear()
     ws.update("A1", rows_to_insert)
     logger.info("🎉 ¡Población de 'FechasHistoricas' en Google Sheets completada exitosamente!")
+
 
 if __name__ == "__main__":
     main()
