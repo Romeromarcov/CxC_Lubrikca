@@ -402,6 +402,20 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         self.invalidate_cache(table)
         ws = self._ws(table)
         header = ws.row_values(1)
+
+        # Si las filas traen columnas que el header aun no tiene (ej. un
+        # campo nuevo del dataclass), se extiende el header en vez de
+        # descartar esos valores en silencio -- mismo comportamiento que
+        # upsert_row (fila a fila) ya tiene mas arriba.
+        columnas_nuevas = []
+        for row in rows:
+            for col in row:
+                if col not in header and col not in columnas_nuevas:
+                    columnas_nuevas.append(col)
+        if columnas_nuevas:
+            header = [*header, *columnas_nuevas]
+            ws.update("A1", [header])
+
         existentes = ws.get_all_records()
         matriz = [[str(rec.get(col, "")) for col in header] for rec in existentes]
         indice = {str(rec.get(pk_field)): i for i, rec in enumerate(existentes)}

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from cxc.models import (
     BandejaFacturacion,
+    Cliente,
     Conciliacion,
     DescuentoAplicado,
     EstadoVinculacion,
@@ -127,6 +128,27 @@ def test_roundtrip_cliente_linea_pago() -> None:
     assert serde.linea_from_row(serde.linea_to_row(ln)) == ln
     p = b.pago("PG5", moneda=Moneda.VES)
     assert serde.pago_from_row(serde.pago_to_row(p)) == p
+
+
+def test_roundtrip_cliente_agente_retencion_iva() -> None:
+    """Bug crítico: wh_iva_agent/wh_iva_rate se perdían en el sync porque
+
+    cliente_to_row/cliente_from_row nunca los serializaban -- el sync
+    incremental sobreescribía la hoja Clientes con esos campos vacíos en
+    cada ciclo, dejando la Bandeja 3 (Pendiente Comprobante IVA) siempre
+    vacía sin importar cuántos clientes fueran agentes de retención en Odoo.
+    """
+    c = Cliente(
+        cliente_id="C_AGENTE",
+        nombre="Cliente Agente Retención",
+        vendedor_email="v@lubrikca.com",
+        wh_iva_agent=True,
+        wh_iva_rate=100.0,
+    )
+    row = serde.cliente_to_row(c)
+    assert row["wh_iva_agent"] == "TRUE"
+    assert row["wh_iva_rate"] == "100.0"
+    assert serde.cliente_from_row(row) == c
 
 
 # --- SheetsRepository sobre gateway en memoria ------------------------------

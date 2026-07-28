@@ -108,14 +108,23 @@ def p_optstr(s: str) -> str | None:
 
 # --- Clientes ----------------------------------------------------------------
 def cliente_to_row(c: Cliente) -> Row:
-    return {"cliente_id": c.cliente_id, "nombre": c.nombre, "vendedor_email": c.vendedor_email}
+    return {
+        "cliente_id": c.cliente_id,
+        "nombre": c.nombre,
+        "vendedor_email": c.vendedor_email,
+        "wh_iva_agent": s_bool(c.wh_iva_agent),
+        "wh_iva_rate": str(c.wh_iva_rate),
+    }
 
 
 def cliente_from_row(r: Mapping[str, str]) -> Cliente:
+    wh_rate_raw = r.get("wh_iva_rate", "").strip()
     return Cliente(
         cliente_id=r["cliente_id"],
         nombre=r.get("nombre", ""),
         vendedor_email=r.get("vendedor_email", ""),
+        wh_iva_agent=p_bool(r.get("wh_iva_agent", "FALSE")),
+        wh_iva_rate=float(wh_rate_raw) if wh_rate_raw else 75.0,
     )
 
 

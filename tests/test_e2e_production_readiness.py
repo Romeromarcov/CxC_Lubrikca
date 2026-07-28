@@ -649,3 +649,74 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
         assert nc_items[0]["so_id"] == "SO_NC"
         assert nc_items[0]["concepto"] == "NC obsequio (Aceite 20W50 Caja)"
         assert nc_items[0]["nc_monto"] == 45.0
+
+
+def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
+    """Bandeja 3: el 16% de IVA se estima sobre el total del MOTOR
+
+    (ya con descuentos aplicados), no sobre el monto bruto original de la
+    orden -- de lo contrario, órdenes con descuentos grandes sobreestiman
+    cuánto IVA se retuvo y esconden un saldo real pendiente como si solo
+    faltara el comprobante.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_AGENTE2",
+                "nombre": "Cliente Agente 2",
+                "wh_iva_agent": "True",
+                "wh_iva_rate": "100",
+            }
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_IVA2",
+            cliente_id="C_AGENTE2",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("300.00"),  # monto bruto -- con descuento grande aplicado
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-002",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_IVA2",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("300.00"),
+            total_descuentos=Decimal("184.00"),
+            ncs_calculadas=Decimal("0"),
+            total_motor=Decimal("116.00"),  # subtotal $100 + IVA 16% ($16)
+        ),
+    ]
+    # Pagó $90 de los $116 reales -- le faltan $26, pero la retención de IVA
+    # (100% de $16) es solo $16: hay un saldo real de $10 más allá del IVA.
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_IVA2",
+            pago_id="P_IVA2",
+            so_id="SO_IVA2",
+            monto_aplicado=Decimal("90.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        so_ids = {item["so_id"] for item in res.json()["iva_pendiente_agentes"]}
+        # No debe entrar: el saldo pendiente ($26) excede la retención real
+        # de IVA sobre el total del motor ($16), aunque calculado sobre el
+        # monto bruto ($300) sí hubiera "cabido" (bug que se corrige aquí).
+        assert "SO_IVA2" not in so_ids

@@ -3359,11 +3359,14 @@ async def get_bandeja_facturacion():
                 # descuentos aplicados) es "normal" si cabe dentro de esa
                 # porcion retenida -- no es que el cliente deba mas, es que
                 # falta el comprobante. IVA Venezuela = 16%; se estima el
-                # subtotal despejando el monto total facturado (asume que
-                # monto_orig ya incluye IVA).
+                # subtotal despejando el total del MOTOR (tot_motor, ya con
+                # descuentos aplicados) -- no el monto bruto original: si la
+                # orden tuvo descuentos ya reflejados en la factura real, el
+                # 16% debe calcularse sobre lo efectivamente facturado, no
+                # sobre el precio de lista previo al descuento.
                 if wh_agent:
-                    subtotal_est = monto_orig / 1.16
-                    iva_total_est = monto_orig - subtotal_est
+                    subtotal_est = tot_motor / 1.16
+                    iva_total_est = tot_motor - subtotal_est
                     iva_retenido_est = iva_total_est * (wh_rate / 100.0)
                     saldo_pendiente_motor = tot_motor - abono
                     if 0 <= saldo_pendiente_motor <= iva_retenido_est + 0.05:
@@ -3372,7 +3375,7 @@ async def get_bandeja_facturacion():
                                 "so_id": o.so_id,
                                 "cliente_nombre": c_name,
                                 "factura_id": o.factura_id or "Odoo",
-                                "monto_factura": monto_orig,
+                                "monto_factura": tot_motor,
                                 "wh_iva_rate": wh_rate,
                                 "base_cobrada": round(subtotal_est, 2),
                                 "iva_total_estimado": round(iva_total_est, 2),
