@@ -4209,6 +4209,26 @@ async def get_reglas_descuento():
 async def get_auditoria():
     try:
         repo = get_repo()
+        # Bug preexistente (Tarea 6): esta funcion usaba `cutoff_historical` y
+        # `hist_map` sin definirlas nunca en su propio scope (solo existian
+        # como variables locales de get_reporte_saldos) -- /api/auditoria
+        # siempre tiraba NameError y devolvia 500. Se replican aqui con la
+        # misma logica.
+        cutoff_historical = date(2026, 3, 12)
+        hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
+        hist_map: dict[str, dict[str, Any]] = {}
+        for _hr in hist_rows:
+            _code = str(_hr.get("codigo", "")).strip()
+            if _code:
+                try:
+                    hist_map[_code] = {
+                        "nombre": _hr.get("producto_nombre", ""),
+                        "usd": Decimal(str(_hr.get("precio_usd", "0") or "0")),
+                        "eur": Decimal(str(_hr.get("precio_bcv_euro", "0") or "0")),
+                    }
+                except Exception:
+                    pass
+
         ordenes = repo.all_ordenes()
         lines_rows = repo._g.read_rows("LineasOrden")
         bandeja_rows = repo.all_bandeja()
