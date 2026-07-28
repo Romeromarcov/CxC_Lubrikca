@@ -209,14 +209,14 @@ def resolve_effective_pricelist_price(
     for r in pricelist_items:
         pl_id = (
             r["pricelist_id"][0]
-            if isinstance(r["pricelist_id"], (list, tuple))
+            if isinstance(r["pricelist_id"], list | tuple)
             else r["pricelist_id"]
         )
         if candidate_pricelist_ids and pl_id not in candidate_pricelist_ids:
             continue
 
         pt_raw = r.get("product_tmpl_id")
-        pt_id = pt_raw[0] if isinstance(pt_raw, (list, tuple)) else pt_raw
+        pt_id = pt_raw[0] if isinstance(pt_raw, list | tuple) else pt_raw
         if pt_id != product_tmpl_id:
             continue
 
@@ -242,7 +242,7 @@ def resolve_effective_pricelist_price(
 
 
 def extract_product_tmpl_id(prod_raw: Any) -> int | None:
-    if isinstance(prod_raw, (int, float)):
+    if isinstance(prod_raw, int | float):
         return int(prod_raw)
     if isinstance(prod_raw, str):
         if prod_raw.startswith("["):
@@ -1225,12 +1225,12 @@ async def get_reporte_saldos(refresh: bool = False):
                     t_info = s.get("payment_term_id")
                     vendedor_name = (
                         u_info[1]
-                        if isinstance(u_info, (list, tuple)) and len(u_info) > 1
+                        if isinstance(u_info, list | tuple) and len(u_info) > 1
                         else "Sin Vendedor"
                     )
                     term_name = (
                         t_info[1]
-                        if isinstance(t_info, (list, tuple)) and len(t_info) > 1
+                        if isinstance(t_info, list | tuple) and len(t_info) > 1
                         else "Contado"
                     )
                     so_odoo_data[s_name] = {
@@ -1242,7 +1242,7 @@ async def get_reporte_saldos(refresh: bool = False):
                         "invoice_status": s.get("invoice_status"),
                     }
                     p_ids = s.get("picking_ids")
-                    if p_ids and isinstance(p_ids, (list, tuple)):
+                    if p_ids and isinstance(p_ids, list | tuple):
                         all_picking_ids.update(p_ids)
             except Exception as e_so:
                 logger.warning("Error consultando sale.order en Odoo: %s", e_so)
@@ -1278,7 +1278,7 @@ async def get_reporte_saldos(refresh: bool = False):
                 for p in pickings:
                     so_name = None
                     s_info = p.get("sale_id")
-                    if isinstance(s_info, (list, tuple)) and len(s_info) > 1:
+                    if isinstance(s_info, list | tuple) and len(s_info) > 1:
                         so_name = s_info[1]
                     elif p.get("origin"):
                         for name in so_ids_names:
@@ -1287,12 +1287,12 @@ async def get_reporte_saldos(refresh: bool = False):
                                 break
                     if not so_name and p.get("return_id"):
                         ret_parent_id = (
-                            p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                            p["return_id"][0] if isinstance(p["return_id"], list | tuple) else None
                         )
                         if ret_parent_id and ret_parent_id in p_by_id:
                             parent_p = p_by_id[ret_parent_id]
                             ps_info = parent_p.get("sale_id")
-                            if isinstance(ps_info, (list, tuple)) and len(ps_info) > 1:
+                            if isinstance(ps_info, list | tuple) and len(ps_info) > 1:
                                 so_name = ps_info[1]
 
                     p_code = str(p.get("picking_type_code") or "")
@@ -1502,7 +1502,7 @@ async def get_reporte_saldos(refresh: bool = False):
                         orig = str(nc.get("invoice_origin", "")).strip()
                         ref = str(nc.get("ref", "")).strip()
                         rev_raw = nc.get("reversed_entry_id")
-                        rev_id = rev_raw[0] if isinstance(rev_raw, (list, tuple)) else None
+                        rev_id = rev_raw[0] if isinstance(rev_raw, list | tuple) else None
 
                         if orig in invoices_by_so:
                             so = orig
@@ -1563,7 +1563,7 @@ async def get_reporte_saldos(refresh: bool = False):
                 for il in inv_lines:
                     move_raw = il.get("move_id")
                     move_id = (
-                        move_raw[0] if isinstance(move_raw, (list, tuple)) else int(move_raw or 0)
+                        move_raw[0] if isinstance(move_raw, list | tuple) else int(move_raw or 0)
                     )
                     so_name = inv_id_to_so.get(move_id, "")
                     if not so_name:
@@ -1624,7 +1624,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     order_raw = sol.get("order_id")
                     so_name = (
                         order_raw[1]
-                        if isinstance(order_raw, (list, tuple)) and len(order_raw) > 1
+                        if isinstance(order_raw, list | tuple) and len(order_raw) > 1
                         else str(order_raw or "")
                     )
                     if not so_name:
@@ -1676,7 +1676,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     p_curr_raw = p.get("currency_id")
                     p_curr = (
                         p_curr_raw[1]
-                        if isinstance(p_curr_raw, (list, tuple)) and len(p_curr_raw) > 1
+                        if isinstance(p_curr_raw, list | tuple) and len(p_curr_raw) > 1
                         else "USD"
                     )
                     p_date = str(p.get("date") or "")[:10]
@@ -1756,7 +1756,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     paid_inv = max(Decimal("0"), tot - res)
 
                     curr = inv.get("currency_id")
-                    c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
                     inv_dt = str(inv.get("invoice_date") or "")[:10]
 
                     if c_name == "VES":
@@ -2080,7 +2080,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     inv_names_list.append(str(inv.get("name", "")))
                     res_val = float(inv.get("amount_residual", 0.0))
                     curr = inv.get("currency_id")
-                    c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
                     inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
                     rate = rates_map.get(inv_dt, last_bcv_val)
                     if c_name == "VES" and rate > 0:
@@ -2150,7 +2150,7 @@ async def get_reporte_saldos(refresh: bool = False):
                 nc_tot = float(nc.get("amount_total") or 0)
                 nc_curr = nc.get("currency_id")
                 nc_c_name = (
-                    nc_curr[1] if isinstance(nc_curr, (list, tuple)) and len(nc_curr) > 1 else "USD"
+                    nc_curr[1] if isinstance(nc_curr, list | tuple) and len(nc_curr) > 1 else "USD"
                 )
                 nc_dt = str(nc.get("invoice_date") or o.fecha.isoformat())[:10]
                 nc_rate = rates_map.get(nc_dt, last_bcv_val)
@@ -2756,7 +2756,7 @@ async def get_config_listas_precio():
         for item in items:
             pl_id = (
                 item["pricelist_id"][0]
-                if isinstance(item["pricelist_id"], (list, tuple))
+                if isinstance(item["pricelist_id"], list | tuple)
                 else item["pricelist_id"]
             )
             items_by_list.setdefault(pl_id, []).append(item)
@@ -2793,7 +2793,7 @@ async def get_config_listas_precio():
                     "id": pl["id"],
                     "name": pl["name"],
                     "moneda": pl["currency_id"][1]
-                    if isinstance(pl["currency_id"], (list, tuple)) and len(pl["currency_id"]) > 1
+                    if isinstance(pl["currency_id"], list | tuple) and len(pl["currency_id"]) > 1
                     else "USD",
                     "active": pl["active"],
                     "reglas": rules,
@@ -5105,7 +5105,7 @@ async def get_auditoria():
                     res_val = float(inv.get("amount_residual", 0.0))
                     curr = inv.get("currency_id")
                     c_name_inv = (
-                        curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                        curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
                     )
                     inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
                     rate = rates_map.get(inv_dt, last_bcv_val)

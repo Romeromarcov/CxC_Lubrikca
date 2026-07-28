@@ -113,7 +113,7 @@ class OdooBcvClient:
         rate_eur = Decimal("0")
         for r in rates:
             curr = r.get("currency_id")
-            c_id = curr[0] if isinstance(curr, (list, tuple)) else curr
+            c_id = curr[0] if isinstance(curr, list | tuple) else curr
             val = r.get("inverse_company_rate")
             if val:
                 if c_id == 1 and rate_usd == Decimal("0"):

@@ -331,7 +331,7 @@ class OdooXmlRpcReader(OdooReader):
                 res.add(int(sid))
             elif p.get("return_id"):
                 ret_parent_id = (
-                    p["return_id"][0] if isinstance(p["return_id"], (list, tuple)) else None
+                    p["return_id"][0] if isinstance(p["return_id"], list | tuple) else None
                 )
                 if ret_parent_id and ret_parent_id in p_by_id:
                     parent_p = p_by_id[ret_parent_id]
@@ -495,7 +495,7 @@ class OdooXmlRpcReader(OdooReader):
         pago_inv_map: dict[int, list[int]] = {}
         for p in pagos:
             inv_ids = p.get("invoice_ids") or []
-            if isinstance(inv_ids, (list, tuple)) and inv_ids:
+            if isinstance(inv_ids, list | tuple) and inv_ids:
                 all_inv_ids.extend(inv_ids)
                 pago_inv_map[p["id"]] = list(inv_ids)
 
