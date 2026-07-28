@@ -1396,16 +1396,14 @@ async def get_reporte_saldos(refresh: bool = False):
                     if len(sub_domain) == 1:
                         full_nc_domain = sub_domain + nc_domain
                     else:
-                        ors = [["|"]] * (len(sub_domain) - 1)
-                        # Flat list of OR operators followed by clauses and state/move_type
-                        flat_sub = [clause for sub in sub_domain for clause in sub]
-                        # In Odoo domain syntax: '|', '|', c1, c2, c3, ['state', '=', 'posted'], ['move_type', '=', 'out_refund']
+                        # Dominio Odoo en notación prefija: '|' * (n-1) antepone las n
+                        # cláusulas para hacer OR entre ellas, luego se ANDan con nc_domain.
                         full_nc_domain = ["|"] * (len(sub_domain) - 1) + sub_domain + nc_domain
 
                     ncs = execute(
                         "account.move",
                         "search_read",
-                        full_nc_domain,
+                        [full_nc_domain],
                         {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual",
                                     "currency_id", "invoice_date", "move_type", "payment_state", "reversed_entry_id", "ref"]}
                     )
@@ -1431,6 +1429,9 @@ async def get_reporte_saldos(refresh: bool = False):
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
 
         # ── Descuentos en líneas de FACTURAS (account.move.line.discount) ──────
+        # Captura dos formas de descuento: (a) el campo `discount` (%) de la línea,
+        # y (b) una línea aparte del producto "Descuento" con `price_subtotal` negativo
+        # (patrón usado en Lubrikca en vez de/además del campo discount).
         inv_line_discounts_by_so: dict[str, float] = {}
         inv_line_discount_detail_by_so: dict[str, str] = {}
         if execute and invoice_ids_all:
@@ -1438,8 +1439,14 @@ async def get_reporte_saldos(refresh: bool = False):
                 inv_lines = execute(
                     "account.move.line",
                     "search_read",
-                    [[["move_id", "in", invoice_ids_all], ["display_type", "in", ["product", False]], ["discount", ">", 0]]],
-                    {"fields": ["move_id", "name", "quantity", "price_unit", "discount", "currency_id"]}
+                    [[
+                        ["move_id", "in", invoice_ids_all],
+                        ["display_type", "in", ["product", False]],
+                        "|",
+                        ["discount", ">", 0],
+                        "&", ["product_id.name", "ilike", "descuento"], ["price_subtotal", "<", 0],
+                    ]],
+                    {"fields": ["move_id", "name", "quantity", "price_unit", "discount", "price_subtotal", "currency_id"]}
                 )
                 for il in inv_lines:
                     move_raw = il.get("move_id")
@@ -1447,19 +1454,24 @@ async def get_reporte_saldos(refresh: bool = False):
                     so_name = inv_id_to_so.get(move_id, "")
                     if not so_name:
                         continue
-                    qty = float(il.get("quantity") or 0)
-                    price = float(il.get("price_unit") or 0)
-                    disc_pct = float(il.get("discount") or 0) / 100.0
-                    disc_monto = qty * price * disc_pct
+                    disc_pct_field = float(il.get("discount") or 0)
+                    if disc_pct_field > 0:
+                        qty = float(il.get("quantity") or 0)
+                        price = float(il.get("price_unit") or 0)
+                        disc_monto = qty * price * (disc_pct_field / 100.0)
+                        new_frag = f"{str(il.get('name') or 'línea')[:40]}: {disc_pct_field:.1f}%"
+                    else:
+                        # Línea aparte de producto "Descuento" (price_subtotal negativo).
+                        disc_monto = abs(float(il.get("price_subtotal") or 0))
+                        new_frag = f"{str(il.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
                     inv_line_discounts_by_so[so_name] = inv_line_discounts_by_so.get(so_name, 0.0) + disc_monto
-                    label = str(il.get("name") or "línea")[:40]
                     detail_existing = inv_line_discount_detail_by_so.get(so_name, "")
-                    new_frag = f"{label}: {il.get('discount',0):.1f}%"
                     inv_line_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
             except Exception as e_il:
                 logger.warning("Error al consultar account.move.line discounts: %s", e_il)
 
         # ── Descuentos en líneas de la ORDEN (sale.order.line.discount) ─────────
+        # Misma lógica de dos formas de descuento que en facturas (ver arriba).
         sol_discounts_by_so: dict[str, float] = {}
         sol_discount_detail_by_so: dict[str, str] = {}
         if execute and so_ids_names:
@@ -1467,23 +1479,31 @@ async def get_reporte_saldos(refresh: bool = False):
                 sol_lines = execute(
                     "sale.order.line",
                     "search_read",
-                    [[["order_id.name", "in", so_ids_names], ["discount", ">", 0]]],
-                    {"fields": ["order_id", "name", "product_uom_qty", "price_unit", "discount"]}
+                    [[
+                        ["order_id.name", "in", so_ids_names],
+                        "|",
+                        ["discount", ">", 0],
+                        "&", ["product_id.name", "ilike", "descuento"], ["price_subtotal", "<", 0],
+                    ]],
+                    {"fields": ["order_id", "name", "product_uom_qty", "price_unit", "discount", "price_subtotal"]}
                 )
                 for sol in sol_lines:
                     order_raw = sol.get("order_id")
                     so_name = order_raw[1] if isinstance(order_raw, (list, tuple)) and len(order_raw) > 1 else str(order_raw or "")
                     if not so_name:
                         continue
-                    qty = float(sol.get("product_uom_qty") or 0)
-                    price = float(sol.get("price_unit") or 0)
-                    disc_pct = float(sol.get("discount") or 0) / 100.0
-                    disc_monto = qty * price * disc_pct
+                    disc_pct_field = float(sol.get("discount") or 0)
+                    if disc_pct_field > 0:
+                        qty = float(sol.get("product_uom_qty") or 0)
+                        price = float(sol.get("price_unit") or 0)
+                        disc_monto = qty * price * (disc_pct_field / 100.0)
+                        new_frag = f"{str(sol.get('name') or 'línea')[:40]}: {disc_pct_field:.1f}%"
+                    else:
+                        # Línea aparte de producto "Descuento" (price_subtotal negativo).
+                        disc_monto = abs(float(sol.get("price_subtotal") or 0))
+                        new_frag = f"{str(sol.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
                     sol_discounts_by_so[so_name] = sol_discounts_by_so.get(so_name, 0.0) + disc_monto
-                    label = str(sol.get("name") or "línea")[:40]
-                    disc_pct_display = float(sol.get("discount") or 0)
                     detail_existing = sol_discount_detail_by_so.get(so_name, "")
-                    new_frag = f"{label}: {disc_pct_display:.1f}%"
                     sol_discount_detail_by_so[so_name] = (detail_existing + "; " + new_frag).lstrip("; ") if detail_existing else new_frag
             except Exception as e_sol:
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
