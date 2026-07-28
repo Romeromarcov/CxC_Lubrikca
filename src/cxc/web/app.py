@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import asyncio
@@ -1257,6 +1258,9 @@ async def get_reporte_saldos(refresh: bool = False):
         invoice_ids_all: list[int] = []               # for fetching move lines
         inv_name_to_so: dict[str, str] = {}
         inv_id_to_so: dict[int, str] = {}
+        # SOs cuya(s) factura(s) Odoo ya estan "Pagada" (paid) o "En proceso de
+        # pago" (in_payment): salen del reporte general de CxC (Tarea 2).
+        so_pagada_en_odoo: set[str] = set()
         try:
             if execute:
                 # 1. Fetch out_invoice records
@@ -1325,6 +1329,14 @@ async def get_reporte_saldos(refresh: bool = False):
                             ncs_by_so.setdefault(so, []).append(nc)
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_reporte_saldos: %s", e)
+
+        # Una SO sale del reporte de CxC solo si TODAS sus facturas out_invoice
+        # ya estan pagadas/en proceso de pago (si queda alguna sin pagar, se
+        # mantiene visible).
+        for so_name, inv_list in invoices_by_so.items():
+            estados = [str(i.get("payment_state", "")) for i in inv_list]
+            if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                so_pagada_en_odoo.add(so_name)
 
         # ── Descuentos en líneas de FACTURAS (account.move.line.discount) ──────
         # Captura dos formas de descuento: (a) el campo `discount` (%) de la línea,
@@ -1669,6 +1681,12 @@ async def get_reporte_saldos(refresh: bool = False):
         for o in ordenes:
             st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st_check in ("cancel", "cancelled", "draft", "sent"):
+                continue
+
+            # Tarea 2: orden facturada cuya factura Odoo ya esta 'Pagada' o
+            # 'En proceso de pago' -> ya no es cuenta por cobrar, sale del
+            # reporte general (sigue disponible via /api/auditoria).
+            if o.facturada and o.so_id in so_pagada_en_odoo:
                 continue
 
             order_lines = lines_by_so.get(o.so_id, [])
@@ -2038,6 +2056,15 @@ async def get_reporte_saldos(refresh: bool = False):
                 repo.append_auditoria_rows(new_audit_rows)
             except Exception as e_aud:
                 logger.warning("Error guardando lote de auditoría: %s", e_aud)
+
+        # Orden mas reciente primero (por numero de SO, creciente con el tiempo
+        # en Odoo) -- sin esto, las ordenes nuevas quedaban al final de una
+        # lista de cientos de filas y parecian "no haber entrado".
+        def _so_num(item: dict) -> int:
+            digits = re.sub(r"[^\d]", "", str(item.get("so_id", "")))
+            return int(digits) if digits else 0
+
+        reporte.sort(key=_so_num, reverse=True)
 
         res = {
             "kpis": {
@@ -4156,17 +4183,31 @@ async def get_auditoria():
         # Fetch posted invoices from Odoo in batch for audit comparison
         so_ids = [o.so_id for o in ordenes]
         invoices_by_so = {}
+        so_pagada_en_odoo: set[str] = set()
         try:
             invoices = execute(
                 "account.move",
                 "search_read",
                 [[["invoice_origin", "in", so_ids], ["state", "=", "posted"], ["move_type", "in", ["out_invoice", "out_refund"]]]],
-                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date"]}
+                {"fields": ["id", "name", "invoice_origin", "amount_total", "amount_residual", "currency_id", "invoice_date", "move_type", "payment_state"]}
             ) if execute else []
             for inv in invoices:
                 so = str(inv.get("invoice_origin", "")).strip()
                 if so:
                     invoices_by_so.setdefault(so, []).append(inv)
+
+            # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment
+            # (misma regla que /api/reporte-saldos, Tarea 2).
+            estados_por_so: dict[str, list[str]] = {}
+            for inv in invoices:
+                if str(inv.get("move_type")) != "out_invoice":
+                    continue
+                so = str(inv.get("invoice_origin", "")).strip()
+                if so:
+                    estados_por_so.setdefault(so, []).append(str(inv.get("payment_state", "")))
+            for so, estados in estados_por_so.items():
+                if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                    so_pagada_en_odoo.add(so)
         except Exception as e:
             logger.warning("Error al consultar facturas Odoo en get_auditoria: %s", e)
 
@@ -4321,7 +4362,9 @@ async def get_auditoria():
                         "causa_probable": "Abono / Pago registrado en CxC pero pendiente de aplicar en Odoo" if saldo_factura_odoo > saldo_cxc else "Diferencia por retenciones o ajustes en factura Odoo"
                     })
 
-            if not has_discrepancy and (o.facturada or (b and b.candidata_a_cierre)):
+            # Tarea 2: la tabla de confirmacion es para lo ya PAGADO en Odoo
+            # (paid/in_payment) y sin discrepancias -- no solo facturado.
+            if not has_discrepancy and o.facturada and o.so_id in so_pagada_en_odoo:
                 neto = float(b.total_motor) if b else float(o.monto_total)
                 desc_tot = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
                 operaciones_conformes.append({
@@ -4332,7 +4375,7 @@ async def get_auditoria():
                     "monto_original": float(o.monto_total),
                     "descuentos_aplicados": desc_tot,
                     "monto_neto_conciliado": neto,
-                    "estado": "Conforme 100%"
+                    "estado": "Conforme 100% (Pagada)"
                 })
 
         # Separate into pending discrepancies and accepted anomalies
