@@ -170,7 +170,10 @@ def test_e2e_05_reconciliation_trays():
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         data = res.json()
-        assert isinstance(data, list)
+        assert isinstance(data, dict)
+        assert "ordenes_por_facturar" in data
+        assert "notas_credito_pendientes" in data
+        assert "iva_pendiente_agentes" in data
 
 def test_e2e_06_vendor_scoping_and_roles():
     """Test 6: Scoping por vendedor y permisos de rol en reportes/cobranza."""
