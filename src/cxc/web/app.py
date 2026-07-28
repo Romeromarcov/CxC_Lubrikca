@@ -1488,63 +1488,113 @@ async def get_reporte_saldos(refresh: bool = False):
             except Exception as e_sol:
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
-        # ─── ABONOS DESDE ODOO (fuente de verdad para SOs sin vinculación manual) ───
+        # ─── ABONOS DESDE ODOO CONSULTANDO account.payment DIRECTAMENTE ───────────
+        # Consulta los pagos reales reconciliados en account.payment:
+        # - Importe pagado en la moneda original (amount, currency_id)
+        # - Fecha del pago (date)
+        # - Si es USD -> 1:1 ($1 pagado = $1 abonado).
+        # - Si es VES -> Se convierte a la tasa BCV/Binance a la fecha del pago (date).
+        payments_by_so: dict[str, dict] = {}
+        if execute and invoice_ids_all:
+            try:
+                payments_raw = execute(
+                    "account.payment",
+                    "search_read",
+                    [[["reconciled_invoice_ids", "in", invoice_ids_all], ["state", "=", "posted"]]],
+                    {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]}
+                )
+                for p in payments_raw:
+                    p_amt = Decimal(str(p.get("amount") or "0"))
+                    p_curr_raw = p.get("currency_id")
+                    p_curr = p_curr_raw[1] if isinstance(p_curr_raw, (list, tuple)) and len(p_curr_raw) > 1 else "USD"
+                    p_date = str(p.get("date") or "")[:10]
+
+                    rec_invs = p.get("reconciled_invoice_ids", [])
+                    matched_sos = set()
+                    for r_id in rec_invs:
+                        so_m = inv_id_to_so.get(int(r_id))
+                        if so_m:
+                            matched_sos.add(so_m)
+                    
+                    for so_m in matched_sos:
+                        p_info = payments_by_so.setdefault(so_m, {
+                            "abono_bcv": Decimal("0"),
+                            "abono_binance": Decimal("0"),
+                            "latest_date": None
+                        })
+                        if p_curr == "USD":
+                            p_bcv = p_amt
+                            p_bin = p_amt
+                        else:
+                            rate_bcv = rates_map.get(p_date, last_bcv_val)
+                            p_bcv = p_amt / Decimal(str(rate_bcv)) if rate_bcv and float(rate_bcv) > 0 else Decimal("0")
+                            p_bin = p_bcv
+                        
+                        p_info["abono_bcv"] += p_bcv
+                        p_info["abono_binance"] += p_bin
+                        if p_date and (not p_info["latest_date"] or p_date > p_info["latest_date"]):
+                            p_info["latest_date"] = p_date
+            except Exception as e_pay:
+                logger.warning("Error al consultar account.payment directo: %s", e_pay)
+
         for so_name, inv_list in invoices_by_so.items():
             existing = pagos_by_so.get(so_name, {})
             if existing.get("tiene_vinc_manual", False):
                 continue
 
-            total_paid_usd = Decimal("0")
-            latest_inv_date: str | None = None
+            p_direct = payments_by_so.get(so_name)
+            if p_direct and p_direct["abono_bcv"] > Decimal("0"):
+                total_paid_bcv = p_direct["abono_bcv"]
+                total_paid_binance = p_direct["abono_binance"]
+                latest_inv_date = p_direct["latest_date"]
+            else:
+                total_paid_bcv = Decimal("0")
+                total_paid_binance = Decimal("0")
+                latest_inv_date = None
+                o_obj = next((o for o in ordenes if o.so_id == so_name), None)
+                order_usd_total = o_obj.monto_total if o_obj else Decimal("0")
 
-            # Look up order object to get original total USD
-            o_obj = next((o for o in ordenes if o.so_id == so_name), None)
-            order_usd_total = o_obj.monto_total if o_obj else Decimal("0")
+                for inv in inv_list:
+                    tot = Decimal(str(inv.get("amount_total") or "0"))
+                    res = Decimal(str(inv.get("amount_residual") or "0"))
+                    paid_inv = max(Decimal("0"), tot - res)
 
-            for inv in inv_list:
-                tot = Decimal(str(inv.get("amount_total") or "0"))
-                res = Decimal(str(inv.get("amount_residual") or "0"))
-                paid_inv = max(Decimal("0"), tot - res)
+                    curr = inv.get("currency_id")
+                    c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
+                    inv_dt = str(inv.get("invoice_date") or "")[:10]
 
-                curr = inv.get("currency_id")
-                c_name = curr[1] if isinstance(curr, (list, tuple)) and len(curr) > 1 else "USD"
-                inv_dt = str(inv.get("invoice_date") or "")[:10]
-
-                if c_name == "VES":
-                    # If order was generated in USD (monto_total > 0), convert using the exact issuance exchange rate
-                    # (tot / order_usd_total) so paid amounts match original USD prices without rate distortion.
-                    if order_usd_total > Decimal("0") and tot > Decimal("0"):
-                        effective_rate = tot / order_usd_total
+                    if c_name == "VES":
+                        if order_usd_total > Decimal("0") and tot > Decimal("0"):
+                            effective_rate = tot / order_usd_total
+                        else:
+                            rate_val = rates_map.get(inv_dt, last_bcv_val)
+                            effective_rate = Decimal(str(rate_val)) if rate_val and float(rate_val) > 0 else Decimal("1")
+                        paid_inv_usd = paid_inv / effective_rate if effective_rate > Decimal("0") else Decimal("0")
                     else:
-                        rate_val = rates_map.get(inv_dt, last_bcv_val)
-                        effective_rate = Decimal(str(rate_val)) if rate_val and float(rate_val) > 0 else Decimal("1")
-                    
-                    paid_inv_usd = paid_inv / effective_rate if effective_rate > Decimal("0") else Decimal("0")
-                else:
-                    paid_inv_usd = paid_inv
+                        paid_inv_usd = paid_inv
 
-                total_paid_usd += paid_inv_usd
+                    total_paid_bcv += paid_inv_usd
+                    total_paid_binance += paid_inv_usd
+                    if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
+                        latest_inv_date = inv_dt
 
-                if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
-                    latest_inv_date = inv_dt
-
-            if total_paid_usd > Decimal("0"):
+            if total_paid_bcv > Decimal("0"):
                 if so_name not in pagos_by_so:
                     pagos_by_so[so_name] = {
-                        "abono_bcv": Decimal("0"),
-                        "abono_binance": Decimal("0"),
-                        "ultimo_abono": None,
-                        "tiene_vinc_manual": False,
+                        "abono_bcv": total_paid_bcv,
+                        "abono_binance": total_paid_binance,
+                        "ultimo_abono": latest_inv_date,
                         "desde_odoo": True,
+                        "tiene_vinc_manual": False
                     }
-                pagos_by_so[so_name]["abono_bcv"] = total_paid_usd
-                pagos_by_so[so_name]["abono_binance"] = total_paid_usd
-                pagos_by_so[so_name]["desde_odoo"] = True
-                if latest_inv_date:
-                    curr_last = pagos_by_so[so_name].get("ultimo_abono")
-                    if not curr_last or latest_inv_date > curr_last:
-                        pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
-                logger.debug("Abono Odoo para %s: USD %.2f (from invoices)", so_name, float(total_paid_usd))
+                else:
+                    pagos_by_so[so_name]["abono_bcv"] = max(Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv)
+                    pagos_by_so[so_name]["abono_binance"] = max(Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))), total_paid_binance)
+                    pagos_by_so[so_name]["desde_odoo"] = True
+                    if latest_inv_date:
+                        curr_last = pagos_by_so[so_name].get("ultimo_abono")
+                        if not curr_last or latest_inv_date > curr_last:
+                            pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
 
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
