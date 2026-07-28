@@ -2046,7 +2046,13 @@ async def get_reporte_saldos(refresh: bool = False):
                 "factura_odoo_nombre": factura_odoo_nombre,
                 "descuentos_desglose": descuentos_desglose,
                 "facturada": o.facturada,
-                "candidata_a_cierre": saldo_deudor_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05,
+                # Tarea 4, Caso B ("Listo para Cierre"): SOLO ordenes SIN
+                # factura cuyo saldo segun el motor ya es 0 (pagada, lista
+                # para que Administracion facture). El otro escenario de
+                # "Listo para Cierre" (facturada y pagada segun el motor pero
+                # no en Odoo -> falta aplicar NC) nunca llega a esta lista:
+                # ya sale del reporte general por el umbral de la Tarea 3.
+                "candidata_a_cierre": (not o.facturada) and (saldo_con_descuento_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05),
                 "pago_desde_odoo": pago_desde_odoo,
                 "descuentos_odoo_orden": {
                     "monto_usd": round(desc_orden_odoo_monto, 2),
