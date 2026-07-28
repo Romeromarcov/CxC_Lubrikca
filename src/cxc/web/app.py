@@ -1572,6 +1572,7 @@ async def get_reporte_saldos(refresh: bool = False):
 
         cutoff_historical = date(2026, 3, 12)
         reporte = []
+        saldo_minimo_items = []  # Tarea 3: facturadas con saldo residual <= $1
         vendedores_set = set()
 
         def empty_kpi():
@@ -1862,6 +1863,23 @@ async def get_reporte_saldos(refresh: bool = False):
             saldo_con_descuento_bcv = max(0.0, saldo_deudor_bcv - total_descuentos_monto - ncs_odoo_monto_usd)
             saldo_con_descuento_lista_usd = max(0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd)
 
+            # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
+            # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
+            # se oculta del reporte general y pasa a la tabla de "pendientes
+            # por cerrar (saldo <= $1)". No aplica a ordenes sin facturar
+            # (esas se manejan por la Tarea 3.1 / bandeja de facturacion).
+            if o.facturada and (saldo_con_descuento_bcv <= 1.0 or saldo_con_descuento_lista_usd <= 1.0):
+                saldo_minimo_items.append({
+                    "so_id": o.so_id,
+                    "cliente_nombre": clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}"),
+                    "vendedor": odoo_info.get("vendedor", "Sin Vendedor"),
+                    "factura_id": o.factura_id or "N/A",
+                    "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
+                    "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
+                    "saldo_factura_odoo": saldo_factura_odoo,
+                })
+                continue
+
             # ── Auditoría de descuentos: motor vs Odoo ────────────────────────────
             motor_desc_usd = Decimal(str(total_descuentos_monto))
             motor_ncs_usd = Decimal(str(b.ncs_calculadas if b else 0))
@@ -2077,7 +2095,8 @@ async def get_reporte_saldos(refresh: bool = False):
                 "vencidas_mas_90": kpi_mas_90,
             },
             "vendedores": sorted(list(vendedores_set)),
-            "items": reporte
+            "items": reporte,
+            "saldo_minimo_pendientes": saldo_minimo_items
         }
         _REPORTE_SALDOS_CACHE["data"] = res
         _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
@@ -2805,7 +2824,13 @@ async def get_bandeja_facturacion():
             desc_monto = float(b.total_descuentos + b.ncs_calculadas) if b else 0.0
             desc_pct = (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
 
-            if not o.facturada:
+            # Tarea 3.1: a la bandeja de facturacion solo van las ordenes SIN
+            # factura cuyo saldo segun el motor ya es 0 (cliente pago la
+            # totalidad) -- listas para que Administracion decida si aplica
+            # descuentos y facture. Con saldo pendiente, la orden se queda
+            # visible en el reporte general de CxC (no entra aqui).
+            saldo_motor = tot_motor - abono
+            if not o.facturada and saldo_motor <= 0.05:
                 ordenes_por_facturar.append({
                     "so_id": o.so_id,
                     "cliente_nombre": c_name,

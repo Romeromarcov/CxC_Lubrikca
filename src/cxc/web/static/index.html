@@ -536,6 +536,36 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- TABLA ORDENES/FACTURAS PENDIENTES POR CERRAR (SALDO <= $1) -->
+                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #94a3b8;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #475569; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>🧾</span> Pendientes por Cerrar (Saldo ≤ $1)
+                        </h2>
+                        <p style="color: #64748b;">Facturas con saldo residual menor o igual a $1 (BCV o Lista USD) — fuera del reporte general, listas para cierre administrativo</p>
+                    </div>
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Saldo Desc. BCV ($)</th>
+                                    <th>Saldo Desc. Lista USD ($)</th>
+                                    <th>Saldo Factura Odoo ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reporte-saldo-minimo-table-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty">No hay facturas con saldo ≤ $1 pendientes por cerrar.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 
