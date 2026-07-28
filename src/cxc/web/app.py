@@ -3280,13 +3280,25 @@ async def get_bandeja_facturacion():
                 (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
             )
 
-            # Tarea 3.1: a la bandeja de facturacion solo van las ordenes SIN
-            # factura cuyo saldo segun el motor ya es 0 (cliente pago la
-            # totalidad) -- listas para que Administracion decida si aplica
-            # descuentos y facture. Con saldo pendiente, la orden se queda
-            # visible en el reporte general de CxC (no entra aqui).
+            # Bandeja 1: ordenes SIN factura listas para facturar.
+            # - Cliente NO agente de retencion: debe estar pagada al 100%
+            #   segun el motor (reglas estandar).
+            # - Cliente SI agente de retencion de IVA: le basta con haber
+            #   pagado el Subtotal (monto sin IVA); lo que falta es
+            #   exactamente la porcion de IVA que retiene (no paga esa
+            #   porcion en efectivo, entrega comprobante de retencion mas
+            #   adelante -- ver Bandeja 3, que aplica una vez facturada).
+            # IVA Venezuela = 16%; se estima el subtotal despejando el total
+            # que calculo el motor (tot_motor, ya con descuentos aplicados).
+            subtotal_neto_motor = tot_motor / 1.16
+            iva_estimado_motor = tot_motor - subtotal_neto_motor
             saldo_motor = tot_motor - abono
-            if not o.facturada and saldo_motor <= 0.05:
+            if wh_agent:
+                listo_para_facturar = saldo_motor <= iva_estimado_motor + 0.05
+            else:
+                listo_para_facturar = saldo_motor <= 0.05
+
+            if not o.facturada and listo_para_facturar:
                 ordenes_por_facturar.append(
                     {
                         "so_id": o.so_id,
@@ -3297,8 +3309,10 @@ async def get_bandeja_facturacion():
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
                         "monto_pagado": abono,
-                        "subtotal_neto": monto_orig,
+                        "subtotal_neto": round(subtotal_neto_motor, 2),
+                        "iva_estimado": round(iva_estimado_motor, 2),
                         "total_motor": tot_motor,
+                        "saldo_pendiente": round(saldo_motor, 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         "precio_base": monto_orig,

@@ -513,3 +513,84 @@ def test_e2e_11_regla_global_excluye_ordenes_no_confirmadas():
         assert res.status_code == 200
         # Solo SO_CONFIRMADA (sale) debe contarse; draft y cancel quedan fuera.
         assert res.json()["total_por_cobrar_usd"] == 1000.0
+
+
+def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
+    """Bandeja 1: un agente de retención de IVA entra al pagar el Subtotal
+
+    (falta solo el IVA retenido); un cliente normal con el mismo saldo
+    pendiente NO debe entrar -- para él aplica la regla estándar (100%).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_AGENTE",
+                "nombre": "Cliente Agente",
+                "wh_iva_agent": "True",
+                "wh_iva_rate": "100",
+            },
+            {"cliente_id": "C_NORMAL", "nombre": "Cliente Normal"},
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_AGENTE",
+            cliente_id="C_AGENTE",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+        OrdenVenta(
+            so_id="SO_NORMAL",
+            cliente_id="C_NORMAL",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    # Ambas órdenes recibieron $100 de abono (el subtotal sin IVA de $116 a
+    # 16%); a ninguna le falta más que la porción de IVA ($16).
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_AGENTE",
+            pago_id="P_AGENTE",
+            so_id="SO_AGENTE",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+        Vinculacion(
+            vinc_id="V_NORMAL",
+            pago_id="P_NORMAL",
+            so_id="SO_NORMAL",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        data = res.json()
+        so_ids = {item["so_id"] for item in data["ordenes_por_facturar"]}
+        assert "SO_AGENTE" in so_ids
+        assert "SO_NORMAL" not in so_ids
