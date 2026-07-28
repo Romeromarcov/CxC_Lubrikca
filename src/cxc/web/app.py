@@ -1431,17 +1431,13 @@ async def get_reporte_saldos(refresh: bool = False):
                     "account.payment",
                     "search_read",
                     [[["reconciled_invoice_ids", "in", invoice_ids_all], ["state", "in", ["in_process", "paid"]]]],
-                    {"fields": ["id", "name", "amount", "currency_id", "date", "reconciled_invoice_ids", "journal_id"]}
+                    {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]}
                 )
                 for p in payments_raw:
                     p_amt = Decimal(str(p.get("amount") or "0"))
                     p_curr_raw = p.get("currency_id")
                     p_curr = p_curr_raw[1] if isinstance(p_curr_raw, (list, tuple)) and len(p_curr_raw) > 1 else "USD"
                     p_date = str(p.get("date") or "")[:10]
-                    p_name = str(p.get("name") or "")
-
-                    j_raw = p.get("journal_id")
-                    j_name = j_raw[1] if isinstance(j_raw, (list, tuple)) and len(j_raw) > 1 else ""
 
                     rec_invs = p.get("reconciled_invoice_ids", [])
                     matched_sos = set()
@@ -1450,30 +1446,23 @@ async def get_reporte_saldos(refresh: bool = False):
                         if so_m:
                             matched_sos.add(so_m)
 
-                    # Distinguish Credit Notes (journal or name contains "nota"/"crédito"/"nc") from cash abonos
-                    is_credit_note = any(kw in (j_name + " " + p_name).lower() for kw in ["nota", "crédito", "credito", "nc", "refund", "reversión", "reversion"])
-
-                    if is_credit_note:
-                        for so_m in matched_sos:
-                            if p_curr == "USD":
-                                nc_usd = p_amt
-                            else:
-                                rate_bcv = rates_map.get(p_date, last_bcv_val)
-                                nc_usd = p_amt / Decimal(str(rate_bcv)) if rate_bcv and float(rate_bcv) > 0 else Decimal("0")
-
-                            nc_entry = {
-                                "id": p.get("id"),
-                                "name": p_name or f"NC #{p.get('id')}",
-                                "amount_total": float(nc_usd),
-                                "currency_id": [0, p_curr],
-                                "invoice_date": p_date,
-                                "move_type": "out_refund"
-                            }
-                            existing_ncs = ncs_by_so.setdefault(so_m, [])
-                            if not any(str(n.get("id")) == str(nc_entry["id"]) or str(n.get("name")) == str(nc_entry["name"]) for n in existing_ncs):
-                                existing_ncs.append(nc_entry)
-                        continue  # Exclude from cash abonos!
-
+                    # NOTA: aqui hubo una heuristica que intentaba distinguir
+                    # Notas de Credito de abonos en efectivo buscando palabras
+                    # clave ("nota"/"credito"/"nc"/"refund"/"reversion") en el
+                    # nombre del diario o del pago. Se elimino: el substring
+                    # "nc" hacia match con cualquier diario que contuviera
+                    # "banco" (baNCo), "bancamiga" (baNCamiga), "banesco"
+                    # (baNCesco... y demas), "binance" (biNANCe) -- es decir,
+                    # con la mayoria de los diarios bancarios reales -- asi
+                    # que pagos normales (ej. PBAMI/2026/00283, un abono real
+                    # via Banco Bancamiga) se mostraban como Notas de Credito.
+                    # Verificado en vivo contra Odoo: ninguna Nota de Credito
+                    # real (account.move move_type=out_refund, diario "Notas
+                    # de credito de clientes") aparece jamas como
+                    # account.payment -- las NC reales ya se detectan de
+                    # forma confiable en el bloque de arriba (paso 2, via
+                    # out_refund). Todo lo que llega aqui es, por definicion
+                    # de Odoo, un pago real.
                     for so_m in matched_sos:
                         p_info = payments_by_so.setdefault(so_m, {
                             "abono_bcv": Decimal("0"),
