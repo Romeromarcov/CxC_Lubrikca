@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
+    BandejaFacturacion,
+    DescuentoAplicado,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
     EstadoVinculacion,
@@ -13,6 +15,7 @@ from cxc.models import (
     Moneda,
     OrdenVenta,
     Pago,
+    SerieTasa,
     Vinculacion,
 )
 from cxc.web.app import SECRET_KEY, app, crear_session_token
@@ -315,10 +318,11 @@ def test_e2e_08_executive_daily_report():
             [
                 {
                     "pago_id": "P_D1",
-                    "fecha": "2026-07-18",
+                    "fecha_pago": "2026-07-18",
                     "monto": "600.0",
                     "moneda": "USD",
                     "metodo_pago": "Efectivo",
+                    "vendedor_email": "v1",
                 }
             ]
             if sheet == "Pagos"
@@ -332,8 +336,19 @@ def test_e2e_08_executive_daily_report():
         data = res.json()
         assert "ventas_diarias" in data
         assert "cobranza_diaria" in data
+        assert "resumen" in data
         assert len(data["ventas_diarias"]) >= 1
         assert len(data["cobranza_diaria"]) >= 1
+        # La cobranza debe quedar en el día real del pago (fecha_pago), no en "hoy".
+        assert data["cobranza_diaria"][0]["fecha"] == "2026-07-18"
+        assert data["cobranza_diaria"][0]["total_eq_bcv"] == 600.0
+
+        # Filtro por vendedor: v1 sí tiene datos, v2 no debe traer nada.
+        res_v1 = client.get("/api/reporte/diario?vendedor=v1")
+        assert len(res_v1.json()["ventas_diarias"]) == 1
+        res_v2 = client.get("/api/reporte/diario?vendedor=v2")
+        assert len(res_v2.json()["ventas_diarias"]) == 0
+        assert len(res_v2.json()["cobranza_diaria"]) == 0
 
 
 def test_e2e_09_listas_precio_mapeo():
@@ -449,3 +464,584 @@ def test_e2e_10_conciliaciones_sugerencias_and_bulk_approval():
         assert res_bulk.status_code == 200
         assert res_bulk.json()["procesados"] == 2
         assert mock_repo.update_vinculacion.call_count == 2
+
+
+def test_e2e_11_regla_global_excluye_ordenes_no_confirmadas():
+    """Regla global: /api/resumen no debe contar cotizaciones (draft/sent) ni
+
+    órdenes canceladas como "Total por Cobrar" — solo órdenes confirmadas.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_CONFIRMADA",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("1000.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+        ),
+        OrdenVenta(
+            so_id="SO_COTIZACION",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 2),
+            fecha_entrega=None,
+            monto_total=Decimal("3_800_000.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="draft",
+        ),
+        OrdenVenta(
+            so_id="SO_CANCELADA",
+            cliente_id="CLI_11",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 3),
+            fecha_entrega=None,
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="cancel",
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        # Solo SO_CONFIRMADA (sale) debe contarse; draft y cancel quedan fuera.
+        assert res.json()["total_por_cobrar_usd"] == 1000.0
+
+
+def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
+    """Bandeja 1: un agente de retención de IVA entra al pagar el Subtotal
+
+    (falta solo el IVA retenido); un cliente normal con el mismo saldo
+    pendiente NO debe entrar -- para él aplica la regla estándar (100%).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_AGENTE",
+                "nombre": "Cliente Agente",
+                "wh_iva_agent": "True",
+                "wh_iva_rate": "100",
+            },
+            {"cliente_id": "C_NORMAL", "nombre": "Cliente Normal"},
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_AGENTE",
+            cliente_id="C_AGENTE",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+        OrdenVenta(
+            so_id="SO_NORMAL",
+            cliente_id="C_NORMAL",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    # Ambas órdenes recibieron $100 de abono (el subtotal sin IVA de $116 a
+    # 16%); a ninguna le falta más que la porción de IVA ($16).
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_AGENTE",
+            pago_id="P_AGENTE",
+            so_id="SO_AGENTE",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+        Vinculacion(
+            vinc_id="V_NORMAL",
+            pago_id="P_NORMAL",
+            so_id="SO_NORMAL",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        data = res.json()
+        so_ids = {item["so_id"] for item in data["ordenes_por_facturar"]}
+        assert "SO_AGENTE" in so_ids
+        assert "SO_NORMAL" not in so_ids
+
+
+def test_e2e_13_bandeja2_concepto_real_de_nc():
+    """Bandeja 2: el "concepto" de la N/C debe venir del detalle real del
+
+    motor (obsequio de producto o % de primera compra), no de un texto
+    genérico fijo.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_NC", "nombre": "Cliente NC"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_NC",
+            cliente_id="C_NC",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=True,
+            facturada=True,
+            factura_id="FAC-001",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_NC",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("500.00"),
+            descuentos_detalle=[
+                DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion="NC obsequio (Aceite 20W50 Caja)",
+                    monto=Decimal("45.00"),
+                )
+            ],
+            total_descuentos=Decimal("0"),
+            ncs_calculadas=Decimal("45.00"),
+            total_motor=Decimal("455.00"),
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        nc_items = res.json()["notas_credito_pendientes"]
+        assert len(nc_items) == 1
+        assert nc_items[0]["so_id"] == "SO_NC"
+        assert nc_items[0]["concepto"] == "NC obsequio (Aceite 20W50 Caja)"
+        assert nc_items[0]["nc_monto"] == 45.0
+
+
+def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
+    """Bandeja 3: el 16% de IVA se estima sobre el total del MOTOR
+
+    (ya con descuentos aplicados), no sobre el monto bruto original de la
+    orden -- de lo contrario, órdenes con descuentos grandes sobreestiman
+    cuánto IVA se retuvo y esconden un saldo real pendiente como si solo
+    faltara el comprobante.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_AGENTE2",
+                "nombre": "Cliente Agente 2",
+                "wh_iva_agent": "True",
+                "wh_iva_rate": "100",
+            }
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_IVA2",
+            cliente_id="C_AGENTE2",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("300.00"),  # monto bruto -- con descuento grande aplicado
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-002",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_IVA2",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("300.00"),
+            total_descuentos=Decimal("184.00"),
+            ncs_calculadas=Decimal("0"),
+            total_motor=Decimal("116.00"),  # subtotal $100 + IVA 16% ($16)
+        ),
+    ]
+    # Pagó $90 de los $116 reales -- le faltan $26, pero la retención de IVA
+    # (100% de $16) es solo $16: hay un saldo real de $10 más allá del IVA.
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_IVA2",
+            pago_id="P_IVA2",
+            so_id="SO_IVA2",
+            monto_aplicado=Decimal("90.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        so_ids = {item["so_id"] for item in res.json()["iva_pendiente_agentes"]}
+        # No debe entrar: el saldo pendiente ($26) excede la retención real
+        # de IVA sobre el total del motor ($16), aunque calculado sobre el
+        # monto bruto ($300) sí hubiera "cabido" (bug que se corrige aquí).
+        assert "SO_IVA2" not in so_ids
+
+
+def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
+    """Tarjeta "Pagos Sin Asignar": debe reportar USD y VES, y usar el
+
+    SALDO real (no todo-o-nada) -- un pago parcialmente vinculado sigue
+    contando por lo que le queda pendiente, y uno vinculado al 100% no
+    cuenta nada.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            # Sin vincular en absoluto: USD $200 completos pendientes.
+            {
+                "pago_id": "P_LIBRE",
+                "cliente_id": "C1",
+                "monto": "200.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+            },
+            # Vinculado parcialmente: de VES 6000, ya se asignaron 2000 ->
+            # quedan 4000 VES pendientes.
+            {
+                "pago_id": "P_PARCIAL",
+                "cliente_id": "C1",
+                "monto": "6000.0",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-01",
+            },
+            # Vinculado al 100%: no debe sumar nada.
+            {
+                "pago_id": "P_COMPLETO",
+                "cliente_id": "C1",
+                "monto": "50.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+            },
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"timestamp": "2026-07-01 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "42.0"}]
+            if sheet == "SerieTasas"
+            else []
+        )
+    )
+    mock_repo.all_ordenes.return_value = []
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_PARCIAL",
+            pago_id="P_PARCIAL",
+            so_id="SO1",
+            monto_aplicado=Decimal("2000.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("42.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+        Vinculacion(
+            vinc_id="V_COMPLETO",
+            pago_id="P_COMPLETO",
+            so_id="SO2",
+            monto_aplicado=Decimal("50.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("42.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_conciliaciones.return_value = []
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        data = res.json()
+        # USD: $200 (libre) + 4000 VES / 40 = $100 equivalente = $300.
+        assert data["pagos_sin_asignar_usd"] == 300.0
+        # VES: 200 USD * 40 = 8000 Bs + 4000 Bs restantes = 12000 Bs.
+        assert data["pagos_sin_asignar_ves"] == 12000.0
+
+
+def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
+    """Conciliaciones: una orden ya facturada sigue siendo destino válido de
+
+    sugerencia mientras su factura en Odoo no esté paid/in_payment. Una vez
+    facturada Y pagada en Odoo, ya no debe sugerirse (antes cualquier orden
+    facturada quedaba excluida por completo, sin importar su estado de pago
+    real en Odoo).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_FACT",
+                "cliente_id": "C_FACT",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-10",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_FACT", "nombre": "Cliente Facturado"}]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_FACT_NOPAGA",
+            cliente_id="C_FACT",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+        OrdenVenta(
+            so_id="SO_FACT_PAGADA",
+            cliente_id="C_FACT",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 1),
+            fecha_entrega=date(2026, 6, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return []
+        if model == "sale.order":
+            return [
+                {"name": "SO_FACT_NOPAGA", "state": "sale"},
+                {"name": "SO_FACT_PAGADA", "state": "sale"},
+            ]
+        if model == "account.move":
+            return [
+                {"invoice_origin": "SO_FACT_NOPAGA", "payment_state": "not_paid"},
+                {"invoice_origin": "SO_FACT_PAGADA", "payment_state": "paid"},
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        so_ids = {item["so_id"] for item in data}
+        assert "SO_FACT_NOPAGA" in so_ids
+        assert "SO_FACT_PAGADA" not in so_ids
+
+
+def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
+    """Tabla de pagos conciliados: debe incluir tanto los vinculados por
+
+    este sistema como los reconciliados directamente en Odoo vía factura,
+    que antes eran invisibles porque get_pagos_historial solo recorría
+    Vinculaciones locales (pagos_reconciliados_por_orden existía en
+    odoo/client.py pero nunca se llamaba desde ningún endpoint).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "10", "nombre": "Cliente Odoo"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_ODOO_REC",
+            cliente_id="10",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("250.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-900",
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "search_read":
+            return [
+                {
+                    "id": 555,
+                    "partner_id": [10, "Cliente Odoo"],
+                    "amount": 250.0,
+                    "currency_id": [2, "VES"],
+                    "journal_id": [1, "Banco"],
+                    "date": "2026-07-05",
+                    "invoice_ids": [900],
+                }
+            ]
+        if model == "account.move" and method == "read":
+            return [
+                {
+                    "id": 900,
+                    "invoice_origin": "SO_ODOO_REC",
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/pagos-historial")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["pago_id"] == "555"
+        assert item["so_id"] == "SO_ODOO_REC"
+        assert item["origen"] == "Odoo (automático vía factura)"
+        assert item["monto_aplicado"] == 250.0
+        assert item["moneda"] == "VES"
+
+
+def test_e2e_18_editar_tasa_binance_valida_min_max_del_dia():
+    """Editar la tasa Binance de una Vinculación: debe rechazar valores
+
+    fuera del rango [mínimo, máximo] capturado ese día en SerieTasas, y
+    aceptar (recalculando equivalentes) un valor dentro del rango.
+    """
+    vinc = Vinculacion(
+        vinc_id="V_EDIT",
+        pago_id="P_EDIT",
+        so_id="SO_EDIT",
+        monto_aplicado=Decimal("1000.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        moneda_abono=Moneda.VES,
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo.serie_tasas_del_dia.return_value = [
+        SerieTasa(datetime(2026, 7, 10, 8, 0), Decimal("36"), Decimal("39.0"), "x"),
+        SerieTasa(datetime(2026, 7, 10, 12, 0), Decimal("36"), Decimal("41.0"), "x"),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        # Fuera de rango (máximo capturado es 41.0).
+        res_bad = client.post(
+            "/api/vinculacion/V_EDIT/tasa-binance", json={"tasa_binance": 45.0}
+        )
+        assert res_bad.status_code == 400
+        assert mock_repo.update_vinculacion.call_count == 0
+
+        # Dentro de rango.
+        res_ok = client.post(
+            "/api/vinculacion/V_EDIT/tasa-binance", json={"tasa_binance": 40.5}
+        )
+        assert res_ok.status_code == 200
+        data = res_ok.json()
+        assert data["tasa_binance_aplicada"] == 40.5
+        assert abs(data["equiv_usd_binance"] - 1000.0 / 40.5) < 1e-6
+        assert mock_repo.update_vinculacion.call_count == 1
+
+
+def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
+    """Selector de tasa BCV: alternar entre BCV-USD y BCV-EUR debe
+
+    recalcular la tasa aplicada y los equivalentes; sin dato de tasa_bcv_euro
+    capturado, seleccionar EUR debe rechazarse con un error claro.
+    """
+    vinc = Vinculacion(
+        vinc_id="V_BCV",
+        pago_id="P_BCV",
+        so_id="SO_BCV",
+        monto_aplicado=Decimal("500.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        moneda_abono=Moneda.VES,
+        bcv_variante="USD",
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo._g.read_rows.return_value = []  # sin tasa_bcv_euro capturada
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        res_no_eur = client.post(
+            "/api/vinculacion/V_BCV/tasa-bcv-tipo", json={"variante": "EUR"}
+        )
+        assert res_no_eur.status_code == 400
+
+    mock_repo._g.read_rows.return_value = [
+        {"timestamp": "2026-07-10 10:00:00", "tasa_bcv": "36.0", "tasa_bcv_euro": "39.8"},
+    ]
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all"),
+    ):
+        res_eur = client.post(
+            "/api/vinculacion/V_BCV/tasa-bcv-tipo", json={"variante": "EUR"}
+        )
+        assert res_eur.status_code == 200
+        data = res_eur.json()
+        assert data["bcv_variante"] == "EUR"
+        assert data["tasa_bcv_aplicada"] == 39.8
+        assert abs(data["equiv_usd_bcv"] - 500.0 / 39.8) < 1e-6

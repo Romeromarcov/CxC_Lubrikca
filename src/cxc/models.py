@@ -413,6 +413,10 @@ class Vinculacion:
     moneda_abono: Moneda = Moneda.VES
     # Ruta real estampada del abono (BCV / Binance / USD) — para mezcla y cierre.
     tipo_tasa_abono: TipoTasa = TipoTasa.N_A
+    # Variante de tasa BCV usada (oficial USD vs. cruce EUR) cuando
+    # tipo_tasa_abono es BCV — independiente de tipo_tasa_abono (esa distingue
+    # BCV vs Binance como FUENTE; esta distingue cuál BCV).
+    bcv_variante: str = "USD"
 
 
 # --- 3.10 BandejaFacturacion (salida del motor + trabajo humano) ------------

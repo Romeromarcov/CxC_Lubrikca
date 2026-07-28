@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from cxc.models import (
     BandejaFacturacion,
+    Cliente,
     Conciliacion,
     DescuentoAplicado,
     EstadoVinculacion,
@@ -129,6 +130,59 @@ def test_roundtrip_cliente_linea_pago() -> None:
     assert serde.pago_from_row(serde.pago_to_row(p)) == p
 
 
+def test_roundtrip_cliente_agente_retencion_iva() -> None:
+    """Bug crítico: wh_iva_agent/wh_iva_rate se perdían en el sync porque
+
+    cliente_to_row/cliente_from_row nunca los serializaban -- el sync
+    incremental sobreescribía la hoja Clientes con esos campos vacíos en
+    cada ciclo, dejando la Bandeja 3 (Pendiente Comprobante IVA) siempre
+    vacía sin importar cuántos clientes fueran agentes de retención en Odoo.
+    """
+    c = Cliente(
+        cliente_id="C_AGENTE",
+        nombre="Cliente Agente Retención",
+        vendedor_email="v@lubrikca.com",
+        wh_iva_agent=True,
+        wh_iva_rate=100.0,
+    )
+    row = serde.cliente_to_row(c)
+    assert row["wh_iva_agent"] == "TRUE"
+    assert row["wh_iva_rate"] == "100.0"
+    assert serde.cliente_from_row(row) == c
+
+
+def test_gspread_upsert_rows_preserva_columnas_no_mencionadas() -> None:
+    """Bug crítico de pérdida de datos: un upsert por lote que solo conoce
+
+    sus propios campos (ej. pago_to_row, que serializa 7 de los N campos
+    reales de la hoja Pagos) NO debe borrar columnas de trabajo humano que
+    otro flujo ya escribió (recibido, tasa_bcv, etc.) -- antes,
+    GspreadGateway.upsert_rows sobreescribía cualquier columna del header
+    ausente del dict con "" en cada ciclo del sync. También debe extender
+    el header si la fila trae una columna nueva que aún no existe.
+    """
+    from unittest.mock import MagicMock
+
+    from cxc.sheets.gateway import GspreadGateway
+
+    gw = GspreadGateway.__new__(GspreadGateway)
+    ws = MagicMock()
+    ws.row_values.return_value = ["pago_id", "monto", "recibido"]
+    ws.get_all_records.return_value = [{"pago_id": "P1", "monto": "100", "recibido": "TRUE"}]
+    gw._ws = MagicMock(return_value=ws)  # type: ignore[method-assign]
+
+    # Upsert parcial (simula el sync de Pagos): trae pago_id/monto
+    # actualizados, pero NO menciona "recibido" -- y trae una columna
+    # nueva ("vendedor_email") que el header aún no tiene.
+    gw.upsert_rows(
+        "Pagos", "pago_id", [{"pago_id": "P1", "monto": "150", "vendedor_email": "v@x.com"}]
+    )
+
+    ws.update.assert_any_call("A1", [["pago_id", "monto", "recibido", "vendedor_email"]])
+    final_kwargs = ws.update.call_args_list[-1].kwargs
+    assert final_kwargs["values"] == [["P1", "150", "TRUE", "v@x.com"]]
+
+
 # --- SheetsRepository sobre gateway en memoria ------------------------------
 def _repo() -> tuple[SheetsRepository, InMemorySheetGateway]:
     gw = InMemorySheetGateway()
@@ -163,6 +217,23 @@ def test_serie_tasas_es_append_only_y_trailing_fail() -> None:
     assert repo.trailing_failed_captures() == 2
     last = repo.last_serie_tasa()
     assert last is not None and last.timestamp == datetime(2026, 6, 27, 11, 0)
+
+
+def test_serie_tasas_del_dia_filtra_por_fecha() -> None:
+    repo, _ = _repo()
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 27, 9, 0), Decimal("36"), Decimal("40"), "ok")
+    )
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 27, 13, 0), Decimal("36.2"), Decimal("41"), "ok")
+    )
+    repo.append_serie_tasa(
+        SerieTasa(datetime(2026, 6, 28, 9, 0), Decimal("36.5"), Decimal("42"), "ok")
+    )
+    del_27 = repo.serie_tasas_del_dia(date(2026, 6, 27))
+    assert len(del_27) == 2
+    assert {f.tasa_binance for f in del_27} == {Decimal("40"), Decimal("41")}
+    assert repo.serie_tasas_del_dia(date(2026, 6, 29)) == []
 
 
 def test_cursor_sync_roundtrip() -> None:

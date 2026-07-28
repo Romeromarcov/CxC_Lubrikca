@@ -108,14 +108,23 @@ def p_optstr(s: str) -> str | None:
 
 # --- Clientes ----------------------------------------------------------------
 def cliente_to_row(c: Cliente) -> Row:
-    return {"cliente_id": c.cliente_id, "nombre": c.nombre, "vendedor_email": c.vendedor_email}
+    return {
+        "cliente_id": c.cliente_id,
+        "nombre": c.nombre,
+        "vendedor_email": c.vendedor_email,
+        "wh_iva_agent": s_bool(c.wh_iva_agent),
+        "wh_iva_rate": str(c.wh_iva_rate),
+    }
 
 
 def cliente_from_row(r: Mapping[str, str]) -> Cliente:
+    wh_rate_raw = r.get("wh_iva_rate", "").strip()
     return Cliente(
         cliente_id=r["cliente_id"],
         nombre=r.get("nombre", ""),
         vendedor_email=r.get("vendedor_email", ""),
+        wh_iva_agent=p_bool(r.get("wh_iva_agent", "FALSE")),
+        wh_iva_rate=float(wh_rate_raw) if wh_rate_raw else 75.0,
     )
 
 
@@ -590,6 +599,7 @@ def vinculacion_to_row(v: Vinculacion) -> Row:
         "estado": v.estado.value,
         "moneda_abono": v.moneda_abono.value,
         "tipo_tasa_abono": v.tipo_tasa_abono.value,
+        "bcv_variante": v.bcv_variante,
     }
 
 
@@ -613,6 +623,7 @@ def vinculacion_from_row(r: Mapping[str, str]) -> Vinculacion:
         estado=EstadoVinculacion(r.get("estado", "pendiente")),
         moneda_abono=Moneda(r.get("moneda_abono", "VES")),
         tipo_tasa_abono=TipoTasa(r.get("tipo_tasa_abono", "N_A")),
+        bcv_variante=r.get("bcv_variante", "").strip() or "USD",
     )
 
 

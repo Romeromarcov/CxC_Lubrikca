@@ -68,6 +68,22 @@ def parse_decimal_safe(val) -> Decimal:
         return Decimal("0")
 
 
+# Estados de sale.order que NUNCA deben entrar a un reporte, bandeja o
+# cálculo de cobranza: Cancelada (cancel), Cotización en cualquiera de sus
+# dos sub-estados Odoo (draft/sent). Regla global — ver auditoría.
+ESTADOS_ORDEN_EXCLUIDOS = frozenset({"cancel", "cancelled", "draft", "sent"})
+
+
+def orden_excluida(o: Any, live_state: str | None = None) -> bool:
+    """True si la orden debe excluirse de cualquier reporte/bandeja/cálculo.
+
+    Usa el estado en vivo de Odoo si se provee (más fresco que el mirror);
+    si no, cae al `estado_orden` ya sincronizado en la orden.
+    """
+    st = live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or "")
+    return st.strip().lower() in ESTADOS_ORDEN_EXCLUIDOS
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -107,6 +123,14 @@ class PricelistMapRequest(BaseModel):
 
 class VincularMasivoRequest(BaseModel):
     items: list[VinculacionRequest]
+
+
+class TasaBinanceEditRequest(BaseModel):
+    tasa_binance: float
+
+
+class TasaBcvVarianteRequest(BaseModel):
+    variante: str  # "USD" | "EUR"
 
 
 class PromocionRequest(BaseModel):
@@ -351,13 +375,7 @@ def get_repo() -> SheetsRepository:
     return _repo_cache
 
 
-def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
-    if rows is None:
-        repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
-    if not rows:
-        return Decimal("36.5"), Decimal("38.0")
-
+def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
     closest_row = None
     min_diff = None
 
@@ -381,12 +399,36 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
             min_diff = diff
             closest_row = r
 
+    return closest_row
+
+
+def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
+    if rows is None:
+        repo = get_repo()
+        rows = repo._g.read_rows("SerieTasas")
+    if not rows:
+        return Decimal("36.5"), Decimal("38.0")
+
+    closest_row = _closest_serie_row(dt, rows)
     if closest_row:
         return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
             closest_row.get("tasa_binance")
         )
 
     return Decimal("36.5"), Decimal("38.0")
+
+
+def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
+    """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`.
+
+    None si no hay ninguna fila con esa columna capturada (huérfana en la
+    mayoría de los despliegues -- el scraper la captura pero nada la usaba).
+    """
+    candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
+    closest_row = _closest_serie_row(dt, candidatas)
+    if closest_row:
+        return parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
+    return None
 
 
 async def run_sync_in_background():
@@ -419,6 +461,8 @@ async def run_sync_in_background():
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas.")
+                if total_first > 0:
+                    recalculate_all_orders()
                 _first_run = False
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
@@ -427,6 +471,11 @@ async def run_sync_in_background():
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+                    # Sincronización bidireccional: si Odoo reportó cambios
+                    # (ej. un pago editado en monto/fecha/cliente), se
+                    # recalculan motor y reconciliación para reflejarlo sin
+                    # esperar a que un humano vincule algo manualmente.
+                    recalculate_all_orders()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
@@ -832,35 +881,52 @@ async def get_resumen():
         repo = get_repo()
         # 1. Total por cobrar (Orders not invoiced)
         ordenes = repo.all_ordenes()
-        total_por_cobrar = sum(o.monto_total for o in ordenes if not o.facturada)
+        total_por_cobrar = sum(
+            o.monto_total for o in ordenes if not o.facturada and not orden_excluida(o)
+        )
 
-        # 2. Pagos sin asignar (convert VES payments to USD at BCV rate)
+        # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
         pagos = repo._g.read_rows("Pagos")
         vincs = repo.all_vinculaciones()
-        linked_pago_ids = {v.pago_id for v in vincs}
+        linked_amounts: dict[str, Decimal] = {}
+        for v in vincs:
+            prev = linked_amounts.get(v.pago_id, Decimal("0"))
+            linked_amounts[v.pago_id] = prev + v.monto_aplicado
         tasas_rows = repo._g.read_rows("SerieTasas")
-        tasas_map = {r.get("fecha"): parse_decimal_safe(r.get("tasa_bcv", "0")) for r in tasas_rows}
 
-        pagos_pendientes_monto = Decimal("0")
+        pagos_pendientes_usd = Decimal("0")
+        pagos_pendientes_ves = Decimal("0")
         for p in pagos:
             pid = str(p.get("pago_id", ""))
-            if pid and pid not in linked_pago_ids:
+            if not pid:
+                continue
+            try:
+                monto_original = parse_decimal_safe(p.get("monto", "0"))
+                saldo = monto_original - linked_amounts.get(pid, Decimal("0"))
+                if saldo <= Decimal("0.05"):
+                    continue
+
+                moneda = str(p.get("moneda", "USD")).upper().strip()
+                fecha_str = str(p.get("fecha_pago", ""))[:10]
                 try:
-                    monto = parse_decimal_safe(p.get("monto", "0"))
-                    moneda = str(p.get("moneda", "USD")).upper().strip()
-                    fecha_pago = str(p.get("fecha_pago", ""))[:10]
+                    fecha_dt = (
+                        datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
+                    )
+                except ValueError:
+                    fecha_dt = datetime.now()
+                bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
 
-                    if "VES" in moneda or "BS" in moneda or "BOLIVAR" in moneda:
-                        tasa = parse_decimal_safe(p.get("tasa_bcv", "0"))
-                        if tasa <= Decimal("0"):
-                            tasa = tasas_map.get(fecha_pago, Decimal("0"))
-                        monto_usd = monto / tasa if tasa > Decimal("0") else Decimal("0")
-                    else:
-                        monto_usd = monto
+                if "VES" in moneda or "BS" in moneda or "BOLIVAR" in moneda:
+                    monto_usd = saldo / bcv_rate if bcv_rate > Decimal("0") else Decimal("0")
+                    monto_ves = saldo
+                else:
+                    monto_usd = saldo
+                    monto_ves = saldo * bcv_rate
 
-                    pagos_pendientes_monto += monto_usd
-                except Exception:
-                    pass
+                pagos_pendientes_usd += monto_usd
+                pagos_pendientes_ves += monto_ves
+            except Exception:
+                pass
 
         # 3. Alertas rojas in Conciliación
         concs = repo.all_conciliaciones()
@@ -868,7 +934,8 @@ async def get_resumen():
 
         return {
             "total_por_cobrar_usd": float(total_por_cobrar),
-            "pagos_sin_asignar_usd": float(pagos_pendientes_monto),
+            "pagos_sin_asignar_usd": float(pagos_pendientes_usd),
+            "pagos_sin_asignar_ves": float(pagos_pendientes_ves),
             "alertas_reconciliacion": alertas_rojas,
         }
     except Exception as e:
@@ -984,6 +1051,8 @@ async def get_ordenes_pendientes(cliente_id: str):
         # Filter outstanding orders for this client
         pendientes = []
         for o in ordenes:
+            if orden_excluida(o):
+                continue
             if o.cliente_id == cliente_id and not o.facturada:
                 pagado = linked_by_so.get(o.so_id, Decimal("0"))
                 saldo = o.monto_total - pagado
@@ -1100,6 +1169,48 @@ def recalculate_all(so_id: str):
         print(f"Recálculo de {so_id} completado con éxito.")
     except Exception as e:
         print(f"Error al recalcular {so_id}: {e}", file=sys.stderr)
+
+
+def recalculate_all_orders():
+    """Recalcula el motor de descuentos y la reconciliación para TODAS las
+
+    órdenes. Se dispara tras cada ciclo del sync incremental que detectó
+    cambios (clientes/órdenes/líneas/pagos) -- sincronización "bidireccional":
+    si algo cambia en Odoo (ej. un pago editado en monto/fecha/cliente), el
+    sync ya refresca el espejo cada 5 min, pero sin esto Bandeja/Conciliación
+    solo se refrescaban cuando un humano vinculaba manualmente algo desde la
+    UI. Reutiliza la misma lógica que recalculate_all(so_id), pero para
+    runner.run_all() en vez de una sola orden.
+    """
+    try:
+        print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
+        config = AppConfig.from_env()
+        if os.environ.get("GOOGLE_TOKEN_JSON"):
+            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+        else:
+            gateway = GspreadGateway(
+                config.sheets.spreadsheet_id, config.sheets.service_account_file
+            )
+        repo = SheetsRepository(gateway)
+        execute = _connect(config.odoo)
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
+        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        pricelist_ids = {
+            config.engine.lista_usd: primary_usd_id,
+            config.engine.lista_bcv: primary_ves_id,
+        }
+        resolver = OdooPriceResolver(execute, pricelist_ids)
+        runner = EngineRunner(repo, resolver, config.engine)
+
+        resultados = runner.run_all(date.today())
+
+        facturas = OdooFacturasReader(execute)
+        Reconciler(repo, facturas, config.reconciliation).run()
+        print(f"Recálculo completo: {len(resultados)} órdenes procesadas.")
+    except Exception as e:
+        print(f"Error al recalcular todas las órdenes: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
 
 
 _REPORTE_SALDOS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
@@ -1935,8 +2046,7 @@ async def get_reporte_saldos(refresh: bool = False):
 
         new_audit_rows: list[dict] = []
         for o in ordenes:
-            st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            if st_check in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o):
                 continue
 
             # Tarea 2: orden facturada cuya factura Odoo ya esta 'Pagada' o
@@ -3038,6 +3148,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set = set()
         so_states_map = {}
+        so_pagada_en_odoo: set[str] = set()
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -3077,6 +3188,34 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                         sname = str(os_item.get("name", "")).strip()
                         if sname:
                             so_states_map[sname] = str(os_item.get("state", "")).strip().lower()
+
+                    # SO "pagada" = todas sus out_invoice estan payment_state
+                    # paid/in_payment (misma regla que /api/reporte-saldos y
+                    # /api/auditoria, Tarea 2). Una orden ya facturada sigue
+                    # siendo un destino valido para sugerir un pago mientras
+                    # su factura en Odoo no figure como pagada.
+                    invoices = execute(
+                        "account.move",
+                        "search_read",
+                        [
+                            [
+                                ["invoice_origin", "in", so_names],
+                                ["state", "=", "posted"],
+                                ["move_type", "=", "out_invoice"],
+                            ]
+                        ],
+                        {"fields": ["invoice_origin", "payment_state"]},
+                    )
+                    estados_por_so: dict[str, list[str]] = {}
+                    for inv in invoices:
+                        so = str(inv.get("invoice_origin", "")).strip()
+                        if so:
+                            estados_por_so.setdefault(so, []).append(
+                                str(inv.get("payment_state", ""))
+                            )
+                    for so, estados in estados_por_so.items():
+                        if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                            so_pagada_en_odoo.add(so)
         except Exception as e_odoo:
             logger.warning("Error consultando Odoo en get_conciliaciones_sugerencias: %s", e_odoo)
 
@@ -3119,27 +3258,27 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
         open_orders_by_client = {}
         for o in ordenes:
-            st = (
-                so_states_map.get(o.so_id)
-                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            )
-            if st in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
                 continue
-            if not o.facturada:
-                pagado = linked_so.get(o.so_id, Decimal("0"))
-                saldo = o.monto_total - pagado
-                if saldo > Decimal("0.05"):
-                    if o.cliente_id not in open_orders_by_client:
-                        open_orders_by_client[o.cliente_id] = []
-                    open_orders_by_client[o.cliente_id].append(
-                        {
-                            "so_id": o.so_id,
-                            "fecha": o.fecha,
-                            "monto_total": o.monto_total,
-                            "saldo_pendiente": saldo,
-                            "vendedor": o.vendedor_email,
-                        }
-                    )
+            # Destino valido: NO pagada segun el motor (saldo local pendiente)
+            # -- sin facturar o facturada pero con su factura Odoo aun sin
+            # marcar como pagada/en proceso de pago.
+            if o.facturada and o.so_id in so_pagada_en_odoo:
+                continue
+            pagado = linked_so.get(o.so_id, Decimal("0"))
+            saldo = o.monto_total - pagado
+            if saldo > Decimal("0.05"):
+                if o.cliente_id not in open_orders_by_client:
+                    open_orders_by_client[o.cliente_id] = []
+                open_orders_by_client[o.cliente_id].append(
+                    {
+                        "so_id": o.so_id,
+                        "fecha": o.fecha,
+                        "monto_total": o.monto_total,
+                        "saldo_pendiente": saldo,
+                        "vendedor": o.vendedor_email,
+                    }
+                )
 
         for cid in open_orders_by_client:
             open_orders_by_client[cid].sort(key=lambda x: x["fecha"])
@@ -3241,11 +3380,7 @@ async def get_bandeja_facturacion():
         iva_pendiente_agentes = []
 
         for o in ordenes:
-            st = (
-                so_odoo_states.get(o.so_id)
-                or str(getattr(o, "estado_orden", "sale") or "").strip().lower()
-            )
-            if st in ("cancel", "cancelled", "draft", "sent"):
+            if orden_excluida(o, live_state=so_odoo_states.get(o.so_id)):
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id), {})
@@ -3269,13 +3404,25 @@ async def get_bandeja_facturacion():
                 (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
             )
 
-            # Tarea 3.1: a la bandeja de facturacion solo van las ordenes SIN
-            # factura cuyo saldo segun el motor ya es 0 (cliente pago la
-            # totalidad) -- listas para que Administracion decida si aplica
-            # descuentos y facture. Con saldo pendiente, la orden se queda
-            # visible en el reporte general de CxC (no entra aqui).
+            # Bandeja 1: ordenes SIN factura listas para facturar.
+            # - Cliente NO agente de retencion: debe estar pagada al 100%
+            #   segun el motor (reglas estandar).
+            # - Cliente SI agente de retencion de IVA: le basta con haber
+            #   pagado el Subtotal (monto sin IVA); lo que falta es
+            #   exactamente la porcion de IVA que retiene (no paga esa
+            #   porcion en efectivo, entrega comprobante de retencion mas
+            #   adelante -- ver Bandeja 3, que aplica una vez facturada).
+            # IVA Venezuela = 16%; se estima el subtotal despejando el total
+            # que calculo el motor (tot_motor, ya con descuentos aplicados).
+            subtotal_neto_motor = tot_motor / 1.16
+            iva_estimado_motor = tot_motor - subtotal_neto_motor
             saldo_motor = tot_motor - abono
-            if not o.facturada and saldo_motor <= 0.05:
+            if wh_agent:
+                listo_para_facturar = saldo_motor <= iva_estimado_motor + 0.05
+            else:
+                listo_para_facturar = saldo_motor <= 0.05
+
+            if not o.facturada and listo_para_facturar:
                 ordenes_por_facturar.append(
                     {
                         "so_id": o.so_id,
@@ -3286,8 +3433,10 @@ async def get_bandeja_facturacion():
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
                         "monto_pagado": abono,
-                        "subtotal_neto": monto_orig,
+                        "subtotal_neto": round(subtotal_neto_motor, 2),
+                        "iva_estimado": round(iva_estimado_motor, 2),
                         "total_motor": tot_motor,
+                        "saldo_pendiente": round(saldo_motor, 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         "precio_base": monto_orig,
@@ -3301,6 +3450,18 @@ async def get_bandeja_facturacion():
                 # ordenes ya facturadas en Odoo.
                 nc_calc = float(b.ncs_calculadas) if b else 0.0
                 if nc_calc > 0.01:
+                    # El concepto real (obsequio de producto vs. % de
+                    # descuento de primera compra) vive en el detalle que ya
+                    # calculó el motor -- se usa en vez de un texto generico.
+                    detalles_b = b.descuentos_detalle if b else []
+                    detalle_nc = next(
+                        (d for d in detalles_b if d.origen == "primera_compra"), None
+                    )
+                    concepto = (
+                        detalle_nc.descripcion
+                        if detalle_nc
+                        else "Obsequio / Descuento de primera compra no aplicado en factura"
+                    )
                     notas_credito_pendientes.append(
                         {
                             "so_id": o.so_id,
@@ -3311,7 +3472,7 @@ async def get_bandeja_facturacion():
                             "nc_porcentaje": (nc_calc / monto_orig * 100.0)
                             if monto_orig > 0
                             else 0.0,
-                            "concepto": "Obsequio / Descuento diferido no aplicado en factura",
+                            "concepto": concepto,
                         }
                     )
 
@@ -3322,11 +3483,14 @@ async def get_bandeja_facturacion():
                 # descuentos aplicados) es "normal" si cabe dentro de esa
                 # porcion retenida -- no es que el cliente deba mas, es que
                 # falta el comprobante. IVA Venezuela = 16%; se estima el
-                # subtotal despejando el monto total facturado (asume que
-                # monto_orig ya incluye IVA).
+                # subtotal despejando el total del MOTOR (tot_motor, ya con
+                # descuentos aplicados) -- no el monto bruto original: si la
+                # orden tuvo descuentos ya reflejados en la factura real, el
+                # 16% debe calcularse sobre lo efectivamente facturado, no
+                # sobre el precio de lista previo al descuento.
                 if wh_agent:
-                    subtotal_est = monto_orig / 1.16
-                    iva_total_est = monto_orig - subtotal_est
+                    subtotal_est = tot_motor / 1.16
+                    iva_total_est = tot_motor - subtotal_est
                     iva_retenido_est = iva_total_est * (wh_rate / 100.0)
                     saldo_pendiente_motor = tot_motor - abono
                     if 0 <= saldo_pendiente_motor <= iva_retenido_est + 0.05:
@@ -3335,7 +3499,7 @@ async def get_bandeja_facturacion():
                                 "so_id": o.so_id,
                                 "cliente_nombre": c_name,
                                 "factura_id": o.factura_id or "Odoo",
-                                "monto_factura": monto_orig,
+                                "monto_factura": tot_motor,
                                 "wh_iva_rate": wh_rate,
                                 "base_cobrada": round(subtotal_est, 2),
                                 "iva_total_estimado": round(iva_total_est, 2),
@@ -3422,6 +3586,122 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
             "message": f"Se procesaron {processed} vinculaciones exitosamente.",
             "procesados": processed,
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _get_vinculacion_or_404(repo: Any, vinc_id: str) -> Vinculacion:
+    vinc = next((v for v in repo.all_vinculaciones() if v.vinc_id == vinc_id), None)
+    if not vinc:
+        raise HTTPException(status_code=404, detail=f"Vinculación {vinc_id} no encontrada.")
+    return vinc
+
+
+@app.post("/api/vinculacion/{vinc_id}/tasa-binance")
+async def post_editar_tasa_binance(
+    vinc_id: str, req: TasaBinanceEditRequest, background_tasks: BackgroundTasks
+):
+    try:
+        repo = get_repo()
+        vinc = _get_vinculacion_or_404(repo, vinc_id)
+        nueva_tasa = Decimal(str(req.tasa_binance))
+        if nueva_tasa <= Decimal("0"):
+            raise HTTPException(status_code=400, detail="La tasa Binance debe ser positiva.")
+
+        # Validación estricta: no puede superar el máximo ni caer bajo el
+        # mínimo capturado ese día en SerieTasas.
+        fecha = vinc.hora_pago_confirmada.date()
+        dia_rows = repo.serie_tasas_del_dia(fecha)
+        binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
+        if binance_vals:
+            minimo, maximo = min(binance_vals), max(binance_vals)
+            if nueva_tasa < minimo or nueva_tasa > maximo:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"La tasa Binance ({nueva_tasa}) debe estar entre {minimo} y "
+                        f"{maximo} -- rango capturado el {fecha.isoformat()}."
+                    ),
+                )
+
+        vinc.tasa_binance_aplicada = nueva_tasa
+        if vinc.moneda_abono == Moneda.USD:
+            vinc.equiv_usd_binance = vinc.monto_aplicado
+            vinc.equiv_ves_binance = vinc.monto_aplicado * nueva_tasa
+        else:
+            vinc.equiv_usd_binance = vinc.monto_aplicado / nueva_tasa
+            vinc.equiv_ves_binance = vinc.monto_aplicado
+
+        repo.update_vinculacion(vinc)
+        background_tasks.add_task(recalculate_all, vinc.so_id)
+
+        return {
+            "status": "success",
+            "vinc_id": vinc_id,
+            "tasa_binance_aplicada": float(nueva_tasa),
+            "equiv_usd_binance": float(vinc.equiv_usd_binance),
+            "equiv_ves_binance": float(vinc.equiv_ves_binance),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/vinculacion/{vinc_id}/tasa-bcv-tipo")
+async def post_cambiar_tipo_tasa_bcv(
+    vinc_id: str, req: TasaBcvVarianteRequest, background_tasks: BackgroundTasks
+):
+    try:
+        variante = req.variante.strip().upper()
+        if variante not in ("USD", "EUR"):
+            raise HTTPException(
+                status_code=400, detail="La variante de tasa BCV debe ser 'USD' o 'EUR'."
+            )
+
+        repo = get_repo()
+        vinc = _get_vinculacion_or_404(repo, vinc_id)
+        tasas_rows = repo._g.read_rows("SerieTasas")
+
+        if variante == "EUR":
+            tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            if tasa_bcv_nueva is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No hay tasa BCV-EUR capturada en SerieTasas para usar esta variante.",
+                )
+        else:
+            tasa_bcv_nueva, _ = get_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+
+        if tasa_bcv_nueva <= Decimal("0"):
+            raise HTTPException(
+                status_code=400, detail=f"Tasa BCV-{variante} inválida (<= 0)."
+            )
+
+        vinc.bcv_variante = variante
+        vinc.tasa_bcv_aplicada = tasa_bcv_nueva
+        if vinc.moneda_abono == Moneda.USD:
+            vinc.equiv_usd_bcv = vinc.monto_aplicado
+            vinc.equiv_ves_bcv = vinc.monto_aplicado * tasa_bcv_nueva
+        else:
+            vinc.equiv_usd_bcv = vinc.monto_aplicado / tasa_bcv_nueva
+            vinc.equiv_ves_bcv = vinc.monto_aplicado
+
+        repo.update_vinculacion(vinc)
+        background_tasks.add_task(recalculate_all, vinc.so_id)
+
+        return {
+            "status": "success",
+            "vinc_id": vinc_id,
+            "bcv_variante": variante,
+            "tasa_bcv_aplicada": float(tasa_bcv_nueva),
+            "equiv_usd_bcv": float(vinc.equiv_usd_bcv),
+            "equiv_ves_bcv": float(vinc.equiv_ves_bcv),
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -3742,6 +4022,8 @@ async def get_odoo_clientes_auditoria():
 
             so_partner_map = {}
             for o in ordenes:
+                if orden_excluida(o):
+                    continue
                 pid = str(o.cliente_id)
                 so_partner_map[o.so_id] = pid
                 date_str = o.fecha.isoformat()
@@ -4751,9 +5033,12 @@ async def get_pagos_historial():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        tasas_rows = repo._g.read_rows("SerieTasas")
 
         historial = []
+        vinculados_pago_ids: set[str] = set()
         for v in vincs:
+            vinculados_pago_ids.add(v.pago_id)
             p_data = pagos_map.get(v.pago_id, {})
             cid = p_data.get("cliente_id", "")
             c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
@@ -4762,6 +5047,7 @@ async def get_pagos_historial():
 
             historial.append(
                 {
+                    "vinc_id": v.vinc_id,
                     "pago_id": v.pago_id,
                     "cliente_nombre": c_name,
                     "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d")
@@ -4773,8 +5059,80 @@ async def get_pagos_historial():
                     "factura_id": factura_id,
                     "confirmado_por": v.confirmado_por or "Sistema",
                     "estado": v.estado.value,
+                    "origen": "Sistema (vinculación manual)",
+                    "tasa_bcv": float(v.tasa_bcv_aplicada) if v.tasa_bcv_aplicada else None,
+                    "tasa_binance": float(v.tasa_binance_aplicada)
+                    if v.tasa_binance_aplicada
+                    else None,
+                    "bcv_variante": v.bcv_variante or "USD",
+                    "editable": True,
                 }
             )
+
+        # Pagos reconciliados directamente en Odoo (via factura) que NUNCA
+        # pasaron por una Vinculacion de este sistema -- antes invisibles en
+        # esta tabla, aunque ya estaban "conciliados" desde el punto de vista
+        # de Odoo. Best-effort: si Odoo no responde, se muestra solo lo que
+        # ya se tenía localmente.
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                reader = OdooXmlRpcReader(config.odoo, execute)
+                so_names = list(ordenes_map.keys())
+                reconciliados_por_so = reader.pagos_reconciliados_por_orden(so_names)
+                for so_name, pagos_odoo in reconciliados_por_so.items():
+                    o = ordenes_map.get(so_name)
+                    factura_id = o.factura_id if o and o.factura_id else "N/A"
+                    for p in pagos_odoo:
+                        pago_id = str(p.get("id", ""))
+                        if pago_id in vinculados_pago_ids:
+                            continue  # ya vino por la Vinculacion local, no duplicar
+                        partner_raw = p.get("partner_id")
+                        cid = (
+                            str(partner_raw[0])
+                            if isinstance(partner_raw, list | tuple) and partner_raw
+                            else ""
+                        )
+                        c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
+                        fecha_str = str(p.get("date") or "")[:10]
+                        try:
+                            fecha_dt = (
+                                datetime.strptime(fecha_str, "%Y-%m-%d")
+                                if fecha_str
+                                else datetime.now()
+                            )
+                        except ValueError:
+                            fecha_dt = datetime.now()
+                        bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+                        curr_raw = p.get("currency_id")
+                        moneda = (
+                            str(curr_raw[1])
+                            if isinstance(curr_raw, list | tuple) and len(curr_raw) > 1
+                            else "USD"
+                        )
+                        historial.append(
+                            {
+                                "vinc_id": None,
+                                "pago_id": pago_id,
+                                "cliente_nombre": c_name,
+                                "fecha_pago": fecha_str,
+                                "monto_aplicado": float(p.get("amount") or 0),
+                                "moneda": moneda,
+                                "so_id": so_name,
+                                "factura_id": factura_id,
+                                "confirmado_por": "Odoo",
+                                "estado": "CONCILIADO",
+                                "origen": "Odoo (automático vía factura)",
+                                "tasa_bcv": float(bcv_rate),
+                                "tasa_binance": float(binance_rate),
+                                "bcv_variante": "USD",
+                                "editable": False,
+                            }
+                        )
+        except Exception as e_odoo:
+            logger.warning("Error consultando pagos reconciliados en Odoo: %s", e_odoo)
+
         return historial
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4955,6 +5313,8 @@ async def get_auditoria():
         discrepancias_facturas_odoo = []
 
         for o in ordenes:
+            if orden_excluida(o):
+                continue
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             b = bandeja_map.get(o.so_id)
             so_lines = lines_by_so.get(o.so_id, [])
@@ -5356,15 +5716,44 @@ async def post_marcar_recibido(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _periodo_bounds(hoy: date) -> dict[str, str]:
+    """Fechas de inicio (YYYY-MM-DD) de mes/trimestre/año en curso, para acumulados."""
+    mes_inicio = hoy.replace(day=1)
+    trimestre_mes = ((hoy.month - 1) // 3) * 3 + 1
+    trimestre_inicio = hoy.replace(month=trimestre_mes, day=1)
+    anio_inicio = hoy.replace(month=1, day=1)
+    return {
+        "hoy": hoy.isoformat(),
+        "mes": mes_inicio.isoformat(),
+        "trimestre": trimestre_inicio.isoformat(),
+        "anio": anio_inicio.isoformat(),
+    }
+
+
 @app.get("/api/reporte/diario")
-async def get_reporte_diario():
+async def get_reporte_diario(
+    vendedor: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
         lineas = repo._g.read_rows("LineasOrden")
         pagos = repo._g.read_rows("Pagos")
+        tasas_rows = repo._g.read_rows("SerieTasas")
+
+        vendedor_f = (vendedor or "").strip().lower()
+        desde_f = (fecha_desde or "")[:10]
+        hasta_f = (fecha_hasta or "")[:10]
+
+        def in_range(fecha_key: str) -> bool:
+            if desde_f and fecha_key < desde_f:
+                return False
+            return not (hasta_f and fecha_key > hasta_f)
 
         prod_litros_map = {}
+        journal_name_map: dict[int, str] = {}
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -5381,18 +5770,28 @@ async def get_reporte_diario():
                     if vol == Decimal("0"):
                         vol = parse_decimal_safe(p.get("weight") or "1.0")
                     prod_litros_map[pid] = vol
-        except Exception as e_p:
-            logger.warning("Error leyendo litros de productos: %s", e_p)
 
-        # 1. Ventas por Día (USD y Litros)
-        ventas_por_dia = {}
+                journals = execute("account.journal", "search_read", [], {"fields": ["id", "name"]})
+                journal_name_map = {int(j["id"]): str(j.get("name") or "") for j in journals}
+        except Exception as e_p:
+            logger.warning("Error leyendo catálogos de Odoo (litros/métodos de pago): %s", e_p)
+
+        # Órdenes validas para este reporte: excluidas por regla global,
+        # y filtradas por vendedor si se pidió.
+        ordenes_validas = {}
         for o in ordenes:
-            st = getattr(o, "estado_orden", "sale")
-            if st in ["cancel", "draft", "sent"] and not (
-                o.entregada_completa or bool(o.fecha_entrega)
-            ):
+            if orden_excluida(o):
                 continue
+            if vendedor_f and vendedor_f != str(o.vendedor_email or "").strip().lower():
+                continue
+            ordenes_validas[o.so_id] = o
+
+        # 1. Ventas por Día (USD -- Monto Bruto de la Orden -- y Litros)
+        ventas_por_dia = {}
+        for o in ordenes_validas.values():
             fecha_key = o.fecha.isoformat()[:10]
+            if not in_range(fecha_key):
+                continue
             if fecha_key not in ventas_por_dia:
                 ventas_por_dia[fecha_key] = {
                     "fecha": fecha_key,
@@ -5406,23 +5805,28 @@ async def get_reporte_diario():
         # Sum line liters
         for ln in lineas:
             so_id = ln.get("so_id")
+            o_match = ordenes_validas.get(so_id)
+            if not o_match:
+                continue
+            fk = o_match.fecha.isoformat()[:10]
+            if fk not in ventas_por_dia:
+                continue
             prod_id = int(ln.get("product_id") or 0)
             qty = parse_decimal_safe(
                 ln.get("cantidad_entregada") or ln.get("cantidad_ordenada") or "0"
             )
             l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
-            total_l = qty * l_per_unit
+            ventas_por_dia[fk]["litros_totales"] += qty * l_per_unit
 
-            o_match = next((o for o in ordenes if o.so_id == so_id), None)
-            if o_match:
-                fk = o_match.fecha.isoformat()[:10]
-                if fk in ventas_por_dia:
-                    ventas_por_dia[fk]["litros_totales"] += total_l
-
-        # 2. Cobranza por Día (Desglosada por Moneda y Método)
+        # 2. Cobranza por Día (Desglosada por Moneda y Método) -- TODA la
+        # cobranza, asociada o no a una orden (se lee la hoja Pagos completa).
         cobranza_por_dia = {}
         for p in pagos:
-            fecha_key = str(p.get("fecha", ""))[:10] or date.today().isoformat()
+            if vendedor_f and vendedor_f != str(p.get("vendedor_email", "")).strip().lower():
+                continue
+            fecha_key = str(p.get("fecha_pago", ""))[:10] or date.today().isoformat()
+            if not in_range(fecha_key):
+                continue
             if fecha_key not in cobranza_por_dia:
                 cobranza_por_dia[fecha_key] = {
                     "fecha": fecha_key,
@@ -5433,9 +5837,16 @@ async def get_reporte_diario():
                 }
             monto = parse_decimal_safe(p.get("monto", "0"))
             moneda = p.get("moneda", "VES")
-            metodo = p.get("metodo_pago") or p.get("forma_pago") or "Efectivo"
+            metodo_raw = str(p.get("metodo_pago") or p.get("forma_pago") or "").strip()
+            metodo = (
+                journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None
+            ) or metodo_raw or "Efectivo"
 
-            bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
+            try:
+                fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
+            except ValueError:
+                fecha_dt = datetime.now()
+            bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
             eq_bcv = (
                 monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
             )
@@ -5477,7 +5888,66 @@ async def get_reporte_diario():
             for k, v in sorted(cobranza_por_dia.items(), reverse=True)
         ]
 
-        return {"ventas_diarias": ventas_list, "cobranza_diaria": cobranza_list}
+        # 3. Acumulados (Hoy / Mes / Trimestre / Año) para las tarjetas del Dashboard
+        bounds = _periodo_bounds(date.today())
+
+        def suma_ventas_desde(inicio: str) -> dict:
+            en_rango = [v for k, v in ventas_por_dia.items() if k >= inicio]
+            total_usd = sum((v["total_usd"] for v in en_rango), Decimal("0"))
+            litros = sum((v["litros_totales"] for v in en_rango), Decimal("0"))
+            cnt = sum(v["ordenes_count"] for v in en_rango)
+            return {"total_usd": float(total_usd), "litros": float(litros), "ordenes_count": cnt}
+
+        def suma_cobranza_desde(inicio: str) -> dict:
+            en_rango = [v for k, v in cobranza_por_dia.items() if k >= inicio]
+            total_bcv = sum((v["total_eq_bcv"] for v in en_rango), Decimal("0"))
+            total_binance = sum((v["total_eq_binance"] for v in en_rango), Decimal("0"))
+            return {"total_eq_bcv": float(total_bcv), "total_eq_binance": float(total_binance)}
+
+        def suma_ventas_dia(dia: str) -> dict:
+            v = ventas_por_dia.get(dia)
+            if not v:
+                return {"total_usd": 0.0, "litros": 0.0, "ordenes_count": 0}
+            return {
+                "total_usd": float(v["total_usd"]),
+                "litros": float(v["litros_totales"]),
+                "ordenes_count": v["ordenes_count"],
+            }
+
+        def suma_cobranza_dia(dia: str) -> dict:
+            v = cobranza_por_dia.get(dia)
+            if not v:
+                return {"total_eq_bcv": 0.0, "total_eq_binance": 0.0}
+            return {
+                "total_eq_bcv": float(v["total_eq_bcv"]),
+                "total_eq_binance": float(v["total_eq_binance"]),
+            }
+
+        resumen = {
+            "ventas": {
+                "hoy": suma_ventas_dia(bounds["hoy"]),
+                "mes": suma_ventas_desde(bounds["mes"]),
+                "trimestre": suma_ventas_desde(bounds["trimestre"]),
+                "anio": suma_ventas_desde(bounds["anio"]),
+            },
+            "cobranza": {
+                "hoy": suma_cobranza_dia(bounds["hoy"]),
+                "mes": suma_cobranza_desde(bounds["mes"]),
+                "trimestre": suma_cobranza_desde(bounds["trimestre"]),
+                "anio": suma_cobranza_desde(bounds["anio"]),
+            },
+        }
+
+        vendedores = sorted(
+            {str(o.vendedor_email) for o in ordenes if o.vendedor_email and not orden_excluida(o)}
+        )
+
+        return {
+            "ventas_diarias": ventas_list,
+            "cobranza_diaria": cobranza_list,
+            "resumen": resumen,
+            "vendedores": vendedores,
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

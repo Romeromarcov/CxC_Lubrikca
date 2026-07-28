@@ -118,157 +118,7 @@
                     </a>
                 </div>
 
-                <!-- REPORTE DIARIO EJECUTIVO DE VENTAS (USD Y LITROS) Y COBRANZA -->
-                <section class="reporte-panel card" style="border-left: 5px solid #059669;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #065f46; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>📊</span> Reporte Diario Ejecutivo de Ventas (USD y Litros) y Cobranzas
-                        </h2>
-                        <p style="color: #047857;">Consolidado diario de lo vendido en dinero ($ USD) y volumen de lubricantes (Litros L), junto con el cobro por moneda y método de pago</p>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem;">
-                        <div>
-                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">🛍️ Ventas Diarias (USD y Litros)</h3>
-                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
-                                <table class="cxc-table mini">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>N° Órdenes</th>
-                                            <th>Vendido ($ USD)</th>
-                                            <th>Volumen (Litros L)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="diario-ventas-table-body">
-                                        <tr>
-                                            <td colspan="4" class="table-empty">Cargando reporte de ventas...</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div>
-                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">💵 Cobranza Diaria (Por Moneda y Método)</h3>
-                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
-                                <table class="cxc-table mini">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>Cobrado (Tasa BCV $)</th>
-                                            <th>Desglose por Moneda</th>
-                                            <th>Desglose por Método</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="diario-cobranza-table-body">
-                                        <tr>
-                                            <td colspan="4" class="table-empty">Cargando reporte de cobranza...</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </div>
-
-        <!-- PESTAÑA 2: FACTURACIÓN (3 BANDEJAS DE APROBACIÓN) -->
-        <div id="tab-facturacion" class="tab-panel">
-            <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <!-- BANDEJA 1: Órdenes Pendientes por Facturar -->
-                <section class="tray-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja 1: Órdenes Pendientes por Facturar</h2>
-                        <p>Órdenes sin facturar pagadas hasta su Subtotal (Agentes de Retención IVA) o Total. Indica el descuento a aplicar al facturar.</p>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Agente Ret. IVA</th>
-                                    <th>Fecha</th>
-                                    <th>Abono ($)</th>
-                                    <th>Subtotal Neto ($)</th>
-                                    <th>Total Motor ($)</th>
-                                    <th>Descuento a Aplicar ($ / %)</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja1-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes por facturar...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- BANDEJA 2: Órdenes Facturadas Pendientes por Nota de Crédito -->
-                <section class="tray-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
-                        <p>Órdenes ya facturadas que requieren emisión de N/C por obsequio de producto o descuento porcentual no aplicado inicialmente.</p>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Abono ($)</th>
-                                    <th>Monto N/C ($)</th>
-                                    <th>% N/C</th>
-                                    <th>Concepto N/C</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja2-table-body">
-                                <tr>
-                                    <td colspan="8" class="table-empty">Cargando órdenes pendientes por N/C...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA -->
-                <section class="tray-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención)</h2>
-                        <p>Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA.</p>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Factura Odoo</th>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>% Retención</th>
-                                    <th>Base Cobrada ($)</th>
-                                    <th>Retención IVA Est. ($)</th>
-                                    <th>Estado Comprobante</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja3-table-body">
-                                <tr>
-                                    <td colspan="7" class="table-empty">Cargando comprobantes pendientes...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            </div>
-        </div>
-
-        <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
-        <div id="tab-reporte" class="tab-panel">
-            <div class="reporte-layout">
+                <!-- TARJETAS DE SALDOS (movidas desde Reporte General de Saldos) -->
                 <!-- Fila 1: TOTAL GENERAL POR COBRAR (Sola arriba del todo) -->
                 <div style="margin-bottom: 1.25rem;">
                     <div class="kpi-card card border-indigo interactive-kpi" data-antiguedad="*" style="cursor: pointer; background: linear-gradient(to bottom right, #ffffff, #f5f3ff); border: 2px solid #8b5cf6; padding: 1.15rem;">
@@ -430,6 +280,212 @@
                     </div>
                 </div>
 
+                <!-- REPORTE DIARIO EJECUTIVO DE VENTAS (USD Y LITROS) Y COBRANZA -->
+                <section class="reporte-panel card" style="border-left: 5px solid #059669;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #065f46; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📊</span> Reporte Diario Ejecutivo de Ventas (USD y Litros) y Cobranzas
+                        </h2>
+                        <p style="color: #047857;">Consolidado diario de lo vendido en dinero ($ USD) y volumen de lubricantes (Litros L), junto con el cobro por moneda y método de pago</p>
+                    </div>
+
+                    <!-- Filtros: Usuario/Vendedor y Rango de Fechas -->
+                    <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
+                        <select id="dashboard-vendedor-filter" style="padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid #cbd5e1;">
+                            <option value="*">Todos los Vendedores</option>
+                        </select>
+                        <label style="font-size: 0.8rem; color: #475569;">Desde:
+                            <input type="date" id="dashboard-fecha-desde" style="padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #cbd5e1;">
+                        </label>
+                        <label style="font-size: 0.8rem; color: #475569;">Hasta:
+                            <input type="date" id="dashboard-fecha-hasta" style="padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #cbd5e1;">
+                        </label>
+                        <button id="dashboard-filter-clear" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Limpiar Filtros</button>
+                    </div>
+
+                    <!-- Acumulados: Hoy / Mes / Trimestre / Año -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                        <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas de Hoy</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-hoy-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-hoy-litros">0 L</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Mes</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-mes-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-mes-litros">0 L</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Trimestre</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-trimestre-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-trimestre-litros">0 L</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Año</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-anio-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-anio-litros">0 L</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza de Hoy</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-hoy-usd">$0.00</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Mes</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-mes-usd">$0.00</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Trimestre</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-trimestre-usd">$0.00</strong></div>
+                        </div>
+                        <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
+                            <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Año</div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-anio-usd">$0.00</strong></div>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem;">
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">🛍️ Ventas Diarias (USD y Litros)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>N° Órdenes</th>
+                                            <th>Vendido ($ USD)</th>
+                                            <th>Volumen (Litros L)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-ventas-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de ventas...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 style="font-size: 0.95rem; color: #1e293b; margin-bottom: 0.5rem;">💵 Cobranza Diaria (Por Moneda y Método)</h3>
+                            <div class="mini-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                                <table class="cxc-table mini">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Cobrado (Tasa BCV $)</th>
+                                            <th>Desglose por Moneda</th>
+                                            <th>Desglose por Método</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="diario-cobranza-table-body">
+                                        <tr>
+                                            <td colspan="4" class="table-empty">Cargando reporte de cobranza...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PESTAÑA 2: FACTURACIÓN (3 BANDEJAS DE APROBACIÓN) -->
+        <div id="tab-facturacion" class="tab-panel">
+            <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- BANDEJA 1: Órdenes Pendientes por Facturar -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 1: Órdenes Pendientes por Facturar</h2>
+                        <p>Órdenes sin facturar pagadas hasta su Subtotal (Agentes de Retención IVA) o Total. Indica el descuento a aplicar al facturar.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Agente Ret. IVA</th>
+                                    <th>Fecha</th>
+                                    <th>Abono ($)</th>
+                                    <th>Subtotal Neto ($)</th>
+                                    <th>Total Motor ($)</th>
+                                    <th>Descuento a Aplicar ($ / %)</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja1-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando órdenes por facturar...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA 2: Órdenes Facturadas Pendientes por Nota de Crédito -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
+                        <p>Órdenes ya facturadas que requieren emisión de N/C por obsequio de producto o descuento porcentual no aplicado inicialmente.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Abono ($)</th>
+                                    <th>Monto N/C ($)</th>
+                                    <th>% N/C</th>
+                                    <th>Concepto N/C</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja2-table-body">
+                                <tr>
+                                    <td colspan="8" class="table-empty">Cargando órdenes pendientes por N/C...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención)</h2>
+                        <p>Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Factura Odoo</th>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>% Retención</th>
+                                    <th>Base Cobrada ($)</th>
+                                    <th>Retención IVA Est. ($)</th>
+                                    <th>Estado Comprobante</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja3-table-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty">Cargando comprobantes pendientes...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
+        <div id="tab-reporte" class="tab-panel">
+            <div class="reporte-layout">
+
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
                         <div>
@@ -577,6 +633,7 @@
                     <div class="kpi-card card">
                         <span class="kpi-label">Pagos Sin Asignar</span>
                         <span class="kpi-value warning" id="kpi-sin-asignar">$0.00</span>
+                        <span style="font-size:0.75rem; color:#64748b; display:block;" id="kpi-sin-asignar-ves">Bs. 0,00</span>
                     </div>
                     <div class="kpi-card card">
                         <span class="kpi-label">Alertas Rojas</span>
@@ -733,8 +790,8 @@
                 <!-- Historial de Pagos Asignados -->
                 <section class="historial-panel card">
                     <div class="panel-header">
-                        <h2>Historial de Pagos Asignados</h2>
-                        <p>Registro completo de cobros ya vinculados a su respectiva Factura en Odoo y Orden de Venta</p>
+                        <h2>Pagos Conciliados</h2>
+                        <p>Todos los pagos ya conciliados -- vinculados manualmente en este sistema o reconciliados directamente en Odoo vía factura -- con sus tasas de referencia aplicadas</p>
                     </div>
 
                     <div class="table-wrapper large-table">
@@ -748,13 +805,17 @@
                                     <th>Moneda</th>
                                     <th>Orden (SO)</th>
                                     <th>Factura Odoo</th>
+                                    <th>Tasa BCV</th>
+                                    <th>Tasa Binance</th>
+                                    <th>Editar Tasas</th>
+                                    <th>Origen</th>
                                     <th>Confirmado Por</th>
                                     <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="historial-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando historial de pagos...</td>
+                                    <td colspan="13" class="table-empty">Cargando pagos conciliados...</td>
                                 </tr>
                             </tbody>
                         </table>

@@ -9,7 +9,7 @@ de trabajo humano.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -84,6 +84,9 @@ class SheetsRepository(Repository):
                 break
             count += 1
         return count
+
+    def serie_tasas_del_dia(self, fecha: date) -> list[SerieTasa]:
+        return [fila for fila in self._serie_rows() if fila.timestamp.date() == fecha]
 
     # --- Cursor --------------------------------------------------------------
     def get_last_sync(self) -> datetime | None:

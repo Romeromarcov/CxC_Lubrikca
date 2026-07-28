@@ -14,7 +14,7 @@ espejo; nunca toca las demás.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import date, datetime
 
 from .models import (
     BandejaFacturacion,
@@ -51,6 +51,13 @@ class Repository(ABC):
     @abstractmethod
     def trailing_failed_captures(self) -> int:
         """Nº de capturas fallidas consecutivas al final de la serie."""
+
+    @abstractmethod
+    def serie_tasas_del_dia(self, fecha: date) -> list[SerieTasa]:
+        """Todas las capturas de SerieTasas del día indicado (para validar
+
+        min/max histórico al editar una tasa manualmente).
+        """
 
     # --- Cursor de sync ------------------------------------------------------
     @abstractmethod
@@ -187,6 +194,9 @@ class InMemoryRepository(Repository):
 
     def all_serie_tasas(self) -> list[SerieTasa]:
         return list(self._serie)
+
+    def serie_tasas_del_dia(self, fecha: date) -> list[SerieTasa]:
+        return [fila for fila in self._serie if fila.timestamp.date() == fecha]
 
     # --- Cursor --------------------------------------------------------------
     def get_last_sync(self) -> datetime | None:
