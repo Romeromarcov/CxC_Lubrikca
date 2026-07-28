@@ -867,7 +867,7 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadReporte() {
         try {
             reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
-            const res = await fetch("/api/reporte-saldos");
+            const res = await fetch("/api/reporte-saldos?refresh=true&t=" + Date.now(), { cache: "no-store" });
             if (res.ok) {
                 const data = await res.json();
                 const kpis = data.kpis || {};

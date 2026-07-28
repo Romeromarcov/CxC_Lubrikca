@@ -1100,7 +1100,7 @@ _REPORTE_SALDOS_CACHE: dict[str, Any] = {
     "data": None,
     "timestamp": 0.0
 }
-_REPORTE_CACHE_TTL = 60.0
+_REPORTE_CACHE_TTL = 0.0
 
 
 @app.get("/api/auditoria-descuentos")
