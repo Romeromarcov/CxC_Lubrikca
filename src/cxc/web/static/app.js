@@ -685,22 +685,26 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Load Historial de Pagos Asignados
+    // Load Pagos Conciliados (vinculados en este sistema + reconciliados en Odoo)
     async function loadHistorialPagos() {
         if (!historialTableBody) return;
         try {
-            historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando historial de pagos asignados...</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando pagos conciliados...</td></tr>';
             const res = await fetch("/api/pagos-historial");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay pagos asignados en el historial.</td></tr>';
+                    historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos conciliados.</td></tr>';
                     return;
                 }
                 const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                const fmtTasa = (v) => (v === null || v === undefined) ? '-' : Number(v).toFixed(4);
                 historialTableBody.innerHTML = "";
                 items.forEach(item => {
                     const row = document.createElement("tr");
+                    const origenBadge = (item.origen || '').startsWith('Odoo')
+                        ? `<span class="state-badge" style="background:#e0f2fe;color:#0369a1">${item.origen}</span>`
+                        : `<span class="state-badge">${item.origen || 'Sistema'}</span>`;
                     row.innerHTML = `
                         <td><strong>#${item.pago_id}</strong></td>
                         <td>${item.cliente_nombre}</td>
@@ -709,6 +713,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><span class="state-badge">${item.moneda}</span></td>
                         <td><strong>${item.so_id}</strong></td>
                         <td><span class="state-badge">${item.factura_id}</span></td>
+                        <td>${fmtTasa(item.tasa_bcv)}</td>
+                        <td>${fmtTasa(item.tasa_binance)}</td>
+                        <td>${origenBadge}</td>
                         <td>${item.confirmado_por}</td>
                         <td><span class="state-badge cierre">${item.estado}</span></td>
                     `;
@@ -716,7 +723,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            historialTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar el historial.</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Error al cargar el historial.</td></tr>';
             console.error("Error loading historial:", err);
         }
     }

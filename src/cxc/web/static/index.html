@@ -790,8 +790,8 @@
                 <!-- Historial de Pagos Asignados -->
                 <section class="historial-panel card">
                     <div class="panel-header">
-                        <h2>Historial de Pagos Asignados</h2>
-                        <p>Registro completo de cobros ya vinculados a su respectiva Factura en Odoo y Orden de Venta</p>
+                        <h2>Pagos Conciliados</h2>
+                        <p>Todos los pagos ya conciliados -- vinculados manualmente en este sistema o reconciliados directamente en Odoo vía factura -- con sus tasas de referencia aplicadas</p>
                     </div>
 
                     <div class="table-wrapper large-table">
@@ -805,13 +805,16 @@
                                     <th>Moneda</th>
                                     <th>Orden (SO)</th>
                                     <th>Factura Odoo</th>
+                                    <th>Tasa BCV</th>
+                                    <th>Tasa Binance</th>
+                                    <th>Origen</th>
                                     <th>Confirmado Por</th>
                                     <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="historial-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando historial de pagos...</td>
+                                    <td colspan="12" class="table-empty">Cargando pagos conciliados...</td>
                                 </tr>
                             </tbody>
                         </table>

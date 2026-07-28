@@ -435,6 +435,8 @@ async def run_sync_in_background():
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas.")
+                if total_first > 0:
+                    recalculate_all_orders()
                 _first_run = False
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
@@ -443,6 +445,11 @@ async def run_sync_in_background():
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+                    # Sincronización bidireccional: si Odoo reportó cambios
+                    # (ej. un pago editado en monto/fecha/cliente), se
+                    # recalculan motor y reconciliación para reflejarlo sin
+                    # esperar a que un humano vincule algo manualmente.
+                    recalculate_all_orders()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
@@ -1136,6 +1143,48 @@ def recalculate_all(so_id: str):
         print(f"Recálculo de {so_id} completado con éxito.")
     except Exception as e:
         print(f"Error al recalcular {so_id}: {e}", file=sys.stderr)
+
+
+def recalculate_all_orders():
+    """Recalcula el motor de descuentos y la reconciliación para TODAS las
+
+    órdenes. Se dispara tras cada ciclo del sync incremental que detectó
+    cambios (clientes/órdenes/líneas/pagos) -- sincronización "bidireccional":
+    si algo cambia en Odoo (ej. un pago editado en monto/fecha/cliente), el
+    sync ya refresca el espejo cada 5 min, pero sin esto Bandeja/Conciliación
+    solo se refrescaban cuando un humano vinculaba manualmente algo desde la
+    UI. Reutiliza la misma lógica que recalculate_all(so_id), pero para
+    runner.run_all() en vez de una sola orden.
+    """
+    try:
+        print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
+        config = AppConfig.from_env()
+        if os.environ.get("GOOGLE_TOKEN_JSON"):
+            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+        else:
+            gateway = GspreadGateway(
+                config.sheets.spreadsheet_id, config.sheets.service_account_file
+            )
+        repo = SheetsRepository(gateway)
+        execute = _connect(config.odoo)
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
+        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        pricelist_ids = {
+            config.engine.lista_usd: primary_usd_id,
+            config.engine.lista_bcv: primary_ves_id,
+        }
+        resolver = OdooPriceResolver(execute, pricelist_ids)
+        runner = EngineRunner(repo, resolver, config.engine)
+
+        resultados = runner.run_all(date.today())
+
+        facturas = OdooFacturasReader(execute)
+        Reconciler(repo, facturas, config.reconciliation).run()
+        print(f"Recálculo completo: {len(resultados)} órdenes procesadas.")
+    except Exception as e:
+        print(f"Error al recalcular todas las órdenes: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
 
 
 _REPORTE_SALDOS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
@@ -4842,9 +4891,12 @@ async def get_pagos_historial():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        tasas_rows = repo._g.read_rows("SerieTasas")
 
         historial = []
+        vinculados_pago_ids: set[str] = set()
         for v in vincs:
+            vinculados_pago_ids.add(v.pago_id)
             p_data = pagos_map.get(v.pago_id, {})
             cid = p_data.get("cliente_id", "")
             c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
@@ -4864,8 +4916,75 @@ async def get_pagos_historial():
                     "factura_id": factura_id,
                     "confirmado_por": v.confirmado_por or "Sistema",
                     "estado": v.estado.value,
+                    "origen": "Sistema (vinculación manual)",
+                    "tasa_bcv": float(v.tasa_bcv_aplicada) if v.tasa_bcv_aplicada else None,
+                    "tasa_binance": float(v.tasa_binance_aplicada)
+                    if v.tasa_binance_aplicada
+                    else None,
                 }
             )
+
+        # Pagos reconciliados directamente en Odoo (via factura) que NUNCA
+        # pasaron por una Vinculacion de este sistema -- antes invisibles en
+        # esta tabla, aunque ya estaban "conciliados" desde el punto de vista
+        # de Odoo. Best-effort: si Odoo no responde, se muestra solo lo que
+        # ya se tenía localmente.
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                reader = OdooXmlRpcReader(config.odoo, execute)
+                so_names = list(ordenes_map.keys())
+                reconciliados_por_so = reader.pagos_reconciliados_por_orden(so_names)
+                for so_name, pagos_odoo in reconciliados_por_so.items():
+                    o = ordenes_map.get(so_name)
+                    factura_id = o.factura_id if o and o.factura_id else "N/A"
+                    for p in pagos_odoo:
+                        pago_id = str(p.get("id", ""))
+                        if pago_id in vinculados_pago_ids:
+                            continue  # ya vino por la Vinculacion local, no duplicar
+                        partner_raw = p.get("partner_id")
+                        cid = (
+                            str(partner_raw[0])
+                            if isinstance(partner_raw, list | tuple) and partner_raw
+                            else ""
+                        )
+                        c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
+                        fecha_str = str(p.get("date") or "")[:10]
+                        try:
+                            fecha_dt = (
+                                datetime.strptime(fecha_str, "%Y-%m-%d")
+                                if fecha_str
+                                else datetime.now()
+                            )
+                        except ValueError:
+                            fecha_dt = datetime.now()
+                        bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+                        curr_raw = p.get("currency_id")
+                        moneda = (
+                            str(curr_raw[1])
+                            if isinstance(curr_raw, list | tuple) and len(curr_raw) > 1
+                            else "USD"
+                        )
+                        historial.append(
+                            {
+                                "pago_id": pago_id,
+                                "cliente_nombre": c_name,
+                                "fecha_pago": fecha_str,
+                                "monto_aplicado": float(p.get("amount") or 0),
+                                "moneda": moneda,
+                                "so_id": so_name,
+                                "factura_id": factura_id,
+                                "confirmado_por": "Odoo",
+                                "estado": "CONCILIADO",
+                                "origen": "Odoo (automático vía factura)",
+                                "tasa_bcv": float(bcv_rate),
+                                "tasa_binance": float(binance_rate),
+                            }
+                        )
+        except Exception as e_odoo:
+            logger.warning("Error consultando pagos reconciliados en Odoo: %s", e_odoo)
+
         return historial
     except Exception as e:
         traceback.print_exc(file=sys.stderr)

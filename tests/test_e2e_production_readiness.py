@@ -881,3 +881,72 @@ def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
         so_ids = {item["so_id"] for item in data}
         assert "SO_FACT_NOPAGA" in so_ids
         assert "SO_FACT_PAGADA" not in so_ids
+
+
+def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
+    """Tabla de pagos conciliados: debe incluir tanto los vinculados por
+
+    este sistema como los reconciliados directamente en Odoo vía factura,
+    que antes eran invisibles porque get_pagos_historial solo recorría
+    Vinculaciones locales (pagos_reconciliados_por_orden existía en
+    odoo/client.py pero nunca se llamaba desde ningún endpoint).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "10", "nombre": "Cliente Odoo"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_ODOO_REC",
+            cliente_id="10",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("250.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-900",
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "search_read":
+            return [
+                {
+                    "id": 555,
+                    "partner_id": [10, "Cliente Odoo"],
+                    "amount": 250.0,
+                    "currency_id": [2, "VES"],
+                    "journal_id": [1, "Banco"],
+                    "date": "2026-07-05",
+                    "invoice_ids": [900],
+                }
+            ]
+        if model == "account.move" and method == "read":
+            return [
+                {
+                    "id": 900,
+                    "invoice_origin": "SO_ODOO_REC",
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/pagos-historial")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["pago_id"] == "555"
+        assert item["so_id"] == "SO_ODOO_REC"
+        assert item["origen"] == "Odoo (automático vía factura)"
+        assert item["monto_aplicado"] == 250.0
+        assert item["moneda"] == "VES"
