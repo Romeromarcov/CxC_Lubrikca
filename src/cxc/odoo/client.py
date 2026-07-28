@@ -422,7 +422,7 @@ class OdooXmlRpcReader(OdooReader):
             r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
         return [map_pago(r) for r in recs]
 
-    def pagos_reconciliados_por_so(self, so_names: list[str] | None = None) -> dict[str, list[dict]]:
+    def pagos_reconciliados_por_orden(self, so_names: list[str] | None = None) -> dict[str, list[dict]]:  # pragma: no cover - red externa
         """Resuelve la cadena account.payment → invoice_ids → account.move.invoice_origin → sale.order.name.
 
         Retorna un mapa {so_name: [lista de pagos aplicados a sus facturas]}.

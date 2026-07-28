@@ -191,9 +191,9 @@ def test_changed_ordenes_enriquece_todo() -> None:
     assert o.facturada is True
     assert o.factura_id == "3835"
     assert o.lista_precios == "5"
-    # El dominio delta de la primera consulta usa write_date.
+    # El dominio delta de la primera consulta usa write_date con margen de 48h.
     primera = fake.calls[0]
-    assert primera[2][0] == [["write_date", ">", "2026-06-01 00:00:00"]]
+    assert primera[2][0] == [["write_date", ">", "2026-05-30 00:00:00"]]
 
 
 def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
