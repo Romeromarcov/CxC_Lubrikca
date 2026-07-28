@@ -3073,6 +3073,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set = set()
         so_states_map = {}
+        so_pagada_en_odoo: set[str] = set()
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -3112,6 +3113,34 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                         sname = str(os_item.get("name", "")).strip()
                         if sname:
                             so_states_map[sname] = str(os_item.get("state", "")).strip().lower()
+
+                    # SO "pagada" = todas sus out_invoice estan payment_state
+                    # paid/in_payment (misma regla que /api/reporte-saldos y
+                    # /api/auditoria, Tarea 2). Una orden ya facturada sigue
+                    # siendo un destino valido para sugerir un pago mientras
+                    # su factura en Odoo no figure como pagada.
+                    invoices = execute(
+                        "account.move",
+                        "search_read",
+                        [
+                            [
+                                ["invoice_origin", "in", so_names],
+                                ["state", "=", "posted"],
+                                ["move_type", "=", "out_invoice"],
+                            ]
+                        ],
+                        {"fields": ["invoice_origin", "payment_state"]},
+                    )
+                    estados_por_so: dict[str, list[str]] = {}
+                    for inv in invoices:
+                        so = str(inv.get("invoice_origin", "")).strip()
+                        if so:
+                            estados_por_so.setdefault(so, []).append(
+                                str(inv.get("payment_state", ""))
+                            )
+                    for so, estados in estados_por_so.items():
+                        if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                            so_pagada_en_odoo.add(so)
         except Exception as e_odoo:
             logger.warning("Error consultando Odoo en get_conciliaciones_sugerencias: %s", e_odoo)
 
@@ -3156,21 +3185,25 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         for o in ordenes:
             if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
                 continue
-            if not o.facturada:
-                pagado = linked_so.get(o.so_id, Decimal("0"))
-                saldo = o.monto_total - pagado
-                if saldo > Decimal("0.05"):
-                    if o.cliente_id not in open_orders_by_client:
-                        open_orders_by_client[o.cliente_id] = []
-                    open_orders_by_client[o.cliente_id].append(
-                        {
-                            "so_id": o.so_id,
-                            "fecha": o.fecha,
-                            "monto_total": o.monto_total,
-                            "saldo_pendiente": saldo,
-                            "vendedor": o.vendedor_email,
-                        }
-                    )
+            # Destino valido: NO pagada segun el motor (saldo local pendiente)
+            # -- sin facturar o facturada pero con su factura Odoo aun sin
+            # marcar como pagada/en proceso de pago.
+            if o.facturada and o.so_id in so_pagada_en_odoo:
+                continue
+            pagado = linked_so.get(o.so_id, Decimal("0"))
+            saldo = o.monto_total - pagado
+            if saldo > Decimal("0.05"):
+                if o.cliente_id not in open_orders_by_client:
+                    open_orders_by_client[o.cliente_id] = []
+                open_orders_by_client[o.cliente_id].append(
+                    {
+                        "so_id": o.so_id,
+                        "fecha": o.fecha,
+                        "monto_total": o.monto_total,
+                        "saldo_pendiente": saldo,
+                        "vendedor": o.vendedor_email,
+                    }
+                )
 
         for cid in open_orders_by_client:
             open_orders_by_client[cid].sort(key=lambda x: x["fecha"])

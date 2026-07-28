@@ -800,3 +800,84 @@ def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
         assert data["pagos_sin_asignar_usd"] == 300.0
         # VES: 200 USD * 40 = 8000 Bs + 4000 Bs restantes = 12000 Bs.
         assert data["pagos_sin_asignar_ves"] == 12000.0
+
+
+def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
+    """Conciliaciones: una orden ya facturada sigue siendo destino válido de
+
+    sugerencia mientras su factura en Odoo no esté paid/in_payment. Una vez
+    facturada Y pagada en Odoo, ya no debe sugerirse (antes cualquier orden
+    facturada quedaba excluida por completo, sin importar su estado de pago
+    real en Odoo).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_FACT",
+                "cliente_id": "C_FACT",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-10",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_FACT", "nombre": "Cliente Facturado"}]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_FACT_NOPAGA",
+            cliente_id="C_FACT",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+        OrdenVenta(
+            so_id="SO_FACT_PAGADA",
+            cliente_id="C_FACT",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 1),
+            fecha_entrega=date(2026, 6, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return []
+        if model == "sale.order":
+            return [
+                {"name": "SO_FACT_NOPAGA", "state": "sale"},
+                {"name": "SO_FACT_PAGADA", "state": "sale"},
+            ]
+        if model == "account.move":
+            return [
+                {"invoice_origin": "SO_FACT_NOPAGA", "payment_state": "not_paid"},
+                {"invoice_origin": "SO_FACT_PAGADA", "payment_state": "paid"},
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        so_ids = {item["so_id"] for item in data}
+        assert "SO_FACT_NOPAGA" in so_ids
+        assert "SO_FACT_PAGADA" not in so_ids
