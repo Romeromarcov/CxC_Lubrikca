@@ -179,7 +179,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         self._sh = self._gc.open_by_key(spreadsheet_id)
         self._ws_cache = {}
         self._read_cache = {}
-        self._cache_ttl_seconds = 10.0
+        self._cache_ttl_seconds = 120.0
         return self
 
     def invalidate_cache(self, table: str | None = None) -> None:
@@ -228,16 +228,20 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
         now = time.time()
         if table in self._read_cache:
             cached_time, cached_records = self._read_cache[table]
-            if now - cached_time < getattr(self, "_cache_ttl_seconds", 10.0):
+            if now - cached_time < getattr(self, "_cache_ttl_seconds", 120.0):
                 return [dict(r) for r in cached_records]
 
         try:
             records = self._ws(table).get_all_records()
             res = [{k: str(v) for k, v in rec.items()} for rec in records]
+            self._read_cache[table] = (now, res)
+            return [dict(r) for r in res]
         except Exception:
-            res = []
-        self._read_cache[table] = (now, res)
-        return [dict(r) for r in res]
+            # Si ocurre error (como 429 Quota Exceeded de Google), retornar cache previo si existe
+            if table in self._read_cache:
+                _, cached_records = self._read_cache[table]
+                return [dict(r) for r in cached_records]
+            return []
 
     def append_row(self, table: str, row: Mapping[str, str]) -> None:
         self.invalidate_cache(table)

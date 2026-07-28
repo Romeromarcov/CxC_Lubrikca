@@ -265,6 +265,13 @@ class SheetsRepository(Repository):
         row = {k: str(v) if v is not None else "" for k, v in fila.items()}
         self._g.append_row(g.T_BANDEJA_AUDITORIA, row)
 
+    def append_auditoria_rows(self, filas: list[dict]) -> None:
+        """Agrega múltiples filas a la bandeja de auditoría en un solo lote (1 escritura)."""
+        if not filas:
+            return
+        rows = [{k: str(v) if v is not None else "" for k, v in f.items()} for f in filas]
+        self._g.upsert_rows(g.T_BANDEJA_AUDITORIA, "audit_id", rows)
+
     def all_auditoria(self) -> list[dict]:
         """Lee todas las filas de la bandeja de auditoría."""
         return self._g.read_rows(g.T_BANDEJA_AUDITORIA)

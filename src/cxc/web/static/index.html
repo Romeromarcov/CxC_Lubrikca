@@ -494,53 +494,6 @@
                     </div>
                 </section>
 
-                <!-- BANDEJA AUDITORÍA DE DESCUENTOS Y NCs -->
-                <section class="reporte-panel card" id="auditoria-descuentos-panel" style="margin-top: 2rem; border-left: 5px solid #f59e0b;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #b45309; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>⚠️</span> Bandeja de Auditoría: Discrepancias en Descuentos y Notas de Crédito
-                        </h2>
-                        <p style="color: #92400e;">Órdenes donde los descuentos u NCs registrados en Odoo difieren de lo calculado por el motor. El sistema marca — el humano revisa.</p>
-                    </div>
-                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center;">
-                        <select id="audit-tipo-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                            <option value="">Todos los tipos</option>
-                            <option value="descuento_orden">Desc. Orden</option>
-                            <option value="descuento_factura">Desc. Factura</option>
-                            <option value="nota_credito">Nota de Crédito</option>
-                        </select>
-                        <select id="audit-estado-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                            <option value="">Todos los estados</option>
-                            <option value="pendiente">Pendiente</option>
-                            <option value="revisado">Revisado</option>
-                            <option value="aprobado">Aprobado</option>
-                        </select>
-                        <button id="audit-refresh-btn" style="padding:0.4rem 1rem; border-radius:6px; background:#f59e0b; color:#fff; border:none; cursor:pointer; font-size:0.85rem; font-weight:600;">🔄 Actualizar</button>
-                        <span id="audit-count-badge" style="padding:0.3rem 0.75rem; border-radius:999px; background:#fef3c7; color:#b45309; font-size:0.78rem; font-weight:700; display:none;"></span>
-                    </div>
-                    <div class="table-wrapper" style="overflow-x:auto;">
-                        <table class="data-table" style="font-size:0.8rem;">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Tipo Discrepancia</th>
-                                    <th>Motor Calcula ($)</th>
-                                    <th>Odoo Registra ($)</th>
-                                    <th>Diferencia ($)</th>
-                                    <th>Detalle Odoo</th>
-                                    <th>Detalle Motor</th>
-                                    <th>Estado</th>
-                                    <th>Fecha Registro</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="auditoria-descuentos-body">
-                                <tr><td colspan="10" class="table-empty">Cargando bandeja de auditoría...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
                 <!-- TABLA SEGUIMIENTO PRIORITARIO MORA CRÍTICA (+60 Y +90 DÍAS) -->
                 <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #ef4444;">
                     <div class="panel-header" style="margin-bottom: 1rem;">
@@ -851,6 +804,51 @@
                     <div class="kpi-card card">
                         <span class="kpi-label">Monto Discrepancia Pendiente</span>
                         <span class="kpi-value warning" id="audit-kpi-monto-discrepancia">$0.00</span>
+                    </div>
+                <!-- BANDEJA AUDITORÍA DE DESCUENTOS Y NCs -->
+                <section class="auditoria-panel card" id="auditoria-descuentos-panel" style="border-left: 5px solid #f59e0b;">
+                    <div class="panel-header" style="margin-bottom: 1rem;">
+                        <h2 style="color: #b45309; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>⚠️</span> Bandeja de Auditoría: Discrepancias en Descuentos y Notas de Crédito
+                        </h2>
+                        <p style="color: #92400e;">Órdenes donde los descuentos u NCs registrados en Odoo difieren de lo calculatedo por el motor. El sistema marca — el humano revisa.</p>
+                    </div>
+                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center;">
+                        <select id="audit-tipo-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
+                            <option value="">Todos los tipos</option>
+                            <option value="descuento_orden">Desc. Orden</option>
+                            <option value="descuento_factura">Desc. Factura</option>
+                            <option value="nota_credito">Nota de Crédito</option>
+                        </select>
+                        <select id="audit-estado-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
+                            <option value="">Todos los estados</option>
+                            <option value="pendiente">Pendiente</option>
+                            <option value="revisado">Revisado</option>
+                            <option value="aprobado">Aprobado</option>
+                        </select>
+                        <button id="audit-refresh-btn" style="padding:0.4rem 1rem; border-radius:6px; background:#f59e0b; color:#fff; border:none; cursor:pointer; font-size:0.85rem; font-weight:600;">🔄 Actualizar</button>
+                        <span id="audit-count-badge" style="padding:0.3rem 0.75rem; border-radius:999px; background:#fef3c7; color:#b45309; font-size:0.78rem; font-weight:700; display:none;"></span>
+                    </div>
+                    <div class="table-wrapper" style="overflow-x:auto;">
+                        <table class="data-table" style="font-size:0.8rem;">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Tipo Discrepancia</th>
+                                    <th>Motor Calcula ($)</th>
+                                    <th>Odoo Registra ($)</th>
+                                    <th>Diferencia ($)</th>
+                                    <th>Detalle Odoo</th>
+                                    <th>Detalle Motor</th>
+                                    <th>Estado</th>
+                                    <th>Fecha Registro</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="auditoria-descuentos-body">
+                                <tr><td colspan="10" class="table-empty">Cargando bandeja de auditoría...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </section>
 

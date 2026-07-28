@@ -1621,6 +1621,7 @@ async def get_reporte_saldos(refresh: bool = False):
             if str(r.get("timestamp_audit", ""))[:10] == _today_str
         }
 
+        new_audit_rows: list[dict] = []
         for o in ordenes:
             st_check = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st_check in ("cancel", "cancelled", "draft", "sent"):
@@ -1831,29 +1832,26 @@ async def get_reporte_saldos(refresh: bool = False):
                 detalle_motor=f"NCs motor: ${float(motor_ncs_usd):.2f}",
             )
 
-            # Persist to BandejaAuditoria only for real discrepancies & once per day
+            # Collect audit rows in memory (persisted in 1 single batch call outside loop)
             _now_iso = datetime.now().isoformat()
             for _ar in [audit_orden, audit_factura, audit_nc]:
-                if _ar.enviar_a_bandeja and hasattr(repo, "append_auditoria"):
+                if _ar.enviar_a_bandeja:
                     _key = (o.so_id, _ar.tipo.value)
                     if _key not in existing_audit_keys:
-                        try:
-                            repo.append_auditoria({
-                                "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
-                                "so_id": o.so_id,
-                                "tipo_auditoria": _ar.tipo.value,
-                                "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
-                                "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
-                                "diferencia_usd": round(float(_ar.diferencia_usd), 4),
-                                "detalle_odoo": _ar.detalle_odoo,
-                                "detalle_motor": _ar.detalle_motor,
-                                "estado": "pendiente",
-                                "revisado_por": "",
-                                "timestamp_audit": _now_iso,
-                            })
-                            existing_audit_keys.add(_key)
-                        except Exception as e_aud:
-                            logger.warning("Error registrando auditoría %s: %s", _key, e_aud)
+                        new_audit_rows.append({
+                            "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
+                            "so_id": o.so_id,
+                            "tipo_auditoria": _ar.tipo.value,
+                            "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
+                            "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
+                            "diferencia_usd": round(float(_ar.diferencia_usd), 4),
+                            "detalle_odoo": _ar.detalle_odoo,
+                            "detalle_motor": _ar.detalle_motor,
+                            "estado": "pendiente",
+                            "revisado_por": "",
+                            "timestamp_audit": _now_iso,
+                        })
+                        existing_audit_keys.add(_key)
 
             # Build audit summary for the report row
             has_any_discrepancy = any(
@@ -1989,6 +1987,13 @@ async def get_reporte_saldos(refresh: bool = False):
                     "resultado": conc.resultado.value if conc else "pendiente"
                 } if conc else None
             })
+
+        # Single batch write for new audit rows to avoid Google Sheets API rate limits
+        if new_audit_rows and hasattr(repo, "append_auditoria_rows"):
+            try:
+                repo.append_auditoria_rows(new_audit_rows)
+            except Exception as e_aud:
+                logger.warning("Error guardando lote de auditoría: %s", e_aud)
 
         res = {
             "kpis": {

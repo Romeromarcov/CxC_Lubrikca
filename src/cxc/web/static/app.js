@@ -734,7 +734,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (auditKpiConformes) auditKpiConformes.textContent = summary.total_conformes;
                 if (auditKpiDiscrepancias) auditKpiDiscrepancias.textContent = summary.total_discrepancias;
                 if (auditKpiAceptadas) auditKpiAceptadas.textContent = summary.total_aceptadas || 0;
-                if (auditKpiMontoDiscrepancia) auditKpiMontoDiscrepancia.textContent = fmt(summary.monto_discrepancia_total);
+                // Load auditoría de descuentos y NCs table
+                if (typeof loadAuditoriaDescuentos === "function") loadAuditoriaDescuentos();
 
                 // Render Discrepancias Pendientes
                 if (data.discrepancias.length === 0) {
@@ -943,8 +944,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 applyReporteFilters();
                 renderCriticaTable(fullReporteItems);
-                // Load audit panel alongside the report
-                if (typeof loadAuditoriaDescuentos === "function") loadAuditoriaDescuentos();
             }
         } catch (err) {
             reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">Error de red al cargar el reporte.</td></tr>';

@@ -85,3 +85,36 @@ def test_auditar_nota_credito():
     assert res_dif.estado == EstadoAuditoria.DISCREPANCIA
     assert res_dif.enviar_a_bandeja
     assert res_dif.tipo == TipoAuditoria.NOTA_CREDITO
+
+
+def test_sheets_repository_auditoria():
+    from cxc.sheets.gateway import InMemorySheetGateway
+    from cxc.sheets.repository import SheetsRepository
+
+    gw = InMemorySheetGateway()
+    repo = SheetsRepository(gw)
+
+    filas = [
+        {
+            "audit_id": "SO001_descuento_orden_2026-07-28",
+            "so_id": "SO001",
+            "tipo_auditoria": "descuento_orden",
+            "motor_calcula_usd": 15.0,
+            "odoo_registrado_usd": 10.0,
+            "diferencia_usd": 5.0,
+            "detalle_odoo": "Sin desc",
+            "detalle_motor": "Pronto pago 5%",
+            "estado": "pendiente",
+            "revisado_por": "",
+            "timestamp_audit": "2026-07-28T00:00:00",
+        }
+    ]
+    repo.append_auditoria(filas[0])
+    repo.append_auditoria_rows(filas)
+    
+    audits = repo.all_auditoria()
+    assert len(audits) >= 1
+
+    repo.update_auditoria_estado("SO001_descuento_orden_2026-07-28", "aprobado", "admin")
+    audits_after = repo.all_auditoria()
+    assert any(a.get("estado") == "aprobado" for a in audits_after)
