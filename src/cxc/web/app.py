@@ -1520,8 +1520,8 @@ async def get_reporte_saldos(refresh: bool = False):
                 payments_raw = execute(
                     "account.payment",
                     "search_read",
-                    [[["reconciled_invoice_ids", "in", invoice_ids_all], ["state", "=", "posted"]]],
-                    {"fields": ["id", "name", "amount", "currency_id", "date", "reconciled_invoice_ids", "journal_id", "ref"]}
+                    [[["reconciled_invoice_ids", "in", invoice_ids_all], ["state", "in", ["in_process", "paid"]]]],
+                    {"fields": ["id", "name", "amount", "currency_id", "date", "reconciled_invoice_ids", "journal_id"]}
                 )
                 for p in payments_raw:
                     p_amt = Decimal(str(p.get("amount") or "0"))
@@ -2696,7 +2696,14 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     )
                     for op in odoo_pagos:
                         pname = str(op.get("name", "")).strip()
-                        is_rec = bool(op.get("is_reconciled")) or int(op.get("reconciled_invoices_count") or 0) > 0 or str(op.get("state")) != "posted"
+                        # account.payment no tiene estado "posted" (ese es de account.move);
+                        # sus estados confirmados son in_process/paid. Los demás (draft,
+                        # canceled, rejected) no son pagos válidos para sugerir.
+                        is_rec = (
+                            bool(op.get("is_reconciled"))
+                            or int(op.get("reconciled_invoices_count") or 0) > 0
+                            or str(op.get("state")) not in ("in_process", "paid")
+                        )
                         if is_rec and pname:
                             reconciled_pagos_set.add(pname)
 

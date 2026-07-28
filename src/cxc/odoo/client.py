@@ -30,6 +30,11 @@ from ..models import Cliente, LineaOrden, Moneda, OrdenVenta, Pago
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
 
+# account.payment no tiene estado "posted" (ese existe en account.move). Sus
+# estados validos son draft/in_process/paid/canceled/rejected; un pago
+# confirmado/procesado queda en in_process o paid (ver docs/ODOO_MAPEO.md).
+PAGO_ESTADOS_CONFIRMADOS = ["in_process", "paid"]
+
 
 def _m2o_id(value: Any) -> str:
     """Odoo devuelve many2one como ``[id, "nombre"]`` o ``False``."""
@@ -409,7 +414,11 @@ class OdooXmlRpcReader(OdooReader):
 
     # --- Pagos ---------------------------------------------------------------
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
-        domain = self._delta(since) + [["payment_type", "=", "inbound"], ["state", "=", "posted"], ["is_reconciled", "=", False]]
+        domain = self._delta(since) + [
+            ["payment_type", "=", "inbound"],
+            ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+            ["is_reconciled", "=", False],
+        ]
         recs = self._search_read(
             self.MODEL_PAGO,
             domain,
@@ -436,7 +445,7 @@ class OdooXmlRpcReader(OdooReader):
         # 1. Leer pagos reconciliados de Odoo
         pagos = self._search_read(
             self.MODEL_PAGO,
-            [["payment_type", "=", "inbound"], ["state", "=", "posted"], ["is_reconciled", "=", True]],
+            [["payment_type", "=", "inbound"], ["state", "in", PAGO_ESTADOS_CONFIRMADOS], ["is_reconciled", "=", True]],
             ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "invoice_ids"],
         )
         if not pagos:
