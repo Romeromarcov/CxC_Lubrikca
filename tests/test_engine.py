@@ -1109,12 +1109,19 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
         def all_ordenes(self):
             return self._ordenes
 
+        def upsert_bandejas(self, filas):
+            pass
+
+        def update_vinculaciones(self, vincs):
+            pass
+
     repo = DummyRepo()
     runner = EngineRunner(repo, None, None)
 
-    # Override run_orden to count calls
+    # Override _calcular (llamado internamente por run_all) para contar
+    # llamadas sin ejercitar el cálculo completo del motor.
     called = []
-    runner.run_orden = lambda so_id, dt: called.append(so_id)
+    runner._calcular = lambda so_id, dt: (called.append(so_id), None)[1]
 
     runner.run_all(date.today())
     assert "SO_ACTIVE" in called

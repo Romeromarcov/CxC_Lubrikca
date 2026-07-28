@@ -108,6 +108,15 @@ class Repository(ABC):
     def update_vinculacion(self, vinc: Vinculacion) -> None: ...
 
     @abstractmethod
+    def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
+        """Igual que update_vinculacion pero en una sola escritura por lote.
+
+        Usar cuando se actualizan muchas Vinculaciones a la vez (ej. un
+        recálculo completo del motor) para no gastar la cuota de la API de
+        Sheets con N escrituras individuales.
+        """
+
+    @abstractmethod
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]: ...
 
     @abstractmethod
@@ -142,6 +151,10 @@ class Repository(ABC):
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None: ...
 
     @abstractmethod
+    def upsert_bandejas(self, filas: list[BandejaFacturacion]) -> None:
+        """Igual que upsert_bandeja pero en una sola escritura por lote."""
+
+    @abstractmethod
     def get_bandeja(self, so_id: str) -> BandejaFacturacion | None: ...
 
     @abstractmethod
@@ -150,6 +163,10 @@ class Repository(ABC):
     # --- Conciliación --------------------------------------------------------
     @abstractmethod
     def upsert_conciliacion(self, fila: Conciliacion) -> None: ...
+
+    @abstractmethod
+    def upsert_conciliaciones(self, filas: list[Conciliacion]) -> None:
+        """Igual que upsert_conciliacion pero en una sola escritura por lote."""
 
     @abstractmethod
     def all_conciliaciones(self) -> list[Conciliacion]: ...
@@ -256,6 +273,10 @@ class InMemoryRepository(Repository):
     def update_vinculacion(self, vinc: Vinculacion) -> None:
         self._vinculaciones[vinc.vinc_id] = vinc
 
+    def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
+        for v in vincs:
+            self._vinculaciones[v.vinc_id] = v
+
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         return list(self._descuentos)
 
@@ -315,6 +336,10 @@ class InMemoryRepository(Repository):
     def upsert_bandeja(self, fila: BandejaFacturacion) -> None:
         self._bandeja[fila.so_id] = fila
 
+    def upsert_bandejas(self, filas: list[BandejaFacturacion]) -> None:
+        for fila in filas:
+            self._bandeja[fila.so_id] = fila
+
     def get_bandeja(self, so_id: str) -> BandejaFacturacion | None:
         return self._bandeja.get(so_id)
 
@@ -324,6 +349,10 @@ class InMemoryRepository(Repository):
     # --- Conciliación --------------------------------------------------------
     def upsert_conciliacion(self, fila: Conciliacion) -> None:
         self._conciliaciones[fila.so_id] = fila
+
+    def upsert_conciliaciones(self, filas: list[Conciliacion]) -> None:
+        for fila in filas:
+            self._conciliaciones[fila.so_id] = fila
 
     def all_conciliaciones(self) -> list[Conciliacion]:
         return list(self._conciliaciones.values())

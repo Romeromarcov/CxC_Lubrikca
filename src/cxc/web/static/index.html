@@ -303,8 +303,8 @@
                         <button id="dashboard-filter-clear" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Limpiar Filtros</button>
                     </div>
 
-                    <!-- Acumulados: Hoy / Mes / Trimestre / Año -->
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                    <!-- Acumulados: Ventas (Hoy / Mes / Trimestre / Año) -->
+                    <div class="dashboard-kpi-row" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                         <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas de Hoy</div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-hoy-usd">$0.00</strong></div>
@@ -325,21 +325,33 @@
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-anio-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-anio-litros">0 L</strong></div>
                         </div>
+                    </div>
+
+                    <!-- Acumulados: Cobranza (Hoy / Mes / Trimestre / Año) -- alineada con Ventas -->
+                    <div class="dashboard-kpi-row" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza de Hoy</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-hoy-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-hoy-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-hoy-ves">Bs. 0,00 ($0.00)</strong></div>
+                            <div id="dash-cobranza-hoy-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Mes</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-mes-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-mes-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-mes-ves">Bs. 0,00 ($0.00)</strong></div>
+                            <div id="dash-cobranza-mes-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Trimestre</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-trimestre-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-trimestre-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-trimestre-ves">Bs. 0,00 ($0.00)</strong></div>
+                            <div id="dash-cobranza-trimestre-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Año</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Tasa BCV:</span> <strong id="dash-cobranza-anio-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-anio-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-anio-ves">Bs. 0,00 ($0.00)</strong></div>
+                            <div id="dash-cobranza-anio-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                     </div>
 

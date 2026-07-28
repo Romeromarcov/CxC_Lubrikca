@@ -24,6 +24,22 @@ from . import builders as b
 
 
 # --- Round-trip de serialización por tabla ----------------------------------
+def test_p_dec_tolera_valores_invalidos() -> None:
+    """Bug de producción: una celda "descuento" con un valor no numérico
+
+    (vacía, texto, error de fórmula) hacía crashear con 500 TODO
+    /api/reporte-saldos vía linea_from_row -> p_dec -> Decimal(s).
+    p_dec ahora degrada a 0 en vez de propagar la excepción.
+    """
+    assert serde.p_dec("no es un número") == Decimal("0")
+    assert serde.p_dec("#REF!") == Decimal("0")
+    assert serde.p_dec("") == Decimal("0")
+    assert serde.p_dec("12.5") == Decimal("12.5")
+    assert serde.p_pct("no es un número") == Decimal("0")
+    assert serde.p_optdec("no es un número") == Decimal("0")
+    assert serde.p_optdec("") is None
+
+
 def test_roundtrip_orden_con_opcionales() -> None:
     o = b.orden("SO9", fecha_entrega=None, primera=True)
     o.factura_id = "INV1"
@@ -283,6 +299,57 @@ def test_bandeja_y_conciliacion_persisten() -> None:
         )
     )
     assert len(repo.all_conciliaciones()) == 1
+
+
+def test_bandeja_conciliacion_vinculacion_batch_persisten() -> None:
+    """Escritura por lote (upsert_bandejas/upsert_conciliaciones/
+
+    update_vinculaciones) -- agregada para que EngineRunner.run_all() y
+    Reconciler.run() no escriban a Sheets fila por fila (causaba 429 en
+    producción con cientos de órdenes).
+    """
+    repo, _ = _repo()
+    repo.upsert_bandejas(
+        [
+            BandejaFacturacion(
+                so_id="SOB1",
+                lista_aplicada="USD",
+                precio_base_calculado=Decimal("100"),
+                total_motor=Decimal("94"),
+            ),
+            BandejaFacturacion(
+                so_id="SOB2",
+                lista_aplicada="USD",
+                precio_base_calculado=Decimal("200"),
+                total_motor=Decimal("188"),
+            ),
+        ]
+    )
+    assert len(repo.all_bandeja()) == 2
+
+    repo.upsert_conciliaciones(
+        [
+            Conciliacion(
+                so_id="SOB1",
+                total_motor=Decimal("94"),
+                monto_odoo=Decimal("94"),
+                ncs_odoo=Decimal("0"),
+                diferencia=Decimal("0"),
+                resultado=ResultadoConciliacion.VERDE,
+            ),
+        ]
+    )
+    assert len(repo.all_conciliaciones()) == 1
+
+    v = b.vinculacion("V1", so_id="SOB1")
+    repo.update_vinculaciones([v])
+    assert repo.all_vinculaciones()[0].vinc_id == "V1"
+
+    # Listas vacías no deben tronar (run_all/Reconciler pueden no tener nada
+    # que persistir si todas las órdenes fueron filtradas).
+    repo.upsert_bandejas([])
+    repo.upsert_conciliaciones([])
+    repo.update_vinculaciones([])
 
 
 def test_config_y_vinculaciones_se_leen() -> None:
