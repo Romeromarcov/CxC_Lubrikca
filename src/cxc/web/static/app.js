@@ -1164,6 +1164,20 @@ document.addEventListener("DOMContentLoaded", () => {
                 `;
             }
 
+            // Venta bruta teórica (precio de lista correcto, sin descuentos)
+            // vs monto real de la orden -- si difieren, es venta perdida (o
+            // ganada) por un precio de línea distinto al de lista, separado
+            // de los descuentos válidos que ya se muestran arriba.
+            const difPrecio = item.diferencia_precio_lista || 0;
+            if (Math.abs(difPrecio) > 0.05) {
+                const perdida = difPrecio > 0;
+                descuentosHtml += `
+                    <div style="font-size:0.72rem; margin-top:4px; color:${perdida ? '#b91c1c' : '#0369a1'};" title="Venta bruta teórica (precio de lista, sin descuentos): ${fmt(item.venta_bruta_teorica)}">
+                        ${perdida ? '⚠️ Vendido bajo lista' : 'Vendido sobre lista'}: <strong>${fmt(Math.abs(difPrecio))}</strong>
+                    </div>
+                `;
+            }
+
             const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
             const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
 
@@ -1254,6 +1268,20 @@ document.addEventListener("DOMContentLoaded", () => {
                         <div style="font-size:0.72rem; color:#475569; margin-top:2px; line-height:1.3">
                             ${itemsList}
                         </div>
+                    </div>
+                `;
+            }
+
+            // Venta bruta teórica (precio de lista correcto, sin descuentos)
+            // vs monto real de la orden -- si difieren, es venta perdida (o
+            // ganada) por un precio de línea distinto al de lista, separado
+            // de los descuentos válidos que ya se muestran arriba.
+            const difPrecio = item.diferencia_precio_lista || 0;
+            if (Math.abs(difPrecio) > 0.05) {
+                const perdida = difPrecio > 0;
+                descuentosHtml += `
+                    <div style="font-size:0.72rem; margin-top:4px; color:${perdida ? '#b91c1c' : '#0369a1'};" title="Venta bruta teórica (precio de lista, sin descuentos): ${fmt(item.venta_bruta_teorica)}">
+                        ${perdida ? '⚠️ Vendido bajo lista' : 'Vendido sobre lista'}: <strong>${fmt(Math.abs(difPrecio))}</strong>
                     </div>
                 `;
             }

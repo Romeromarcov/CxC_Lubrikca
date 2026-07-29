@@ -71,17 +71,29 @@ def parse_decimal_safe(val) -> Decimal:
 # Estados de sale.order que NUNCA deben entrar a un reporte, bandeja o
 # cálculo de cobranza: Cancelada (cancel), Cotización en cualquiera de sus
 # dos sub-estados Odoo (draft/sent). Regla global — ver auditoría.
+#
+# Excepción de negocio: una orden CANCELADA cuya mercancía ya salió de
+# almacén (ALM/OUT, stock.picking saliente en estado "done") y el cliente
+# no la devolvió sigue siendo una venta real -- Odoo permite cancelar una SO
+# después del despacho y eso no deshace la entrega. Ver
+# get_live_delivered_not_returned() / parámetro entrega_valida.
 ESTADOS_ORDEN_EXCLUIDOS = frozenset({"cancel", "cancelled", "draft", "sent"})
 
 
-def orden_excluida(o: Any, live_state: str | None = None) -> bool:
+def orden_excluida(o: Any, live_state: str | None = None, entrega_valida: bool = False) -> bool:
     """True si la orden debe excluirse de cualquier reporte/bandeja/cálculo.
 
     Usa el estado en vivo de Odoo si se provee (más fresco que el mirror);
-    si no, cae al `estado_orden` ya sincronizado en la orden.
+    si no, cae al `estado_orden` ya sincronizado en la orden. `entrega_valida`
+    es la excepción de negocio: una orden cancelada con entrega ALM/OUT sin
+    devolver no se excluye (ver comentario de ESTADOS_ORDEN_EXCLUIDOS).
     """
-    st = live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or "")
-    return st.strip().lower() in ESTADOS_ORDEN_EXCLUIDOS
+    st = (
+        live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or "")
+    ).strip().lower()
+    if st not in ESTADOS_ORDEN_EXCLUIDOS:
+        return False
+    return not (st in ("cancel", "cancelled") and entrega_valida)
 
 
 def get_live_so_states(so_names: list[str]) -> dict[str, str]:
@@ -112,6 +124,64 @@ def get_live_so_states(so_names: list[str]) -> dict[str, str]:
     except Exception as e:
         logger.warning("Error consultando estado en vivo de órdenes en Odoo: %s", e)
         return {}
+
+
+def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:
+    """SO names con entrega ALM/OUT (stock.picking saliente, estado "done") y SIN devolución.
+
+    Es la excepción de negocio de ESTADOS_ORDEN_EXCLUIDOS: una orden CANCELADA
+    en Odoo después de que la mercancía ya salió de almacén sigue siendo una
+    venta real -- cancelar la SO no deshace el despacho. Acepta un `execute`
+    ya conectado para reusar la conexión del llamador; si no se provee, abre
+    una propia. Best-effort: ante cualquier error devuelve vacío.
+    """
+    if not so_names:
+        return set()
+    if execute is None:
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+        except Exception as e:
+            logger.warning("Error conectando a Odoo en get_live_delivered_not_returned: %s", e)
+            return set()
+    if not execute:
+        return set()
+    try:
+        so_records = execute(
+            "sale.order",
+            "search_read",
+            [[["name", "in", so_names]]],
+            {"fields": ["name", "picking_ids"]},
+        )
+        picking_to_so: dict[int, str] = {}
+        for s in so_records:
+            sname = str(s.get("name", "")).strip()
+            p_ids = s.get("picking_ids") or []
+            if sname and isinstance(p_ids, list | tuple):
+                for pid in p_ids:
+                    picking_to_so[pid] = sname
+        if not picking_to_so:
+            return set()
+        pickings = execute(
+            "stock.picking",
+            "search_read",
+            [[["id", "in", list(picking_to_so.keys())], ["state", "=", "done"]]],
+            {"fields": ["id", "picking_type_code", "return_id"]},
+        )
+        delivered: set[str] = set()
+        returned: set[str] = set()
+        for p in pickings:
+            so_name = picking_to_so.get(p["id"])
+            if not so_name:
+                continue
+            if bool(p.get("return_id")) or str(p.get("picking_type_code")) == "incoming":
+                returned.add(so_name)
+            elif str(p.get("picking_type_code")) == "outgoing":
+                delivered.add(so_name)
+        return delivered - returned
+    except Exception as e:
+        logger.warning("Error consultando entregas en get_live_delivered_not_returned: %s", e)
+        return set()
 
 
 # Models for POST requests
@@ -917,11 +987,18 @@ async def get_resumen():
         repo = get_repo()
         # 1. Total por cobrar (Orders not invoiced)
         ordenes = repo.all_ordenes()
-        so_states_map = get_live_so_states([o.so_id for o in ordenes])
+        so_names_r = [o.so_id for o in ordenes]
+        so_states_map = get_live_so_states(so_names_r)
+        entrega_valida_set = get_live_delivered_not_returned(so_names_r)
         total_por_cobrar = sum(
             o.monto_total
             for o in ordenes
-            if not o.facturada and not orden_excluida(o, live_state=so_states_map.get(o.so_id))
+            if not o.facturada
+            and not orden_excluida(
+                o,
+                live_state=so_states_map.get(o.so_id),
+                entrega_valida=o.so_id in entrega_valida_set,
+            )
         )
 
         # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
@@ -2086,7 +2163,8 @@ async def get_reporte_saldos(refresh: bool = False):
         new_audit_rows: list[dict] = []
         for o in ordenes:
             live_state = so_odoo_data.get(o.so_id, {}).get("state")
-            if orden_excluida(o, live_state=live_state):
+            entrega_valida = o.so_id in picking_delivery_map and o.so_id not in picking_return_set
+            if orden_excluida(o, live_state=live_state, entrega_valida=entrega_valida):
                 continue
 
             # Tarea 2: orden facturada cuya factura Odoo ya esta 'Pagada' o
@@ -2330,6 +2408,15 @@ async def get_reporte_saldos(refresh: bool = False):
                 0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd
             )
 
+            # Venta bruta teórica: lo que la orden DEBIÓ sumar con el precio
+            # correcto de lista y SIN ningún descuento (b.precio_base_calculado,
+            # ignora el precio que realmente quedó en la línea de Odoo). Sirve
+            # para separar "cuánto perdí por vender a un precio equivocado" de
+            # "cuánto di en descuentos válidos" -- monto_orig ya trae ambos
+            # efectos mezclados.
+            venta_bruta_teorica = float(b.precio_base_calculado) if b else monto_orig
+            diferencia_precio_lista = round(venta_bruta_teorica - monto_orig, 2)
+
             # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
             # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
             # se oculta del reporte general y pasa a la tabla de "pendientes
@@ -2519,6 +2606,8 @@ async def get_reporte_saldos(refresh: bool = False):
                     "saldo_deudor_lista_usd": saldo_deudor_lista_usd,
                     "total_con_descuentos": total_con_descuentos,
                     "total_descuentos_monto": total_descuentos_monto,
+                    "venta_bruta_teorica": venta_bruta_teorica,
+                    "diferencia_precio_lista": diferencia_precio_lista,
                     "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
                     "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
                     "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
@@ -3189,6 +3278,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         reconciled_pagos_set = set()
         so_states_map = {}
         so_pagada_en_odoo: set[str] = set()
+        entrega_valida_set: set[str] = set()
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -3267,6 +3357,8 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     for so, estados in estados_por_so.items():
                         if estados and all(ps in ("paid", "in_payment") for ps in estados):
                             so_pagada_en_odoo.add(so)
+
+                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
         except Exception as e_odoo:
             logger.warning("Error consultando Odoo en get_conciliaciones_sugerencias: %s", e_odoo)
 
@@ -3309,7 +3401,11 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
         open_orders_by_client = {}
         for o in ordenes:
-            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
+            if orden_excluida(
+                o,
+                live_state=so_states_map.get(o.so_id),
+                entrega_valida=o.so_id in entrega_valida_set,
+            ):
                 continue
             # Destino valido: NO pagada segun el motor (saldo local pendiente)
             # -- sin facturar o facturada pero con su factura Odoo aun sin
@@ -3398,6 +3494,7 @@ async def get_bandeja_facturacion():
 
         # Batch query live Odoo state
         so_odoo_states = {}
+        entrega_valida_set: set[str] = set()
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -3414,6 +3511,7 @@ async def get_bandeja_facturacion():
                         sname = str(s.get("name", "")).strip()
                         if sname:
                             so_odoo_states[sname] = str(s.get("state", "")).strip().lower()
+                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
         except Exception as e_odoo:
             logger.warning("Error consultando Odoo en get_bandeja: %s", e_odoo)
 
@@ -3431,7 +3529,11 @@ async def get_bandeja_facturacion():
         iva_pendiente_agentes = []
 
         for o in ordenes:
-            if orden_excluida(o, live_state=so_odoo_states.get(o.so_id)):
+            if orden_excluida(
+                o,
+                live_state=so_odoo_states.get(o.so_id),
+                entrega_valida=o.so_id in entrega_valida_set,
+            ):
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id), {})
@@ -5365,6 +5467,7 @@ async def get_auditoria():
         # etc.). Ver get_reporte_diario / get_resumen / get_reporte_saldos
         # para el mismo fix.
         so_states_map: dict[str, str] = {}
+        entrega_valida_set: set[str] = set()
         if execute and so_ids:
             try:
                 so_recs_live = execute(
@@ -5377,15 +5480,71 @@ async def get_auditoria():
                     sname = str(s.get("name", "")).strip()
                     if sname:
                         so_states_map[sname] = str(s.get("state", "")).strip().lower()
+                entrega_valida_set = get_live_delivered_not_returned(so_ids, execute=execute)
             except Exception as e:
                 logger.warning("Error consultando estado en vivo en get_auditoria: %s", e)
+
+        # Productos realmente despachados (stock.move.line de las entregas
+        # ALM/OUT en estado "done") por orden -- para el Check 5 más abajo:
+        # detectar si se entregó un producto distinto o adicional al pedido.
+        delivered_products_by_so: dict[str, set[int]] = {}
+        if execute and so_ids:
+            try:
+                so_pick_recs = execute(
+                    "sale.order",
+                    "search_read",
+                    [[["name", "in", so_ids]]],
+                    {"fields": ["name", "picking_ids"]},
+                )
+                picking_to_so: dict[int, str] = {}
+                for s in so_pick_recs:
+                    sname = str(s.get("name", "")).strip()
+                    for pid in s.get("picking_ids") or []:
+                        picking_to_so[pid] = sname
+                if picking_to_so:
+                    done_out_pickings = execute(
+                        "stock.picking",
+                        "search_read",
+                        [
+                            [
+                                ["id", "in", list(picking_to_so.keys())],
+                                ["state", "=", "done"],
+                                ["picking_type_code", "=", "outgoing"],
+                            ]
+                        ],
+                        {"fields": ["id"]},
+                    )
+                    done_ids = [p["id"] for p in done_out_pickings]
+                    if done_ids:
+                        move_lines = execute(
+                            "stock.move.line",
+                            "search_read",
+                            [[["picking_id", "in", done_ids]]],
+                            {"fields": ["picking_id", "product_id"]},
+                        )
+                        for ml in move_lines:
+                            pid_info = ml.get("picking_id")
+                            p_id = pid_info[0] if isinstance(pid_info, list | tuple) else None
+                            so_name = picking_to_so.get(p_id) if p_id else None
+                            prod_info = ml.get("product_id")
+                            prod_id = (
+                                prod_info[0] if isinstance(prod_info, list | tuple) else None
+                            )
+                            if so_name and prod_id:
+                                delivered_products_by_so.setdefault(so_name, set()).add(prod_id)
+            except Exception as e_ml:
+                logger.warning("Error consultando productos entregados en get_auditoria: %s", e_ml)
 
         operaciones_conformes = []
         raw_discrepancias = []
         discrepancias_facturas_odoo = []
 
         for o in ordenes:
-            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
+            if orden_excluida(
+                o,
+                live_state=so_states_map.get(o.so_id),
+                entrega_valida=o.so_id in entrega_valida_set,
+            ):
                 continue
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             b = bandeja_map.get(o.so_id)
@@ -5568,6 +5727,38 @@ async def get_auditoria():
                                 if saldo_factura_odoo > saldo_cxc
                                 else "Diferencia por retenciones o ajustes en factura Odoo"
                             ),
+                        }
+                    )
+
+            # Check 5: producto entregado (ALM/OUT) que no estaba en la orden
+            # -- el cliente recibió algo distinto o adicional a lo pedido.
+            delivered_set = delivered_products_by_so.get(o.so_id)
+            if delivered_set:
+                expected_set: set[int] = set()
+                for ln in so_lines:
+                    with contextlib.suppress(Exception):
+                        pid = int(ln.get("producto") or 0)
+                        if pid:
+                            expected_set.add(pid)
+                extra_products = delivered_set - expected_set
+                if extra_products:
+                    has_discrepancy = True
+                    extra_ids = ", ".join(str(pid) for pid in sorted(extra_products))
+                    raw_discrepancias.append(
+                        {
+                            "so_id": o.so_id,
+                            "factura_id": o.factura_id or "N/A",
+                            "cliente_nombre": c_name,
+                            "vendedor": o.vendedor_email or "N/A",
+                            "tipo": "Producto Entregado No Coincide con la Orden",
+                            "detalle": (
+                                f"Entrega ALM/OUT incluye producto(s) [Odoo ID: {extra_ids}] "
+                                "que no están en las líneas de la orden"
+                            ),
+                            "esperado": 0.0,
+                            "actual": 0.0,
+                            "diferencia_monto": 0.0,
+                            "diferencia_porcentaje": 0.0,
                         }
                     )
 
@@ -5827,6 +6018,7 @@ async def get_reporte_diario(
         prod_litros_map = {}
         journal_name_map: dict[int, str] = {}
         so_states_map: dict[str, str] = {}
+        entrega_valida_set: set[str] = set()
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -5865,6 +6057,7 @@ async def get_reporte_diario(
                         sname = str(s.get("name", "")).strip()
                         if sname:
                             so_states_map[sname] = str(s.get("state", "")).strip().lower()
+                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
         except Exception as e_p:
             logger.warning("Error leyendo catálogos de Odoo (litros/métodos de pago): %s", e_p)
 
@@ -5873,7 +6066,11 @@ async def get_reporte_diario(
         # fallback al espejo local), y filtradas por vendedor si se pidió.
         ordenes_validas = {}
         for o in ordenes:
-            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
+            if orden_excluida(
+                o,
+                live_state=so_states_map.get(o.so_id),
+                entrega_valida=o.so_id in entrega_valida_set,
+            ):
                 continue
             if vendedor_f and vendedor_f != str(o.vendedor_email or "").strip().lower():
                 continue
@@ -6054,7 +6251,16 @@ async def get_reporte_diario(
         }
 
         vendedores = sorted(
-            {str(o.vendedor_email) for o in ordenes if o.vendedor_email and not orden_excluida(o)}
+            {
+                str(o.vendedor_email)
+                for o in ordenes
+                if o.vendedor_email
+                and not orden_excluida(
+                    o,
+                    live_state=so_states_map.get(o.so_id),
+                    entrega_valida=o.so_id in entrega_valida_set,
+                )
+            }
         )
 
         return {

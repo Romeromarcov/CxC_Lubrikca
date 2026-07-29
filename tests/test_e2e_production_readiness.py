@@ -1227,3 +1227,102 @@ def test_e2e_21_conciliaciones_sugerencias_filtra_pagos_ya_reconciliados_en_odoo
         assert "111" not in pagos_sugeridos
         # El pago 222 sigue sin conciliar -- sí debe aparecer.
         assert "222" in pagos_sugeridos
+
+
+def test_e2e_22_orden_excluida_excepcion_solo_aplica_a_cancel_con_entrega():
+    """orden_excluida(): la excepción de negocio (entrega_valida) solo debe
+
+    salvar órdenes CANCELADAS con mercancía despachada y no devuelta -- una
+    cotización (draft/sent) nunca es una venta real, así que la excepción no
+    le aplica aunque tenga un "picking" asociado (Odoo lo bloquearía, pero
+    la función no debe asumirlo).
+    """
+    from cxc.web.app import orden_excluida
+
+    o_cancel = OrdenVenta(
+        so_id="X1",
+        cliente_id="C",
+        vendedor_email="v",
+        fecha=date(2026, 7, 1),
+        fecha_entrega=None,
+        monto_total=Decimal("1"),
+        lista_precios="4",
+        es_primera_compra=False,
+        estado_orden="cancel",
+    )
+    o_draft = OrdenVenta(
+        so_id="X2",
+        cliente_id="C",
+        vendedor_email="v",
+        fecha=date(2026, 7, 1),
+        fecha_entrega=None,
+        monto_total=Decimal("1"),
+        lista_precios="4",
+        es_primera_compra=False,
+        estado_orden="draft",
+    )
+    # Cancelada + entrega válida (ALM/OUT sin devolución) -> excepción de negocio, NO se excluye.
+    assert orden_excluida(o_cancel, entrega_valida=True) is False
+    # Cancelada sin entrega -> comportamiento normal, se excluye.
+    assert orden_excluida(o_cancel, entrega_valida=False) is True
+    # Cotización (draft) nunca se salva por la excepción -- solo aplica a cancel.
+    assert orden_excluida(o_draft, entrega_valida=True) is True
+
+
+def test_e2e_23_regla_global_excepcion_cancelada_con_entrega_no_devuelta():
+    """Excepción de negocio end-to-end: una orden CANCELADA en Odoo cuya
+
+    mercancía ya salió de almacén (ALM/OUT, stock.picking saliente "done")
+    y no fue devuelta sigue siendo una venta real -- Odoo permite cancelar
+    una SO después del despacho sin deshacer la entrega -- y debe seguir
+    contando en /api/resumen pese a estado_orden="cancel" en el espejo local.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_CANCEL_ENTREGADA",
+            cliente_id="CLI_23",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("777.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="cancel",
+        ),
+        OrdenVenta(
+            so_id="SO_CANCEL_SIN_ENTREGA",
+            cliente_id="CLI_23",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 2),
+            fecha_entrega=None,
+            monto_total=Decimal("300.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="cancel",
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_CANCEL_ENTREGADA", "state": "cancel", "picking_ids": [501]},
+                {"name": "SO_CANCEL_SIN_ENTREGA", "state": "cancel", "picking_ids": []},
+            ]
+        if model == "stock.picking":
+            return [{"id": 501, "picking_type_code": "outgoing", "return_id": False}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        # SO_CANCEL_ENTREGADA tiene un picking de salida "done" sin devolución -> cuenta.
+        # SO_CANCEL_SIN_ENTREGA no tiene picking -> sigue excluida como antes.
+        assert res.json()["total_por_cobrar_usd"] == 777.0
