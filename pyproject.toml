@@ -35,7 +35,8 @@ line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
 # Carpetas de soporte/análisis ajenas al paquete (no son el deliverable).
-extend-exclude = ["auditoria_soporte", "Info_Odoo", "tools", "scratch"]
+# alembic/versions: migraciones autogeneradas, no se editan a mano.
+extend-exclude = ["auditoria_soporte", "Info_Odoo", "tools", "scratch", "alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W", "C4", "SIM"]
