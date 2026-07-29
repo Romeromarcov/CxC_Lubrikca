@@ -1369,6 +1369,18 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
             estado_orden="sale",
             facturada=True,
         ),
+        OrdenVenta(
+            so_id="SO_V3",
+            cliente_id="CLI_V",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 3),
+            fecha_entrega=None,
+            monto_total=Decimal("150.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
     ]
     mock_repo.all_bandeja.return_value = [
         BandejaFacturacion(
@@ -1382,6 +1394,12 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
             lista_aplicada="4",
             precio_base_calculado=Decimal("200.00"),
             total_motor=Decimal("180.00"),
+        ),
+        BandejaFacturacion(
+            so_id="SO_V3",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("140.00"),
+            total_motor=Decimal("130.00"),
         ),
     ]
 
@@ -1398,6 +1416,7 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
             return [
                 {"name": "SO_V1", "state": "sale", "amount_untaxed": 100.0},
                 {"name": "SO_V2", "state": "sale", "amount_untaxed": 200.0},
+                {"name": "SO_V3", "state": "sale", "amount_untaxed": 140.0},
             ]
         if model == "account.move":
             return [
@@ -1446,6 +1465,17 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
         assert v2["total_facturado_neto"] == 162.40
         assert abs(v2["venta_neta_teorica_impuestos"] - 208.8) < 0.01
         assert v2["alerta"] is True
+
+        # SO_V3: sin factura -- "diferencia" NO debe ser toda la venta bruta
+        # teórica (facturado neto=0 sería una falsa alarma), sino la venta
+        # neta teórica + impuestos contra el neto real de la propia orden en
+        # Odoo (150.80 - 150.00 = 0.80). Sin factura, tampoco hay alerta.
+        v3 = by_so["SO_V3"]
+        assert v3["total_facturado_neto"] == 0.0
+        assert v3["venta_neta_real"] == 150.0
+        assert abs(v3["venta_neta_teorica_impuestos"] - 150.8) < 0.01
+        assert abs(v3["diferencia"] - 0.8) < 0.01
+        assert v3["alerta"] is False
 
         assert data["kpis"]["total_alertas"] == 1
         assert data["kpis"]["iva_rate"] == 0.16
