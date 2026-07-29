@@ -661,7 +661,7 @@
                             <h2 style="color: #1d4ed8; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
                                 <span>⚡</span> Pagos Pendientes por Asociar
                             </h2>
-                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Todos los pagos con saldo sin conciliar (excluye los ya reconciliados en Odoo). La orden sugerida usa FIFO por cliente -- aprueba en lote, individualmente, o vincula manualmente a otra orden.</p>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Todos los pagos con saldo sin conciliar (excluye los ya reconciliados en Odoo). La orden sugerida usa FIFO por cliente -- aprueba en lote, individualmente, o vincula manualmente a otra orden. Un mismo pago puede repartirse en varias filas si cubre varias órdenes (no es un duplicado). Para pagos en VES se muestra el equivalente a tasa BCV y Binance; el selector de hora bajo el residual previsualiza la tasa a otro momento del día.</p>
                         </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
                             <span id="badge-sugerencias-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px;">0 Pagos</span>
@@ -680,8 +680,8 @@
                                     <th>Pago ID</th>
                                     <th>Fecha Pago</th>
                                     <th>Cliente</th>
-                                    <th title="Monto original del pago recibido, en su moneda y su equivalente USD (tasa BCV del día)">Monto Pago</th>
-                                    <th title="Saldo del pago aún sin conciliar (USD) -- disminuye con cada vinculación aplicada">Residual Pago ($)</th>
+                                    <th title="Monto original del pago recibido. Si es en VES, se muestra el equivalente a tasa BCV y a tasa Binance del día (mediodía por defecto, ajustable con el selector de hora)">Monto Pago</th>
+                                    <th title="Saldo del pago aún sin conciliar, a tasa BCV y Binance -- disminuye con cada vinculación aplicada">Residual Pago ($)</th>
                                     <th>Orden Sugerida (FIFO)</th>
                                     <th>Fecha Orden</th>
                                     <th>Saldo Orden ($)</th>

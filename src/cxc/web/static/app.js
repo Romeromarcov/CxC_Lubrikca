@@ -3365,6 +3365,38 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
     let currentSugerenciasList = [];
 
+    // Vista previa (solo en pantalla): recalcula BCV/Binance de un pago VES
+    // a otra hora del mismo día -- la tasa varía por hora. No cambia lo que
+    // se aplicaría al vincular (eso usa la tasa de mediodía calculada en el
+    // servidor); para aplicar a una tasa distinta, usar "Vincular
+    // manualmente", que sí permite ajustar la hora antes de confirmar.
+    async function previsualizarHoraPago(idx, hora) {
+        const item = currentSugerenciasList[idx];
+        if (!item || item.moneda_pago !== "VES" || !hora) return;
+        try {
+            const res = await fetch(`/api/config/tasa-referencia?fecha=${item.pago_fecha}&hora=${hora}`);
+            if (!res.ok) return;
+            const { tasa_bcv, tasa_binance } = await res.json();
+            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+
+            const montoBcv = item.monto_pago_original / tasa_bcv;
+            const montoBinance = item.monto_pago_original / tasa_binance;
+            const residualBcv = item.saldo_pago_original / tasa_bcv;
+            const residualBinance = item.saldo_pago_original / tasa_binance;
+
+            const bcvEl = document.querySelector(`.ves-bcv-eq[data-idx="${idx}"]`);
+            const binanceEl = document.querySelector(`.ves-binance-eq[data-idx="${idx}"]`);
+            const resBcvEl = document.querySelector(`.ves-residual-bcv[data-idx="${idx}"]`);
+            const resBinanceEl = document.querySelector(`.ves-residual-binance[data-idx="${idx}"]`);
+            if (bcvEl) bcvEl.textContent = `BCV: ~${fmt(montoBcv)}`;
+            if (binanceEl) binanceEl.textContent = `Binance: ~${fmt(montoBinance)}`;
+            if (resBcvEl) resBcvEl.textContent = fmt(residualBcv);
+            if (resBinanceEl) resBinanceEl.textContent = `Binance: ~${fmt(residualBinance)}`;
+        } catch (err) {
+            console.error("Error al previsualizar tasa por hora:", err);
+        }
+    }
+
     window.loadSugerenciasConciliacion = async function() {
         const tbody = document.getElementById("sugerencias-table-body");
         const countBadge = document.getElementById("badge-sugerencias-count");
@@ -3391,11 +3423,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
 
+            // Cuenta cuántas filas comparte cada pago_id -- un pago grande
+            // puede cubrir varias órdenes (FIFO) y aparecer varias veces;
+            // sin esta marca visual parece un duplicado en vez de un reparto.
+            const pagoCounts = {};
+            data.forEach(it => { pagoCounts[it.pago_id] = (pagoCounts[it.pago_id] || 0) + 1; });
+            const pagoSeen = {};
+
             tbody.innerHTML = data.map((item, idx) => {
                 const tieneSugerencia = !!item.so_id;
+                const totalFilasPago = pagoCounts[item.pago_id];
+                pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
+                const pagoIdCell = totalFilasPago > 1
+                    ? `<strong>${item.pago_id}</strong><br><small style="color:#64748b; font-weight:normal;" title="Este pago cubre ${totalFilasPago} órdenes distintas -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${totalFilasPago}</small>`
+                    : `<strong>${item.pago_id}</strong>`;
                 const montoPagoCell = item.moneda_pago === "VES"
-                    ? `${fmt(item.monto_pago)} <span style="font-size:0.72rem; color:#64748b; display:block;">Bs. ${item.monto_pago_original.toLocaleString('es-VE', { minimumFractionDigits: 2 })}</span>`
+                    ? `Bs. ${item.monto_pago_original.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
+                       <span class="ves-bcv-eq" data-idx="${idx}" style="font-size:0.72rem; color:#059669; display:block;">BCV: ~${fmt(item.monto_pago)}</span>
+                       <span class="ves-binance-eq" data-idx="${idx}" style="font-size:0.72rem; color:#d97706; display:block;">Binance: ~${fmt(item.monto_pago_binance)}</span>`
                     : fmt(item.monto_pago);
+                const residualCell = item.moneda_pago === "VES"
+                    ? `<strong class="ves-residual-bcv" data-idx="${idx}" style="color:#b45309;">${fmt(item.saldo_pago)}</strong>
+                       <span class="ves-residual-binance" data-idx="${idx}" style="font-size:0.72rem; color:#d97706; display:block;">Binance: ~${fmt(item.saldo_pago_binance)}</span>
+                       <span style="display:flex; align-items:center; gap:3px; margin-top:2px;">
+                           <input type="time" class="input-hora-pago" data-idx="${idx}" value="12:00" step="60" style="width:82px; padding:1px 2px; font-size:0.68rem;" title="Vista previa a otra hora (la tasa varía por hora) -- para aplicar a esa tasa, usa Vincular manualmente">
+                       </span>`
+                    : `<strong style="color:#b45309;">${fmt(item.saldo_pago)}</strong>`;
                 const ordenCell = tieneSugerencia
                     ? `<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span>`
                     : `<span style="color:#94a3b8; font-size:0.8rem;">Sin sugerencia</span>`;
@@ -3411,11 +3464,11 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td style="text-align:center;">
                             <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${tieneSugerencia ? "checked" : "disabled"}>
                         </td>
-                        <td><strong>${item.pago_id}</strong></td>
+                        <td>${pagoIdCell}</td>
                         <td>${item.pago_fecha}</td>
                         <td>${item.cliente_nombre}</td>
                         <td>${montoPagoCell}</td>
-                        <td><strong style="color:#b45309;">${fmt(item.saldo_pago)}</strong></td>
+                        <td>${residualCell}</td>
                         <td>${ordenCell}</td>
                         <td>${item.so_fecha || '-'}</td>
                         <td>${item.so_saldo_pendiente != null ? fmt(item.so_saldo_pendiente) : '-'}</td>
@@ -3425,6 +3478,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     </tr>
                 `;
             }).join('');
+
+            tbody.querySelectorAll(".input-hora-pago").forEach(inp => {
+                inp.addEventListener("change", () => previsualizarHoraPago(parseInt(inp.dataset.idx), inp.value));
+            });
         } catch (err) {
             console.error("Error cargando pagos pendientes:", err);
             tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Error de conexión al cargar pagos pendientes.</td></tr>';

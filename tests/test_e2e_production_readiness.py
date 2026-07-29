@@ -1784,6 +1784,9 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
         # orden ($60), no por el monto crudo en VES.
         assert primero["so_id"] == "SO_VES_1"
         assert primero["monto_sugerido"] == 60.0
+        # Ambas referencias visibles para un pago VES -- BCV y Binance del
+        # mismo monto original (5181.27 / 38.0 ~= $136.35), no solo una.
+        assert abs(primero["monto_pago_binance"] - 136.35) < 0.05
 
         # El remanente del pago ($141.71 - $60 = $81.71) sigue apareciendo,
         # sin orden sugerida, para poder vincularse manualmente.
@@ -1792,6 +1795,9 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
         assert segundo["pago_id"] == "P_VES"
         # $141.71 originales - $60 ya sugeridos para SO_VES_1 = $81.71 aun sin asociar.
         assert abs(segundo["saldo_pago"] - 81.71) < 0.05
+        # Ese mismo residual reexpresado a tasa Binance (~$78.61), no una
+        # copia del valor BCV.
+        assert abs(segundo["saldo_pago_binance"] - 78.61) < 0.05
 
 
 def test_e2e_30_resumen_pagos_sin_asignar_excluye_reconciliados_en_odoo():
