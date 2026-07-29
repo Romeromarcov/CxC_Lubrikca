@@ -723,12 +723,12 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadHistorialPagos() {
         if (!historialTableBody) return;
         try {
-            historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">Cargando pagos conciliados...</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Cargando pagos conciliados...</td></tr>';
             const res = await fetch("/api/pagos-historial");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">No hay pagos conciliados.</td></tr>';
+                    historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">No hay pagos conciliados.</td></tr>';
                     return;
                 }
                 const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
@@ -754,6 +754,13 @@ document.addEventListener("DOMContentLoaded", () => {
                             </div>
                         </div>
                     ` : '<span style="font-size:0.72rem; color:#94a3b8;">No editable</span>';
+                    const facturasTitle = (item.facturas || [])
+                        .map(f => `${f.factura_id}: residual ${fmt(f.residual_usd || 0)}`)
+                        .join(' | ');
+                    const residualTotal = (item.residual_facturas_usd || 0) + (item.residual_pago_usd || 0);
+                    const residualCell = residualTotal > 0.005
+                        ? `<strong style="color:#b45309;" title="Saldo sin conciliar">${fmt(residualTotal)}</strong>`
+                        : `<span style="color:#059669;">$0.00</span>`;
                     row.innerHTML = `
                         <td><strong>#${item.pago_id}</strong></td>
                         <td>${item.cliente_nombre}</td>
@@ -761,7 +768,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong style="color: #059669">${fmt(item.monto_aplicado)}</strong></td>
                         <td><span class="state-badge">${item.moneda}</span></td>
                         <td><strong>${item.so_id}</strong></td>
-                        <td><span class="state-badge">${item.factura_id}</span></td>
+                        <td><span class="state-badge" title="${facturasTitle}">${item.factura_id}</span></td>
+                        <td>${residualCell}</td>
                         <td>${fmtTasa(item.tasa_bcv)}</td>
                         <td>${fmtTasa(item.tasa_binance)}</td>
                         <td>${editCell}</td>
@@ -773,7 +781,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } catch (err) {
-            historialTableBody.innerHTML = '<tr><td colspan="13" class="table-empty">Error al cargar el historial.</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Error al cargar el historial.</td></tr>';
             console.error("Error loading historial:", err);
         }
     }

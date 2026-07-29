@@ -477,7 +477,14 @@ class OdooXmlRpcReader(OdooReader):
             so_names: Si se provee, filtra solo los pagos asociados a esas órdenes.
                       Si es None, trae todos los pagos reconciliados.
         """
-        # 1. Leer pagos reconciliados de Odoo
+        # 1. Leer pagos reconciliados de Odoo. OJO: "invoice_ids" (Invoices)
+        # es el campo que llena el wizard "Registrar Pago" -- en pagos
+        # reconciliados por matching de banco/manual (el caso normal aquí)
+        # queda SIEMPRE vacío. El campo que sí refleja la reconciliación
+        # real es "reconciled_invoice_ids" (Reconciled Invoices).
+        # Verificado en vivo: de 673 pagos con is_reconciled=True, 0 tenían
+        # invoice_ids poblado y los 673 tenían reconciled_invoice_ids -- la
+        # tabla de "Pagos Conciliados" quedaba siempre vacía.
         pagos = self._search_read(
             self.MODEL_PAGO,
             [
@@ -485,7 +492,15 @@ class OdooXmlRpcReader(OdooReader):
                 ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                 ["is_reconciled", "=", True],
             ],
-            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "invoice_ids"],
+            [
+                "id",
+                "partner_id",
+                "amount",
+                "currency_id",
+                "journal_id",
+                "date",
+                "reconciled_invoice_ids",
+            ],
         )
         if not pagos:
             return {}
@@ -494,7 +509,7 @@ class OdooXmlRpcReader(OdooReader):
         all_inv_ids: list[int] = []
         pago_inv_map: dict[int, list[int]] = {}
         for p in pagos:
-            inv_ids = p.get("invoice_ids") or []
+            inv_ids = p.get("reconciled_invoice_ids") or []
             if isinstance(inv_ids, list | tuple) and inv_ids:
                 all_inv_ids.extend(inv_ids)
                 pago_inv_map[p["id"]] = list(inv_ids)

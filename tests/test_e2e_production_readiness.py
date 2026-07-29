@@ -852,10 +852,11 @@ def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
 def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
     """Conciliaciones: una orden ya facturada sigue siendo destino válido de
 
-    sugerencia mientras su factura en Odoo no esté paid/in_payment. Una vez
-    facturada Y pagada en Odoo, ya no debe sugerirse (antes cualquier orden
-    facturada quedaba excluida por completo, sin importar su estado de pago
-    real en Odoo).
+    sugerencia mientras su factura en Odoo tenga residual > 0
+    (amount_residual_usd, el campo firmado en USD -- no se recalcula la
+    conversión con una tasa propia). Una vez el residual llega a 0, ya no
+    debe sugerirse (antes cualquier orden facturada quedaba excluida por
+    completo, sin importar su estado de pago real en Odoo).
     """
     mock_repo = MagicMock()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
@@ -912,8 +913,8 @@ def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
             ]
         if model == "account.move":
             return [
-                {"invoice_origin": "SO_FACT_NOPAGA", "payment_state": "not_paid"},
-                {"invoice_origin": "SO_FACT_PAGADA", "payment_state": "paid"},
+                {"invoice_origin": "SO_FACT_NOPAGA", "amount_residual_usd": 100.0},
+                {"invoice_origin": "SO_FACT_PAGADA", "amount_residual_usd": 0.0},
             ]
         return []
 
@@ -934,9 +935,13 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
     """Tabla de pagos conciliados: debe incluir tanto los vinculados por
 
     este sistema como los reconciliados directamente en Odoo vía factura,
-    que antes eran invisibles porque get_pagos_historial solo recorría
-    Vinculaciones locales (pagos_reconciliados_por_orden existía en
-    odoo/client.py pero nunca se llamaba desde ningún endpoint).
+    con TODAS sus facturas asociadas (un pago puede conciliar varias),
+    monto conciliado y residual -- una sola fila por pago, no una por
+    orden. Bug corregido: se leía "invoice_ids" de account.payment (SIEMPRE
+    vacío en pagos reconciliados por matching de banco/manual -- el caso
+    normal); el campo correcto es "reconciled_invoice_ids". Verificado en
+    vivo: de 673 pagos reconciliados en producción, 0 tenían invoice_ids
+    poblado.
     """
     mock_repo = MagicMock()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
@@ -964,21 +969,37 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
                 {
                     "id": 555,
                     "partner_id": [10, "Cliente Odoo"],
-                    "amount": 250.0,
+                    "amount": 53750.0,
+                    "amount_ref": 250.0,
+                    "amount_available_for_refund": 0.0,
                     "currency_id": [2, "VES"],
                     "journal_id": [1, "Banco"],
                     "date": "2026-07-05",
-                    "invoice_ids": [900],
+                    "reconciled_invoice_ids": [900, 901],
                 }
             ]
         if model == "account.move" and method == "read":
+            # Un pago reconciliando facturas de DOS órdenes distintas --
+            # FAC-901 queda con residual (pago parcial de esa factura).
             return [
                 {
                     "id": 900,
+                    "name": "FAC-900",
                     "invoice_origin": "SO_ODOO_REC",
                     "move_type": "out_invoice",
                     "state": "posted",
-                }
+                    "amount_total_signed_usd": 200.0,
+                    "amount_residual_usd": 0.0,
+                },
+                {
+                    "id": 901,
+                    "name": "FAC-901",
+                    "invoice_origin": "SO_ODOO_REC_2",
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                    "amount_total_signed_usd": 80.0,
+                    "amount_residual_usd": 30.0,
+                },
             ]
         return []
 
@@ -990,13 +1011,21 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
         res = client.get("/api/pagos-historial")
         assert res.status_code == 200
         data = res.json()
+        # Una sola fila para el pago, no una por cada orden que reconcilia.
         assert len(data) == 1
         item = data[0]
         assert item["pago_id"] == "555"
-        assert item["so_id"] == "SO_ODOO_REC"
         assert item["origen"] == "Odoo (automático vía factura)"
+        assert "SO_ODOO_REC" in item["so_id"]
+        assert "SO_ODOO_REC_2" in item["so_id"]
+        assert "FAC-900" in item["factura_id"]
+        assert "FAC-901" in item["factura_id"]
+        assert len(item["facturas"]) == 2
+        # monto conciliado = amount_ref (USD) - amount_available_for_refund.
         assert item["monto_aplicado"] == 250.0
         assert item["moneda"] == "VES"
+        # FAC-901 quedó con $30 de residual -- debe quedar visible, no perderse.
+        assert item["residual_facturas_usd"] == 30.0
 
 
 def test_e2e_18_editar_tasa_binance_valida_min_max_del_dia():
