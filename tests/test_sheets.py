@@ -40,6 +40,24 @@ def test_p_dec_tolera_valores_invalidos() -> None:
     assert serde.p_optdec("") is None
 
 
+def test_p_dec_celda_vacia_no_loggea_warning(caplog) -> None:
+    """Bug de producción: una celda vacía es el caso normal y mayoritario de
+
+    cualquier columna numérica opcional -- loggear un warning por cada una
+    (miles por cada lectura completa de una hoja grande) inundaba el log y
+    Railway empezaba a descartar mensajes por exceder su límite de 500
+    logs/seg. Solo un valor no vacío que de verdad no parsea debe loggear.
+    """
+    with caplog.at_level("WARNING", logger="cxc.sheets.serde"):
+        assert serde.p_dec("") == Decimal("0")
+        assert serde.p_dec("   ") == Decimal("0")
+    assert caplog.records == []
+
+    with caplog.at_level("WARNING", logger="cxc.sheets.serde"):
+        assert serde.p_dec("#REF!") == Decimal("0")
+    assert len(caplog.records) == 1
+
+
 def test_roundtrip_orden_con_opcionales() -> None:
     o = b.orden("SO9", fecha_entrega=None, primera=True)
     o.factura_id = "INV1"
