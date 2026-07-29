@@ -654,23 +654,23 @@
                     </div>
                 </section>
 
-                <!-- SUGERENCIAS INTELIGENTES DE CONCILIACIÓN (FIFO) -->
+                <!-- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + asignación manual) -->
                 <section class="card" style="border-left: 5px solid #3b82f6;">
                     <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <div>
                             <h2 style="color: #1d4ed8; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
-                                <span>⚡</span> Sugerencias Inteligentes de Conciliación Automática (FIFO por Cliente)
+                                <span>⚡</span> Pagos Pendientes por Asociar
                             </h2>
-                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Asocia pagos no asignados con la orden pendiente más antigua del mismo cliente. Puedes aprobar en lote o seleccionar individualmente.</p>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Todos los pagos con saldo sin conciliar (excluye los ya reconciliados en Odoo). La orden sugerida usa FIFO por cliente -- aprueba en lote, individualmente, o vincula manualmente a otra orden.</p>
                         </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span id="badge-sugerencias-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px;">0 Sugerencias</span>
+                            <span id="badge-sugerencias-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px;">0 Pagos</span>
                             <button class="btn btn-primary" onclick="aprobarSugerenciasSeleccionadas()" style="background:#2563eb; font-weight:600;">⚡ Aprobar Seleccionadas (Bulk)</button>
                             <button class="btn btn-secondary" onclick="loadSugerenciasConciliacion()">🔄 Actualizar</button>
                         </div>
                     </div>
 
-                    <div class="table-wrapper large-table" style="max-height: 350px; overflow-y: auto;">
+                    <div class="table-wrapper large-table" style="max-height: 450px; overflow-y: auto;">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
@@ -680,7 +680,8 @@
                                     <th>Pago ID</th>
                                     <th>Fecha Pago</th>
                                     <th>Cliente</th>
-                                    <th>Monto Pago ($)</th>
+                                    <th title="Monto original del pago recibido, en su moneda y su equivalente USD (tasa BCV del día)">Monto Pago</th>
+                                    <th title="Saldo del pago aún sin conciliar (USD) -- disminuye con cada vinculación aplicada">Residual Pago ($)</th>
                                     <th>Orden Sugerida (FIFO)</th>
                                     <th>Fecha Orden</th>
                                     <th>Saldo Orden ($)</th>
@@ -691,82 +692,71 @@
                             </thead>
                             <tbody id="sugerencias-table-body">
                                 <tr>
-                                    <td colspan="11" class="table-empty">Cargando sugerencias inteligentes...</td>
+                                    <td colspan="12" class="table-empty">Cargando pagos pendientes...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
 
-                <!-- Asignación de Pagos Recibidos -->
-                <section class="main-panel card">
-                    <div class="panel-header">
-                        <h2>Asignación de Pagos Recibidos (Pagos Sin Asignar)</h2>
-                        <p>Vincula cobros de Odoo a órdenes abiertas (excluye pagos ya asignados a facturas en Odoo)</p>
-                    </div>
-                    
-                    <div class="splitter">
-                        <div class="payment-list-area">
-                            <h3>Pagos Recientes Por Asignar</h3>
-                            <div class="list-wrapper" id="payments-list">
-                                <div class="loading-spinner">Cargando pagos...</div>
+                <!-- Modal: Vincular Pago Manualmente (a cualquier orden del cliente, no solo la sugerida FIFO) -->
+                <div id="modal-vincular-manual" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99999; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+                    <div style="max-width:520px; width:100%; background:white; padding:1.75rem; border-radius:16px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; border-bottom:1px solid #e2e8f0; padding-bottom:0.75rem;">
+                            <h3 style="margin:0; color:#0f172a; font-size:1.15rem;">🔗 Vincular Pago Manualmente</h3>
+                            <button type="button" class="btn btn-secondary" onclick="cerrarModalVincularManual()" style="padding:0.4rem 0.8rem;">✖️ Cerrar</button>
+                        </div>
+                        <form id="vinculacion-form" class="cxc-form">
+                            <div class="form-group">
+                                <label>ID del Pago</label>
+                                <input type="text" id="form-pago-id" readonly placeholder="Selecciona un pago">
                             </div>
-                        </div>
+                            <div class="form-group">
+                                <label>Cliente</label>
+                                <input type="text" id="form-cliente-nombre" readonly placeholder="Cliente asociado">
+                                <input type="hidden" id="form-cliente-id">
+                            </div>
+                            <div class="form-group">
+                                <label>Monto Original Recibido</label>
+                                <div class="currency-input-wrapper">
+                                    <span class="input-currency" id="form-pago-moneda">USD</span>
+                                    <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
+                                </div>
+                            </div>
 
-                        <div class="association-form-area">
-                            <h3>Vincular Pago</h3>
-                            <form id="vinculacion-form" class="cxc-form">
-                                <div class="form-group">
-                                    <label>ID del Pago</label>
-                                    <input type="text" id="form-pago-id" readonly placeholder="Selecciona un pago">
+                            <div class="form-group" id="group-fecha-hora-pago" style="display: none;">
+                                <label>Fecha/Hora de Pago (Ajustar Tasa)</label>
+                                <div class="form-group-row">
+                                    <input type="date" id="form-pago-fecha" style="width: 55%;">
+                                    <input type="time" id="form-pago-hora" style="width: 45%;">
                                 </div>
-                                <div class="form-group">
-                                    <label>Cliente</label>
-                                    <input type="text" id="form-cliente-nombre" readonly placeholder="Cliente asociado">
-                                    <input type="hidden" id="form-cliente-id">
+                            </div>
+                            <div class="form-group" id="group-tasas-referencia" style="display: none; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px dashed #cbd5e1; margin-bottom: 0.5rem;">
+                                <label style="margin-bottom: 0.35rem; font-weight:700;">Tasas de Referencia Aplicadas</label>
+                                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
+                                    <span>Tasa BCV: <strong id="lbl-tasa-bcv">0.00</strong> Bs</span>
+                                    <span>Tasa Binance: <strong id="lbl-tasa-binance">0.00</strong> Bs</span>
                                 </div>
-                                <div class="form-group">
-                                    <label>Monto Original Recibido</label>
-                                    <div class="currency-input-wrapper">
-                                        <span class="input-currency" id="form-pago-moneda">USD</span>
-                                        <input type="number" id="form-pago-disponible" readonly placeholder="0.00">
-                                    </div>
+                                <div style="font-size: 0.8rem; line-height: 1.4; color: #64748b;">
+                                    Equivalente BCV: <strong id="lbl-eq-bcv" style="color: #0f172a;">$0.00 USD</strong><br>
+                                    Equivalente Binance: <strong id="lbl-eq-binance" style="color: #0f172a;">$0.00 USD</strong>
                                 </div>
+                            </div>
 
-                                <div class="form-group" id="group-fecha-hora-pago" style="display: none;">
-                                    <label>Fecha/Hora de Pago (Ajustar Tasa)</label>
-                                    <div class="form-group-row">
-                                        <input type="date" id="form-pago-fecha" style="width: 55%;">
-                                        <input type="time" id="form-pago-hora" style="width: 45%;">
-                                    </div>
-                                </div>
-                                <div class="form-group" id="group-tasas-referencia" style="display: none; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px dashed #cbd5e1; margin-bottom: 0.5rem;">
-                                    <label style="margin-bottom: 0.35rem; font-weight:700;">Tasas de Referencia Aplicadas</label>
-                                    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
-                                        <span>Tasa BCV: <strong id="lbl-tasa-bcv">0.00</strong> Bs</span>
-                                        <span>Tasa Binance: <strong id="lbl-tasa-binance">0.00</strong> Bs</span>
-                                    </div>
-                                    <div style="font-size: 0.8rem; line-height: 1.4; color: #64748b;">
-                                        Equivalente BCV: <strong id="lbl-eq-bcv" style="color: #0f172a;">$0.00 USD</strong><br>
-                                        Equivalente Binance: <strong id="lbl-eq-binance" style="color: #0f172a;">$0.00 USD</strong>
-                                    </div>
-                                </div>
-
-                                <div class="form-group">
-                                    <label>Orden de Venta Odoo (SO)</label>
-                                    <select id="form-so-select" required disabled>
-                                        <option value="">Selecciona una orden...</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Monto a Aplicar (USD)</label>
-                                    <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto en USD">
-                                </div>
-                                <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
-                            </form>
-                        </div>
+                            <div class="form-group">
+                                <label>Orden de Venta Odoo (SO)</label>
+                                <select id="form-so-select" required disabled>
+                                    <option value="">Selecciona una orden...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Monto a Aplicar (USD)</label>
+                                <input type="number" id="form-monto-aplicar" step="0.01" min="0.01" required disabled placeholder="Ingresa el monto en USD">
+                            </div>
+                            <button type="submit" class="btn-primary" id="btn-submit" disabled>Asignar Cobro</button>
+                        </form>
                     </div>
-                </section>
+                </div>
 
                 <!-- Mapa de Conciliación de Pagos Cruzados -->
                 <section class="mapa-panel card">
@@ -814,6 +804,7 @@
                                     <th>Pago ID</th>
                                     <th>Cliente</th>
                                     <th>Fecha Pago</th>
+                                    <th title="Importe total del pago (amount_ref de Odoo, ya en USD) -- para verificar a ojo que Monto Aplicado + Residual cuadre contra este monto">Monto Pago ($)</th>
                                     <th>Monto Aplicado ($)</th>
                                     <th>Moneda</th>
                                     <th>Orden (SO)</th>
@@ -829,7 +820,7 @@
                             </thead>
                             <tbody id="historial-table-body">
                                 <tr>
-                                    <td colspan="14" class="table-empty">Cargando pagos conciliados...</td>
+                                    <td colspan="15" class="table-empty">Cargando pagos conciliados...</td>
                                 </tr>
                             </tbody>
                         </table>

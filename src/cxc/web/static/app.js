@@ -18,7 +18,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const kpiAlertas = document.getElementById("kpi-alertas");
     
     // Elements - Dashboard/Payments
-    const paymentsList = document.getElementById("payments-list");
     const formPagoId = document.getElementById("form-pago-id");
     const formClienteNombre = document.getElementById("form-cliente-nombre");
     const formClienteId = document.getElementById("form-cliente-id");
@@ -238,7 +237,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadBandeja === "function") loadBandeja();
             } else if (path === "conciliaciones") {
                 if (typeof loadKPIs === "function") loadKPIs();
-                if (typeof loadPayments === "function") loadPayments();
                 if (typeof loadSugerenciasConciliacion === "function") loadSugerenciasConciliacion();
                 if (typeof loadMapa === "function") loadMapa();
                 if (typeof loadHistorialPagos === "function") loadHistorialPagos();
@@ -398,67 +396,47 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Fetch and render pending payments
-    async function loadPayments() {
-        try {
-            paymentsList.innerHTML = '<div class="loading-spinner">Cargando pagos...</div>';
-            const res = await fetch("/api/pagos-pendientes");
-            if (res.ok) {
-                const payments = await res.json();
-                if (payments.length === 0) {
-                    paymentsList.innerHTML = '<div class="loading-spinner">No hay pagos pendientes de asignar.</div>';
-                    return;
-                }
-                
-                paymentsList.innerHTML = "";
-                payments.forEach(p => {
-                    const item = document.createElement("div");
-                    item.className = "payment-item";
-                    item.dataset.pagoId = p.pago_id;
-                    
-                    const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-                    let amountHtml = "";
-                    if (p.moneda === "VES") {
-                        amountHtml = `
-                            <span class="p-amount text-ves" style="font-size: 0.9rem; text-align: right; line-height: 1.35;">
-                                VES ${p.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
-                                <span style="font-size: 0.72rem; font-weight: normal; color: #059669; display: block;">
-                                    BCV: ~ ${fmt(p.equiv_usd_bcv)} USD
-                                </span>
-                                <span style="font-size: 0.72rem; font-weight: normal; color: #d97706; display: block;">
-                                    Binance: ~ ${fmt(p.equiv_usd_binance)} USD
-                                </span>
-                            </span>`;
-                    } else {
-                        amountHtml = `<span class="p-amount">${new Intl.NumberFormat('es-US', { style: 'currency', currency: p.moneda }).format(p.monto)}</span>`;
-                    }
+    // Abre el modal de vinculación manual pre-cargado con un pago de la
+    // tabla unificada "Pagos Pendientes por Asociar" (fusiona lo que antes
+    // eran dos paneles/listas separados con datos potencialmente distintos).
+    window.abrirModalVincularManual = function(idx) {
+        const item = currentSugerenciasList[idx];
+        const modal = document.getElementById("modal-vincular-manual");
+        if (!item || !modal) return;
+        const esVes = item.moneda_pago === "VES";
+        // saldo_pago ya viene en USD (equivalente BCV) desde el backend;
+        // reconvertir a la moneda original para reusar selectPayment() tal
+        // cual, que trabaja con el monto en moneda original + recalcula
+        // los equivalentes en vivo.
+        const bcv = item.tasa_bcv || 36.5;
+        const binance = item.tasa_binance || bcv;
+        const montoOriginalMoneda = esVes ? item.saldo_pago * bcv : item.saldo_pago;
+        const payment = {
+            pago_id: item.pago_id,
+            cliente_id: item.cliente_id,
+            cliente_nombre: item.cliente_nombre,
+            moneda: item.moneda_pago,
+            monto: montoOriginalMoneda,
+            fecha: item.pago_fecha,
+            equiv_usd_bcv: item.saldo_pago,
+            equiv_usd_binance: esVes ? montoOriginalMoneda / binance : item.saldo_pago,
+        };
+        modal.style.display = "flex";
+        selectPayment(payment, null);
+    };
 
-                    item.innerHTML = `
-                        <div class="p-header">
-                            <span class="p-id">#${p.pago_id}</span>
-                            ${amountHtml}
-                        </div>
-                        <div class="p-client">${p.cliente_nombre}</div>
-                        <div class="p-meta">
-                            <span>Fecha: ${p.fecha}</span>
-                            <span>Módulo: ${p.metodo_pago}</span>
-                        </div>
-                    `;
-                    item.addEventListener("click", () => selectPayment(p, item));
-                    paymentsList.appendChild(item);
-                });
-            }
-        } catch (err) {
-            paymentsList.innerHTML = '<div class="loading-spinner">Error al conectar con el servidor.</div>';
-            console.error("Error loading payments:", err);
-        }
-    }
+    window.cerrarModalVincularManual = function() {
+        const modal = document.getElementById("modal-vincular-manual");
+        if (modal) modal.style.display = "none";
+    };
 
-    // Handle payment selection
+    // Handle payment selection (desde el modal de vinculación manual)
     async function selectPayment(payment, element) {
-        document.querySelectorAll(".payment-item").forEach(item => item.classList.remove("active"));
-        element.classList.add("active");
-        
+        if (element) {
+            document.querySelectorAll(".payment-item").forEach(item => item.classList.remove("active"));
+            element.classList.add("active");
+        }
+
         selectedPayment = payment;
         
         formPagoId.value = payment.pago_id;
@@ -601,12 +579,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnSubmit.disabled = true;
                 btnSubmit.textContent = "Asignar Cobro";
                 selectedPayment = null;
-                
+
                 groupFechaHoraPago.style.display = "none";
                 groupTasasReferencia.style.display = "none";
-                
+                window.cerrarModalVincularManual();
+
                 loadKPIs();
-                loadPayments();
+                loadSugerenciasConciliacion();
+                loadHistorialPagos();
                 loadBandeja();
             } else {
                 const errData = await res.json();
@@ -723,12 +703,12 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadHistorialPagos() {
         if (!historialTableBody) return;
         try {
-            historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Cargando pagos conciliados...</td></tr>';
+            historialTableBody.innerHTML = '<tr><td colspan="15" class="table-empty">Cargando pagos conciliados...</td></tr>';
             const res = await fetch("/api/pagos-historial");
             if (res.ok) {
                 const items = await res.json();
                 if (items.length === 0) {
-                    historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">No hay pagos conciliados.</td></tr>';
+                    historialTableBody.innerHTML = '<tr><td colspan="15" class="table-empty">No hay pagos conciliados.</td></tr>';
                     return;
                 }
                 const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
@@ -765,6 +745,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong>#${item.pago_id}</strong></td>
                         <td>${item.cliente_nombre}</td>
                         <td>${item.fecha_pago}</td>
+                        <td>${fmt(item.monto_pago_usd ?? item.monto_aplicado)}</td>
                         <td><strong style="color: #059669">${fmt(item.monto_aplicado)}</strong></td>
                         <td><span class="state-badge">${item.moneda}</span></td>
                         <td><strong>${item.so_id}</strong></td>
@@ -3381,7 +3362,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    // --- SUGERENCIAS INTELIGENTES DE CONCILIACIÓN (FIFO) ---
+    // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
     let currentSugerenciasList = [];
 
     window.loadSugerenciasConciliacion = async function() {
@@ -3390,53 +3371,68 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!tbody) return;
 
         try {
-            tbody.innerHTML = '<tr><td colspan="11" class="table-empty">Calculando asignaciones recomendadas (FIFO)...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Calculando pagos pendientes y asignaciones recomendadas (FIFO)...</td></tr>';
             const res = await fetch('/api/conciliaciones/sugerencias');
             const data = await res.json();
 
             if (!res.ok || !Array.isArray(data)) {
-                tbody.innerHTML = '<tr><td colspan="11" class="table-empty">No se pudieron cargar sugerencias.</td></tr>';
-                if (countBadge) countBadge.textContent = "0 Sugerencias";
+                tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No se pudieron cargar los pagos pendientes.</td></tr>';
+                if (countBadge) countBadge.textContent = "0 Pagos";
                 return;
             }
 
             currentSugerenciasList = data;
-            if (countBadge) countBadge.textContent = `${data.length} Sugerencias`;
+            if (countBadge) countBadge.textContent = `${data.length} Pagos`;
 
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="table-empty">🎉 No hay pagos pendientes que requieran asociación automática.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="table-empty">🎉 No hay pagos pendientes por asociar.</td></tr>';
                 return;
             }
 
+            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+
             tbody.innerHTML = data.map((item, idx) => {
+                const tieneSugerencia = !!item.so_id;
+                const montoPagoCell = item.moneda_pago === "VES"
+                    ? `${fmt(item.monto_pago)} <span style="font-size:0.72rem; color:#64748b; display:block;">Bs. ${item.monto_pago_original.toLocaleString('es-VE', { minimumFractionDigits: 2 })}</span>`
+                    : fmt(item.monto_pago);
+                const ordenCell = tieneSugerencia
+                    ? `<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span>`
+                    : `<span style="color:#94a3b8; font-size:0.8rem;">Sin sugerencia</span>`;
+                const accionCell = tieneSugerencia
+                    ? `<div style="display:flex; flex-direction:column; gap:3px;">
+                        <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
+                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.75rem;">✏️ Otra orden</button>
+                       </div>`
+                    : `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>`;
+
                 return `
                     <tr>
                         <td style="text-align:center;">
-                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" checked>
+                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${tieneSugerencia ? "checked" : "disabled"}>
                         </td>
                         <td><strong>${item.pago_id}</strong></td>
                         <td>${item.pago_fecha}</td>
                         <td>${item.cliente_nombre}</td>
-                        <td>$${item.monto_pago.toFixed(2)} (${item.moneda_pago})</td>
-                        <td><span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span></td>
-                        <td>${item.so_fecha}</td>
-                        <td>$${item.so_saldo_pendiente.toFixed(2)}</td>
-                        <td><strong style="color:#16a34a;">$${item.monto_sugerido.toFixed(2)}</strong></td>
+                        <td>${montoPagoCell}</td>
+                        <td><strong style="color:#b45309;">${fmt(item.saldo_pago)}</strong></td>
+                        <td>${ordenCell}</td>
+                        <td>${item.so_fecha || '-'}</td>
+                        <td>${item.so_saldo_pendiente != null ? fmt(item.so_saldo_pendiente) : '-'}</td>
+                        <td>${tieneSugerencia ? `<strong style="color:#16a34a;">${fmt(item.monto_sugerido)}</strong>` : '-'}</td>
                         <td><small>${item.vendedor}</small></td>
-                        <td>
-                            <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
-                        </td>
+                        <td>${accionCell}</td>
                     </tr>
                 `;
             }).join('');
         } catch (err) {
-            console.error("Error cargando sugerencias:", err);
-            tbody.innerHTML = '<tr><td colspan="11" class="table-empty">Error de conexión al cargar sugerencias.</td></tr>';
+            console.error("Error cargando pagos pendientes:", err);
+            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Error de conexión al cargar pagos pendientes.</td></tr>';
         }
     };
 
     window.toggleAllSugerencias = function(master) {
-        const checks = document.querySelectorAll(".check-sugerencia-item");
+        const checks = document.querySelectorAll(".check-sugerencia-item:not(:disabled)");
         checks.forEach(c => c.checked = master.checked);
     };
 
@@ -3458,7 +3454,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert("✅ Vinculación completada con éxito.");
                 loadSugerenciasConciliacion();
                 loadKPIs();
-                loadPayments();
                 loadMapa();
                 loadHistorialPagos();
             } else {
@@ -3473,7 +3468,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.aprobarSugerenciasSeleccionadas = async function() {
         const selectedChecks = Array.from(document.querySelectorAll(".check-sugerencia-item:checked"));
         if (selectedChecks.length === 0) {
-            alert("Por favor selecciona al menos una sugerencia para aprobar.");
+            alert("Por favor selecciona al menos un pago con sugerencia para aprobar.");
             return;
         }
 
@@ -3502,7 +3497,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert(`🎉 ${data.message}`);
                 loadSugerenciasConciliacion();
                 loadKPIs();
-                loadPayments();
                 loadMapa();
                 loadHistorialPagos();
             } else {

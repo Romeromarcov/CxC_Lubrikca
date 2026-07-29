@@ -404,6 +404,47 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
     return result
 
 
+def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
+    """IDs (str) de ``account.payment`` que ya no son válidos como "pago sin
+
+    asignar": reconciliados en Odoo, o en un estado distinto de
+    in_process/paid (account.payment no tiene estado "posted" -- ese es de
+    account.move). ``pago_id`` local es el ID numérico de Odoo
+    (``map_pago``: ``pago_id=str(rec["id"])``), nunca el campo "name".
+    """
+    reconciled: set[str] = set()
+    p_ids = [int(pid) for pid in pago_ids if pid.isdigit()]
+    if not p_ids:
+        return reconciled
+    odoo_pagos = execute(
+        "account.payment",
+        "search_read",
+        [[["id", "in", p_ids]]],
+        {"fields": ["id", "is_reconciled", "state", "reconciled_invoices_count"]},
+    )
+    for op in odoo_pagos:
+        pid_str = str(op.get("id", "")).strip()
+        is_rec = (
+            bool(op.get("is_reconciled"))
+            or int(op.get("reconciled_invoices_count") or 0) > 0
+            or str(op.get("state")) not in ("in_process", "paid")
+        )
+        if is_rec and pid_str:
+            reconciled.add(pid_str)
+    return reconciled
+
+
+def pago_monto_usd(monto_raw: Decimal, moneda: str, bcv_rate: Decimal) -> Decimal:
+    """Equivalente USD de un monto de pago -- usa la tasa BCV del día del pago
+
+    (mismo criterio que ``/api/resumen`` y el resto de reportes agregados).
+    Nunca trata un monto en VES como si ya fuera USD.
+    """
+    if moneda == "VES" and bcv_rate > Decimal("0"):
+        return monto_raw / bcv_rate
+    return monto_raw
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -1261,19 +1302,28 @@ async def get_resumen():
             linked_amounts[v.pago_id] = prev + v.monto_aplicado
         tasas_rows = repo._g.read_rows("SerieTasas")
 
+        # Igual que /api/conciliaciones/sugerencias: excluir pagos ya
+        # reconciliados directamente en Odoo (via factura, sin pasar por una
+        # Vinculacion de este sistema) -- si no, esta tarjeta suma pagos que
+        # ya estan conciliados como si siguieran "sin asignar".
+        reconciled_pagos_set: set[str] = set()
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                p_ids_str = [str(p.get("pago_id", "")).strip() for p in pagos if p.get("pago_id")]
+                reconciled_pagos_set = get_reconciled_pago_ids_odoo(execute, p_ids_str)
+        except Exception as e_odoo:
+            logger.warning("Error consultando Odoo en get_resumen: %s", e_odoo)
+
         pagos_pendientes_usd = Decimal("0")
         pagos_pendientes_ves = Decimal("0")
         for p in pagos:
             pid = str(p.get("pago_id", ""))
-            if not pid:
+            if not pid or pid in reconciled_pagos_set:
                 continue
             try:
-                monto_original = parse_decimal_safe(p.get("monto", "0"))
-                saldo = monto_original - linked_amounts.get(pid, Decimal("0"))
-                if saldo <= Decimal("0.05"):
-                    continue
-
-                moneda = str(p.get("moneda", "USD")).upper().strip()
+                moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
                 fecha_str = str(p.get("fecha_pago", ""))[:10]
                 try:
                     fecha_dt = (
@@ -1283,15 +1333,17 @@ async def get_resumen():
                     fecha_dt = datetime.now()
                 bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
 
-                if "VES" in moneda or "BS" in moneda or "BOLIVAR" in moneda:
-                    monto_usd = saldo / bcv_rate if bcv_rate > Decimal("0") else Decimal("0")
-                    monto_ves = saldo
-                else:
-                    monto_usd = saldo
-                    monto_ves = saldo * bcv_rate
+                # linked_amounts (Vinculacion.monto_aplicado) siempre esta en
+                # USD -- convertir el monto original ANTES de restar, nunca
+                # restar un monto en VES contra un aplicado en USD.
+                monto_original_raw = parse_decimal_safe(p.get("monto", "0"))
+                monto_original_usd = pago_monto_usd(monto_original_raw, moneda, bcv_rate)
+                saldo_usd = monto_original_usd - linked_amounts.get(pid, Decimal("0"))
+                if saldo_usd <= Decimal("0.05"):
+                    continue
 
-                pagos_pendientes_usd += monto_usd
-                pagos_pendientes_ves += monto_ves
+                pagos_pendientes_usd += saldo_usd
+                pagos_pendientes_ves += saldo_usd * bcv_rate
             except Exception:
                 pass
 
@@ -1305,97 +1357,6 @@ async def get_resumen():
             "pagos_sin_asignar_ves": float(pagos_pendientes_ves),
             "alertas_reconciliacion": alertas_rojas,
         }
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@app.get("/api/pagos-pendientes")
-async def get_pagos_pendientes():
-    try:
-        repo = get_repo()
-        # Read raw rows to preserve client names/emails
-        pagos = repo._g.read_rows("Pagos")
-        vincs = repo.all_vinculaciones()
-
-        # Read SerieTasas once to avoid N+1 Sheets API quota errors
-        tasas_rows = repo._g.read_rows("SerieTasas")
-
-        # Load all clients once to avoid N+1 queries to Google Sheets API
-        clientes_rows = repo._g.read_rows("Clientes")
-        from cxc.sheets import serde
-
-        clientes_map = {}
-        for r in clientes_rows:
-            cid = str(r.get("cliente_id", ""))
-            if cid:
-                with contextlib.suppress(BaseException):
-                    clientes_map[cid] = serde.cliente_from_row(r)
-
-        # Gather amounts linked per pago_id
-        linked_amounts = {}
-        for v in vincs:
-            linked_amounts[v.pago_id] = (
-                linked_amounts.get(v.pago_id, Decimal("0")) + v.monto_aplicado
-            )
-
-        pendientes = []
-        for p in pagos:
-            pago_id = str(p.get("pago_id", ""))
-            if not pago_id:
-                continue
-            monto_original = parse_decimal_safe(p.get("monto", "0"))
-            monto_vinculado = linked_amounts.get(pago_id, Decimal("0"))
-
-            saldo_pendiente = monto_original - monto_vinculado
-            if saldo_pendiente > Decimal("0.05"):
-                # Retrieve client name from cache map
-                cliente_id = str(p.get("cliente_id", ""))
-                cliente = clientes_map.get(cliente_id)
-                cliente_nombre = cliente.nombre if cliente else f"Cliente ID: {cliente_id}"
-
-                moneda = p.get("moneda", "USD")
-                fecha_str = p.get("fecha_pago", "")
-
-                dt_pago = datetime.now()
-                if fecha_str:
-                    try:
-                        if len(fecha_str) == 10:
-                            dt_pago = datetime.strptime(
-                                f"{fecha_str} 12:00:00", "%Y-%m-%d %H:%M:%S"
-                            )
-                        else:
-                            fs = fecha_str.replace("T", " ")
-                            if "." in fs:
-                                fs = fs.split(".")[0]
-                            dt_pago = datetime.strptime(fs, "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        pass
-
-                bcv, binance = get_rate_for_datetime(dt_pago, tasas_rows)
-
-                if moneda == "VES":
-                    equiv_usd_bcv = saldo_pendiente / bcv
-                    equiv_usd_binance = saldo_pendiente / binance
-                else:
-                    equiv_usd_bcv = saldo_pendiente
-                    equiv_usd_binance = saldo_pendiente
-
-                pendientes.append(
-                    {
-                        "pago_id": pago_id,
-                        "cliente_id": cliente_id,
-                        "cliente_nombre": cliente_nombre,
-                        "monto": float(saldo_pendiente),
-                        "monto_original": float(monto_original),
-                        "moneda": moneda,
-                        "fecha": fecha_str,
-                        "metodo_pago": p.get("metodo_pago", ""),
-                        "equiv_usd_bcv": float(equiv_usd_bcv),
-                        "equiv_usd_binance": float(equiv_usd_binance),
-                    }
-                )
-        return pendientes
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -3529,9 +3490,10 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         ordenes = repo.all_ordenes()
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+        tasas_rows = repo._g.read_rows("SerieTasas")
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
-        reconciled_pagos_set = set()
+        reconciled_pagos_set: set[str] = set()
         so_states_map = {}
         so_pagada_en_odoo: set[str] = set()
         entrega_valida_set: set[str] = set()
@@ -3539,39 +3501,10 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                # map_pago() guarda pago_id=str(rec["id"]) (el ID numerico de
-                # Odoo), NO el campo "name" (la referencia formateada, p.ej.
-                # "PUSD1/2026/00552"). Buscar por ["name", "in", p_names] con
-                # IDs numericos nunca hacia match -- reconciled_pagos_set
-                # quedaba siempre vacio y el filtro de "ya conciliado en
-                # Odoo" jamas excluia nada, mostrando ~866 pagos ya
-                # reconciliados/invalidos como si estuvieran "sin asignar"
-                # (verificado en vivo: de 962 pagos en Odoo, solo 96 estan
-                # realmente sin conciliar).
-                p_ids = []
-                for p in pagos_rows:
-                    raw_id = str(p.get("pago_id", "")).strip()
-                    if raw_id.isdigit():
-                        p_ids.append(int(raw_id))
-                if p_ids:
-                    odoo_pagos = execute(
-                        "account.payment",
-                        "search_read",
-                        [[["id", "in", p_ids]]],
-                        {"fields": ["id", "is_reconciled", "state", "reconciled_invoices_count"]},
-                    )
-                    for op in odoo_pagos:
-                        pid_str = str(op.get("id", "")).strip()
-                        # account.payment no tiene estado "posted" (ese es de account.move);
-                        # sus estados confirmados son in_process/paid. Los demás (draft,
-                        # canceled, rejected) no son pagos válidos para sugerir.
-                        is_rec = (
-                            bool(op.get("is_reconciled"))
-                            or int(op.get("reconciled_invoices_count") or 0) > 0
-                            or str(op.get("state")) not in ("in_process", "paid")
-                        )
-                        if is_rec and pid_str:
-                            reconciled_pagos_set.add(pid_str)
+                p_ids_str = [
+                    str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")
+                ]
+                reconciled_pagos_set = get_reconciled_pago_ids_odoo(execute, p_ids_str)
 
                 so_names = [o.so_id for o in ordenes]
                 if so_names:
@@ -3632,11 +3565,25 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             pid = str(p.get("pago_id", "")).strip()
             if not pid or pid in reconciled_pagos_set:
                 continue
-            monto_orig = parse_decimal_safe(p.get("monto", "0"))
-            monto_vinculado = linked_pago.get(pid, Decimal("0"))
-            saldo = monto_orig - monto_vinculado
+            fecha_pago = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
+            try:
+                fecha_dt = (
+                    datetime.strptime(fecha_pago, "%Y-%m-%d") if fecha_pago else datetime.now()
+                )
+            except ValueError:
+                fecha_dt = datetime.now()
+            bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
 
-            if saldo > Decimal("0.05"):
+            moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
+            monto_orig_raw = parse_decimal_safe(p.get("monto", "0"))
+            # monto_vinculado (Vinculacion.monto_aplicado) siempre esta en USD
+            # (la moneda de las ordenes) -- nunca restar directamente un saldo
+            # en VES contra esto; hay que convertir el monto original primero.
+            monto_orig_usd = pago_monto_usd(monto_orig_raw, moneda, bcv_rate)
+            monto_vinculado_usd = linked_pago.get(pid, Decimal("0"))
+            saldo_usd = monto_orig_usd - monto_vinculado_usd
+
+            if saldo_usd > Decimal("0.05"):
                 vendedor = p.get("vendedor") or "Sin Vendedor"
                 cliente_id = str(p.get("cliente_id", "")).strip()
                 cliente_nombre = (
@@ -3648,12 +3595,15 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 unallocated_pagos.append(
                     {
                         "pago_id": pid,
-                        "fecha_pago": str(p.get("fecha_pago") or p.get("fecha") or "")[:10],
+                        "fecha_pago": fecha_pago,
                         "cliente_id": cliente_id,
                         "cliente_nombre": cliente_nombre,
-                        "monto_original": monto_orig,
-                        "saldo_pendiente": saldo,
-                        "moneda": p.get("moneda", "USD"),
+                        "monto_original_raw": monto_orig_raw,
+                        "monto_original_usd": monto_orig_usd,
+                        "saldo_pendiente_usd": saldo_usd,
+                        "moneda": moneda,
+                        "tasa_bcv": bcv_rate,
+                        "tasa_binance": binance_rate,
                         "vendedor": vendedor,
                     }
                 )
@@ -3689,12 +3639,34 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         for cid in open_orders_by_client:
             open_orders_by_client[cid].sort(key=lambda x: x["fecha"])
 
+        def visible_to_user(vendedor: str) -> bool:
+            if not (user and user["rol"] == "ventas"):
+                return True
+            u_name = (user["nombre"] or user["email"]).strip().lower()
+            return (
+                vendedor.strip().lower() == u_name
+                or user["email"].strip().lower() in vendedor.lower()
+            )
+
         sugerencias = []
         for p in unallocated_pagos:
             cid = p["cliente_id"]
             client_orders = open_orders_by_client.get(cid, [])
 
-            monto_pago_restante = p["saldo_pendiente"]
+            base_item = {
+                "pago_id": p["pago_id"],
+                "pago_fecha": p["fecha_pago"],
+                "cliente_id": cid,
+                "cliente_nombre": p["cliente_nombre"],
+                "monto_pago": float(p["monto_original_usd"]),
+                "monto_pago_original": float(p["monto_original_raw"]),
+                "saldo_pago": float(p["saldo_pendiente_usd"]),
+                "moneda_pago": p["moneda"],
+                "tasa_bcv": float(p["tasa_bcv"]),
+                "tasa_binance": float(p["tasa_binance"]),
+            }
+
+            monto_pago_restante = p["saldo_pendiente_usd"]
             for o in client_orders:
                 if monto_pago_restante <= Decimal("0.05"):
                     break
@@ -3705,13 +3677,13 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
                 sug_id = f"SUG_{p['pago_id']}_{o['so_id']}"
                 item = {
+                    **base_item,
+                    # Residual del pago justo ANTES de aplicar esta sugerencia
+                    # -- si un mismo pago cubre varias órdenes, cada fila
+                    # muestra cuanto le quedaba disponible en ese momento, no
+                    # el total original constante.
+                    "saldo_pago": float(monto_pago_restante),
                     "sugerencia_id": sug_id,
-                    "pago_id": p["pago_id"],
-                    "pago_fecha": p["fecha_pago"],
-                    "cliente_nombre": p["cliente_nombre"],
-                    "monto_pago": float(p["monto_original"]),
-                    "saldo_pago": float(p["saldo_pendiente"]),
-                    "moneda_pago": p["moneda"],
                     "so_id": o["so_id"],
                     "so_fecha": o["fecha"].isoformat()
                     if hasattr(o["fecha"], "isoformat")
@@ -3722,17 +3694,31 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     "vendedor": p["vendedor"] or o["vendedor"],
                 }
 
-                if user and user["rol"] == "ventas":
-                    u_name = (user["nombre"] or user["email"]).strip().lower()
-                    if (
-                        item["vendedor"].strip().lower() != u_name
-                        and user["email"].strip().lower() not in item["vendedor"].lower()
-                    ):
-                        continue
+                if not visible_to_user(item["vendedor"]):
+                    continue
 
                 sugerencias.append(item)
                 monto_pago_restante -= monto_aplicar
                 o["saldo_pendiente"] -= monto_aplicar
+
+            # Pago sin (mas) ordenes abiertas del mismo cliente que cubrir --
+            # se sigue mostrando (sin sugerencia, con el residual que
+            # realmente le queda) para poder vincularse manualmente, en vez
+            # de desaparecer silenciosamente de la vista.
+            if monto_pago_restante > Decimal("0.05") and visible_to_user(p["vendedor"]):
+                sugerencias.append(
+                    {
+                        **base_item,
+                        "saldo_pago": float(monto_pago_restante),
+                        "sugerencia_id": f"SUG_{p['pago_id']}_SIN_ORDEN",
+                        "so_id": None,
+                        "so_fecha": None,
+                        "so_monto_total": None,
+                        "so_saldo_pendiente": None,
+                        "monto_sugerido": 0.0,
+                        "vendedor": p["vendedor"],
+                    }
+                )
 
         return sugerencias
     except Exception as e:
@@ -5454,6 +5440,7 @@ async def get_pagos_historial():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        tasas_rows = repo._g.read_rows("SerieTasas")
 
         # Total vinculado por orden (todas las vinculaciones, no solo la de
         # esta fila) -- para poder mostrar si la orden destino de una
@@ -5477,6 +5464,27 @@ async def get_pagos_historial():
                 else Decimal("0")
             )
 
+            # Monto original del pago (no solo lo aplicado en esta
+            # vinculación puntual) -- en USD, para poder verificar a ojo si
+            # el residual mostrado cuadra contra el importe firmado del pago.
+            monto_pago_usd = float(v.monto_aplicado)
+            if p_data:
+                fecha_p = str(p_data.get("fecha_pago") or p_data.get("fecha") or "")[:10]
+                try:
+                    fecha_p_dt = (
+                        datetime.strptime(fecha_p, "%Y-%m-%d") if fecha_p else datetime.now()
+                    )
+                except ValueError:
+                    fecha_p_dt = datetime.now()
+                bcv_p, _ = get_rate_for_datetime(fecha_p_dt, tasas_rows)
+                monto_pago_usd = float(
+                    pago_monto_usd(
+                        parse_decimal_safe(p_data.get("monto", "0")),
+                        str(p_data.get("moneda", "USD") or "USD").upper().strip(),
+                        bcv_p,
+                    )
+                )
+
             historial.append(
                 {
                     "vinc_id": v.vinc_id,
@@ -5485,6 +5493,7 @@ async def get_pagos_historial():
                     "fecha_pago": v.hora_pago_confirmada.strftime("%Y-%m-%d")
                     if v.hora_pago_confirmada
                     else "",
+                    "monto_pago_usd": monto_pago_usd,
                     "monto_aplicado": float(v.monto_aplicado),
                     "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
                     "so_id": v.so_id,
@@ -5533,6 +5542,7 @@ async def get_pagos_historial():
                             "pago_id": pago_id,
                             "cliente_nombre": c_name,
                             "fecha_pago": p["fecha_pago"],
+                            "monto_pago_usd": p["monto_ref_usd"],
                             "monto_aplicado": p["monto_conciliado_usd"],
                             "moneda": p["moneda"],
                             "so_id": so_id,
