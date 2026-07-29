@@ -272,6 +272,138 @@ def get_live_pagos_confirmados(execute: Any) -> list[dict[str, Any]]:
     return recs
 
 
+def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
+    """Pagos de cliente RECONCILIADOS en Odoo, con su(s) factura(s), monto
+
+    conciliado y residual -- una fila por pago (no una por orden, para no
+    duplicar un pago que reconcilia facturas de varias órdenes).
+
+    Bug corregido: ``pagos_reconciliados_por_orden`` (odoo/client.py) leía
+    el campo "invoice_ids" de account.payment -- ese campo lo llena el
+    wizard "Registrar Pago"; en pagos reconciliados por matching de banco o
+    manualmente (el caso normal acá) queda SIEMPRE vacío. El campo que sí
+    refleja la reconciliación real es "reconciled_invoice_ids". Verificado
+    en vivo: de 673 pagos con is_reconciled=True, 0 tenían invoice_ids
+    poblado y los 673 tenían reconciled_invoice_ids -- la tabla de "Pagos
+    Conciliados" quedaba siempre vacía.
+
+    "Monto conciliado" = ``amount_ref`` (ya en USD, mismo campo que Odoo
+    usa en su propia lista de pagos) menos ``amount_available_for_refund``
+    (lo que del pago sigue disponible/sin aplicar). "Residual" es el saldo
+    de la(s) factura(s) asociada(s) (``amount_residual_usd``) -- si sigue
+    siendo > 0, esa factura quedó parcialmente pagada por este (u otro)
+    pago.
+    """
+    pagos = execute(
+        "account.payment",
+        "search_read",
+        [
+            [
+                ["payment_type", "=", "inbound"],
+                ["partner_type", "=", "customer"],
+                ["state", "in", ["in_process", "paid"]],
+                ["is_reconciled", "=", True],
+            ]
+        ],
+        {
+            "fields": [
+                "id",
+                "partner_id",
+                "amount",
+                "amount_ref",
+                "amount_available_for_refund",
+                "currency_id",
+                "journal_id",
+                "date",
+                "reconciled_invoice_ids",
+            ]
+        },
+    )
+    if not pagos:
+        return []
+
+    all_inv_ids: set[int] = set()
+    for p in pagos:
+        all_inv_ids.update(p.get("reconciled_invoice_ids") or [])
+
+    invoices_map: dict[int, dict[str, Any]] = {}
+    if all_inv_ids:
+        invs = execute(
+            "account.move",
+            "read",
+            [list(all_inv_ids)],
+            {
+                "fields": [
+                    "id",
+                    "name",
+                    "invoice_origin",
+                    "move_type",
+                    "state",
+                    "amount_total_signed_usd",
+                    "amount_residual_usd",
+                ]
+            },
+        )
+        invoices_map = {i["id"]: i for i in invs}
+
+    partner_ids = {
+        int(p["partner_id"][0])
+        for p in pagos
+        if isinstance(p.get("partner_id"), list | tuple) and p["partner_id"]
+    }
+    vendedores = resolve_vendedores_por_partner(execute, partner_ids)
+
+    result: list[dict[str, Any]] = []
+    for p in pagos:
+        inv_ids = p.get("reconciled_invoice_ids") or []
+        invs = [invoices_map[i] for i in inv_ids if i in invoices_map]
+        facturas = [
+            {
+                "factura_id": str(i.get("name", "")),
+                "so_id": str(i.get("invoice_origin") or ""),
+                "monto_usd": float(i.get("amount_total_signed_usd") or 0.0),
+                "residual_usd": float(i.get("amount_residual_usd") or 0.0),
+                "tipo": str(i.get("move_type") or ""),
+            }
+            for i in invs
+        ]
+        residual_facturas = sum(f["residual_usd"] for f in facturas)
+
+        monto_ref = parse_decimal_safe(str(p.get("amount_ref") or "0"))
+        residual_pago = parse_decimal_safe(str(p.get("amount_available_for_refund") or "0"))
+        monto_conciliado = monto_ref - residual_pago
+
+        pinfo = p.get("partner_id")
+        pid = pinfo[0] if isinstance(pinfo, list | tuple) and pinfo else None
+        curr_info = p.get("currency_id")
+        journal_info = p.get("journal_id")
+        result.append(
+            {
+                "pago_id": str(p.get("id", "")),
+                "cliente_id": str(pid) if pid else "",
+                "cliente_nombre": pinfo[1]
+                if isinstance(pinfo, list | tuple) and len(pinfo) > 1
+                else "",
+                "fecha_pago": str(p.get("date") or "")[:10],
+                "moneda": curr_info[1]
+                if isinstance(curr_info, list | tuple) and len(curr_info) > 1
+                else "USD",
+                "metodo_pago": journal_info[1]
+                if isinstance(journal_info, list | tuple) and len(journal_info) > 1
+                else "",
+                "monto_original": float(p.get("amount") or 0.0),
+                "monto_ref_usd": float(monto_ref),
+                "monto_conciliado_usd": float(monto_conciliado),
+                "residual_pago_usd": float(residual_pago),
+                "residual_facturas_usd": round(residual_facturas, 2),
+                "facturas": facturas,
+                "so_ids": sorted({f["so_id"] for f in facturas if f["so_id"]}),
+                "vendedor_email": vendedores.get(int(pid), "") if pid else "",
+            }
+        )
+    return result
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -3454,11 +3586,14 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                         if sname:
                             so_states_map[sname] = str(os_item.get("state", "")).strip().lower()
 
-                    # SO "pagada" = todas sus out_invoice estan payment_state
-                    # paid/in_payment (misma regla que /api/reporte-saldos y
-                    # /api/auditoria, Tarea 2). Una orden ya facturada sigue
-                    # siendo un destino valido para sugerir un pago mientras
-                    # su factura en Odoo no figure como pagada.
+                    # SO "pagada" = el residual de TODAS sus out_invoice suma
+                    # 0 (usando amount_residual_usd, el campo firmado en USD
+                    # de Odoo -- NUNCA recalcular la conversión nosotros
+                    # mismos con una tasa BCV propia, que puede diferir de la
+                    # que Odoo aplicó a esa factura puntual). Una orden ya
+                    # facturada sigue siendo un destino valido para sugerir
+                    # un pago mientras su factura tenga saldo pendiente
+                    # (residual > 0), sin importar el payment_state.
                     invoices = execute(
                         "account.move",
                         "search_read",
@@ -3469,17 +3604,17 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                                 ["move_type", "=", "out_invoice"],
                             ]
                         ],
-                        {"fields": ["invoice_origin", "payment_state"]},
+                        {"fields": ["invoice_origin", "amount_residual_usd"]},
                     )
-                    estados_por_so: dict[str, list[str]] = {}
+                    residual_por_so: dict[str, Decimal] = {}
                     for inv in invoices:
                         so = str(inv.get("invoice_origin", "")).strip()
                         if so:
-                            estados_por_so.setdefault(so, []).append(
-                                str(inv.get("payment_state", ""))
-                            )
-                    for so, estados in estados_por_so.items():
-                        if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                            residual_por_so[so] = residual_por_so.get(
+                                so, Decimal("0")
+                            ) + parse_decimal_safe(str(inv.get("amount_residual_usd") or "0"))
+                    for so, residual in residual_por_so.items():
+                        if residual <= Decimal("0.05"):
                             so_pagada_en_odoo.add(so)
 
                     entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
@@ -5319,7 +5454,13 @@ async def get_pagos_historial():
         clientes_rows = repo._g.read_rows("Clientes")
         clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_rows = repo._g.read_rows("SerieTasas")
+
+        # Total vinculado por orden (todas las vinculaciones, no solo la de
+        # esta fila) -- para poder mostrar si la orden destino de una
+        # vinculación manual todavía tiene saldo pendiente (residual).
+        linked_so_total: dict[str, Decimal] = {}
+        for v in vincs:
+            linked_so_total[v.so_id] = linked_so_total.get(v.so_id, Decimal("0")) + v.monto_aplicado
 
         historial = []
         vinculados_pago_ids: set[str] = set()
@@ -5330,6 +5471,11 @@ async def get_pagos_historial():
             c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
             o = ordenes_map.get(v.so_id)
             factura_id = o.factura_id if o and o.factura_id else "N/A"
+            residual_orden = (
+                max(Decimal("0"), o.monto_total - linked_so_total.get(v.so_id, Decimal("0")))
+                if o
+                else Decimal("0")
+            )
 
             historial.append(
                 {
@@ -5343,6 +5489,9 @@ async def get_pagos_historial():
                     "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
                     "so_id": v.so_id,
                     "factura_id": factura_id,
+                    "facturas": [],
+                    "residual_pago_usd": 0.0,
+                    "residual_facturas_usd": float(residual_orden),
                     "confirmado_por": v.confirmado_por or "Sistema",
                     "estado": v.estado.value,
                     "origen": "Sistema (vinculación manual)",
@@ -5358,64 +5507,48 @@ async def get_pagos_historial():
         # Pagos reconciliados directamente en Odoo (via factura) que NUNCA
         # pasaron por una Vinculacion de este sistema -- antes invisibles en
         # esta tabla, aunque ya estaban "conciliados" desde el punto de vista
-        # de Odoo. Best-effort: si Odoo no responde, se muestra solo lo que
-        # ya se tenía localmente.
+        # de Odoo. Una fila POR PAGO (no por orden, un pago puede reconciliar
+        # facturas de varias órdenes) con TODAS sus facturas asociadas, monto
+        # conciliado y residual. Best-effort: si Odoo no responde, se muestra
+        # solo lo que ya se tenía localmente.
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                reader = OdooXmlRpcReader(config.odoo, execute)
-                so_names = list(ordenes_map.keys())
-                reconciliados_por_so = reader.pagos_reconciliados_por_orden(so_names)
-                for so_name, pagos_odoo in reconciliados_por_so.items():
-                    o = ordenes_map.get(so_name)
-                    factura_id = o.factura_id if o and o.factura_id else "N/A"
-                    for p in pagos_odoo:
-                        pago_id = str(p.get("id", ""))
-                        if pago_id in vinculados_pago_ids:
-                            continue  # ya vino por la Vinculacion local, no duplicar
-                        partner_raw = p.get("partner_id")
-                        cid = (
-                            str(partner_raw[0])
-                            if isinstance(partner_raw, list | tuple) and partner_raw
-                            else ""
-                        )
-                        c_name = clientes_map.get(cid, f"Cliente ID: {cid}")
-                        fecha_str = str(p.get("date") or "")[:10]
-                        try:
-                            fecha_dt = (
-                                datetime.strptime(fecha_str, "%Y-%m-%d")
-                                if fecha_str
-                                else datetime.now()
-                            )
-                        except ValueError:
-                            fecha_dt = datetime.now()
-                        bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
-                        curr_raw = p.get("currency_id")
-                        moneda = (
-                            str(curr_raw[1])
-                            if isinstance(curr_raw, list | tuple) and len(curr_raw) > 1
-                            else "USD"
-                        )
-                        historial.append(
-                            {
-                                "vinc_id": None,
-                                "pago_id": pago_id,
-                                "cliente_nombre": c_name,
-                                "fecha_pago": fecha_str,
-                                "monto_aplicado": float(p.get("amount") or 0),
-                                "moneda": moneda,
-                                "so_id": so_name,
-                                "factura_id": factura_id,
-                                "confirmado_por": "Odoo",
-                                "estado": "CONCILIADO",
-                                "origen": "Odoo (automático vía factura)",
-                                "tasa_bcv": float(bcv_rate),
-                                "tasa_binance": float(binance_rate),
-                                "bcv_variante": "USD",
-                                "editable": False,
-                            }
-                        )
+                for p in get_live_pagos_conciliados(execute):
+                    pago_id = p["pago_id"]
+                    if pago_id in vinculados_pago_ids:
+                        continue  # ya vino por la Vinculacion local, no duplicar
+                    facturas = p["facturas"]
+                    factura_id = (
+                        ", ".join(f["factura_id"] for f in facturas) if facturas else "N/A"
+                    )
+                    so_id = ", ".join(p["so_ids"]) if p["so_ids"] else ""
+                    c_name = p["cliente_nombre"] or clientes_map.get(
+                        p["cliente_id"], f"Cliente ID: {p['cliente_id']}"
+                    )
+                    historial.append(
+                        {
+                            "vinc_id": None,
+                            "pago_id": pago_id,
+                            "cliente_nombre": c_name,
+                            "fecha_pago": p["fecha_pago"],
+                            "monto_aplicado": p["monto_conciliado_usd"],
+                            "moneda": p["moneda"],
+                            "so_id": so_id,
+                            "factura_id": factura_id,
+                            "facturas": facturas,
+                            "residual_pago_usd": p["residual_pago_usd"],
+                            "residual_facturas_usd": p["residual_facturas_usd"],
+                            "confirmado_por": "Odoo",
+                            "estado": "CONCILIADO",
+                            "origen": "Odoo (automático vía factura)",
+                            "tasa_bcv": None,
+                            "tasa_binance": None,
+                            "bcv_variante": "USD",
+                            "editable": False,
+                        }
+                    )
         except Exception as e_odoo:
             logger.warning("Error consultando pagos reconciliados en Odoo: %s", e_odoo)
 
