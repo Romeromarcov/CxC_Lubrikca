@@ -184,6 +184,94 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
         return set()
 
 
+def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[int, str]:
+    """Email del vendedor (res.users.login) asignado a cada partner (res.partner.user_id).
+
+    Mismo criterio que ``OdooXmlRpcReader._vendedor_por_partner`` (odoo/client.py),
+    reimplementado aquí sobre el ``execute`` crudo para no depender de esa clase.
+    """
+    if not partner_ids:
+        return {}
+    try:
+        partners = execute(
+            "res.partner", "read", [list(partner_ids)], {"fields": ["id", "user_id"]}
+        )
+        uids = {
+            int(p["user_id"][0])
+            for p in partners
+            if isinstance(p.get("user_id"), list | tuple) and p["user_id"]
+        }
+        logins: dict[int, str] = {}
+        if uids:
+            users = execute("res.users", "read", [list(uids)], {"fields": ["id", "login"]})
+            logins = {int(u["id"]): str(u.get("login") or "") for u in users}
+        out: dict[int, str] = {}
+        for p in partners:
+            u = p.get("user_id")
+            uid = u[0] if isinstance(u, list | tuple) and u else None
+            out[int(p["id"])] = logins.get(int(uid), "") if uid else ""
+        return out
+    except Exception as e:
+        logger.warning("Error resolviendo vendedores por partner: %s", e)
+        return {}
+
+
+def get_live_pagos_confirmados(execute: Any) -> list[dict[str, Any]]:
+    """Pagos de cliente CONFIRMADOS en vivo desde Odoo -- espejo exacto.
+
+    ``account.payment`` no tiene estado "posted" (eso es de account.move);
+    sus estados confirmados son in_process/paid. NO filtra por
+    ``is_reconciled`` -- ese es justo el bug que esto reemplaza: el sync
+    incremental (``changed_pagos`` en odoo/client.py) SOLO trae pagos
+    is_reconciled=False a la hoja local "Pagos" (esa hoja existe para
+    sugerir vinculaciones manuales, no para totalizar cobranza), así que
+    en cuanto Odoo reconcilia un pago contra una factura, el sync deja de
+    traerlo -- verificado en vivo: de 882 pagos confirmados en Odoo, 673
+    (76%) ya estaban reconciliados y el total de cobranza del dashboard
+    quedaba ~$16,562 por debajo del real de Odoo.
+
+    Usa ``amount_ref`` (el mismo campo "Importe referencia" que Odoo
+    muestra en su propia lista de pagos, ya en USD) en vez de recalcular
+    la tasa BCV nosotros mismos -- así no hay forma de que la tasa usada
+    difiera de la que usó Odoo para esa transacción puntual. Verificado en
+    vivo: sum(amount_ref) para este dominio = $234,091.96, exactamente el
+    total que muestra Odoo en Contabilidad > Pagos del cliente.
+    """
+    recs = execute(
+        "account.payment",
+        "search_read",
+        [
+            [
+                ["payment_type", "=", "inbound"],
+                ["partner_type", "=", "customer"],
+                ["state", "in", ["in_process", "paid"]],
+            ]
+        ],
+        {
+            "fields": [
+                "id",
+                "amount",
+                "amount_ref",
+                "currency_id",
+                "journal_id",
+                "partner_id",
+                "date",
+            ]
+        },
+    )
+    partner_ids = {
+        int(p["partner_id"][0])
+        for p in recs
+        if isinstance(p.get("partner_id"), list | tuple) and p["partner_id"]
+    }
+    vendedores = resolve_vendedores_por_partner(execute, partner_ids)
+    for r in recs:
+        pinfo = r.get("partner_id")
+        pid = pinfo[0] if isinstance(pinfo, list | tuple) and pinfo else None
+        r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
+    return recs
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -6273,6 +6361,7 @@ async def get_reporte_diario(
         journal_name_map: dict[int, str] = {}
         so_states_map: dict[str, str] = {}
         entrega_valida_set: set[str] = set()
+        execute = None
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -6346,35 +6435,87 @@ async def get_reporte_diario(
             ventas_por_dia[fecha_key]["total_usd"] += o.monto_total
             ventas_por_dia[fecha_key]["ordenes_count"] += 1
 
-        # Sum line liters
+        # Litros: se usa sale.report de Odoo (mismo "Volumen (L)" que Odoo
+        # muestra en su propio pivot "Análisis de Ventas") para las órdenes
+        # que Odoo reconoce ahí -- evita 2 bugs reales encontrados
+        # comparando contra Odoo en vivo:
+        #  (a) "cantidad_entregada" en la hoja local se guarda como texto
+        #      "0" (nunca vacío) para líneas aún no despachadas, así que
+        #      "cantidad_entregada or cantidad" NUNCA caía al pedido (el
+        #      "0" ya es truthy como string) -- subestimaba litros en
+        #      ~2.600 L verificado en vivo (79.201 vs 81.823 L reales).
+        #  (b) el volumen de un producto puede diferir entre el valor
+        #      ACTUAL en product.product.volume y el que Odoo capturó en
+        #      su reporte al momento de la orden (ej. "GRASA MULTIPLE
+        #      Ep200 PAILA": nuestro campo decía 15.9 L, sale.report decía
+        #      18.92 L) -- leer sale.report directamente elimina también
+        #      ese desfase.
+        # sale.report NO incluye órdenes canceladas (ni con la excepción de
+        # negocio cancelada+entregada) -- para esas (y como red de
+        # seguridad si Odoo no responde para alguna orden puntual) se cae
+        # al cálculo local, ya con el bug (a) corregido.
+        litros_por_so: dict[str, Decimal] = {}
+        if execute:
+            try:
+                so_names_validas = list(ordenes_validas.keys())
+                if so_names_validas:
+                    sr_rows = execute(
+                        "sale.report",
+                        "search_read",
+                        [[["name", "in", so_names_validas]]],
+                        {"fields": ["name", "product_volume"]},
+                    )
+                    for r in sr_rows:
+                        sname = str(r.get("name", "")).strip()
+                        if sname:
+                            litros_por_so[sname] = litros_por_so.get(
+                                sname, Decimal("0")
+                            ) + parse_decimal_safe(str(r.get("product_volume") or "0"))
+            except Exception as e_sr:
+                logger.warning("Error consultando sale.report en get_reporte_diario: %s", e_sr)
+
+        lineas_por_so: dict[str, list[dict]] = {}
         for ln in lineas:
             so_id = ln.get("so_id")
-            o_match = ordenes_validas.get(so_id)
-            if not o_match:
-                continue
+            if so_id:
+                lineas_por_so.setdefault(so_id, []).append(ln)
+
+        for so_id, o_match in ordenes_validas.items():
             fk = o_match.fecha.isoformat()[:10]
             if fk not in ventas_por_dia:
                 continue
-            # "producto" guarda el product_id de Odoo (ver map_linea en
-            # odoo/client.py) -- NO existe una columna "product_id" en la
-            # hoja LineasOrden. "cantidad_ordenada" tampoco existe, la
-            # columna real es "cantidad". Con las claves equivocadas, esta
-            # suma caía siempre al fallback de 1.0 L/unidad para TODA línea,
-            # subestimando los litros reales de cada producto.
-            prod_id = int(ln.get("producto") or 0)
-            qty = parse_decimal_safe(ln.get("cantidad_entregada") or ln.get("cantidad") or "0")
-            l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
-            ventas_por_dia[fk]["litros_totales"] += qty * l_per_unit
+            if so_id in litros_por_so:
+                ventas_por_dia[fk]["litros_totales"] += litros_por_so[so_id]
+                continue
+            # Fallback local (orden no encontrada en sale.report: excepción
+            # cancelada+entregada, u Odoo no disponible).
+            for ln in lineas_por_so.get(so_id, []):
+                prod_id = int(ln.get("producto") or 0)
+                qty_entregada = parse_decimal_safe(ln.get("cantidad_entregada") or "0")
+                qty = (
+                    qty_entregada
+                    if qty_entregada > 0
+                    else parse_decimal_safe(ln.get("cantidad") or "0")
+                )
+                l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
+                ventas_por_dia[fk]["litros_totales"] += qty * l_per_unit
 
-        # 2. Cobranza por Día (Desglosada por Moneda y Método) -- TODA la
-        # cobranza, asociada o no a una orden (se lee la hoja Pagos completa).
-        cobranza_por_dia = {}
-        for p in pagos:
-            if vendedor_f and vendedor_f != str(p.get("vendedor_email", "")).strip().lower():
-                continue
-            fecha_key = str(p.get("fecha_pago", ""))[:10] or date.today().isoformat()
-            if not in_range(fecha_key):
-                continue
+        # 2. Cobranza por Día (Desglosada por Moneda y Método) -- espejo EXACTO
+        # de Odoo. Se consulta LIVE account.payment (cliente, inbound,
+        # confirmado) en vez de la hoja local "Pagos": esa hoja solo
+        # sincroniza pagos is_reconciled=False (changed_pagos() en
+        # odoo/client.py -- existe para sugerir vinculaciones manuales, NO
+        # para totalizar cobranza), así que en cuanto Odoo reconcilia un pago
+        # contra una factura el sync deja de traerlo. Verificado en vivo: de
+        # 882 pagos confirmados en Odoo, 673 (76%) ya estaban reconciliados y
+        # el total de cobranza del dashboard quedaba ~$16,562 por debajo del
+        # real (ver get_live_pagos_confirmados). Si Odoo no responde, cae a
+        # la hoja local (degradado pero funcional).
+        cobranza_por_dia: dict[str, dict[str, Any]] = {}
+
+        def _acumular_pago(
+            fecha_key: str, monto: Decimal, eq_usd: Decimal, moneda: str, metodo: str
+        ) -> None:
             if fecha_key not in cobranza_por_dia:
                 cobranza_por_dia[fecha_key] = {
                     "fecha": fecha_key,
@@ -6385,41 +6526,73 @@ async def get_reporte_diario(
                     "ves_monto": Decimal("0"),
                     "ves_eq_usd": Decimal("0"),
                 }
-            monto = parse_decimal_safe(p.get("monto", "0"))
-            moneda = p.get("moneda", "VES")
-            metodo_raw = str(p.get("metodo_pago") or p.get("forma_pago") or "").strip()
-            metodo = (
-                journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None
-            ) or metodo_raw or "Efectivo"
-
-            try:
-                fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
-            except ValueError:
-                fecha_dt = datetime.now()
-            bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
-            eq_bcv = (
-                monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
-            )
-            eq_binance = (
-                monto
-                if moneda == "USD"
-                else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
-            )
-
-            cobranza_por_dia[fecha_key]["total_eq_bcv"] += eq_bcv
-            cobranza_por_dia[fecha_key]["total_eq_binance"] += eq_binance
-
-            if moneda not in cobranza_por_dia[fecha_key]["por_moneda"]:
-                cobranza_por_dia[fecha_key]["por_moneda"][moneda] = Decimal("0")
-            cobranza_por_dia[fecha_key]["por_moneda"][moneda] += monto
-
-            if metodo not in cobranza_por_dia[fecha_key]["por_metodo"]:
-                cobranza_por_dia[fecha_key]["por_metodo"][metodo] = Decimal("0")
-            cobranza_por_dia[fecha_key]["por_metodo"][metodo] += eq_bcv
-
+            dia = cobranza_por_dia[fecha_key]
+            dia["total_eq_bcv"] += eq_usd
+            dia["total_eq_binance"] += eq_usd
+            dia["por_moneda"][moneda] = dia["por_moneda"].get(moneda, Decimal("0")) + monto
+            dia["por_metodo"][metodo] = dia["por_metodo"].get(metodo, Decimal("0")) + eq_usd
             if moneda != "USD":
-                cobranza_por_dia[fecha_key]["ves_monto"] += monto
-                cobranza_por_dia[fecha_key]["ves_eq_usd"] += eq_bcv
+                dia["ves_monto"] += monto
+                dia["ves_eq_usd"] += eq_usd
+
+        cobranza_desde_odoo = False
+        if execute:
+            try:
+                for p in get_live_pagos_confirmados(execute):
+                    vendedor_email = str(p.get("vendedor_email") or "").strip().lower()
+                    if vendedor_f and vendedor_f != vendedor_email:
+                        continue
+                    fecha_key = str(p.get("date") or "")[:10] or date.today().isoformat()
+                    if not in_range(fecha_key):
+                        continue
+                    monto = parse_decimal_safe(str(p.get("amount") or "0"))
+                    eq_usd = parse_decimal_safe(str(p.get("amount_ref") or "0"))
+                    curr_info = p.get("currency_id")
+                    moneda = (
+                        curr_info[1]
+                        if isinstance(curr_info, list | tuple) and len(curr_info) > 1
+                        else "USD"
+                    )
+                    journal_info = p.get("journal_id")
+                    metodo = (
+                        journal_info[1]
+                        if isinstance(journal_info, list | tuple) and len(journal_info) > 1
+                        else "Efectivo"
+                    )
+                    _acumular_pago(fecha_key, monto, eq_usd, moneda, metodo)
+                cobranza_desde_odoo = True
+            except Exception as e_pagos:
+                logger.warning(
+                    "Error consultando pagos en vivo en get_reporte_diario, "
+                    "usando hoja local degradada: %s",
+                    e_pagos,
+                )
+                cobranza_por_dia = {}
+
+        if not cobranza_desde_odoo:
+            for p in pagos:
+                if vendedor_f and vendedor_f != str(p.get("vendedor_email", "")).strip().lower():
+                    continue
+                fecha_key = str(p.get("fecha_pago", ""))[:10] or date.today().isoformat()
+                if not in_range(fecha_key):
+                    continue
+                monto = parse_decimal_safe(p.get("monto", "0"))
+                moneda = p.get("moneda", "VES")
+                metodo_raw = str(p.get("metodo_pago") or p.get("forma_pago") or "").strip()
+                metodo = (
+                    journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None
+                ) or metodo_raw or "Efectivo"
+                try:
+                    fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
+                except ValueError:
+                    fecha_dt = datetime.now()
+                bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+                eq_usd = (
+                    monto
+                    if moneda == "USD"
+                    else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+                )
+                _acumular_pago(fecha_key, monto, eq_usd, moneda, metodo)
 
         ventas_list = [
             {
