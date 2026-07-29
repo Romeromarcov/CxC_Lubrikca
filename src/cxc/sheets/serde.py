@@ -71,7 +71,16 @@ def p_dec(s: str) -> Decimal:
     cualquier columna numérica de cualquier fila; que UNA fila mala tumbe
     con 500 un endpoint entero (que procesa cientos de filas) es peor que
     tratarla como 0 y dejar rastro en el log para auditarla aparte.
+
+    Una celda vacía NO se loggea -- es el caso normal y mayoritario de
+    cualquier columna numérica opcional (miles de celdas en blanco por cada
+    lectura completa), no un dato corrupto; loggearla como warning ahogaba
+    el log real (Railway descartaba cientos de mensajes/seg por exceder su
+    límite de 500 logs/seg). Solo se loggea texto no vacío que de verdad no
+    parsea (p.ej. "#REF!" o texto suelto), que sí amerita auditarse.
     """
+    if not s or not s.strip():
+        return Decimal("0")
     try:
         return Decimal(s)
     except (InvalidOperation, ValueError, TypeError):

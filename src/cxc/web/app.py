@@ -445,6 +445,21 @@ def pago_monto_usd(monto_raw: Decimal, moneda: str, bcv_rate: Decimal) -> Decima
     return monto_raw
 
 
+def usd_bcv_to_binance(
+    usd_via_bcv: Decimal, moneda: str, bcv_rate: Decimal, binance_rate: Decimal
+) -> Decimal:
+    """Reexpresa un equivalente USD (calculado con tasa BCV) usando tasa
+
+    Binance en su lugar -- ancla el monto original en VES (usd_via_bcv *
+    bcv_rate) y lo reconvierte con binance_rate, para mostrar ambas
+    referencias de un mismo pago en VES sin recalcular desde la celda cruda.
+    Para pagos en USD el valor no cambia (no hay tasa que aplicar).
+    """
+    if moneda == "VES" and binance_rate > Decimal("0"):
+        return usd_via_bcv * bcv_rate / binance_rate
+    return usd_via_bcv
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -3567,8 +3582,15 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 continue
             fecha_pago = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
             try:
+                # Mediodía por defecto (no medianoche): la tasa varía por
+                # hora y el pago normalmente se recibe en horario laboral --
+                # mismo criterio que el resto del sistema (formulario de
+                # vinculación manual). El usuario puede ajustarlo antes de
+                # confirmar una vinculación puntual.
                 fecha_dt = (
-                    datetime.strptime(fecha_pago, "%Y-%m-%d") if fecha_pago else datetime.now()
+                    datetime.strptime(f"{fecha_pago} 12:00:00", "%Y-%m-%d %H:%M:%S")
+                    if fecha_pago
+                    else datetime.now()
                 )
             except ValueError:
                 fecha_dt = datetime.now()
@@ -3652,6 +3674,29 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         for p in unallocated_pagos:
             cid = p["cliente_id"]
             client_orders = open_orders_by_client.get(cid, [])
+            bcv_rate, binance_rate, moneda_p = p["tasa_bcv"], p["tasa_binance"], p["moneda"]
+
+            def saldo_fields(
+                restante_usd_bcv: Decimal,
+                moneda_r: str = moneda_p,
+                bcv_r: Decimal = bcv_rate,
+                binance_r: Decimal = binance_rate,
+            ) -> dict:
+                # Ambas referencias del MISMO residual -- el pago en VES no
+                # tiene una tasa "oficial" unica para el usuario, y la que
+                # aplique al vincular puede ajustarse (hora) antes de
+                # confirmar; mostrar las dos evita que una parezca faltante.
+                # Argumentos default (no closure) para no atar esta función
+                # a la variable de loop mutable de la siguiente iteración.
+                return {
+                    "saldo_pago": float(restante_usd_bcv),
+                    "saldo_pago_binance": float(
+                        usd_bcv_to_binance(restante_usd_bcv, moneda_r, bcv_r, binance_r)
+                    ),
+                    "saldo_pago_original": float(
+                        restante_usd_bcv * bcv_r if moneda_r == "VES" else restante_usd_bcv
+                    ),
+                }
 
             base_item = {
                 "pago_id": p["pago_id"],
@@ -3659,11 +3704,13 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 "cliente_id": cid,
                 "cliente_nombre": p["cliente_nombre"],
                 "monto_pago": float(p["monto_original_usd"]),
+                "monto_pago_binance": float(
+                    usd_bcv_to_binance(p["monto_original_usd"], moneda_p, bcv_rate, binance_rate)
+                ),
                 "monto_pago_original": float(p["monto_original_raw"]),
-                "saldo_pago": float(p["saldo_pendiente_usd"]),
                 "moneda_pago": p["moneda"],
-                "tasa_bcv": float(p["tasa_bcv"]),
-                "tasa_binance": float(p["tasa_binance"]),
+                "tasa_bcv": float(bcv_rate),
+                "tasa_binance": float(binance_rate),
             }
 
             monto_pago_restante = p["saldo_pendiente_usd"]
@@ -3682,7 +3729,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     # -- si un mismo pago cubre varias órdenes, cada fila
                     # muestra cuanto le quedaba disponible en ese momento, no
                     # el total original constante.
-                    "saldo_pago": float(monto_pago_restante),
+                    **saldo_fields(monto_pago_restante),
                     "sugerencia_id": sug_id,
                     "so_id": o["so_id"],
                     "so_fecha": o["fecha"].isoformat()
@@ -3709,7 +3756,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 sugerencias.append(
                     {
                         **base_item,
-                        "saldo_pago": float(monto_pago_restante),
+                        **saldo_fields(monto_pago_restante),
                         "sugerencia_id": f"SUG_{p['pago_id']}_SIN_ORDEN",
                         "so_id": None,
                         "so_fecha": None,
