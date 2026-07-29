@@ -787,8 +787,10 @@ def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
                 "moneda": "USD",
                 "fecha_pago": "2026-07-01",
             },
-            # Vinculado parcialmente: de VES 6000, ya se asignaron 2000 ->
-            # quedan 4000 VES pendientes.
+            # Vinculado parcialmente: VES 6000 equivalen a $150 (tasa 40); ya
+            # se aplicaron $50 (Vinculacion.monto_aplicado siempre esta en
+            # USD, la moneda de las ordenes, nunca en la moneda original del
+            # pago) -> quedan $100 pendientes (= 4000 VES a esa misma tasa).
             {
                 "pago_id": "P_PARCIAL",
                 "cliente_id": "C1",
@@ -818,7 +820,7 @@ def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
             vinc_id="V_PARCIAL",
             pago_id="P_PARCIAL",
             so_id="SO1",
-            monto_aplicado=Decimal("2000.00"),
+            monto_aplicado=Decimal("50.00"),
             hora_pago_confirmada=datetime.now(),
             tasa_bcv_aplicada=Decimal("40.0"),
             tasa_binance_aplicada=Decimal("42.0"),
@@ -1714,3 +1716,191 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
         ventas = {v["fecha"]: v for v in res.json()["ventas_diarias"]}
         # 123.45 (sale.report, SO_SR1) + 10*2.0=20.0 (fallback, SO_FALLBACK) = 143.45
         assert abs(ventas["2026-07-18"]["litros_totales"] - 143.45) < 0.01
+
+
+def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
+    """Un pago en VES no debe tratarse como si su monto ya fuera USD -- el
+
+    bug reportado: un pago de VES 5.181,27 aparecía en la tabla de
+    sugerencias como "$5181.27", cuando a la tasa BCV del día ese pago vale
+    ~$141.68 USD. La sugerencia de aplicación (monto_sugerido) debe basarse
+    en el equivalente USD real, no en el número crudo en bolívares.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_VES",
+                "cliente_id": "C_VES",
+                "monto": "5181.27",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-23",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_VES", "nombre": "Cliente VES"}]
+            if sheet == "Clientes"
+            else (
+                [{"timestamp": "2026-07-23 12:00:00", "tasa_bcv": "36.57", "tasa_binance": "38.0"}]
+                if sheet == "SerieTasas"
+                else []
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_VES_1",
+            cliente_id="C_VES",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 5, 7),
+            fecha_entrega=date(2026, 5, 7),
+            # Saldo pequeño a proposito: si el bug estuviera presente
+            # (tratando 5181.27 como USD), este monto_sugerido seria
+            # min(5181.27, 60.0) = 60.0 -- igual que con la conversion
+            # correcta, por eso el saldo/residual es la aserción clave.
+            monto_total=Decimal("60.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+        ),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 2  # cubre SO_VES_1 ($60) y queda un remanente sin orden
+        primero = data[0]
+        # VES 5181.27 / 36.57 ~= $141.71 -- NUNCA 5181.27 tratado como USD.
+        assert abs(primero["monto_pago"] - 141.71) < 0.05
+        assert abs(primero["saldo_pago"] - 141.71) < 0.05
+        # El monto aplicado a la orden esta limitado por el saldo de la
+        # orden ($60), no por el monto crudo en VES.
+        assert primero["so_id"] == "SO_VES_1"
+        assert primero["monto_sugerido"] == 60.0
+
+        # El remanente del pago ($141.71 - $60 = $81.71) sigue apareciendo,
+        # sin orden sugerida, para poder vincularse manualmente.
+        segundo = data[1]
+        assert segundo["so_id"] is None
+        assert segundo["pago_id"] == "P_VES"
+        # $141.71 originales - $60 ya sugeridos para SO_VES_1 = $81.71 aun sin asociar.
+        assert abs(segundo["saldo_pago"] - 81.71) < 0.05
+
+
+def test_e2e_30_resumen_pagos_sin_asignar_excluye_reconciliados_en_odoo():
+    """La tarjeta KPI "Pagos Sin Asignar" (/api/resumen) debe excluir pagos ya
+
+    reconciliados directamente en Odoo, igual que /api/conciliaciones/sugerencias
+    -- antes de este fix, este endpoint no consultaba Odoo en absoluto y
+    sumaba pagos ya conciliados como si siguieran sin asignar.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "111",
+                "cliente_id": "C1",
+                "monto": "500.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-15",
+            },
+            {
+                "pago_id": "222",
+                "cliente_id": "C1",
+                "monto": "300.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-16",
+            },
+        ]
+        if sheet == "Pagos"
+        else []
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            # 111 ya reconciliado en Odoo -- no debe sumar en el KPI.
+            return [
+                {
+                    "id": 111,
+                    "is_reconciled": True,
+                    "state": "paid",
+                    "reconciled_invoices_count": 1,
+                },
+                {
+                    "id": 222,
+                    "is_reconciled": False,
+                    "state": "in_process",
+                    "reconciled_invoices_count": 0,
+                },
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/resumen")
+        assert res.status_code == 200
+        data = res.json()
+        # Solo el pago 222 ($300) debe contar -- el 111 esta reconciliado.
+        assert data["pagos_sin_asignar_usd"] == 300.0
+
+
+def test_e2e_31_pagos_historial_incluye_monto_pago_usd():
+    """Cada fila de "Pagos Conciliados" debe exponer el monto original del
+
+    pago (importe firmado, USD) además del monto aplicado -- para poder
+    verificar a ojo que aplicado + residual cuadra contra el pago completo.
+    """
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="P1",
+            so_id="SO1",
+            monto_aplicado=Decimal("60.00"),
+            hora_pago_confirmada=datetime(2026, 7, 20),
+            tasa_bcv_aplicada=Decimal("36.5"),
+            tasa_binance_aplicada=Decimal("38.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        )
+    ]
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P1",
+                "cliente_id": "C1",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-20",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/pagos-historial")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        # Monto total del pago ($100) visible además de lo aplicado ($60).
+        assert data[0]["monto_pago_usd"] == 100.0
+        assert data[0]["monto_aplicado"] == 60.0
