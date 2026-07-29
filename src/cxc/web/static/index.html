@@ -1166,6 +1166,18 @@
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <div id="tab-config" class="tab-panel">
             <div class="config-grid">
+                <!-- RECÁLCULO MANUAL DEL MOTOR (solo Admin / Gerente de Ventas) -->
+                <section class="config-card card" id="recalcular-todo-container" style="grid-column: 1 / span 2; border-top: 4px solid #dc2626; display:none;">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                        <div>
+                            <h2>🔄 Forzar Recálculo Completo del Motor</h2>
+                            <p>Recalcula todas las órdenes (venta bruta/neta teórica, descuentos, conciliación) sin esperar a que Odoo reporte un cambio. Útil después de una corrección de precios/reglas para refrescar de inmediato los reportes.</p>
+                        </div>
+                        <button type="button" class="btn-primary" id="btn-recalcular-todo" onclick="recalcularTodo()" style="background:#dc2626; display:inline-flex; align-items:center; gap:6px;">🔄 Recalcular Todo Ahora</button>
+                    </div>
+                    <p id="recalcular-todo-status" style="font-size:0.85rem; color:#64748b; margin-top:0.5rem;"></p>
+                </section>
+
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
                 <section class="config-card card" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
                     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">

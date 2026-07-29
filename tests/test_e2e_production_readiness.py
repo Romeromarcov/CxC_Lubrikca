@@ -1479,3 +1479,40 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
 
         assert data["kpis"]["total_alertas"] == 1
         assert data["kpis"]["iva_rate"] == 0.16
+
+
+def test_e2e_25_recalcular_todo_requiere_admin_o_gerente():
+    """POST /api/admin/recalcular-todo debe rechazar roles sin permiso
+
+    (p.ej. "ventas") con 403, sin disparar el recálculo.
+    """
+    with (
+        patch(
+            "cxc.web.app.get_current_user_from_cookie",
+            return_value={"email": "juan@lubrikca.com", "rol": "ventas", "nombre": "Juan"},
+        ),
+        patch("cxc.web.app.recalculate_all_orders") as mock_recalc,
+    ):
+        client.cookies.set("cxc_session", "fake-token")
+        res = client.post("/api/admin/recalcular-todo")
+        assert res.status_code == 403
+        mock_recalc.assert_not_called()
+
+
+def test_e2e_26_recalcular_todo_admin_dispara_recalculo_en_segundo_plano():
+    """Con rol admin (o gerente_ventas), el endpoint debe programar
+
+    recalculate_all_orders como background task y responder success.
+    """
+    with (
+        patch(
+            "cxc.web.app.get_current_user_from_cookie",
+            return_value={"email": "admin@lubrikca.com", "rol": "admin", "nombre": "Admin"},
+        ),
+        patch("cxc.web.app.recalculate_all_orders") as mock_recalc,
+    ):
+        client.cookies.set("cxc_session", "fake-token")
+        res = client.post("/api/admin/recalcular-todo")
+        assert res.status_code == 200
+        assert res.json()["status"] == "success"
+        mock_recalc.assert_called_once()
