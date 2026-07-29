@@ -9,6 +9,28 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cxc
+          POSTGRES_PASSWORD: cxc_ci_pw
+          POSTGRES_DB: cxc_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Backend Postgres en pruebas (tests/test_repository_contract.py y la
+      # migración Alembic) -- producción sigue en REPO_BACKEND=sheets hasta
+      # que la migración se valide (ver src/cxc/db/).
+      DATABASE_URL: postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci
+
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +50,9 @@ jobs:
 
       - name: Mypy (type check)
         run: mypy
+
+      - name: Alembic (aplicar migraciones a la base de CI)
+        run: alembic upgrade head
 
       - name: Pytest (tests + coverage >= 90%)
         run: pytest

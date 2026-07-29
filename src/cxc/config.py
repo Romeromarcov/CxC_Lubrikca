@@ -76,6 +76,26 @@ class SheetsConfig:
 
 
 @dataclass(frozen=True)
+class DatabaseConfig:
+    """PostgreSQL -- reemplazo gradual de Sheets como almacén principal.
+
+    ``repo_backend`` decide qué implementación de ``Repository`` usa
+    ``get_repo()`` ("sheets" | "postgres"); ``url`` es opcional porque la
+    mayoría de despliegues (mientras dure la migración) no la necesitan.
+    """
+
+    url: str | None
+    repo_backend: str
+
+    @classmethod
+    def from_env(cls) -> DatabaseConfig:
+        return cls(
+            url=_get_optional("DATABASE_URL"),
+            repo_backend=_get("REPO_BACKEND", "sheets").strip().lower(),
+        )
+
+
+@dataclass(frozen=True)
 class BinanceConfig:
     """Parametrización completa del scraper Binance P2P.
 
@@ -227,6 +247,7 @@ class AppConfig:
     reconciliation: ReconciliationConfig
     hour_audit: HourAuditConfig
     scraper_policy: ScraperPolicy = field(default_factory=ScraperPolicy.from_env)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig.from_env)
 
     @classmethod
     def from_env(cls, load_dotenv: bool = True) -> AppConfig:
@@ -242,6 +263,7 @@ class AppConfig:
             reconciliation=ReconciliationConfig.from_env(),
             hour_audit=HourAuditConfig.from_env(),
             scraper_policy=ScraperPolicy.from_env(),
+            database=DatabaseConfig.from_env(),
         )
 
 

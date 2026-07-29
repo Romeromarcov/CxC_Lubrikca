@@ -27,11 +27,13 @@ from cxc.auth import (
     verificar_usuario_odoo_activo,
 )
 from cxc.config import AppConfig
+from cxc.db.postgres_repository import PostgresRepository
 from cxc.engine.runner import EngineRunner
 from cxc.models import EstadoVinculacion, Moneda, TipoTasa, Vinculacion
 from cxc.odoo.client import OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
+from cxc.repositories import Repository
 from cxc.sheets.gateway import GspreadGateway
 from cxc.sheets.repository import SheetsRepository
 from cxc.sync.incremental import IncrementalSync
@@ -729,25 +731,46 @@ class DescuentoVolumenRequest(BaseModel):
     listas_aplicables: str = "*"
 
 
-_repo_cache: SheetsRepository | None = None
+def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
+    """Instancia nueva de ``SheetsRepository`` -- bypasea el cache de lectura
+
+    de 120s de ``GspreadGateway`` (ver ``gateway.py``) para no calcular sobre
+    datos potencialmente obsoletos. La usan ``get_repo()`` (backend sheets) y
+    ``recalculate_all``/``recalculate_all_orders``.
+    """
+    _sid = config.sheets.spreadsheet_id
+    print(
+        f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(_sid)}, repr={_sid!r}",
+        file=sys.stderr,
+    )
+    if os.environ.get("GOOGLE_TOKEN_JSON"):
+        gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+    else:
+        gateway = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+    return SheetsRepository(gateway)
 
 
-def get_repo() -> SheetsRepository:
+_repo_cache: Repository | None = None
+
+
+def get_repo() -> Repository:
+    """Repositorio activo -- ``REPO_BACKEND`` (env var, "sheets" por defecto)
+
+    decide la implementación. Postgres se cachea (reusa el pool de
+    conexiones, ver ``PostgresRepository``/``cxc.db.engine``); Sheets se
+    reconstruye la primera vez igual que siempre.
+    """
     global _repo_cache
     if _repo_cache is None:
         config = AppConfig.from_env()
-        _sid = config.sheets.spreadsheet_id
-        print(
-            f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(_sid)}, repr={_sid!r}",
-            file=sys.stderr,
-        )
-        if os.environ.get("GOOGLE_TOKEN_JSON"):
-            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+        if config.database.repo_backend == "postgres":
+            if not config.database.url:
+                raise RuntimeError(
+                    "REPO_BACKEND=postgres requiere configurar DATABASE_URL"
+                )
+            _repo_cache = PostgresRepository.from_url(config.database.url)
         else:
-            gateway = GspreadGateway(
-                config.sheets.spreadsheet_id, config.sheets.service_account_file
-            )
-        _repo_cache = SheetsRepository(gateway)
+            _repo_cache = _fresh_sheets_repo(config)
     return _repo_cache
 
 
@@ -1485,13 +1508,16 @@ def recalculate_all(so_id: str):
     try:
         print(f"Recalculando orden {so_id}...")
         config = AppConfig.from_env()
-        if os.environ.get("GOOGLE_TOKEN_JSON"):
-            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-        else:
-            gateway = GspreadGateway(
-                config.sheets.spreadsheet_id, config.sheets.service_account_file
-            )
-        repo = SheetsRepository(gateway)
+        # Postgres: reusar el pool compartido (get_repo()) -- crear un
+        # engine nuevo en cada llamada (esta función corre por cada
+        # vinculación manual, ademas del sync cada ~5 min) agotaría las
+        # conexiones. Sheets: instancia nueva a propósito (comportamiento
+        # preexistente, sin cambios) -- ver _fresh_sheets_repo().
+        repo = (
+            get_repo()
+            if config.database.repo_backend == "postgres"
+            else _fresh_sheets_repo(config)
+        )
         execute = _connect(config.odoo)
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
@@ -1528,13 +1554,11 @@ def recalculate_all_orders():
     try:
         print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
         config = AppConfig.from_env()
-        if os.environ.get("GOOGLE_TOKEN_JSON"):
-            gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-        else:
-            gateway = GspreadGateway(
-                config.sheets.spreadsheet_id, config.sheets.service_account_file
-            )
-        repo = SheetsRepository(gateway)
+        repo = (
+            get_repo()
+            if config.database.repo_backend == "postgres"
+            else _fresh_sheets_repo(config)
+        )
         execute = _connect(config.odoo)
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
