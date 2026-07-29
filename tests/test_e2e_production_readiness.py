@@ -1518,3 +1518,170 @@ def test_e2e_26_recalcular_todo_admin_dispara_recalculo_en_segundo_plano():
         assert res.status_code == 200
         assert res.json()["status"] == "success"
         mock_recalc.assert_called_once()
+
+
+def test_e2e_27_reporte_diario_cobranza_incluye_pagos_reconciliados_en_odoo():
+    """La hoja local "Pagos" solo sincroniza pagos is_reconciled=False
+
+    (ver changed_pagos() en odoo/client.py -- existe para sugerir
+    vinculaciones manuales, no para totalizar cobranza). Verificado en vivo
+    contra producción: de 882 pagos confirmados en Odoo, 673 (76%) ya
+    estaban reconciliados y el total de cobranza del dashboard quedaba
+    ~$16,562 por debajo del real. /api/reporte/diario debe consultar
+    account.payment EN VIVO (sin filtrar por is_reconciled) y sumar
+    "amount_ref" -- el mismo campo que Odoo usa para su propio total -- en
+    vez de depender de la hoja local.
+    """
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = []
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_SHEET_STALE",
+                "fecha_pago": "2026-07-01",
+                "monto": "1.0",
+                "moneda": "USD",
+                "metodo_pago": "Efectivo",
+                "vendedor_email": "otro@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else []
+    )
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return [
+                {
+                    "id": 1,
+                    "amount": 100.0,
+                    "amount_ref": 100.0,
+                    "currency_id": [1, "USD"],
+                    "journal_id": [8, "Zelle"],
+                    "partner_id": [50, "Cliente Uno"],
+                    "date": "2026-07-15",
+                },
+                {
+                    # Pago YA RECONCILIADO en Odoo -- el sync incremental
+                    # nunca lo trae a la hoja local "Pagos", pero SÍ debe
+                    # contarse en la cobranza real.
+                    "id": 2,
+                    "amount": 43000.0,
+                    "amount_ref": 200.0,
+                    "currency_id": [2, "VES"],
+                    "journal_id": [3, "Banco Bancamiga"],
+                    "partner_id": [51, "Cliente Dos"],
+                    "date": "2026-07-15",
+                },
+            ]
+        if model == "res.partner":
+            return [
+                {"id": 50, "user_id": [10, "Juan Vendedor"]},
+                {"id": 51, "user_id": [10, "Juan Vendedor"]},
+            ]
+        if model == "res.users":
+            return [{"id": 10, "login": "juan@lubrikca.com"}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/reporte/diario")
+        assert res.status_code == 200
+        cobranza = res.json()["cobranza_diaria"]
+        assert len(cobranza) == 1
+        dia = cobranza[0]
+        assert dia["fecha"] == "2026-07-15"
+        # 100 (USD directo) + 200 (VES via amount_ref, YA reconciliado) = 300.
+        # La fila de la hoja local ("P_SHEET_STALE") NO debe sumarse --
+        # una vez que hay datos en vivo de Odoo, reemplazan a la hoja.
+        assert dia["total_eq_bcv"] == 300.0
+        assert dia["por_metodo"]["Zelle"] == 100.0
+        assert dia["por_metodo"]["Banco Bancamiga"] == 200.0
+        assert dia["ves_monto"] == 43000.0
+        assert dia["ves_eq_usd"] == 200.0
+
+        # Filtro por vendedor resuelto vía res.partner.user_id -> res.users.login.
+        res_v = client.get("/api/reporte/diario?vendedor=juan@lubrikca.com")
+        assert res_v.json()["cobranza_diaria"][0]["total_eq_bcv"] == 300.0
+        res_v2 = client.get("/api/reporte/diario?vendedor=nadie@lubrikca.com")
+        assert res_v2.json()["cobranza_diaria"] == []
+
+
+def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
+    """Los litros deben venir de sale.report (mismo "Volumen (L)" del pivot
+
+    "Análisis de Ventas" de Odoo) para las órdenes que Odoo reconoce ahí,
+    con fallback local (cantidad_entregada si es > 0, si no cantidad
+    pedida) para órdenes que sale.report no trae (p.ej. la excepción de
+    negocio cancelada+entregada). Verificado en vivo: el fallback anterior
+    ("cantidad_entregada or cantidad") nunca caía a "cantidad" porque la
+    hoja guarda "0" como texto (truthy), subestimando litros en ~2.600 L.
+    """
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_SR1",
+            cliente_id="C1",
+            vendedor_email="v1",
+            fecha=date(2026, 7, 18),
+            fecha_entrega=date(2026, 7, 18),
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+        ),
+        OrdenVenta(
+            so_id="SO_FALLBACK",
+            cliente_id="C1",
+            vendedor_email="v1",
+            fecha=date(2026, 7, 18),
+            fecha_entrega=date(2026, 7, 18),
+            monto_total=Decimal("90.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="cancel",
+        ),
+    ]
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            # Línea NO despachada aún: cantidad_entregada llega como texto
+            # "0" (nunca vacío) -- el fallback debe usar "cantidad" (10).
+            {
+                "so_id": "SO_FALLBACK",
+                "producto": "77",
+                "cantidad": "10",
+                "cantidad_entregada": "0",
+            }
+        ]
+        if sheet == "LineasOrden"
+        else []
+    )
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            return [{"id": 77, "name": "Producto Fallback", "volume": "2.0", "weight": "0"}]
+        if model == "sale.order":
+            return [
+                {"name": "SO_SR1", "state": "sale", "picking_ids": []},
+                {"name": "SO_FALLBACK", "state": "cancel", "picking_ids": [501]},
+            ]
+        if model == "stock.picking":
+            return [{"id": 501, "picking_type_code": "outgoing", "return_id": False}]
+        if model == "sale.report":
+            # SO_SR1 SÍ aparece en sale.report -- SO_FALLBACK (cancelada) no.
+            return [{"name": "SO_SR1", "product_volume": 123.45}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/reporte/diario")
+        assert res.status_code == 200
+        ventas = {v["fecha"]: v for v in res.json()["ventas_diarias"]}
+        # 123.45 (sale.report, SO_SR1) + 10*2.0=20.0 (fallback, SO_FALLBACK) = 143.45
+        assert abs(ventas["2026-07-18"]["litros_totales"] - 143.45) < 0.01
