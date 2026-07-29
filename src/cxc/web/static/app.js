@@ -193,6 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "facturacion": "tab-facturacion",
             "conciliaciones": "tab-conciliaciones",
             "cobranza": "tab-cobranza",
+            "ventas": "tab-ventas",
             "reporte": "tab-reporte",
             "auditoria": "tab-auditoria",
             "configuracion": "tab-config"
@@ -237,6 +238,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadHistorialPagos === "function") loadHistorialPagos();
             } else if (path === "cobranza") {
                 if (typeof loadCobranza === "function") loadCobranza();
+            } else if (path === "ventas") {
+                if (typeof loadVentas === "function") loadVentas();
             } else if (path === "reporte") {
                 if (typeof loadReporte === "function") loadReporte();
             } else if (path === "auditoria") {
@@ -1372,6 +1375,136 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${closeHtml}</td>
             `;
             reporteTableBody.appendChild(row);
+        });
+    }
+
+    // ── Página Ventas: teórico (bruta/neta, con y sin impuestos) vs real ──
+    let ventasData = [];
+
+    async function loadVentas() {
+        const tbody = document.getElementById("ventas-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
+            if (!res.ok) {
+                tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            ventasData = data.items || [];
+            const kpis = data.kpis || {};
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            setText("ventas-kpi-bruta-teorica", fmt(kpis.venta_bruta_teorica_total));
+            setText("ventas-kpi-neta-teorica", fmt(kpis.venta_neta_teorica_total));
+            setText("ventas-kpi-neta-real", fmt(kpis.venta_neta_real_total));
+            setText("ventas-kpi-facturado-neto", fmt(kpis.total_facturado_neto_total));
+            setText("ventas-kpi-alertas", String(kpis.total_alertas || 0));
+
+            const ivaPct = ((kpis.iva_rate || 0) * 100).toFixed(0);
+            const igtfInfo = kpis.igtf_activo ? ` · IGTF ${((kpis.igtf_rate || 0) * 100).toFixed(0)}%` : ' · IGTF inactivo';
+            setText("ventas-iva-info", `Tasas de impuesto configuradas: IVA ${ivaPct}%${igtfInfo}`);
+
+            // Poblar filtro de vendedores
+            const vendedorSelect = document.getElementById("ventas-vendedor-filter");
+            if (vendedorSelect) {
+                const currentVal = vendedorSelect.value || "*";
+                const vendedores = [...new Set(ventasData.map(it => it.vendedor).filter(Boolean))].sort();
+                vendedorSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vendedorSelect.appendChild(opt);
+                });
+                vendedorSelect.value = currentVal;
+                if (!vendedorSelect.dataset.listenerAttached) {
+                    vendedorSelect.addEventListener("change", applyVentasFilters);
+                    vendedorSelect.dataset.listenerAttached = "true";
+                }
+            }
+
+            const soloAlertasEl = document.getElementById("ventas-solo-alertas");
+            if (soloAlertasEl && !soloAlertasEl.dataset.listenerAttached) {
+                soloAlertasEl.addEventListener("change", applyVentasFilters);
+                soloAlertasEl.dataset.listenerAttached = "true";
+            }
+
+            const searchEl = document.getElementById("ventas-search");
+            if (searchEl && !searchEl.dataset.listenerAttached) {
+                searchEl.addEventListener("input", applyVentasFilters);
+                searchEl.dataset.listenerAttached = "true";
+            }
+
+            applyVentasFilters();
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    function applyVentasFilters() {
+        const vendedorVal = document.getElementById("ventas-vendedor-filter")?.value || "*";
+        const soloAlertas = document.getElementById("ventas-solo-alertas")?.checked || false;
+        const searchVal = (document.getElementById("ventas-search")?.value || "").toLowerCase().trim();
+
+        let filtered = ventasData;
+        if (vendedorVal !== "*") {
+            filtered = filtered.filter(it => it.vendedor === vendedorVal);
+        }
+        if (soloAlertas) {
+            filtered = filtered.filter(it => it.alerta);
+        }
+        if (searchVal) {
+            filtered = filtered.filter(it =>
+                (it.so_id || "").toLowerCase().includes(searchVal) ||
+                (it.cliente_nombre || "").toLowerCase().includes(searchVal)
+            );
+        }
+        renderVentasTable(filtered);
+    }
+
+    function renderVentasTable(items) {
+        const tbody = document.getElementById("ventas-table-body");
+        if (!tbody) return;
+        if (!items || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            return;
+        }
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        tbody.innerHTML = "";
+        items.forEach(item => {
+            const row = document.createElement("tr");
+            if (item.alerta) {
+                row.style.background = "#fef2f2";
+            }
+            const difColor = item.diferencia > 0.05 ? "#b91c1c" : (item.diferencia < -0.05 ? "#0369a1" : "#059669");
+            const alertaCell = item.alerta
+                ? '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;">⚠️ Facturado de menos</span>'
+                : (item.facturada
+                    ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">OK</span>'
+                    : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>');
+
+            row.innerHTML = `
+                <td><strong>${item.so_id}</strong></td>
+                <td>${item.cliente_nombre}</td>
+                <td><small>${item.vendedor}</small></td>
+                <td><small>${item.fecha}</small></td>
+                <td>${fmt(item.venta_bruta_teorica)}</td>
+                <td>${fmt(item.venta_bruta_teorica_iva)}</td>
+                <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica)}</strong></td>
+                <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica_impuestos)}</strong></td>
+                <td>${fmt(item.venta_bruta_real)}</td>
+                <td><strong>${fmt(item.venta_neta_real)}</strong></td>
+                <td>${fmt(item.total_facturado_antes_impuestos)}</td>
+                <td>${fmt(item.total_facturado_con_impuestos)}</td>
+                <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
+                <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
+                <td>${alertaCell}</td>
+            `;
+            tbody.appendChild(row);
         });
     }
 

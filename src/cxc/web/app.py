@@ -800,6 +800,11 @@ async def page_conciliaciones(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("conciliaciones", cxc_session)
 
 
+@app.get("/ventas", response_class=HTMLResponse)
+async def page_ventas(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("ventas", cxc_session)
+
+
 @app.get("/reporte", response_class=HTMLResponse)
 async def page_reporte(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("reporte", cxc_session)
@@ -2413,9 +2418,14 @@ async def get_reporte_saldos(refresh: bool = False):
             # ignora el precio que realmente quedó en la línea de Odoo). Sirve
             # para separar "cuánto perdí por vender a un precio equivocado" de
             # "cuánto di en descuentos válidos" -- monto_orig ya trae ambos
-            # efectos mezclados.
+            # efectos mezclados. precio_base_calculado es SIN IVA (viene del
+            # price_resolver, igual que price_unit en Odoo); monto_orig
+            # (amount_total) SÍ trae IVA -- hay que igualar la base antes de
+            # comparar o la diferencia siempre marca ~16% de "pérdida" aunque
+            # el precio esté correcto.
             venta_bruta_teorica = float(b.precio_base_calculado) if b else monto_orig
-            diferencia_precio_lista = round(venta_bruta_teorica - monto_orig, 2)
+            venta_bruta_teorica_con_iva = venta_bruta_teorica * (1 + float(config.engine.iva_rate))
+            diferencia_precio_lista = round(venta_bruta_teorica_con_iva - monto_orig, 2)
 
             # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
             # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
@@ -5809,6 +5819,202 @@ async def get_auditoria():
                 "total_aceptadas": len(anomalias_aceptadas),
                 "monto_discrepancia_total": round(
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
+                ),
+            },
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/ventas")
+async def get_ventas(
+    vendedor: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Reporte "Ventas": venta bruta/neta teórica vs real, por orden.
+
+    Venta bruta teórica = precio de lista correcto, SIN descuentos
+    (``BandejaFacturacion.precio_base_calculado``). Venta neta teórica =
+    bruta menos los descuentos que el motor calcula (``total_motor``) --
+    incluye los que solo se pueden calcular una vez que hay pagos
+    registrados (contado/BCV-completo se computan por abono real, ver
+    ``engine/discounts.py``), así que se actualiza sola cuando el runner
+    recalcula tras un nuevo pago. Ambas son SIN impuestos; se les aplica
+    ``config.engine.iva_rate`` (+ IGTF si está activo) para las columnas
+    "+ Impuestos".
+
+    Venta bruta real = ``amount_untaxed`` de la orden en Odoo. Venta neta
+    real = ``monto_total`` (``amount_total``, YA con impuestos -- es el
+    valor que usa Cuentas por Cobrar).
+
+    Total facturado: de las facturas "posted" ligadas por ``invoice_origin``,
+    en equivalente USD vía los campos ``*_signed_usd`` de Odoo. Neto = con
+    impuestos menos las notas de crédito (``out_refund``) aplicadas.
+
+    Alerta: solo si la orden YA tiene factura y lo realmente facturado neto
+    quedó por debajo de lo que el motor dice que debió facturarse neto (ya
+    con impuestos) -- eso es un faltante real de facturación o un descuento
+    indebido. El resto (diferencias explicadas por descuentos válidos,
+    redondeo, u órdenes aún sin facturar) es informativo y subsanable.
+    """
+    try:
+        repo = get_repo()
+        user = get_current_user_from_cookie(cxc_session)
+        config = AppConfig.from_env()
+        iva_rate = float(config.engine.iva_rate)
+        igtf_rate = float(config.engine.igtf_rate) if config.engine.igtf_activo else 0.0
+
+        ordenes = repo.all_ordenes()
+        bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+
+        so_names = [o.so_id for o in ordenes]
+        execute = None
+        try:
+            execute = _connect(config.odoo)
+        except Exception as e_conn:
+            logger.warning("No se pudo conectar a Odoo en get_ventas: %s", e_conn)
+
+        so_states_map: dict[str, str] = {}
+        so_untaxed_map: dict[str, float] = {}
+        entrega_valida_set: set[str] = set()
+        facturado_antes_imp_map: dict[str, float] = {}
+        facturado_con_imp_map: dict[str, float] = {}
+        nc_con_imp_map: dict[str, float] = {}
+
+        if execute and so_names:
+            try:
+                so_recs = execute(
+                    "sale.order",
+                    "search_read",
+                    [[["name", "in", so_names]]],
+                    {"fields": ["name", "state", "amount_untaxed"]},
+                )
+                for s in so_recs:
+                    sname = str(s.get("name", "")).strip()
+                    if sname:
+                        so_states_map[sname] = str(s.get("state", "")).strip().lower()
+                        so_untaxed_map[sname] = float(s.get("amount_untaxed") or 0.0)
+
+                entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
+
+                invoices = execute(
+                    "account.move",
+                    "search_read",
+                    [
+                        [
+                            ["invoice_origin", "in", so_names],
+                            ["state", "=", "posted"],
+                            ["move_type", "in", ["out_invoice", "out_refund"]],
+                        ]
+                    ],
+                    {
+                        "fields": [
+                            "invoice_origin",
+                            "move_type",
+                            "amount_untaxed_signed_usd",
+                            "amount_total_signed_usd",
+                        ]
+                    },
+                )
+                for inv in invoices:
+                    so = str(inv.get("invoice_origin", "")).strip()
+                    if not so:
+                        continue
+                    con_imp = abs(float(inv.get("amount_total_signed_usd") or 0.0))
+                    antes_imp = abs(float(inv.get("amount_untaxed_signed_usd") or 0.0))
+                    if str(inv.get("move_type")) == "out_refund":
+                        nc_con_imp_map[so] = nc_con_imp_map.get(so, 0.0) + con_imp
+                    else:
+                        facturado_con_imp_map[so] = facturado_con_imp_map.get(so, 0.0) + con_imp
+                        facturado_antes_imp_map[so] = (
+                            facturado_antes_imp_map.get(so, 0.0) + antes_imp
+                        )
+            except Exception as e_odoo:
+                logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
+
+        items = []
+        total_alertas = 0
+        for o in ordenes:
+            live_state = so_states_map.get(o.so_id)
+            entrega_valida = o.so_id in entrega_valida_set
+            if orden_excluida(o, live_state=live_state, entrega_valida=entrega_valida):
+                continue
+            if vendedor and vendedor.strip().lower() != str(o.vendedor_email or "").strip().lower():
+                continue
+            if user and user["rol"] == "ventas":
+                u_name = (user["nombre"] or user["email"]).strip().lower()
+                v_email = str(o.vendedor_email or "").strip().lower()
+                if v_email != u_name and user["email"].strip().lower() not in v_email:
+                    continue
+
+            b = bandeja_map.get(o.so_id)
+            monto_orig = float(o.monto_total)  # amount_total Odoo: YA con impuestos
+
+            venta_bruta_real = so_untaxed_map.get(o.so_id)
+            if venta_bruta_real is None:
+                # Sin conexión a Odoo: estimar el subtotal a partir del total con IVA.
+                venta_bruta_real = monto_orig / (1 + iva_rate) if iva_rate > -1 else monto_orig
+            venta_neta_real = monto_orig
+
+            # Sin cálculo del motor aún (bandeja no recalculada) -- mejor
+            # estimación disponible es el subtotal real, sin descuento conocido.
+            venta_bruta_teorica = float(b.precio_base_calculado) if b else venta_bruta_real
+            venta_neta_teorica = float(b.total_motor) if b else venta_bruta_teorica
+
+            venta_bruta_teorica_iva = venta_bruta_teorica * (1 + iva_rate)
+            venta_neta_teorica_impuestos = venta_neta_teorica * (1 + iva_rate + igtf_rate)
+
+            total_facturado_antes_impuestos = facturado_antes_imp_map.get(o.so_id, 0.0)
+            total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
+            total_nc_aplicada = nc_con_imp_map.get(o.so_id, 0.0)
+            total_facturado_neto = total_facturado_con_impuestos - total_nc_aplicada
+
+            diferencia = round(venta_bruta_teorica_iva - total_facturado_neto, 2)
+
+            tiene_factura = total_facturado_con_impuestos > 0.005
+            alerta = tiene_factura and (total_facturado_neto < venta_neta_teorica_impuestos - 0.05)
+            if alerta:
+                total_alertas += 1
+
+            items.append(
+                {
+                    "so_id": o.so_id,
+                    "cliente_nombre": clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}"),
+                    "vendedor": o.vendedor_email or "Sin Vendedor",
+                    "fecha": o.fecha.isoformat(),
+                    "facturada": o.facturada,
+                    "venta_bruta_teorica": round(venta_bruta_teorica, 2),
+                    "venta_bruta_teorica_iva": round(venta_bruta_teorica_iva, 2),
+                    "venta_neta_teorica": round(venta_neta_teorica, 2),
+                    "venta_neta_teorica_impuestos": round(venta_neta_teorica_impuestos, 2),
+                    "venta_bruta_real": round(venta_bruta_real, 2),
+                    "venta_neta_real": round(venta_neta_real, 2),
+                    "total_facturado_antes_impuestos": round(total_facturado_antes_impuestos, 2),
+                    "total_facturado_con_impuestos": round(total_facturado_con_impuestos, 2),
+                    "total_facturado_neto": round(total_facturado_neto, 2),
+                    "diferencia": diferencia,
+                    "alerta": alerta,
+                }
+            )
+
+        items.sort(key=lambda it: str(it["so_id"]), reverse=True)
+
+        return {
+            "items": items,
+            "kpis": {
+                "total_ordenes": len(items),
+                "total_alertas": total_alertas,
+                "iva_rate": iva_rate,
+                "igtf_rate": igtf_rate,
+                "igtf_activo": config.engine.igtf_activo,
+                "venta_bruta_teorica_total": round(sum(i["venta_bruta_teorica"] for i in items), 2),
+                "venta_neta_teorica_total": round(sum(i["venta_neta_teorica"] for i in items), 2),
+                "venta_neta_real_total": round(sum(i["venta_neta_real"] for i in items), 2),
+                "total_facturado_neto_total": round(
+                    sum(i["total_facturado_neto"] for i in items), 2
                 ),
             },
         }

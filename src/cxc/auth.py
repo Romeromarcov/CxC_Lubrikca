@@ -22,6 +22,7 @@ ALL_PAGES = [
     "facturacion",
     "conciliaciones",
     "cobranza",
+    "ventas",
     "reporte",
     "auditoria",
     "configuracion",

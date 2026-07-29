@@ -38,6 +38,13 @@ def _get_optional(name: str) -> str | None:
     return value if value not in (None, "") else None
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "si", "sí")
+
+
 @dataclass(frozen=True)
 class OdooConfig:
     url: str
@@ -146,6 +153,12 @@ class EngineConfig:
     lista_bcv: str
     valid_pricelists_ves: list[str] = field(default_factory=lambda: ["5", "3"])
     valid_pricelists_usd: list[str] = field(default_factory=lambda: ["4", "8", "USD"])
+    # Tasa de IVA aplicada a las ventas teóricas (motor) -- Venezuela: 16%
+    # estándar. IGTF (impuesto a grandes transacciones en divisas) no está
+    # activo hoy en Lubrikca; queda configurable por si aplica a futuro.
+    iva_rate: Decimal = Decimal("0.16")
+    igtf_rate: Decimal = Decimal("0.03")
+    igtf_activo: bool = False
 
     @classmethod
     def from_env(cls) -> EngineConfig:
@@ -160,6 +173,9 @@ class EngineConfig:
             lista_bcv=_get("ENGINE_LISTA_BCV", "BCV"),
             valid_pricelists_ves=valid_ves,
             valid_pricelists_usd=valid_usd,
+            iva_rate=_get_decimal("ENGINE_IVA_RATE", "0.16"),
+            igtf_rate=_get_decimal("ENGINE_IGTF_RATE", "0.03"),
+            igtf_activo=_get_bool("ENGINE_IGTF_ACTIVO", False),
         )
 
 
