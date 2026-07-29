@@ -3998,7 +3998,14 @@ async def get_odoo_productos():
             "search_read",
             [[["sale_ok", "=", True], ["active", "=", True]]],
             {
-                "fields": ["id", "name", "default_code", "list_price", "product_volume"],
+                "fields": [
+                    "id",
+                    "name",
+                    "default_code",
+                    "list_price",
+                    "list_price_usd",
+                    "product_volume",
+                ],
                 "limit": 100,
             },
         )
@@ -4043,7 +4050,9 @@ async def get_odoo_productos():
                     "nombre": p["name"],
                     "ref_interna": p.get("default_code") or "N/A",
                     "precio_publico": float(p.get("list_price") or 0.0),
-                    "precio_usd": prices_usd.get(pid, float(p.get("list_price") or 0.0)),
+                    # Sin regla en la pricelist -- fallback a "Precio de venta $"
+                    # (list_price_usd), NUNCA list_price (esa está en VES).
+                    "precio_usd": prices_usd.get(pid, float(p.get("list_price_usd") or 0.0)),
                     "precio_ves_usd": prices_ves.get(pid, 0.0),
                     "litros": float(p.get("product_volume") or 0.0),
                 }
@@ -5971,10 +5980,19 @@ async def get_ventas(
             total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
             total_nc_aplicada = nc_con_imp_map.get(o.so_id, 0.0)
             total_facturado_neto = total_facturado_con_impuestos - total_nc_aplicada
-
-            diferencia = round(venta_bruta_teorica_iva - total_facturado_neto, 2)
-
             tiene_factura = total_facturado_con_impuestos > 0.005
+
+            if tiene_factura:
+                diferencia = round(venta_bruta_teorica_iva - total_facturado_neto, 2)
+            else:
+                # Sin factura todavía, "facturado neto" es 0 -- comparar
+                # contra eso daría una "diferencia" falsa igual a toda la
+                # venta bruta teórica. Antes de facturar, la única cifra
+                # real disponible es la propia orden en Odoo: comparar la
+                # venta neta teórica (con impuestos) contra el neto real de
+                # la orden.
+                diferencia = round(venta_neta_teorica_impuestos - venta_neta_real, 2)
+
             alerta = tiene_factura and (total_facturado_neto < venta_neta_teorica_impuestos - 0.05)
             if alerta:
                 total_alertas += 1

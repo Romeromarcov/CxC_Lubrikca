@@ -108,15 +108,21 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             else:
                 precio = to_decimal(str(rules[0]["fixed_price"]))
         else:
-            # Fallback to product.template list_price
+            # Sin regla de precio fijo para esta pricelist -- usar el campo
+            # "Precio de venta $" (list_price_usd) de la ficha del producto,
+            # NUNCA "list_price" (esa está en VES, la moneda de la compañía
+            # en Odoo -- tratarla como USD infla el precio ~800x). Verificado
+            # en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W SAE 40
+            # (Tambor)" sin regla en la lista de la orden -- list_price
+            # devuelve 1,457,052.51 (VES) vs list_price_usd 1,961.54 (USD).
             precio = Decimal("0.0")
             if prod_id:
                 try:
                     prod = self._execute(
-                        "product.template", "read", [[prod_id]], {"fields": ["list_price"]}
+                        "product.product", "read", [[prod_id]], {"fields": ["list_price_usd"]}
                     )
                     if prod and isinstance(prod, list) and len(prod) > 0:
-                        precio = to_decimal(str(prod[0].get("list_price") or "0.0"))
+                        precio = to_decimal(str(prod[0].get("list_price_usd") or "0.0"))
                 except Exception:
                     precio = Decimal("0.0")
 
