@@ -30,6 +30,8 @@ import argparse
 import os
 import random
 import sys
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -47,6 +49,41 @@ from cxc.sheets.repository import SheetsRepository
 
 _TOLERANCE = Decimal("0.01")
 
+# Ver el mismo comentario en scripts/migrate_sheets_to_postgres.py: sin
+# espaciar las lecturas, este comparador puede disparar la cuota de la API
+# de Sheets y GspreadGateway.read_rows() atrapa esa excepción devolviendo
+# [] en silencio -- eso se vería como una "discrepancia" (Postgres con más
+# filas que Sheets) que en realidad es un falso positivo por cuota, no un
+# problema real de datos.
+_SHEETS_READ_DELAY_SECONDS = 1.5
+
+
+class _PacedGateway(SheetGateway):
+    def __init__(
+        self, inner: SheetGateway, delay_seconds: float = _SHEETS_READ_DELAY_SECONDS
+    ) -> None:
+        self._inner = inner
+        self._delay = delay_seconds
+
+    def read_rows(self, table: str) -> list[dict[str, str]]:
+        time.sleep(self._delay)
+        return self._inner.read_rows(table)
+
+    def append_row(self, table: str, row: Mapping[str, str]) -> None:
+        self._inner.append_row(table, row)
+
+    def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None:
+        self._inner.upsert_row(table, pk_field, row)
+
+    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool:
+        return self._inner.delete_row(table, pk_field, pk_value)
+
+    def get_meta(self, key: str) -> str | None:
+        return self._inner.get_meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._inner.set_meta(key, value)
+
 
 @dataclass
 class Discrepancy:
@@ -60,8 +97,10 @@ def _make_gateway(config: AppConfig) -> SheetGateway:
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
     ):
-        return GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-    return GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+        inner = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+    else:
+        inner = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+    return _PacedGateway(inner)
 
 
 def _pg_count(engine: Any, table: Table) -> int:

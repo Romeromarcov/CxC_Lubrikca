@@ -37,6 +37,7 @@ import dataclasses
 import logging
 import os
 import sys
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
@@ -54,6 +55,47 @@ from cxc.sheets.gateway import GspreadGateway, SheetGateway
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cxc.migrate_sheets_to_postgres")
 
+# Segundos entre lecturas consecutivas a la API de Sheets. Este backfill lee
+# ~26 pestañas completas en una sola corrida -- sin espaciarlas se puede
+# disparar la cuota "Read requests per minute" (el mismo problema del
+# HOTFIX de logging de 429 en producción), y GspreadGateway.read_rows()
+# atrapa esa excepción y devuelve [] en silencio: sin este pacing, una
+# tabla con datos reales puede reportarse como vacía sin ningún error.
+_SHEETS_READ_DELAY_SECONDS = 1.5
+
+
+class _PacedGateway(SheetGateway):
+    """Envoltorio de solo lectura que espacía las llamadas a ``read_rows``.
+
+    Ver ``_SHEETS_READ_DELAY_SECONDS``. Los demás métodos delegan sin
+    modificar -- este backfill nunca escribe en Sheets.
+    """
+
+    def __init__(
+        self, inner: SheetGateway, delay_seconds: float = _SHEETS_READ_DELAY_SECONDS
+    ) -> None:
+        self._inner = inner
+        self._delay = delay_seconds
+
+    def read_rows(self, table: str) -> list[dict[str, str]]:
+        time.sleep(self._delay)
+        return self._inner.read_rows(table)
+
+    def append_row(self, table: str, row: Mapping[str, str]) -> None:
+        self._inner.append_row(table, row)
+
+    def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None:
+        self._inner.upsert_row(table, pk_field, row)
+
+    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool:
+        return self._inner.delete_row(table, pk_field, pk_value)
+
+    def get_meta(self, key: str) -> str | None:
+        return self._inner.get_meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._inner.set_meta(key, value)
+
 
 def _make_gateway(config: AppConfig) -> SheetGateway:
     if (
@@ -61,8 +103,10 @@ def _make_gateway(config: AppConfig) -> SheetGateway:
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
     ):
-        return GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-    return GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+        inner = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+    else:
+        inner = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+    return _PacedGateway(inner)
 
 
 def _dc_row(dc: Any, enum_fields: tuple[str, ...] = ()) -> dict[str, Any]:
