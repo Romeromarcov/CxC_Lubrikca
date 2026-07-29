@@ -180,6 +180,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const canGenerateReceipt = ["admin", "tesoreria", "gerente_ventas"].includes(user.rol);
             reciboBtnContainer.style.display = canGenerateReceipt ? "block" : "none";
         }
+
+        const recalcularTodoContainer = document.getElementById("recalcular-todo-container");
+        if (recalcularTodoContainer) {
+            const canRecalcularTodo = ["admin", "gerente_ventas"].includes(user.rol);
+            recalcularTodoContainer.style.display = canRecalcularTodo ? "block" : "none";
+        }
     }
 
     // Page Route Initialization
@@ -257,6 +263,30 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.initCurrentPage = initCurrentPage;
+
+    window.recalcularTodo = async function() {
+        const btn = document.getElementById("btn-recalcular-todo");
+        const statusEl = document.getElementById("recalcular-todo-status");
+        if (!confirm("¿Forzar el recálculo completo del motor de descuentos para TODAS las órdenes? Puede tardar varios minutos en segundo plano.")) {
+            return;
+        }
+        try {
+            if (btn) btn.disabled = true;
+            if (statusEl) statusEl.textContent = "Iniciando recálculo en segundo plano...";
+            const res = await fetch("/api/admin/recalcular-todo", { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                if (statusEl) statusEl.textContent = "✅ " + (data.message || "Recálculo iniciado.") + " Los reportes se actualizarán en unos minutos.";
+            } else {
+                if (statusEl) statusEl.textContent = "❌ Error: " + (data.detail || "No se pudo iniciar el recálculo.");
+            }
+        } catch (err) {
+            if (statusEl) statusEl.textContent = "❌ Error de red al iniciar el recálculo.";
+            console.error(err);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
 
     window.loadAdminUsuarios = async function() {
         const tbody = document.getElementById("admin-usuarios-table-body");

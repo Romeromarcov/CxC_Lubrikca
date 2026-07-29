@@ -986,6 +986,32 @@ async def api_admin_cambiar_rol(
     }
 
 
+@app.post("/api/admin/recalcular-todo")
+async def api_admin_recalcular_todo(
+    background_tasks: BackgroundTasks, cxc_session: str | None = Cookie(default=None)
+):
+    """Fuerza un recálculo completo del motor de descuentos y la reconciliación.
+
+    El sync incremental solo dispara ``recalculate_all_orders`` cuando detecta
+    un cambio real en Odoo para una orden -- si nada cambió (p.ej. después de
+    un fix de código como la corrección del fallback de precio, que no toca
+    datos de Odoo), la Bandeja se queda con el valor calculado la última vez.
+    Este endpoint deja que Admin/Gerencia fuercen el recálculo cuando lo
+    necesiten, sin depender de que algo cambie primero en Odoo.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] not in ("admin", "gerente_ventas"):
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso denegado: Se requiere rol Administrador o Gerente de Ventas",
+        )
+    background_tasks.add_task(recalculate_all_orders)
+    return {
+        "status": "success",
+        "message": "Recálculo completo del motor de descuentos iniciado en segundo plano.",
+    }
+
+
 @app.get("/api/resumen")
 async def get_resumen():
     try:
