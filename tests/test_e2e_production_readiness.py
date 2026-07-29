@@ -1326,3 +1326,126 @@ def test_e2e_23_regla_global_excepcion_cancelada_con_entrega_no_devuelta():
         # SO_CANCEL_ENTREGADA tiene un picking de salida "done" sin devolución -> cuenta.
         # SO_CANCEL_SIN_ENTREGA no tiene picking -> sigue excluida como antes.
         assert res.json()["total_por_cobrar_usd"] == 777.0
+
+
+def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
+    """/api/ventas: venta bruta/neta teórica (motor) vs real (Odoo) vs
+
+    facturado, con IVA aplicado a las columnas teóricas -- y la alerta solo
+    debe dispararse cuando una orden YA facturada quedó facturada, en neto,
+    por debajo de lo que el motor dice que debió facturarse neto (con
+    impuestos). Una orden facturada al monto lleno (sin descuento aplicado
+    en la factura) no es una alerta, aunque no coincida exactamente con la
+    venta neta teórica -- solo lo es cuando factura MENOS de lo debido.
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import BandejaFacturacion
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_V1",
+            cliente_id="CLI_V",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            # amount_total de Odoo (CON IVA 16% sobre 100 de subtotal).
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+        OrdenVenta(
+            so_id="SO_V2",
+            cliente_id="CLI_V",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 2),
+            fecha_entrega=None,
+            monto_total=Decimal("232.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_V1",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("90.00"),
+        ),
+        BandejaFacturacion(
+            so_id="SO_V2",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("200.00"),
+            total_motor=Decimal("180.00"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+        lista_usd="4",
+        lista_bcv="5",
+    )  # iva_rate=0.16, igtf_activo=False por defecto
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_V1", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_V2", "state": "sale", "amount_untaxed": 200.0},
+            ]
+        if model == "account.move":
+            return [
+                # SO_V1: facturado al monto lleno, sin descuento -- coincide
+                # exactamente con la bruta teórica + IVA. No es una alerta.
+                {
+                    "invoice_origin": "SO_V1",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 100.0,
+                    "amount_total_signed_usd": 116.0,
+                },
+                # SO_V2: facturado muy por debajo -- ni siquiera cubre la
+                # venta neta teórica + IVA ($208.80). Debe alertar.
+                {
+                    "invoice_origin": "SO_V2",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 140.0,
+                    "amount_total_signed_usd": 162.40,
+                },
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        data = res.json()
+        by_so = {it["so_id"]: it for it in data["items"]}
+
+        v1 = by_so["SO_V1"]
+        assert v1["venta_bruta_teorica"] == 100.0
+        assert v1["venta_bruta_teorica_iva"] == 116.0
+        assert v1["venta_neta_teorica"] == 90.0
+        assert abs(v1["venta_neta_teorica_impuestos"] - 104.4) < 0.01
+        assert v1["venta_bruta_real"] == 100.0
+        assert v1["venta_neta_real"] == 116.0
+        assert v1["total_facturado_con_impuestos"] == 116.0
+        assert v1["total_facturado_neto"] == 116.0
+        assert v1["diferencia"] == 0.0
+        assert v1["alerta"] is False
+
+        v2 = by_so["SO_V2"]
+        assert v2["total_facturado_neto"] == 162.40
+        assert abs(v2["venta_neta_teorica_impuestos"] - 208.8) < 0.01
+        assert v2["alerta"] is True
+
+        assert data["kpis"]["total_alertas"] == 1
+        assert data["kpis"]["iva_rate"] == 0.16

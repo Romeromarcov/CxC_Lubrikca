@@ -30,6 +30,7 @@
             <a href="/facturacion" class="tab-btn nav-link" data-page="facturacion" style="text-decoration: none;">🧾 Facturación</a>
             <a href="/conciliaciones" class="tab-btn nav-link" data-page="conciliaciones" style="text-decoration: none;">🤝 Conciliaciones</a>
             <a href="/cobranza" class="tab-btn nav-link" data-page="cobranza" style="text-decoration: none;">💵 Cobranza</a>
+            <a href="/ventas" class="tab-btn nav-link" data-page="ventas" style="text-decoration: none;">💰 Ventas</a>
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
             <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
             <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
@@ -879,6 +880,86 @@
                             <tbody id="cobranza-table-body">
                                 <tr>
                                     <td colspan="13" class="table-empty">Cargando cobranzas registradas...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PESTAÑA: VENTAS (teórico vs real, por orden) -->
+        <div id="tab-ventas" class="tab-panel">
+            <div class="ventas-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+                    <div class="kpi-card">
+                        <h3>Venta Bruta Teórica (Total)</h3>
+                        <p id="ventas-kpi-bruta-teorica">$0.00</p>
+                        <span>Precio de lista correcto, sin descuentos</span>
+                    </div>
+                    <div class="kpi-card">
+                        <h3>Venta Neta Teórica (Total)</h3>
+                        <p id="ventas-kpi-neta-teorica">$0.00</p>
+                        <span>Con los descuentos que corresponden según el motor</span>
+                    </div>
+                    <div class="kpi-card">
+                        <h3>Venta Neta Real (Total)</h3>
+                        <p id="ventas-kpi-neta-real">$0.00</p>
+                        <span>Monto real de la orden en Odoo (usado en CxC)</span>
+                    </div>
+                    <div class="kpi-card">
+                        <h3>Total Facturado Neto (Total)</h3>
+                        <p id="ventas-kpi-facturado-neto">$0.00</p>
+                        <span>Facturas con impuestos, menos notas de crédito</span>
+                    </div>
+                    <div class="kpi-card" style="border-left: 4px solid #dc2626;">
+                        <h3>⚠️ Órdenes con Alerta</h3>
+                        <p id="ventas-kpi-alertas" style="color:#b91c1c;">0</p>
+                        <span>Facturado neto por debajo de la venta neta teórica + impuestos</span>
+                    </div>
+                </section>
+
+                <section class="reporte-panel card">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2>Ventas: Teórico vs. Real por Orden</h2>
+                            <p id="ventas-iva-info">Tasas de impuesto configuradas: IVA —</p>
+                        </div>
+                        <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                            <select id="ventas-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
+                                <option value="*">Todos los Vendedores</option>
+                            </select>
+                            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:#334155;">
+                                <input type="checkbox" id="ventas-solo-alertas"> Solo con alerta
+                            </label>
+                            <input type="text" id="ventas-search" placeholder="🔍 Buscar por cliente o SO...">
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Fecha</th>
+                                    <th title="Precio de lista correcto, sin descuentos, sin impuestos">Venta Bruta Teórica</th>
+                                    <th title="Venta Bruta Teórica + IVA">Bruta Teórica + IVA</th>
+                                    <th title="Bruta teórica menos los descuentos que calcula el motor (incluye los que requieren pago registrado)">Venta Neta Teórica</th>
+                                    <th title="Venta Neta Teórica + Impuestos (IVA / IGTF si aplica)">Neta Teórica + Imp.</th>
+                                    <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
+                                    <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
+                                    <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
+                                    <th title="Suma de facturas posted, con impuestos">Facturado con Imp.</th>
+                                    <th title="Facturado con impuestos menos Notas de Crédito aplicadas">Facturado Neto</th>
+                                    <th title="Venta Bruta Teórica + IVA − Facturado Neto">Diferencia</th>
+                                    <th title="Facturado Neto por debajo de la Venta Neta Teórica + Impuestos en una orden ya facturada">Alerta</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ventas-table-body">
+                                <tr>
+                                    <td colspan="15" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
