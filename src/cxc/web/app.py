@@ -84,6 +84,36 @@ def orden_excluida(o: Any, live_state: str | None = None) -> bool:
     return st.strip().lower() in ESTADOS_ORDEN_EXCLUIDOS
 
 
+def get_live_so_states(so_names: list[str]) -> dict[str, str]:
+    """Estado EN VIVO de cada sale.order en Odoo, para usar con orden_excluida.
+
+    El espejo local (estado_orden) puede quedar desactualizado si una orden
+    se cancela/revierte en Odoo y el sync incremental no la vuelve a traer
+    (ventana delta de 48h vencida, downtime del servidor, etc.) -- verificado
+    en vivo: una orden cancelada de $161,679.06 seguía contando como venta
+    confirmada porque el espejo nunca se refrescó. Best-effort: si Odoo no
+    responde, se devuelve vacío y el llamador cae al estado local.
+    """
+    if not so_names:
+        return {}
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        if not execute:
+            return {}
+        so_recs = execute(
+            "sale.order", "search_read", [[["name", "in", so_names]]], {"fields": ["name", "state"]}
+        )
+        return {
+            str(s["name"]).strip(): str(s.get("state", "")).strip().lower()
+            for s in so_recs
+            if str(s.get("name", "")).strip()
+        }
+    except Exception as e:
+        logger.warning("Error consultando estado en vivo de órdenes en Odoo: %s", e)
+        return {}
+
+
 # Models for POST requests
 class VinculacionRequest(BaseModel):
     pago_id: str
@@ -887,8 +917,11 @@ async def get_resumen():
         repo = get_repo()
         # 1. Total por cobrar (Orders not invoiced)
         ordenes = repo.all_ordenes()
+        so_states_map = get_live_so_states([o.so_id for o in ordenes])
         total_por_cobrar = sum(
-            o.monto_total for o in ordenes if not o.facturada and not orden_excluida(o)
+            o.monto_total
+            for o in ordenes
+            if not o.facturada and not orden_excluida(o, live_state=so_states_map.get(o.so_id))
         )
 
         # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
@@ -2052,7 +2085,8 @@ async def get_reporte_saldos(refresh: bool = False):
 
         new_audit_rows: list[dict] = []
         for o in ordenes:
-            if orden_excluida(o):
+            live_state = so_odoo_data.get(o.so_id, {}).get("state")
+            if orden_excluida(o, live_state=live_state):
                 continue
 
             # Tarea 2: orden facturada cuya factura Odoo ya esta 'Pagada' o
@@ -3159,18 +3193,29 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                p_names = [
-                    str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")
-                ]
-                if p_names:
+                # map_pago() guarda pago_id=str(rec["id"]) (el ID numerico de
+                # Odoo), NO el campo "name" (la referencia formateada, p.ej.
+                # "PUSD1/2026/00552"). Buscar por ["name", "in", p_names] con
+                # IDs numericos nunca hacia match -- reconciled_pagos_set
+                # quedaba siempre vacio y el filtro de "ya conciliado en
+                # Odoo" jamas excluia nada, mostrando ~866 pagos ya
+                # reconciliados/invalidos como si estuvieran "sin asignar"
+                # (verificado en vivo: de 962 pagos en Odoo, solo 96 estan
+                # realmente sin conciliar).
+                p_ids = []
+                for p in pagos_rows:
+                    raw_id = str(p.get("pago_id", "")).strip()
+                    if raw_id.isdigit():
+                        p_ids.append(int(raw_id))
+                if p_ids:
                     odoo_pagos = execute(
                         "account.payment",
                         "search_read",
-                        [[["name", "in", p_names]]],
-                        {"fields": ["name", "is_reconciled", "state", "reconciled_invoices_count"]},
+                        [[["id", "in", p_ids]]],
+                        {"fields": ["id", "is_reconciled", "state", "reconciled_invoices_count"]},
                     )
                     for op in odoo_pagos:
-                        pname = str(op.get("name", "")).strip()
+                        pid_str = str(op.get("id", "")).strip()
                         # account.payment no tiene estado "posted" (ese es de account.move);
                         # sus estados confirmados son in_process/paid. Los demás (draft,
                         # canceled, rejected) no son pagos válidos para sugerir.
@@ -3179,8 +3224,8 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                             or int(op.get("reconciled_invoices_count") or 0) > 0
                             or str(op.get("state")) not in ("in_process", "paid")
                         )
-                        if is_rec and pname:
-                            reconciled_pagos_set.add(pname)
+                        if is_rec and pid_str:
+                            reconciled_pagos_set.add(pid_str)
 
                 so_names = [o.so_id for o in ordenes]
                 if so_names:
@@ -5314,12 +5359,33 @@ async def get_auditoria():
             if v.estado == EstadoVinculacion.CONCILIADO:
                 pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(v.monto_aplicado)
 
+        # Estado EN VIVO de cada orden -- el espejo local (estado_orden) puede
+        # quedar desactualizado si una orden se cancela en Odoo y el sync
+        # incremental no la vuelve a traer (ventana delta vencida, downtime,
+        # etc.). Ver get_reporte_diario / get_resumen / get_reporte_saldos
+        # para el mismo fix.
+        so_states_map: dict[str, str] = {}
+        if execute and so_ids:
+            try:
+                so_recs_live = execute(
+                    "sale.order",
+                    "search_read",
+                    [[["name", "in", so_ids]]],
+                    {"fields": ["name", "state"]},
+                )
+                for s in so_recs_live:
+                    sname = str(s.get("name", "")).strip()
+                    if sname:
+                        so_states_map[sname] = str(s.get("state", "")).strip().lower()
+            except Exception as e:
+                logger.warning("Error consultando estado en vivo en get_auditoria: %s", e)
+
         operaciones_conformes = []
         raw_discrepancias = []
         discrepancias_facturas_odoo = []
 
         for o in ordenes:
-            if orden_excluida(o):
+            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
                 continue
             c_name = clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}")
             b = bandeja_map.get(o.so_id)
@@ -5760,6 +5826,7 @@ async def get_reporte_diario(
 
         prod_litros_map = {}
         journal_name_map: dict[int, str] = {}
+        so_states_map: dict[str, str] = {}
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -5779,14 +5846,34 @@ async def get_reporte_diario(
 
                 journals = execute("account.journal", "search_read", [], {"fields": ["id", "name"]})
                 journal_name_map = {int(j["id"]): str(j.get("name") or "") for j in journals}
+
+                # Estado EN VIVO de cada orden -- el espejo local (estado_orden)
+                # puede quedar desactualizado si una orden se cancela en Odoo
+                # y el sync incremental no la vuelve a traer (ventana delta
+                # vencida, downtime, etc.). Verificado en vivo: S00162
+                # ($161,679.06) aparecía como "sale" en el espejo pero está
+                # "cancel" en Odoo, inflando "Ventas del Año" en ese monto.
+                so_names = [o.so_id for o in ordenes]
+                if so_names:
+                    so_recs = execute(
+                        "sale.order",
+                        "search_read",
+                        [[["name", "in", so_names]]],
+                        {"fields": ["name", "state"]},
+                    )
+                    for s in so_recs:
+                        sname = str(s.get("name", "")).strip()
+                        if sname:
+                            so_states_map[sname] = str(s.get("state", "")).strip().lower()
         except Exception as e_p:
             logger.warning("Error leyendo catálogos de Odoo (litros/métodos de pago): %s", e_p)
 
-        # Órdenes validas para este reporte: excluidas por regla global,
-        # y filtradas por vendedor si se pidió.
+        # Órdenes validas para este reporte: excluidas por regla global
+        # (usando el estado EN VIVO de Odoo si se pudo consultar, con
+        # fallback al espejo local), y filtradas por vendedor si se pidió.
         ordenes_validas = {}
         for o in ordenes:
-            if orden_excluida(o):
+            if orden_excluida(o, live_state=so_states_map.get(o.so_id)):
                 continue
             if vendedor_f and vendedor_f != str(o.vendedor_email or "").strip().lower():
                 continue
@@ -5817,10 +5904,14 @@ async def get_reporte_diario(
             fk = o_match.fecha.isoformat()[:10]
             if fk not in ventas_por_dia:
                 continue
-            prod_id = int(ln.get("product_id") or 0)
-            qty = parse_decimal_safe(
-                ln.get("cantidad_entregada") or ln.get("cantidad_ordenada") or "0"
-            )
+            # "producto" guarda el product_id de Odoo (ver map_linea en
+            # odoo/client.py) -- NO existe una columna "product_id" en la
+            # hoja LineasOrden. "cantidad_ordenada" tampoco existe, la
+            # columna real es "cantidad". Con las claves equivocadas, esta
+            # suma caía siempre al fallback de 1.0 L/unidad para TODA línea,
+            # subestimando los litros reales de cada producto.
+            prod_id = int(ln.get("producto") or 0)
+            qty = parse_decimal_safe(ln.get("cantidad_entregada") or ln.get("cantidad") or "0")
             l_per_unit = prod_litros_map.get(prod_id, Decimal("1.0"))
             ventas_por_dia[fk]["litros_totales"] += qty * l_per_unit
 

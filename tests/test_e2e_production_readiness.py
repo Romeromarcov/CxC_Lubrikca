@@ -1091,3 +1091,139 @@ def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
         assert data["bcv_variante"] == "EUR"
         assert data["tasa_bcv_aplicada"] == 39.8
         assert abs(data["equiv_usd_bcv"] - 500.0 / 39.8) < 1e-6
+
+
+def test_e2e_20_reporte_diario_litros_usa_claves_correctas_de_lineasorden():
+    """LineasOrden usa las columnas "producto" (product_id de Odoo) y
+
+    "cantidad" -- NO "product_id" ni "cantidad_ordenada", que no existen.
+    Con las claves equivocadas, el cálculo caía siempre al fallback de
+    1.0 L/unidad; con las correctas debe usar el volumen real de Odoo.
+    """
+    mock_repo = MagicMock()
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_LIT",
+            cliente_id="C1",
+            vendedor_email="v1",
+            fecha=date(2026, 7, 18),
+            fecha_entrega=date(2026, 7, 18),
+            monto_total=Decimal("1200.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+        )
+    ]
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"so_id": "SO_LIT", "producto": "555", "cantidad": "10"}]
+        if sheet == "LineasOrden"
+        else []
+    )
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            return [{"id": 555, "default_code": "P555", "name": "Aceite", "volume": "20.0"}]
+        if model == "sale.order":
+            return [{"name": "SO_LIT", "state": "sale"}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/reporte/diario")
+        assert res.status_code == 200
+        ventas = res.json()["ventas_diarias"]
+        assert len(ventas) == 1
+        # 10 unidades x 20.0 L/unidad (volumen real) = 200 L, no 10 L
+        # (que es lo que daría el fallback de 1.0 L/unidad con las
+        # claves viejas y equivocadas).
+        assert ventas[0]["litros_totales"] == 200.0
+
+
+def test_e2e_21_conciliaciones_sugerencias_filtra_pagos_ya_reconciliados_en_odoo():
+    """El pago_id local es el ID numérico de Odoo (map_pago: pago_id=str(rec["id"])),
+
+    no el campo "name" (referencia formateada tipo "PUSD1/2026/00552"). El
+    filtro de pagos ya reconciliados en Odoo debe buscar por "id", si no
+    nunca hace match y pagos ya reconciliados aparecen como "sin asignar".
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "111",
+                "cliente_id": "CLI_R1",
+                "monto": "500.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-15",
+                "vendedor": "juan@lubrikca.com",
+            },
+            {
+                "pago_id": "222",
+                "cliente_id": "CLI_R1",
+                "monto": "300.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-16",
+                "vendedor": "juan@lubrikca.com",
+            },
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "CLI_R1", "nombre": "Cliente Reconciliado"}]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_R1",
+            cliente_id="CLI_R1",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("1000.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            # Pago 111 ya reconciliado en Odoo; 222 sigue en process, sin conciliar.
+            return [
+                {
+                    "id": 111,
+                    "is_reconciled": True,
+                    "state": "paid",
+                    "reconciled_invoices_count": 1,
+                },
+                {
+                    "id": 222,
+                    "is_reconciled": False,
+                    "state": "in_process",
+                    "reconciled_invoices_count": 0,
+                },
+            ]
+        if model == "sale.order":
+            return [{"name": "SO_R1", "state": "sale"}]
+        if model == "account.move":
+            return []
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        sug_data = res.json()
+        pagos_sugeridos = {s["pago_id"] for s in sug_data}
+        # El pago 111 ya está reconciliado en Odoo -- no debe sugerirse.
+        assert "111" not in pagos_sugeridos
+        # El pago 222 sigue sin conciliar -- sí debe aparecer.
+        assert "222" in pagos_sugeridos
