@@ -250,6 +250,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadReporte === "function") loadReporte();
             } else if (path === "auditoria") {
                 if (typeof loadAuditoria === "function") loadAuditoria();
+                if (typeof loadAuditoriaVentasAlertas === "function") loadAuditoriaVentasAlertas();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadListasMapeo === "function") loadListasMapeo();
@@ -1427,11 +1428,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
             const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            setText("ventas-kpi-subtotal-real", fmt(kpis.subtotal_real_total));
             setText("ventas-kpi-bruta-teorica", fmt(kpis.venta_bruta_teorica_total));
+            setText("ventas-kpi-bruta-teorica-iva", fmt(kpis.venta_bruta_teorica_iva_total));
             setText("ventas-kpi-neta-teorica", fmt(kpis.venta_neta_teorica_total));
             setText("ventas-kpi-neta-real", fmt(kpis.venta_neta_real_total));
             setText("ventas-kpi-facturado-neto", fmt(kpis.total_facturado_neto_total));
-            setText("ventas-kpi-alertas", String(kpis.total_alertas || 0));
 
             const ivaPct = ((kpis.iva_rate || 0) * 100).toFixed(0);
             const igtfInfo = kpis.igtf_activo ? ` · IGTF ${((kpis.igtf_rate || 0) * 100).toFixed(0)}%` : ' · IGTF inactivo';
@@ -3642,6 +3644,52 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadAuditoria = loadAuditoria;
+
+    async function loadAuditoriaVentasAlertas() {
+        const tbody = document.getElementById("auditoria-ventas-alertas-body");
+        const kpiEl = document.getElementById("audit-kpi-ventas-alertas");
+        if (!tbody && !kpiEl) return;
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
+        try {
+            const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
+            if (!res.ok) {
+                if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar órdenes con alerta.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            const alertas = (data.items || []).filter(it => it.alerta);
+            if (kpiEl) kpiEl.textContent = String(alertas.length);
+            if (!tbody) return;
+            if (alertas.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ No hay órdenes facturadas por debajo de lo debido.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = alertas.map(it => `
+                <tr>
+                    <td><strong>${escapeHtml(it.so_id)}</strong></td>
+                    <td>${escapeHtml(it.cliente_nombre)}</td>
+                    <td><small>${escapeHtml(it.vendedor)}</small></td>
+                    <td><small>${escapeHtml(it.fecha)}</small></td>
+                    <td>${fmt(it.venta_neta_teorica_impuestos)}</td>
+                    <td>${fmt(it.total_facturado_neto)}</td>
+                    <td><strong style="color:#b91c1c;">${fmt(it.venta_neta_teorica_impuestos - it.total_facturado_neto)}</strong></td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar órdenes con alerta.</td></tr>';
+            console.error(err);
+        }
+    }
+    window.loadAuditoriaVentasAlertas = loadAuditoriaVentasAlertas;
 
     window.aceptarAnomalia = async function(anomaliaId, soId, tipo) {
         const just = prompt(`Justificación para aceptar la anomalía (${soId} - ${tipo}):`, "Aceptado por gerencia");

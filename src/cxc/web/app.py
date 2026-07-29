@@ -6054,7 +6054,11 @@ async def get_ventas(
                 "iva_rate": iva_rate,
                 "igtf_rate": igtf_rate,
                 "igtf_activo": config.engine.igtf_activo,
+                "subtotal_real_total": round(sum(i["venta_bruta_real"] for i in items), 2),
                 "venta_bruta_teorica_total": round(sum(i["venta_bruta_teorica"] for i in items), 2),
+                "venta_bruta_teorica_iva_total": round(
+                    sum(i["venta_bruta_teorica_iva"] for i in items), 2
+                ),
                 "venta_neta_teorica_total": round(sum(i["venta_neta_teorica"] for i in items), 2),
                 "venta_neta_real_total": round(sum(i["venta_neta_real"] for i in items), 2),
                 "total_facturado_neto_total": round(

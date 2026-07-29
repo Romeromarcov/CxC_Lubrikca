@@ -1479,6 +1479,8 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
 
         assert data["kpis"]["total_alertas"] == 1
         assert data["kpis"]["iva_rate"] == 0.16
+        assert abs(data["kpis"]["subtotal_real_total"] - 440.0) < 0.01
+        assert abs(data["kpis"]["venta_bruta_teorica_iva_total"] - 510.4) < 0.01
 
 
 def test_e2e_25_recalcular_todo_requiere_admin_o_gerente():
