@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import traceback
+from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -404,6 +405,106 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
+    """Regla general del sistema: Odoo siempre prevalece.
+
+    Si un pago se vinculó localmente a una orden (``Vinculacion.so_id``) y
+    Odoo luego lo reconcilió contra una factura/orden DISTINTA, la
+    Vinculación local debe seguir a Odoo -- no quedarse con la asignación
+    manual vieja. Compara cada ``Vinculacion`` cuyo pago ya esté
+    reconciliado en Odoo (``get_live_pagos_conciliados``) contra el/los
+    ``so_id`` reales que Odoo le asignó, y re-apunta cuando divergen.
+
+    Caso simple (1 Vinculación local, Odoo reconcilió contra 1 sola orden):
+    se re-apunta automáticamente y se deja rastro en ``BandejaAuditoria``
+    (qué decía antes, qué dice ahora). Caso ambiguo (el pago cubre varias
+    Vinculaciones locales o Odoo lo reconcilió contra varias órdenes a la
+    vez): no se auto-corrige -- solo se registra la discrepancia en
+    auditoría para revisión manual, porque no hay forma inequívoca de
+    saber qué Vinculación local corresponde a cuál orden de Odoo sin más
+    contexto.
+
+    Devuelve la lista de cambios/discrepancias detectados (para logging).
+    """
+    conciliados_por_pago = {c["pago_id"]: c for c in get_live_pagos_conciliados(execute)}
+    if not conciliados_por_pago:
+        return []
+
+    vincs_por_pago: dict[str, list[Vinculacion]] = {}
+    for v in repo.all_vinculaciones():
+        vincs_por_pago.setdefault(v.pago_id, []).append(v)
+
+    cambios: list[dict[str, Any]] = []
+    vincs_a_actualizar: list[Vinculacion] = []
+    for pago_id, vincs_locales in vincs_por_pago.items():
+        conciliado = conciliados_por_pago.get(pago_id)
+        if not conciliado:
+            continue  # este pago aun no esta reconciliado en Odoo -- nada que verificar
+        so_ids_odoo = set(conciliado["so_ids"])
+        if not so_ids_odoo:
+            continue
+
+        so_ids_locales = {v.so_id for v in vincs_locales}
+        if so_ids_locales == so_ids_odoo:
+            continue  # ya coincide
+
+        if len(vincs_locales) == 1 and len(so_ids_odoo) == 1:
+            v = vincs_locales[0]
+            so_id_nuevo = next(iter(so_ids_odoo))
+            vincs_a_actualizar.append(dataclasses_replace(v, so_id=so_id_nuevo))
+            cambios.append(
+                {
+                    "pago_id": pago_id,
+                    "so_id_anterior": v.so_id,
+                    "so_id_nuevo": so_id_nuevo,
+                    "requiere_revision_manual": False,
+                }
+            )
+        else:
+            cambios.append(
+                {
+                    "pago_id": pago_id,
+                    "so_id_anterior": ", ".join(sorted(so_ids_locales)),
+                    "so_id_nuevo": ", ".join(sorted(so_ids_odoo)),
+                    "requiere_revision_manual": True,
+                }
+            )
+
+    if vincs_a_actualizar:
+        repo.update_vinculaciones(vincs_a_actualizar)
+
+    if cambios and hasattr(repo, "append_auditoria_rows"):
+        ahora = datetime.now()
+        audit_rows = [
+            {
+                "audit_id": f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}",
+                "so_id": c["so_id_nuevo"],
+                "tipo_auditoria": (
+                    "vinculacion_discrepancia_multi_orden"
+                    if c["requiere_revision_manual"]
+                    else "vinculacion_revinculada_por_odoo"
+                ),
+                "motor_calcula_usd": "",
+                "odoo_registrado_usd": "",
+                "diferencia_usd": "",
+                "detalle_odoo": (
+                    f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}"
+                ),
+                "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
+                "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
+                "revisado_por": "",
+                "timestamp_audit": ahora.isoformat(),
+            }
+            for c in cambios
+        ]
+        try:
+            repo.append_auditoria_rows(audit_rows)
+        except Exception as e_aud:
+            logger.warning("Error guardando auditoría de re-vinculación por Odoo: %s", e_aud)
+
+    return cambios
 
 
 def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
@@ -1581,6 +1682,15 @@ def recalculate_all_orders():
             else _fresh_sheets_repo(config)
         )
         execute = _connect(config.odoo)
+
+        if execute:
+            try:
+                cambios = _resincronizar_vinculaciones_con_odoo(repo, execute)
+                if cambios:
+                    print(f"Re-vinculación por Odoo: {len(cambios)} discrepancia(s) revisada(s).")
+            except Exception as e_relink:
+                print(f"Error re-sincronizando Vinculaciones con Odoo: {e_relink}", file=sys.stderr)
+
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
         primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5

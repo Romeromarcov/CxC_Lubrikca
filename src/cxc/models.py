@@ -390,7 +390,16 @@ class Feriado:
     tipo: TipoFeriado
 
 
-# --- 3.9 Vinculaciones (trabajo humano; el sync NUNCA la toca) --------------
+# --- 3.9 Vinculaciones (trabajo humano; el sync NUNCA la toca, salvo la
+# excepción de abajo) --------------------------------------------------------
+# Excepción: si el pago de una Vinculacion ya está reconciliado en Odoo
+# contra una orden DISTINTA a `so_id` (caso simple, sin ambigüedad -- ver
+# `cxc.web.app._resincronizar_vinculaciones_con_odoo`), el ciclo de sync SÍ
+# actualiza `so_id` para igualar a Odoo -- Odoo siempre prevalece sobre una
+# asignación manual vieja. `monto_aplicado` NO se toca (evita introducir
+# discrepancias financieras derivadas; solo corrige a qué orden cuenta el
+# pago). Cada corrección deja un rastro en BandejaAuditoria (qué decía
+# antes, qué dice ahora).
 @dataclass
 class Vinculacion:
     vinc_id: str
