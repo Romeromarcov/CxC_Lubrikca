@@ -343,6 +343,12 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                     "aprobado_por",
                     "timestamp_aprobacion",
                 ],
+                "PagosHuerfanosCerrados": [
+                    "pago_id",
+                    "motivo",
+                    "cerrado_por",
+                    "timestamp_cierre",
+                ],
             }
             cols = headers.get(table, ["id"])
             ws = self._sh.add_worksheet(title=table, rows=1000, cols=20)

@@ -2438,3 +2438,117 @@ def test_e2e_38_sugerencias_no_marca_duplicado_si_algun_campo_difiere():
         assert len(data) == 2
         assert all(item["posible_duplicado"] is False for item in data)
         assert all(item["duplicado_de"] == [] for item in data)
+
+
+def test_e2e_39_sugerencias_excluye_pago_huerfano_ya_cerrado():
+    """Un pago sin orden abierta del cliente (huérfano) que ya fue cerrado
+
+    "a favor de la empresa" (POST /api/conciliaciones/cerrar-pago-huerfano)
+    no debe seguir apareciendo en Pagos Pendientes por Asociar.
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "1002",
+                "cliente_id": "C1",
+                "monto": "50.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C1", "nombre": "Cliente Uno"}]
+            if sheet == "Clientes"
+            else (
+                [{"pago_id": "1002", "motivo": "sin orden", "cerrado_por": "admin"}]
+                if sheet == "PagosHuerfanosCerrados"
+                else []
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        assert res.json() == []
+
+
+def test_e2e_40_sugerencias_muestra_pago_huerfano_sin_cerrar():
+    """El mismo pago huérfano, sin cerrar, debe seguir apareciendo (control
+
+    negativo del test anterior -- confirma que la exclusión es por la
+    presencia real en PagosHuerfanosCerrados, no por el pago en sí).
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "117",
+                "cliente_id": "C1",
+                "monto": "50.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["pago_id"] == "117"
+        assert data[0]["so_id"] is None
+
+
+def test_e2e_41_post_cerrar_pago_huerfano_escribe_fila():
+    """POST /api/conciliaciones/cerrar-pago-huerfano hace upsert en
+
+    PagosHuerfanosCerrados con el motivo dado y quién lo cerró -- y NO
+    llama a ningún endpoint/método de Odoo (solo marca local).
+    """
+    mock_repo = MagicMock()
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.post(
+            "/api/conciliaciones/cerrar-pago-huerfano",
+            json={"pago_id": "117", "motivo": "Cliente cerró operaciones"},
+        )
+        assert res.status_code == 200
+        assert res.json()["status"] == "success"
+
+        mock_repo._g.upsert_row.assert_called_once()
+        args, _ = mock_repo._g.upsert_row.call_args
+        assert args[0] == "PagosHuerfanosCerrados"
+        assert args[1] == "pago_id"
+        row = args[2]
+        assert row["pago_id"] == "117"
+        assert row["motivo"] == "Cliente cerró operaciones"
