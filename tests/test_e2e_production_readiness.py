@@ -2552,3 +2552,159 @@ def test_e2e_41_post_cerrar_pago_huerfano_escribe_fila():
         (row,), _ = mock_repo.upsert_pago_huerfano_cerrado.call_args
         assert row["pago_id"] == "117"
         assert row["motivo"] == "Cliente cerró operaciones"
+
+
+def _fake_execute_pago_conciliado(so_ids: list[str], pago_id: int = 100):
+    """Construye un ``execute`` falso donde ``pago_id`` aparece reconciliado
+
+    en Odoo contra una factura por cada ``so_id`` en ``so_ids``.
+    """
+    invoice_ids = list(range(1, len(so_ids) + 1))
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "search_read":
+            return [
+                {
+                    "id": pago_id,
+                    "partner_id": False,
+                    "amount": 500.0,
+                    "amount_ref": 500.0,
+                    "amount_available_for_refund": 0.0,
+                    "currency_id": [1, "USD"],
+                    "journal_id": False,
+                    "date": "2026-07-01",
+                    "reconciled_invoice_ids": invoice_ids,
+                }
+            ]
+        if model == "account.move" and method == "read":
+            return [
+                {
+                    "id": inv_id,
+                    "name": f"INV/{inv_id:03d}",
+                    "invoice_origin": so_id,
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                    "amount_total_signed_usd": 500.0,
+                    "amount_residual_usd": 0.0,
+                }
+                for inv_id, so_id in zip(invoice_ids, so_ids, strict=True)
+            ]
+        return []
+
+    return fake_execute
+
+
+def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
+    """Regla general: si Odoo reconcilió un pago contra una orden distinta a
+
+    la Vinculación local, la Vinculación debe seguir a Odoo automáticamente
+    -- caso simple, sin ambigüedad (una Vinculación local, una orden en
+    Odoo). Debe quedar rastro en BandejaAuditoria.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_A",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+        )
+    ]
+
+    fake_execute = _fake_execute_pago_conciliado(["SO_B"])
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert cambios == [
+        {
+            "pago_id": "100",
+            "so_id_anterior": "SO_A",
+            "so_id_nuevo": "SO_B",
+            "requiere_revision_manual": False,
+        }
+    ]
+
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    assert len(vincs_actualizadas) == 1
+    assert vincs_actualizadas[0].vinc_id == "V1"
+    assert vincs_actualizadas[0].so_id == "SO_B"
+    # monto_aplicado NO se toca -- solo se corrige a qué orden cuenta el pago.
+    assert vincs_actualizadas[0].monto_aplicado == Decimal("500.00")
+
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert len(audit_rows) == 1
+    assert audit_rows[0]["so_id"] == "SO_B"
+    assert audit_rows[0]["tipo_auditoria"] == "vinculacion_revinculada_por_odoo"
+    assert audit_rows[0]["estado"] == "aplicado"
+
+
+def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
+    """Si la Vinculación local ya coincide con lo que Odoo reconcilió, no se
+
+    debe tocar nada -- ni update_vinculaciones ni auditoría.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+        )
+    ]
+
+    fake_execute = _fake_execute_pago_conciliado(["SO_B"])
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert cambios == []
+    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.append_auditoria_rows.assert_not_called()
+
+
+def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
+    """Si Odoo reconcilió el pago contra VARIAS órdenes a la vez (multi-
+
+    factura), no hay forma inequívoca de reasignar la Vinculación local --
+    se registra la discrepancia en auditoría para revisión manual, pero no
+    se toca la Vinculación.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_A",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+        )
+    ]
+
+    fake_execute = _fake_execute_pago_conciliado(["SO_C", "SO_D"])
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert len(cambios) == 1
+    assert cambios[0]["requiere_revision_manual"] is True
+
+    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert audit_rows[0]["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden"
+    assert audit_rows[0]["estado"] == "pendiente_revision"
