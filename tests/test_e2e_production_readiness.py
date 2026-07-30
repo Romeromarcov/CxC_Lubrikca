@@ -2631,3 +2631,90 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
     assert audit_rows[0]["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden"
     assert audit_rows[0]["estado"] == "pendiente_revision"
+
+
+def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
+    """Bug real (pago Odoo 29, tras el fix de tax_today): el spreadsheet usa
+
+    locale es_ES (coma decimal); un valor Binance sembrado como NUMBER
+    nativo se leía formateado con coma ("451,5072") y gspread lo
+    "numericizaba" quitando la coma como si fuera separador de miles,
+    guardando 4515072 en vez de 451.5072 -- un valor ~10000x mayor que la
+    tasa BCV del mismo día, que producía un monto_pago_binance ~$0.01.
+    La guardia de plausibilidad debe descartar ese dato corrupto y caer al
+    fallback de SerieTasas en vez de aplicar una tasa disparatada.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "29",
+                "cliente_id": "C_ZIP",
+                "monto": "36196.75",
+                "moneda": "VES",
+                "fecha_pago": "2026-03-18",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_ZIP", "nombre": "ZIP MARKET, CA"}]
+            if sheet == "Clientes"
+            else (
+                [
+                    {
+                        "timestamp": "2026-03-18 12:00:00",
+                        "tasa_bcv": "451.5072",
+                        "tasa_binance": "521.66",
+                    }
+                ]
+                if sheet == "SerieTasas"
+                else (
+                    # Fila corrupta: dato del día exacto, pero con el bug de
+                    # locale/numericise ya aplicado (punto decimal borrado).
+                    [
+                        {
+                            "fecha": "2026-03-18",
+                            "tasa_binance_promedio_diario": "5216600",
+                        }
+                    ]
+                    if sheet == "TasasHistoricasAuditoria"
+                    else []
+                )
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return [
+                {
+                    "id": 29,
+                    "name": "PBAMI/2026/00009",
+                    "tax_today": 451.5072,
+                    "amount_ref": 80.17,
+                    "is_reconciled": False,
+                    "state": "in_process",
+                    "reconciled_invoices_count": 0,
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        # BCV sigue viniendo de Odoo (tax_today), sin cambios.
+        assert abs(item["tasa_bcv"] - 451.5072) < 0.001
+        # Binance NO debe ser el valor corrupto (5216600) -- se descarta por
+        # implausible (ratio > 3x contra BCV) y cae a SerieTasas (521.66).
+        assert abs(item["tasa_binance"] - 521.66) < 0.001
+        assert item["tasa_binance"] < 1000

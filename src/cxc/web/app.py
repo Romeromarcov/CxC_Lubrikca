@@ -3898,8 +3898,15 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
             binance_del_dia = get_binance_rate_for_date(fecha_dt.date(), tasas_historicas_rows)
-            if binance_del_dia is not None:
-                binance_rate = binance_del_dia
+            # Guardia de plausibilidad: Binance y BCV son ambas tasas VES/USD del
+            # mismo día, con una brecha de mercado normalmente < 100%. Si el dato
+            # histórico sembrado está corrupto (ej. bug de locale que borra el punto
+            # decimal), aparece muy fuera de ese rango -- se descarta y se conserva
+            # el fallback de SerieTasas en vez de aplicar una tasa disparatada.
+            if binance_del_dia is not None and bcv_rate > Decimal("0"):
+                ratio = binance_del_dia / bcv_rate
+                if Decimal("0.5") <= ratio <= Decimal("3"):
+                    binance_rate = binance_del_dia
 
             # monto_vinculado (Vinculacion.monto_aplicado) siempre esta en USD
             # (la moneda de las ordenes) -- nunca restar directamente un saldo
