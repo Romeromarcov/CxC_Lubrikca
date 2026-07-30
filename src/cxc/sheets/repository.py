@@ -96,6 +96,36 @@ class SheetsRepository(Repository):
     def set_last_sync(self, cursor: datetime) -> None:
         self._g.set_meta(_META_LAST_SYNC, serde.s_dt(cursor))
 
+    # --- Configuración genérica (_Meta) ---------------------------------------
+    def get_config(self, key: str) -> str | None:
+        return self._g.get_meta(key)
+
+    def set_config(self, key: str, value: str) -> None:
+        self._g.set_meta(key, value)
+
+    def all_config(self) -> dict[str, str]:
+        return {
+            r.get("key"): r.get("value", "")
+            for r in self._g.read_rows(g.T_META)
+            if r.get("key")
+        }
+
+    # --- Usuarios de la plataforma ---------------------------------------------
+    _T_USUARIOS = "UsuariosPlataforma"
+
+    def get_usuario_plataforma(self, email: str) -> dict[str, str] | None:
+        email_clean = email.strip().lower()
+        for r in self._g.read_rows(self._T_USUARIOS):
+            if str(r.get("email") or "").strip().lower() == email_clean:
+                return r
+        return None
+
+    def all_usuarios_plataforma(self) -> list[dict[str, str]]:
+        return self._g.read_rows(self._T_USUARIOS)
+
+    def upsert_usuario_plataforma(self, row: dict[str, str]) -> None:
+        self._g.upsert_row(self._T_USUARIOS, "email", row)
+
     # --- Espejo (upsert por PK) ---------------------------------------------
     def upsert_clientes(self, filas: list[Cliente]) -> None:
         self._g.upsert_rows(g.T_CLIENTES, "cliente_id", [serde.cliente_to_row(c) for c in filas])
@@ -116,6 +146,9 @@ class SheetsRepository(Repository):
                 return serde.cliente_from_row(r)
         return None
 
+    def all_clientes(self) -> list[Cliente]:
+        return [serde.cliente_from_row(r) for r in self._g.read_rows(g.T_CLIENTES)]
+
     def get_orden(self, so_id: str) -> OrdenVenta | None:
         for r in self._g.read_rows(g.T_ORDENES):
             if r.get("so_id") == so_id:
@@ -132,17 +165,45 @@ class SheetsRepository(Repository):
             if r.get("so_id") == so_id
         ]
 
+    def all_lineas(self) -> list[LineaOrden]:
+        return [serde.linea_from_row(r) for r in self._g.read_rows(g.T_LINEAS)]
+
     def get_pago(self, pago_id: str) -> Pago | None:
         for r in self._g.read_rows(g.T_PAGOS):
             if r.get("pago_id") == pago_id:
                 return serde.pago_from_row(r)
         return None
 
+    def all_pagos(self) -> list[Pago]:
+        return [serde.pago_from_row(r) for r in self._g.read_rows(g.T_PAGOS)]
+
+    def all_pagos_full(self) -> list[dict[str, str]]:
+        return self._g.read_rows(g.T_PAGOS)
+
+    def marcar_pagos_recibido(
+        self, pago_ids: list[str], numero_recibido: str, fecha_recibido: datetime, recibido_por: str
+    ) -> list[dict[str, str]]:
+        target = set(pago_ids)
+        actualizados = []
+        for r in self._g.read_rows(g.T_PAGOS):
+            pid = str(r.get("pago_id", "")).strip()
+            if pid in target:
+                r["recibido"] = "TRUE"
+                r["numero_recibido"] = numero_recibido
+                r["fecha_recibido"] = fecha_recibido.isoformat()[:19]
+                r["recibido_por"] = recibido_por
+                self._g.upsert_row(g.T_PAGOS, "pago_id", r)
+                actualizados.append(r)
+        return actualizados
+
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None:
         for r in self._g.read_rows(g.T_METODOS):
             if r.get("metodo_id") == metodo_id:
                 return serde.metodo_from_row(r)
         return None
+
+    def all_serie_tasas(self) -> list[SerieTasa]:
+        return self._serie_rows()
 
     def vinculaciones_de_orden(self, so_id: str) -> list[Vinculacion]:
         return [

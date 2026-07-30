@@ -32,6 +32,7 @@ from ..models import (
     DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoProntoPago,
     DescuentoRecompra,
     DescuentoVolumen,
@@ -176,6 +177,51 @@ class PostgresRepository(Repository):
                 ["key"],
             )
 
+    # --- Configuración genérica (app_settings) --------------------------------
+    def get_config(self, key: str) -> str | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(t.app_settings.c.value).where(t.app_settings.c.key == key)
+            ).first()
+        return row.value if row else None
+
+    def set_config(self, key: str, value: str) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.app_settings, [{"key": key, "value": value}], ["key"])
+
+    def all_config(self) -> dict[str, str]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.app_settings)).all()
+        return {r.key: r.value for r in rows}
+
+    # --- Usuarios de la plataforma ---------------------------------------------
+    def get_usuario_plataforma(self, email: str) -> dict[str, str] | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(t.usuarios_plataforma).where(
+                    t.usuarios_plataforma.c.email == email.strip().lower()
+                )
+            ).first()
+        return _row_to_usuario(row) if row else None
+
+    def all_usuarios_plataforma(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.usuarios_plataforma)).all()
+        return [_row_to_usuario(r) for r in rows]
+
+    def upsert_usuario_plataforma(self, row: dict[str, str]) -> None:
+        pg_row = {
+            "email": row["email"].strip().lower(),
+            "nombre": row.get("nombre_odoo") or row.get("nombre") or "",
+            "rol": row.get("rol") or "",
+            "password_hash": row.get("password_hash") or None,
+            "salt": row.get("salt") or None,
+            "activo": str(row.get("activo", "TRUE")).strip().upper() != "FALSE",
+            "fecha_registro": row.get("fecha_registro") or "",
+        }
+        with self._engine.begin() as conn:
+            _upsert(conn, t.usuarios_plataforma, [pg_row], ["email"])
+
     # --- Espejo (upsert por PK, el sync es el único escritor) ---------------
     def upsert_clientes(self, filas: list[Cliente]) -> None:
         with self._engine.begin() as conn:
@@ -201,6 +247,11 @@ class PostgresRepository(Repository):
             ).first()
         return _row_to_cliente(row) if row else None
 
+    def all_clientes(self) -> list[Cliente]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.clientes)).all()
+        return [_row_to_cliente(r) for r in rows]
+
     def get_orden(self, so_id: str) -> OrdenVenta | None:
         with self._engine.connect() as conn:
             row = conn.execute(
@@ -220,10 +271,46 @@ class PostgresRepository(Repository):
             ).all()
         return [_row_to_linea(r) for r in rows]
 
+    def all_lineas(self) -> list[LineaOrden]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.lineas_orden)).all()
+        return [_row_to_linea(r) for r in rows]
+
     def get_pago(self, pago_id: str) -> Pago | None:
         with self._engine.connect() as conn:
             row = conn.execute(select(t.pagos).where(t.pagos.c.pago_id == pago_id)).first()
         return _row_to_pago(row) if row else None
+
+    def all_pagos(self) -> list[Pago]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.pagos)).all()
+        return [_row_to_pago(r) for r in rows]
+
+    def all_pagos_full(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.pagos)).all()
+        return [_row_to_pago_full(r) for r in rows]
+
+    def marcar_pagos_recibido(
+        self, pago_ids: list[str], numero_recibido: str, fecha_recibido: datetime, recibido_por: str
+    ) -> list[dict[str, str]]:
+        if not pago_ids:
+            return []
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(t.pagos)
+                .where(t.pagos.c.pago_id.in_(pago_ids))
+                .values(
+                    recibido=True,
+                    numero_recibido=numero_recibido,
+                    fecha_recibido=fecha_recibido,
+                    recibido_por=recibido_por,
+                )
+            )
+            rows = conn.execute(
+                select(t.pagos).where(t.pagos.c.pago_id.in_(pago_ids))
+            ).all()
+        return [_row_to_pago_full(r) for r in rows]
 
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None:
         with self._engine.connect() as conn:
@@ -231,6 +318,13 @@ class PostgresRepository(Repository):
                 select(t.metodos_pago).where(t.metodos_pago.c.metodo_id == metodo_id)
             ).first()
         return _row_to_metodo(row) if row else None
+
+    def all_serie_tasas(self) -> list[SerieTasa]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.serie_tasas).order_by(t.serie_tasas.c.timestamp)
+            ).all()
+        return [_row_to_serie(r) for r in rows]
 
     def vinculaciones_de_orden(self, so_id: str) -> list[Vinculacion]:
         with self._engine.connect() as conn:
@@ -276,6 +370,11 @@ class PostgresRepository(Repository):
         if not rows:
             return list(_DIFERENCIAL_DEFAULTS)
         return [_row_to_diferencial(r) for r in rows]
+
+    def descuentos_producto(self) -> list[DescuentoProducto]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.descuentos_producto)).all()
+        return [_row_to_producto(r) for r in rows]
 
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         with self._engine.connect() as conn:
@@ -517,6 +616,22 @@ def _row_to_pago(r: Any) -> Pago:
     )
 
 
+def _row_to_pago_full(r: Any) -> dict[str, str]:
+    return {
+        "pago_id": r.pago_id,
+        "cliente_id": r.cliente_id,
+        "monto": str(r.monto),
+        "moneda": r.moneda,
+        "metodo_pago": r.metodo_pago,
+        "fecha_pago": r.fecha_pago.isoformat(),
+        "vendedor_email": r.vendedor_email,
+        "recibido": "TRUE" if r.recibido else "FALSE",
+        "numero_recibido": r.numero_recibido or "",
+        "fecha_recibido": r.fecha_recibido.isoformat()[:19] if r.fecha_recibido else "",
+        "recibido_por": r.recibido_por or "",
+    }
+
+
 def _row_to_metodo(r: Any) -> MetodoPago:
     return MetodoPago(
         metodo_id=r.metodo_id,
@@ -632,6 +747,37 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         max_cantidad=r.max_cantidad,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
+        monedas_aplicables=r.monedas_aplicables,
+        listas_aplicables=r.listas_aplicables,
+        vigencia_desde=r.vigencia_desde,
+        vigencia_hasta=r.vigencia_hasta,
+        activo=r.activo,
+    )
+
+
+def _row_to_usuario(r: Any) -> dict[str, str]:
+    return {
+        "email": r.email,
+        "nombre_odoo": r.nombre or "",
+        "password_hash": r.password_hash or "",
+        "salt": r.salt or "",
+        "rol": r.rol or "",
+        "activo": "TRUE" if r.activo else "FALSE",
+        "fecha_registro": r.fecha_registro or "",
+    }
+
+
+def _row_to_producto(r: Any) -> DescuentoProducto:
+    return DescuentoProducto(
+        regla_id=r.regla_id,
+        productos=r.productos,
+        marca=r.marca,
+        categoria=r.categoria,
+        min_cantidad=r.min_cantidad,
+        max_cantidad=r.max_cantidad,
+        unidad_medida=r.unidad_medida,
+        tipo_beneficio=r.tipo_beneficio,
+        porcentaje=r.porcentaje,
         monedas_aplicables=r.monedas_aplicables,
         listas_aplicables=r.listas_aplicables,
         vigencia_desde=r.vigencia_desde,

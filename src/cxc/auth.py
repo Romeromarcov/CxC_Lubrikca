@@ -10,11 +10,9 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from cxc.sheets.repository import SheetsRepository
+from cxc.repositories import Repository
 
 logger = logging.getLogger("cxc.auth")
-
-T_USUARIOS = "UsuariosPlataforma"
 
 # Matriz de Permisos por Rol
 ALL_PAGES = [
@@ -93,34 +91,29 @@ def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any]
     return None
 
 
-def obtener_usuarios_plataforma(repo: SheetsRepository) -> list[dict[str, str]]:
-    """Lee todos los usuarios registrados en Google Sheets."""
+def obtener_usuarios_plataforma(repo: Repository) -> list[dict[str, str]]:
+    """Lee todos los usuarios registrados en la plataforma."""
     try:
-        return repo._g.read_rows(T_USUARIOS)
+        return repo.all_usuarios_plataforma()
     except Exception as e:
-        logger.warning("Error leyendo tabla %s: %s", T_USUARIOS, e)
+        logger.warning("Error leyendo usuarios de la plataforma: %s", e)
         return []
 
 
-def buscar_usuario_plataforma(repo: SheetsRepository, email: str) -> dict[str, str] | None:
-    """Busca un usuario por correo en Google Sheets."""
-    email_clean = email.strip().lower()
-    for row in obtener_usuarios_plataforma(repo):
-        row_email = str(row.get("email") or "").strip().lower()
-        if row_email == email_clean:
-            return row
-    return None
+def buscar_usuario_plataforma(repo: Repository, email: str) -> dict[str, str] | None:
+    """Busca un usuario por correo."""
+    return repo.get_usuario_plataforma(email.strip().lower())
 
 
 def registrar_o_actualizar_usuario(
-    repo: SheetsRepository,
+    repo: Repository,
     email: str,
     password: str | None = None,
     nombre_odoo: str = "",
     rol: str | None = None,
     activo: bool = True,
 ) -> dict[str, str]:
-    """Registra o actualiza un usuario en Google Sheets."""
+    """Registra o actualiza un usuario de la plataforma."""
     email_clean = email.strip().lower()
     existente = buscar_usuario_plataforma(repo, email_clean) or {}
 
@@ -146,12 +139,12 @@ def registrar_o_actualizar_usuario(
         "fecha_registro": existente.get("fecha_registro") or datetime.now().isoformat()[:19],
     }
 
-    repo._g.upsert_row(T_USUARIOS, "email", new_row)
+    repo.upsert_usuario_plataforma(new_row)
     return new_row
 
 
 def autenticar_usuario(
-    execute_fn: Any, repo: SheetsRepository, email: str, password: str
+    execute_fn: Any, repo: Repository, email: str, password: str
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Valida la contraseña y que el usuario siga activo en Odoo."""
     email_clean = email.strip().lower()

@@ -34,6 +34,7 @@ from cxc.odoo.client import OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
+from cxc.sheets import serde
 from cxc.sheets.gateway import GspreadGateway
 from cxc.sheets.repository import SheetsRepository
 from cxc.sync.incremental import IncrementalSync
@@ -572,8 +573,7 @@ class EliminarDescuentoRequest(BaseModel):
 
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
-        rows = repo._g.read_rows("_Meta")
-        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
+        meta = repo.all_config()
 
         def _parse(val_str: str, default_val: int) -> list[int]:
             if not val_str:
@@ -774,6 +774,27 @@ def get_repo() -> Repository:
     return _repo_cache
 
 
+def _all_lineas_rows(repo) -> list[dict]:
+    """LineasOrden del backend activo, como dict de strings (mismo shape
+    que ``serde.linea_to_row``)."""
+    return [serde.linea_to_row(ln) for ln in repo.all_lineas()]
+
+
+def _all_pagos_rows(repo) -> list[dict]:
+    """Pagos del backend activo, como dict de strings (mismas columnas
+    espejo que ``serde.pago_to_row`` -- sin las columnas humanas de
+    cobranza, ver ``_all_pagos_rows_con_recibido``)."""
+    return [serde.pago_to_row(p) for p in repo.all_pagos()]
+
+
+def _all_serie_tasas_rows(repo) -> list[dict]:
+    """SerieTasas del backend activo, como dict de strings -- mismo formato
+    que antes daba ``GspreadGateway.read_rows("SerieTasas")`` -- para no
+    tener que tocar el resto del código (parseo con ``.get()``/strptime)
+    que las consume, sea cual sea el backend."""
+    return [serde.serie_to_row(f) for f in repo.all_serie_tasas()]
+
+
 def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
     closest_row = None
     min_diff = None
@@ -804,7 +825,7 @@ def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     if rows is None:
         repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
+        rows = _all_serie_tasas_rows(repo)
     if not rows:
         return Decimal("36.5"), Decimal("38.0")
 
@@ -1278,7 +1299,7 @@ async def api_admin_cambiar_rol(
     if not u_row:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
     u_row["rol"] = req.nuevo_rol
-    repo._g.upsert_row("UsuariosPlataforma", "email", u_row)
+    repo.upsert_usuario_plataforma(u_row)
     return {
         "status": "success",
         "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}.",
@@ -1332,13 +1353,13 @@ async def get_resumen():
         )
 
         # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
-        pagos = repo._g.read_rows("Pagos")
+        pagos = _all_pagos_rows(repo)
         vincs = repo.all_vinculaciones()
         linked_amounts: dict[str, Decimal] = {}
         for v in vincs:
             prev = linked_amounts.get(v.pago_id, Decimal("0"))
             linked_amounts[v.pago_id] = prev + v.monto_aplicado
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         # Igual que /api/conciliaciones/sugerencias: excluir pagos ya
         # reconciliados directamente en Odoo (via factura, sin pasar por una
@@ -1664,8 +1685,7 @@ async def get_reporte_saldos(refresh: bool = False):
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
 
         # Load clients once
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         execute = None
         config = AppConfig.from_env()
@@ -1849,7 +1869,7 @@ async def get_reporte_saldos(refresh: bool = False):
             else []
         )
 
-        all_lines = repo._g.read_rows("LineasOrden")
+        all_lines = _all_lineas_rows(repo)
         lines_by_so = {}
         for r in all_lines:
             so = r.get("so_id", "")
@@ -1876,7 +1896,7 @@ async def get_reporte_saldos(refresh: bool = False):
         repo.descuentos_marca_categoria()
 
         # Read rates series to convert VES invoice residual to USD
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
         rates_map = {}
         for r in tasas_rows:
             ts = str(r.get("timestamp", ""))[:10]
@@ -2318,7 +2338,6 @@ async def get_reporte_saldos(refresh: bool = False):
         from cxc.engine.discounts import EngineInputs, calcular_factura
         from cxc.engine.price_resolver import PriceResolver
         from cxc.odoo.price import OdooPriceResolver
-        from cxc.sheets import serde
 
         engine_cfg_obj = config.engine
         pricelist_ids_map = {
@@ -2333,10 +2352,9 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Pre-fetch all collections once outside loop to eliminate N+1 I/O overhead
         all_lines_map = {}
-        for l_row in repo._g.read_rows("LineasOrden"):
-            so_id_key = l_row.get("so_id", "")
-            if so_id_key:
-                all_lines_map.setdefault(so_id_key, []).append(serde.linea_from_row(l_row))
+        for ln in repo.all_lineas():
+            if ln.so_id:
+                all_lines_map.setdefault(ln.so_id, []).append(ln)
 
         class FastPriceResolver(PriceResolver):
             def __init__(self, lines_map, fallback_resolver=None):
@@ -2946,7 +2964,7 @@ async def get_config_tasas():
     try:
         repo = get_repo()
         # Read the last 15 raw rows from SerieTasas
-        filas = repo._g.read_rows("SerieTasas")[-15:]
+        filas = _all_serie_tasas_rows(repo)[-15:]
         tasas = []
         for f in reversed(filas):
             tbcv = float(parse_decimal_safe(f.get("tasa_bcv", "0")))
@@ -3031,8 +3049,7 @@ async def get_mapa_vinculaciones():
         vincs = repo.all_vinculaciones()
 
         # Load clients once
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         # Load all orders
         ordenes = {o.so_id: o for o in repo.all_ordenes()}
@@ -3316,12 +3333,7 @@ async def get_config_listas_precio():
 async def get_config_meta():
     try:
         repo = get_repo()
-        rows = repo._g.read_rows("_Meta")
-        meta = {}
-        for r in rows:
-            k = r.get("key")
-            if k:
-                meta[k] = r.get("value", "")
+        meta = repo.all_config()
         # Defaults
         if "cash_window_business_days" not in meta:
             meta["cash_window_business_days"] = "3"
@@ -3434,8 +3446,8 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     try:
         if repo is None:
             repo = get_repo()
-        usd_str = repo._g.get_meta("valid_pricelists_usd")
-        ves_str = repo._g.get_meta("valid_pricelists_ves")
+        usd_str = repo.get_config("valid_pricelists_usd")
+        ves_str = repo.get_config("valid_pricelists_ves")
 
         usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
         ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
@@ -3485,8 +3497,8 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
         # 3. Write to Google Sheets _Meta (true persistent storage across deploys)
         try:
             repo = get_repo()
-            repo._g.set_meta("valid_pricelists_usd", ",".join(usd_list))
-            repo._g.set_meta("valid_pricelists_ves", ",".join(ves_list))
+            repo.set_config("valid_pricelists_usd", ",".join(usd_list))
+            repo.set_config("valid_pricelists_ves", ",".join(ves_list))
         except Exception as sheets_err:
             logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
 
@@ -3524,12 +3536,11 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
 
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = _all_pagos_rows(repo)
         vincs = repo.all_vinculaciones()
         ordenes = repo.all_ordenes()
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
@@ -4132,7 +4143,7 @@ async def post_cambiar_tipo_tasa_bcv(
 
         repo = get_repo()
         vinc = _get_vinculacion_or_404(repo, vinc_id)
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         if variante == "EUR":
             tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
@@ -4220,7 +4231,7 @@ async def post_sync_odoo_rates():
         )
 
         repo = get_repo()
-        existing_rows = repo._g.read_rows("SerieTasas")
+        existing_rows = _all_serie_tasas_rows(repo)
         existing_dates = set()
         for r in existing_rows:
             ts = r.get("timestamp", "")
@@ -4485,15 +4496,14 @@ async def get_odoo_clientes_auditoria():
 
         else:
             repo = get_repo()
-            clientes_rows = repo._g.read_rows("Clientes")
             ordenes = repo.all_ordenes()
-            lineas = repo._g.read_rows("LineasOrden")
+            lineas = repo.all_lineas()
 
-            for c in clientes_rows:
+            for c in repo.all_clientes():
                 partners_data.append(
                     {
-                        "id": c.get("cliente_id", ""),
-                        "name": c.get("nombre", ""),
+                        "id": c.cliente_id,
+                        "name": c.nombre,
                         "create_date": "N/A",
                     }
                 )
@@ -4523,13 +4533,10 @@ async def get_odoo_clientes_auditoria():
                     s["last_date"] = date_str
 
             for ln in lineas:
-                so_id = ln.get("so_id")
-                pid = so_partner_map.get(so_id)
+                pid = so_partner_map.get(ln.so_id)
                 if pid and pid in stats:
-                    brand = str(ln.get("marca", "")).upper()
-                    qty = parse_decimal_safe(
-                        ln.get("cantidad_entregada") or ln.get("cantidad") or "0"
-                    )
+                    brand = str(ln.marca or "").upper()
+                    qty = ln.cantidad_entregada or ln.cantidad or Decimal("0")
                     if "GLOBAL" in brand:
                         stats[pid]["litros_global"] += qty
                     elif "SINOCO" in brand:
@@ -5427,7 +5434,7 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
 async def get_tasas_promedios():
     try:
         repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
+        rows = _all_serie_tasas_rows(repo)
         today_str = date.today().isoformat()
 
         rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
@@ -5506,12 +5513,11 @@ async def get_pagos_historial():
     try:
         repo = get_repo()
         vincs = repo.all_vinculaciones()
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = _all_pagos_rows(repo)
         pagos_map = {r.get("pago_id"): r for r in pagos_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         # Total vinculado por orden (todas las vinculaciones, no solo la de
         # esta fila) -- para poder mostrar si la orden destino de una
@@ -5697,11 +5703,10 @@ async def get_auditoria():
                     }
 
         ordenes = repo.all_ordenes()
-        lines_rows = repo._g.read_rows("LineasOrden")
+        lines_rows = _all_lineas_rows(repo)
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         # Load UI configured pricelists (USD & VES) from _Meta
         config = AppConfig.from_env()
@@ -5791,7 +5796,7 @@ async def get_auditoria():
             logger.warning("Error al consultar facturas Odoo en get_auditoria: %s", e)
 
         # Read rates series to convert VES invoice residual to USD
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
         rates_map = {}
         for r in tasas_rows:
             ts = str(r.get("timestamp", ""))[:10]
@@ -6204,8 +6209,7 @@ async def get_ventas(
 
         ordenes = repo.all_ordenes()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         so_names = [o.so_id for o in ordenes]
         execute = None
@@ -6415,14 +6419,13 @@ async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
     try:
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
-        pagos = repo._g.read_rows("Pagos")
+        pagos = repo.all_pagos_full()
         vincs = repo.all_vinculaciones()
         vinc_by_pago = {v.pago_id: v for v in vincs}
 
         # Load clients and orders for vendor names
         ordenes = {o.so_id: o for o in repo.all_ordenes()}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         resultados = []
         for p in pagos:
@@ -6505,23 +6508,13 @@ async def post_marcar_recibido(
         user = get_current_user_from_cookie(cxc_session)
         recibido_por = req.recibido_por or (user["nombre"] if user else "Administración")
         repo = get_repo()
-        pagos_rows = repo._g.read_rows("Pagos")
 
         now = datetime.now()
         recibo_num = f"REC-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
 
-        target_pago_ids = set(req.pago_ids)
-        pagos_actualizados = []
-
-        for r in pagos_rows:
-            pid = str(r.get("pago_id", "")).strip()
-            if pid in target_pago_ids:
-                r["recibido"] = "TRUE"
-                r["numero_recibido"] = recibo_num
-                r["fecha_recibido"] = now.isoformat()[:19]
-                r["recibido_por"] = recibido_por
-                repo._g.upsert_row("Pagos", "pago_id", r)
-                pagos_actualizados.append(r)
+        pagos_actualizados = repo.marcar_pagos_recibido(
+            req.pago_ids, recibo_num, now, recibido_por
+        )
 
         return {
             "status": "success",
@@ -6558,9 +6551,9 @@ async def get_reporte_diario(
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
-        lineas = repo._g.read_rows("LineasOrden")
-        pagos = repo._g.read_rows("Pagos")
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        lineas = _all_lineas_rows(repo)
+        pagos = _all_pagos_rows(repo)
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         vendedor_f = (vendedor or "").strip().lower()
         desde_f = (fecha_desde or "")[:10]

@@ -421,6 +421,9 @@ app_settings = Table(
 )
 
 # --- UsuariosPlataforma (roles del panel web) --------------------------------
+# Mismas columnas que la pestaña Sheets "UsuariosPlataforma" (ver cxc.auth):
+# nombre == nombre_odoo, + salt/activo/fecha_registro, necesarias para
+# verificar_password() y para desactivar un usuario sin borrar su historial.
 usuarios_plataforma = Table(
     "usuarios_plataforma",
     metadata,
@@ -428,6 +431,9 @@ usuarios_plataforma = Table(
     Column("nombre", String, nullable=False, server_default=""),
     Column("rol", String, nullable=False, server_default=""),
     Column("password_hash", String, nullable=True),
+    Column("salt", String, nullable=True),
+    Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("fecha_registro", String, nullable=False, server_default=""),
 )
 
 # --- BandejaAuditoria (log de discrepancias motor vs. Odoo) ------------------

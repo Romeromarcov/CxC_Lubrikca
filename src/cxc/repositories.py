@@ -23,6 +23,7 @@ from .models import (
     DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
     ExclusionRegla,
@@ -66,6 +67,30 @@ class Repository(ABC):
     @abstractmethod
     def set_last_sync(self, cursor: datetime) -> None: ...
 
+    # --- Configuración genérica clave/valor (_Meta en Sheets, app_settings en
+    # Postgres) -- separado del cursor de sync (get_last_sync/set_last_sync,
+    # que usan la misma tabla pero con una clave reservada). ------------------
+    @abstractmethod
+    def get_config(self, key: str) -> str | None: ...
+
+    @abstractmethod
+    def set_config(self, key: str, value: str) -> None: ...
+
+    @abstractmethod
+    def all_config(self) -> dict[str, str]: ...
+
+    # --- Usuarios de la plataforma (login) -- filas crudas email/nombre/
+    # rol/password_hash/salt/activo/fecha_registro, igual forma en ambos
+    # backends (ver cxc.auth, que las consume como dict). ---------------------
+    @abstractmethod
+    def get_usuario_plataforma(self, email: str) -> dict[str, str] | None: ...
+
+    @abstractmethod
+    def all_usuarios_plataforma(self) -> list[dict[str, str]]: ...
+
+    @abstractmethod
+    def upsert_usuario_plataforma(self, row: dict[str, str]) -> None: ...
+
     # --- Tablas-espejo (solo el sync escribe) --------------------------------
     @abstractmethod
     def upsert_clientes(self, filas: list[Cliente]) -> None: ...
@@ -84,6 +109,9 @@ class Repository(ABC):
     def get_cliente(self, cliente_id: str) -> Cliente | None: ...
 
     @abstractmethod
+    def all_clientes(self) -> list[Cliente]: ...
+
+    @abstractmethod
     def get_orden(self, so_id: str) -> OrdenVenta | None: ...
 
     @abstractmethod
@@ -93,10 +121,32 @@ class Repository(ABC):
     def lineas_de_orden(self, so_id: str) -> list[LineaOrden]: ...
 
     @abstractmethod
+    def all_lineas(self) -> list[LineaOrden]: ...
+
+    @abstractmethod
     def get_pago(self, pago_id: str) -> Pago | None: ...
 
     @abstractmethod
+    def all_pagos(self) -> list[Pago]: ...
+
+    # --- Pagos + columnas humanas de cobranza (recibido/numero_recibido/
+    # fecha_recibido/recibido_por) -- fuera del dataclass Pago porque el
+    # sync (upsert_pagos) nunca las toca; solo /api/cobranza/marcar-recibido
+    # las escribe. Fila cruda dict[str,str], mismo shape en ambos backends
+    # (igual que lo que daba GspreadGateway.read_rows("Pagos")). ------------
+    @abstractmethod
+    def all_pagos_full(self) -> list[dict[str, str]]: ...
+
+    @abstractmethod
+    def marcar_pagos_recibido(
+        self, pago_ids: list[str], numero_recibido: str, fecha_recibido: datetime, recibido_por: str
+    ) -> list[dict[str, str]]: ...
+
+    @abstractmethod
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None: ...
+
+    @abstractmethod
+    def all_serie_tasas(self) -> list[SerieTasa]: ...
 
     @abstractmethod
     def vinculaciones_de_orden(self, so_id: str) -> list[Vinculacion]: ...
@@ -127,6 +177,9 @@ class Repository(ABC):
 
     @abstractmethod
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]: ...
+
+    @abstractmethod
+    def descuentos_producto(self) -> list[DescuentoProducto]: ...
 
     @abstractmethod
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]: ...
@@ -193,6 +246,29 @@ class InMemoryRepository(Repository):
         self._exclusiones: list[ExclusionRegla] = []
         self._bandeja: dict[str, BandejaFacturacion] = {}
         self._conciliaciones: dict[str, Conciliacion] = {}
+        self._config: dict[str, str] = {}
+        self._descuentos_producto: list[DescuentoProducto] = []
+        self._usuarios: dict[str, dict[str, str]] = {}
+        self._pagos_human: dict[str, dict[str, str]] = {}
+
+    # --- Configuración genérica -----------------------------------------------
+    def get_config(self, key: str) -> str | None:
+        return self._config.get(key)
+
+    def set_config(self, key: str, value: str) -> None:
+        self._config[key] = value
+
+    def all_config(self) -> dict[str, str]:
+        return dict(self._config)
+
+    def get_usuario_plataforma(self, email: str) -> dict[str, str] | None:
+        return self._usuarios.get(email.strip().lower())
+
+    def all_usuarios_plataforma(self) -> list[dict[str, str]]:
+        return [dict(u) for u in self._usuarios.values()]
+
+    def upsert_usuario_plataforma(self, row: dict[str, str]) -> None:
+        self._usuarios[row["email"].strip().lower()] = dict(row)
 
     # --- SerieTasas ----------------------------------------------------------
     def last_serie_tasa(self) -> SerieTasa | None:
@@ -243,6 +319,9 @@ class InMemoryRepository(Repository):
     def get_cliente(self, cliente_id: str) -> Cliente | None:
         return self._clientes.get(cliente_id)
 
+    def all_clientes(self) -> list[Cliente]:
+        return list(self._clientes.values())
+
     def get_orden(self, so_id: str) -> OrdenVenta | None:
         return self._ordenes.get(so_id)
 
@@ -252,8 +331,59 @@ class InMemoryRepository(Repository):
     def lineas_de_orden(self, so_id: str) -> list[LineaOrden]:
         return [ln for ln in self._lineas.values() if ln.so_id == so_id]
 
+    def all_lineas(self) -> list[LineaOrden]:
+        return list(self._lineas.values())
+
     def get_pago(self, pago_id: str) -> Pago | None:
         return self._pagos.get(pago_id)
+
+    def all_pagos(self) -> list[Pago]:
+        return list(self._pagos.values())
+
+    def all_pagos_full(self) -> list[dict[str, str]]:
+        out = []
+        for p in self._pagos.values():
+            row = {
+                "pago_id": p.pago_id,
+                "cliente_id": p.cliente_id,
+                "monto": str(p.monto),
+                "moneda": p.moneda.value,
+                "metodo_pago": p.metodo_pago,
+                "fecha_pago": p.fecha_pago.isoformat(),
+                "vendedor_email": p.vendedor_email,
+            }
+            row.update(
+                self._pagos_human.get(
+                    p.pago_id,
+                    {
+                        "recibido": "FALSE",
+                        "numero_recibido": "",
+                        "fecha_recibido": "",
+                        "recibido_por": "",
+                    },
+                )
+            )
+            out.append(row)
+        return out
+
+    def marcar_pagos_recibido(
+        self, pago_ids: list[str], numero_recibido: str, fecha_recibido: datetime, recibido_por: str
+    ) -> list[dict[str, str]]:
+        actualizados = []
+        target = set(pago_ids)
+        for pid in target:
+            if pid not in self._pagos:
+                continue
+            self._pagos_human[pid] = {
+                "recibido": "TRUE",
+                "numero_recibido": numero_recibido,
+                "fecha_recibido": fecha_recibido.isoformat()[:19],
+                "recibido_por": recibido_por,
+            }
+        for row in self.all_pagos_full():
+            if row["pago_id"] in target:
+                actualizados.append(row)
+        return actualizados
 
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None:
         return self._metodos.get(metodo_id)
@@ -291,6 +421,12 @@ class InMemoryRepository(Repository):
 
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
         return getattr(self, "_descuentos_diferencial", [])
+
+    def descuentos_producto(self) -> list[DescuentoProducto]:
+        return list(self._descuentos_producto)
+
+    def add_descuento_producto(self, regla: DescuentoProducto) -> None:
+        self._descuentos_producto.append(regla)
 
     def add_descuento_volumen(self, regla: DescuentoVolumen) -> None:
         self._descuentos_volumen.append(regla)
