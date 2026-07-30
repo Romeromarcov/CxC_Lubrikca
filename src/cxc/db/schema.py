@@ -457,11 +457,13 @@ bandeja_auditoria = Table(
 anomalias_aceptadas = Table(
     "anomalias_aceptadas",
     metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("anomalia_id", String, primary_key=True),
     Column("so_id", String, nullable=False, index=True),
-    Column("motivo", String, nullable=False, server_default=""),
-    Column("aceptado_por", String, nullable=False, server_default=""),
-    Column("timestamp", DateTime(timezone=False), nullable=False),
+    Column("factura_id", String, nullable=False, server_default=""),
+    Column("tipo_anomalia", String, nullable=False, server_default=""),
+    Column("motivo_aceptacion", String, nullable=False, server_default=""),
+    Column("aprobado_por", String, nullable=False, server_default=""),
+    Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),
 )
 
 # --- TasasHistoricasAuditoria (trazabilidad de ediciones manuales de tasas) --
@@ -476,16 +478,17 @@ tasas_historicas_auditoria = Table(
     Column("editado_por", String, nullable=False, server_default=""),
 )
 
-# --- ListasPreciosHistoricas (precios de catálogo antes de un corte) -------
+# --- ListasPreciosHistoricas (precios de catálogo de referencia antes de un
+# corte -- mantenida a mano, la lee /api/reporte-saldos y /api/auditoria para
+# comparar contra el precio vigente) -----------------------------------------
 listas_precios_historicas = Table(
     "listas_precios_historicas",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("producto_id", String, nullable=False, index=True),
-    Column("lista_precios", String, nullable=False),
-    Column("precio", MONEY, nullable=False),
-    Column("vigencia_desde", Date, nullable=True),
-    Column("vigencia_hasta", Date, nullable=True),
+    Column("codigo", String, nullable=False, index=True),
+    Column("producto_nombre", String, nullable=False, server_default=""),
+    Column("precio_usd", MONEY, nullable=False, server_default="0"),
+    Column("precio_bcv_euro", MONEY, nullable=False, server_default="0"),
 )
 
 # --- FechasHistoricas (fecha histórica alterna por orden) -------------------

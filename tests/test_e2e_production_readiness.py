@@ -610,7 +610,7 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
     (falta solo el IVA retenido); un cliente normal con el mismo saldo
     pendiente NO debe entrar -- para él aplica la regla estándar (100%).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {

@@ -99,6 +99,21 @@ _DIFERENCIAL_DEFAULTS = [
 ]
 
 
+def _dataclass_row(obj: Any) -> dict[str, Any]:
+    """dataclass de cxc.models -> dict listo para SQLAlchemy: Decimal/date/
+    bool tal cual, Enum como su .value -- válido porque en cada tabla de
+    config el nombre de cada campo del dataclass coincide 1:1 con el nombre
+    de columna (ver cxc.db.schema)."""
+    from dataclasses import fields
+    from enum import Enum
+
+    out: dict[str, Any] = {}
+    for f in fields(obj):
+        val = getattr(obj, f.name)
+        out[f.name] = val.value if isinstance(val, Enum) else val
+    return out
+
+
 def _upsert(conn: Any, table: Any, rows: list[dict[str, Any]], pk_cols: list[str]) -> None:
     """INSERT ... ON CONFLICT DO UPDATE, solo con las columnas presentes en
 
@@ -354,15 +369,27 @@ class PostgresRepository(Repository):
             rows = conn.execute(select(t.descuentos_pronto_pago)).all()
         return [_row_to_pronto_pago(r) for r in rows]
 
+    def append_descuento_pronto_pago(self, regla: DescuentoMarcaCategoria) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.descuentos_pronto_pago, [_dataclass_row(regla)], ["regla_id"])
+
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.descuentos_volumen)).all()
         return [_row_to_volumen(r) for r in rows]
 
+    def append_descuento_volumen(self, regla: DescuentoVolumen) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.descuentos_volumen, [_dataclass_row(regla)], ["regla_id"])
+
     def descuentos_recompra(self) -> list[DescuentoRecompra]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.descuentos_recompra)).all()
         return [_row_to_recompra(r) for r in rows]
+
+    def append_descuento_recompra(self, regla: DescuentoRecompra) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.descuentos_recompra, [_dataclass_row(regla)], ["regla_id"])
 
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
         with self._engine.connect() as conn:
@@ -371,15 +398,43 @@ class PostgresRepository(Repository):
             return list(_DIFERENCIAL_DEFAULTS)
         return [_row_to_diferencial(r) for r in rows]
 
+    def append_descuento_diferencial_cambiario(
+        self, regla: DescuentoDiferencialCambiario
+    ) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.descuentos_diferencial_cambiario, [_dataclass_row(regla)], ["regla_id"])
+
     def descuentos_producto(self) -> list[DescuentoProducto]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.descuentos_producto)).all()
         return [_row_to_producto(r) for r in rows]
 
+    def append_descuento_producto(self, regla: DescuentoProducto) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.descuentos_producto, [_dataclass_row(regla)], ["regla_id"])
+
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.reglas_recurrencia)).all()
         return [_row_to_regla_recurrencia(r) for r in rows]
+
+    def set_regla_recurrencia_porcentaje(self, condicion: str, valor: Decimal) -> None:
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(t.reglas_recurrencia)
+                .where(t.reglas_recurrencia.c.condicion == condicion)
+                .values(valor=valor)
+            )
+            if result.rowcount == 0:
+                conn.execute(
+                    insert(t.reglas_recurrencia).values(
+                        condicion=condicion,
+                        tipo_beneficio=TipoBeneficio.PORCENTAJE.value,
+                        valor=valor,
+                        vigencia_desde=date.today(),
+                        activo=True,
+                    )
+                )
 
     def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
         with self._engine.connect() as conn:
@@ -391,10 +446,125 @@ class PostgresRepository(Repository):
             rows = conn.execute(select(t.promocion_primera_compra)).all()
         return [_row_to_promocion(r) for r in rows]
 
+    def append_promocion_primera_compra(self, regla: PromocionPrimeraCompra) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.promocion_primera_compra, [_dataclass_row(regla)], ["regla_id"])
+
+    _REGLA_TABLAS = {
+        "DescuentosRecompra": "descuentos_recompra",
+        "DescuentosProntoPago": "descuentos_pronto_pago",
+        "DescuentosMarcaCategoria": "descuentos_pronto_pago",
+        "DescuentosVolumen": "descuentos_volumen",
+        "PromocionPrimeraCompra": "promocion_primera_compra",
+        "DescuentosProducto": "descuentos_producto",
+        "DescuentosDiferencialCambiario": "descuentos_diferencial_cambiario",
+    }
+
+    def _regla_table(self, tabla: str) -> Any:
+        table_name = self._REGLA_TABLAS.get(tabla)
+        return getattr(t, table_name) if table_name else None
+
+    def delete_regla(self, tabla: str, regla_id: str) -> bool:
+        table = self._regla_table(tabla)
+        if table is None:
+            return False
+        with self._engine.begin() as conn:
+            result = conn.execute(delete(table).where(table.c.regla_id == regla_id))
+        return bool(result.rowcount)
+
+    def set_regla_activo(self, tabla: str, regla_id: str, activo: bool) -> bool:
+        table = self._regla_table(tabla)
+        if table is None:
+            return False
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(table).where(table.c.regla_id == regla_id).values(activo=activo)
+            )
+        return bool(result.rowcount)
+
+    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.anomalias_aceptadas)).all()
+        return [
+            {
+                "anomalia_id": r.anomalia_id,
+                "so_id": r.so_id,
+                "factura_id": r.factura_id,
+                "tipo_anomalia": r.tipo_anomalia,
+                "motivo_aceptacion": r.motivo_aceptacion,
+                "aprobado_por": r.aprobado_por,
+                "timestamp_aprobacion": r.timestamp_aprobacion.isoformat(),
+            }
+            for r in rows
+        ]
+
+    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.anomalias_aceptadas,
+                [
+                    {
+                        "anomalia_id": row["anomalia_id"],
+                        "so_id": row.get("so_id", ""),
+                        "factura_id": row.get("factura_id", ""),
+                        "tipo_anomalia": row.get("tipo_anomalia", ""),
+                        "motivo_aceptacion": row.get("motivo_aceptacion", ""),
+                        "aprobado_por": row.get("aprobado_por", ""),
+                        "timestamp_aprobacion": datetime.fromisoformat(
+                            row["timestamp_aprobacion"]
+                        ),
+                    }
+                ],
+                ["anomalia_id"],
+            )
+
+    def all_listas_precios_historicas(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.listas_precios_historicas)).all()
+        return [
+            {
+                "codigo": r.codigo,
+                "producto_nombre": r.producto_nombre,
+                "precio_usd": str(r.precio_usd),
+                "precio_bcv_euro": str(r.precio_bcv_euro),
+            }
+            for r in rows
+        ]
+
+    def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.tasas_historicas_auditoria)).all()
+        return [
+            {
+                "timestamp": r.timestamp.isoformat(),
+                "campo": r.campo,
+                "valor_anterior": r.valor_anterior or "",
+                "valor_nuevo": r.valor_nuevo or "",
+                "editado_por": r.editado_por,
+            }
+            for r in rows
+        ]
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()
         return [_row_to_feriado(r) for r in rows]
+
+    def append_feriado(self, feriado: Feriado) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.feriados,
+                [
+                    {
+                        "fecha": feriado.fecha,
+                        "descripcion": feriado.descripcion,
+                        "tipo": feriado.tipo.value,
+                    }
+                ],
+                ["fecha"],
+            )
 
     def exclusiones(self) -> list[ExclusionRegla]:
         with self._engine.connect() as conn:

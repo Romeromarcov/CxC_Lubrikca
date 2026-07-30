@@ -17,6 +17,7 @@ from ..models import (
     BandejaFacturacion,
     Cliente,
     Conciliacion,
+    Condicion,
     DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
@@ -33,6 +34,7 @@ from ..models import (
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     SerieTasa,
+    TipoBeneficio,
     Vinculacion,
 )
 from ..repositories import Repository
@@ -109,6 +111,9 @@ class SheetsRepository(Repository):
             for r in self._g.read_rows(g.T_META)
             if r.get("key")
         }
+
+    def invalidate_cache(self, table: str | None = None) -> None:
+        self._g.invalidate_cache(table)
 
     # --- Usuarios de la plataforma ---------------------------------------------
     _T_USUARIOS = "UsuariosPlataforma"
@@ -234,12 +239,21 @@ class SheetsRepository(Repository):
     def descuentos_pronto_pago(self) -> list[DescuentoProntoPago]:
         return self.descuentos_marca_categoria()
 
+    def append_descuento_pronto_pago(self, regla: DescuentoMarcaCategoria) -> None:
+        self._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(regla))
+
     def descuentos_recompra(self) -> list[DescuentoRecompra]:
         rows = self._g.read_rows("DescuentosRecompra")
         return [serde.recompra_from_row(r) for r in rows]
 
+    def append_descuento_recompra(self, regla: DescuentoRecompra) -> None:
+        self._g.append_row("DescuentosRecompra", serde.recompra_to_row(regla))
+
     def descuentos_producto(self) -> list[DescuentoProducto]:
         return [serde.producto_from_row(r) for r in self._g.read_rows("DescuentosProducto")]
+
+    def append_descuento_producto(self, regla: DescuentoProducto) -> None:
+        self._g.append_row("DescuentosProducto", serde.producto_to_row(regla))
 
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
         rows = self._g.read_rows("DescuentosDiferencialCambiario")
@@ -278,11 +292,35 @@ class SheetsRepository(Repository):
             ]
         return [serde.diferencial_from_row(r) for r in rows]
 
+    def append_descuento_diferencial_cambiario(
+        self, regla: DescuentoDiferencialCambiario
+    ) -> None:
+        self._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(regla))
+
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
         return [serde.desc_volumen_from_row(r) for r in self._g.read_rows("DescuentosVolumen")]
 
+    def append_descuento_volumen(self, regla: DescuentoVolumen) -> None:
+        self._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(regla))
+
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         return [serde.regla_from_row(r) for r in self._g.read_rows(g.T_REGLAS)]
+
+    def set_regla_recurrencia_porcentaje(self, condicion: str, valor: Decimal) -> None:
+        rows = self._g.read_rows(g.T_REGLAS)
+        for r in rows:
+            if r.get("condicion") == condicion:
+                r["porcentaje"] = str(valor)
+                r["valor"] = str(valor)
+                self._g.upsert_row(g.T_REGLAS, "condicion", r)
+                return
+        nueva = ReglaRecurrencia(
+            condicion=Condicion(condicion),
+            tipo_beneficio=TipoBeneficio.PORCENTAJE,
+            valor=valor,
+            vigencia_desde=date.today(),
+        )
+        self._g.append_row(g.T_REGLAS, serde.regla_to_row(nueva))
 
     def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
         return [serde.bcv_completo_from_row(r) for r in self._g.read_rows(g.T_BCV_COMPLETO)]
@@ -290,8 +328,37 @@ class SheetsRepository(Repository):
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
         return [serde.promocion_from_row(r) for r in self._g.read_rows(g.T_PROMO_PRIMERA)]
 
+    def append_promocion_primera_compra(self, regla: PromocionPrimeraCompra) -> None:
+        self._g.append_row(g.T_PROMO_PRIMERA, serde.promocion_to_row(regla))
+
+    def delete_regla(self, tabla: str, regla_id: str) -> bool:
+        return self._g.delete_row(tabla, "regla_id", regla_id)
+
+    def set_regla_activo(self, tabla: str, regla_id: str, activo: bool) -> bool:
+        for r in self._g.read_rows(tabla):
+            if str(r.get("regla_id", "")).strip() == regla_id:
+                r["activo"] = "TRUE" if activo else "FALSE"
+                self._g.upsert_row(tabla, "regla_id", r)
+                return True
+        return False
+
+    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
+        return self._g.read_rows("AnomaliasAceptadas")
+
+    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
+        self._g.append_row("AnomaliasAceptadas", row)
+
+    def all_listas_precios_historicas(self) -> list[dict[str, str]]:
+        return self._g.read_rows("ListasPreciosHistoricas")
+
+    def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
+        return self._g.read_rows("TasasHistoricasAuditoria")
+
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
+
+    def append_feriado(self, feriado: Feriado) -> None:
+        self._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
 
     def exclusiones(self) -> list[ExclusionRegla]:
         return [serde.exclusion_from_row(r) for r in self._g.read_rows("Exclusiones")]
