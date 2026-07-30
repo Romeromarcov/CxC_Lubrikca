@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -2101,3 +2101,202 @@ def test_e2e_33_sugerencias_binance_sin_historico_cae_a_serietasas():
         # Sin Odoo y sin histórico diario: BCV y Binance caen a SerieTasas.
         assert abs(data[0]["tasa_bcv"] - 40.0) < 0.001
         assert abs(data[0]["tasa_binance"] - 45.0) < 0.001
+
+
+def test_e2e_34_sugerencias_excluye_orden_con_saldo_real_cero():
+    """Bug real (orden S00170): el cálculo naive de sugerencias
+
+    (``monto_total - Vinculaciones``) mostraba saldo $239.67 para una orden
+    que en realidad ya estaba saldada según ``/api/reporte-saldos`` (que sí
+    resta pagos directos de Odoo, NCs y descuentos del motor) -- el sistema
+    sugería aplicarle un pago a una orden ya cerrada. Una orden ausente del
+    reporte real (``saldo_con_descuento_bcv``) debe excluirse por completo
+    como destino, sin importar lo que diga el cálculo naive local.
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P1",
+                "cliente_id": "C1",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO170",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 3, 30),
+            fecha_entrega=date(2026, 3, 30),
+            monto_total=Decimal("239.67"),  # naive calc mostraría esto como saldo abierto
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+        patch(
+            "cxc.web.app.get_reporte_saldos",
+            new=AsyncMock(return_value={"items": [], "saldo_minimo_pendientes": []}),
+        ),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        # SO170 no aparece ni en items ni en saldo_minimo_pendientes del
+        # reporte real -> saldo real inexistente/cero -> nunca se sugiere.
+        assert all(item["so_id"] != "SO170" for item in data)
+        # El pago queda sin orden sugerida (huérfano), no aplicado a SO170.
+        assert len(data) == 1
+        assert data[0]["so_id"] is None
+
+
+def test_e2e_35_sugerencias_usa_saldo_real_no_calculo_naive():
+    """El monto sugerido y el "Saldo Orden" mostrado deben basarse en el
+
+    saldo real de ``/api/reporte-saldos``, no en ``monto_total -
+    Vinculaciones`` -- caso: la orden tiene $500 de monto_total sin
+    Vinculaciones locales (naive daría $500 de saldo), pero el reporte real
+    la reporta con solo $50 pendientes (ej. por un pago directo en Odoo sin
+    Vinculación manual, o notas de crédito).
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P2",
+                "cliente_id": "C1",
+                "monto": "200.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO2",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 1),
+            fecha_entrega=date(2026, 6, 1),
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+        patch(
+            "cxc.web.app.get_reporte_saldos",
+            new=AsyncMock(
+                return_value={
+                    "items": [{"so_id": "SO2", "saldo_con_descuento_bcv": 50.0}],
+                    "saldo_minimo_pendientes": [],
+                }
+            ),
+        ),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 2  # $50 aplicados a SO2 + $150 remanente sin orden
+        primero = data[0]
+        assert primero["so_id"] == "SO2"
+        # Saldo real ($50), no naive ($500).
+        assert primero["so_saldo_pendiente"] == 50.0
+        assert primero["monto_sugerido"] == 50.0
+
+        segundo = data[1]
+        assert segundo["so_id"] is None
+        assert abs(segundo["saldo_pago"] - 150.0) < 0.01
+
+
+def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
+    """Si get_reporte_saldos() falla (Odoo caído, error de datos), sugerencias
+
+    no debe vaciarse por completo -- cae al cálculo naive anterior
+    (``monto_total - Vinculaciones``) en vez de tratar "no pude calcular"
+    como "saldo cero en todas las órdenes".
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P3",
+                "cliente_id": "C1",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO3",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 1),
+            fecha_entrega=date(2026, 6, 1),
+            monto_total=Decimal("300.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+        patch(
+            "cxc.web.app.get_reporte_saldos",
+            new=AsyncMock(side_effect=Exception("Odoo no disponible")),
+        ),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["so_id"] == "SO3"
+        # Cálculo naive: saldo de la orden = monto_total ($300), sugerido = $100.
+        assert data[0]["so_saldo_pendiente"] == 300.0
+        assert data[0]["monto_sugerido"] == 100.0

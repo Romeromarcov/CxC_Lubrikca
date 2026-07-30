@@ -3514,6 +3514,69 @@ async def post_eliminar_descuento(req: EliminarDescuentoRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_SALDOS_REALES_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
+_SALDOS_REALES_CACHE_TTL = 60.0
+
+
+async def _get_saldos_reales_por_so() -> dict[str, float] | None:
+    """``so_id`` -> saldo real pendiente, EXACTAMENTE el mismo cálculo que
+
+    ``/api/reporte-saldos`` (Vinculaciones + pago directo de Odoo como
+    fallback + NCs reales + descuentos del motor + zonificación por
+    cantidad entregada/devuelta + exclusión por ``payment_state`` + piso de
+    $1) -- a diferencia del cálculo naive de sugerencias
+    (``monto_total - Vinculaciones``), que no resta nada de eso y por eso
+    podía sugerir aplicar un pago a una orden que en realidad ya está
+    saldada.
+
+    Reusa ``get_reporte_saldos()`` tal cual en vez de duplicar su lógica
+    (evita mantener dos copias de un cálculo financiero de ~1000 líneas).
+    Esa función recalcula SIEMPRE desde Odoo (su propio cache interno tiene
+    TTL 0 -- deliberado para que el reporte principal muestre datos
+    siempre frescas), así que se envuelve acá con un cache propio de 60s
+    para que cargar la tabla de sugerencias repetidas veces no dispare esa
+    misma batería completa de queries a Odoo en cada carga.
+
+    Una orden que no aparece en ninguna de las dos listas del reporte
+    (``items`` ni ``saldo_minimo_pendientes``) se trata como saldo 0 -- el
+    reporte ya la excluyó por alguna razón real (cancelada, sin entrega
+    neta, totalmente pagada), y sugerencias no debe ofrecerla tampoco.
+
+    Devuelve ``None`` (no ``{}``) si ``get_reporte_saldos()`` mismo falla
+    (Odoo caído, error de datos) -- quien llama debe caer al cálculo naive
+    anterior en ese caso, no tratar "no pude calcular" como "todo saldo 0"
+    (eso vaciaría la bandeja de sugerencias enteras ante cualquier falla
+    transitoria del reporte).
+    """
+    import time
+
+    now_ts = time.time()
+    cached = _SALDOS_REALES_CACHE["data"]
+    if cached is not None and now_ts - float(_SALDOS_REALES_CACHE["timestamp"]) < (
+        _SALDOS_REALES_CACHE_TTL
+    ):
+        return cached  # type: ignore[no-any-return]
+
+    try:
+        reporte = await get_reporte_saldos()
+    except Exception as e_reporte:
+        logger.warning(
+            "No se pudo calcular saldos reales (get_reporte_saldos) para sugerencias: %s",
+            e_reporte,
+        )
+        return None
+
+    saldos: dict[str, float] = {}
+    for item in reporte.get("items", []):
+        saldos[item["so_id"]] = item["saldo_con_descuento_bcv"]
+    for item in reporte.get("saldo_minimo_pendientes", []):
+        saldos[item["so_id"]] = item["saldo_con_descuento_bcv"]
+
+    _SALDOS_REALES_CACHE["data"] = saldos
+    _SALDOS_REALES_CACHE["timestamp"] = now_ts
+    return saldos
+
+
 @app.get("/api/conciliaciones/sugerencias")
 async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
     try:
@@ -3696,6 +3759,8 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     }
                 )
 
+        saldos_reales = await _get_saldos_reales_por_so()
+
         open_orders_by_client = {}
         for o in ordenes:
             if orden_excluida(
@@ -3709,20 +3774,36 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             # marcar como pagada/en proceso de pago.
             if o.facturada and o.so_id in so_pagada_en_odoo:
                 continue
-            pagado = linked_so.get(o.so_id, Decimal("0"))
-            saldo = o.monto_total - pagado
-            if saldo > Decimal("0.05"):
-                if o.cliente_id not in open_orders_by_client:
-                    open_orders_by_client[o.cliente_id] = []
-                open_orders_by_client[o.cliente_id].append(
-                    {
-                        "so_id": o.so_id,
-                        "fecha": o.fecha,
-                        "monto_total": o.monto_total,
-                        "saldo_pendiente": saldo,
-                        "vendedor": o.vendedor_email,
-                    }
-                )
+
+            if saldos_reales is not None:
+                # Saldo real -- el mismo que muestra /api/reporte-saldos para
+                # esta orden (resta pagos directos de Odoo, NCs y descuentos
+                # del motor, no solo Vinculaciones locales). Una orden
+                # ausente de saldos_reales ya está saldada/excluida según
+                # ese reporte -- no se ofrece como destino.
+                saldo_real = saldos_reales.get(o.so_id)
+                if saldo_real is None or saldo_real <= 0.05:
+                    continue
+                saldo = Decimal(str(saldo_real))
+            else:
+                # get_reporte_saldos falló -- cae al cálculo naive anterior
+                # en vez de vaciar la bandeja de sugerencias por completo.
+                pagado = linked_so.get(o.so_id, Decimal("0"))
+                saldo = o.monto_total - pagado
+                if saldo <= Decimal("0.05"):
+                    continue
+
+            if o.cliente_id not in open_orders_by_client:
+                open_orders_by_client[o.cliente_id] = []
+            open_orders_by_client[o.cliente_id].append(
+                {
+                    "so_id": o.so_id,
+                    "fecha": o.fecha,
+                    "monto_total": o.monto_total,
+                    "saldo_pendiente": saldo,
+                    "vendedor": o.vendedor_email,
+                }
+            )
 
         for cid in open_orders_by_client:
             open_orders_by_client[cid].sort(key=lambda x: x["fecha"])
