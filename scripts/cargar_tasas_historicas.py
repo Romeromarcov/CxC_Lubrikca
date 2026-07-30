@@ -1,0 +1,192 @@
+"""Siembra/actualiza ``TasasHistoricasAuditoria`` (tasas BCV/Binance diarias).
+
+Uso:
+  python scripts/cargar_tasas_historicas.py
+  python scripts/cargar_tasas_historicas.py --start-date 2026-01-01
+  python scripts/cargar_tasas_historicas.py --dry-run
+
+Genera una fila por día calendario (desde ``--start-date``, default
+2026-01-01, hasta hoy) con la tasa BCV oficial de Odoo (``res.currency.rate``,
+``inverse_company_rate`` para USD/EUR) y el promedio de Binance capturado ese
+día en ``SerieTasas`` -- si no hay captura real para un día, se estima con el
+diferencial de mercado histórico (17.2%) sobre el BCV de ese día, dejando
+constancia en la columna ``notas``.
+
+Esta tabla es la fuente que usa ``cxc.web.app.get_binance_rate_for_date``
+para convertir pagos VES a USD con la tasa Binance del día EXACTO del pago
+(``SerieTasas`` solo cubre lo que el scraper horario capturó en vivo -- huecos
+de días sin cron, downtime, o fechas anteriores a que el scraper existiera
+quedan sin dato ahí). Reejecutable: limpia y regenera la pestaña completa
+cada vez a partir de las mismas fuentes autoritativas (Odoo + SerieTasas), no
+acumula filas duplicadas.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from datetime import date, timedelta
+
+from cxc.config import AppConfig
+from cxc.odoo.client import _connect
+from cxc.sheets.gateway import GspreadGateway
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("cxc.cargar_tasas_historicas")
+
+_DIFERENCIAL_MERCADO_DEFAULT = 1.172  # 17.2% -- mismo heurístico ya usado en producción.
+_TAB = "TasasHistoricasAuditoria"
+
+
+def _make_gateway(config: AppConfig) -> GspreadGateway:
+    if (
+        os.environ.get("GOOGLE_TOKEN_JSON")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
+    ):
+        return GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+    return GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    parser = argparse.ArgumentParser(
+        description="Siembra TasasHistoricasAuditoria desde Odoo + SerieTasas."
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default="2026-01-01",
+        help="Primer día a generar (YYYY-MM-DD). Default: 2026-01-01.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Calcula y muestra el resumen sin escribir en Google Sheets.",
+    )
+    args = parser.parse_args()
+    start_d = date.fromisoformat(args.start_date)
+    end_d = date.today()
+
+    config = AppConfig.from_env()
+    logger.info("Conectando a Odoo...")
+    execute = _connect(config.odoo)
+    logger.info("Conectando a Google Sheets...")
+    gw = _make_gateway(config)
+
+    rates_odoo = (
+        execute(
+            "res.currency.rate",
+            "search_read",
+            [[["name", ">=", start_d.isoformat()], ["currency_id", "in", [1, 125]]]],
+            {"fields": ["name", "currency_id", "inverse_company_rate"], "order": "name asc"},
+        )
+        if execute
+        else []
+    )
+
+    bcv_usd_map: dict[str, float] = {}
+    bcv_eur_map: dict[str, float] = {}
+    for r in rates_odoo:
+        d_str = str(r.get("name", ""))[:10]
+        curr = r.get("currency_id")
+        c_id = curr[0] if isinstance(curr, list | tuple) else curr
+        val = r.get("inverse_company_rate")
+        if d_str and val:
+            if c_id == 1:
+                bcv_usd_map[d_str] = float(val)
+            elif c_id == 125:
+                bcv_eur_map[d_str] = float(val)
+
+    serie_rows = gw.read_rows("SerieTasas")
+    binance_by_date: dict[str, list[float]] = {}
+    for r in serie_rows:
+        ts = str(r.get("timestamp", ""))[:10]
+        tb = r.get("tasa_binance")
+        if ts and tb:
+            try:
+                val = float(tb)
+                if val > 0:
+                    binance_by_date.setdefault(ts, []).append(val)
+            except (TypeError, ValueError):
+                continue
+    binance_avg_captured = {d: sum(vals) / len(vals) for d, vals in binance_by_date.items()}
+
+    table_rows = [
+        [
+            "fecha",
+            "tasa_bcv_usd",
+            "tasa_bcv_euro",
+            "tasa_binance_promedio_diario",
+            "diferencial_bcv_binance_pct",
+            "fuente",
+            "notas",
+        ]
+    ]
+
+    if not bcv_usd_map:
+        logger.warning(
+            "Sin tasas BCV de Odoo (res.currency.rate) para el rango -- "
+            "verificar conexión a Odoo. No se generará ningún día."
+        )
+    else:
+        curr_d = start_d
+        primer_usd = bcv_usd_map.get(start_d.isoformat())
+        last_usd = primer_usd if primer_usd is not None else next(iter(bcv_usd_map.values()))
+        primer_eur = bcv_eur_map.get(start_d.isoformat())
+        last_eur = primer_eur if primer_eur is not None else next(iter(bcv_eur_map.values()), 0.0)
+
+        while curr_d <= end_d:
+            d_str = curr_d.isoformat()
+            usd = bcv_usd_map.get(d_str, last_usd)
+            eur = bcv_eur_map.get(d_str, last_eur)
+
+            if d_str in binance_avg_captured:
+                binance = round(binance_avg_captured[d_str], 4)
+                notas = "Binance capturado (SerieTasas)"
+            else:
+                binance = round(usd * _DIFERENCIAL_MERCADO_DEFAULT, 4)
+                notas = f"Binance estimado (diferencial {_DIFERENCIAL_MERCADO_DEFAULT})"
+
+            diff_pct = round(((binance - usd) / binance) * 100, 2) if binance else 0.0
+
+            table_rows.append(
+                [
+                    d_str,
+                    round(usd, 4),
+                    round(eur, 4),
+                    binance,
+                    f"{diff_pct}%",
+                    "Odoo res.currency.rate / SerieTasas",
+                    notas,
+                ]
+            )
+
+            last_usd = usd
+            last_eur = eur
+            curr_d += timedelta(days=1)
+
+    logger.info(
+        "Días generados (%s a %s): %d", start_d.isoformat(), end_d.isoformat(), len(table_rows) - 1
+    )
+
+    if args.dry_run:
+        logger.info("DRY-RUN: no se escribió nada en Google Sheets.")
+        return
+
+    ws_hist = gw._sh.worksheet(_TAB) if _TAB in [w.title for w in gw._sh.worksheets()] else None
+    if ws_hist:
+        ws_hist.clear()
+        logger.info("Pestaña %s existía, limpiada.", _TAB)
+    else:
+        ws_hist = gw._sh.add_worksheet(title=_TAB, rows=len(table_rows) + 20, cols=10)
+        logger.info("Pestaña %s creada.", _TAB)
+
+    ws_hist.update(range_name="A1", values=table_rows)
+    logger.info("Listo: %s actualizada en Google Sheets.", _TAB)
+
+
+if __name__ == "__main__":
+    main()
