@@ -3460,7 +3460,12 @@ document.addEventListener("DOMContentLoaded", () => {
                         <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
                         <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.75rem;">✏️ Otra orden</button>
                        </div>`
-                    : `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>`;
+                    : (!tieneSugerencia
+                        ? `<div style="display:flex; flex-direction:column; gap:3px;">
+                            <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>
+                            <button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.72rem; color:#92400e;" title="Sin orden abierta del cliente para aplicarlo -- marca el pago como resuelto/a favor de la empresa. No crea ningún ajuste en Odoo.">💰 Cerrar a favor de la empresa</button>
+                           </div>`
+                        : `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>`);
 
                 return `
                     <tr>
@@ -3522,6 +3527,30 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             console.error("Error al vincular sugerencia:", err);
+            alert("❌ Error de red.");
+        }
+    };
+
+    window.cerrarPagoHuerfano = async function(pago_id) {
+        const motivo = prompt(`¿Por qué se cierra el pago ${pago_id} a favor de la empresa?\n(Sin orden abierta del cliente para aplicarlo -- esto NO crea ningún ajuste contable en Odoo, solo lo marca como resuelto acá)`, "Sin orden abierta del cliente -- cerrado a favor de la empresa");
+        if (motivo === null) return; // cancelado
+
+        try {
+            const res = await fetch('/api/conciliaciones/cerrar-pago-huerfano', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pago_id: pago_id, motivo: motivo || undefined })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Pago cerrado a favor de la empresa.");
+                loadSugerenciasConciliacion();
+                loadKPIs();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo cerrar el pago."));
+            }
+        } catch (err) {
+            console.error("Error al cerrar pago huérfano:", err);
             alert("❌ Error de red.");
         }
     };
