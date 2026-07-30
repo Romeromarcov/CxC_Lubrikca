@@ -3602,6 +3602,40 @@ async def _get_saldos_reales_por_so() -> dict[str, float] | None:
     return saldos
 
 
+def _detectar_pagos_duplicados(pagos_rows: list[dict[str, str]]) -> dict[str, list[str]]:
+    """``pago_id`` -> lista de otros ``pago_id`` con cliente, monto, moneda,
+
+    método de pago y fecha IDÉNTICOS -- posible duplicado (ej. el mismo
+    pago cargado dos veces en Odoo, o un banco que reporta la misma
+    transacción dos veces).
+
+    Compara contra TODO el universo de pagos, incluidos los ya vinculados o
+    conciliados -- no solo los pendientes: el caso real es que el pago
+    "original" ya esté aplicado, y el que entra de nuevo (todavía sin
+    asociar) sea el sospechoso. Comparar solo contra pendientes no
+    detectaría ese caso, el más común de un duplicado real.
+    """
+    grupos: dict[tuple[str, Decimal, str, str, str], list[str]] = {}
+    for p in pagos_rows:
+        pid = str(p.get("pago_id", "")).strip()
+        if not pid:
+            continue
+        cliente_id = str(p.get("cliente_id", "")).strip()
+        monto = parse_decimal_safe(p.get("monto", "0")).quantize(Decimal("0.01"))
+        moneda = str(p.get("moneda", "") or "").upper().strip()
+        metodo = str(p.get("metodo_pago", "") or "").strip()
+        fecha = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
+        key = (cliente_id, monto, moneda, metodo, fecha)
+        grupos.setdefault(key, []).append(pid)
+
+    duplicados: dict[str, list[str]] = {}
+    for pids in grupos.values():
+        if len(pids) > 1:
+            for pid in pids:
+                duplicados[pid] = [otro for otro in pids if otro != pid]
+    return duplicados
+
+
 @app.get("/api/conciliaciones/sugerencias")
 async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
     try:
@@ -3615,6 +3649,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
         tasas_rows = repo._g.read_rows("SerieTasas")
         tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        pagos_duplicados = _detectar_pagos_duplicados(pagos_rows)
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
@@ -3782,6 +3817,8 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                         "tasa_bcv": bcv_rate,
                         "tasa_binance": binance_rate,
                         "vendedor": vendedor,
+                        "posible_duplicado": pid in pagos_duplicados,
+                        "duplicado_de": pagos_duplicados.get(pid, []),
                     }
                 )
 
@@ -3885,6 +3922,8 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 "moneda_pago": p["moneda"],
                 "tasa_bcv": float(bcv_rate),
                 "tasa_binance": float(binance_rate),
+                "posible_duplicado": p["posible_duplicado"],
+                "duplicado_de": p["duplicado_de"],
             }
 
             monto_pago_restante = p["saldo_pendiente_usd"]
