@@ -3650,6 +3650,14 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         tasas_rows = repo._g.read_rows("SerieTasas")
         tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
         pagos_duplicados = _detectar_pagos_duplicados(pagos_rows)
+        # Pagos huérfanos que un humano ya cerró "a favor de la empresa"
+        # (ver POST /api/conciliaciones/cerrar-pago-huerfano) -- no deben
+        # seguir apareciendo como pendientes.
+        pagos_huerfanos_cerrados = {
+            str(r.get("pago_id", "")).strip()
+            for r in repo._g.read_rows("PagosHuerfanosCerrados")
+            if r.get("pago_id")
+        }
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
@@ -3741,7 +3749,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
-            if not pid or pid in reconciled_pagos_set:
+            if not pid or pid in reconciled_pagos_set or pid in pagos_huerfanos_cerrados:
                 continue
             fecha_pago = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
             try:
@@ -3987,6 +3995,46 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         sugerencias.sort(key=lambda item: item["pago_fecha"] or "")
 
         return sugerencias
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class CerrarPagoHuerfanoRequest(BaseModel):
+    pago_id: str
+    motivo: str = "Sin orden abierta del cliente -- cerrado a favor de la empresa"
+
+
+@app.post("/api/conciliaciones/cerrar-pago-huerfano")
+async def post_cerrar_pago_huerfano(
+    req: CerrarPagoHuerfanoRequest, cxc_session: str | None = Cookie(default=None)
+):
+    """Marca localmente un pago huérfano (sin orden abierta del cliente que
+
+    cubrir) como resuelto/a favor de la empresa -- deja de aparecer en
+    "Pagos Pendientes por Asociar". Solo marca local: NO crea ningún
+    asiento contable ni ajuste en Odoo; eso lo hace un humano por fuera si
+    corresponde. Reversible: quitar la fila de la pestaña
+    PagosHuerfanosCerrados hace que el pago vuelva a aparecer.
+    """
+    try:
+        repo = get_repo()
+        user = get_current_user_from_cookie(cxc_session)
+        cerrado_por = (user["nombre"] or user["email"]) if user else "Desconocido"
+        repo._g.upsert_row(
+            "PagosHuerfanosCerrados",
+            "pago_id",
+            {
+                "pago_id": req.pago_id,
+                "motivo": req.motivo,
+                "cerrado_por": cerrado_por,
+                "timestamp_cierre": datetime.now().isoformat(),
+            },
+        )
+        return {
+            "status": "success",
+            "message": f"Pago {req.pago_id} cerrado a favor de la empresa.",
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
