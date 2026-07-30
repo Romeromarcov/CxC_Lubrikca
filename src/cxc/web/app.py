@@ -851,6 +851,27 @@ def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | 
     return None
 
 
+def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
+    """Tasa Binance promedio del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
+
+    A diferencia de ``get_rate_for_datetime`` (que busca la fila de
+    ``SerieTasas`` más cercana en el tiempo, sin tope de un mismo día -- si
+    esa hoja tiene un hueco alrededor de la fecha buscada, puede devolver la
+    tasa de OTRO día en silencio), esta función NO cae a un día distinto:
+    Odoo no tiene noción de tasa Binance, así que la única fuente confiable
+    para una fecha puntual es el histórico diario ya sembrado
+    (``scripts/cargar_tasas_historicas.py``). Devuelve ``None`` si ese día
+    no tiene fila -- quien llama decide el fallback.
+    """
+    fecha_str = fecha.isoformat()
+    for r in rows:
+        if str(r.get("fecha", ""))[:10] == fecha_str:
+            val = parse_decimal_safe(r.get("tasa_binance_promedio_diario", "0"))
+            if val > Decimal("0"):
+                return val
+    return None
+
+
 async def run_sync_in_background():
     """Daemon de sincronización incremental Odoo → Sheets.
 
@@ -3504,12 +3525,14 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         ordenes = repo.all_ordenes()
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         tasas_rows = _all_serie_tasas_rows(repo)
+        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
         so_states_map = {}
         so_pagada_en_odoo: set[str] = set()
         entrega_valida_set: set[str] = set()
+        odoo_pago_info: dict[str, dict[str, Any]] = {}
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
@@ -3518,6 +3541,24 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")
                 ]
                 reconciled_pagos_set = get_reconciled_pago_ids_odoo(execute, p_ids_str)
+
+                # tax_today ("Tasa") y amount_ref ("Importe referencia") son
+                # campos propios de este Odoo: la tasa BCV exacta que se
+                # aplicó a ESE pago puntual y su equivalente USD ya
+                # calculado por Odoo -- confirmado en vivo que coinciden con
+                # lo que muestra la ficha del pago. Se prefieren sobre
+                # cualquier tasa adivinada por cercanía de SerieTasas (regla
+                # general: Odoo siempre prevalece). "name" es el número de
+                # pago (ej. PBAMI/2026/00009) para ubicarlo en Odoo.
+                p_ids_int = [int(pid) for pid in p_ids_str if pid.isdigit()]
+                if p_ids_int:
+                    pago_recs = execute(
+                        "account.payment",
+                        "search_read",
+                        [[["id", "in", p_ids_int]]],
+                        {"fields": ["id", "name", "tax_today", "amount_ref"]},
+                    )
+                    odoo_pago_info = {str(r["id"]): r for r in pago_recs}
 
                 so_names = [o.so_id for o in ordenes]
                 if so_names:
@@ -3596,10 +3637,36 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
             moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
             monto_orig_raw = parse_decimal_safe(p.get("monto", "0"))
+
+            # Odoo prevalece sobre cualquier tasa adivinada localmente: para un
+            # pago en VES, tax_today es la tasa BCV EXACTA que Odoo aplicó a
+            # ESE pago puntual (no la más cercana en el tiempo de SerieTasas),
+            # y amount_ref es el equivalente USD que Odoo ya calculó con ella
+            # -- confirmado en vivo que ambos coinciden con la ficha del pago
+            # en Odoo. Binance no existe en Odoo: se busca el promedio del día
+            # EXACTO en TasasHistoricasAuditoria (sin caer a otro día).
+            odoo_info = odoo_pago_info.get(pid)
+            numero_pago_odoo = odoo_info.get("name") if odoo_info else None
+            monto_orig_usd_odoo: Decimal | None = None
+            if moneda == "VES" and odoo_info:
+                tax_today = parse_decimal_safe(str(odoo_info.get("tax_today") or "0"))
+                if tax_today > Decimal("0"):
+                    bcv_rate = tax_today
+                    amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
+                    if amount_ref > Decimal("0"):
+                        monto_orig_usd_odoo = amount_ref
+            binance_del_dia = get_binance_rate_for_date(fecha_dt.date(), tasas_historicas_rows)
+            if binance_del_dia is not None:
+                binance_rate = binance_del_dia
+
             # monto_vinculado (Vinculacion.monto_aplicado) siempre esta en USD
             # (la moneda de las ordenes) -- nunca restar directamente un saldo
             # en VES contra esto; hay que convertir el monto original primero.
-            monto_orig_usd = pago_monto_usd(monto_orig_raw, moneda, bcv_rate)
+            monto_orig_usd = (
+                monto_orig_usd_odoo
+                if monto_orig_usd_odoo is not None
+                else pago_monto_usd(monto_orig_raw, moneda, bcv_rate)
+            )
             monto_vinculado_usd = linked_pago.get(pid, Decimal("0"))
             saldo_usd = monto_orig_usd - monto_vinculado_usd
 
@@ -3615,6 +3682,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                 unallocated_pagos.append(
                     {
                         "pago_id": pid,
+                        "numero_pago_odoo": numero_pago_odoo,
                         "fecha_pago": fecha_pago,
                         "cliente_id": cliente_id,
                         "cliente_nombre": cliente_nombre,
@@ -3698,6 +3766,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
 
             base_item = {
                 "pago_id": p["pago_id"],
+                "numero_pago_odoo": p["numero_pago_odoo"],
                 "pago_fecha": p["fecha_pago"],
                 "cliente_id": cid,
                 "cliente_nombre": p["cliente_nombre"],
