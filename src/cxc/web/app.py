@@ -3765,6 +3765,12 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     }
                 )
 
+        # Pago más antiguo primero -- cola de trabajo: los pendientes más
+        # atrasados se resuelven antes. sort() es estable, así que las
+        # filas de "reparto" de un mismo pago (misma pago_fecha) mantienen
+        # su orden FIFO relativo entre sí.
+        sugerencias.sort(key=lambda item: item["pago_fecha"] or "")
+
         return sugerencias
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
