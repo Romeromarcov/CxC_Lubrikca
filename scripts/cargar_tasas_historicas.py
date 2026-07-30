@@ -143,6 +143,10 @@ def main() -> None:
             usd = bcv_usd_map.get(d_str, last_usd)
             eur = bcv_eur_map.get(d_str, last_eur)
 
+            # Los valores se escriben como str (no float/round nativo): el locale del
+            # spreadsheet es es_ES (coma decimal), y escribir un NUMBER nativo hace que
+            # el valor se lea luego con coma decimal y gspread lo "numericise" quitando
+            # la coma como si fuera separador de miles (451,5072 -> 4515072).
             if d_str in binance_avg_captured:
                 binance = round(binance_avg_captured[d_str], 4)
                 notas = "Binance capturado (SerieTasas)"
@@ -155,9 +159,9 @@ def main() -> None:
             table_rows.append(
                 [
                     d_str,
-                    round(usd, 4),
-                    round(eur, 4),
-                    binance,
+                    str(round(usd, 4)),
+                    str(round(eur, 4)),
+                    str(binance),
                     f"{diff_pct}%",
                     "Odoo res.currency.rate / SerieTasas",
                     notas,
