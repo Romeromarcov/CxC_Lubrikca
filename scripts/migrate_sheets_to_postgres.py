@@ -29,6 +29,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -275,13 +276,49 @@ def _migrate_serie_tasas(sheets_repo: SheetsRepository, engine: Engine, apply: b
 def _migrate_usuarios_plataforma(
     sheets_repo: SheetsRepository, engine: Engine, apply: bool
 ) -> TableResult:
-    raw_rows = sheets_repo._g.read_rows("UsuariosPlataforma")
+    raw_rows = sheets_repo.all_usuarios_plataforma()
     if apply:
         pg_repo = PostgresRepository(engine)
         for r in raw_rows:
             if r.get("email"):
                 pg_repo.upsert_usuario_plataforma(r)
     return TableResult("usuarios_plataforma", len(raw_rows), len(raw_rows) if apply else 0)
+
+
+def _migrate_anomalias_aceptadas(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo.all_anomalias_aceptadas()
+    if apply:
+        pg_repo = PostgresRepository(engine)
+        for r in raw_rows:
+            if r.get("anomalia_id"):
+                pg_repo.append_anomalia_aceptada(r)
+    return TableResult("anomalias_aceptadas", len(raw_rows), len(raw_rows) if apply else 0)
+
+
+def _migrate_listas_precios_historicas(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo.all_listas_precios_historicas()
+    if apply and raw_rows:
+        pg_rows = [
+            {
+                "codigo": str(r.get("codigo", "")).strip(),
+                "producto_nombre": r.get("producto_nombre", ""),
+                "precio_usd": Decimal(str(r.get("precio_usd", "0") or "0")),
+                "precio_bcv_euro": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
+            }
+            for r in raw_rows
+            if str(r.get("codigo", "")).strip()
+        ]
+        with engine.begin() as conn:
+            conn.execute(delete(t.listas_precios_historicas))
+            if pg_rows:
+                conn.execute(insert(t.listas_precios_historicas), pg_rows)
+    return TableResult(
+        "listas_precios_historicas", len(raw_rows), len(raw_rows) if apply else 0
+    )
 
 
 def _migrate_config_meta(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
@@ -377,6 +414,8 @@ TABLE_SPECS: dict[str, TableMigrator] = {
     "reglas_recurrencia": _migrate_reglas_recurrencia,
     "exclusiones": _migrate_exclusiones,
     "usuarios_plataforma": _migrate_usuarios_plataforma,
+    "anomalias_aceptadas": _migrate_anomalias_aceptadas,
+    "listas_precios_historicas": _migrate_listas_precios_historicas,
     "app_settings": _migrate_config_meta,
 }
 
