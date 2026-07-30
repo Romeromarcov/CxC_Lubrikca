@@ -3434,9 +3434,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tieneSugerencia = !!item.so_id;
                 const totalFilasPago = pagoCounts[item.pago_id];
                 pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
-                const pagoIdCell = totalFilasPago > 1
+                const pagoIdCell = (totalFilasPago > 1
                     ? `<strong>${item.pago_id}</strong><br><small style="color:#64748b; font-weight:normal;" title="Este pago cubre ${totalFilasPago} órdenes distintas -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${totalFilasPago}</small>`
-                    : `<strong>${item.pago_id}</strong>`;
+                    : `<strong>${item.pago_id}</strong>`)
+                    + (item.posible_duplicado
+                        ? `<br><span class="badge" style="background:#fee2e2; color:#b91c1c; font-weight:700; font-size:0.68rem;" title="Mismo cliente, monto, moneda, método de pago y fecha que el/los pago(s): ${item.duplicado_de.join(', ')} -- revisar antes de conciliar">⚠️ Posible duplicado</span>`
+                        : '');
                 const montoPagoCell = item.moneda_pago === "VES"
                     ? `Bs. ${item.monto_pago_original.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
                        <span class="ves-bcv-eq" data-idx="${idx}" style="font-size:0.72rem; color:#059669; display:block;">BCV: ~${fmt(item.monto_pago)}</span>
@@ -3452,7 +3455,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const ordenCell = tieneSugerencia
                     ? `<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span>`
                     : `<span style="color:#94a3b8; font-size:0.8rem;">Sin sugerencia</span>`;
-                const accionCell = tieneSugerencia
+                const accionCell = (tieneSugerencia && !item.posible_duplicado)
                     ? `<div style="display:flex; flex-direction:column; gap:3px;">
                         <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
                         <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.75rem;">✏️ Otra orden</button>
@@ -3462,7 +3465,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return `
                     <tr>
                         <td style="text-align:center;">
-                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${tieneSugerencia ? "checked" : "disabled"}>
+                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${(tieneSugerencia && !item.posible_duplicado) ? "checked" : "disabled"}>
                         </td>
                         <td>${pagoIdCell}</td>
                         <td><small>${item.numero_pago_odoo || '-'}</small></td>

@@ -2327,3 +2327,114 @@ def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
         # Cálculo naive: saldo de la orden = monto_total ($300), sugerido = $100.
         assert data[0]["so_saldo_pendiente"] == 300.0
         assert data[0]["monto_sugerido"] == 100.0
+
+
+def test_e2e_37_sugerencias_marca_pagos_posiblemente_duplicados():
+    """Dos pagos con el mismo cliente, monto, moneda, método de pago y fecha
+
+    -- posible pago cargado dos veces en Odoo (mismo caso real: pago id
+    54). Ambos deben marcarse como posible_duplicado, cada uno apuntando al
+    otro en duplicado_de, para que el frontend bloquee el auto-vincular y
+    solo permita vinculación manual con advertencia.
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "54",
+                "cliente_id": "C1",
+                "monto": "100.00",
+                "moneda": "USD",
+                "metodo_pago": "M1",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            },
+            {
+                "pago_id": "55",
+                "cliente_id": "C1",
+                "monto": "100.00",
+                "moneda": "USD",
+                "metodo_pago": "M1",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            },
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 2
+        by_id = {item["pago_id"]: item for item in data}
+        assert by_id["54"]["posible_duplicado"] is True
+        assert by_id["54"]["duplicado_de"] == ["55"]
+        assert by_id["55"]["posible_duplicado"] is True
+        assert by_id["55"]["duplicado_de"] == ["54"]
+
+
+def test_e2e_38_sugerencias_no_marca_duplicado_si_algun_campo_difiere():
+    """Si cliente, monto, moneda, método o fecha difieren, no se marca como
+
+    posible duplicado -- dos pagos distintos y coincidentes por casualidad
+    en algunos campos no deben generar falsos positivos.
+    """
+    from cxc.web import app as web_app_module
+
+    web_app_module._SALDOS_REALES_CACHE["data"] = None
+    web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "60",
+                "cliente_id": "C1",
+                "monto": "100.00",
+                "moneda": "USD",
+                "metodo_pago": "M1",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            },
+            {
+                # Mismo cliente/monto/moneda/método, pero OTRA fecha -- no es
+                # un duplicado, son dos pagos reales distintos.
+                "pago_id": "61",
+                "cliente_id": "C1",
+                "monto": "100.00",
+                "moneda": "USD",
+                "metodo_pago": "M1",
+                "fecha_pago": "2026-07-21",
+                "vendedor": "v@lubrikca.com",
+            },
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "C1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else [])
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 2
+        assert all(item["posible_duplicado"] is False for item in data)
+        assert all(item["duplicado_de"] == [] for item in data)
