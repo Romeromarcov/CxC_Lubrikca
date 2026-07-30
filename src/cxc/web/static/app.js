@@ -3403,12 +3403,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!tbody) return;
 
         try {
-            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Calculando pagos pendientes y asignaciones recomendadas (FIFO)...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Calculando pagos pendientes y asignaciones recomendadas (FIFO)...</td></tr>';
             const res = await fetch('/api/conciliaciones/sugerencias');
             const data = await res.json();
 
             if (!res.ok || !Array.isArray(data)) {
-                tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No se pudieron cargar los pagos pendientes.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="13" class="table-empty">No se pudieron cargar los pagos pendientes.</td></tr>';
                 if (countBadge) countBadge.textContent = "0 Pagos";
                 return;
             }
@@ -3417,7 +3417,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (countBadge) countBadge.textContent = `${data.length} Pagos`;
 
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="12" class="table-empty">🎉 No hay pagos pendientes por asociar.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="13" class="table-empty">🎉 No hay pagos pendientes por asociar.</td></tr>';
                 return;
             }
 
@@ -3465,6 +3465,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${tieneSugerencia ? "checked" : "disabled"}>
                         </td>
                         <td>${pagoIdCell}</td>
+                        <td><small>${item.numero_pago_odoo || '-'}</small></td>
                         <td>${item.pago_fecha}</td>
                         <td>${item.cliente_nombre}</td>
                         <td>${montoPagoCell}</td>
@@ -3484,7 +3485,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (err) {
             console.error("Error cargando pagos pendientes:", err);
-            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Error de conexión al cargar pagos pendientes.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Error de conexión al cargar pagos pendientes.</td></tr>';
         }
     };
 

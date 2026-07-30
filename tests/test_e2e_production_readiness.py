@@ -1910,3 +1910,144 @@ def test_e2e_31_pagos_historial_incluye_monto_pago_usd():
         # Monto total del pago ($100) visible además de lo aplicado ($60).
         assert data[0]["monto_pago_usd"] == 100.0
         assert data[0]["monto_aplicado"] == 60.0
+
+
+def test_e2e_32_sugerencias_usa_tasa_odoo_del_pago_no_serietasas_cercana():
+    """Bug real (pago Odoo 29, 2026-03-18): la tasa BCV usada para convertir
+
+    un pago VES a USD venía de la fila de SerieTasas más CERCANA en el
+    tiempo, sin respetar el día exacto del pago -- si SerieTasas tenía un
+    hueco alrededor de esa fecha, terminaba usando la tasa de OTRO día.
+    Ahora, cuando Odoo trae el campo propio `tax_today` (la tasa BCV EXACTA
+    que Odoo aplicó a ESE pago) y `amount_ref` (su equivalente USD ya
+    calculado por Odoo), esos valores deben prevalecer sobre cualquier
+    adivinanza local -- ignorando a propósito la tasa "cercana pero
+    incorrecta" de SerieTasas (36.5, muy distinta de la real 451.5072).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "29",
+                "cliente_id": "C_ZIP",
+                "monto": "36196.75",
+                "moneda": "VES",
+                "fecha_pago": "2026-03-18",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_ZIP", "nombre": "ZIP MARKET, CA"}]
+            if sheet == "Clientes"
+            else (
+                # SerieTasas NO tiene captura el 2026-03-18 -- la fila más
+                # cercana es de otro día, con una tasa muy distinta (36.5
+                # vs. la real 451.5072). Si el bug estuviera presente, el
+                # sistema usaría esta tasa incorrecta.
+                [{"timestamp": "2026-03-10 12:00:00", "tasa_bcv": "36.5", "tasa_binance": "38.0"}]
+                if sheet == "SerieTasas"
+                else (
+                    # TasasHistoricasAuditoria SÍ tiene el día exacto para
+                    # Binance (Odoo no tiene noción de esa tasa).
+                    [
+                        {
+                            "fecha": "2026-03-18",
+                            "tasa_binance_promedio_diario": "471.87",
+                        }
+                    ]
+                    if sheet == "TasasHistoricasAuditoria"
+                    else []
+                )
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            # El mock no distingue por "fields" -- la misma fila debe
+            # satisfacer tanto a get_reconciled_pago_ids_odoo (is_reconciled/
+            # state/reconciled_invoices_count) como al nuevo lookup de
+            # tax_today/amount_ref/name.
+            return [
+                {
+                    "id": 29,
+                    "name": "PBAMI/2026/00009",
+                    "tax_today": 451.5072,
+                    "amount_ref": 80.17,
+                    "is_reconciled": False,
+                    "state": "in_process",
+                    "reconciled_invoices_count": 0,
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        # Tasa/monto de Odoo (exactos para ESE pago), no la de SerieTasas
+        # más cercana (que hubiera dado 36196.75/36.5 ~= $991.69 -- muy
+        # distinto del real $80.17).
+        assert item["numero_pago_odoo"] == "PBAMI/2026/00009"
+        assert abs(item["tasa_bcv"] - 451.5072) < 0.001
+        assert abs(item["monto_pago"] - 80.17) < 0.01
+        assert abs(item["saldo_pago"] - 80.17) < 0.01
+        # Binance del día exacto (TasasHistoricasAuditoria), no una
+        # adivinanza: 36196.75 / 471.87 ~= $76.71.
+        assert abs(item["tasa_binance"] - 471.87) < 0.001
+        assert abs(item["monto_pago_binance"] - 76.71) < 0.05
+
+
+def test_e2e_33_sugerencias_binance_sin_historico_cae_a_serietasas():
+    """Si TasasHistoricasAuditoria no tiene el día exacto del pago, Binance
+
+    cae al comportamiento anterior (SerieTasas más cercana) en vez de
+    fallar -- fallback, no default.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "500",
+                "cliente_id": "C1",
+                "monto": "1000.0",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C1", "nombre": "Cliente Uno"}]
+            if sheet == "Clientes"
+            else (
+                [{"timestamp": "2026-07-20 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "45.0"}]
+                if sheet == "SerieTasas"
+                else []  # TasasHistoricasAuditoria vacío -- sin dato del día
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        # Sin Odoo y sin histórico diario: BCV y Binance caen a SerieTasas.
+        assert abs(data[0]["tasa_bcv"] - 40.0) < 0.001
+        assert abs(data[0]["tasa_binance"] - 45.0) < 0.001
