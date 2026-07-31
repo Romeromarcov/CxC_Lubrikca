@@ -2817,3 +2817,169 @@ def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
     assert set(detalle.keys()) == {"1002"}
     assert detalle["1002"]["motivo"] == "Sin orden abierta del cliente"
     assert detalle["1002"]["cerrado_por"] == "admin@lubrikca.com"
+
+
+def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
+    """``GET /api/cobranza/pagos`` -- endpoint unificado (PR 2). Un pago VES
+
+    huérfano (sin orden abierta del cliente) debe quedar como fila
+    "pendiente" con las 3 tasas (BCV vía Odoo tax_today, Binance vía
+    TasasHistoricasAuditoria, y la NUEVA tasa EUR), el método de pago
+    resuelto a nombre real (no id), el vendedor tomado del Cliente, y
+    marcado como candidato a "cerrar a favor de la empresa" (sin orden).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "777",
+                "cliente_id": "C1",
+                "monto": "50000.00",
+                "moneda": "VES",
+                "fecha_pago": "2026-03-18",
+                "vendedor_email": "actual@lubrikca.com",
+                "metodo_pago": "5",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C1", "nombre": "Cliente Uno", "vendedor_email": "actual@lubrikca.com"}]
+            if sheet == "Clientes"
+            else (
+                [
+                    {
+                        "fecha": "2026-03-18",
+                        "tasa_binance_promedio_diario": "550.0",
+                        "tasa_bcv_euro": "600.0",
+                    }
+                ]
+                if sheet == "TasasHistoricasAuditoria"
+                else []
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+    mock_repo.all_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            domain = args[0] if args else []
+            if ["is_reconciled", "=", True] in domain:
+                return []  # get_live_pagos_conciliados -- este pago no está reconciliado
+            return [
+                {
+                    "id": 777,
+                    "name": "PBAMI/2026/00099",
+                    "tax_today": 500.0,
+                    "amount_ref": 100.0,
+                    "is_reconciled": False,
+                    "state": "in_process",
+                    "reconciled_invoices_count": 0,
+                }
+            ]
+        if model == "account.journal":
+            return [{"id": 5, "name": "Banco Mercantil VES"}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/cobranza/pagos")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+
+        assert item["pago_id"] == "777"
+        assert item["numero_pago_odoo"] == "PBAMI/2026/00099"
+        assert item["estado"] == "pendiente"
+        assert item["metodo_pago"] == "Banco Mercantil VES"
+        assert item["vendedor"] == "actual@lubrikca.com"
+        assert item["vendedor_mismatch"] is False
+        assert item["moneda_pago"] == "VES"
+        assert item["monto_pago_original"] == 50000.0
+
+        # Las 3 tasas del día, siempre presentes.
+        assert abs(item["tasa_bcv"] - 500.0) < 0.01
+        assert abs(item["tasa_binance"] - 550.0) < 0.01
+        assert abs(item["tasa_bcv_eur"] - 600.0) < 0.01
+
+        # Equivalentes: BCV usa amount_ref de Odoo (100.0), EUR se calcula
+        # sobre el monto original VES (50000 / 600 = 83.33).
+        assert abs(item["monto_pago_bcv_usd"] - 100.0) < 0.01
+        assert abs(item["monto_pago_eur"] - 83.33) < 0.01
+
+        assert item["so_id"] is None
+        assert item["puede_cerrar_huerfano"] is True
+        assert item["puede_vincular"] is True
+        assert item["posible_duplicado"] is False
+
+
+def test_e2e_51_cobranza_pagos_unificado_cerrado_empresa_y_usd_1a1():
+    """Un pago cerrado "a favor de la empresa" (PagosHuerfanosCerrados) debe
+
+    aparecer en el endpoint unificado con ``estado="cerrado_empresa"`` y su
+    detalle (motivo/cerrado_por) -- antes estos pagos eran invisibles fuera
+    del filtro de exclusión de "pendientes". Además, siendo un pago en USD,
+    el equivalente EUR debe ser 1:1 (igual que BCV/Binance) sin depender de
+    que exista una tasa EUR para ese día.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "999",
+                "cliente_id": "C2",
+                "monto": "250.00",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+                "vendedor_email": "v@lubrikca.com",
+                "metodo_pago": "",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C2", "nombre": "Cliente Dos", "vendedor_email": "v@lubrikca.com"}]
+            if sheet == "Clientes"
+            else (
+                [
+                    {
+                        "pago_id": "999",
+                        "motivo": "Sin orden abierta del cliente",
+                        "cerrado_por": "admin@lubrikca.com",
+                        "timestamp_cierre": "2026-07-01T10:00:00",
+                    }
+                ]
+                if sheet == "PagosHuerfanosCerrados"
+                else []
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []
+    mock_repo.all_auditoria.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/cobranza/pagos")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+
+        assert item["pago_id"] == "999"
+        assert item["estado"] == "cerrado_empresa"
+        assert item["cerrado_motivo"] == "Sin orden abierta del cliente"
+        assert item["cerrado_por"] == "admin@lubrikca.com"
+        assert item["moneda_pago"] == "USD"
+        assert item["monto_pago_original"] == 250.0
+        # USD es 1:1 -- no depende de conocer la tasa EUR del día.
+        assert item["monto_pago_eur"] == 250.0
+        assert item["puede_vincular"] is False
+        assert item["puede_cerrar_huerfano"] is False
