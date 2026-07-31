@@ -3653,6 +3653,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             renderCobranzaUnificado();
+            renderCobranzaCerrados();
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="12" class="table-empty danger">Error cargando pagos: ${err.message}</td></tr>`;
             console.error(err);
@@ -3801,6 +3802,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }).join('');
     }
     window.renderCobranzaUnificado = renderCobranzaUnificado;
+
+    // Bandeja "Cerrados a Favor de la Empresa" -- pagos huérfanos marcados
+    // como resueltos (ver cerrarPagoHuerfano). Antes eran invisibles fuera
+    // del filtro de exclusión de "pendientes"; ahora tienen su propia vista,
+    // sourced del mismo payload unificado (sin endpoint nuevo).
+    function renderCobranzaCerrados() {
+        const tbody = document.getElementById("cobranza-cerrados-table-body");
+        const countBadge = document.getElementById("badge-cobranza-cerrados-count");
+        if (!tbody) return;
+
+        const cerrados = cobranzaUnificadaData.filter(i => i.estado === "cerrado_empresa");
+        if (countBadge) countBadge.textContent = `${cerrados.length} Pagos`;
+
+        if (cerrados.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay pagos cerrados a favor de la empresa.</td></tr>';
+            return;
+        }
+
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        tbody.innerHTML = cerrados.map(item => `
+            <tr>
+                <td><strong>${item.pago_id}</strong></td>
+                <td>${item.cliente_nombre || '-'}</td>
+                <td>${item.moneda_pago === 'VES'
+                    ? 'Bs. ' + Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })
+                    : fmt(item.monto_pago_original)}</td>
+                <td>${item.cerrado_motivo || '-'}</td>
+                <td>${item.cerrado_por || item.confirmado_por || '-'}</td>
+                <td>${(item.cerrado_timestamp || '').slice(0, 19).replace('T', ' ') || '-'}</td>
+            </tr>
+        `).join('');
+    }
+    window.renderCobranzaCerrados = renderCobranzaCerrados;
 
     window.toggleAllCobranza = function(el) {
         document.querySelectorAll(".check-cobranza-item, .check-sugerencia-item").forEach(cb => cb.checked = el.checked);
