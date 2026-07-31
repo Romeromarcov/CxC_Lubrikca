@@ -127,14 +127,11 @@ def test_rates_scraper_run():
         def __init__(self):
             self.saved = []
 
-            class DummyG:
-                def read_rows(self, t):
-                    return []
-
-            self._g = DummyG()
-
         def append_serie_tasa(self, r):
             self.saved.append(r)
+
+        def all_serie_tasas(self):
+            return list(self.saved)
 
     from cxc.alerts import LoggingAlerter
     from cxc.config import ScraperPolicy

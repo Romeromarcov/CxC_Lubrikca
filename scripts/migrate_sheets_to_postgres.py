@@ -104,6 +104,41 @@ def _migrate_via_repo_method(
     return _run
 
 
+def _ensure_clientes_placeholder(engine: Engine, cliente_ids: set[str]) -> None:
+    """Datos reales de producción pueden tener cliente_id huérfanos (una
+
+    orden/pago que referencia un cliente que ya no está -- o nunca estuvo
+    -- en la pestaña Clientes; Sheets no tiene FK así que nunca truena ahí).
+    Antes de insertar filas que dependen de clientes.cliente_id, crea un
+    cliente placeholder para cada id faltante en vez de perder la fila.
+    """
+    if not cliente_ids:
+        return
+    with engine.begin() as conn:
+        existentes = {r.cliente_id for r in conn.execute(select(t.clientes.c.cliente_id)).all()}
+        faltantes = cliente_ids - existentes
+        if not faltantes:
+            return
+        conn.execute(
+            insert(t.clientes),
+            [
+                {
+                    "cliente_id": cid,
+                    "nombre": f"[placeholder] cliente_id={cid!r} sin fila en Clientes (Sheets)",
+                    "vendedor_email": "",
+                    "wh_iva_agent": False,
+                    "wh_iva_rate": Decimal("75.0"),
+                }
+                for cid in faltantes
+            ],
+        )
+    logger.warning(
+        "Creados %d cliente(s) placeholder para cliente_id huérfanos: %s",
+        len(faltantes),
+        sorted(faltantes),
+    )
+
+
 def _migrate_config_table(
     table_name: str,
     pg_table,
@@ -185,6 +220,16 @@ def _migrate_exclusiones(sheets_repo: SheetsRepository, engine: Engine, apply: b
     return TableResult("exclusiones", len(rows), len(rows) if apply else 0)
 
 
+def _migrate_ordenes_venta(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    ordenes = sheets_repo.all_ordenes()
+    if apply:
+        _ensure_clientes_placeholder(engine, {o.cliente_id for o in ordenes})
+        PostgresRepository(engine).upsert_ordenes(ordenes)
+    return TableResult("ordenes_venta", len(ordenes), len(ordenes) if apply else 0)
+
+
 def _migrate_metodos_pago(
     sheets_repo: SheetsRepository, engine: Engine, apply: bool
 ) -> TableResult:
@@ -215,6 +260,7 @@ def _migrate_pagos(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -
     raw_rows = sheets_repo._g.read_rows(g.T_PAGOS)
     pagos = [serde.pago_from_row(r) for r in raw_rows]
     if apply:
+        _ensure_clientes_placeholder(engine, {p.cliente_id for p in pagos})
         pg_repo = PostgresRepository(engine)
         pg_repo.upsert_pagos(pagos)
         human_rows = []
@@ -338,9 +384,7 @@ TABLE_SPECS: dict[str, TableMigrator] = {
         "clientes", lambda r: r.all_clientes(), lambda pg, rows: pg.upsert_clientes(rows)
     ),
     "metodos_pago": _migrate_metodos_pago,
-    "ordenes_venta": _migrate_via_repo_method(
-        "ordenes_venta", lambda r: r.all_ordenes(), lambda pg, rows: pg.upsert_ordenes(rows)
-    ),
+    "ordenes_venta": _migrate_ordenes_venta,
     "lineas_orden": _migrate_via_repo_method(
         "lineas_orden", lambda r: r.all_lineas(), lambda pg, rows: pg.upsert_lineas(rows)
     ),
