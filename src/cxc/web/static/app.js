@@ -39,9 +39,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const lblEqBcv = document.getElementById("lbl-eq-bcv");
     const lblEqBinance = document.getElementById("lbl-eq-binance");
 
-    // Elements - Reporte & Mapa
+    // Elements - Reporte
     const reporteTableBody = document.getElementById("reporte-table-body");
-    const mapaTableBody = document.getElementById("mapa-table-body");
     const reporteSearch = document.getElementById("reporte-search");
 
     // Elements - Config
@@ -111,9 +110,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja1TableBody = document.getElementById("bandeja1-table-body");
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
-
-    // Elements - Conciliaciones & Historial
-    const historialTableBody = document.getElementById("historial-table-body");
 
     // Elements - Auditoria
     const auditKpiConformes = document.getElementById("audit-kpi-conformes");
@@ -196,7 +192,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const pageToTabMap = {
             "dashboard": "tab-dashboard",
             "facturacion": "tab-facturacion",
-            "conciliaciones": "tab-conciliaciones",
             "cobranza": "tab-cobranza",
             "ventas": "tab-ventas",
             "reporte": "tab-reporte",
@@ -235,11 +230,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadReporte === "function") loadReporte();
             } else if (path === "facturacion") {
                 if (typeof loadBandeja === "function") loadBandeja();
-            } else if (path === "conciliaciones") {
-                if (typeof loadKPIs === "function") loadKPIs();
-                if (typeof loadSugerenciasConciliacion === "function") loadSugerenciasConciliacion();
-                if (typeof loadMapa === "function") loadMapa();
-                if (typeof loadHistorialPagos === "function") loadHistorialPagos();
             } else if (path === "cobranza") {
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
             } else if (path === "ventas") {
@@ -585,9 +575,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 window.cerrarModalVincularManual();
 
                 loadKPIs();
-                loadSugerenciasConciliacion();
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
-                loadHistorialPagos();
                 loadBandeja();
             } else {
                 const errData = await res.json();
@@ -700,74 +688,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Load Pagos Conciliados (vinculados en este sistema + reconciliados en Odoo)
-    async function loadHistorialPagos() {
-        if (!historialTableBody) return;
-        try {
-            historialTableBody.innerHTML = '<tr><td colspan="15" class="table-empty">Cargando pagos conciliados...</td></tr>';
-            const res = await fetch("/api/pagos-historial");
-            if (res.ok) {
-                const items = await res.json();
-                if (items.length === 0) {
-                    historialTableBody.innerHTML = '<tr><td colspan="15" class="table-empty">No hay pagos conciliados.</td></tr>';
-                    return;
-                }
-                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-                const fmtTasa = (v) => (v === null || v === undefined) ? '-' : Number(v).toFixed(4);
-                historialTableBody.innerHTML = "";
-                items.forEach(item => {
-                    const row = document.createElement("tr");
-                    const origenBadge = (item.origen || '').startsWith('Odoo')
-                        ? `<span class="state-badge" style="background:#e0f2fe;color:#0369a1">${item.origen}</span>`
-                        : `<span class="state-badge">${item.origen || 'Sistema'}</span>`;
-                    const editCell = item.editable && item.vinc_id ? `
-                        <div style="display:flex; flex-direction:column; gap:3px;">
-                            <div style="display:flex; gap:3px; align-items:center;">
-                                <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${item.vinc_id}" value="${item.tasa_binance ?? ''}" style="width:80px; padding:2px 4px; font-size:0.75rem;">
-                                <button class="btn btn-sm" onclick="guardarTasaBinance('${item.vinc_id}')" style="padding:2px 6px; font-size:0.7rem;">Bin.</button>
-                            </div>
-                            <div style="display:flex; gap:3px; align-items:center;">
-                                <select class="select-bcv-variante" data-vinc="${item.vinc_id}" style="width:65px; padding:2px; font-size:0.72rem;">
-                                    <option value="USD" ${item.bcv_variante === 'USD' ? 'selected' : ''}>BCV USD</option>
-                                    <option value="EUR" ${item.bcv_variante === 'EUR' ? 'selected' : ''}>BCV EUR</option>
-                                </select>
-                                <button class="btn btn-sm" onclick="guardarTipoTasaBcv('${item.vinc_id}')" style="padding:2px 6px; font-size:0.7rem;">BCV</button>
-                            </div>
-                        </div>
-                    ` : '<span style="font-size:0.72rem; color:#94a3b8;">No editable</span>';
-                    const facturasTitle = (item.facturas || [])
-                        .map(f => `${f.factura_id}: residual ${fmt(f.residual_usd || 0)}`)
-                        .join(' | ');
-                    const residualTotal = (item.residual_facturas_usd || 0) + (item.residual_pago_usd || 0);
-                    const residualCell = residualTotal > 0.005
-                        ? `<strong style="color:#b45309;" title="Saldo sin conciliar">${fmt(residualTotal)}</strong>`
-                        : `<span style="color:#059669;">$0.00</span>`;
-                    row.innerHTML = `
-                        <td><strong>#${item.pago_id}</strong></td>
-                        <td>${item.cliente_nombre}</td>
-                        <td>${item.fecha_pago}</td>
-                        <td>${fmt(item.monto_pago_usd ?? item.monto_aplicado)}</td>
-                        <td><strong style="color: #059669">${fmt(item.monto_aplicado)}</strong></td>
-                        <td><span class="state-badge">${item.moneda}</span></td>
-                        <td><strong>${item.so_id}</strong></td>
-                        <td><span class="state-badge" title="${facturasTitle}">${item.factura_id}</span></td>
-                        <td>${residualCell}</td>
-                        <td>${fmtTasa(item.tasa_bcv)}</td>
-                        <td>${fmtTasa(item.tasa_binance)}</td>
-                        <td>${editCell}</td>
-                        <td>${origenBadge}</td>
-                        <td>${item.confirmado_por}</td>
-                        <td><span class="state-badge cierre">${item.estado}</span></td>
-                    `;
-                    historialTableBody.appendChild(row);
-                });
-            }
-        } catch (err) {
-            historialTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Error al cargar el historial.</td></tr>';
-            console.error("Error loading historial:", err);
-        }
-    }
-
     window.guardarTasaBinance = async function(vincId) {
         const input = document.querySelector(`.input-tasa-binance[data-vinc="${vincId}"]`);
         if (!input) return;
@@ -787,7 +707,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert(data.detail || "No se pudo actualizar la tasa Binance.");
                 return;
             }
-            loadHistorialPagos();
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
         } catch (err) {
             alert("Error de red al actualizar la tasa Binance.");
             console.error(err);
@@ -808,7 +728,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert(data.detail || "No se pudo cambiar el tipo de tasa BCV.");
                 return;
             }
-            loadHistorialPagos();
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
         } catch (err) {
             alert("Error de red al cambiar el tipo de tasa BCV.");
             console.error(err);
@@ -1528,58 +1448,6 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
             tbody.appendChild(row);
         });
-    }
-
-    // Load Cross-Referenced Mapping (Pago ↔ SO ↔ Invoice)
-
-    async function loadMapa() {
-        try {
-            mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando mapa de vinculación...</td></tr>';
-            const res = await fetch("/api/mapa-vinculaciones");
-            if (res.ok) {
-                const data = await res.json();
-                if (data.length === 0) {
-                    mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay vinculaciones registradas.</td></tr>';
-                    return;
-                }
-
-                mapaTableBody.innerHTML = "";
-                data.forEach(item => {
-                    const row = document.createElement("tr");
-
-                    const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val);
-
-                    row.innerHTML = `
-                        <td><strong>#${item.pago_id}</strong></td>
-                        <td>${item.cliente_nombre}</td>
-                        <td>${item.fecha_pago}</td>
-                        <td>
-                            <strong style="color: #10b981">${new Intl.NumberFormat('es-US', { style: 'currency', currency: item.moneda }).format(item.monto_aplicado)}</strong>
-                            ${item.moneda === "VES" ? `<div style="font-size:0.7rem; color:#64748b">Eq. Binance: ${fmt(item.monto_aplicado)}</div>` : ""}
-                        </td>
-                        <td><strong>${item.so_id}</strong></td>
-                        <td>
-                            <div>Total: ${fmt(item.order_details.total)}</div>
-                            <div style="font-size:0.7rem; color:#64748b">Base: ${fmt(item.order_details.subtotal)}</div>
-                        </td>
-                        <td><span class="state-badge">${item.invoice_id}</span></td>
-                        <td>
-                            <div>Base: ${fmt(item.invoice_details.subtotal)}</div>
-                            <div style="font-size:0.7rem; color:#64748b">IVA: ${fmt(item.invoice_details.iva)}</div>
-                        </td>
-                        <td>
-                            <div>Total: ${fmt(item.invoice_details.total)}</div>
-                            <div style="font-size:0.7rem; color:#d97706; font-weight:700">Saldo: ${fmt(item.invoice_details.saldo_deudor)}</div>
-                        </td>
-                        <td><strong>${fmt(item.invoice_details.retencion_iva_est)}</strong></td>
-                    `;
-                    mapaTableBody.appendChild(row);
-                });
-            }
-        } catch (err) {
-            mapaTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar el mapa.</td></tr>';
-            console.error(err);
-        }
     }
 
     // ── Bandeja Auditoría de Descuentos y NCs ─────────────────────────────────
@@ -2969,87 +2837,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // COBRANZA & RECIBOS MODULE
-    let cobranzaDataGlobal = [];
-
-    async function loadCobranza() {
-        const tbody = document.getElementById("cobranza-table-body");
-        const vSelect = document.getElementById("cobranza-vendedor-filter");
-        if (!tbody) return;
-
-        tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Cargando cobranzas registradas...</td></tr>';
-        try {
-            const res = await fetch("/api/cobranza");
-            if (!res.ok) throw new Error("Error al obtener la lista de cobranza");
-            cobranzaDataGlobal = await res.json();
-            
-            // Populate vendor filter options
-            if (vSelect) {
-                const vendedores = [...new Set(cobranzaDataGlobal.map(item => item.vendedor || "Sin Vendedor"))].sort();
-                const curVal = vSelect.value;
-                vSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
-                vendedores.forEach(v => {
-                    const opt = document.createElement("option");
-                    opt.value = v;
-                    opt.textContent = v;
-                    vSelect.appendChild(opt);
-                });
-                vSelect.value = curVal || "*";
-                vSelect.onchange = renderCobranzaTable;
-            }
-
-            renderCobranzaTable();
-        } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="13" class="table-empty danger">Error cargando cobranza: ${err.message}</td></tr>`;
-            console.error(err);
-        }
-    }
-
-    function renderCobranzaTable() {
-        const tbody = document.getElementById("cobranza-table-body");
-        const vSelect = document.getElementById("cobranza-vendedor-filter");
-        if (!tbody) return;
-
-        const selVend = vSelect ? vSelect.value : "*";
-        const filtered = cobranzaDataGlobal.filter(item => {
-            if (selVend !== "*" && item.vendedor !== selVend) return false;
-            return true;
-        });
-
-        if (filtered.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">No hay cobranzas registradas para el filtro seleccionado.</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = filtered.map(item => {
-            const estadoBadge = item.recibido ? 
-                `<span class="semaphore green" title="Dinero entregado a Administración">✓ Recibido</span>` : 
-                `<span class="semaphore yellow" title="Pendiente por confirmar entrega">⏳ Pendiente</span>`;
-                
-            return `
-                <tr>
-                    <td><input type="checkbox" class="check-cobranza-item" value="${item.pago_id}" data-vendedor="${item.vendedor}"></td>
-                    <td><strong>${item.pago_id}</strong></td>
-                    <td>${item.fecha}</td>
-                    <td><strong>${item.vendedor}</strong></td>
-                    <td>${item.cliente_nombre}</td>
-                    <td><span class="badge blue">${item.so_id}</span></td>
-                    <td>${item.metodo_pago} <br><small style="color:#64748b">${item.referencia}</small></td>
-                    <td><strong>${item.moneda} ${item.monto.toLocaleString('es-VE', {minimumFractionDigits: 2})}</strong></td>
-                    <td>Bs. ${item.tasa_bcv.toFixed(2)}</td>
-                    <td><strong style="color:#2563eb">$${item.equivalente_bcv_usd.toFixed(2)}</strong></td>
-                    <td>$${item.equivalente_binance_usd.toFixed(2)}</td>
-                    <td>${estadoBadge}</td>
-                    <td><small>${item.numero_recibido}</small></td>
-                </tr>
-            `;
-        }).join('');
-    }
-
-    window.toggleAllCobranza = function(el) {
-        document.querySelectorAll(".check-cobranza-item").forEach(cb => cb.checked = el.checked);
-    };
-
     window.generarReciboSeleccionados = async function() {
         const checked = Array.from(document.querySelectorAll(".check-cobranza-item:checked")).map(cb => cb.value);
         if (checked.length === 0) {
@@ -3366,143 +3153,6 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
     let currentSugerenciasList = [];
 
-    // Vista previa (solo en pantalla): recalcula BCV/Binance de un pago VES
-    // a otra hora del mismo día -- la tasa varía por hora. No cambia lo que
-    // se aplicaría al vincular (eso usa la tasa de mediodía calculada en el
-    // servidor); para aplicar a una tasa distinta, usar "Vincular
-    // manualmente", que sí permite ajustar la hora antes de confirmar.
-    async function previsualizarHoraPago(idx, hora) {
-        const item = currentSugerenciasList[idx];
-        if (!item || item.moneda_pago !== "VES" || !hora) return;
-        try {
-            const res = await fetch(`/api/config/tasa-referencia?fecha=${item.pago_fecha}&hora=${hora}`);
-            if (!res.ok) return;
-            const { tasa_bcv, tasa_binance } = await res.json();
-            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-
-            const montoBcv = item.monto_pago_original / tasa_bcv;
-            const montoBinance = item.monto_pago_original / tasa_binance;
-            const residualBcv = item.saldo_pago_original / tasa_bcv;
-            const residualBinance = item.saldo_pago_original / tasa_binance;
-
-            const bcvEl = document.querySelector(`.ves-bcv-eq[data-idx="${idx}"]`);
-            const binanceEl = document.querySelector(`.ves-binance-eq[data-idx="${idx}"]`);
-            const resBcvEl = document.querySelector(`.ves-residual-bcv[data-idx="${idx}"]`);
-            const resBinanceEl = document.querySelector(`.ves-residual-binance[data-idx="${idx}"]`);
-            if (bcvEl) bcvEl.textContent = `BCV: ~${fmt(montoBcv)}`;
-            if (binanceEl) binanceEl.textContent = `Binance: ~${fmt(montoBinance)}`;
-            if (resBcvEl) resBcvEl.textContent = fmt(residualBcv);
-            if (resBinanceEl) resBinanceEl.textContent = `Binance: ~${fmt(residualBinance)}`;
-        } catch (err) {
-            console.error("Error al previsualizar tasa por hora:", err);
-        }
-    }
-
-    window.loadSugerenciasConciliacion = async function() {
-        const tbody = document.getElementById("sugerencias-table-body");
-        const countBadge = document.getElementById("badge-sugerencias-count");
-        if (!tbody) return;
-
-        try {
-            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Calculando pagos pendientes y asignaciones recomendadas (FIFO)...</td></tr>';
-            const res = await fetch('/api/conciliaciones/sugerencias');
-            const data = await res.json();
-
-            if (!res.ok || !Array.isArray(data)) {
-                tbody.innerHTML = '<tr><td colspan="13" class="table-empty">No se pudieron cargar los pagos pendientes.</td></tr>';
-                if (countBadge) countBadge.textContent = "0 Pagos";
-                return;
-            }
-
-            currentSugerenciasList = data;
-            if (countBadge) countBadge.textContent = `${data.length} Pagos`;
-
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="13" class="table-empty">🎉 No hay pagos pendientes por asociar.</td></tr>';
-                return;
-            }
-
-            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-
-            // Cuenta cuántas filas comparte cada pago_id -- un pago grande
-            // puede cubrir varias órdenes (FIFO) y aparecer varias veces;
-            // sin esta marca visual parece un duplicado en vez de un reparto.
-            const pagoCounts = {};
-            data.forEach(it => { pagoCounts[it.pago_id] = (pagoCounts[it.pago_id] || 0) + 1; });
-            const pagoSeen = {};
-
-            tbody.innerHTML = data.map((item, idx) => {
-                const tieneSugerencia = !!item.so_id;
-                const totalFilasPago = pagoCounts[item.pago_id];
-                pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
-                const pagoIdCell = (totalFilasPago > 1
-                    ? `<strong>${item.pago_id}</strong><br><small style="color:#64748b; font-weight:normal;" title="Este pago cubre ${totalFilasPago} órdenes distintas -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${totalFilasPago}</small>`
-                    : `<strong>${item.pago_id}</strong>`)
-                    + (item.posible_duplicado
-                        ? `<br><span class="badge" style="background:#fee2e2; color:#b91c1c; font-weight:700; font-size:0.68rem;" title="Mismo cliente, monto, moneda, método de pago y fecha que el/los pago(s): ${item.duplicado_de.join(', ')} -- revisar antes de conciliar">⚠️ Posible duplicado</span>`
-                        : '');
-                const montoPagoCell = item.moneda_pago === "VES"
-                    ? `Bs. ${item.monto_pago_original.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
-                       <span class="ves-bcv-eq" data-idx="${idx}" style="font-size:0.72rem; color:#059669; display:block;">BCV: ~${fmt(item.monto_pago)}</span>
-                       <span class="ves-binance-eq" data-idx="${idx}" style="font-size:0.72rem; color:#d97706; display:block;">Binance: ~${fmt(item.monto_pago_binance)}</span>`
-                    : fmt(item.monto_pago);
-                const residualCell = item.moneda_pago === "VES"
-                    ? `<strong class="ves-residual-bcv" data-idx="${idx}" style="color:#b45309;">${fmt(item.saldo_pago)}</strong>
-                       <span class="ves-residual-binance" data-idx="${idx}" style="font-size:0.72rem; color:#d97706; display:block;">Binance: ~${fmt(item.saldo_pago_binance)}</span>
-                       <span style="display:flex; align-items:center; gap:3px; margin-top:2px;">
-                           <input type="time" class="input-hora-pago" data-idx="${idx}" value="12:00" step="60" style="width:82px; padding:1px 2px; font-size:0.68rem;" title="Vista previa a otra hora (la tasa varía por hora) -- para aplicar a esa tasa, usa Vincular manualmente">
-                       </span>`
-                    : `<strong style="color:#b45309;">${fmt(item.saldo_pago)}</strong>`;
-                const ordenCell = tieneSugerencia
-                    ? `<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">${item.so_id}</span>`
-                    : `<span style="color:#94a3b8; font-size:0.8rem;">Sin sugerencia</span>`;
-                const accionCell = (tieneSugerencia && !item.posible_duplicado)
-                    ? `<div style="display:flex; flex-direction:column; gap:3px;">
-                        <button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.78rem;">✓ Vincular</button>
-                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.75rem;">✏️ Otra orden</button>
-                       </div>`
-                    : (!tieneSugerencia
-                        ? `<div style="display:flex; flex-direction:column; gap:3px;">
-                            <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>
-                            <button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.72rem; color:#92400e;" title="Sin orden abierta del cliente para aplicarlo -- marca el pago como resuelto/a favor de la empresa. No crea ningún ajuste en Odoo.">💰 Cerrar a favor de la empresa</button>
-                           </div>`
-                        : `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${idx})" style="padding:3px 8px; font-size:0.78rem;">🔗 Vincular manualmente</button>`);
-
-                return `
-                    <tr>
-                        <td style="text-align:center;">
-                            <input type="checkbox" class="check-sugerencia-item" data-idx="${idx}" ${(tieneSugerencia && !item.posible_duplicado) ? "checked" : "disabled"}>
-                        </td>
-                        <td>${pagoIdCell}</td>
-                        <td><small>${item.numero_pago_odoo || '-'}</small></td>
-                        <td>${item.pago_fecha}</td>
-                        <td>${item.cliente_nombre}</td>
-                        <td>${montoPagoCell}</td>
-                        <td>${residualCell}</td>
-                        <td>${ordenCell}</td>
-                        <td>${item.so_fecha || '-'}</td>
-                        <td>${item.so_saldo_pendiente != null ? fmt(item.so_saldo_pendiente) : '-'}</td>
-                        <td>${tieneSugerencia ? `<strong style="color:#16a34a;">${fmt(item.monto_sugerido)}</strong>` : '-'}</td>
-                        <td><small>${item.vendedor}</small></td>
-                        <td>${accionCell}</td>
-                    </tr>
-                `;
-            }).join('');
-
-            tbody.querySelectorAll(".input-hora-pago").forEach(inp => {
-                inp.addEventListener("change", () => previsualizarHoraPago(parseInt(inp.dataset.idx), inp.value));
-            });
-        } catch (err) {
-            console.error("Error cargando pagos pendientes:", err);
-            tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Error de conexión al cargar pagos pendientes.</td></tr>';
-        }
-    };
-
-    window.toggleAllSugerencias = function(master) {
-        const checks = document.querySelectorAll(".check-sugerencia-item:not(:disabled)");
-        checks.forEach(c => c.checked = master.checked);
-    };
-
     window.aprobarSugerenciaIndividual = async function(pago_id, so_id, monto_sugerido) {
         if (!confirm(`¿Confirmar asociación de $${monto_sugerido.toFixed(2)} del Pago ${pago_id} a la Orden ${so_id}?`)) return;
 
@@ -3519,11 +3169,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (res.ok) {
                 alert("✅ Vinculación completada con éxito.");
-                loadSugerenciasConciliacion();
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
-                loadMapa();
-                loadHistorialPagos();
             } else {
                 alert("❌ Error: " + (data.detail || "No se pudo vincular."));
             }
@@ -3546,7 +3193,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (res.ok) {
                 alert("✅ Pago cerrado a favor de la empresa.");
-                loadSugerenciasConciliacion();
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
             } else {
@@ -3588,11 +3234,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (res.ok) {
                 alert(`🎉 ${data.message}`);
-                loadSugerenciasConciliacion();
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
-                loadMapa();
-                loadHistorialPagos();
             } else {
                 alert("❌ Error procesando lote: " + (data.detail || "Error desconocido."));
             }
@@ -3882,6 +3525,23 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>`;
         }
 
+        if (base.puede_editar_tasas && base.vinc_id) {
+            html += `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
+                <label style="font-weight:700; font-size:0.85rem; display:block; margin-bottom:0.5rem;">Editar Tasas Aplicadas</label>
+                <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+                    <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${base.vinc_id}" value="${base.tasa_binance ?? ''}" placeholder="Tasa Binance" style="width:120px; padding:4px 6px; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTasaBinance('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Binance</button>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <select class="select-bcv-variante" data-vinc="${base.vinc_id}" style="padding:4px 6px; font-size:0.8rem;">
+                        <option value="USD">BCV USD</option>
+                        <option value="EUR">BCV EUR</option>
+                    </select>
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTipoTasaBcv('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Variante BCV</button>
+                </div>
+            </div>`;
+        }
+
         html += `<h3 style="margin:1rem 0 0.5rem;">Reparto / Órdenes y Facturas</h3>
             <table class="cxc-table"><thead><tr>
                 <th>Orden</th><th>Factura</th><th>Monto Aplicado</th><th>Por Aplicar</th>
@@ -3900,6 +3560,8 @@ document.addEventListener("DOMContentLoaded", () => {
         html += `</tbody></table>`;
 
         body.innerHTML = html;
+        const bcvVarianteSelect = body.querySelector(`.select-bcv-variante[data-vinc="${base.vinc_id}"]`);
+        if (bcvVarianteSelect && base.bcv_variante) bcvVarianteSelect.value = base.bcv_variante;
         modal.style.display = "flex";
     };
 

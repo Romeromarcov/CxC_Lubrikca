@@ -1297,9 +1297,15 @@ async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("dashboard", cxc_session)
 
 
-@app.get("/conciliaciones", response_class=HTMLResponse)
-async def page_conciliaciones(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("conciliaciones", cxc_session)
+@app.get("/conciliaciones")
+async def page_conciliaciones():
+    """"Conciliaciones" se unificó con "Cobranza" en una sola página.
+
+    Redirect para bookmarks/links viejos -- la tabla y sus 4 endpoints
+    de origen (sugerencias, mapa-vinculaciones, pagos-historial, cobranza)
+    fueron reemplazados por ``GET /api/cobranza/pagos``.
+    """
+    return RedirectResponse(url="/cobranza")
 
 
 @app.get("/ventas", response_class=HTMLResponse)
@@ -3227,105 +3233,6 @@ async def post_config_feriados(req: FeriadoRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.get("/api/mapa-vinculaciones")
-async def get_mapa_vinculaciones():
-    try:
-        repo = get_repo()
-        vincs = repo.all_vinculaciones()
-
-        # Load clients once
-        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
-
-        # Load all orders
-        ordenes = {o.so_id: o for o in repo.all_ordenes()}
-
-        # Fetch Odoo Invoices in batch
-        so_ids = list(ordenes.keys())
-        config = AppConfig.from_env()
-        execute = _connect(config.odoo)
-        invoices = execute(
-            "account.move",
-            "search_read",
-            [
-                [
-                    ["invoice_origin", "in", so_ids],
-                    ["state", "=", "posted"],
-                    ["move_type", "in", ["out_invoice", "out_refund"]],
-                ]
-            ],
-            {
-                "fields": [
-                    "id",
-                    "name",
-                    "invoice_origin",
-                    "amount_total",
-                    "amount_untaxed",
-                    "amount_tax",
-                    "amount_residual",
-                    "payment_state",
-                    "move_type",
-                ]
-            },
-        )
-        invoices_by_so = {}
-        for inv in invoices:
-            so = str(inv.get("invoice_origin", "")).strip()
-            if so:
-                invoices_by_so.setdefault(so, []).append(inv)
-
-        resultado = []
-        for v in vincs:
-            o = ordenes.get(v.so_id)
-            client_name = clientes_map.get(o.cliente_id, "Desconocido") if o else "Desconocido"
-
-            # Fetch invoice details for this SO
-            inv_name = "N/A"
-            inv_total = 0.0
-            inv_subtotal = 0.0
-            inv_tax = 0.0
-            inv_residual = 0.0
-
-            if o and o.so_id in invoices_by_so:
-                inv_list = invoices_by_so[o.so_id]
-                inv_names = [inv.get("name", "") for inv in inv_list]
-                inv_name = ", ".join(inv_names)
-
-                inv_total = sum(float(inv.get("amount_total", 0.0)) for inv in inv_list)
-                inv_subtotal = sum(float(inv.get("amount_untaxed", 0.0)) for inv in inv_list)
-                inv_tax = sum(float(inv.get("amount_tax", 0.0)) for inv in inv_list)
-                inv_residual = sum(float(inv.get("amount_residual", 0.0)) for inv in inv_list)
-
-            resultado.append(
-                {
-                    "vinc_id": v.vinc_id,
-                    "pago_id": v.pago_id,
-                    "so_id": v.so_id,
-                    "cliente_nombre": client_name,
-                    "monto_aplicado": float(v.monto_aplicado),
-                    "moneda": v.moneda_abono.value,
-                    "fecha_pago": v.hora_pago_confirmada.date().isoformat(),
-                    "invoice_id": inv_name,
-                    "order_details": {
-                        "total": float(o.monto_total) if o else 0.0,
-                        "subtotal": float(o.monto_total) / 1.16 if o else 0.0,
-                        "iva": float(o.monto_total) - (float(o.monto_total) / 1.16) if o else 0.0,
-                    },
-                    "invoice_details": {
-                        "total": inv_total,
-                        "subtotal": inv_subtotal,
-                        "iva": inv_tax,
-                        "saldo_deudor": inv_residual,
-                        "retencion_iva_est": inv_tax * 0.75,
-                    },
-                }
-            )
-
-        return resultado
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
 @app.get("/api/config/descuentos-marca")
 async def get_config_descuentos_marca():
     try:
@@ -3799,6 +3706,14 @@ def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
 
 @app.get("/api/conciliaciones/sugerencias")
 async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
+    """Pagos pendientes por asociar, con orden sugerida (FIFO).
+
+    Ya no es la fuente principal de la UI -- absorbida por
+    ``GET /api/cobranza/pagos`` (``get_cobranza_pagos_unificado``), que
+    llama esta función directamente. Se conserva como ruta pública además
+    de función interna reusable: sigue siendo un endpoint válido y
+    probado, con cobertura de tests que documentan bugs reales corregidos.
+    """
     try:
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
@@ -5766,6 +5681,14 @@ async def get_tasas_promedios():
 
 @app.get("/api/pagos-historial")
 async def get_pagos_historial():
+    """Pagos vinculados localmente + conciliados directo en Odoo.
+
+    Ya no es la fuente principal de la UI -- absorbida por
+    ``GET /api/cobranza/pagos`` (``get_cobranza_pagos_unificado``), que
+    llama esta función directamente. Se conserva como ruta pública además
+    de función interna reusable: sigue siendo un endpoint válido y
+    probado, con cobertura de tests que documentan bugs reales corregidos.
+    """
     try:
         repo = get_repo()
         vincs = repo.all_vinculaciones()
@@ -6169,6 +6092,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "sugerencia_id": None,
                     "vinc_id": item.get("vinc_id"),
                     "monto_sugerido": None,
+                    "bcv_variante": item.get("bcv_variante", "USD"),
                     "puede_vincular": False,
                     "puede_cerrar_huerfano": False,
                     "puede_editar_tasas": bool(item.get("editable")),
@@ -6997,92 +6921,6 @@ async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
 class MarcarRecibidoRequest(BaseModel):
     pago_ids: list[str]
     recibido_por: str = "Administración"
-
-
-@app.get("/api/cobranza")
-async def get_cobranza_list(cxc_session: str | None = Cookie(default=None)):
-    try:
-        repo = get_repo()
-        user = get_current_user_from_cookie(cxc_session)
-        pagos = repo.all_pagos_full()
-        vincs = repo.all_vinculaciones()
-        vinc_by_pago = {v.pago_id: v for v in vincs}
-
-        # Load clients and orders for vendor names
-        ordenes = {o.so_id: o for o in repo.all_ordenes()}
-        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
-
-        resultados = []
-        for p in pagos:
-            pid = str(p.get("pago_id", "")).strip()
-            if not pid:
-                continue
-
-            moneda = p.get("moneda", "VES")
-            monto = parse_decimal_safe(p.get("monto", "0"))
-            fecha_str = str(p.get("fecha", ""))[:10]
-
-            # Find rates for that date
-            bcv_rate, binance_rate = get_rate_for_datetime(datetime.now())
-
-            # Compute BCV and Binance equivalents
-            eq_bcv = (
-                monto if moneda == "USD" else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
-            )
-            eq_binance = (
-                monto
-                if moneda == "USD"
-                else (monto / binance_rate if binance_rate > 0 else Decimal("0"))
-            )
-
-            v = vinc_by_pago.get(pid)
-            so_id = v.so_id if v else "-"
-            orden_obj = ordenes.get(so_id)
-            vendedor = p.get("vendedor") or (
-                orden_obj.vendedor_email if orden_obj else "Sin Vendedor"
-            )
-            cliente_name_from_order = (
-                clientes_map.get(orden_obj.cliente_id, "Sin Cliente")
-                if orden_obj
-                else "Sin Cliente"
-            )
-            cliente = p.get("cliente_nombre") or cliente_name_from_order
-
-            item = {
-                "pago_id": pid,
-                "fecha": fecha_str,
-                "monto": float(monto),
-                "moneda": moneda,
-                "metodo_pago": p.get("metodo_pago") or p.get("forma_pago") or "Efectivo",
-                "referencia": p.get("referencia") or p.get("banco") or "-",
-                "vendedor": vendedor,
-                "cliente_nombre": cliente,
-                "so_id": so_id,
-                "tasa_bcv": float(bcv_rate),
-                "tasa_binance": float(binance_rate),
-                "equivalente_bcv_usd": float(eq_bcv),
-                "equivalente_binance_usd": float(eq_binance),
-                "recibido": p.get("recibido") == "TRUE",
-                "numero_recibido": p.get("numero_recibido") or "-",
-                "fecha_recibido": p.get("fecha_recibido") or "-",
-                "recibido_por": p.get("recibido_por") or "-",
-            }
-
-            # Filter if user is vendor
-            if user and user["rol"] == "ventas":
-                u_name = (user["nombre"] or user["email"]).strip().lower()
-                if (
-                    item["vendedor"].strip().lower() != u_name
-                    and user["email"].strip().lower() not in item["vendedor"].lower()
-                ):
-                    continue
-
-            resultados.append(item)
-
-        return resultados
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/cobranza/marcar-recibido")
