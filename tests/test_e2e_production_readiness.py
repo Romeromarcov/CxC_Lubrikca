@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
     BandejaFacturacion,
+    Cliente,
     DescuentoAplicado,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
@@ -2718,3 +2719,101 @@ def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
         # implausible (ratio > 3x contra BCV) y cae a SerieTasas (521.66).
         assert abs(item["tasa_binance"] - 521.66) < 0.001
         assert item["tasa_binance"] < 1000
+
+
+def test_e2e_46_get_eur_rate_for_date_lookup_dia_exacto():
+    """``get_eur_rate_for_date`` -- mismo criterio que ``get_binance_rate_for_date``:
+
+    lookup por día EXACTO en TasasHistoricasAuditoria, sin caer a otro día.
+    """
+    from cxc.web.app import get_eur_rate_for_date
+
+    rows = [
+        {"fecha": "2026-03-17", "tasa_bcv_euro": "500.0"},
+        {"fecha": "2026-03-18", "tasa_bcv_euro": "520.642"},
+    ]
+    assert get_eur_rate_for_date(date(2026, 3, 18), rows) == Decimal("520.642")
+    assert get_eur_rate_for_date(date(2026, 3, 19), rows) is None
+
+
+def test_e2e_47_resolve_metodo_pago_nombre_batch_journals():
+    """``resolve_metodo_pago_nombre`` trae el catálogo completo de
+
+    ``account.journal`` y arma un mapa id -> nombre; sin ``execute`` (Odoo
+    no disponible) devuelve un dict vacío en vez de fallar.
+    """
+    from cxc.web.app import resolve_metodo_pago_nombre
+
+    def fake_execute(model, method, args, kwargs=None):
+        assert model == "account.journal"
+        return [{"id": 7, "name": "Banco Mercantil USD"}, {"id": 9, "name": "Efectivo VES"}]
+
+    assert resolve_metodo_pago_nombre(fake_execute) == {7: "Banco Mercantil USD", 9: "Efectivo VES"}
+    assert resolve_metodo_pago_nombre(None) == {}
+
+
+def test_e2e_48_resolve_vendedor_validado_detecta_cambio_de_vendedor():
+    """``resolve_vendedor_validado`` -- el cliente cambió de vendedor desde que
+
+    se creó la orden: se prefiere el vendedor VIGENTE del cliente, y se
+    marca ``mismatch=True`` para revisión humana (no se autocorrige nada).
+    """
+    from cxc.web.app import resolve_vendedor_validado
+
+    clientes_map = {
+        "C1": Cliente(cliente_id="C1", nombre="Cliente Uno", vendedor_email="nuevo@lubrikca.com")
+    }
+    ordenes_map = {
+        "S00001": OrdenVenta(
+            so_id="S00001",
+            cliente_id="C1",
+            fecha=date(2026, 1, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100"),
+            lista_precios="USD",
+            vendedor_email="viejo@lubrikca.com",
+            es_primera_compra=False,
+        )
+    }
+
+    vendedor, mismatch = resolve_vendedor_validado("C1", "S00001", clientes_map, ordenes_map)
+    assert vendedor == "nuevo@lubrikca.com"
+    assert mismatch is True
+
+    # Mismo vendedor en ambos lados -- sin discrepancia.
+    ordenes_map["S00001"].vendedor_email = "nuevo@lubrikca.com"
+    _, mismatch_ok = resolve_vendedor_validado("C1", "S00001", clientes_map, ordenes_map)
+    assert mismatch_ok is False
+
+    # Sin orden sugerida -- se usa el vendedor del cliente, sin discrepancia
+    # posible (no hay con qué comparar).
+    vendedor_sin_so, mismatch_sin_so = resolve_vendedor_validado(
+        "C1", None, clientes_map, ordenes_map
+    )
+    assert vendedor_sin_so == "nuevo@lubrikca.com"
+    assert mismatch_sin_so is False
+
+
+def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
+    """``leer_pagos_huerfanos_cerrados`` -- lector compartido que expone el
+
+    detalle completo (motivo, cerrado_por, timestamp), no solo el set de
+    ids que se usaba antes para excluir de "pendientes".
+    """
+    from cxc.web.app import leer_pagos_huerfanos_cerrados
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = [
+        {
+            "pago_id": "1002",
+            "motivo": "Sin orden abierta del cliente",
+            "cerrado_por": "admin@lubrikca.com",
+            "timestamp_cierre": "2026-07-01T10:00:00",
+        }
+    ]
+
+    detalle = leer_pagos_huerfanos_cerrados(mock_repo)
+    mock_repo._g.read_rows.assert_called_once_with("PagosHuerfanosCerrados")
+    assert set(detalle.keys()) == {"1002"}
+    assert detalle["1002"]["motivo"] == "Sin orden abierta del cliente"
+    assert detalle["1002"]["cerrado_por"] == "admin@lubrikca.com"
