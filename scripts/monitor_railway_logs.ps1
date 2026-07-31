@@ -19,6 +19,9 @@ param(
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogFile = Join-Path $RepoRoot "railway_monitor_findings.log"
 $ErrorPatterns = 'Error|Exception|Traceback|AttributeError|TypeError|KeyError|CRITICAL|500 Internal|Fallo captura|Failed'
+# Ruido conocido del propio CLI de Railway (glitches de red al traer logs,
+# no errores de la app) -- se descarta antes de aplicar $ErrorPatterns.
+$CliNoisePatterns = 'Failed to fetch|error decoding response body'
 
 Set-Location $RepoRoot
 
@@ -30,7 +33,7 @@ try {
     exit 1
 }
 
-$found = $raw | Select-String -Pattern $ErrorPatterns
+$found = $raw | Where-Object { $_ -notmatch $CliNoisePatterns } | Select-String -Pattern $ErrorPatterns
 
 if ($found) {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
