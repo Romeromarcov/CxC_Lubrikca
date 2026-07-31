@@ -30,8 +30,8 @@ from cxc.auth import (
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
 from cxc.engine.runner import EngineRunner
-from cxc.models import EstadoVinculacion, Moneda, TipoTasa, Vinculacion
-from cxc.odoo.client import OdooXmlRpcReader, _connect
+from cxc.models import Cliente, EstadoVinculacion, Moneda, OrdenVenta, TipoTasa, Vinculacion
+from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
@@ -247,7 +247,7 @@ def get_live_pagos_confirmados(execute: Any) -> list[dict[str, Any]]:
             [
                 ["payment_type", "=", "inbound"],
                 ["partner_type", "=", "customer"],
-                ["state", "in", ["in_process", "paid"]],
+                ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
             ]
         ],
         {
@@ -304,7 +304,7 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
             [
                 ["payment_type", "=", "inbound"],
                 ["partner_type", "=", "customer"],
-                ["state", "in", ["in_process", "paid"]],
+                ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                 ["is_reconciled", "=", True],
             ]
         ],
@@ -530,7 +530,7 @@ def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
         is_rec = (
             bool(op.get("is_reconciled"))
             or int(op.get("reconciled_invoices_count") or 0) > 0
-            or str(op.get("state")) not in ("in_process", "paid")
+            or str(op.get("state")) not in PAGO_ESTADOS_CONFIRMADOS
         )
         if is_rec and pid_str:
             reconciled.add(pid_str)
@@ -950,6 +950,65 @@ def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
             if val > Decimal("0"):
                 return val
     return None
+
+
+def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
+    """Tasa BCV-EUR oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
+
+    Mismo criterio que ``get_binance_rate_for_date`` (lookup por día exacto,
+    sin caer a otro día): la tabla ya trae ``tasa_bcv_euro`` (Odoo
+    ``res.currency.rate``, sembrado por ``scripts/cargar_tasas_historicas.py``).
+    Devuelve ``None`` si ese día no tiene fila -- quien llama decide el fallback.
+    """
+    fecha_str = fecha.isoformat()
+    for r in rows:
+        if str(r.get("fecha", ""))[:10] == fecha_str:
+            val = parse_decimal_safe(r.get("tasa_bcv_euro", "0"))
+            if val > Decimal("0"):
+                return val
+    return None
+
+
+def resolve_metodo_pago_nombre(execute: Any) -> dict[int, str]:
+    """Mapa id -> nombre de ``account.journal`` (diario/método de pago real).
+
+    Único resolver compartido: antes esta lectura se repetía de formas
+    distintas en cada endpoint (unpacking manual de ``journal_id`` en
+    lecturas en vivo de ``account.payment`` vs. una lectura de
+    ``account.journal`` separada solo dentro de ``/api/reporte/diario``).
+    El catálogo de diarios es chico -- se trae completo, no filtrado por id.
+    """
+    if not execute:
+        return {}
+    journals = execute("account.journal", "search_read", [], {"fields": ["id", "name"]})
+    return {int(j["id"]): str(j.get("name") or "") for j in journals}
+
+
+def resolve_vendedor_validado(
+    cliente_id: str,
+    so_id: str | None,
+    clientes_map: dict[str, Cliente],
+    ordenes_map: dict[str, OrdenVenta],
+) -> tuple[str, bool]:
+    """Vendedor "vigente" de un pago, y si difiere del vendedor de la orden.
+
+    Los clientes a veces cambian de vendedor con el tiempo -- ``Cliente.vendedor_email``
+    (re-sincronizado desde ``res.partner.user_id`` en cada corrida) es la fuente
+    más actual; ``OrdenVenta.vendedor_email`` quedó fijado al vendedor vigente
+    cuando esa orden se creó/sincronizó. Si difieren, se marca
+    ``vendedor_mismatch=True`` para que un humano lo revise -- nunca se
+    autocorrige nada (mismo criterio que la detección de duplicados).
+    """
+    cliente = clientes_map.get(cliente_id)
+    vendedor_cliente = (cliente.vendedor_email if cliente else "") or ""
+    orden = ordenes_map.get(so_id) if so_id else None
+    vendedor_orden = (orden.vendedor_email if orden else "") or ""
+
+    vendedor = vendedor_cliente or vendedor_orden or "Sin Vendedor"
+    v_cliente_norm = vendedor_cliente.strip().lower()
+    v_orden_norm = vendedor_orden.strip().lower()
+    mismatch = bool(vendedor_cliente and vendedor_orden and v_cliente_norm != v_orden_norm)
+    return vendedor, mismatch
 
 
 async def run_sync_in_background():
@@ -2275,7 +2334,7 @@ async def get_reporte_saldos(refresh: bool = False):
                     [
                         [
                             ["reconciled_invoice_ids", "in", invoice_ids_all],
-                            ["state", "in", ["in_process", "paid"]],
+                            ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                         ]
                     ],
                     {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
@@ -3746,6 +3805,22 @@ def _detectar_pagos_duplicados(pagos_rows: list[dict[str, str]]) -> dict[str, li
     return duplicados
 
 
+def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
+    """``pago_id`` -> detalle de cierre (``motivo``, ``cerrado_por``,
+    ``timestamp_cierre``) para pagos huérfanos marcados "a favor de la
+    empresa" (ver ``POST /api/conciliaciones/cerrar-pago-huerfano``).
+
+    Único lector compartido de ``PagosHuerfanosCerrados`` -- antes solo se
+    usaba para excluir estos pagos de "pendientes" (un ``set`` de ids); esto
+    además expone el detalle para mostrarlo en su propia bandeja.
+    """
+    return {
+        str(r.get("pago_id", "")).strip(): r
+        for r in repo._g.read_rows("PagosHuerfanosCerrados")
+        if r.get("pago_id")
+    }
+
+
 @app.get("/api/conciliaciones/sugerencias")
 async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
     try:
@@ -3763,11 +3838,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         # Pagos huérfanos que un humano ya cerró "a favor de la empresa"
         # (ver POST /api/conciliaciones/cerrar-pago-huerfano) -- no deben
         # seguir apareciendo como pendientes.
-        pagos_huerfanos_cerrados = {
-            str(r.get("pago_id", "")).strip()
-            for r in repo._g.read_rows("PagosHuerfanosCerrados")
-            if r.get("pago_id")
-        }
+        pagos_huerfanos_cerrados = set(leer_pagos_huerfanos_cerrados(repo).keys())
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
