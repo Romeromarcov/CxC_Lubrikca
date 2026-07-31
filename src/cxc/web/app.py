@@ -480,6 +480,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         audit_rows = [
             {
                 "audit_id": f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}",
+                "pago_id": c["pago_id"],
                 "so_id": c["so_id_nuevo"],
                 "tipo_auditoria": (
                     "vinculacion_discrepancia_multi_orden"
@@ -6012,6 +6013,14 @@ async def get_pagos_historial():
                     else None,
                     "bcv_variante": v.bcv_variante or "USD",
                     "editable": True,
+                    # Campos adicionales para /api/cobranza/pagos (unificado) --
+                    # no se usaban antes en esta tabla, se agregan sin tocar
+                    # los ya existentes.
+                    "metodo_pago_id": str(p_data.get("metodo_pago", "") or "").strip(),
+                    "monto_original": float(parse_decimal_safe(p_data.get("monto", "0"))),
+                    "vendedor_email": (
+                        p_data.get("vendedor_email") or (o.vendedor_email if o else "")
+                    ),
                 }
             )
 
@@ -6059,12 +6068,349 @@ async def get_pagos_historial():
                             "tasa_binance": None,
                             "bcv_variante": "USD",
                             "editable": False,
+                            "metodo_pago_id": "",
+                            "metodo_pago_nombre": p.get("metodo_pago") or "",
+                            "monto_original": p["monto_original"],
+                            "vendedor_email": p.get("vendedor_email") or "",
                         }
                     )
         except Exception as e_odoo:
             logger.warning("Error consultando pagos reconciliados en Odoo: %s", e_odoo)
 
         return historial
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/cobranza/pagos")
+async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=None)):
+    """Vista unificada de pagos: reemplaza las 4 tablas históricas
+
+    ("Pagos Pendientes por Asociar", "Mapa de Conciliación", "Pagos
+    Conciliados" y "Cobranza") con un solo esquema de campos.
+
+    NO reimplementa el cálculo financiero (FIFO, saldo real de orden,
+    tasas por pago) -- reusa ``get_conciliaciones_sugerencias`` (pendientes)
+    y ``get_pagos_historial`` (vinculados localmente + conciliados directo
+    en Odoo) tal cual, y les agrega lo que falta para el esquema común:
+    método de pago (nombre), vendedor validado contra la orden, tasa
+    BCV-EUR, trazabilidad de re-vinculación por Odoo, estado de recepción
+    de recibo, y los pagos huérfanos cerrados a favor de la empresa (antes
+    invisibles fuera del filtro de exclusión de "pendientes").
+    """
+    try:
+        repo = get_repo()
+        user = get_current_user_from_cookie(cxc_session)
+
+        sugerencias = await get_conciliaciones_sugerencias(cxc_session)
+        historial = await get_pagos_historial()
+        cerrados_detalle = leer_pagos_huerfanos_cerrados(repo)
+
+        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows}
+        clientes_rows = repo._g.read_rows("Clientes")
+        clientes_map_obj = {
+            str(r.get("cliente_id", "")): Cliente(
+                cliente_id=str(r.get("cliente_id", "")),
+                nombre=r.get("nombre", ""),
+                vendedor_email=r.get("vendedor_email", ""),
+            )
+            for r in clientes_rows
+        }
+        clientes_nombre_map = {
+            str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows
+        }
+        ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
+
+        # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
+        # reconcilió contra una orden distinta a la Vinculación local (ver
+        # _resincronizar_vinculaciones_con_odoo, corre en cada sync). Se
+        # SURFACEA acá -- la corrección automática y su auditoría ya existen.
+        reasignados_por_pago: dict[str, dict[str, str]] = {}
+        if hasattr(repo, "all_auditoria"):
+            try:
+                for row in repo.all_auditoria():
+                    if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
+                        pid = str(row.get("pago_id", "")).strip()
+                        if pid:
+                            reasignados_por_pago[pid] = row
+            except Exception as e_aud:
+                logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
+
+        metodo_pago_map: dict[int, str] = {}
+        odoo_tax_today_map: dict[str, dict[str, Any]] = {}
+        try:
+            config = AppConfig.from_env()
+            execute = _connect(config.odoo)
+            if execute:
+                metodo_pago_map = resolve_metodo_pago_nombre(execute)
+                # tax_today para los pagos conciliados directo en Odoo (nunca
+                # pasaron por Vinculacion local) -- el historial no trae esta
+                # tasa para esos, y el usuario pidió mostrar SIEMPRE las 3
+                # tasas, sea cual sea el estado del pago.
+                ids_sin_tasa = [
+                    int(h["pago_id"])
+                    for h in historial
+                    if h.get("vinc_id") is None and str(h["pago_id"]).isdigit()
+                ]
+                if ids_sin_tasa:
+                    recs = execute(
+                        "account.payment",
+                        "search_read",
+                        [[["id", "in", ids_sin_tasa]]],
+                        {"fields": ["id", "tax_today"]},
+                    )
+                    odoo_tax_today_map = {str(r["id"]): r for r in recs}
+        except Exception as e_odoo:
+            logger.warning(
+                "Error resolviendo métodos de pago/tasas en /api/cobranza/pagos: %s", e_odoo
+            )
+
+        def visible(vendedor: str) -> bool:
+            if not (user and user["rol"] == "ventas"):
+                return True
+            u_name = (user["nombre"] or user["email"]).strip().lower()
+            return (
+                vendedor.strip().lower() == u_name
+                or user["email"].strip().lower() in vendedor.lower()
+            )
+
+        def comun(pid: str, cliente_id: str, so_id: str | None, fecha_pago: str) -> dict[str, Any]:
+            p_row = pagos_by_id.get(pid, {})
+            metodo_id = str(p_row.get("metodo_pago", "") or "").strip()
+            metodo_nombre = (
+                (metodo_pago_map.get(int(metodo_id)) if metodo_id.isdigit() else None)
+                or metodo_id
+                or None
+            )
+
+            vendedor, mismatch = resolve_vendedor_validado(
+                cliente_id, so_id, clientes_map_obj, ordenes_map
+            )
+
+            fecha_dt = None
+            try:
+                if fecha_pago:
+                    fecha_dt = datetime.strptime(str(fecha_pago)[:10], "%Y-%m-%d").date()
+            except ValueError:
+                fecha_dt = None
+            tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows) if fecha_dt else None
+
+            reasignado = reasignados_por_pago.get(pid)
+
+            return {
+                "metodo_pago": metodo_nombre,
+                "vendedor": vendedor,
+                "vendedor_mismatch": mismatch,
+                "tasa_bcv_eur": float(tasa_eur) if tasa_eur is not None else None,
+                "reasignado_por_odoo": reasignado is not None,
+                "reasignado_detalle": reasignado.get("detalle_odoo") if reasignado else None,
+                "recibido": p_row.get("recibido") == "TRUE",
+                "numero_recibido": p_row.get("numero_recibido") or None,
+                "fecha_recibido": p_row.get("fecha_recibido") or None,
+                "recibido_por": p_row.get("recibido_por") or None,
+            }
+
+        def monto_eur(pid: str, tasa_eur: float | None) -> float | None:
+            # USD es 1:1 en las 3 tasas (BCV, Binance, EUR) -- no depende de
+            # conocer la tasa del día, igual que ``pago_monto_usd``.
+            p_row = pagos_by_id.get(pid)
+            if p_row:
+                monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
+                moneda = str(p_row.get("moneda", "USD") or "USD").upper().strip()
+            else:
+                # Pago conciliado directo en Odoo, nunca sincronizado local --
+                # se usa el monto original ya traído por get_live_pagos_conciliados
+                # (ver el campo "monto_original" agregado a /api/pagos-historial).
+                for h in historial:
+                    if h["pago_id"] == pid and h.get("vinc_id") is None:
+                        monto_raw = Decimal(str(h.get("monto_original", 0)))
+                        moneda = str(h.get("moneda", "USD") or "USD").upper().strip()
+                        break
+                else:
+                    return None
+            if moneda == "USD":
+                return float(monto_raw)
+            if tasa_eur is None or tasa_eur <= 0:
+                return None
+            return float(monto_raw / Decimal(str(tasa_eur)))
+
+        unificados: list[dict[str, Any]] = []
+
+        # 1) Pendientes -- ya vienen con reparto FIFO resuelto.
+        for item in sugerencias:
+            pid = item["pago_id"]
+            extra = comun(pid, item["cliente_id"], item.get("so_id"), item["pago_fecha"])
+            if not visible(extra["vendedor"]):
+                continue
+            unificados.append(
+                {
+                    "pago_id": pid,
+                    "numero_pago_odoo": item.get("numero_pago_odoo"),
+                    "pago_fecha": item["pago_fecha"],
+                    "cliente_id": item["cliente_id"],
+                    "cliente_nombre": item["cliente_nombre"],
+                    "monto_pago_original": item["monto_pago_original"],
+                    "moneda_pago": item["moneda_pago"],
+                    "tasa_bcv": item["tasa_bcv"],
+                    "tasa_binance": item["tasa_binance"],
+                    "monto_pago_bcv_usd": item["monto_pago"],
+                    "monto_pago_binance_usd": item["monto_pago_binance"],
+                    "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
+                    "monto_aplicado": 0.0,
+                    "monto_por_aplicar": item["saldo_pago"],
+                    "so_saldo_pendiente": item.get("so_saldo_pendiente"),
+                    "factura_saldo_odoo": None,
+                    "so_id": item.get("so_id"),
+                    "factura_id": None,
+                    "facturas": [],
+                    "estado": "pendiente",
+                    "origen": "Sistema (sugerencia, aún sin confirmar)",
+                    "confirmado_por": None,
+                    "posible_duplicado": item["posible_duplicado"],
+                    "duplicado_de": item["duplicado_de"],
+                    "sugerencia_id": item["sugerencia_id"],
+                    "vinc_id": None,
+                    "monto_sugerido": item.get("monto_sugerido"),
+                    "puede_vincular": True,
+                    "puede_cerrar_huerfano": item.get("so_id") is None,
+                    "puede_editar_tasas": False,
+                    "puede_marcar_recibido": not extra["recibido"],
+                    **extra,
+                }
+            )
+
+        # 2) Vinculados localmente / conciliados directo en Odoo.
+        for item in historial:
+            pid = item["pago_id"]
+            p_row_hist = pagos_by_id.get(pid)
+            cliente_id = str(p_row_hist.get("cliente_id", "")).strip() if p_row_hist else ""
+            extra = comun(pid, cliente_id, item.get("so_id"), item["fecha_pago"])
+            if not cliente_id:
+                # Pago Odoo-directo nunca sincronizado local -- no hay Cliente
+                # local contra el que validar; se usa el vendedor que ya trae
+                # get_live_pagos_conciliados (vendedor_email) tal cual.
+                extra["vendedor"] = item.get("vendedor_email") or extra["vendedor"]
+            if not visible(extra["vendedor"]):
+                continue
+
+            estado_vinc = str(item.get("estado", "")).lower()
+            estado_unificado = (
+                "conciliado_odoo" if estado_vinc == "conciliado" else "vinculado_local"
+            )
+            if item.get("vinc_id") is None:
+                estado_unificado = "conciliado_odoo"
+
+            tasa_bcv = item.get("tasa_bcv")
+            tasa_binance = item.get("tasa_binance")
+            if tasa_bcv is None and pid in odoo_tax_today_map:
+                tt = parse_decimal_safe(str(odoo_tax_today_map[pid].get("tax_today") or "0"))
+                if tt > Decimal("0"):
+                    tasa_bcv = float(tt)
+
+            monto_original_raw = item.get("monto_original")
+            monto_bin_usd = None
+            if monto_original_raw is not None:
+                moneda_item = str(item.get("moneda", "USD") or "USD").upper().strip()
+                if moneda_item == "USD":
+                    monto_bin_usd = float(monto_original_raw)
+                elif tasa_binance:
+                    monto_bin_usd = float(
+                        Decimal(str(monto_original_raw)) / Decimal(str(tasa_binance))
+                    )
+
+            unificados.append(
+                {
+                    "pago_id": pid,
+                    "numero_pago_odoo": None,
+                    "pago_fecha": item["fecha_pago"],
+                    "cliente_id": cliente_id,
+                    "cliente_nombre": item["cliente_nombre"],
+                    "monto_pago_original": monto_original_raw,
+                    "moneda_pago": item.get("moneda"),
+                    "tasa_bcv": tasa_bcv,
+                    "tasa_binance": tasa_binance,
+                    "monto_pago_bcv_usd": item["monto_pago_usd"],
+                    "monto_pago_binance_usd": monto_bin_usd,
+                    "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
+                    "monto_aplicado": item["monto_aplicado"],
+                    "monto_por_aplicar": item["residual_pago_usd"],
+                    "so_saldo_pendiente": None,
+                    "factura_saldo_odoo": item["residual_facturas_usd"],
+                    "so_id": item.get("so_id") or None,
+                    "factura_id": item.get("factura_id"),
+                    "facturas": item.get("facturas", []),
+                    "estado": estado_unificado,
+                    "origen": item["origen"],
+                    "confirmado_por": item["confirmado_por"],
+                    "posible_duplicado": False,
+                    "duplicado_de": [],
+                    "sugerencia_id": None,
+                    "vinc_id": item.get("vinc_id"),
+                    "monto_sugerido": None,
+                    "puede_vincular": False,
+                    "puede_cerrar_huerfano": False,
+                    "puede_editar_tasas": bool(item.get("editable")),
+                    "puede_marcar_recibido": not extra["recibido"],
+                    **extra,
+                }
+            )
+
+        # 3) Cerrados a favor de la empresa -- antes solo excluían de
+        # "pendientes", nunca tenían su propia bandeja/vista.
+        for pid, detalle in cerrados_detalle.items():
+            p_row = pagos_by_id.get(pid, {})
+            cliente_id = str(p_row.get("cliente_id", "")).strip()
+            cliente_nombre = clientes_nombre_map.get(cliente_id, f"Cliente {cliente_id}")
+            fecha_cierre = str(p_row.get("fecha_pago") or p_row.get("fecha") or "")
+            extra = comun(pid, cliente_id, None, fecha_cierre)
+            if not visible(extra["vendedor"]):
+                continue
+            monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
+            unificados.append(
+                {
+                    "pago_id": pid,
+                    "numero_pago_odoo": None,
+                    "pago_fecha": str(p_row.get("fecha_pago") or p_row.get("fecha") or "")[:10],
+                    "cliente_id": cliente_id,
+                    "cliente_nombre": cliente_nombre,
+                    "monto_pago_original": float(monto_raw),
+                    "moneda_pago": p_row.get("moneda"),
+                    "tasa_bcv": None,
+                    "tasa_binance": None,
+                    "monto_pago_bcv_usd": None,
+                    "monto_pago_binance_usd": None,
+                    "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
+                    "monto_aplicado": 0.0,
+                    "monto_por_aplicar": float(monto_raw),
+                    "so_saldo_pendiente": None,
+                    "factura_saldo_odoo": None,
+                    "so_id": None,
+                    "factura_id": None,
+                    "facturas": [],
+                    "estado": "cerrado_empresa",
+                    "origen": "Sistema (cerrado a favor de la empresa)",
+                    "confirmado_por": detalle.get("cerrado_por"),
+                    "posible_duplicado": False,
+                    "duplicado_de": [],
+                    "sugerencia_id": None,
+                    "vinc_id": None,
+                    "monto_sugerido": None,
+                    "cerrado_motivo": detalle.get("motivo"),
+                    "cerrado_por": detalle.get("cerrado_por"),
+                    "cerrado_timestamp": detalle.get("timestamp_cierre"),
+                    "puede_vincular": False,
+                    "puede_cerrar_huerfano": False,
+                    "puede_editar_tasas": False,
+                    "puede_marcar_recibido": not extra["recibido"],
+                    **extra,
+                }
+            )
+
+        unificados.sort(key=lambda r: r["pago_fecha"] or "")
+        return unificados
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
