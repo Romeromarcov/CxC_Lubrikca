@@ -902,6 +902,35 @@
                         </table>
                     </div>
                 </section>
+
+                <section class="cobranza-panel card">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom: 1rem;">
+                        <div>
+                            <h2>💰 Cerrados a Favor de la Empresa</h2>
+                            <p>Pagos huérfanos (sin orden abierta del cliente) marcados como resueltos/a favor de la empresa. Solo una marca local -- ningún asiento contable se crea en Odoo.</p>
+                            <span id="badge-cobranza-cerrados-count" class="badge" style="background:#fef3c7; color:#92400e; padding:6px 12px; font-weight:700; border-radius:20px; display:inline-block; margin-top:0.4rem;">0 Pagos</span>
+                        </div>
+                    </div>
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Pago ID</th>
+                                    <th>Cliente</th>
+                                    <th>Monto</th>
+                                    <th>Motivo</th>
+                                    <th>Cerrado Por</th>
+                                    <th>Fecha de Cierre</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cobranza-cerrados-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 
