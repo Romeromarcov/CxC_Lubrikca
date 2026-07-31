@@ -19,7 +19,7 @@ from cxc.models import (
     SerieTasa,
     Vinculacion,
 )
-from cxc.web.app import SECRET_KEY, app, crear_session_token
+from cxc.web.app import _SALDOS_REALES_CACHE, SECRET_KEY, app, crear_session_token
 
 client = TestClient(app)
 
@@ -216,38 +216,59 @@ def test_e2e_05_reconciliation_trays():
 
 
 def test_e2e_06_vendor_scoping_and_roles():
-    """Test 6: Scoping por vendedor y permisos de rol en reportes/cobranza."""
+    """Test 6: Scoping por vendedor y permisos de rol en la tabla unificada
+
+    de Cobranza (GET /api/cobranza/pagos, reemplazó a GET /api/cobranza).
+    """
     mock_repo = MagicMock()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
                 "pago_id": "P_VEND_1",
-                "fecha": "2026-07-15",
+                "cliente_id": "C_JUAN",
+                "fecha_pago": "2026-07-15",
                 "monto": "200.0",
                 "moneda": "USD",
                 "vendedor": "vendedor_juan@lubrikca.com",
-                "cliente_nombre": "Cliente Juan",
             },
             {
                 "pago_id": "P_VEND_2",
-                "fecha": "2026-07-15",
+                "cliente_id": "C_PEDRO",
+                "fecha_pago": "2026-07-15",
                 "monto": "500.0",
                 "moneda": "USD",
                 "vendedor": "vendedor_pedro@lubrikca.com",
-                "cliente_nombre": "Cliente Pedro",
             },
         ]
         if sheet == "Pagos"
-        else []
+        else (
+            [
+                {
+                    "cliente_id": "C_JUAN",
+                    "nombre": "Cliente Juan",
+                    "vendedor_email": "vendedor_juan@lubrikca.com",
+                },
+                {
+                    "cliente_id": "C_PEDRO",
+                    "nombre": "Cliente Pedro",
+                    "vendedor_email": "vendedor_pedro@lubrikca.com",
+                },
+            ]
+            if sheet == "Clientes"
+            else []
+        )
     )
 
     mock_repo.all_vinculaciones.return_value = []
     mock_repo.all_ordenes.return_value = []
+    mock_repo.all_auditoria.return_value = []
 
     token = crear_session_token("vendedor_juan@lubrikca.com", SECRET_KEY)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
         patch(
             "cxc.web.app.get_current_user_from_cookie",
             return_value={
@@ -258,11 +279,20 @@ def test_e2e_06_vendor_scoping_and_roles():
         ),
     ):
         client.cookies.set("cxc_session", token)
-        res = client.get("/api/cobranza")
-        assert res.status_code == 200
-        data = res.json()
-        for item in data:
-            assert item["vendedor"] == "vendedor_juan@lubrikca.com"
+        try:
+            res = client.get("/api/cobranza/pagos")
+            assert res.status_code == 200
+            data = res.json()
+            assert len(data) > 0
+            for item in data:
+                assert item["vendedor"] == "vendedor_juan@lubrikca.com"
+        finally:
+            # Evita que la cookie de sesión y el cache de saldos reales (TTL
+            # 60s, módulo-level) "se filtren" al resto de los tests -- client
+            # y _SALDOS_REALES_CACHE son compartidos a nivel de módulo.
+            client.cookies.delete("cxc_session")
+            _SALDOS_REALES_CACHE["data"] = None
+            _SALDOS_REALES_CACHE["timestamp"] = 0.0
 
 
 def test_e2e_07_receipt_generation():
