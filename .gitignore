@@ -45,3 +45,6 @@ Thumbs.db
 
 # Datos locales / fixtures generados en vivo
 data/*.local.json
+
+# Hallazgos del monitor local de logs de Railway (scripts/monitor_railway_logs.ps1)
+railway_monitor_findings.log
