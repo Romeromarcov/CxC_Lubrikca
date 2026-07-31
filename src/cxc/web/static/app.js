@@ -241,7 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadMapa === "function") loadMapa();
                 if (typeof loadHistorialPagos === "function") loadHistorialPagos();
             } else if (path === "cobranza") {
-                if (typeof loadCobranza === "function") loadCobranza();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
             } else if (path === "ventas") {
                 if (typeof loadVentas === "function") loadVentas();
             } else if (path === "reporte") {
@@ -586,6 +586,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 loadKPIs();
                 loadSugerenciasConciliacion();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadHistorialPagos();
                 loadBandeja();
             } else {
@@ -3100,7 +3101,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("recibo-items-2").innerHTML = rowsHtml;
 
             document.getElementById("recibo-modal").style.display = "flex";
-            loadCobranza();
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
         } catch (err) {
             alert("❌ Error: " + err.message);
             console.error(err);
@@ -3519,6 +3520,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 alert("✅ Vinculación completada con éxito.");
                 loadSugerenciasConciliacion();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
                 loadMapa();
                 loadHistorialPagos();
@@ -3545,6 +3547,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 alert("✅ Pago cerrado a favor de la empresa.");
                 loadSugerenciasConciliacion();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
             } else {
                 alert("❌ Error: " + (data.detail || "No se pudo cerrar el pago."));
@@ -3586,6 +3589,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 alert(`🎉 ${data.message}`);
                 loadSugerenciasConciliacion();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
                 loadKPIs();
                 loadMapa();
                 loadHistorialPagos();
@@ -3596,6 +3600,278 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("Error en aprobación masiva:", err);
             alert("❌ Error de comunicación con el servidor.");
         }
+    };
+
+    // COBRANZA UNIFICADA -- reemplaza las 4 tablas históricas (Pagos
+    // Pendientes por Asociar, Mapa de Conciliación, Pagos Conciliados y el
+    // registro de Cobranza) con una sola fuente de datos (/api/cobranza/pagos)
+    // y una sola tabla. Reusa TAL CUAL las acciones ya existentes
+    // (aprobarSugerenciaIndividual, abrirModalVincularManual, cerrarPagoHuerfano,
+    // aprobarSugerenciasSeleccionadas, generarReciboSeleccionados/toggleAllCobranza)
+    // -- currentSugerenciasList se repuebla acá con los pendientes de la
+    // tabla unificada (con alias de campos para que esas funciones, que
+    // esperan el esquema viejo de /api/conciliaciones/sugerencias, sigan
+    // funcionando sin tocarlas.
+    let cobranzaUnificadaData = [];
+
+    async function loadCobranzaUnificado() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const vSelect = document.getElementById("cobranza-vendedor-filter");
+        if (!tbody) return;
+
+        tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando pagos (pendientes, vinculados y conciliados en Odoo)...</td></tr>';
+        try {
+            const res = await fetch("/api/cobranza/pagos");
+            if (!res.ok) throw new Error("Error al obtener los pagos");
+            cobranzaUnificadaData = await res.json();
+
+            if (vSelect) {
+                const curVal = vSelect.value;
+                const vendedores = [...new Set(cobranzaUnificadaData.map(i => i.vendedor || "Sin Vendedor"))].sort();
+                vSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vSelect.appendChild(opt);
+                });
+                vSelect.value = curVal || "*";
+            }
+
+            ["cobranza-vendedor-filter", "cobranza-estado-filter", "cobranza-moneda-filter",
+             "cobranza-solo-duplicados", "cobranza-solo-alertas", "cobranza-sort"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !el.dataset.wired) {
+                    el.addEventListener("change", renderCobranzaUnificado);
+                    el.dataset.wired = "1";
+                }
+            });
+            const searchEl = document.getElementById("cobranza-search");
+            if (searchEl && !searchEl.dataset.wired) {
+                searchEl.addEventListener("input", renderCobranzaUnificado);
+                searchEl.dataset.wired = "1";
+            }
+
+            renderCobranzaUnificado();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="12" class="table-empty danger">Error cargando pagos: ${err.message}</td></tr>`;
+            console.error(err);
+        }
+    }
+    window.loadCobranzaUnificado = loadCobranzaUnificado;
+
+    function renderCobranzaUnificado() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const countBadge = document.getElementById("badge-cobranza-count");
+        if (!tbody) return;
+
+        const selVend = (document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
+        const selEstado = (document.getElementById("cobranza-estado-filter") || {}).value || "*";
+        const selMoneda = (document.getElementById("cobranza-moneda-filter") || {}).value || "*";
+        const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
+        const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
+        const search = ((document.getElementById("cobranza-search") || {}).value || "").trim().toLowerCase();
+        const sortBy = (document.getElementById("cobranza-sort") || {}).value || "pago_fecha_asc";
+
+        // "Cerrados a favor de la empresa" tienen su propia bandeja (ver
+        // sección debajo) -- no se muestran en la tabla principal.
+        let filtered = cobranzaUnificadaData.filter(i => i.estado !== "cerrado_empresa");
+        if (selVend !== "*") filtered = filtered.filter(i => (i.vendedor || "Sin Vendedor") === selVend);
+        if (selEstado !== "*") filtered = filtered.filter(i => i.estado === selEstado);
+        if (selMoneda !== "*") filtered = filtered.filter(i => i.moneda_pago === selMoneda);
+        if (soloDup) filtered = filtered.filter(i => i.posible_duplicado);
+        if (soloAlertas) filtered = filtered.filter(i => i.vendedor_mismatch || i.reasignado_por_odoo);
+        if (search) {
+            filtered = filtered.filter(i => [i.pago_id, i.numero_pago_odoo, i.cliente_nombre, i.so_id]
+                .some(v => v && String(v).toLowerCase().includes(search)));
+        }
+
+        const sorters = {
+            pago_fecha_asc: (a, b) => (a.pago_fecha || "").localeCompare(b.pago_fecha || ""),
+            pago_fecha_desc: (a, b) => (b.pago_fecha || "").localeCompare(a.pago_fecha || ""),
+            monto_desc: (a, b) => (b.monto_pago_bcv_usd || b.monto_pago_original || 0) - (a.monto_pago_bcv_usd || a.monto_pago_original || 0),
+            cliente_asc: (a, b) => (a.cliente_nombre || "").localeCompare(b.cliente_nombre || ""),
+        };
+        filtered = [...filtered].sort(sorters[sortBy] || sorters.pago_fecha_asc);
+
+        if (countBadge) countBadge.textContent = `${filtered.length} Pagos`;
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos para el filtro seleccionado.</td></tr>';
+            currentSugerenciasList = [];
+            return;
+        }
+
+        // currentSugerenciasList repuebla el array que ya consumen
+        // aprobarSugerenciaIndividual/abrirModalVincularManual/aprobarSugerenciasSeleccionadas
+        // -- alias de campos hacia el esquema viejo que esas funciones esperan.
+        currentSugerenciasList = filtered
+            .filter(i => i.estado === "pendiente")
+            .map(i => ({
+                ...i,
+                saldo_pago: i.monto_por_aplicar,
+                saldo_pago_original: i.monto_pago_original,
+                monto_pago: i.monto_pago_bcv_usd,
+                monto_pago_binance: i.monto_pago_binance_usd,
+            }));
+        const idxByPagoSug = {};
+        currentSugerenciasList.forEach((it, idx) => { idxByPagoSug[it.sugerencia_id] = idx; });
+
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        const pagoCounts = {};
+        filtered.forEach(i => { pagoCounts[i.pago_id] = (pagoCounts[i.pago_id] || 0) + 1; });
+        const pagoSeen = {};
+
+        const estadoBadge = {
+            pendiente: '<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:700;">⏳ Pendiente</span>',
+            vinculado_local: '<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">🔗 Vinculado</span>',
+            conciliado_odoo: '<span class="badge" style="background:#dcfce7; color:#166534; font-weight:700;">✓ Conciliado (Odoo)</span>',
+        };
+
+        tbody.innerHTML = filtered.map(item => {
+            const total = pagoCounts[item.pago_id];
+            pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
+            const pagoCell = `<strong>${item.pago_id}</strong>`
+                + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
+                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} órdenes -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${total}</small>` : '');
+
+            const montoCell = item.moneda_pago === "VES"
+                ? `Bs. ${Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`
+                : fmt(item.monto_pago_original);
+            const tasasCell = `
+                <span style="font-size:0.72rem; color:#2563eb; display:block;">BCV: ${fmt(item.monto_pago_bcv_usd)}</span>
+                <span style="font-size:0.72rem; color:#d97706; display:block;">Binance: ${fmt(item.monto_pago_binance_usd)}</span>
+                <span style="font-size:0.72rem; color:#7c3aed; display:block;">EUR: ${fmt(item.monto_pago_eur)}</span>`;
+
+            const ordenCell = item.so_id
+                ? `<span class="badge blue">${item.so_id}</span>` + (item.factura_id ? `<br><small>${item.factura_id}</small>` : '')
+                : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`;
+
+            const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`
+                + (item.vendedor_mismatch ? `<br><span title="El cliente cambió de vendedor -- la orden quedó con uno distinto al vigente" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ vendedor distinto en la orden</span>` : '');
+
+            const alertas = [];
+            if (item.posible_duplicado) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
+            if (item.reasignado_por_odoo) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:700;">🔄 Reasignado por Odoo</span>`);
+            const alertasCell = alertas.length ? alertas.join('<br>') : '<span style="color:#94a3b8;">-</span>';
+
+            const reciboCell = item.recibido
+                ? `<span class="semaphore green" title="Entregado a Administración">✓ Recibido</span>`
+                : `<span class="semaphore yellow">⏳ Pendiente</span>`;
+
+            const tieneSugerencia = !!item.so_id;
+            const sugIdx = idxByPagoSug[item.sugerencia_id];
+            let accionesExtra = '';
+            let checkboxCell = '<td></td>';
+            if (item.estado === "pendiente") {
+                if (tieneSugerencia && !item.posible_duplicado && sugIdx !== undefined) {
+                    accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
+                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden</button>`;
+                    checkboxCell = `<td style="text-align:center;"><input type="checkbox" class="check-sugerencia-item" data-idx="${sugIdx}" checked></td>`;
+                } else if (sugIdx !== undefined) {
+                    accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`
+                        + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
+                    checkboxCell = `<td></td>`;
+                }
+            } else if (item.puede_marcar_recibido) {
+                checkboxCell = `<td style="text-align:center;"><input type="checkbox" class="check-cobranza-item" value="${item.pago_id}" data-vendedor="${item.vendedor || ''}"></td>`;
+            }
+
+            return `
+                <tr>
+                    ${checkboxCell}
+                    <td>${pagoCell}</td>
+                    <td>${item.pago_fecha || '-'}</td>
+                    <td>${item.cliente_nombre || '-'}</td>
+                    <td>${vendedorCell}</td>
+                    <td>${montoCell}</td>
+                    <td>${tasasCell}</td>
+                    <td>${ordenCell}</td>
+                    <td>${estadoBadge[item.estado] || item.estado}</td>
+                    <td>${alertasCell}</td>
+                    <td>${reciboCell}</td>
+                    <td>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <button class="btn btn-sm btn-secondary" onclick="abrirModalDetallePago('${item.pago_id}')" style="padding:3px 8px; font-size:0.75rem;">👁️ Detalle</button>
+                            ${accionesExtra}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+    window.renderCobranzaUnificado = renderCobranzaUnificado;
+
+    window.toggleAllCobranza = function(el) {
+        document.querySelectorAll(".check-cobranza-item, .check-sugerencia-item").forEach(cb => cb.checked = el.checked);
+    };
+
+    window.abrirModalDetallePago = function(pago_id) {
+        const modal = document.getElementById("modal-detalle-pago");
+        const body = document.getElementById("modal-detalle-pago-body");
+        if (!modal || !body) return;
+        const filas = cobranzaUnificadaData.filter(i => i.pago_id === pago_id);
+        if (filas.length === 0) return;
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        const base = filas[0];
+
+        const campo = (label, valor) => `<div style="margin-bottom:0.5rem;"><span style="font-size:0.75rem; color:#64748b; display:block;">${label}</span><strong>${valor ?? '-'}</strong></div>`;
+
+        let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:0.5rem 1rem; margin-bottom:1rem;">
+            ${campo('Pago ID', base.pago_id)}
+            ${campo('N° Pago Odoo', base.numero_pago_odoo)}
+            ${campo('Fecha', base.pago_fecha)}
+            ${campo('Cliente', base.cliente_nombre)}
+            ${campo('Vendedor', base.vendedor + (base.vendedor_mismatch ? ' ⚠️ (distinto al de la orden)' : ''))}
+            ${campo('Método de Pago', base.metodo_pago)}
+            ${campo('Monto Original', (base.moneda_pago === 'VES' ? 'Bs. ' + Number(base.monto_pago_original).toLocaleString('es-VE', {minimumFractionDigits:2}) : fmt(base.monto_pago_original)))}
+            ${campo('Tasa BCV', base.tasa_bcv ? base.tasa_bcv.toFixed(4) : '-')}
+            ${campo('Tasa Binance', base.tasa_binance ? base.tasa_binance.toFixed(4) : '-')}
+            ${campo('Tasa BCV-EUR', base.tasa_bcv_eur ? base.tasa_bcv_eur.toFixed(4) : '-')}
+            ${campo('Equiv. BCV', fmt(base.monto_pago_bcv_usd))}
+            ${campo('Equiv. Binance', fmt(base.monto_pago_binance_usd))}
+            ${campo('Equiv. EUR', fmt(base.monto_pago_eur))}
+            ${campo('Estado', base.estado)}
+            ${campo('Origen', base.origen)}
+            ${campo('Confirmado Por', base.confirmado_por)}
+            ${campo('Recibido', base.recibido ? `Sí (${base.numero_recibido || ''}, ${base.fecha_recibido || ''}, ${base.recibido_por || ''})` : 'No')}
+        </div>`;
+
+        if (base.reasignado_por_odoo) {
+            html += `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#1e40af;">
+                🔄 <strong>Odoo reasignó este pago.</strong> ${base.reasignado_detalle || ''}
+            </div>`;
+        }
+        if (base.posible_duplicado) {
+            html += `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#b91c1c;">
+                ⚠️ <strong>Posible duplicado</strong> de: ${(base.duplicado_de || []).join(', ')}
+            </div>`;
+        }
+
+        html += `<h3 style="margin:1rem 0 0.5rem;">Reparto / Órdenes y Facturas</h3>
+            <table class="cxc-table"><thead><tr>
+                <th>Orden</th><th>Factura</th><th>Monto Aplicado</th><th>Por Aplicar</th>
+                <th>Saldo Orden (CxC)</th><th>Saldo Factura (Odoo)</th>
+            </tr></thead><tbody>`;
+        filas.forEach(f => {
+            html += `<tr>
+                <td>${f.so_id || '-'}</td>
+                <td>${f.factura_id || '-'}</td>
+                <td>${fmt(f.monto_aplicado)}</td>
+                <td>${fmt(f.monto_por_aplicar)}</td>
+                <td>${fmt(f.so_saldo_pendiente)}</td>
+                <td>${fmt(f.factura_saldo_odoo)}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+
+        body.innerHTML = html;
+        modal.style.display = "flex";
+    };
+
+    window.cerrarModalDetallePago = function() {
+        const modal = document.getElementById("modal-detalle-pago");
+        if (modal) modal.style.display = "none";
     };
 
     // Initial Load for Dashboard

@@ -28,7 +28,6 @@
         <nav class="tab-navigation">
             <a href="/dashboard" class="tab-btn nav-link" data-page="dashboard" style="text-decoration: none;">📊 Dashboard</a>
             <a href="/facturacion" class="tab-btn nav-link" data-page="facturacion" style="text-decoration: none;">🧾 Facturación</a>
-            <a href="/conciliaciones" class="tab-btn nav-link" data-page="conciliaciones" style="text-decoration: none;">🤝 Conciliaciones</a>
             <a href="/cobranza" class="tab-btn nav-link" data-page="cobranza" style="text-decoration: none;">💵 Cobranza</a>
             <a href="/ventas" class="tab-btn nav-link" data-page="ventas" style="text-decoration: none;">💰 Ventas</a>
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
@@ -97,13 +96,9 @@
                         <h3 style="margin:0 0 0.4rem 0; color:#1e40af;">🧾 Gestión de Facturación</h3>
                         <p style="margin:0; font-size:0.83rem; color:#64748b;">3 Bandejas de Aprobación de Órdenes por Facturar, N/C y Comprobantes de IVA.</p>
                     </a>
-                    <a href="/conciliaciones" data-page="conciliaciones" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #059669; display:block;">
-                        <h3 style="margin:0 0 0.4rem 0; color:#065f46;">🤝 Conciliación y Asignación</h3>
-                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Asigne pagos recibidos a órdenes abiertas y consulte el mapa de vinculación.</p>
-                    </a>
                     <a href="/cobranza" data-page="cobranza" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #d97706; display:block;">
-                        <h3 style="margin:0 0 0.4rem 0; color:#92400e;">💵 Registro de Cobranzas</h3>
-                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Gestione la entrega de dinero por vendedores y emita recibos de entrega en PDF.</p>
+                        <h3 style="margin:0 0 0.4rem 0; color:#92400e;">💵 Cobranza</h3>
+                        <p style="margin:0; font-size:0.83rem; color:#64748b;">Asigne pagos a órdenes, revise duplicados y trazabilidad, y emita recibos de entrega.</p>
                     </a>
                     <a href="/reporte" data-page="reporte" class="card nav-link" style="text-decoration:none; padding:1.25rem; border-left:4px solid #7c3aed; display:block;">
                         <h3 style="margin:0 0 0.4rem 0; color:#5b21b6;">📑 Reporte General de Saldos</h3>
@@ -836,19 +831,49 @@
                 <section class="cobranza-panel card">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom: 1rem;">
                         <div>
-                            <h2>💵 Registro y Entrega de Cobranzas por Vendedor</h2>
-                            <p>Gestión de pagos recibidos, equivalencias a tasa BCV y Binance, asignación a órdenes y emisión de recibos de entrega</p>
+                            <h2>💵 Cobranza — Pagos, Conciliación y Entrega</h2>
+                            <p>Todos los pagos (pendientes, vinculados, conciliados en Odoo) con tasa BCV/Binance/EUR, duplicados, trazabilidad y recibos de entrega. Haz clic en una fila para ver el detalle completo.</p>
+                            <span id="badge-cobranza-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px; display:inline-block; margin-top:0.4rem;">0 Pagos</span>
                         </div>
-                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
-                            <select id="cobranza-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
-                                <option value="*">Todos los Vendedores</option>
-                            </select>
-                            <div id="btn-generar-recibo-container">
-                                <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
-                                    <span>🖨️</span> Marcar Recibido y Generar Recibo (2 Copias)
-                                </button>
-                            </div>
+                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="aprobarSugerenciasSeleccionadas()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600;">
+                                ⚡ Aprobar Seleccionadas (Bulk)
+                            </button>
+                            <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
+                                <span>🖨️</span> Marcar Recibido y Generar Recibo
+                            </button>
+                            <button class="btn btn-secondary" onclick="loadCobranzaUnificado()" style="padding: 0.55rem 1rem; font-size: 0.85rem;">🔄 Actualizar</button>
                         </div>
+                    </div>
+
+                    <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
+                        <select id="cobranza-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
+                            <option value="*">Todos los Vendedores</option>
+                        </select>
+                        <select id="cobranza-estado-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
+                            <option value="*">Todos los Estados</option>
+                            <option value="pendiente">Pendiente</option>
+                            <option value="vinculado_local">Vinculado (local)</option>
+                            <option value="conciliado_odoo">Conciliado en Odoo</option>
+                        </select>
+                        <select id="cobranza-moneda-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
+                            <option value="*">Todas las Monedas</option>
+                            <option value="USD">USD</option>
+                            <option value="VES">VES</option>
+                        </select>
+                        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:#334155;">
+                            <input type="checkbox" id="cobranza-solo-duplicados"> Solo duplicados
+                        </label>
+                        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:#334155;">
+                            <input type="checkbox" id="cobranza-solo-alertas"> Solo con alerta (vendedor/reasignado)
+                        </label>
+                        <input type="text" id="cobranza-search" placeholder="🔍 Buscar por pago, cliente, N° Odoo u orden..." style="min-width:220px;">
+                        <select id="cobranza-sort" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
+                            <option value="pago_fecha_asc">Fecha (antiguo primero)</option>
+                            <option value="pago_fecha_desc">Fecha (reciente primero)</option>
+                            <option value="monto_desc">Monto (mayor primero)</option>
+                            <option value="cliente_asc">Cliente (A-Z)</option>
+                        </select>
                     </div>
 
                     <div class="table-wrapper large-table">
@@ -856,28 +881,38 @@
                             <thead>
                                 <tr>
                                     <th style="width:30px;"><input type="checkbox" id="check-all-cobranza" onclick="toggleAllCobranza(this)"></th>
-                                    <th>Pago ID</th>
-                                    <th>Fecha Pago</th>
-                                    <th>Vendedor</th>
+                                    <th>Pago ID / N° Odoo</th>
+                                    <th>Fecha</th>
                                     <th>Cliente</th>
-                                    <th>Orden / Factura</th>
-                                    <th>Método / Ref</th>
+                                    <th>Vendedor</th>
                                     <th>Monto Original</th>
-                                    <th>Tasa BCV</th>
-                                    <th>Equiv. BCV ($)</th>
-                                    <th>Equiv. Binance ($)</th>
-                                    <th>Estado Recepción</th>
-                                    <th>Recibo N°</th>
+                                    <th>Equiv. BCV / Binance / EUR</th>
+                                    <th>Orden / Factura</th>
+                                    <th>Estado</th>
+                                    <th>Alertas</th>
+                                    <th>Recibo</th>
+                                    <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody id="cobranza-table-body">
                                 <tr>
-                                    <td colspan="13" class="table-empty">Cargando cobranzas registradas...</td>
+                                    <td colspan="12" class="table-empty">Cargando pagos...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
+            </div>
+        </div>
+
+        <!-- Modal de detalle de un pago (tabla unificada de Cobranza) -->
+        <div id="modal-detalle-pago" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+            <div class="card" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                    <h2 style="margin:0;">Detalle del Pago</h2>
+                    <button class="btn btn-secondary" onclick="cerrarModalDetallePago()" style="padding:0.3rem 0.7rem;">✕</button>
+                </div>
+                <div id="modal-detalle-pago-body"></div>
             </div>
         </div>
 
