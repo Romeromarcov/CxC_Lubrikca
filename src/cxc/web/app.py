@@ -3881,7 +3881,12 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             saldo_usd = monto_orig_usd - monto_vinculado_usd
 
             if saldo_usd > Decimal("0.05"):
-                vendedor = p.get("vendedor") or "Sin Vendedor"
+                # "vendedor" (a secas) nunca existió como columna real en
+                # Pagos -- Sheets solo tiene "vendedor_email" (ver
+                # serde.pago_to_row); usarlo daba "Sin Vendedor" siempre y
+                # ese pago quedaba invisible para cualquier usuario con rol
+                # "ventas" (visible_to_user más abajo).
+                vendedor = p.get("vendedor_email") or p.get("vendedor") or "Sin Vendedor"
                 cliente_id = str(p.get("cliente_id", "")).strip()
                 cliente_nombre = (
                     p.get("cliente_nombre")

@@ -293,7 +293,7 @@ def test_e2e_06_vendor_scoping_and_roles():
 
     de Cobranza (GET /api/cobranza/pagos, reemplazó a GET /api/cobranza).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -302,7 +302,7 @@ def test_e2e_06_vendor_scoping_and_roles():
                 "fecha_pago": "2026-07-15",
                 "monto": "200.0",
                 "moneda": "USD",
-                "vendedor": "vendedor_juan@lubrikca.com",
+                "vendedor_email": "vendedor_juan@lubrikca.com",
             },
             {
                 "pago_id": "P_VEND_2",
@@ -310,7 +310,7 @@ def test_e2e_06_vendor_scoping_and_roles():
                 "fecha_pago": "2026-07-15",
                 "monto": "500.0",
                 "moneda": "USD",
-                "vendedor": "vendedor_pedro@lubrikca.com",
+                "vendedor_email": "vendedor_pedro@lubrikca.com",
             },
         ]
         if sheet == "Pagos"
