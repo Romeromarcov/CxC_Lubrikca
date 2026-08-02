@@ -1,7 +1,9 @@
+import contextlib
 from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cxc.engine.runner import EngineRunner
@@ -19,9 +21,34 @@ from cxc.models import (
     Vinculacion,
 )
 from cxc.sheets import serde
+from cxc.web import app as _app_module
 from cxc.web.app import SECRET_KEY, app, crear_session_token
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_level_caches():
+    """``app.py`` tiene varios caches a nivel de módulo (TTL en memoria,
+
+    compartidos entre requests reales) -- sin resetearlos entre tests, el
+    resultado cacheado de un test (con SUS mocks) se filtra al siguiente
+    (con mocks distintos) y produce fallos que dependen del orden de
+    ejecución. Se resetean antes Y después de cada test.
+    """
+    _app_module._REPORTE_SALDOS_CACHE["data"] = None
+    _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+    _app_module._SALDOS_REALES_CACHE["data"] = None
+    _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    yield
+    _app_module._REPORTE_SALDOS_CACHE["data"] = None
+    _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+    _app_module._SALDOS_REALES_CACHE["data"] = None
+    _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    with contextlib.suppress(Exception):
+        client.cookies.delete("cxc_session")
 
 
 def _mock_repo_with_gateway_bridge() -> MagicMock:
@@ -2118,7 +2145,7 @@ def test_e2e_34_sugerencias_excluye_orden_con_saldo_real_cero():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2182,7 +2209,7 @@ def test_e2e_35_sugerencias_usa_saldo_real_no_calculo_naive():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2253,7 +2280,7 @@ def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
