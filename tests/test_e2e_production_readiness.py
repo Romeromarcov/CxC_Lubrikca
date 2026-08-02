@@ -2721,7 +2721,7 @@ def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
     La guardia de plausibilidad debe descartar ese dato corrupto y caer al
     fallback de SerieTasas en vez de aplicar una tasa disparatada.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
