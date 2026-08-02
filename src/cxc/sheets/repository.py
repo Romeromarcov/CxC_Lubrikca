@@ -17,6 +17,7 @@ from ..models import (
     BandejaFacturacion,
     Cliente,
     Conciliacion,
+    Condicion,
     DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
@@ -33,6 +34,7 @@ from ..models import (
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     SerieTasa,
+    TipoBeneficio,
     Vinculacion,
 )
 from ..repositories import Repository
@@ -96,6 +98,39 @@ class SheetsRepository(Repository):
     def set_last_sync(self, cursor: datetime) -> None:
         self._g.set_meta(_META_LAST_SYNC, serde.s_dt(cursor))
 
+    # --- Configuración genérica (_Meta) ---------------------------------------
+    def get_config(self, key: str) -> str | None:
+        return self._g.get_meta(key)
+
+    def set_config(self, key: str, value: str) -> None:
+        self._g.set_meta(key, value)
+
+    def all_config(self) -> dict[str, str]:
+        return {
+            r.get("key"): r.get("value", "")
+            for r in self._g.read_rows(g.T_META)
+            if r.get("key")
+        }
+
+    def invalidate_cache(self, table: str | None = None) -> None:
+        self._g.invalidate_cache(table)
+
+    # --- Usuarios de la plataforma ---------------------------------------------
+    _T_USUARIOS = "UsuariosPlataforma"
+
+    def get_usuario_plataforma(self, email: str) -> dict[str, str] | None:
+        email_clean = email.strip().lower()
+        for r in self._g.read_rows(self._T_USUARIOS):
+            if str(r.get("email") or "").strip().lower() == email_clean:
+                return r
+        return None
+
+    def all_usuarios_plataforma(self) -> list[dict[str, str]]:
+        return self._g.read_rows(self._T_USUARIOS)
+
+    def upsert_usuario_plataforma(self, row: dict[str, str]) -> None:
+        self._g.upsert_row(self._T_USUARIOS, "email", row)
+
     # --- Espejo (upsert por PK) ---------------------------------------------
     def upsert_clientes(self, filas: list[Cliente]) -> None:
         self._g.upsert_rows(g.T_CLIENTES, "cliente_id", [serde.cliente_to_row(c) for c in filas])
@@ -116,6 +151,9 @@ class SheetsRepository(Repository):
                 return serde.cliente_from_row(r)
         return None
 
+    def all_clientes(self) -> list[Cliente]:
+        return [serde.cliente_from_row(r) for r in self._g.read_rows(g.T_CLIENTES)]
+
     def get_orden(self, so_id: str) -> OrdenVenta | None:
         for r in self._g.read_rows(g.T_ORDENES):
             if r.get("so_id") == so_id:
@@ -132,17 +170,45 @@ class SheetsRepository(Repository):
             if r.get("so_id") == so_id
         ]
 
+    def all_lineas(self) -> list[LineaOrden]:
+        return [serde.linea_from_row(r) for r in self._g.read_rows(g.T_LINEAS)]
+
     def get_pago(self, pago_id: str) -> Pago | None:
         for r in self._g.read_rows(g.T_PAGOS):
             if r.get("pago_id") == pago_id:
                 return serde.pago_from_row(r)
         return None
 
+    def all_pagos(self) -> list[Pago]:
+        return [serde.pago_from_row(r) for r in self._g.read_rows(g.T_PAGOS)]
+
+    def all_pagos_full(self) -> list[dict[str, str]]:
+        return self._g.read_rows(g.T_PAGOS)
+
+    def marcar_pagos_recibido(
+        self, pago_ids: list[str], numero_recibido: str, fecha_recibido: datetime, recibido_por: str
+    ) -> list[dict[str, str]]:
+        target = set(pago_ids)
+        actualizados = []
+        for r in self._g.read_rows(g.T_PAGOS):
+            pid = str(r.get("pago_id", "")).strip()
+            if pid in target:
+                r["recibido"] = "TRUE"
+                r["numero_recibido"] = numero_recibido
+                r["fecha_recibido"] = fecha_recibido.isoformat()[:19]
+                r["recibido_por"] = recibido_por
+                self._g.upsert_row(g.T_PAGOS, "pago_id", r)
+                actualizados.append(r)
+        return actualizados
+
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None:
         for r in self._g.read_rows(g.T_METODOS):
             if r.get("metodo_id") == metodo_id:
                 return serde.metodo_from_row(r)
         return None
+
+    def all_serie_tasas(self) -> list[SerieTasa]:
+        return self._serie_rows()
 
     def vinculaciones_de_orden(self, so_id: str) -> list[Vinculacion]:
         return [
@@ -173,12 +239,21 @@ class SheetsRepository(Repository):
     def descuentos_pronto_pago(self) -> list[DescuentoProntoPago]:
         return self.descuentos_marca_categoria()
 
+    def append_descuento_pronto_pago(self, regla: DescuentoMarcaCategoria) -> None:
+        self._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(regla))
+
     def descuentos_recompra(self) -> list[DescuentoRecompra]:
         rows = self._g.read_rows("DescuentosRecompra")
         return [serde.recompra_from_row(r) for r in rows]
 
+    def append_descuento_recompra(self, regla: DescuentoRecompra) -> None:
+        self._g.append_row("DescuentosRecompra", serde.recompra_to_row(regla))
+
     def descuentos_producto(self) -> list[DescuentoProducto]:
         return [serde.producto_from_row(r) for r in self._g.read_rows("DescuentosProducto")]
+
+    def append_descuento_producto(self, regla: DescuentoProducto) -> None:
+        self._g.append_row("DescuentosProducto", serde.producto_to_row(regla))
 
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
         rows = self._g.read_rows("DescuentosDiferencialCambiario")
@@ -217,11 +292,35 @@ class SheetsRepository(Repository):
             ]
         return [serde.diferencial_from_row(r) for r in rows]
 
+    def append_descuento_diferencial_cambiario(
+        self, regla: DescuentoDiferencialCambiario
+    ) -> None:
+        self._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(regla))
+
     def descuentos_volumen(self) -> list[DescuentoVolumen]:
         return [serde.desc_volumen_from_row(r) for r in self._g.read_rows("DescuentosVolumen")]
 
+    def append_descuento_volumen(self, regla: DescuentoVolumen) -> None:
+        self._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(regla))
+
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]:
         return [serde.regla_from_row(r) for r in self._g.read_rows(g.T_REGLAS)]
+
+    def set_regla_recurrencia_porcentaje(self, condicion: str, valor: Decimal) -> None:
+        rows = self._g.read_rows(g.T_REGLAS)
+        for r in rows:
+            if r.get("condicion") == condicion:
+                r["porcentaje"] = str(valor)
+                r["valor"] = str(valor)
+                self._g.upsert_row(g.T_REGLAS, "condicion", r)
+                return
+        nueva = ReglaRecurrencia(
+            condicion=Condicion(condicion),
+            tipo_beneficio=TipoBeneficio.PORCENTAJE,
+            valor=valor,
+            vigencia_desde=date.today(),
+        )
+        self._g.append_row(g.T_REGLAS, serde.regla_to_row(nueva))
 
     def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
         return [serde.bcv_completo_from_row(r) for r in self._g.read_rows(g.T_BCV_COMPLETO)]
@@ -229,8 +328,46 @@ class SheetsRepository(Repository):
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
         return [serde.promocion_from_row(r) for r in self._g.read_rows(g.T_PROMO_PRIMERA)]
 
+    def append_promocion_primera_compra(self, regla: PromocionPrimeraCompra) -> None:
+        self._g.append_row(g.T_PROMO_PRIMERA, serde.promocion_to_row(regla))
+
+    def delete_regla(self, tabla: str, regla_id: str) -> bool:
+        return self._g.delete_row(tabla, "regla_id", regla_id)
+
+    def set_regla_activo(self, tabla: str, regla_id: str, activo: bool) -> bool:
+        for r in self._g.read_rows(tabla):
+            if str(r.get("regla_id", "")).strip() == regla_id:
+                r["activo"] = "TRUE" if activo else "FALSE"
+                self._g.upsert_row(tabla, "regla_id", r)
+                return True
+        return False
+
+    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
+        return self._g.read_rows("AnomaliasAceptadas")
+
+    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
+        self._g.append_row("AnomaliasAceptadas", row)
+
+    def all_listas_precios_historicas(self) -> list[dict[str, str]]:
+        return self._g.read_rows("ListasPreciosHistoricas")
+
+    def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
+        return self._g.read_rows("TasasHistoricasAuditoria")
+
+    def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
+        self._g.replace_rows("TasasHistoricasAuditoria", rows)
+
+    def all_pagos_huerfanos_cerrados(self) -> list[dict[str, str]]:
+        return self._g.read_rows("PagosHuerfanosCerrados")
+
+    def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
+        self._g.upsert_row("PagosHuerfanosCerrados", "pago_id", row)
+
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
+
+    def append_feriado(self, feriado: Feriado) -> None:
+        self._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
 
     def exclusiones(self) -> list[ExclusionRegla]:
         return [serde.exclusion_from_row(r) for r in self._g.read_rows("Exclusiones")]

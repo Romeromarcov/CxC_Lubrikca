@@ -13,6 +13,7 @@ from cxc.auth import (
     verificar_session_token,
     verificar_usuario_odoo_activo,
 )
+from cxc.repositories import InMemoryRepository
 
 
 def test_hash_and_verify_password():
@@ -68,11 +69,8 @@ def test_session_token():
 
 
 def test_repo_usuarios_management():
-    mock_gateway = MagicMock()
-    mock_repo = MagicMock()
-    mock_repo._g = mock_gateway
-
-    mock_rows = [
+    repo = InMemoryRepository()
+    repo.upsert_usuario_plataforma(
         {
             "email": "admin@lubrikca.com",
             "nombre_odoo": "Admin",
@@ -81,22 +79,18 @@ def test_repo_usuarios_management():
             "rol": "admin",
             "activo": "TRUE",
         }
-    ]
-    mock_gateway.read_rows.return_value = mock_rows
+    )
 
-    users = obtener_usuarios_plataforma(mock_repo)
+    users = obtener_usuarios_plataforma(repo)
     assert len(users) == 1
 
-    found = buscar_usuario_plataforma(mock_repo, "ADMIN@lubrikca.com")
+    found = buscar_usuario_plataforma(repo, "ADMIN@lubrikca.com")
     assert found is not None
     assert found["email"] == "admin@lubrikca.com"
 
     # Test registrar_o_actualizar_usuario
-    pwd_hash, salt = hash_password("admin123")
-    mock_gateway.read_rows.return_value = []
-
     new_u = registrar_o_actualizar_usuario(
-        mock_repo,
+        repo,
         email="nuevo@lubrikca.com",
         password="password123",
         nombre_odoo="Nuevo Usuario",
@@ -104,18 +98,15 @@ def test_repo_usuarios_management():
     )
     assert new_u["email"] == "nuevo@lubrikca.com"
     assert new_u["rol"] == "tesoreria"
-    assert mock_gateway.upsert_row.called
+    assert buscar_usuario_plataforma(repo, "nuevo@lubrikca.com") is not None
 
 
 def test_autenticar_usuario():
     pwd = "password123"
     pwd_hash, salt = hash_password(pwd)
 
-    mock_gateway = MagicMock()
-    mock_repo = MagicMock()
-    mock_repo._g = mock_gateway
-
-    mock_gateway.read_rows.return_value = [
+    mock_repo = InMemoryRepository()
+    mock_repo.upsert_usuario_plataforma(
         {
             "email": "user@lubrikca.com",
             "nombre_odoo": "User Test",
@@ -124,7 +115,7 @@ def test_autenticar_usuario():
             "rol": "tesoreria",
             "activo": "TRUE",
         }
-    ]
+    )
 
     mock_execute = MagicMock(
         return_value=[

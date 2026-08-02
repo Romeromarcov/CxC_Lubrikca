@@ -1,740 +1,551 @@
-"""Backfill: copia todos los datos de Google Sheets a PostgreSQL.
+"""Backfill: copia todas las tablas de Google Sheets a PostgreSQL.
+
+Fase 1 de la migración a Postgres. Lee el Google Sheet real (mismas
+credenciales que usa la app hoy) y escribe en la base Postgres indicada,
+tabla por tabla, respetando el orden de dependencias (FK).
 
 Uso:
-  # Simulación -- lee de Sheets y muestra conteos, no escribe en Postgres.
-  python scripts/migrate_sheets_to_postgres.py --dry-run
+    # Solo cuenta filas en Sheets, no toca Postgres.
+    python scripts/migrate_sheets_to_postgres.py --dry-run
 
-  # Ejecución real (upsert en Postgres). Requiere DATABASE_URL en el entorno
-  # (o --database-url).
-  python scripts/migrate_sheets_to_postgres.py --apply
+    # Backfill real.
+    python scripts/migrate_sheets_to_postgres.py --apply \\
+        --database-url "postgresql://user:pass@host:puerto/db"
 
-  # Limitar a un subconjunto de tablas (para reintentar una sola tras un
-  # error, o probar rápido durante desarrollo):
-  python scripts/migrate_sheets_to_postgres.py --apply --tables clientes,pagos
+    # Repetir solo una tabla (por si una falló).
+    python scripts/migrate_sheets_to_postgres.py --apply --tables clientes,pagos \\
+        --database-url "postgresql://..."
 
-Lee vía ``SheetGateway`` (mismo binding que usa la app en producción) y
-parsea cada fila con las mismas reglas que ``cxc.sheets.serde`` usa hoy
-(``Decimal``/bool/fecha, valores por defecto ante campos vacíos o
-inválidos). Las tablas-espejo y de trabajo humano que ya tienen métodos de
-escritura en ``PostgresRepository`` (clientes, órdenes, líneas, pagos,
-vinculaciones, bandeja, conciliación) se escriben a través de esos métodos
--- misma lógica de upsert que usa producción. Las tablas de configuración
-que ``Repository`` todavía no expone para escritura (reglas de descuento,
-métodos de pago, feriados, etc. -- se amplía en un PR futuro) se escriben
-con upsert directo contra el esquema (``cxc.db.postgres_repository._upsert``).
-
-Idempotente: se puede reejecutar cuantas veces haga falta durante la
-ventana de validación en paralelo sin duplicar filas. Una fila individual
-inválida (celda corrupta, campo requerido vacío) se omite con un warning en
-vez de abortar toda la tabla -- mismo espíritu tolerante que
-``cxc.sheets.serde.p_dec``.
+Todas las escrituras son upsert (ON CONFLICT DO UPDATE) por clave primaria,
+salvo donde se indica lo contrario -- correr el script más de una vez sobre
+la misma base es seguro (idempotente), no duplica filas.
 """
 
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import logging
 import os
 import sys
-import time
-from collections.abc import Callable, Mapping
-from datetime import datetime
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass
+from decimal import Decimal
 
-from sqlalchemy import Table, delete, insert, select
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from cxc.config import AppConfig
-from cxc.db import schema as t
-from cxc.db.engine import make_engine
-from cxc.db.postgres_repository import PostgresRepository, _upsert
-from cxc.sheets import gateway as g
-from cxc.sheets import serde
-from cxc.sheets.gateway import GspreadGateway, SheetGateway
+from sqlalchemy import Engine, delete, insert, select  # noqa: E402
+from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("cxc.migrate_sheets_to_postgres")
+from cxc.config import AppConfig  # noqa: E402
+from cxc.db import schema as t  # noqa: E402
+from cxc.db.engine import make_engine  # noqa: E402
+from cxc.db.postgres_repository import PostgresRepository  # noqa: E402
+from cxc.sheets import gateway as g  # noqa: E402
+from cxc.sheets import serde  # noqa: E402
+from cxc.sheets.repository import SheetsRepository  # noqa: E402
 
-# Segundos entre lecturas consecutivas a la API de Sheets. Este backfill lee
-# ~26 pestañas completas en una sola corrida -- sin espaciarlas se puede
-# disparar la cuota "Read requests per minute" (el mismo problema del
-# HOTFIX de logging de 429 en producción), y GspreadGateway.read_rows()
-# atrapa esa excepción y devuelve [] en silencio: sin este pacing, una
-# tabla con datos reales puede reportarse como vacía sin ningún error.
-_SHEETS_READ_DELAY_SECONDS = 1.5
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger("migrate_sheets_to_postgres")
 
 
-class _PacedGateway(SheetGateway):
-    """Envoltorio de solo lectura que espacía las llamadas a ``read_rows``.
-
-    Ver ``_SHEETS_READ_DELAY_SECONDS``. Los demás métodos delegan sin
-    modificar -- este backfill nunca escribe en Sheets.
-    """
-
-    def __init__(
-        self, inner: SheetGateway, delay_seconds: float = _SHEETS_READ_DELAY_SECONDS
-    ) -> None:
-        self._inner = inner
-        self._delay = delay_seconds
-
-    def read_rows(self, table: str) -> list[dict[str, str]]:
-        time.sleep(self._delay)
-        return self._inner.read_rows(table)
-
-    def append_row(self, table: str, row: Mapping[str, str]) -> None:
-        self._inner.append_row(table, row)
-
-    def upsert_row(self, table: str, pk_field: str, row: Mapping[str, str]) -> None:
-        self._inner.upsert_row(table, pk_field, row)
-
-    def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool:
-        return self._inner.delete_row(table, pk_field, pk_value)
-
-    def get_meta(self, key: str) -> str | None:
-        return self._inner.get_meta(key)
-
-    def set_meta(self, key: str, value: str) -> None:
-        self._inner.set_meta(key, value)
+def _upsert(conn, table, rows: list[dict], pk_cols: list[str]) -> None:
+    """INSERT ... ON CONFLICT DO UPDATE genérico (mismo patrón que
+    ``cxc.db.postgres_repository._upsert``, reimplementado acá para no
+    depender de un símbolo privado de otro módulo)."""
+    if not rows:
+        return
+    stmt = pg_insert(table).values(rows)
+    update_cols = {col: stmt.excluded[col] for col in rows[0] if col not in pk_cols}
+    if update_cols:
+        stmt = stmt.on_conflict_do_update(index_elements=pk_cols, set_=update_cols)
+    else:
+        stmt = stmt.on_conflict_do_nothing(index_elements=pk_cols)
+    conn.execute(stmt)
 
 
-def _make_gateway(config: AppConfig) -> SheetGateway:
+def _build_sheets_repo() -> SheetsRepository:
+    config = AppConfig.from_env()
     if (
         os.environ.get("GOOGLE_TOKEN_JSON")
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
     ):
-        inner = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
+        gateway = g.GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
     else:
-        inner = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
-    return _PacedGateway(inner)
+        gateway = g.GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
+    return SheetsRepository(gateway)
 
 
-def _dc_row(dc: Any, enum_fields: tuple[str, ...] = ()) -> dict[str, Any]:
-    """``dataclass`` -> dict listo para insertar en Postgres.
+@dataclass
+class TableResult:
+    name: str
+    sheets_rows: int
+    written: int
+    error: str | None = None
 
-    Los campos en ``enum_fields`` (``StrEnum``) se convierten con ``.value``;
-    el resto viaja tal cual -- para las tablas de configuración, los campos
-    del dataclass coinciden 1:1 con las columnas del esquema (ver
-    ``cxc.db.schema``).
+
+TableMigrator = Callable[[SheetsRepository, Engine, bool], TableResult]
+
+
+def _migrate_via_repo_method(
+    table_name: str,
+    read_fn: Callable[[SheetsRepository], list],
+    write_fn: Callable[[PostgresRepository, list], None],
+) -> TableMigrator:
+    """Fábrica para tablas que ya tienen upsert_* en el Repository
+    abstracto -- reusa el mismo código que usa la app en producción."""
+
+    def _run(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+        rows = read_fn(sheets_repo)
+        if apply:
+            write_fn(PostgresRepository(engine), rows)
+        return TableResult(table_name, len(rows), len(rows) if apply else 0)
+
+    return _run
+
+
+def _ensure_clientes_placeholder(engine: Engine, cliente_ids: set[str]) -> None:
+    """Datos reales de producción pueden tener cliente_id huérfanos (una
+
+    orden/pago que referencia un cliente que ya no está -- o nunca estuvo
+    -- en la pestaña Clientes; Sheets no tiene FK así que nunca truena ahí).
+    Antes de insertar filas que dependen de clientes.cliente_id, crea un
+    cliente placeholder para cada id faltante en vez de perder la fila.
     """
-    row = dataclasses.asdict(dc)
-    for field in enum_fields:
-        row[field] = row[field].value if hasattr(row[field], "value") else row[field]
-    return row
+    if not cliente_ids:
+        return
+    with engine.begin() as conn:
+        existentes = {r.cliente_id for r in conn.execute(select(t.clientes.c.cliente_id)).all()}
+        faltantes = cliente_ids - existentes
+        if not faltantes:
+            return
+        conn.execute(
+            insert(t.clientes),
+            [
+                {
+                    "cliente_id": cid,
+                    "nombre": f"[placeholder] cliente_id={cid!r} sin fila en Clientes (Sheets)",
+                    "vendedor_email": "",
+                    "wh_iva_agent": False,
+                    "wh_iva_rate": Decimal("75.0"),
+                }
+                for cid in faltantes
+            ],
+        )
+    logger.warning(
+        "Creados %d cliente(s) placeholder para cliente_id huérfanos: %s",
+        len(faltantes),
+        sorted(faltantes),
+    )
 
 
-def _parse_all(
-    rows: list[Mapping[str, str]],
-    parse_fn: Callable[[Mapping[str, str]], Any],
-    label: str,
-) -> list[Any]:
-    out = []
-    for r in rows:
-        try:
-            out.append(parse_fn(r))
-        except Exception:
-            logger.warning("Fila inválida en %s, se omite: %r", label, dict(r))
+def _migrate_config_table(
+    table_name: str,
+    pg_table,
+    pk_cols: list[str],
+    tab_name: str,
+    from_row_fn: Callable,
+) -> TableMigrator:
+    """Tablas de configuración con clave primaria natural (regla_id, fecha,
+    metodo_id, ...) -- upsert directo, sin pasar por el Repository (que no
+    expone escritura para estas, solo lectura -- las edita el admin panel
+    fila a fila en Sheets)."""
+
+    def _run(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+        raw_rows = sheets_repo._g.read_rows(tab_name)
+        parsed = [from_row_fn(r) for r in raw_rows]
+        pg_rows = [_dataclass_to_pg_row(p) for p in parsed]
+        if apply and pg_rows:
+            with engine.begin() as conn:
+                _upsert(conn, pg_table, pg_rows, pk_cols)
+        return TableResult(table_name, len(raw_rows), len(pg_rows) if apply else 0)
+
+    return _run
+
+
+def _dataclass_to_pg_row(dataclass_obj) -> dict:
+    """Convierte un dataclass de cxc.models a dict listo para SQLAlchemy,
+    dejando Decimal/date/bool tal cual (SQLAlchemy+psycopg los adapta
+    directamente) y los Enum como su .value (mismo valor que usan las
+    columnas ENUM nativas de cxc.db.schema)."""
+    from dataclasses import fields
+    from enum import Enum
+
+    out = {}
+    for f in fields(dataclass_obj):
+        val = getattr(dataclass_obj, f.name)
+        if isinstance(val, Enum):
+            val = val.value
+        out[f.name] = val
     return out
 
 
-# --- Estrategia genérica: upsert directo contra una tabla del esquema -------
-def _backfill_upsert(
-    gw: SheetGateway,
-    pg: PostgresRepository | None,
-    *,
-    dry_run: bool,
-    label: str,
-    read_rows: Callable[[SheetGateway], list[Mapping[str, str]]],
-    parse_fn: Callable[[Mapping[str, str]], dict[str, Any]],
-    table: Table,
-    pk_cols: list[str],
-) -> int:
-    rows = _parse_all(read_rows(gw), parse_fn, label)
-    if not dry_run and pg is not None and rows:
-        with pg._engine.begin() as conn:  # noqa: SLF001 -- script interno, mismo paquete
-            _upsert(conn, table, rows, pk_cols)
-    return len(rows)
+def _migrate_reglas_recurrencia(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    rows = sheets_repo.reglas_recurrencia()
+    if apply:
+        pg_rows = [
+            {
+                "condicion": r.condicion.value,
+                "tipo_beneficio": r.tipo_beneficio.value,
+                "valor": r.valor,
+                "vigencia_desde": r.vigencia_desde,
+                "vigencia_hasta": r.vigencia_hasta,
+                "activo": r.activo,
+            }
+            for r in rows
+        ]
+        with engine.begin() as conn:
+            # Sin clave natural en Sheets (ni en Postgres, salvo el id
+            # autoincrement) -- replace completo en cada corrida, tabla de
+            # configuración chica (nunca la toca el sync).
+            conn.execute(delete(t.reglas_recurrencia))
+            if pg_rows:
+                conn.execute(insert(t.reglas_recurrencia), pg_rows)
+    return TableResult("reglas_recurrencia", len(rows), len(rows) if apply else 0)
 
 
-# --- Estrategia genérica: reemplazo total (sin clave natural en Sheets) -----
-def _backfill_replace_all(
-    gw: SheetGateway,
-    pg: PostgresRepository | None,
-    *,
-    dry_run: bool,
-    label: str,
-    sheet_tab: str,
-    parse_fn: Callable[[Mapping[str, str]], dict[str, Any]],
-    table: Table,
-) -> int:
-    rows = _parse_all(gw.read_rows(sheet_tab), parse_fn, label)
-    if not dry_run and pg is not None:
-        with pg._engine.begin() as conn:  # noqa: SLF001
-            conn.execute(delete(table))
-            if rows:
-                conn.execute(insert(table), rows)
-    return len(rows)
+def _migrate_exclusiones(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+    rows = sheets_repo.exclusiones()
+    if apply:
+        pg_rows = [
+            {"regla_tipo_a": r.regla_tipo_a, "regla_tipo_b": r.regla_tipo_b, "activo": r.activo}
+            for r in rows
+        ]
+        with engine.begin() as conn:
+            conn.execute(delete(t.exclusiones))
+            if pg_rows:
+                conn.execute(insert(t.exclusiones), pg_rows)
+    return TableResult("exclusiones", len(rows), len(rows) if apply else 0)
 
 
-# --- Tablas-espejo y de trabajo -- vía PostgresRepository (misma lógica que
-# usa producción para upsert/append) -----------------------------------------
-def _backfill_clientes(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_CLIENTES), serde.cliente_from_row, "Clientes")
-    if not dry_run and pg is not None:
-        pg.upsert_clientes(parsed)
-    return len(parsed)
+def _migrate_ordenes_venta(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    ordenes = sheets_repo.all_ordenes()
+    if apply:
+        _ensure_clientes_placeholder(engine, {o.cliente_id for o in ordenes})
+        PostgresRepository(engine).upsert_ordenes(ordenes)
+    return TableResult("ordenes_venta", len(ordenes), len(ordenes) if apply else 0)
 
 
-def _backfill_ordenes(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_ORDENES), serde.orden_from_row, "OrdenesVenta")
-    if not dry_run and pg is not None:
-        pg.upsert_ordenes(parsed)
-    return len(parsed)
+def _migrate_metodos_pago(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo._g.read_rows(g.T_METODOS)
+    metodos = [serde.metodo_from_row(r) for r in raw_rows]
+    if apply:
+        pg_rows = [
+            {
+                "metodo_id": m.metodo_id,
+                "nombre": m.nombre,
+                "moneda": m.moneda.value,
+                "tipo_tasa": m.tipo_tasa.value,
+                "es_contado": m.es_contado,
+            }
+            for m in metodos
+        ]
+        with engine.begin() as conn:
+            _upsert(conn, t.metodos_pago, pg_rows, ["metodo_id"])
+    return TableResult("metodos_pago", len(raw_rows), len(metodos) if apply else 0)
 
 
-def _backfill_lineas(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_LINEAS), serde.linea_from_row, "LineasOrden")
-    if not dry_run and pg is not None:
-        pg.upsert_lineas(parsed)
-    return len(parsed)
+def _migrate_pagos(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+    """Pagos necesita trato especial: además de las columnas espejo
+    (upsert_pagos, que el sync también escribe) hay que preservar las
+    columnas humanas de cobranza (recibido/numero_recibido/fecha_recibido/
+    recibido_por) que solo existen en la hoja cruda, no en el dataclass
+    ``Pago``."""
+    raw_rows = sheets_repo._g.read_rows(g.T_PAGOS)
+    pagos = [serde.pago_from_row(r) for r in raw_rows]
+    if apply:
+        _ensure_clientes_placeholder(engine, {p.cliente_id for p in pagos})
+        pg_repo = PostgresRepository(engine)
+        pg_repo.upsert_pagos(pagos)
+        human_rows = []
+        for r in raw_rows:
+            pid = r.get("pago_id")
+            if not pid:
+                continue
+            row: dict = {"pago_id": pid}
+            if str(r.get("recibido", "")).strip().upper() == "TRUE":
+                row["recibido"] = True
+            if r.get("numero_recibido"):
+                row["numero_recibido"] = r["numero_recibido"]
+            if r.get("fecha_recibido"):
+                row["fecha_recibido"] = serde.p_dt(r["fecha_recibido"])
+            if r.get("recibido_por"):
+                row["recibido_por"] = r["recibido_por"]
+            if len(row) > 1:
+                human_rows.append(row)
+        if human_rows:
+            with engine.begin() as conn:
+                _upsert(conn, t.pagos, human_rows, ["pago_id"])
+    return TableResult("pagos", len(raw_rows), len(pagos) if apply else 0)
 
 
-def _backfill_pagos(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_PAGOS), serde.pago_from_row, "Pagos")
-    if not dry_run and pg is not None:
-        pg.upsert_pagos(parsed)
-    return len(parsed)
+def _migrate_serie_tasas(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+    """Append-only: idempotente por timestamp -- si ya existe una fila con
+    ese timestamp en Postgres, no se reinserta (evita duplicar en corridas
+    repetidas del backfill)."""
+    filas = sheets_repo._serie_rows()
+    written = 0
+    if apply and filas:
+        with engine.begin() as conn:
+            existentes = {row.timestamp for row in conn.execute(select(t.serie_tasas.c.timestamp))}
+            pg_rows = []
+            for f in filas:
+                if f.timestamp in existentes:
+                    continue
+                pg_rows.append(
+                    {
+                        "timestamp": f.timestamp,
+                        "tasa_bcv": f.tasa_bcv,
+                        "tasa_binance": f.tasa_binance,
+                        "fuente": f.fuente,
+                        "es_heredada": f.es_heredada,
+                        "capturada_ok": f.capturada_ok,
+                        "tasa_binance_manana": f.tasa_binance_manana,
+                        "tasa_binance_tarde": f.tasa_binance_tarde,
+                        "tasa_binance_diario": f.tasa_binance_diario,
+                        "diferencial_bcv_binance_pct": f.diferencial_bcv_binance_pct,
+                        "tasa_bcv_euro": f.tasa_bcv_euro,
+                    }
+                )
+            if pg_rows:
+                conn.execute(insert(t.serie_tasas), pg_rows)
+            written = len(pg_rows)
+    return TableResult("serie_tasas", len(filas), written)
 
 
-def _backfill_vinculaciones(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    parsed = _parse_all(
-        gw.read_rows(g.T_VINCULACIONES), serde.vinculacion_from_row, "Vinculaciones"
-    )
-    if not dry_run and pg is not None:
-        pg.update_vinculaciones(parsed)
-    return len(parsed)
+def _migrate_usuarios_plataforma(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo.all_usuarios_plataforma()
+    if apply:
+        pg_repo = PostgresRepository(engine)
+        for r in raw_rows:
+            if r.get("email"):
+                pg_repo.upsert_usuario_plataforma(r)
+    return TableResult("usuarios_plataforma", len(raw_rows), len(raw_rows) if apply else 0)
 
 
-def _backfill_bandeja(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_BANDEJA), serde.bandeja_from_row, "BandejaFacturacion")
-    if not dry_run and pg is not None:
-        pg.upsert_bandejas(parsed)
-    return len(parsed)
+def _migrate_anomalias_aceptadas(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo.all_anomalias_aceptadas()
+    if apply:
+        pg_repo = PostgresRepository(engine)
+        for r in raw_rows:
+            if r.get("anomalia_id"):
+                pg_repo.append_anomalia_aceptada(r)
+    return TableResult("anomalias_aceptadas", len(raw_rows), len(raw_rows) if apply else 0)
 
 
-def _backfill_conciliacion(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    parsed = _parse_all(gw.read_rows(g.T_CONCILIACION), serde.conciliacion_from_row, "Conciliacion")
-    if not dry_run and pg is not None:
-        pg.upsert_conciliaciones(parsed)
-    return len(parsed)
-
-
-def _backfill_exclusiones(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    parsed = _parse_all(gw.read_rows("Exclusiones"), serde.exclusion_from_row, "Exclusiones")
-    if not dry_run and pg is not None:
-        for rule in parsed:
-            pg.save_exclusion(rule)
-    return len(parsed)
-
-
-def _backfill_serie_tasas(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    # Append-only: una fila por captura, sin PK natural en Sheets. Para que
-    # reejecutar el backfill no duplique capturas ya migradas, se compara
-    # contra los timestamps ya presentes en Postgres y solo se insertan los
-    # nuevos (nunca se actualiza ni se borra una captura existente).
-    parsed = _parse_all(gw.read_rows(g.T_SERIE), serde.serie_from_row, "SerieTasas")
-    if dry_run or pg is None:
-        return len(parsed)
-    with pg._engine.connect() as conn:  # noqa: SLF001
-        existentes = {row.timestamp for row in conn.execute(select(t.serie_tasas.c.timestamp))}
-    nuevas = [s for s in parsed if s.timestamp not in existentes]
-    if nuevas:
-        with pg._engine.begin() as conn:  # noqa: SLF001
-            conn.execute(insert(t.serie_tasas), [dataclasses.asdict(s) for s in nuevas])
-    return len(nuevas)
-
-
-# --- Tablas de configuración -- Repository aún no expone escritura (se
-# amplía en un PR futuro), así que se escriben directo contra el esquema ----
-def _backfill_metodos_pago(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="MetodosPago",
-        read_rows=lambda gw: gw.read_rows(g.T_METODOS),
-        parse_fn=lambda r: _dc_row(serde.metodo_from_row(r), ("moneda", "tipo_tasa")),
-        table=t.metodos_pago,
-        pk_cols=["metodo_id"],
-    )
-
-
-def _backfill_descuentos_pronto_pago(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    def _read(gw: SheetGateway) -> list[Mapping[str, str]]:
-        rows = gw.read_rows("DescuentosProntoPago")
-        return rows if rows else gw.read_rows(g.T_DESCUENTOS)
-
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentosProntoPago",
-        read_rows=_read,
-        parse_fn=lambda r: _dc_row(serde.pronto_pago_from_row(r), ("tipo_descuento",)),
-        table=t.descuentos_pronto_pago,
-        pk_cols=["regla_id"],
-    )
-
-
-def _backfill_descuentos_volumen(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentosVolumen",
-        read_rows=lambda gw: gw.read_rows("DescuentosVolumen"),
-        parse_fn=lambda r: _dc_row(serde.desc_volumen_from_row(r)),
-        table=t.descuentos_volumen,
-        pk_cols=["regla_id"],
-    )
-
-
-def _backfill_descuentos_recompra(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentosRecompra",
-        read_rows=lambda gw: gw.read_rows("DescuentosRecompra"),
-        parse_fn=lambda r: _dc_row(serde.recompra_from_row(r)),
-        table=t.descuentos_recompra,
-        pk_cols=["regla_id"],
+def _migrate_listas_precios_historicas(
+    sheets_repo: SheetsRepository, engine: Engine, apply: bool
+) -> TableResult:
+    raw_rows = sheets_repo.all_listas_precios_historicas()
+    if apply and raw_rows:
+        pg_rows = [
+            {
+                "codigo": str(r.get("codigo", "")).strip(),
+                "producto_nombre": r.get("producto_nombre", ""),
+                "precio_usd": Decimal(str(r.get("precio_usd", "0") or "0")),
+                "precio_bcv_euro": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
+            }
+            for r in raw_rows
+            if str(r.get("codigo", "")).strip()
+        ]
+        with engine.begin() as conn:
+            conn.execute(delete(t.listas_precios_historicas))
+            if pg_rows:
+                conn.execute(insert(t.listas_precios_historicas), pg_rows)
+    return TableResult(
+        "listas_precios_historicas", len(raw_rows), len(raw_rows) if apply else 0
     )
 
 
-def _backfill_descuentos_producto(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentosProducto",
-        read_rows=lambda gw: gw.read_rows("DescuentosProducto"),
-        parse_fn=lambda r: _dc_row(serde.producto_from_row(r)),
-        table=t.descuentos_producto,
-        pk_cols=["regla_id"],
-    )
+def _migrate_config_meta(sheets_repo: SheetsRepository, engine: Engine, apply: bool) -> TableResult:
+    meta = sheets_repo.all_config()
+    if apply:
+        pg_repo = PostgresRepository(engine)
+        for k, v in meta.items():
+            pg_repo.set_config(k, v)
+    return TableResult("app_settings(_Meta)", len(meta), len(meta) if apply else 0)
 
 
-def _backfill_descuentos_diferencial(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentosDiferencialCambiario",
-        read_rows=lambda gw: gw.read_rows("DescuentosDiferencialCambiario"),
-        parse_fn=lambda r: _dc_row(serde.diferencial_from_row(r)),
-        table=t.descuentos_diferencial_cambiario,
-        pk_cols=["regla_id"],
-    )
-
-
-def _backfill_bcv_completo(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="DescuentoBCVCompleto",
-        read_rows=lambda gw: gw.read_rows(g.T_BCV_COMPLETO),
-        parse_fn=lambda r: _dc_row(serde.bcv_completo_from_row(r)),
-        table=t.descuento_bcv_completo,
-        pk_cols=["vigencia_desde"],
-    )
-
-
-def _backfill_promocion_primera_compra(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="PromocionPrimeraCompra",
-        read_rows=lambda gw: gw.read_rows(g.T_PROMO_PRIMERA),
-        parse_fn=lambda r: _dc_row(serde.promocion_from_row(r)),
-        table=t.promocion_primera_compra,
-        pk_cols=["regla_id"],
-    )
-
-
-def _backfill_feriados(gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="Feriados",
-        read_rows=lambda gw: gw.read_rows(g.T_FERIADOS),
-        parse_fn=lambda r: _dc_row(serde.feriado_from_row(r), ("tipo",)),
-        table=t.feriados,
-        pk_cols=["fecha"],
-    )
-
-
-def _backfill_reglas_recurrencia(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_replace_all(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="ReglasRecurrencia",
-        sheet_tab=g.T_REGLAS,
-        parse_fn=lambda r: _dc_row(serde.regla_from_row(r), ("condicion", "tipo_beneficio")),
-        table=t.reglas_recurrencia,
-    )
-
-
-# --- Tablas fuera de cxc.models -- se leen/escriben como dict crudo --------
-def _parse_usuario(r: Mapping[str, str]) -> dict[str, Any]:
-    fecha_raw = r.get("fecha_registro", "").strip()
-    return {
-        "email": r["email"].strip().lower(),
-        "nombre_odoo": r.get("nombre_odoo", ""),
-        "password_hash": r.get("password_hash") or None,
-        "salt": r.get("salt") or None,
-        "rol": r.get("rol", ""),
-        "activo": serde.p_bool(r.get("activo", "TRUE")),
-        "fecha_registro": datetime.fromisoformat(fecha_raw) if fecha_raw else None,
-    }
-
-
-def _backfill_usuarios_plataforma(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="UsuariosPlataforma",
-        read_rows=lambda gw: gw.read_rows("UsuariosPlataforma"),
-        parse_fn=_parse_usuario,
-        table=t.usuarios_plataforma,
-        pk_cols=["email"],
-    )
-
-
-def _parse_anomalia(r: Mapping[str, str]) -> dict[str, Any]:
-    ts_raw = r.get("timestamp_aprobacion", "").strip()
-    return {
-        "anomalia_id": r["anomalia_id"],
-        "so_id": r.get("so_id", ""),
-        "factura_id": r.get("factura_id", ""),
-        "tipo_anomalia": r.get("tipo_anomalia", ""),
-        "motivo_aceptacion": r.get("motivo_aceptacion", ""),
-        "aprobado_por": r.get("aprobado_por", ""),
-        "timestamp_aprobacion": datetime.fromisoformat(ts_raw) if ts_raw else None,
-    }
-
-
-def _backfill_anomalias_aceptadas(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="AnomaliasAceptadas",
-        read_rows=lambda gw: gw.read_rows("AnomaliasAceptadas"),
-        parse_fn=_parse_anomalia,
-        table=t.anomalias_aceptadas,
-        pk_cols=["anomalia_id"],
-    )
-
-
-def _parse_bandeja_auditoria(r: Mapping[str, str]) -> dict[str, Any]:
-    return {
-        "audit_id": r["audit_id"],
-        "so_id": r.get("so_id", ""),
-        "tipo_auditoria": r.get("tipo_auditoria", ""),
-        "motor_calcula_usd": serde.p_optdec(r.get("motor_calcula_usd", "")),
-        "odoo_registrado_usd": serde.p_optdec(r.get("odoo_registrado_usd", "")),
-        "diferencia_usd": serde.p_optdec(r.get("diferencia_usd", "")),
-        "detalle_odoo": r.get("detalle_odoo", ""),
-        "detalle_motor": r.get("detalle_motor", ""),
-        "estado": r.get("estado", ""),
-        "revisado_por": r.get("revisado_por") or None,
-        "timestamp_audit": serde.p_dt(r["timestamp_audit"]),
-    }
-
-
-def _backfill_bandeja_auditoria(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="BandejaAuditoria",
-        read_rows=lambda gw: gw.read_rows(g.T_BANDEJA_AUDITORIA),
-        parse_fn=_parse_bandeja_auditoria,
-        table=t.bandeja_auditoria,
-        pk_cols=["audit_id"],
-    )
-
-
-def _parse_tasa_historica(r: Mapping[str, str]) -> dict[str, Any]:
-    return {
-        "fecha": serde.p_date(r["fecha"]),
-        "tasa_bcv_usd": serde.p_optdec(r.get("tasa_bcv_usd", "")),
-        "tasa_bcv_euro": serde.p_optdec(r.get("tasa_bcv_euro", "")),
-        "tasa_binance_promedio_diario": serde.p_optdec(r.get("tasa_binance_promedio_diario", "")),
-        "diferencial_bcv_binance_pct": r.get("diferencial_bcv_binance_pct") or None,
-        "fuente": r.get("fuente", ""),
-        "notas": r.get("notas", ""),
-    }
-
-
-def _backfill_tasas_historicas(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="TasasHistoricasAuditoria",
-        read_rows=lambda gw: gw.read_rows("TasasHistoricasAuditoria"),
-        parse_fn=_parse_tasa_historica,
-        table=t.tasas_historicas_auditoria,
-        pk_cols=["fecha"],
-    )
-
-
-def _parse_lista_historica(r: Mapping[str, str]) -> dict[str, Any]:
-    return {
-        "codigo": r["codigo"],
-        "producto_nombre": r.get("producto_nombre", ""),
-        "precio_usd": serde.p_optdec(r.get("precio_usd", "")),
-        "precio_bcv_euro": serde.p_optdec(r.get("precio_bcv_euro", "")),
-        "fecha_corte": serde.p_optdate(r.get("fecha_corte", "")),
-        "notas": r.get("notas", ""),
-    }
-
-
-def _backfill_listas_precios_historicas(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    # Sin clave natural en Sheets (ni codigo es único: puede repetirse en
-    # distintos cortes) -- se reemplaza la tabla completa en cada corrida.
-    return _backfill_replace_all(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="ListasPreciosHistoricas",
-        sheet_tab="ListasPreciosHistoricas",
-        parse_fn=_parse_lista_historica,
-        table=t.listas_precios_historicas,
-    )
-
-
-def _parse_fecha_historica(r: Mapping[str, str]) -> dict[str, Any]:
-    return {"so_id": r["so_id"], "fecha_historica": serde.p_date(r["fecha_historica"])}
-
-
-def _backfill_fechas_historicas(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="FechasHistoricas",
-        read_rows=lambda gw: gw.read_rows(g.T_FECHAS_HISTORICAS),
-        parse_fn=_parse_fecha_historica,
-        table=t.fechas_historicas,
-        pk_cols=["so_id"],
-    )
-
-
-def _backfill_app_settings(
-    gw: SheetGateway, pg: PostgresRepository | None, *, dry_run: bool
-) -> int:
-    return _backfill_upsert(
-        gw,
-        pg,
-        dry_run=dry_run,
-        label="_Meta",
-        read_rows=lambda gw: gw.read_rows(g.T_META),
-        parse_fn=lambda r: {"key": r["key"], "value": r.get("value", "")},
-        table=t.app_settings,
-        pk_cols=["key"],
-    )
-
-
-# Orden de migración: primero lo que las FKs de las demás tablas referencian
-# (clientes antes que órdenes/pagos, órdenes antes que líneas/vinculaciones/
-# bandeja/conciliación).
-STEPS: list[tuple[str, Callable[[SheetGateway, PostgresRepository | None, bool], int]]] = [
-    ("clientes", lambda gw, pg, dry: _backfill_clientes(gw, pg, dry_run=dry)),
-    ("ordenes_venta", lambda gw, pg, dry: _backfill_ordenes(gw, pg, dry_run=dry)),
-    ("lineas_orden", lambda gw, pg, dry: _backfill_lineas(gw, pg, dry_run=dry)),
-    ("pagos", lambda gw, pg, dry: _backfill_pagos(gw, pg, dry_run=dry)),
-    ("metodos_pago", lambda gw, pg, dry: _backfill_metodos_pago(gw, pg, dry_run=dry)),
-    ("serie_tasas", lambda gw, pg, dry: _backfill_serie_tasas(gw, pg, dry_run=dry)),
-    ("vinculaciones", lambda gw, pg, dry: _backfill_vinculaciones(gw, pg, dry_run=dry)),
-    ("bandeja_facturacion", lambda gw, pg, dry: _backfill_bandeja(gw, pg, dry_run=dry)),
-    ("conciliacion", lambda gw, pg, dry: _backfill_conciliacion(gw, pg, dry_run=dry)),
-    ("exclusiones", lambda gw, pg, dry: _backfill_exclusiones(gw, pg, dry_run=dry)),
-    (
+# --- Orden de ejecución: primero las tablas sin FK entrantes, luego las que
+# dependen de ellas (clientes -> ordenes/pagos -> lineas/vinculaciones ->
+# bandeja/conciliacion). --------------------------------------------------
+TABLE_SPECS: dict[str, TableMigrator] = {
+    "clientes": _migrate_via_repo_method(
+        "clientes", lambda r: r.all_clientes(), lambda pg, rows: pg.upsert_clientes(rows)
+    ),
+    "metodos_pago": _migrate_metodos_pago,
+    "ordenes_venta": _migrate_ordenes_venta,
+    "lineas_orden": _migrate_via_repo_method(
+        "lineas_orden", lambda r: r.all_lineas(), lambda pg, rows: pg.upsert_lineas(rows)
+    ),
+    "pagos": _migrate_pagos,
+    "serie_tasas": _migrate_serie_tasas,
+    "vinculaciones": _migrate_via_repo_method(
+        "vinculaciones",
+        lambda r: r.all_vinculaciones(),
+        lambda pg, rows: pg.update_vinculaciones(rows),
+    ),
+    "bandeja_facturacion": _migrate_via_repo_method(
+        "bandeja_facturacion", lambda r: r.all_bandeja(), lambda pg, rows: pg.upsert_bandejas(rows)
+    ),
+    "conciliacion": _migrate_via_repo_method(
+        "conciliacion",
+        lambda r: r.all_conciliaciones(),
+        lambda pg, rows: pg.upsert_conciliaciones(rows),
+    ),
+    "descuentos_pronto_pago": _migrate_config_table(
         "descuentos_pronto_pago",
-        lambda gw, pg, dry: _backfill_descuentos_pronto_pago(gw, pg, dry_run=dry),
+        t.descuentos_pronto_pago,
+        ["regla_id"],
+        "DescuentosProntoPago",
+        serde.pronto_pago_from_row,
     ),
-    (
+    "descuentos_volumen": _migrate_config_table(
         "descuentos_volumen",
-        lambda gw, pg, dry: _backfill_descuentos_volumen(gw, pg, dry_run=dry),
+        t.descuentos_volumen,
+        ["regla_id"],
+        "DescuentosVolumen",
+        serde.desc_volumen_from_row,
     ),
-    (
+    "descuentos_recompra": _migrate_config_table(
         "descuentos_recompra",
-        lambda gw, pg, dry: _backfill_descuentos_recompra(gw, pg, dry_run=dry),
+        t.descuentos_recompra,
+        ["regla_id"],
+        "DescuentosRecompra",
+        serde.recompra_from_row,
     ),
-    (
+    "descuentos_producto": _migrate_config_table(
         "descuentos_producto",
-        lambda gw, pg, dry: _backfill_descuentos_producto(gw, pg, dry_run=dry),
+        t.descuentos_producto,
+        ["regla_id"],
+        "DescuentosProducto",
+        serde.producto_from_row,
     ),
-    (
+    "descuentos_diferencial_cambiario": _migrate_config_table(
         "descuentos_diferencial_cambiario",
-        lambda gw, pg, dry: _backfill_descuentos_diferencial(gw, pg, dry_run=dry),
+        t.descuentos_diferencial_cambiario,
+        ["regla_id"],
+        "DescuentosDiferencialCambiario",
+        serde.diferencial_from_row,
     ),
-    ("descuento_bcv_completo", lambda gw, pg, dry: _backfill_bcv_completo(gw, pg, dry_run=dry)),
-    (
+    "descuento_bcv_completo": _migrate_config_table(
+        "descuento_bcv_completo",
+        t.descuento_bcv_completo,
+        ["vigencia_desde"],
+        g.T_BCV_COMPLETO,
+        serde.bcv_completo_from_row,
+    ),
+    "promocion_primera_compra": _migrate_config_table(
         "promocion_primera_compra",
-        lambda gw, pg, dry: _backfill_promocion_primera_compra(gw, pg, dry_run=dry),
+        t.promocion_primera_compra,
+        ["regla_id"],
+        g.T_PROMO_PRIMERA,
+        serde.promocion_from_row,
     ),
-    ("feriados", lambda gw, pg, dry: _backfill_feriados(gw, pg, dry_run=dry)),
-    (
-        "reglas_recurrencia",
-        lambda gw, pg, dry: _backfill_reglas_recurrencia(gw, pg, dry_run=dry),
+    "feriados": _migrate_config_table(
+        "feriados", t.feriados, ["fecha"], g.T_FERIADOS, serde.feriado_from_row
     ),
-    (
-        "usuarios_plataforma",
-        lambda gw, pg, dry: _backfill_usuarios_plataforma(gw, pg, dry_run=dry),
-    ),
-    (
-        "anomalias_aceptadas",
-        lambda gw, pg, dry: _backfill_anomalias_aceptadas(gw, pg, dry_run=dry),
-    ),
-    (
-        "bandeja_auditoria",
-        lambda gw, pg, dry: _backfill_bandeja_auditoria(gw, pg, dry_run=dry),
-    ),
-    (
-        "tasas_historicas_auditoria",
-        lambda gw, pg, dry: _backfill_tasas_historicas(gw, pg, dry_run=dry),
-    ),
-    (
-        "listas_precios_historicas",
-        lambda gw, pg, dry: _backfill_listas_precios_historicas(gw, pg, dry_run=dry),
-    ),
-    (
-        "fechas_historicas",
-        lambda gw, pg, dry: _backfill_fechas_historicas(gw, pg, dry_run=dry),
-    ),
-    ("app_settings", lambda gw, pg, dry: _backfill_app_settings(gw, pg, dry_run=dry)),
-]
+    "reglas_recurrencia": _migrate_reglas_recurrencia,
+    "exclusiones": _migrate_exclusiones,
+    "usuarios_plataforma": _migrate_usuarios_plataforma,
+    "anomalias_aceptadas": _migrate_anomalias_aceptadas,
+    "listas_precios_historicas": _migrate_listas_precios_historicas,
+    "app_settings": _migrate_config_meta,
+}
+
+TABLE_ORDER = list(TABLE_SPECS.keys())
 
 
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Copia todos los datos de Google Sheets a PostgreSQL (idempotente)."
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Lee de Sheets y muestra conteos, sin escribir en Postgres.",
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--dry-run", action="store_true", help="Solo cuenta filas en Sheets, no escribe nada."
     )
+    mode.add_argument("--apply", action="store_true", help="Backfill real hacia Postgres.")
     parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Ejecuta el backfill real (upsert en Postgres).",
+        "--database-url",
+        default=None,
+        help="Connection string de Postgres. Si se omite, usa DATABASE_URL del entorno "
+        "(cxc.config.DatabaseConfig). Requerido con --apply.",
     )
     parser.add_argument(
         "--tables",
-        type=str,
-        default="",
-        help="Lista separada por comas de tablas a migrar (default: todas).",
-    )
-    parser.add_argument(
-        "--database-url",
-        type=str,
         default=None,
-        help="Override de DATABASE_URL (default: variable de entorno / .env).",
+        help=f"Lista separada por comas para migrar solo esas tablas. "
+        f"Disponibles: {', '.join(TABLE_ORDER)}",
     )
     args = parser.parse_args()
 
-    if not args.dry_run and not args.apply:
-        logger.error("Debe especificar --dry-run o --apply para ejecutar el script.")
-        sys.exit(1)
-
-    config = AppConfig.from_env()
-    logger.info("Conectando a Google Sheets...")
-    gw = _make_gateway(config)
-
-    pg: PostgresRepository | None = None
-    if not args.dry_run:
-        database_url = args.database_url or config.database.url
+    if args.apply:
+        database_url = args.database_url or os.environ.get("DATABASE_URL")
         if not database_url:
-            logger.error("Falta DATABASE_URL (variable de entorno o --database-url).")
-            sys.exit(1)
+            parser.error("--apply requiere --database-url o la variable de entorno DATABASE_URL")
+    else:
+        database_url = args.database_url or os.environ.get("DATABASE_URL") or "postgresql://dry-run"
+
+    tables_to_run = TABLE_ORDER
+    if args.tables:
+        requested = [x.strip() for x in args.tables.split(",") if x.strip()]
+        unknown = [x for x in requested if x not in TABLE_SPECS]
+        if unknown:
+            parser.error(f"Tablas desconocidas: {unknown}. Disponibles: {', '.join(TABLE_ORDER)}")
+        tables_to_run = requested
+
+    logger.info("Conectando a Google Sheets...")
+    sheets_repo = _build_sheets_repo()
+
+    engine = None
+    if args.apply:
+        logger.info("Conectando a Postgres...")
         engine = make_engine(database_url)
-        t.metadata.create_all(engine)  # idempotente -- no pisa tablas existentes
-        pg = PostgresRepository(engine)
-        logger.info("Conectado a Postgres.")
+        with engine.connect():
+            pass  # falla rápido si la URL/credenciales están mal, antes de tocar nada
 
-    selected = {x.strip() for x in args.tables.split(",") if x.strip()} or None
-
-    resultados: dict[str, int] = {}
-    for name, fn in STEPS:
-        if selected and name not in selected:
-            continue
+    results: list[TableResult] = []
+    for name in tables_to_run:
+        migrator = TABLE_SPECS[name]
+        logger.info("Procesando %s...", name)
         try:
-            resultados[name] = fn(gw, pg, args.dry_run)
-            logger.info("%s: %d filas", name, resultados[name])
-        except Exception:
-            logger.exception("Error migrando '%s' -- se continúa con las demás tablas", name)
-            resultados[name] = -1
+            result = migrator(sheets_repo, engine, args.apply)
+            results.append(result)
+            logger.info(
+                "  %s: %d filas en Sheets, %d escritas en Postgres",
+                result.name,
+                result.sheets_rows,
+                result.written,
+            )
+        except Exception as e:  # noqa: BLE001 - queremos seguir con las demás tablas
+            logger.exception("  ERROR en %s: %s", name, e)
+            results.append(TableResult(name, -1, 0, error=str(e)))
 
-    print("\n" + "=" * 60)
-    print("RESUMEN" + (" (DRY-RUN, nada escrito en Postgres)" if args.dry_run else ""))
-    print("=" * 60)
-    for name, count in resultados.items():
-        estado = "ERROR" if count < 0 else f"{count} filas"
-        print(f"  - {name}: {estado}")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print(f"RESUMEN ({'APPLY' if args.apply else 'DRY-RUN'})")
+    print("=" * 70)
+    print(f"{'tabla':<36}{'sheets':>10}{'postgres':>12}")
+    for r in results:
+        estado = f"  ERROR: {r.error}" if r.error else ""
+        print(f"{r.name:<36}{r.sheets_rows:>10}{r.written:>12}{estado}")
 
-    if any(c < 0 for c in resultados.values()):
-        sys.exit(1)
+    failed = [r for r in results if r.error]
+    if failed:
+        print(f"\n{len(failed)} tabla(s) con error. Revisar log arriba.")
+        return 1
+    print("\nOK -- sin errores.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

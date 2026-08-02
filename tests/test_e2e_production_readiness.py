@@ -1,7 +1,9 @@
+import contextlib
 from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cxc.engine.runner import EngineRunner
@@ -19,9 +21,80 @@ from cxc.models import (
     SerieTasa,
     Vinculacion,
 )
-from cxc.web.app import _SALDOS_REALES_CACHE, SECRET_KEY, app, crear_session_token
+from cxc.sheets import serde
+from cxc.web import app as _app_module
+from cxc.web.app import SECRET_KEY, app, crear_session_token
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_level_caches():
+    """``app.py`` tiene varios caches a nivel de módulo (TTL en memoria,
+
+    compartidos entre requests reales) -- sin resetearlos entre tests, el
+    resultado cacheado de un test (con SUS mocks) se filtra al siguiente
+    (con mocks distintos) y produce fallos que dependen del orden de
+    ejecución. Se resetean antes Y después de cada test.
+    """
+    _app_module._REPORTE_SALDOS_CACHE["data"] = None
+    _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+    _app_module._SALDOS_REALES_CACHE["data"] = None
+    _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    yield
+    _app_module._REPORTE_SALDOS_CACHE["data"] = None
+    _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+    _app_module._SALDOS_REALES_CACHE["data"] = None
+    _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
+    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    with contextlib.suppress(Exception):
+        client.cookies.delete("cxc_session")
+
+
+def _mock_repo_with_gateway_bridge() -> MagicMock:
+    """``MagicMock`` de ``Repository`` con los métodos "wholesale" (que
+    reemplazaron a ``repo._g.read_rows(...)`` en ``cxc.web.app``) derivados
+    en vivo de ``repo._g.read_rows`` -- así los tests que ya mockean por
+    pestaña de Sheets (``side_effect = lambda sheet: ...``) siguen
+    funcionando sin duplicar los datos de prueba en dos formatos."""
+    repo = MagicMock()
+    repo.all_pagos.side_effect = lambda: [
+        serde.pago_from_row(r) for r in repo._g.read_rows("Pagos")
+    ]
+    repo.all_pagos_full.side_effect = lambda: repo._g.read_rows("Pagos")
+    repo.all_lineas.side_effect = lambda: [
+        serde.linea_from_row(r) for r in repo._g.read_rows("LineasOrden")
+    ]
+    repo.all_clientes.side_effect = lambda: [
+        serde.cliente_from_row(r) for r in repo._g.read_rows("Clientes")
+    ]
+    repo.all_serie_tasas.side_effect = lambda: [
+        serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")
+    ]
+    repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
+        "TasasHistoricasAuditoria"
+    )
+    repo.all_pagos_huerfanos_cerrados.side_effect = lambda: repo._g.read_rows(
+        "PagosHuerfanosCerrados"
+    )
+
+    def _marcar_recibido(pago_ids, numero_recibido, fecha_recibido, recibido_por):
+        target = set(pago_ids)
+        actualizados = []
+        for r in repo._g.read_rows("Pagos"):
+            pid = str(r.get("pago_id", "")).strip()
+            if pid in target:
+                r = dict(r)
+                r["recibido"] = "TRUE"
+                r["numero_recibido"] = numero_recibido
+                r["fecha_recibido"] = fecha_recibido.isoformat()[:19]
+                r["recibido_por"] = recibido_por
+                actualizados.append(r)
+        return actualizados
+
+    repo.marcar_pagos_recibido.side_effect = _marcar_recibido
+    return repo
 
 
 @patch(
@@ -220,7 +293,7 @@ def test_e2e_06_vendor_scoping_and_roles():
 
     de Cobranza (GET /api/cobranza/pagos, reemplazó a GET /api/cobranza).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -229,7 +302,7 @@ def test_e2e_06_vendor_scoping_and_roles():
                 "fecha_pago": "2026-07-15",
                 "monto": "200.0",
                 "moneda": "USD",
-                "vendedor": "vendedor_juan@lubrikca.com",
+                "vendedor_email": "vendedor_juan@lubrikca.com",
             },
             {
                 "pago_id": "P_VEND_2",
@@ -237,7 +310,7 @@ def test_e2e_06_vendor_scoping_and_roles():
                 "fecha_pago": "2026-07-15",
                 "monto": "500.0",
                 "moneda": "USD",
-                "vendedor": "vendedor_pedro@lubrikca.com",
+                "vendedor_email": "vendedor_pedro@lubrikca.com",
             },
         ]
         if sheet == "Pagos"
@@ -289,15 +362,17 @@ def test_e2e_06_vendor_scoping_and_roles():
         finally:
             # Evita que la cookie de sesión y el cache de saldos reales (TTL
             # 60s, módulo-level) "se filtren" al resto de los tests -- client
-            # y _SALDOS_REALES_CACHE son compartidos a nivel de módulo.
+            # y _SALDOS_REALES_CACHE son compartidos a nivel de módulo. (El
+            # fixture autouse _reset_module_level_caches ya hace este reset
+            # entre todos los tests; se deja explícito acá también.)
             client.cookies.delete("cxc_session")
-            _SALDOS_REALES_CACHE["data"] = None
-            _SALDOS_REALES_CACHE["timestamp"] = 0.0
+            _app_module._SALDOS_REALES_CACHE["data"] = None
+            _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
 
 def test_e2e_07_receipt_generation():
     """Test 7: Generación de Recibo de Entrega (2 Copias PDF)."""
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -436,7 +511,7 @@ def test_e2e_09_listas_precio_mapeo():
     app_module._PRICELIST_MAPEO_CACHE.clear()
 
     mock_repo = MagicMock()
-    mock_repo._g.get_meta.side_effect = lambda key: (
+    mock_repo.get_config.side_effect = lambda key: (
         "4,6"
         if key == "valid_pricelists_usd"
         else ("5,7" if key == "valid_pricelists_ves" else None)
@@ -462,12 +537,12 @@ def test_e2e_09_listas_precio_mapeo():
         assert resp_data["status"] == "success"
         assert resp_data["valid_pricelists_usd"] == ["4", "8"]
         assert resp_data["valid_pricelists_ves"] == ["5", "9"]
-        mock_repo._g.set_meta.assert_called()
+        mock_repo.set_config.assert_called()
 
 
 def test_e2e_10_conciliaciones_sugerencias_and_bulk_approval():
     """Test 10: Sugerencias Inteligentes de Conciliación (FIFO por cliente) y Aprobación Masiva."""
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -601,7 +676,7 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
     (falta solo el IVA retenido); un cliente normal con el mismo saldo
     pendiente NO debe entrar -- para él aplica la regla estándar (100%).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -807,7 +882,7 @@ def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
     contando por lo que le queda pendiente, y uno vinculado al 100% no
     cuenta nada.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             # Sin vincular en absoluto: USD $200 completos pendientes.
@@ -891,7 +966,7 @@ def test_e2e_16_sugerencias_orden_facturada_no_pagada_sigue_siendo_destino():
     debe sugerirse (antes cualquier orden facturada quedaba excluida por
     completo, sin importar su estado de pago real en Odoo).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -1127,7 +1202,7 @@ def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
     )
     mock_repo = MagicMock()
     mock_repo.all_vinculaciones.return_value = [vinc]
-    mock_repo._g.read_rows.return_value = []  # sin tasa_bcv_euro capturada
+    mock_repo.all_serie_tasas.return_value = []  # sin tasa_bcv_euro capturada
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1138,8 +1213,14 @@ def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
         )
         assert res_no_eur.status_code == 400
 
-    mock_repo._g.read_rows.return_value = [
-        {"timestamp": "2026-07-10 10:00:00", "tasa_bcv": "36.0", "tasa_bcv_euro": "39.8"},
+    mock_repo.all_serie_tasas.return_value = [
+        SerieTasa(
+            timestamp=datetime(2026, 7, 10, 10, 0, 0),
+            tasa_bcv=Decimal("36.0"),
+            tasa_binance=Decimal("40.0"),
+            fuente="test",
+            tasa_bcv_euro=Decimal("39.8"),
+        ),
     ]
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1162,7 +1243,7 @@ def test_e2e_20_reporte_diario_litros_usa_claves_correctas_de_lineasorden():
     Con las claves equivocadas, el cálculo caía siempre al fallback de
     1.0 L/unidad; con las correctas debe usar el volumen real de Odoo.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_LIT",
@@ -1177,7 +1258,7 @@ def test_e2e_20_reporte_diario_litros_usa_claves_correctas_de_lineasorden():
         )
     ]
     mock_repo._g.read_rows.side_effect = lambda sheet: (
-        [{"so_id": "SO_LIT", "producto": "555", "cantidad": "10"}]
+        [{"linea_id": "L1", "so_id": "SO_LIT", "producto": "555", "cantidad": "10"}]
         if sheet == "LineasOrden"
         else []
     )
@@ -1211,7 +1292,7 @@ def test_e2e_21_conciliaciones_sugerencias_filtra_pagos_ya_reconciliados_en_odoo
     filtro de pagos ya reconciliados en Odoo debe buscar por "id", si no
     nunca hace match y pagos ya reconciliados aparecen como "sin asignar".
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -1682,7 +1763,7 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
     ("cantidad_entregada or cantidad") nunca caía a "cantidad" porque la
     hoja guarda "0" como texto (truthy), subestimando litros en ~2.600 L.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_SR1",
@@ -1712,6 +1793,7 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
             # Línea NO despachada aún: cantidad_entregada llega como texto
             # "0" (nunca vacío) -- el fallback debe usar "cantidad" (10).
             {
+                "linea_id": "L1",
                 "so_id": "SO_FALLBACK",
                 "producto": "77",
                 "cantidad": "10",
@@ -1757,7 +1839,7 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
     ~$141.68 USD. La sugerencia de aplicación (monto_sugerido) debe basarse
     en el equivalente USD real, no en el número crudo en bolívares.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -1771,7 +1853,7 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
         ]
         if sheet == "Pagos"
         else (
-            [{"cliente_id": "C_VES", "nombre": "Cliente VES"}]
+            [{"cliente_id": "C_VES", "nombre": "Cliente VES", "vendedor_email": "v@lubrikca.com"}]
             if sheet == "Clientes"
             else (
                 [{"timestamp": "2026-07-23 12:00:00", "tasa_bcv": "36.57", "tasa_binance": "38.0"}]
@@ -1838,7 +1920,7 @@ def test_e2e_30_resumen_pagos_sin_asignar_excluye_reconciliados_en_odoo():
     -- antes de este fix, este endpoint no consultaba Odoo en absoluto y
     sumaba pagos ya conciliados como si siguieran sin asignar.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -1900,7 +1982,7 @@ def test_e2e_31_pagos_historial_incluye_monto_pago_usd():
     pago (importe firmado, USD) además del monto aplicado -- para poder
     verificar a ojo que aplicado + residual cuadra contra el pago completo.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo.all_vinculaciones.return_value = [
         Vinculacion(
             vinc_id="V1",
@@ -1955,7 +2037,7 @@ def test_e2e_32_sugerencias_usa_tasa_odoo_del_pago_no_serietasas_cercana():
     adivinanza local -- ignorando a propósito la tasa "cercana pero
     incorrecta" de SerieTasas (36.5, muy distinta de la real 451.5072).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2044,7 +2126,7 @@ def test_e2e_33_sugerencias_binance_sin_historico_cae_a_serietasas():
     cae al comportamiento anterior (SerieTasas más cercana) en vez de
     fallar -- fallback, no default.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2099,7 +2181,7 @@ def test_e2e_34_sugerencias_excluye_orden_con_saldo_real_cero():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2163,7 +2245,7 @@ def test_e2e_35_sugerencias_usa_saldo_real_no_calculo_naive():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2234,7 +2316,7 @@ def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2296,7 +2378,7 @@ def test_e2e_37_sugerencias_marca_pagos_posiblemente_duplicados():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2351,7 +2433,7 @@ def test_e2e_38_sugerencias_no_marca_duplicado_si_algun_campo_difiere():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2405,7 +2487,7 @@ def test_e2e_39_sugerencias_excluye_pago_huerfano_ya_cerrado():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2452,7 +2534,7 @@ def test_e2e_40_sugerencias_muestra_pago_huerfano_sin_cerrar():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2499,11 +2581,8 @@ def test_e2e_41_post_cerrar_pago_huerfano_escribe_fila():
         assert res.status_code == 200
         assert res.json()["status"] == "success"
 
-        mock_repo._g.upsert_row.assert_called_once()
-        args, _ = mock_repo._g.upsert_row.call_args
-        assert args[0] == "PagosHuerfanosCerrados"
-        assert args[1] == "pago_id"
-        row = args[2]
+        mock_repo.upsert_pago_huerfano_cerrado.assert_called_once()
+        (row,), _ = mock_repo.upsert_pago_huerfano_cerrado.call_args
         assert row["pago_id"] == "117"
         assert row["motivo"] == "Cliente cerró operaciones"
 
@@ -2675,7 +2754,7 @@ def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
     La guardia de plausibilidad debe descartar ese dato corrupto y caer al
     fallback de SerieTasas en vez de aplicar una tasa disparatada.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2833,7 +2912,7 @@ def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
     from cxc.web.app import leer_pagos_huerfanos_cerrados
 
     mock_repo = MagicMock()
-    mock_repo._g.read_rows.return_value = [
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = [
         {
             "pago_id": "1002",
             "motivo": "Sin orden abierta del cliente",
@@ -2843,7 +2922,7 @@ def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
     ]
 
     detalle = leer_pagos_huerfanos_cerrados(mock_repo)
-    mock_repo._g.read_rows.assert_called_once_with("PagosHuerfanosCerrados")
+    mock_repo.all_pagos_huerfanos_cerrados.assert_called_once_with()
     assert set(detalle.keys()) == {"1002"}
     assert detalle["1002"]["motivo"] == "Sin orden abierta del cliente"
     assert detalle["1002"]["cerrado_por"] == "admin@lubrikca.com"
@@ -2858,7 +2937,7 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
     resuelto a nombre real (no id), el vendedor tomado del Cliente, y
     marcado como candidato a "cerrar a favor de la empresa" (sin orden).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2957,7 +3036,7 @@ def test_e2e_51_cobranza_pagos_unificado_cerrado_empresa_y_usd_1a1():
     el equivalente EUR debe ser 1:1 (igual que BCV/Binance) sin depender de
     que exista una tasa EUR para ese día.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {

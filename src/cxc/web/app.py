@@ -35,6 +35,7 @@ from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
+from cxc.sheets import serde
 from cxc.sheets.gateway import GspreadGateway
 from cxc.sheets.repository import SheetsRepository
 from cxc.sync.incremental import IncrementalSync
@@ -92,8 +93,10 @@ def orden_excluida(o: Any, live_state: str | None = None, entrega_valida: bool =
     devolver no se excluye (ver comentario de ESTADOS_ORDEN_EXCLUIDOS).
     """
     st = (
-        live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or "")
-    ).strip().lower()
+        (live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or ""))
+        .strip()
+        .lower()
+    )
     if st not in ESTADOS_ORDEN_EXCLUIDOS:
         return False
     return not (st in ("cancel", "cancelled") and entrega_valida)
@@ -674,8 +677,7 @@ class EliminarDescuentoRequest(BaseModel):
 
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
-        rows = repo._g.read_rows("_Meta")
-        meta = {r.get("key"): r.get("value", "") for r in rows if r.get("key")}
+        meta = repo.all_config()
 
         def _parse(val_str: str, default_val: int) -> list[int]:
             if not val_str:
@@ -867,13 +869,32 @@ def get_repo() -> Repository:
         config = AppConfig.from_env()
         if config.database.repo_backend == "postgres":
             if not config.database.url:
-                raise RuntimeError(
-                    "REPO_BACKEND=postgres requiere configurar DATABASE_URL"
-                )
+                raise RuntimeError("REPO_BACKEND=postgres requiere configurar DATABASE_URL")
             _repo_cache = PostgresRepository.from_url(config.database.url)
         else:
             _repo_cache = _fresh_sheets_repo(config)
     return _repo_cache
+
+
+def _all_lineas_rows(repo) -> list[dict]:
+    """LineasOrden del backend activo, como dict de strings (mismo shape
+    que ``serde.linea_to_row``)."""
+    return [serde.linea_to_row(ln) for ln in repo.all_lineas()]
+
+
+def _all_pagos_rows(repo) -> list[dict]:
+    """Pagos del backend activo, como dict de strings (mismas columnas
+    espejo que ``serde.pago_to_row`` -- sin las columnas humanas de
+    cobranza, ver ``_all_pagos_rows_con_recibido``)."""
+    return [serde.pago_to_row(p) for p in repo.all_pagos()]
+
+
+def _all_serie_tasas_rows(repo) -> list[dict]:
+    """SerieTasas del backend activo, como dict de strings -- mismo formato
+    que antes daba ``GspreadGateway.read_rows("SerieTasas")`` -- para no
+    tener que tocar el resto del código (parseo con ``.get()``/strptime)
+    que las consume, sea cual sea el backend."""
+    return [serde.serie_to_row(f) for f in repo.all_serie_tasas()]
 
 
 def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
@@ -906,7 +927,7 @@ def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     if rows is None:
         repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
+        rows = _all_serie_tasas_rows(repo)
     if not rows:
         return Decimal("36.5"), Decimal("38.0")
 
@@ -1466,7 +1487,7 @@ async def api_admin_cambiar_rol(
     if not u_row:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
     u_row["rol"] = req.nuevo_rol
-    repo._g.upsert_row("UsuariosPlataforma", "email", u_row)
+    repo.upsert_usuario_plataforma(u_row)
     return {
         "status": "success",
         "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}.",
@@ -1520,13 +1541,13 @@ async def get_resumen():
         )
 
         # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
-        pagos = repo._g.read_rows("Pagos")
+        pagos = _all_pagos_rows(repo)
         vincs = repo.all_vinculaciones()
         linked_amounts: dict[str, Decimal] = {}
         for v in vincs:
             prev = linked_amounts.get(v.pago_id, Decimal("0"))
             linked_amounts[v.pago_id] = prev + v.monto_aplicado
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         # Igual que /api/conciliaciones/sugerencias: excluir pagos ya
         # reconciliados directamente en Odoo (via factura, sin pasar por una
@@ -1702,9 +1723,7 @@ def recalculate_all(so_id: str):
         # conexiones. Sheets: instancia nueva a propósito (comportamiento
         # preexistente, sin cambios) -- ver _fresh_sheets_repo().
         repo = (
-            get_repo()
-            if config.database.repo_backend == "postgres"
-            else _fresh_sheets_repo(config)
+            get_repo() if config.database.repo_backend == "postgres" else _fresh_sheets_repo(config)
         )
         execute = _connect(config.odoo)
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
@@ -1743,9 +1762,7 @@ def recalculate_all_orders():
         print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
         config = AppConfig.from_env()
         repo = (
-            get_repo()
-            if config.database.repo_backend == "postgres"
-            else _fresh_sheets_repo(config)
+            get_repo() if config.database.repo_backend == "postgres" else _fresh_sheets_repo(config)
         )
         execute = _connect(config.odoo)
 
@@ -1861,8 +1878,7 @@ async def get_reporte_saldos(refresh: bool = False):
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
 
         # Load clients once
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         execute = None
         config = AppConfig.from_env()
@@ -2046,7 +2062,7 @@ async def get_reporte_saldos(refresh: bool = False):
             else []
         )
 
-        all_lines = repo._g.read_rows("LineasOrden")
+        all_lines = _all_lineas_rows(repo)
         lines_by_so = {}
         for r in all_lines:
             so = r.get("so_id", "")
@@ -2073,7 +2089,7 @@ async def get_reporte_saldos(refresh: bool = False):
         repo.descuentos_marca_categoria()
 
         # Read rates series to convert VES invoice residual to USD
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
         rates_map = {}
         for r in tasas_rows:
             ts = str(r.get("timestamp", ""))[:10]
@@ -2481,7 +2497,7 @@ async def get_reporte_saldos(refresh: bool = False):
                             pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
-        hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
+        hist_rows = repo.all_listas_precios_historicas()
         hist_map = {}
         for r in hist_rows:
             code = str(r.get("codigo", "")).strip()
@@ -2515,7 +2531,6 @@ async def get_reporte_saldos(refresh: bool = False):
         from cxc.engine.discounts import EngineInputs, calcular_factura
         from cxc.engine.price_resolver import PriceResolver
         from cxc.odoo.price import OdooPriceResolver
-        from cxc.sheets import serde
 
         engine_cfg_obj = config.engine
         pricelist_ids_map = {
@@ -2530,10 +2545,9 @@ async def get_reporte_saldos(refresh: bool = False):
 
         # Pre-fetch all collections once outside loop to eliminate N+1 I/O overhead
         all_lines_map = {}
-        for l_row in repo._g.read_rows("LineasOrden"):
-            so_id_key = l_row.get("so_id", "")
-            if so_id_key:
-                all_lines_map.setdefault(so_id_key, []).append(serde.linea_from_row(l_row))
+        for ln in repo.all_lineas():
+            if ln.so_id:
+                all_lines_map.setdefault(ln.so_id, []).append(ln)
 
         class FastPriceResolver(PriceResolver):
             def __init__(self, lines_map, fallback_resolver=None):
@@ -3143,7 +3157,7 @@ async def get_config_tasas():
     try:
         repo = get_repo()
         # Read the last 15 raw rows from SerieTasas
-        filas = repo._g.read_rows("SerieTasas")[-15:]
+        filas = _all_serie_tasas_rows(repo)[-15:]
         tasas = []
         for f in reversed(filas):
             tbcv = float(parse_decimal_safe(f.get("tasa_bcv", "0")))
@@ -3206,15 +3220,13 @@ async def post_config_feriados(req: FeriadoRequest):
     try:
         repo = get_repo()
         from cxc.models import Feriado, TipoFeriado
-        from cxc.sheets import gateway as g
-        from cxc.sheets import serde
 
         feriado = Feriado(
             fecha=date.fromisoformat(req.fecha),
             descripcion=req.descripcion,
             tipo=TipoFeriado.NACIONAL,
         )
-        repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
+        repo.append_feriado(feriado)
         return {"status": "success", "message": "Feriado registrado con éxito."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -3252,8 +3264,6 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
         import uuid
 
         from cxc.models import DescuentoMarcaCategoria
-        from cxc.sheets import gateway as g
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -3297,7 +3307,7 @@ async def post_config_descuentos_marca(req: DescuentoMarcaRequest):
             listas_aplicables=req.listas_aplicables,
             activo=True,
         )
-        repo._g.append_row(g.T_DESCUENTOS, serde.descuento_to_row(rule))
+        repo.append_descuento_pronto_pago(rule)
         return {"status": "success", "message": "Regla de descuento registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -3413,12 +3423,7 @@ async def get_config_listas_precio():
 async def get_config_meta():
     try:
         repo = get_repo()
-        rows = repo._g.read_rows("_Meta")
-        meta = {}
-        for r in rows:
-            k = r.get("key")
-            if k:
-                meta[k] = r.get("value", "")
+        meta = repo.all_config()
         # Defaults
         if "cash_window_business_days" not in meta:
             meta["cash_window_business_days"] = "3"
@@ -3434,36 +3439,9 @@ async def get_config_meta():
 async def post_config_meta(req: MetaRequest):
     try:
         repo = get_repo()
-        repo._g.upsert_row(
-            "_Meta",
-            "key",
-            {"key": "cash_window_business_days", "value": str(req.cash_window_business_days)},
-        )
-        repo._g.upsert_row(
-            "_Meta", "key", {"key": "descuento_recompra", "value": str(req.descuento_recompra)}
-        )
-
-        # Sync to ReglasRecurrencia sheet for RECOMPRA rule
-        rules = repo._g.read_rows("ReglasRecurrencia")
-        recompra_exists = False
-        for r in rules:
-            if r.get("condicion") == "recompra":
-                recompra_exists = True
-                r["porcentaje"] = str(req.descuento_recompra)
-                repo._g.upsert_row("ReglasRecurrencia", "regla_id", r)
-                break
-        if not recompra_exists:
-            repo._g.append_row(
-                "ReglasRecurrencia",
-                {
-                    "regla_id": "REG_RECOMPRA",
-                    "condicion": "recompra",
-                    "porcentaje": str(req.descuento_recompra),
-                    "vigencia_desde": date.today().isoformat(),
-                    "vigencia_hasta": "",
-                    "activo": "TRUE",
-                },
-            )
+        repo.set_config("cash_window_business_days", str(req.cash_window_business_days))
+        repo.set_config("descuento_recompra", str(req.descuento_recompra))
+        repo.set_regla_recurrencia_porcentaje("recompra", Decimal(str(req.descuento_recompra)))
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
@@ -3531,8 +3509,8 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     try:
         if repo is None:
             repo = get_repo()
-        usd_str = repo._g.get_meta("valid_pricelists_usd")
-        ves_str = repo._g.get_meta("valid_pricelists_ves")
+        usd_str = repo.get_config("valid_pricelists_usd")
+        ves_str = repo.get_config("valid_pricelists_ves")
 
         usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
         ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
@@ -3582,8 +3560,8 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
         # 3. Write to Google Sheets _Meta (true persistent storage across deploys)
         try:
             repo = get_repo()
-            repo._g.set_meta("valid_pricelists_usd", ",".join(usd_list))
-            repo._g.set_meta("valid_pricelists_ves", ",".join(ves_list))
+            repo.set_config("valid_pricelists_usd", ",".join(usd_list))
+            repo.set_config("valid_pricelists_ves", ",".join(ves_list))
         except Exception as sheets_err:
             logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
 
@@ -3602,9 +3580,7 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
 async def post_eliminar_descuento(req: EliminarDescuentoRequest):
     try:
         repo = get_repo()
-        deleted = repo._g.delete_row(req.tabla, "regla_id", req.regla_id)
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop(req.tabla, None)
+        deleted = repo.delete_regla(req.tabla, req.regla_id)
         if not deleted:
             raise HTTPException(
                 status_code=404, detail="Regla no encontrada o no se pudo eliminar."
@@ -3723,7 +3699,7 @@ def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
     """
     return {
         str(r.get("pago_id", "")).strip(): r
-        for r in repo._g.read_rows("PagosHuerfanosCerrados")
+        for r in repo.all_pagos_huerfanos_cerrados()
         if r.get("pago_id")
     }
 
@@ -3742,13 +3718,12 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
 
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = _all_pagos_rows(repo)
         vincs = repo.all_vinculaciones()
         ordenes = repo.all_ordenes()
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
-        tasas_rows = repo._g.read_rows("SerieTasas")
-        tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        tasas_rows = _all_serie_tasas_rows(repo)
+        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
         pagos_duplicados = _detectar_pagos_duplicados(pagos_rows)
         # Pagos huérfanos que un humano ya cerró "a favor de la empresa"
         # (ver POST /api/conciliaciones/cerrar-pago-huerfano) -- no deben
@@ -3906,7 +3881,12 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             saldo_usd = monto_orig_usd - monto_vinculado_usd
 
             if saldo_usd > Decimal("0.05"):
-                vendedor = p.get("vendedor") or "Sin Vendedor"
+                # "vendedor" (a secas) nunca existió como columna real en
+                # Pagos -- Sheets solo tiene "vendedor_email" (ver
+                # serde.pago_to_row); usarlo daba "Sin Vendedor" siempre y
+                # ese pago quedaba invisible para cualquier usuario con rol
+                # "ventas" (visible_to_user más abajo).
+                vendedor = p.get("vendedor_email") or p.get("vendedor") or "Sin Vendedor"
                 cliente_id = str(p.get("cliente_id", "")).strip()
                 cliente_nombre = (
                     p.get("cliente_nombre")
@@ -4124,15 +4104,13 @@ async def post_cerrar_pago_huerfano(
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
         cerrado_por = (user["nombre"] or user["email"]) if user else "Desconocido"
-        repo._g.upsert_row(
-            "PagosHuerfanosCerrados",
-            "pago_id",
+        repo.upsert_pago_huerfano_cerrado(
             {
                 "pago_id": req.pago_id,
                 "motivo": req.motivo,
                 "cerrado_por": cerrado_por,
                 "timestamp_cierre": datetime.now().isoformat(),
-            },
+            }
         )
         return {
             "status": "success",
@@ -4150,8 +4128,7 @@ async def get_bandeja_facturacion():
         ordenes = repo.all_ordenes()
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {str(r.get("cliente_id", "")): r for r in clientes_rows}
+        clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
         vincs = repo.all_vinculaciones()
 
         # Batch query live Odoo state
@@ -4198,16 +4175,10 @@ async def get_bandeja_facturacion():
             ):
                 continue
 
-            c_info = clientes_map.get(str(o.cliente_id), {})
-            c_name = c_info.get("nombre") or f"Cliente {o.cliente_id}"
-            wh_agent = bool(c_info.get("wh_iva_agent")) or (
-                str(c_info.get("agente_retencion", "")).upper() == "TRUE"
-            )
-            wh_rate = (
-                float(parse_decimal_safe(str(c_info.get("wh_iva_rate", "75"))))
-                if c_info.get("wh_iva_rate")
-                else 75.0
-            )
+            c_info = clientes_map.get(str(o.cliente_id))
+            c_name = (c_info.nombre if c_info else "") or f"Cliente {o.cliente_id}"
+            wh_agent = bool(c_info.wh_iva_agent) if c_info else False
+            wh_rate = float(c_info.wh_iva_rate) if c_info else 75.0
 
             b = bandeja_map.get(o.so_id)
             abono = float(pagos_by_so.get(o.so_id, Decimal("0")))
@@ -4269,9 +4240,7 @@ async def get_bandeja_facturacion():
                     # descuento de primera compra) vive en el detalle que ya
                     # calculó el motor -- se usa en vez de un texto generico.
                     detalles_b = b.descuentos_detalle if b else []
-                    detalle_nc = next(
-                        (d for d in detalles_b if d.origen == "primera_compra"), None
-                    )
+                    detalle_nc = next((d for d in detalles_b if d.origen == "primera_compra"), None)
                     concepto = (
                         detalle_nc.descripcion
                         if detalle_nc
@@ -4478,7 +4447,7 @@ async def post_cambiar_tipo_tasa_bcv(
 
         repo = get_repo()
         vinc = _get_vinculacion_or_404(repo, vinc_id)
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         if variante == "EUR":
             tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
@@ -4491,9 +4460,7 @@ async def post_cambiar_tipo_tasa_bcv(
             tasa_bcv_nueva, _ = get_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
 
         if tasa_bcv_nueva <= Decimal("0"):
-            raise HTTPException(
-                status_code=400, detail=f"Tasa BCV-{variante} inválida (<= 0)."
-            )
+            raise HTTPException(status_code=400, detail=f"Tasa BCV-{variante} inválida (<= 0).")
 
         vinc.bcv_variante = variante
         vinc.tasa_bcv_aplicada = tasa_bcv_nueva
@@ -4566,7 +4533,7 @@ async def post_sync_odoo_rates():
         )
 
         repo = get_repo()
-        existing_rows = repo._g.read_rows("SerieTasas")
+        existing_rows = _all_serie_tasas_rows(repo)
         existing_dates = set()
         for r in existing_rows:
             ts = r.get("timestamp", "")
@@ -4574,8 +4541,6 @@ async def post_sync_odoo_rates():
                 existing_dates.add(ts.split(" ")[0].split("T")[0])
 
         from cxc.models import SerieTasa
-        from cxc.sheets import gateway as g
-        from cxc.sheets import serde
 
         rates.sort(key=lambda x: x["name"])
         added_count = 0
@@ -4624,7 +4589,7 @@ async def post_sync_odoo_rates():
                         descripcion="Feriado detectado por BCV (sin tasa)",
                         tipo=TipoFeriado.NACIONAL,
                     )
-                    repo._g.append_row(g.T_FERIADOS, serde.feriado_to_row(feriado))
+                    repo.append_feriado(feriado)
                     detected_feriados_count += 1
             current += timedelta(days=1)
 
@@ -4831,15 +4796,14 @@ async def get_odoo_clientes_auditoria():
 
         else:
             repo = get_repo()
-            clientes_rows = repo._g.read_rows("Clientes")
             ordenes = repo.all_ordenes()
-            lineas = repo._g.read_rows("LineasOrden")
+            lineas = repo.all_lineas()
 
-            for c in clientes_rows:
+            for c in repo.all_clientes():
                 partners_data.append(
                     {
-                        "id": c.get("cliente_id", ""),
-                        "name": c.get("nombre", ""),
+                        "id": c.cliente_id,
+                        "name": c.nombre,
                         "create_date": "N/A",
                     }
                 )
@@ -4869,13 +4833,10 @@ async def get_odoo_clientes_auditoria():
                     s["last_date"] = date_str
 
             for ln in lineas:
-                so_id = ln.get("so_id")
-                pid = so_partner_map.get(so_id)
+                pid = so_partner_map.get(ln.so_id)
                 if pid and pid in stats:
-                    brand = str(ln.get("marca", "")).upper()
-                    qty = parse_decimal_safe(
-                        ln.get("cantidad_entregada") or ln.get("cantidad") or "0"
-                    )
+                    brand = str(ln.marca or "").upper()
+                    qty = ln.cantidad_entregada or ln.cantidad or Decimal("0")
                     if "GLOBAL" in brand:
                         stats[pid]["litros_global"] += qty
                     elif "SINOCO" in brand:
@@ -4948,8 +4909,6 @@ async def post_config_promociones(req: PromocionRequest):
         import uuid
 
         from cxc.models import PromocionPrimeraCompra
-        from cxc.sheets import gateway as g
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde)
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -4986,10 +4945,7 @@ async def post_config_promociones(req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
         )
-        row = serde.promocion_to_row(promo)
-        repo._g.append_row(g.T_PROMO_PRIMERA, row)
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop(g.T_PROMO_PRIMERA, None)
+        repo.append_promocion_primera_compra(promo)
         return {"status": "success", "message": "Promoción registrada correctamente."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5059,7 +5015,6 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
         import uuid
 
         from cxc.models import DescuentoVolumen
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5078,7 +5033,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             listas_aplicables=req.listas_aplicables,
             activo=True,
         )
-        repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
+        repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5090,8 +5045,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
 async def get_todas_reglas_descuento():
     try:
         repo = get_repo()
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.clear()
+        repo.invalidate_cache()
         todas = []
 
         # 1. Recompra
@@ -5310,7 +5264,6 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         import uuid
 
         from cxc.models import DescuentoProntoPago
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5334,9 +5287,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
         )
-        repo._g.append_row("DescuentosProntoPago", serde.pronto_pago_to_row(rule))
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("DescuentosProntoPago", None)
+        repo.append_descuento_pronto_pago(rule)
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5348,8 +5299,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
 async def get_config_volumen():
     try:
         repo = get_repo()
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.clear()
+        repo.invalidate_cache()
         rules = repo.descuentos_volumen()
         res = []
         for r in rules:
@@ -5394,7 +5344,6 @@ async def post_config_volumen(req: VolumenRequest):
         import uuid
 
         from cxc.models import DescuentoVolumen
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5421,9 +5370,7 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
         )
-        repo._g.append_row("DescuentosVolumen", serde.desc_volumen_to_row(rule))
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("DescuentosVolumen", None)
+        repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5464,7 +5411,6 @@ async def post_config_recompra(req: RecompraRequest):
         import uuid
 
         from cxc.models import DescuentoRecompra
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5483,9 +5429,7 @@ async def post_config_recompra(req: RecompraRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
         )
-        repo._g.append_row("DescuentosRecompra", serde.recompra_to_row(rule))
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("DescuentosRecompra", None)
+        repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5525,7 +5469,6 @@ async def post_config_producto(req: ProductoPromoRequest):
         import uuid
 
         from cxc.models import DescuentoProducto
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5543,9 +5486,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
         )
-        repo._g.append_row("DescuentosProducto", serde.producto_to_row(rule))
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("DescuentosProducto", None)
+        repo.append_descuento_producto(rule)
         return {"status": "success", "message": "Regla de descuento por producto registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5585,7 +5526,6 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
         import uuid
 
         from cxc.models import DescuentoDiferencialCambiario
-        from cxc.sheets import serde
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
@@ -5603,9 +5543,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
         )
-        repo._g.append_row("DescuentosDiferencialCambiario", serde.diferencial_to_row(rule))
-        if hasattr(repo._g, "_read_cache"):
-            repo._g._read_cache.pop("DescuentosDiferencialCambiario", None)
+        repo.append_descuento_diferencial_cambiario(rule)
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5613,154 +5551,53 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
 
 
 # --- Toggle Rule Active Endpoint ---
+_REGLA_TABLAS_CONOCIDAS = [
+    "DescuentosProntoPago",
+    "DescuentosRecompra",
+    "DescuentosVolumen",
+    "PromocionPrimeraCompra",
+    "DescuentosProducto",
+    "DescuentosDiferencialCambiario",
+]
+
+
 @app.post("/api/config/toggle-descuento")
 async def post_toggle_descuento(req: ToggleDescuentoRequest):
     try:
         repo = get_repo()
-
-        TABLE_CANDIDATES = {
-            "DescuentosProntoPago": ["DescuentosProntoPago", "DescuentosMarcaCategoria"],
-            "DescuentosRecompra": ["DescuentosRecompra", "ReglasRecurrencia"],
-            "DescuentosProducto": ["DescuentosProducto", "PromocionesPrimeraCompra"],
-            "DescuentosDiferencialCambiario": [
-                "DescuentosDiferencialCambiario",
-                "DescuentoBCVCompleto",
-            ],
-        }
-
-        candidate_names = TABLE_CANDIDATES.get(
-            req.tabla,
-            [
-                req.tabla,
-                "DescuentosProntoPago",
-                "DescuentosMarcaCategoria",
-                "DescuentosRecompra",
-                "DescuentosProducto",
-                "DescuentosDiferencialCambiario",
-            ],
-        )
         target_id_str = str(req.regla_id).strip()
 
-        # Handle GspreadGateway (Real Google Sheets)
-        if hasattr(repo._g, "_sh"):
-            for w_name in candidate_names:
-                try:
-                    ws = repo._g._ws(w_name)
-                    values = ws.get_all_values()
-                    if not values or len(values) < 2:
-                        continue
+        # Primero la tabla que mandó el front; si no está ahí (regla_id de
+        # otro tipo, o el front no sabía en cuál vivía), se busca en las
+        # demás tablas de reglas conocidas.
+        candidate_names = [req.tabla, *_REGLA_TABLAS_CONOCIDAS]
+        for tabla in dict.fromkeys(candidate_names):  # dedup preservando orden
+            if repo.set_regla_activo(tabla, target_id_str, req.activo):
+                estado_str = "Activo" if req.activo else "Inactivo"
+                return {
+                    "status": "success",
+                    "message": (
+                        f"Estado de la regla {target_id_str} actualizado a "
+                        f"{estado_str} en '{tabla}'."
+                    ),
+                }
 
-                    headers = [str(h).strip().lower() for h in values[0]]
-                    activo_col_idx = None
-                    for idx, h in enumerate(headers):
-                        if h in ("activo", "active", "estado"):
-                            activo_col_idx = idx + 1
-                            break
+        # No encontrada en ninguna tabla real -- puede ser una de las 3
+        # reglas de diferencial cambiario "por defecto" (nunca persistidas
+        # hasta que alguien las toca por primera vez desde el panel).
+        defaults_por_id = {d.regla_id: d for d in repo.descuentos_diferencial_cambiario()}
+        default_rule = defaults_por_id.get(target_id_str)
+        if default_rule is not None:
+            import dataclasses
 
-                    if not activo_col_idx:
-                        continue
-
-                    for r_idx, row in enumerate(values[1:], start=2):
-                        row_str_values = [str(val).strip() for val in row]
-                        if target_id_str in row_str_values:
-                            ws.update_cell(r_idx, activo_col_idx, "TRUE" if req.activo else "FALSE")
-                            if hasattr(repo._g, "invalidate_cache"):
-                                repo._g.invalidate_cache(w_name)
-                            logger.info(
-                                "Regla %s actualizada a %s en '%s', fila %d",
-                                target_id_str,
-                                req.activo,
-                                w_name,
-                                r_idx,
-                            )
-                            estado_str = "Activo" if req.activo else "Inactivo"
-                            return {
-                                "status": "success",
-                                "message": (
-                                    f"Estado de la regla {target_id_str} actualizado a "
-                                    f"{estado_str} en '{w_name}'."
-                                ),
-                            }
-                except Exception as inner_e:
-                    logger.warning(
-                        "Error buscando regla %s en '%s': %s", target_id_str, w_name, inner_e
-                    )
-                    continue
-        else:
-            # InMemorySheetGateway fallback for tests
-            for t_name in candidate_names:
-                rows = repo._g.read_rows(t_name)
-                for r in rows:
-                    r_id = str(r.get("regla_id") or r.get("id") or "")
-                    if r_id == target_id_str:
-                        r["activo"] = "TRUE" if req.activo else "FALSE"
-                        repo._g.upsert_row(t_name, "regla_id", r)
-                        estado_str = "Activo" if req.activo else "Inactivo"
-                        msg = f"Estado de la regla {target_id_str} actualizado a {estado_str}."
-                        return {"status": "success", "message": msg}
-
-        # If not found in Sheet, handle Default Fallback Rules by persisting them into Google Sheets
-        DEFAULT_RULES_SEED = {
-            "DIF_35_VES": (
-                "DescuentosDiferencialCambiario",
-                {
-                    "regla_id": "DIF_35_VES",
-                    "nombre": "35% Fijo VES a USD",
-                    "tipo_diferencial": "fijo_35_ves_usd",
-                    "tipo_calculo": "fijo",
-                    "porcentaje_fijo": "0.35",
-                    "unidad_medida": "USD",
-                    "monedas_aplicables": "USD",
-                    "listas_aplicables": "LISTAS_VES",
-                    "vigencia_desde": date.today().isoformat(),
-                    "vigencia_hasta": "",
-                    "activo": "TRUE" if req.activo else "FALSE",
-                },
-            ),
-            "DIF_EQUIPARAR": (
-                "DescuentosDiferencialCambiario",
-                {
-                    "regla_id": "DIF_EQUIPARAR",
-                    "nombre": "Equiparar Binance N/C",
-                    "tipo_diferencial": "equiparar_binance",
-                    "tipo_calculo": "variable",
-                    "porcentaje_fijo": "0",
-                    "unidad_medida": "USD",
-                    "monedas_aplicables": "*",
-                    "listas_aplicables": "LISTAS_VES",
-                    "vigencia_desde": date.today().isoformat(),
-                    "vigencia_hasta": "",
-                    "activo": "TRUE" if req.activo else "FALSE",
-                },
-            ),
-            "DIF_BRECHA_CIERRE": (
-                "DescuentosDiferencialCambiario",
-                {
-                    "regla_id": "DIF_BRECHA_CIERRE",
-                    "nombre": "Brecha BCV vs Binance Cierre",
-                    "tipo_diferencial": "diferencial_bcv_binance",
-                    "tipo_calculo": "variable",
-                    "porcentaje_fijo": "0",
-                    "unidad_medida": "USD",
-                    "monedas_aplicables": "*",
-                    "listas_aplicables": "LISTAS_VES",
-                    "vigencia_desde": date.today().isoformat(),
-                    "vigencia_hasta": "",
-                    "activo": "TRUE" if req.activo else "FALSE",
-                },
-            ),
-        }
-
-        if target_id_str in DEFAULT_RULES_SEED:
-            target_table, seed_row = DEFAULT_RULES_SEED[target_id_str]
-            repo._g.append_row(target_table, seed_row)
+            repo.append_descuento_diferencial_cambiario(
+                dataclasses.replace(default_rule, activo=req.activo)
+            )
             estado_str = "Activo" if req.activo else "Inactivo"
             msg = f"Regla por defecto {target_id_str} registrada y actualizada a {estado_str}."
             return {"status": "success", "message": msg}
 
-        raise HTTPException(
-            status_code=404, detail=f"Regla '{target_id_str}' no encontrada en Google Sheets."
-        )
+        raise HTTPException(status_code=404, detail=f"Regla '{target_id_str}' no encontrada.")
     except HTTPException:
         raise
     except Exception as e:
@@ -5773,7 +5610,7 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
 async def get_tasas_promedios():
     try:
         repo = get_repo()
-        rows = repo._g.read_rows("SerieTasas")
+        rows = _all_serie_tasas_rows(repo)
         today_str = date.today().isoformat()
 
         rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
@@ -5860,12 +5697,11 @@ async def get_pagos_historial():
     try:
         repo = get_repo()
         vincs = repo.all_vinculaciones()
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = _all_pagos_rows(repo)
         pagos_map = {r.get("pago_id"): r for r in pagos_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         # Total vinculado por orden (todas las vinculaciones, no solo la de
         # esta fila) -- para poder mostrar si la orden destino de una
@@ -5962,9 +5798,7 @@ async def get_pagos_historial():
                     if pago_id in vinculados_pago_ids:
                         continue  # ya vino por la Vinculacion local, no duplicar
                     facturas = p["facturas"]
-                    factura_id = (
-                        ", ".join(f["factura_id"] for f in facturas) if facturas else "N/A"
-                    )
+                    factura_id = ", ".join(f["factura_id"] for f in facturas) if facturas else "N/A"
                     so_id = ", ".join(p["so_ids"]) if p["so_ids"] else ""
                     c_name = p["cliente_nombre"] or clientes_map.get(
                         p["cliente_id"], f"Cliente ID: {p['cliente_id']}"
@@ -6029,22 +5863,13 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         historial = await get_pagos_historial()
         cerrados_detalle = leer_pagos_huerfanos_cerrados(repo)
 
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = repo.all_pagos_full()
         pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map_obj = {
-            str(r.get("cliente_id", "")): Cliente(
-                cliente_id=str(r.get("cliente_id", "")),
-                nombre=r.get("nombre", ""),
-                vendedor_email=r.get("vendedor_email", ""),
-            )
-            for r in clientes_rows
-        }
-        clientes_nombre_map = {
-            str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows
-        }
+        clientes = repo.all_clientes()
+        clientes_map_obj = {c.cliente_id: c for c in clientes}
+        clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
 
         # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
         # reconcilió contra una orden distinta a la Vinculación local (ver
@@ -6343,7 +6168,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
 async def get_tasas_historicas():
     try:
         repo = get_repo()
-        rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        rows = repo.all_tasas_historicas_auditoria()
         return {"items": rows, "count": len(rows)}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -6354,20 +6179,17 @@ async def get_tasas_historicas():
 async def get_reglas_descuento():
     try:
         repo = get_repo()
-        primera = repo._g.read_rows("PromocionPrimeraCompra")
-        recompra = repo._g.read_rows("DescuentosRecompra")
-        pronto_pago = repo._g.read_rows("DescuentosProntoPago")
-        volumen = repo._g.read_rows("DescuentosVolumen")
-        producto = repo._g.read_rows("DescuentosProducto")
-        diferencial = repo._g.read_rows("DescuentosDiferencialCambiario")
-
         return {
-            "primera_compra": primera,
-            "recompra": recompra,
-            "pronto_pago": pronto_pago,
-            "volumen": volumen,
-            "producto": producto,
-            "diferencial_cambiario": diferencial,
+            "primera_compra": [
+                serde.promocion_to_row(r) for r in repo.promociones_primera_compra()
+            ],
+            "recompra": [serde.recompra_to_row(r) for r in repo.descuentos_recompra()],
+            "pronto_pago": [serde.pronto_pago_to_row(r) for r in repo.descuentos_marca_categoria()],
+            "volumen": [serde.desc_volumen_to_row(r) for r in repo.descuentos_volumen()],
+            "producto": [serde.producto_to_row(r) for r in repo.descuentos_producto()],
+            "diferencial_cambiario": [
+                serde.diferencial_to_row(r) for r in repo.descuentos_diferencial_cambiario()
+            ],
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -6384,7 +6206,7 @@ async def get_auditoria():
         # siempre tiraba NameError y devolvia 500. Se replican aqui con la
         # misma logica.
         cutoff_historical = date(2026, 3, 12)
-        hist_rows = repo._g.read_rows("ListasPreciosHistoricas")
+        hist_rows = repo.all_listas_precios_historicas()
         hist_map: dict[str, dict[str, Any]] = {}
         for _hr in hist_rows:
             _code = str(_hr.get("codigo", "")).strip()
@@ -6397,11 +6219,10 @@ async def get_auditoria():
                     }
 
         ordenes = repo.all_ordenes()
-        lines_rows = repo._g.read_rows("LineasOrden")
+        lines_rows = _all_lineas_rows(repo)
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {r.get("cliente_id"): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         # Load UI configured pricelists (USD & VES) from _Meta
         config = AppConfig.from_env()
@@ -6429,7 +6250,7 @@ async def get_auditoria():
         )
 
         # Load accepted anomalies from Google Sheets
-        anomalias_aceptadas_rows = repo._g.read_rows("AnomaliasAceptadas")
+        anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
         aceptadas_map = {r.get("anomalia_id"): r for r in anomalias_aceptadas_rows}
         lines_by_so = {}
         for r in lines_rows:
@@ -6491,7 +6312,7 @@ async def get_auditoria():
             logger.warning("Error al consultar facturas Odoo en get_auditoria: %s", e)
 
         # Read rates series to convert VES invoice residual to USD
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        tasas_rows = _all_serie_tasas_rows(repo)
         rates_map = {}
         for r in tasas_rows:
             ts = str(r.get("timestamp", ""))[:10]
@@ -6574,9 +6395,7 @@ async def get_auditoria():
                             p_id = pid_info[0] if isinstance(pid_info, list | tuple) else None
                             so_name = picking_to_so.get(p_id) if p_id else None
                             prod_info = ml.get("product_id")
-                            prod_id = (
-                                prod_info[0] if isinstance(prod_info, list | tuple) else None
-                            )
+                            prod_id = prod_info[0] if isinstance(prod_info, list | tuple) else None
                             if so_name and prod_id:
                                 delivered_products_by_so.setdefault(so_name, set()).add(prod_id)
             except Exception as e_ml:
@@ -6904,8 +6723,7 @@ async def get_ventas(
 
         ordenes = repo.all_ordenes()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map = {str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows}
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         so_names = [o.so_id for o in ordenes]
         execute = None
@@ -7095,7 +6913,7 @@ async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
             "aprobado_por": req.aprobado_por,
             "timestamp_aprobacion": datetime.now().isoformat(),
         }
-        repo._g.append_row("AnomaliasAceptadas", row)
+        repo.append_anomalia_aceptada(row)
         return {
             "status": "success",
             "message": "Anomalía aceptada y movida al historial de revisiones.",
@@ -7118,23 +6936,11 @@ async def post_marcar_recibido(
         user = get_current_user_from_cookie(cxc_session)
         recibido_por = req.recibido_por or (user["nombre"] if user else "Administración")
         repo = get_repo()
-        pagos_rows = repo._g.read_rows("Pagos")
 
         now = datetime.now()
         recibo_num = f"REC-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
 
-        target_pago_ids = set(req.pago_ids)
-        pagos_actualizados = []
-
-        for r in pagos_rows:
-            pid = str(r.get("pago_id", "")).strip()
-            if pid in target_pago_ids:
-                r["recibido"] = "TRUE"
-                r["numero_recibido"] = recibo_num
-                r["fecha_recibido"] = now.isoformat()[:19]
-                r["recibido_por"] = recibido_por
-                repo._g.upsert_row("Pagos", "pago_id", r)
-                pagos_actualizados.append(r)
+        pagos_actualizados = repo.marcar_pagos_recibido(req.pago_ids, recibo_num, now, recibido_por)
 
         return {
             "status": "success",
@@ -7171,9 +6977,9 @@ async def get_reporte_diario(
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
-        lineas = repo._g.read_rows("LineasOrden")
-        pagos = repo._g.read_rows("Pagos")
-        tasas_rows = repo._g.read_rows("SerieTasas")
+        lineas = _all_lineas_rows(repo)
+        pagos = _all_pagos_rows(repo)
+        tasas_rows = _all_serie_tasas_rows(repo)
 
         vendedor_f = (vendedor or "").strip().lower()
         desde_f = (fecha_desde or "")[:10]
@@ -7407,8 +7213,10 @@ async def get_reporte_diario(
                 moneda = p.get("moneda", "VES")
                 metodo_raw = str(p.get("metodo_pago") or p.get("forma_pago") or "").strip()
                 metodo = (
-                    journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None
-                ) or metodo_raw or "Efectivo"
+                    (journal_name_map.get(int(metodo_raw)) if metodo_raw.isdigit() else None)
+                    or metodo_raw
+                    or "Efectivo"
+                )
                 try:
                     fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
                 except ValueError:

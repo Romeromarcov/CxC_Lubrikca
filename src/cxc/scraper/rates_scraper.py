@@ -65,32 +65,22 @@ class RatesScraper:
 
         # Compute morning, afternoon, and daily averages for the current day
         try:
-            today_str = now.strftime("%Y-%m-%d")
-            # Acceso directo a la hoja (solo disponible en repos respaldados por Sheets).
             rows_today = [
-                r
-                for r in self._repo._g.read_rows("SerieTasas")  # type: ignore[attr-defined]
-                if r.get("timestamp", "").startswith(today_str)
+                s for s in self._repo.all_serie_tasas() if s.timestamp.date() == now.date()
             ]
 
             manana_rates = []
             tarde_rates = []
             diario_rates = []
 
-            for r in rows_today:
-                try:
-                    tb = Decimal(str(r.get("tasa_binance", "0")))
-                    if tb > Decimal("0"):
-                        diario_rates.append(tb)
-                        ts_str = str(r.get("timestamp", "00:00"))
-                        time_part = ts_str.split("T")[-1].split(" ")[-1]
-                        ts_hour = int(time_part.split(":")[0])
-                        if 6 <= ts_hour <= 9:
-                            manana_rates.append(tb)
-                        elif 10 <= ts_hour <= 13:
-                            tarde_rates.append(tb)
-                except Exception:
-                    pass
+            for s in rows_today:
+                tb = s.tasa_binance
+                if tb > Decimal("0"):
+                    diario_rates.append(tb)
+                    if 6 <= s.timestamp.hour <= 9:
+                        manana_rates.append(tb)
+                    elif 10 <= s.timestamp.hour <= 13:
+                        tarde_rates.append(tb)
 
             if fila.tasa_binance > Decimal("0"):
                 diario_rates.append(fila.tasa_binance)

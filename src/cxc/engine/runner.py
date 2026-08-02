@@ -67,14 +67,11 @@ class EngineRunner:
 
         # Override cash_window_business_days with value from _Meta if available
         try:
-            if hasattr(self._repo, "_g"):
-                rows = self._repo._g.read_rows("_Meta")
-                for r in rows:
-                    if r.get("key") == "cash_window_business_days" and r.get("value"):
-                        self._cfg = dataclasses.replace(
-                            self._cfg, cash_window_business_days=int(r.get("value"))
-                        )
-                        break
+            valor = self._repo.get_config("cash_window_business_days")
+            if valor:
+                self._cfg = dataclasses.replace(
+                    self._cfg, cash_window_business_days=int(valor)
+                )
         except Exception as e:
             logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)
 

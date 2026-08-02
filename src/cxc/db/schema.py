@@ -421,20 +421,19 @@ app_settings = Table(
 )
 
 # --- UsuariosPlataforma (roles del panel web) --------------------------------
-# Espejo exacto de la pestaña real (ver cxc.auth.registrar_o_actualizar_usuario):
-# email, nombre_odoo, password_hash, salt, rol, activo, fecha_registro. salt es
-# indispensable para verificar_password (hash SHA-256 + salt); sin ella no hay
-# forma de validar ninguna contraseña ya guardada.
+# Mismas columnas que la pestaña Sheets "UsuariosPlataforma" (ver cxc.auth):
+# nombre == nombre_odoo, + salt/activo/fecha_registro, necesarias para
+# verificar_password() y para desactivar un usuario sin borrar su historial.
 usuarios_plataforma = Table(
     "usuarios_plataforma",
     metadata,
     Column("email", String, primary_key=True),
-    Column("nombre_odoo", String, nullable=False, server_default=""),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("rol", String, nullable=False, server_default=""),
     Column("password_hash", String, nullable=True),
     Column("salt", String, nullable=True),
-    Column("rol", String, nullable=False, server_default=""),
     Column("activo", Boolean, nullable=False, server_default="true"),
-    Column("fecha_registro", DateTime(timezone=False), nullable=True),
+    Column("fecha_registro", String, nullable=False, server_default=""),
 )
 
 # --- BandejaAuditoria (log de discrepancias motor vs. Odoo) ------------------
@@ -455,8 +454,6 @@ bandeja_auditoria = Table(
 )
 
 # --- AnomaliasAceptadas (waivers de discrepancias de facturación) ----------
-# Espejo exacto de la pestaña real (ver POST /api/auditoria/aceptar-anomalia
-# en web/app.py): anomalia_id es el ID que genera el frontend (no autoincrement).
 anomalias_aceptadas = Table(
     "anomalias_aceptadas",
     metadata,
@@ -466,42 +463,50 @@ anomalias_aceptadas = Table(
     Column("tipo_anomalia", String, nullable=False, server_default=""),
     Column("motivo_aceptacion", String, nullable=False, server_default=""),
     Column("aprobado_por", String, nullable=False, server_default=""),
-    Column("timestamp_aprobacion", DateTime(timezone=False), nullable=True),
+    Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),
 )
 
-# --- TasasHistoricasAuditoria (tasas BCV/Binance diarias de referencia,
-# usadas solo para auditoría de lectura -- GET /api/tasas-historicas) --------
-# Espejo exacto de la pestaña real (ver scratch/cargar_tasas_historicas.py):
-# una fila por día con las tasas oficiales/estimadas de ese día. Se lee
-# siempre como passthrough (dict crudo), nunca la escribe la app -- por eso
-# diferencial_bcv_binance_pct se guarda como String: en el origen ya viene
-# formateado con el sufijo "%" (ej. "12.3%"), no como fracción decimal.
+# --- TasasHistoricasAuditoria (archivo diario BCV/Binance -- una fila por
+# día, regenerada por scripts/cargar_tasas_historicas.py desde Odoo +
+# SerieTasas; la usa get_binance_rate_for_date() para convertir pagos VES a
+# USD con la tasa del día EXACTO del pago). Columnas reales de Sheets --
+# diferencial_bcv_binance_pct y notas quedan como texto libre (vienen con
+# "%" y comentarios humanos, no son valores numéricos limpios). -----------
 tasas_historicas_auditoria = Table(
     "tasas_historicas_auditoria",
     metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("fecha", Date, nullable=False, unique=True),
+    Column("fecha", Date, primary_key=True),
     Column("tasa_bcv_usd", RATE, nullable=True),
     Column("tasa_bcv_euro", RATE, nullable=True),
     Column("tasa_binance_promedio_diario", RATE, nullable=True),
     Column("diferencial_bcv_binance_pct", String, nullable=True),
     Column("fuente", String, nullable=False, server_default=""),
-    Column("notas", Text, nullable=False, server_default=""),
+    Column("notas", String, nullable=False, server_default=""),
 )
 
-# --- ListasPreciosHistoricas (precios de catálogo previos al corte 2026-03-12,
-# referencia para órdenes sin lista Odoo) ------------------------------------
-# Espejo exacto de la pestaña real (ver scratch/cargar_listas_historicas.py).
+# --- ListasPreciosHistoricas (precios de catálogo de referencia antes de un
+# corte -- mantenida a mano, la lee /api/reporte-saldos y /api/auditoria para
+# comparar contra el precio vigente) -----------------------------------------
 listas_precios_historicas = Table(
     "listas_precios_historicas",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("codigo", String, nullable=False, index=True),
     Column("producto_nombre", String, nullable=False, server_default=""),
-    Column("precio_usd", MONEY, nullable=True),
-    Column("precio_bcv_euro", MONEY, nullable=True),
-    Column("fecha_corte", Date, nullable=True),
-    Column("notas", Text, nullable=False, server_default=""),
+    Column("precio_usd", MONEY, nullable=False, server_default="0"),
+    Column("precio_bcv_euro", MONEY, nullable=False, server_default="0"),
+)
+
+# --- PagosHuerfanosCerrados (marca local -- pago sin orden abierta del
+# cliente, cerrado "a favor de la empresa" por un humano; no crea asiento
+# contable ni toca Odoo, solo deja de aparecer en sugerencias) -------------
+pagos_huerfanos_cerrados = Table(
+    "pagos_huerfanos_cerrados",
+    metadata,
+    Column("pago_id", String, primary_key=True),
+    Column("motivo", String, nullable=False, server_default=""),
+    Column("cerrado_por", String, nullable=False, server_default=""),
+    Column("timestamp_cierre", DateTime(timezone=False), nullable=False),
 )
 
 # --- FechasHistoricas (fecha histórica alterna por orden) -------------------
