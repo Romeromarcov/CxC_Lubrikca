@@ -534,17 +534,32 @@ class PostgresRepository(Repository):
 
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
-            rows = conn.execute(select(t.tasas_historicas_auditoria)).all()
-        return [
-            {
-                "timestamp": r.timestamp.isoformat(),
-                "campo": r.campo,
-                "valor_anterior": r.valor_anterior or "",
-                "valor_nuevo": r.valor_nuevo or "",
-                "editado_por": r.editado_por,
-            }
-            for r in rows
-        ]
+            rows = conn.execute(
+                select(t.tasas_historicas_auditoria).order_by(t.tasas_historicas_auditoria.c.fecha)
+            ).all()
+        return [_row_to_tasa_historica(r) for r in rows]
+
+    def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(delete(t.tasas_historicas_auditoria))
+            if rows:
+                conn.execute(
+                    insert(t.tasas_historicas_auditoria),
+                    [
+                        {
+                            "fecha": date.fromisoformat(str(r["fecha"])[:10]),
+                            "tasa_bcv_usd": r.get("tasa_bcv_usd") or None,
+                            "tasa_bcv_euro": r.get("tasa_bcv_euro") or None,
+                            "tasa_binance_promedio_diario": r.get("tasa_binance_promedio_diario")
+                            or None,
+                            "diferencial_bcv_binance_pct": r.get("diferencial_bcv_binance_pct")
+                            or "",
+                            "fuente": r.get("fuente") or "",
+                            "notas": r.get("notas") or "",
+                        }
+                        for r in rows
+                    ],
+                )
 
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
@@ -923,6 +938,20 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
     )
+
+
+def _row_to_tasa_historica(r: Any) -> dict[str, str]:
+    return {
+        "fecha": r.fecha.isoformat(),
+        "tasa_bcv_usd": str(r.tasa_bcv_usd) if r.tasa_bcv_usd is not None else "",
+        "tasa_bcv_euro": str(r.tasa_bcv_euro) if r.tasa_bcv_euro is not None else "",
+        "tasa_binance_promedio_diario": str(r.tasa_binance_promedio_diario)
+        if r.tasa_binance_promedio_diario is not None
+        else "",
+        "diferencial_bcv_binance_pct": r.diferencial_bcv_binance_pct or "",
+        "fuente": r.fuente or "",
+        "notas": r.notas or "",
+    }
 
 
 def _row_to_usuario(r: Any) -> dict[str, str]:

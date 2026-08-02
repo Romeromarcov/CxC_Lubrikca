@@ -50,6 +50,17 @@ class SheetGateway(ABC):
     def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool: ...
 
     @abstractmethod
+    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+        """Reemplaza el contenido completo de la pestaña (limpia + reescribe).
+
+        Para tablas que se regeneran enteras desde una fuente externa cada
+        vez (ej. TasasHistoricasAuditoria vía
+        scripts/cargar_tasas_historicas.py), a diferencia de upsert_rows
+        (que solo actualiza/agrega, nunca borra filas que ya no vienen en
+        el lote).
+        """
+
+    @abstractmethod
     def get_meta(self, key: str) -> str | None: ...
 
     @abstractmethod
@@ -88,6 +99,9 @@ class InMemorySheetGateway(SheetGateway):
         eliminado = len(nuevas) < len(filas)
         self._tables[table] = nuevas
         return eliminado
+
+    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+        self._tables[table] = [dict(r) for r in rows]
 
     def get_meta(self, key: str) -> str | None:
         return self._meta.get(key)
@@ -454,6 +468,16 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 ws.delete_rows(fila_num)
                 return True
         return False
+
+    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+        self.invalidate_cache(table)
+        ws = self._ws(table)
+        ws.clear()
+        if not rows:
+            return
+        header = list(rows[0].keys())
+        matriz = [header, *[[str(row.get(col, "")) for col in header] for row in rows]]
+        ws.update(range_name="A1", values=matriz)
 
     def get_meta(self, key: str) -> str | None:
         for rec in self.read_rows(T_META):

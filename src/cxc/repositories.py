@@ -240,6 +240,14 @@ class Repository(ABC):
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
+    def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
+        """Reemplaza la tabla completa (scripts/cargar_tasas_historicas.py
+
+        regenera el archivo diario entero desde Odoo + SerieTasas cada vez
+        que corre -- no es un upsert incremental).
+        """
+
+    @abstractmethod
     def reglas_recurrencia(self) -> list[ReglaRecurrencia]: ...
 
     @abstractmethod
@@ -601,6 +609,9 @@ class InMemoryRepository(Repository):
 
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._tasas_historicas_auditoria]
+
+    def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
+        self._tasas_historicas_auditoria = [dict(r) for r in rows]
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)

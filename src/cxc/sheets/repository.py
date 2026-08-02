@@ -354,6 +354,9 @@ class SheetsRepository(Repository):
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         return self._g.read_rows("TasasHistoricasAuditoria")
 
+    def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
+        self._g.replace_rows("TasasHistoricasAuditoria", rows)
+
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
 

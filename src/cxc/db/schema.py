@@ -466,16 +466,22 @@ anomalias_aceptadas = Table(
     Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),
 )
 
-# --- TasasHistoricasAuditoria (trazabilidad de ediciones manuales de tasas) --
+# --- TasasHistoricasAuditoria (archivo diario BCV/Binance -- una fila por
+# día, regenerada por scripts/cargar_tasas_historicas.py desde Odoo +
+# SerieTasas; la usa get_binance_rate_for_date() para convertir pagos VES a
+# USD con la tasa del día EXACTO del pago). Columnas reales de Sheets --
+# diferencial_bcv_binance_pct y notas quedan como texto libre (vienen con
+# "%" y comentarios humanos, no son valores numéricos limpios). -----------
 tasas_historicas_auditoria = Table(
     "tasas_historicas_auditoria",
     metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("timestamp", DateTime(timezone=False), nullable=False),
-    Column("campo", String, nullable=False, server_default=""),
-    Column("valor_anterior", String, nullable=True),
-    Column("valor_nuevo", String, nullable=True),
-    Column("editado_por", String, nullable=False, server_default=""),
+    Column("fecha", Date, primary_key=True),
+    Column("tasa_bcv_usd", RATE, nullable=True),
+    Column("tasa_bcv_euro", RATE, nullable=True),
+    Column("tasa_binance_promedio_diario", RATE, nullable=True),
+    Column("diferencial_bcv_binance_pct", String, nullable=True),
+    Column("fuente", String, nullable=False, server_default=""),
+    Column("notas", String, nullable=False, server_default=""),
 )
 
 # --- ListasPreciosHistoricas (precios de catálogo de referencia antes de un
