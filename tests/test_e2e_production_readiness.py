@@ -44,6 +44,9 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
     repo.all_serie_tasas.side_effect = lambda: [
         serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")
     ]
+    repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
+        "TasasHistoricasAuditoria"
+    )
 
     def _marcar_recibido(pago_ids, numero_recibido, fecha_recibido, recibido_por):
         target = set(pago_ids)
@@ -1971,7 +1974,7 @@ def test_e2e_32_sugerencias_usa_tasa_odoo_del_pago_no_serietasas_cercana():
     adivinanza local -- ignorando a propósito la tasa "cercana pero
     incorrecta" de SerieTasas (36.5, muy distinta de la real 451.5072).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2060,7 +2063,7 @@ def test_e2e_33_sugerencias_binance_sin_historico_cae_a_serietasas():
     cae al comportamiento anterior (SerieTasas más cercana) en vez de
     fallar -- fallback, no default.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
