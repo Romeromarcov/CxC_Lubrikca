@@ -561,6 +561,35 @@ class PostgresRepository(Repository):
                     ],
                 )
 
+    def all_pagos_huerfanos_cerrados(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.pagos_huerfanos_cerrados)).all()
+        return [
+            {
+                "pago_id": r.pago_id,
+                "motivo": r.motivo or "",
+                "cerrado_por": r.cerrado_por or "",
+                "timestamp_cierre": r.timestamp_cierre.isoformat(),
+            }
+            for r in rows
+        ]
+
+    def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.pagos_huerfanos_cerrados,
+                [
+                    {
+                        "pago_id": row["pago_id"],
+                        "motivo": row.get("motivo") or "",
+                        "cerrado_por": row.get("cerrado_por") or "",
+                        "timestamp_cierre": datetime.fromisoformat(row["timestamp_cierre"]),
+                    }
+                ],
+                ["pago_id"],
+            )
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()

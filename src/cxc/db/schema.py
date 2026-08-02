@@ -497,6 +497,18 @@ listas_precios_historicas = Table(
     Column("precio_bcv_euro", MONEY, nullable=False, server_default="0"),
 )
 
+# --- PagosHuerfanosCerrados (marca local -- pago sin orden abierta del
+# cliente, cerrado "a favor de la empresa" por un humano; no crea asiento
+# contable ni toca Odoo, solo deja de aparecer en sugerencias) -------------
+pagos_huerfanos_cerrados = Table(
+    "pagos_huerfanos_cerrados",
+    metadata,
+    Column("pago_id", String, primary_key=True),
+    Column("motivo", String, nullable=False, server_default=""),
+    Column("cerrado_por", String, nullable=False, server_default=""),
+    Column("timestamp_cierre", DateTime(timezone=False), nullable=False),
+)
+
 # --- FechasHistoricas (fecha histórica alterna por orden) -------------------
 fechas_historicas = Table(
     "fechas_historicas",

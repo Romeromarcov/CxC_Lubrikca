@@ -74,6 +74,9 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
     repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
         "TasasHistoricasAuditoria"
     )
+    repo.all_pagos_huerfanos_cerrados.side_effect = lambda: repo._g.read_rows(
+        "PagosHuerfanosCerrados"
+    )
 
     def _marcar_recibido(pago_ids, numero_recibido, fecha_recibido, recibido_por):
         target = set(pago_ids)
@@ -2451,7 +2454,7 @@ def test_e2e_39_sugerencias_excluye_pago_huerfano_ya_cerrado():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2498,7 +2501,7 @@ def test_e2e_40_sugerencias_muestra_pago_huerfano_sin_cerrar():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2545,10 +2548,7 @@ def test_e2e_41_post_cerrar_pago_huerfano_escribe_fila():
         assert res.status_code == 200
         assert res.json()["status"] == "success"
 
-        mock_repo._g.upsert_row.assert_called_once()
-        args, _ = mock_repo._g.upsert_row.call_args
-        assert args[0] == "PagosHuerfanosCerrados"
-        assert args[1] == "pago_id"
-        row = args[2]
+        mock_repo.upsert_pago_huerfano_cerrado.assert_called_once()
+        (row,), _ = mock_repo.upsert_pago_huerfano_cerrado.call_args
         assert row["pago_id"] == "117"
         assert row["motivo"] == "Cliente cerró operaciones"

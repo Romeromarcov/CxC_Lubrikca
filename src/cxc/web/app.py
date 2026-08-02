@@ -3629,7 +3629,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
         # seguir apareciendo como pendientes.
         pagos_huerfanos_cerrados = {
             str(r.get("pago_id", "")).strip()
-            for r in repo._g.read_rows("PagosHuerfanosCerrados")
+            for r in repo.all_pagos_huerfanos_cerrados()
             if r.get("pago_id")
         }
 
@@ -3995,15 +3995,13 @@ async def post_cerrar_pago_huerfano(
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
         cerrado_por = (user["nombre"] or user["email"]) if user else "Desconocido"
-        repo._g.upsert_row(
-            "PagosHuerfanosCerrados",
-            "pago_id",
+        repo.upsert_pago_huerfano_cerrado(
             {
                 "pago_id": req.pago_id,
                 "motivo": req.motivo,
                 "cerrado_por": cerrado_por,
                 "timestamp_cierre": datetime.now().isoformat(),
-            },
+            }
         )
         return {
             "status": "success",
