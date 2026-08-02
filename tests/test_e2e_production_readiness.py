@@ -2905,7 +2905,7 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
     resuelto a nombre real (no id), el vendedor tomado del Cliente, y
     marcado como candidato a "cerrar a favor de la empresa" (sin orden).
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -3004,7 +3004,7 @@ def test_e2e_51_cobranza_pagos_unificado_cerrado_empresa_y_usd_1a1():
     el equivalente EUR debe ser 1:1 (igual que BCV/Binance) sin depender de
     que exista una tasa EUR para ese día.
     """
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {

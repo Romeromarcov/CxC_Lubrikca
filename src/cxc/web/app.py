@@ -5935,22 +5935,13 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         historial = await get_pagos_historial()
         cerrados_detalle = leer_pagos_huerfanos_cerrados(repo)
 
-        pagos_rows = repo._g.read_rows("Pagos")
+        pagos_rows = repo.all_pagos_full()
         pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows}
-        clientes_rows = repo._g.read_rows("Clientes")
-        clientes_map_obj = {
-            str(r.get("cliente_id", "")): Cliente(
-                cliente_id=str(r.get("cliente_id", "")),
-                nombre=r.get("nombre", ""),
-                vendedor_email=r.get("vendedor_email", ""),
-            )
-            for r in clientes_rows
-        }
-        clientes_nombre_map = {
-            str(r.get("cliente_id", "")): r.get("nombre", "") for r in clientes_rows
-        }
+        clientes = repo.all_clientes()
+        clientes_map_obj = {c.cliente_id: c for c in clientes}
+        clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_historicas_rows = repo._g.read_rows("TasasHistoricasAuditoria")
+        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
 
         # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
         # reconcilió contra una orden distinta a la Vinculación local (ver
