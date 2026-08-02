@@ -2880,7 +2880,7 @@ def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
     from cxc.web.app import leer_pagos_huerfanos_cerrados
 
     mock_repo = MagicMock()
-    mock_repo._g.read_rows.return_value = [
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = [
         {
             "pago_id": "1002",
             "motivo": "Sin orden abierta del cliente",
@@ -2890,7 +2890,7 @@ def test_e2e_49_leer_pagos_huerfanos_cerrados_expone_detalle():
     ]
 
     detalle = leer_pagos_huerfanos_cerrados(mock_repo)
-    mock_repo._g.read_rows.assert_called_once_with("PagosHuerfanosCerrados")
+    mock_repo.all_pagos_huerfanos_cerrados.assert_called_once_with()
     assert set(detalle.keys()) == {"1002"}
     assert detalle["1002"]["motivo"] == "Sin orden abierta del cliente"
     assert detalle["1002"]["cerrado_por"] == "admin@lubrikca.com"
