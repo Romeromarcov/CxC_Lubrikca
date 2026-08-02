@@ -2342,7 +2342,7 @@ def test_e2e_37_sugerencias_marca_pagos_posiblemente_duplicados():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
@@ -2397,7 +2397,7 @@ def test_e2e_38_sugerencias_no_marca_duplicado_si_algun_campo_difiere():
     web_app_module._SALDOS_REALES_CACHE["data"] = None
     web_app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
 
-    mock_repo = MagicMock()
+    mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
             {
