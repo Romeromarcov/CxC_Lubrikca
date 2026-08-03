@@ -323,6 +323,7 @@ def pronto_pago_to_row(d: DescuentoProntoPago) -> Row:
         "vigencia_desde": d.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -338,6 +339,7 @@ def pronto_pago_from_row(r: Mapping[str, str]) -> DescuentoProntoPago:
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "TRUE")),
     )
 
 
@@ -362,6 +364,7 @@ def recompra_from_row(r: Mapping[str, str]) -> DescuentoRecompra:
         vigencia_desde=p_date(r.get("vigencia_desde") or "2026-01-01"),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta") or ""),
         activo=p_bool(r.get("activo") or "TRUE"),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo") or "FALSE"),
     )
 
 
@@ -378,6 +381,7 @@ def producto_to_row(d: DescuentoProducto) -> Row:
         "vigencia_desde": d.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -393,6 +397,7 @@ def producto_from_row(r: Mapping[str, str]) -> DescuentoProducto:
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "FALSE")),
     )
 
 
@@ -414,6 +419,7 @@ def diferencial_to_row(d: DescuentoDiferencialCambiario) -> Row:
         "vigencia_desde": d.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -436,6 +442,7 @@ def diferencial_from_row(r: Mapping[str, str]) -> DescuentoDiferencialCambiario:
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "TRUE")),
     )
 
 
@@ -446,6 +453,7 @@ def bcv_completo_to_row(d: DescuentoBCVCompleto) -> Row:
         "porcentaje": str(d.porcentaje),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -455,6 +463,7 @@ def bcv_completo_from_row(r: Mapping[str, str]) -> DescuentoBCVCompleto:
         porcentaje=p_dec(r.get("porcentaje", "0")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "TRUE")),
     )
 
 
@@ -473,6 +482,7 @@ def promocion_to_row(p: PromocionPrimeraCompra) -> Row:
         "categorias_aplica": p.categorias_aplica,
         "solo_primera_compra": s_bool(getattr(p, "solo_primera_compra", False)),
         "activo": s_bool(p.activo),
+        "requiere_pago_previo": s_bool(p.requiere_pago_previo),
     }
 
 
@@ -490,6 +500,7 @@ def promocion_from_row(r: Mapping[str, str]) -> PromocionPrimeraCompra:
         categorias_aplica=r.get("categorias_aplica", "Comercial"),
         solo_primera_compra=p_bool(r.get("solo_primera_compra", "FALSE")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "FALSE")),
     )
 
 
@@ -527,6 +538,7 @@ def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "listas_aplicables": d.listas_aplicables,
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -546,6 +558,7 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         listas_aplicables=r.get("listas_aplicables", "*"),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "FALSE")),
     )
 
 
@@ -563,6 +576,7 @@ def recompra_to_row(d: DescuentoRecompra) -> Row:
         "vigencia_desde": d.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(d.vigencia_hasta),
         "activo": s_bool(d.activo),
+        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
     }
 
 
@@ -575,6 +589,7 @@ def regla_to_row(g: ReglaRecurrencia) -> Row:
         "vigencia_desde": g.vigencia_desde.isoformat(),
         "vigencia_hasta": s_optdate(g.vigencia_hasta),
         "activo": s_bool(g.activo),
+        "requiere_pago_previo": s_bool(g.requiere_pago_previo),
     }
 
 
@@ -586,6 +601,7 @@ def regla_from_row(r: Mapping[str, str]) -> ReglaRecurrencia:
         vigencia_desde=p_date(r["vigencia_desde"]),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
+        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "FALSE")),
     )
 
 

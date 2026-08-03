@@ -153,6 +153,7 @@ def descuento(
     porcentaje: str = "0.03",
     desde: date = date(2026, 1, 1),
     hasta: date | None = None,
+    requiere_pago_previo: bool = True,
 ) -> DescuentoMarcaCategoria:
     return DescuentoMarcaCategoria(
         regla_id=regla_id,
@@ -162,6 +163,7 @@ def descuento(
         porcentaje=Decimal(porcentaje),
         vigencia_desde=desde,
         vigencia_hasta=hasta,
+        requiere_pago_previo=requiere_pago_previo,
     )
 
 
@@ -174,6 +176,7 @@ def descuento_volumen(
     porcentaje: str = "0.05",
     desde: date = date(2026, 1, 1),
     hasta: date | None = None,
+    requiere_pago_previo: bool = False,
 ) -> DescuentoVolumen:
     return DescuentoVolumen(
         regla_id=regla_id,
@@ -183,6 +186,7 @@ def descuento_volumen(
         porcentaje=Decimal(porcentaje),
         vigencia_desde=desde,
         vigencia_hasta=hasta,
+        requiere_pago_previo=requiere_pago_previo,
     )
 
 
@@ -190,11 +194,13 @@ def regla_bcv_completo(
     porcentaje: str = "0.15",
     desde: date = date(2026, 1, 1),
     hasta: date | None = None,
+    requiere_pago_previo: bool = True,
 ) -> DescuentoBCVCompleto:
     return DescuentoBCVCompleto(
         vigencia_desde=desde,
         porcentaje=Decimal(porcentaje),
         vigencia_hasta=hasta,
+        requiere_pago_previo=requiere_pago_previo,
     )
 
 

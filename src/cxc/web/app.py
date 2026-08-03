@@ -631,6 +631,7 @@ class PromocionRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = False
 
 
 class ExclusionRequest(BaseModel):
@@ -653,6 +654,7 @@ class ProntoPagoRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = True
 
 
 class VolumenRequest(BaseModel):
@@ -669,6 +671,7 @@ class VolumenRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = False
 
 
 class EliminarDescuentoRequest(BaseModel):
@@ -783,6 +786,7 @@ class RecompraRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = False
 
 
 class ProductoPromoRequest(BaseModel):
@@ -799,6 +803,7 @@ class ProductoPromoRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = False
 
 
 class DiferencialCambiarioRequest(BaseModel):
@@ -816,6 +821,7 @@ class DiferencialCambiarioRequest(BaseModel):
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
+    requiere_pago_previo: bool = True
 
 
 class ToggleDescuentoRequest(BaseModel):
@@ -834,6 +840,7 @@ class DescuentoVolumenRequest(BaseModel):
     vigencia_desde: str
     vigencia_hasta: str | None = None
     listas_aplicables: str = "*"
+    requiere_pago_previo: bool = False
 
 
 def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
@@ -5050,6 +5057,7 @@ async def post_config_promociones(req: PromocionRequest):
             categorias_aplica=req.categorias_aplica,
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_promocion_primera_compra(promo)
         return {"status": "success", "message": "Promoción registrada correctamente."}
@@ -5106,6 +5114,7 @@ async def get_config_descuentos_volumen():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "listas_aplicables": r.listas_aplicables,
                 "activo": r.activo,
+                "requiere_pago_previo": r.requiere_pago_previo,
             }
             for r in rules
         ]
@@ -5138,6 +5147,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             vigencia_hasta=v_hasta,
             listas_aplicables=req.listas_aplicables,
             activo=True,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
@@ -5355,6 +5365,7 @@ async def get_config_pronto_pago():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
+                "requiere_pago_previo": r.requiere_pago_previo,
             }
             for r in rules
         ]
@@ -5392,6 +5403,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_pronto_pago(rule)
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
@@ -5435,6 +5447,7 @@ async def get_config_volumen():
                     "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "activo": r.activo,
+                    "requiere_pago_previo": r.requiere_pago_previo,
                 }
             )
         return res
@@ -5475,6 +5488,7 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
@@ -5502,6 +5516,7 @@ async def get_config_recompra():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
+                "requiere_pago_previo": r.requiere_pago_previo,
             }
             for r in rules
         ]
@@ -5534,6 +5549,7 @@ async def post_config_recompra(req: RecompraRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
@@ -5560,6 +5576,7 @@ async def get_config_producto():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
+                "requiere_pago_previo": r.requiere_pago_previo,
             }
             for r in rules
         ]
@@ -5591,6 +5608,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_producto(rule)
         return {"status": "success", "message": "Regla de descuento por producto registrada."}
@@ -5617,6 +5635,7 @@ async def get_config_diferencial():
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
+                "requiere_pago_previo": r.requiere_pago_previo,
             }
             for r in rules
         ]
@@ -5648,6 +5667,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
         )
         repo.append_descuento_diferencial_cambiario(rule)
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
