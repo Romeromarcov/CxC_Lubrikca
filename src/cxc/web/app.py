@@ -602,6 +602,7 @@ class MetaRequest(BaseModel):
 class PricelistMapRequest(BaseModel):
     valid_pricelists_usd: list[str]
     valid_pricelists_ves: list[str]
+    historical_pricelist_enabled: bool = True
 
 
 class VincularMasivoRequest(BaseModel):
@@ -1656,7 +1657,7 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
 
         # Fetch latest exchange rates from SerieTasas
         last_tasa = repo.last_serie_tasa()
-        tasa_bcv = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
         tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
 
         # Fetch payment to get currency
@@ -1665,6 +1666,11 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             raise HTTPException(status_code=404, detail="Pago no encontrado.")
 
         monto_dec = Decimal(str(req.monto_aplicado))
+        hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
+        tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+            repo, req.so_id, hora_pago_confirmada, tasa_bcv_ultima
+        )
 
         # Calculate equivalents
         if pago.moneda == "USD":
@@ -1684,7 +1690,7 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             pago_id=req.pago_id,
             so_id=req.so_id,
             monto_aplicado=monto_dec,
-            hora_pago_confirmada=datetime.combine(pago.fecha_pago, datetime.min.time()),
+            hora_pago_confirmada=hora_pago_confirmada,
             tasa_bcv_aplicada=tasa_bcv,
             tasa_binance_aplicada=tasa_binance,
             es_tasa_heredada=False,
@@ -1697,6 +1703,7 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             estado=EstadoVinculacion.PENDIENTE,
             moneda_abono=Moneda(pago.moneda),
             tipo_tasa_abono=TipoTasa.BCV,
+            bcv_variante=bcv_variante,
         )
 
         # Write vinculacion row
@@ -1733,7 +1740,11 @@ def recalculate_all(so_id: str):
             config.engine.lista_usd: primary_usd_id,
             config.engine.lista_bcv: primary_ves_id,
         }
-        resolver = OdooPriceResolver(execute, pricelist_ids)
+        # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
+        # puntual de la orden no tiene item propio para un producto, probar
+        # las demás pricelists configuradas antes de asumir precio 0.
+        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
+        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
         runner = EngineRunner(repo, resolver, config.engine)
 
         # Calculate this SO
@@ -1781,7 +1792,11 @@ def recalculate_all_orders():
             config.engine.lista_usd: primary_usd_id,
             config.engine.lista_bcv: primary_ves_id,
         }
-        resolver = OdooPriceResolver(execute, pricelist_ids)
+        # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
+        # puntual de la orden no tiene item propio para un producto, probar
+        # las demás pricelists configuradas antes de asumir precio 0.
+        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
+        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
         runner = EngineRunner(repo, resolver, config.engine)
 
         resultados = runner.run_all(date.today())
@@ -2509,7 +2524,7 @@ async def get_reporte_saldos(refresh: bool = False):
                         "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
                     }
 
-        cutoff_historical = date(2026, 3, 12)
+        historical_enabled = is_historical_pricelist_enabled(repo)
         reporte = []
         saldo_minimo_items = []  # Tarea 3: facturadas con saldo residual <= $1
         vendedores_set = set()
@@ -2541,7 +2556,10 @@ async def get_reporte_saldos(refresh: bool = False):
             if ves_ids and str(ves_ids[0]).isdigit()
             else 5,
         }
-        price_resolver_engine = OdooPriceResolver(execute, pricelist_ids_map) if execute else None
+        _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
+        price_resolver_engine = (
+            OdooPriceResolver(execute, pricelist_ids_map, _fallback_pl_ids) if execute else None
+        )
 
         # Pre-fetch all collections once outside loop to eliminate N+1 I/O overhead
         all_lines_map = {}
@@ -2688,7 +2706,12 @@ async def get_reporte_saldos(refresh: bool = False):
 
             lista_id_str = str(o.lista_precios or "").strip()
             is_historical = (
-                not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical
+                not lista_id_str
+                or lista_id_str in ("0", "None", "")
+                or (
+                    historical_enabled
+                    and HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+                )
             )
 
             # Compute projected USD subtotal and total using UI candidate USD pricelists
@@ -2732,7 +2755,7 @@ async def get_reporte_saldos(refresh: bool = False):
             if is_historical:
                 lista_name = (
                     "Lista Histórica Auditoría"
-                    if o.fecha < cutoff_historical
+                    if HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
                     else "Lista Histórica (Sin Lista)"
                 )
                 monto_total_proyectado_usd = (
@@ -3484,6 +3507,73 @@ def _save_mapeo_to_json(usd_list: list[str], ves_list: list[str]) -> None:
         pass
 
 
+# Tarea 2 (auditoria precios/saldos Ventas): ventana de vigencia de la Lista
+# Histórica de Auditoría (ListasPreciosHistoricas / VES-BCV-Euro). Extremo
+# superior verificado contra datos reales -- S00092 (primera orden con lista
+# de Odoo propia y consistente tras la transición) está fechada 2026-03-13,
+# por eso el corte es EXCLUSIVO ese día (órdenes hasta 2026-03-12 inclusive
+# quedan históricas). Sin cota inferior no hay riesgo práctico hoy (no existen
+# órdenes antes de 2026-02-25), pero se define igual para que coincida con el
+# rango de negocio documentado (20-2-2026 al 13-3-2026).
+HISTORICAL_PRICE_LIST_START = date(2026, 2, 20)
+HISTORICAL_PRICE_LIST_END_EXCLUSIVE = date(2026, 3, 13)
+
+
+def is_historical_pricelist_enabled(repo) -> bool:
+    """Selector de Configuración (Tarea 1/2): permite desactivar la
+    sustitución por Lista Histórica de Auditoría para órdenes fechadas en la
+    ventana, sin afectar el fallback estructural de órdenes sin lista
+    asignada (esas siempre necesitan algún precio de referencia). Default
+    activo -- preserva el comportamiento preexistente si nadie lo toca.
+    """
+    try:
+        val = repo.get_config("historical_pricelist_enabled")
+        return val is None or val.strip().lower() not in ("false", "0", "no")
+    except Exception:
+        return True
+
+
+def orden_en_periodo_historico(repo, orden) -> bool:
+    """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
+    (Tarea 2) y el toggle correspondiente está activo."""
+    if orden is None or not isinstance(getattr(orden, "fecha", None), date):
+        return False
+    try:
+        return is_historical_pricelist_enabled(repo) and (
+            HISTORICAL_PRICE_LIST_START <= orden.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+        )
+    except Exception:
+        return False
+
+
+def resolver_tasa_bcv_vinculacion(
+    repo, so_id: str, hora_pago: datetime, tasa_bcv_default: Decimal
+) -> tuple[Decimal, str]:
+    """Tasa BCV a aplicar a una Vinculación nueva + su variante ('USD'/'EUR').
+
+    Tarea 2: las órdenes de la ventana histórica (20-Feb al 12-Mar-2026
+    inclusive) se pagaron con la tasa BCV-Euro como referencia, no la BCV-USD
+    normal -- si no hay tasa BCV-Euro capturada en SerieTasas para esa fecha,
+    se cae a la tasa BCV-USD normal (mejor tener algo que bloquear el
+    vínculo) y queda con variante 'USD' igual, para no fingir una tasa que no
+    existe.
+    """
+    try:
+        orden = repo.get_orden(so_id)
+    except Exception:
+        orden = None
+    if not orden_en_periodo_historico(repo, orden):
+        return tasa_bcv_default, "USD"
+    try:
+        tasas_rows = _all_serie_tasas_rows(repo)
+        tasa_eur = get_bcv_euro_rate_for_datetime(hora_pago, tasas_rows)
+    except Exception:
+        tasa_eur = None
+    if tasa_eur and tasa_eur > Decimal("0"):
+        return tasa_eur, "EUR"
+    return tasa_bcv_default, "USD"
+
+
 def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     """Obtiene las listas de precios USD y VES configuradas.
     Orden de prioridad:
@@ -3537,7 +3627,11 @@ async def get_config_listas_precio_mapeo():
     try:
         repo = get_repo()
         usd_list, ves_list = get_valid_pricelists_usd_and_ves(repo)
-        return {"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}
+        return {
+            "valid_pricelists_usd": usd_list,
+            "valid_pricelists_ves": ves_list,
+            "historical_pricelist_enabled": is_historical_pricelist_enabled(repo),
+        }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -3562,6 +3656,10 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
             repo = get_repo()
             repo.set_config("valid_pricelists_usd", ",".join(usd_list))
             repo.set_config("valid_pricelists_ves", ",".join(ves_list))
+            repo.set_config(
+                "historical_pricelist_enabled",
+                "true" if req.historical_pricelist_enabled else "false",
+            )
         except Exception as sheets_err:
             logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
 
@@ -3570,6 +3668,7 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
             "message": "Mapeo de listas de precios actualizado correctamente.",
             "valid_pricelists_usd": usd_list,
             "valid_pricelists_ves": ves_list,
+            "historical_pricelist_enabled": req.historical_pricelist_enabled,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4311,7 +4410,7 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
     try:
         repo = get_repo()
         last_tasa = repo.last_serie_tasa()
-        tasa_bcv = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
         tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
 
         processed = 0
@@ -4325,6 +4424,12 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
             monto_dec = Decimal(str(item.monto_aplicado))
             if monto_dec <= Decimal("0"):
                 continue
+
+            hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+            # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
+            tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+                repo, item.so_id, hora_pago_confirmada, tasa_bcv_ultima
+            )
 
             if pago.moneda == "USD":
                 equiv_usd_bcv = monto_dec
@@ -4343,7 +4448,7 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
                 pago_id=item.pago_id,
                 so_id=item.so_id,
                 monto_aplicado=monto_dec,
-                hora_pago_confirmada=datetime.combine(pago.fecha_pago, datetime.min.time()),
+                hora_pago_confirmada=hora_pago_confirmada,
                 tasa_bcv_aplicada=tasa_bcv,
                 tasa_binance_aplicada=tasa_binance,
                 es_tasa_heredada=False,
@@ -4356,6 +4461,7 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
                 estado=EstadoVinculacion.PENDIENTE,
                 moneda_abono=Moneda(pago.moneda),
                 tipo_tasa_abono=TipoTasa.BCV,
+                bcv_variante=bcv_variante,
             )
 
             repo.update_vinculacion(vinc)
@@ -6205,7 +6311,7 @@ async def get_auditoria():
         # como variables locales de get_reporte_saldos) -- /api/auditoria
         # siempre tiraba NameError y devolvia 500. Se replican aqui con la
         # misma logica.
-        cutoff_historical = date(2026, 3, 12)
+        historical_enabled = is_historical_pricelist_enabled(repo)
         hist_rows = repo.all_listas_precios_historicas()
         hist_map: dict[str, dict[str, Any]] = {}
         for _hr in hist_rows:
@@ -6424,7 +6530,12 @@ async def get_auditoria():
                 f"Lista VES (#{lista_id_str})" if is_ves else f"Lista USD (#{lista_id_str})"
             )
             is_historical = (
-                not lista_id_str or lista_id_str in ("0", "None", "") or o.fecha < cutoff_historical
+                not lista_id_str
+                or lista_id_str in ("0", "None", "")
+                or (
+                    historical_enabled
+                    and HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+                )
             )
 
             # Check 1: Unit prices vs correct official pricelist or Historical List
@@ -6450,9 +6561,12 @@ async def get_auditoria():
                     price_official = (
                         hist_info["usd"] if hist_info and hist_info["usd"] > Decimal("0") else None
                     )
+                    _en_ventana_historica = (
+                        HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+                    )
                     cur_label = (
-                        "Lista Histórica Auditoría (Pre-12-Mar)"
-                        if o.fecha < cutoff_historical
+                        "Lista Histórica Auditoría (Pre-13-Mar)"
+                        if _en_ventana_historica
                         else "Lista Histórica Auditoría (Sin Lista)"
                     )
                 else:

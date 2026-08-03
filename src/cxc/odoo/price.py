@@ -36,12 +36,71 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         self,
         execute: ExecuteFn,
         pricelist_ids: dict[str, int],
+        fallback_pricelist_ids: list[int] | None = None,
     ) -> None:
         self._execute = execute
         self._pricelist_ids = pricelist_ids
+        # Tarea 4 (auditoria saldos teoricos): ambas listas (USD y VES/BCV)
+        # están fijadas en USD por definición de negocio -- si la lista
+        # asignada a la orden no tiene una regla de precio fijo para el
+        # producto (item nunca creado en esa pricelist puntual), se prueba
+        # con las demás pricelists configuradas en Configuración antes de
+        # rendirse a `list_price_usd` (que en la práctica suele estar en 0
+        # para productos que Odoo nunca vendió por esa lista -- ver caso real
+        # S00754/producto 1655: sin regla en pricelist 5, con regla en 8,
+        # list_price_usd=0.0). Root cause del bug de "teórico = 0".
+        self._fallback_pricelist_ids = list(fallback_pricelist_ids or [])
         # Claves de forma variable: (producto, lista, fecha) en precio(),
         # (producto, "volumen") en volumen().
         self._cache: dict[tuple[str, ...], Decimal] = {}
+
+    def _precio_fijo_en_lista(
+        self, pricelist_id: int, prod_id: int, fecha: date | None
+    ) -> Decimal | None:
+        """Precio de la regla ``compute_price=fixed`` vigente a ``fecha`` en
+        ``pricelist_id`` para ``prod_id``, o ``None`` si no hay ninguna."""
+        try:
+            rules = self._execute(
+                "product.pricelist.item",
+                "search_read",
+                [
+                    [
+                        ["pricelist_id", "=", pricelist_id],
+                        ["product_tmpl_id", "=", prod_id],
+                        ["compute_price", "=", "fixed"],
+                    ]
+                ],
+                {"fields": ["fixed_price", "date_start", "date_end"]},
+            )
+        except Exception:
+            rules = []
+
+        if not rules:
+            return None
+
+        matched = []
+        from datetime import datetime
+
+        for r in rules:
+            d_start_str = r.get("date_start")
+            d_end_str = r.get("date_end")
+            d_start = (
+                datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
+            )
+            d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
+
+            if fecha:
+                if d_start and fecha < d_start:
+                    continue
+                if d_end and fecha > d_end:
+                    continue
+            p_val = to_decimal(str(r.get("fixed_price") or "0"))
+            matched.append((d_start or date.min, p_val))
+
+        if matched:
+            matched.sort(key=lambda x: x[0], reverse=True)
+            return matched[0][1]
+        return to_decimal(str(rules[0]["fixed_price"]))
 
     def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
         clave = (producto, lista, fecha.isoformat() if fecha else "sin_fecha")
@@ -64,56 +123,24 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         except (ValueError, TypeError):
             prod_id = None
 
-        rules = []
+        precio: Decimal | None = None
         if prod_id:
-            try:
-                rules = self._execute(
-                    "product.pricelist.item",
-                    "search_read",
-                    [
-                        [
-                            ["pricelist_id", "=", pricelist_id],
-                            ["product_tmpl_id", "=", prod_id],
-                            ["compute_price", "=", "fixed"],
-                        ]
-                    ],
-                    {"fields": ["fixed_price", "date_start", "date_end"]},
-                )
-            except Exception:
-                rules = []
-
-        if rules:
-            matched = []
-            from datetime import datetime
-
-            for r in rules:
-                d_start_str = r.get("date_start")
-                d_end_str = r.get("date_end")
-                d_start = (
-                    datetime.strptime(d_start_str[:10], "%Y-%m-%d").date() if d_start_str else None
-                )
-                d_end = datetime.strptime(d_end_str[:10], "%Y-%m-%d").date() if d_end_str else None
-
-                if fecha:
-                    if d_start and fecha < d_start:
+            precio = self._precio_fijo_en_lista(pricelist_id, prod_id, fecha)
+            if precio is None:
+                for fallback_id in self._fallback_pricelist_ids:
+                    if fallback_id == pricelist_id:
                         continue
-                    if d_end and fecha > d_end:
-                        continue
-                p_val = to_decimal(str(r.get("fixed_price") or "0"))
-                matched.append((d_start or date.min, p_val))
+                    precio = self._precio_fijo_en_lista(fallback_id, prod_id, fecha)
+                    if precio is not None:
+                        break
 
-            if matched:
-                matched.sort(key=lambda x: x[0], reverse=True)
-                precio = matched[0][1]
-            else:
-                precio = to_decimal(str(rules[0]["fixed_price"]))
-        else:
-            # Sin regla de precio fijo para esta pricelist -- usar el campo
-            # "Precio de venta $" (list_price_usd) de la ficha del producto,
-            # NUNCA "list_price" (esa está en VES, la moneda de la compañía
-            # en Odoo -- tratarla como USD infla el precio ~800x). Verificado
-            # en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W SAE 40
-            # (Tambor)" sin regla en la lista de la orden -- list_price
+        if precio is None:
+            # Sin regla de precio fijo en ninguna pricelist candidata -- usar
+            # el campo "Precio de venta $" (list_price_usd) de la ficha del
+            # producto, NUNCA "list_price" (esa está en VES, la moneda de la
+            # compañía en Odoo -- tratarla como USD infla el precio ~800x).
+            # Verificado en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W
+            # SAE 40 (Tambor)" sin regla en la lista de la orden -- list_price
             # devuelve 1,457,052.51 (VES) vs list_price_usd 1,961.54 (USD).
             precio = Decimal("0.0")
             if prod_id:

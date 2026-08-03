@@ -255,6 +255,8 @@ def descuento_volumen_vigente(
     cantidad_unidades: Decimal = Decimal("0"),
     fecha: date = date(2026, 1, 1),
     lista_precios: str = "*",
+    valid_ves: list[str] | None = None,
+    valid_usd: list[str] | None = None,
 ) -> DescuentoVolumen | None:
     """Retorna la regla de descuento por volumen aplicable para la marca/categoría."""
     candidatas = []
@@ -265,7 +267,7 @@ def descuento_volumen_vigente(
             continue
         if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
             continue
-        if not _match_lista(r.listas_aplicables, lista_precios):
+        if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
             continue
 
         unidad = str(r.unidad_medida or "").upper()
