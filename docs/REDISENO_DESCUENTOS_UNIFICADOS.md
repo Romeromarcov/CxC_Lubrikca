@@ -184,7 +184,7 @@ Diseño de las columnas pedidas, en el orden de la tarea:
 |---|---|---|---|
 | a | Equivalente lista USD | Si `orden.lista_precios == lista_usd`: mismo valor que "Venta Bruta Teórica". Si nació en VES: `Σ price_resolver.precio(producto, lista_usd, fecha_orden) * cantidad` — **mismo cálculo que ya hace el motor internamente** (`precio_target_usd` en `discounts.py:503-509`) para el "Equiparación Binance". Reutilizar esa lógica, no reimplementarla — exponer `precio_target_usd` como un campo nuevo de `BandejaFacturacion` (p.ej. `equivalente_lista_usd`) para que Ventas lo lea, no lo recalcule. |
 | b | Teóricos VES/USD vigentes | Igual patrón: el motor ya resuelve precio por lista y fecha (`_precio_linea`) respetando la excepción de Lista Histórica de Auditoría (`orden_es_historica`/`historical_price_map`, ya implementada). Exponer dos campos nuevos en `BandejaFacturacion`: `teorico_lista_ves`, `teorico_lista_usd`, calculados una vez en `calcular_factura()` reutilizando `_precio_linea` con `lista_bcv`/`lista_usd` fijas (no la lista aplicada real de la orden). |
-| c | Descuentos aplicados (orden/factura) + validación visual | "Aplicados en orden" = lo que Odoo trae en `sale.order.line.discount` (ya se lee para otros propósitos). "Aplicados en factura" = `account.move.line.discount` / notas ya reflejadas en Odoo. La "validación visual" es una comparación contra `BandejaFacturacion.descuentos_detalle` (lo que el motor dictamina) — **esto ya es, conceptualmente, lo que hace `discount_audit.py`** (`auditar_descuento_orden`/`auditar_descuento_factura`). Diseño: exponer el resultado de `discount_audit` como 2 columnas nuevas en la fila de Ventas en vez de sólo en la pestaña de Auditoría — no duplicar el cálculo, sólo mostrarlo en otra vista. |
+| c | Descuentos aplicados (orden/factura) + validación visual | "Aplicados en orden" = lo que Odoo trae en `sale.order.line.discount` (ya se lee para otros propósitos). "Aplicados en factura" = `account.move.line.discount` / notas ya reflejadas en Odoo. La "validación visual" es una comparación contra `BandejaFacturacion.descuentos_detalle` (lo que el motor dictamina) — **esto ya es, conceptualmente, lo que hace `discount_audit.py`** (`auditar_descuento_orden`/`auditar_descuento_factura`). Diseño: exponer el resultado de `discount_audit` como 2 columnas nuevas en la fila de Ventas en vez de sólo en la pestaña de Auditoría — no duplicar el cálculo, sólo mostrarlo en otra vista. **Bloqueante encontrado, ver "Hallazgo no contemplado #2" abajo: la persistencia de este resultado (`bandeja_auditoria`, vía `repo.all_auditoria()`/`append_auditoria_rows()`) sólo existe en `SheetsRepository` — `PostgresRepository` no la implementa, así que hoy `/api/auditoria-descuentos` es un no-op silencioso en producción (Postgres).** Antes de construir 3c hay que decidir: (i) agregar esos métodos a `PostgresRepository` (con su propia migración para leer/escribir `bandeja_auditoria`, tabla que sí existe en `schema.py` pero sin código que la use), o (ii) llamar `discount_audit.py` en línea dentro de `/api/ventas` sin depender de esa persistencia. |
 | d | Descuentos pendientes de aplicar | `BandejaFacturacion.total_descuentos` (lo que el motor dictamina) menos lo que ya está aplicado en Odoo (columna c). Cálculo derivado, no nueva lógica de descuento — se apoya en (c). |
 | e | Descuentos aplicados desde el sistema (uso interno, posteriores a orden/factura en Odoo) | **Dependencia abierta explícita** (ver más abajo) — depende de una lógica de Facturación aún no construida. Se deja el campo modelado (columna nullable en la respuesta de `/api/ventas`, valor `null`/`"pendiente"` hasta que exista esa lógica) pero **no se implementa el cálculo** en este cambio. |
 | f | N/C (reutilizar lógica existente) y N/D (nueva) atadas a la factura | N/C: ya se lee de Odoo `account.move` con `move_type=out_refund` y se compara en `/api/auditoria` y `reconcile.py` — reutilizar esa función tal cual. N/D: **no existe hoy ninguna lectura de notas de débito** (`move_type=out_invoice` con referencia a otra factura, o el tipo que Odoo use en esta instancia — a confirmar en `docs/ODOO_MAPEO.md`, que no documenta N/D). Diseño: nueva función `odoo_notas_debito(so_id_or_factura_id)` en el mismo módulo/patrón que ya lee N/C, de solo lectura (Odoo nunca se escribe). |
@@ -329,9 +329,9 @@ cambia — sin errores de JS en consola.
 
 ---
 
-## Caso no contemplado (registrado explícitamente, no resuelto implícitamente)
+## Casos no contemplados (registrados explícitamente, no resueltos implícitamente)
 
-**Duplicación de rutas `/api/config/descuentos-volumen` (GET y POST).**
+### #1 — Ruta duplicada `/api/config/descuentos-volumen` (GET y POST)
 Durante la implementación de la Tarea 1 se encontró que
 `src/cxc/web/app.py` registra **dos veces** la misma ruta
 `GET/POST /api/config/descuentos-volumen` (una vez usando
@@ -345,6 +345,27 @@ nuevo en **ambas** definiciones para no dejar una rama muerta sin el flag.
 Se registra aquí para que quede explícito y no se pierda: alguien debe
 decidir cuál de las dos implementaciones es la "correcta" y eliminar la
 otra en un cambio aparte.
+
+### #2 — `bandeja_auditoria` (discrepancias descuento/NC) no existe en Postgres
+
+Al diseñar la Tarea 3c (descuentos aplicados + validación visual, que iba a
+reutilizar `discount_audit.py` vía la bandeja ya persistida) se encontró que
+`repo.all_auditoria()` / `repo.append_auditoria_rows()` / la actualización de
+estado de `/api/auditoria-descuentos` **sólo están implementados en
+`SheetsRepository`** (`src/cxc/sheets/repository.py:445-454` y alrededores).
+`PostgresRepository` no define estos métodos en absoluto, aunque la tabla
+`bandeja_auditoria` sí existe en `src/cxc/db/schema.py` (columnas listas,
+sin código que las lea/escriba). Como el código de `web/app.py` siempre
+comprueba `hasattr(repo, "all_auditoria")` antes de usarlo, esto no lanza un
+error — **simplemente `/api/auditoria-descuentos` devuelve una lista vacía
+en silencio cuando `REPO_BACKEND=postgres`**, que es el backend de
+producción actual (ver hallazgo del reporte de investigación: "migracion a
+Postgres completa"). Es decir, la bandeja de discrepancias de descuentos/NC
+está efectivamente apagada en producción hoy, independientemente de esta
+tarea. No se corrigió aquí (es una laguna preexistente del backend Postgres,
+no algo introducido por el rediseño de descuentos) pero bloquea la Tarea 3c
+tal como estaba diseñada originalmente — ver la nota en la tabla de la
+Tarea 3c más arriba con las dos alternativas de diseño.
 
 ---
 
