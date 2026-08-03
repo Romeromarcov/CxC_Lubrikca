@@ -6995,6 +6995,14 @@ async def get_ventas(
                     "total_facturado_neto": round(total_facturado_neto, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
+                    # Tarea 3a/3b: equivalentes/teóricos por lista, calculados
+                    # por el motor (BandejaFacturacion) -- no se recalculan
+                    # aquí, solo se leen y formatean.
+                    "equivalente_lista_usd": (
+                        round(float(b.equivalente_lista_usd), 2) if b else None
+                    ),
+                    "teorico_lista_ves": round(float(b.teorico_lista_ves), 2) if b else None,
+                    "teorico_lista_usd": round(float(b.teorico_lista_usd), 2) if b else None,
                 }
             )
 

@@ -462,6 +462,15 @@ class BandejaFacturacion:
     candidata_a_cierre: bool = False
     aprobado_por: str | None = None
     estado: EstadoBandeja = EstadoBandeja.CALCULADO
+    # Tarea 3 (rediseño de Ventas) -- equivalentes/teóricos por lista,
+    # calculados una vez por el motor (mismo precio_resolver que
+    # precio_base_calculado) para que Ventas/Auditoría los lean sin
+    # recalcular. Ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md.
+    equivalente_lista_usd: Decimal = Decimal("0")
+    teorico_lista_ves: Decimal = Decimal("0")
+    teorico_lista_usd: Decimal = Decimal("0")
+    descuentos_teorico_ves: Decimal = Decimal("0")
+    descuentos_teorico_usd: Decimal = Decimal("0")
 
 
 @dataclass

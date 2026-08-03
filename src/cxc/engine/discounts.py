@@ -620,6 +620,54 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     )
 
 
+def _teoricos_por_lista(
+    inp: EngineInputs, pura_bcv: bool, lista_ves_name: str, lista_usd_name: str
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    """Tarea 3a/3b/4a/4b: teóricos y descuentos correspondientes en cada
+
+    lista vigente (VES y USD), reutilizando ``_calcular_componentes`` -- la
+    misma función que calcula el neto real -- para no duplicar la lógica de
+    descuentos fuera del motor. Devuelve
+    ``(teorico_ves, teorico_usd, equivalente_usd, descuentos_ves, descuentos_usd)``.
+    """
+    try:
+        comp_ves = _calcular_componentes(inp, lista_ves_name, pura_bcv=True)
+    except KeyError:
+        # Lista VES sin precio para algún producto en el resolver (ej. en
+        # tests con catálogos parciales) -- no se puede derivar el teórico.
+        comp_ves = _Componentes(
+            precio_base=Decimal("0"),
+            pct_recompra=Decimal("0"),
+            contado_proy=Decimal("0"),
+            bcv_completo=Decimal("0"),
+            volumen=Decimal("0"),
+            nc=Decimal("0"),
+        )
+    try:
+        comp_usd = _calcular_componentes(inp, lista_usd_name, pura_bcv=False)
+    except KeyError:
+        comp_usd = _Componentes(
+            precio_base=Decimal("0"),
+            pct_recompra=Decimal("0"),
+            contado_proy=Decimal("0"),
+            bcv_completo=Decimal("0"),
+            volumen=Decimal("0"),
+            nc=Decimal("0"),
+        )
+    descuentos_ves = comp_ves.pct_recompra + comp_ves.contado_proy + comp_ves.volumen
+    descuentos_usd = comp_usd.pct_recompra + comp_usd.contado_proy + comp_usd.volumen
+    # 3a: "igual si nació en USD; teórico si nació en VES" -- en ambos casos
+    # es el precio resuelto contra la lista USD vigente (mismo cálculo).
+    equivalente_usd = comp_usd.precio_base
+    return (
+        q2(comp_ves.precio_base),
+        q2(comp_usd.precio_base),
+        q2(equivalente_usd),
+        q2(descuentos_ves),
+        q2(descuentos_usd),
+    )
+
+
 def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     """Calcula la fila de BandejaFacturacion para una orden (cierre híbrido)."""
     cfg = inp.engine_config
@@ -630,6 +678,14 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     pura_bcv = es_ruta_bcv_pura(vincs)
     lista = _determinar_lista(inp, pura_bcv)
     comp = _calcular_componentes(inp, lista, pura_bcv)
+
+    (
+        teorico_ves,
+        teorico_usd,
+        equivalente_usd,
+        descuentos_teorico_ves,
+        descuentos_teorico_usd,
+    ) = _teoricos_por_lista(inp, pura_bcv, str(cfg.lista_bcv), str(cfg.lista_usd))
 
     contado_evaluable = comp.flags["contado_evaluable"]
     valor_pagado = valor_pagado_usd(vincs) if vincs else Decimal("0")
@@ -764,4 +820,9 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         requiere_revision=requiere_revision,
         candidata_a_cierre=candidata,
         estado=EstadoBandeja.CALCULADO,
+        equivalente_lista_usd=equivalente_usd,
+        teorico_lista_ves=teorico_ves,
+        teorico_lista_usd=teorico_usd,
+        descuentos_teorico_ves=descuentos_teorico_ves,
+        descuentos_teorico_usd=descuentos_teorico_usd,
     )

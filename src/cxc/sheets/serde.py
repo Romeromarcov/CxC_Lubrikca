@@ -687,6 +687,11 @@ def bandeja_to_row(b: BandejaFacturacion) -> Row:
         "candidata_a_cierre": s_bool(b.candidata_a_cierre),
         "aprobado_por": s_optstr(b.aprobado_por),
         "estado": b.estado.value,
+        "equivalente_lista_usd": str(b.equivalente_lista_usd),
+        "teorico_lista_ves": str(b.teorico_lista_ves),
+        "teorico_lista_usd": str(b.teorico_lista_usd),
+        "descuentos_teorico_ves": str(b.descuentos_teorico_ves),
+        "descuentos_teorico_usd": str(b.descuentos_teorico_usd),
     }
 
 
@@ -714,6 +719,11 @@ def bandeja_from_row(r: Mapping[str, str]) -> BandejaFacturacion:
         candidata_a_cierre=p_bool(r.get("candidata_a_cierre", "FALSE")),
         aprobado_por=p_optstr(r.get("aprobado_por", "")),
         estado=EstadoBandeja(r.get("estado", "calculado")),
+        equivalente_lista_usd=p_dec(r.get("equivalente_lista_usd", "0")),
+        teorico_lista_ves=p_dec(r.get("teorico_lista_ves", "0")),
+        teorico_lista_usd=p_dec(r.get("teorico_lista_usd", "0")),
+        descuentos_teorico_ves=p_dec(r.get("descuentos_teorico_ves", "0")),
+        descuentos_teorico_usd=p_dec(r.get("descuentos_teorico_usd", "0")),
     )
 
 

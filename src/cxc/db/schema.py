@@ -373,6 +373,12 @@ bandeja_facturacion = Table(
     Column("candidata_a_cierre", Boolean, nullable=False, server_default="false"),
     Column("aprobado_por", String, nullable=True),
     Column("estado", estado_bandeja_enum, nullable=False, server_default="calculado"),
+    # Tarea 3 (rediseño de Ventas) -- equivalentes/teóricos por lista.
+    Column("equivalente_lista_usd", MONEY, nullable=False, server_default="0"),
+    Column("teorico_lista_ves", MONEY, nullable=False, server_default="0"),
+    Column("teorico_lista_usd", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_ves", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_usd", MONEY, nullable=False, server_default="0"),
 )
 
 # Hija normalizada de BandejaFacturacion.descuentos_detalle (antes un blob

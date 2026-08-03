@@ -1,9 +1,12 @@
 # Rediseño CxC_Lubrikca — Descuentos unificados, `requiere_pago_previo`, Ventas/Auditoría, Configuración en subpáginas
 
-Estado: Tarea 1 implementada y probada. Tareas 2–4 y la reorganización de
-Configuración quedan diseñadas y documentadas aquí, con una porción de la
-Tarea 2 ya cerrada por hallazgo de auditoría (ver abajo). Implementación de
-3/4/Configuración queda como trabajo futuro explícito (ver "Pendientes").
+Estado: Tarea 1 implementada y probada. Tarea 2 cerrada por hallazgo de
+auditoría (no había nada que unificar; el flujo reactivo Cobranza→Ventas
+queda diseñado, no implementado). Tarea 3a/3b implementadas y probadas
+(equivalente/teóricos por lista en `BandejaFacturacion`); 3c–3g diseñadas.
+Tarea 4a.2/b.2 (el insumo "descuentos correspondientes" dinámico) ya
+calculado por 3a/3b; el resto de 4 y la reorganización de Configuración
+quedan diseñados, no implementados (ver "Pendientes").
 
 ## Tarea 1 — `requiere_pago_previo` en reglas de descuento (IMPLEMENTADA)
 
@@ -135,7 +138,38 @@ tipos de regla (documentado, no resuelto).
 
 ---
 
-## Tarea 3 — Nuevas columnas en tabla Ventas (DISEÑO, no implementado)
+## Tarea 3 — Nuevas columnas en tabla Ventas
+
+### 3a/3b — IMPLEMENTADAS
+
+- `BandejaFacturacion` gana 5 campos nuevos: `equivalente_lista_usd`,
+  `teorico_lista_ves`, `teorico_lista_usd`, `descuentos_teorico_ves`,
+  `descuentos_teorico_usd` (`src/cxc/models.py`).
+- El motor los calcula en `calcular_factura()` vía la nueva función pura
+  `_teoricos_por_lista()` (`src/cxc/engine/discounts.py`), que **reutiliza
+  `_calcular_componentes()`** —la misma función que produce el neto real—
+  corriéndola una vez contra la lista VES vigente y otra contra la lista USD
+  vigente (respetando la excepción de Lista Histórica de Auditoría, ya que
+  `_precio_unitario_linea` se usa sin cambios). No hay cálculo de descuentos
+  nuevo ni duplicado: es la misma lógica, con la lista forzada.
+  - Si el catálogo no tiene precio para una de las dos listas (p. ej. datos
+    de prueba parciales), se degrada a `0` en vez de propagar `KeyError`
+    (mismo patrón que ya usaba `precio_target_usd` en el código existente).
+- `equivalente_lista_usd`: "igual si nació en USD, teórico si nació en VES"
+  se resuelve siempre como el teórico contra la lista USD vigente (que
+  coincide con el valor real cuando la orden efectivamente nació ahí).
+- Migración: `alembic/versions/f6a7b8c9d0e1_add_bandeja_teoricos_lista.py`
+  agrega las 5 columnas `NUMERIC(18,4) NOT NULL DEFAULT 0` a
+  `bandeja_facturacion`. Verificada de punta a punta contra un Postgres real
+  (`alembic upgrade head` limpio).
+- Repositorio Sheets (legado) actualizado en `serde.bandeja_to_row`/`bandeja_from_row`.
+- `/api/ventas` expone `equivalente_lista_usd`, `teorico_lista_ves`,
+  `teorico_lista_usd` en cada fila — lectura directa de `BandejaFacturacion`,
+  sin recalcular.
+- Tests: `tests/test_teoricos_por_lista.py` (orden nacida en USD, orden
+  nacida en VES, catálogo parcial sin romper el cálculo).
+
+### 3c–3g — DISEÑO (no implementado)
 
 Estado actual de `/api/ventas` (`src/cxc/web/app.py:~6800-7005`) y su tabla:
 Orden, Cliente, Vendedor, Fecha, Venta Bruta Teórica, Bruta Teórica + IVA,
@@ -305,16 +339,25 @@ otra en un cambio aparte.
 
 ## Checklist de migraciones Alembic
 
-- [x] `e5f6a7b8c9d0_add_requiere_pago_previo.py` creada (agrega
-      `requiere_pago_previo BOOLEAN NOT NULL` a `descuentos_pronto_pago`,
-      `descuento_bcv_completo`, `descuentos_diferencial_cambiario`,
-      `descuentos_volumen`, `promocion_primera_compra`,
-      `descuentos_recompra`, `descuentos_producto`, `reglas_recurrencia`).
-- [ ] **Pendiente de aplicar** (`alembic upgrade head`) en cada entorno con
-      Postgres real — no se pudo ejecutar en este sandbox por no tener una
-      base de datos disponible. Verificar `alembic current` antes y después
-      en staging/producción antes de desplegar el código que la usa.
-- [ ] No se requieren migraciones adicionales para la Tarea 1. Tareas 3/4
-      requerirán una migración nueva sobre `bandeja_facturacion` cuando se
-      implementen (columnas `equivalente_lista_usd`, `teorico_lista_ves`,
-      `teorico_lista_usd`) — no incluida en este cambio.
+- [x] `e5f6a7b8c9d0_add_requiere_pago_previo.py` creada y **verificada**
+      (agrega `requiere_pago_previo BOOLEAN NOT NULL` a
+      `descuentos_pronto_pago`, `descuento_bcv_completo`,
+      `descuentos_diferencial_cambiario`, `descuentos_volumen`,
+      `promocion_primera_compra`, `descuentos_recompra`,
+      `descuentos_producto`, `reglas_recurrencia`).
+- [x] `f6a7b8c9d0e1_add_bandeja_teoricos_lista.py` creada y **verificada**
+      (agrega `equivalente_lista_usd`, `teorico_lista_ves`,
+      `teorico_lista_usd`, `descuentos_teorico_ves`, `descuentos_teorico_usd`
+      — todas `NUMERIC(18,4) NOT NULL DEFAULT 0` — a `bandeja_facturacion`).
+- [x] Ambas migraciones se corrieron con `alembic upgrade head` contra un
+      Postgres 16 real (localmente, mismo flujo que usa el job de CI:
+      levantar el servidor, crear el rol/DB de la cadena `DATABASE_URL`,
+      aplicar la cadena completa desde `1fc70f5694c1` sin errores). CI
+      (`.github/workflows/ci.yml`) también corre `alembic upgrade head`
+      contra un servicio Postgres antes de la suite de tests — confirmado
+      verde en el PR.
+- [ ] Verificar `alembic current` en staging/producción antes de desplegar
+      (no se tocó ningún entorno real fuera de CI/este sandbox).
+- [ ] Tarea 3c–3g (descuentos aplicados/pendientes por orden-factura, N/D)
+      requerirán migraciones nuevas cuando se implementen — no incluidas
+      en este cambio.

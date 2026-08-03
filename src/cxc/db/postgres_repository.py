@@ -1133,6 +1133,11 @@ def _bandeja_to_row(b: BandejaFacturacion) -> dict[str, Any]:
         "candidata_a_cierre": b.candidata_a_cierre,
         "aprobado_por": b.aprobado_por,
         "estado": b.estado.value,
+        "equivalente_lista_usd": b.equivalente_lista_usd,
+        "teorico_lista_ves": b.teorico_lista_ves,
+        "teorico_lista_usd": b.teorico_lista_usd,
+        "descuentos_teorico_ves": b.descuentos_teorico_ves,
+        "descuentos_teorico_usd": b.descuentos_teorico_usd,
     }
 
 
@@ -1149,6 +1154,11 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
         candidata_a_cierre=r.candidata_a_cierre,
         aprobado_por=r.aprobado_por,
         estado=EstadoBandeja(r.estado),
+        equivalente_lista_usd=r.equivalente_lista_usd,
+        teorico_lista_ves=r.teorico_lista_ves,
+        teorico_lista_usd=r.teorico_lista_usd,
+        descuentos_teorico_ves=r.descuentos_teorico_ves,
+        descuentos_teorico_usd=r.descuentos_teorico_usd,
     )
 
 
