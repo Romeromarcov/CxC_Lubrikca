@@ -6798,11 +6798,55 @@ async def get_auditoria():
             else:
                 discrepancias_pendientes.append(item)
 
+        # Tarea 4 (venta bruta teórica derivada, VES/USD): a/b/c del diseño
+        # -- lee equivalente_lista_usd/teorico_lista_ves/teorico_lista_usd/
+        # descuentos_teorico_ves/descuentos_teorico_usd de BandejaFacturacion
+        # (Tarea 3a/3b, ya calculados por el motor) y solo aplica impuestos +
+        # resta -- no recalcula ningún descuento aquí.
+        _iva_rate = float(config.engine.iva_rate)
+        venta_bruta_teorica_auditoria = []
+        for o in ordenes:
+            b = bandeja_map.get(o.so_id)
+            if b is None:
+                continue
+            teorico_ves = float(b.teorico_lista_ves)
+            teorico_usd = float(b.teorico_lista_usd)
+            desc_ves = float(b.descuentos_teorico_ves)
+            desc_usd = float(b.descuentos_teorico_usd)
+            ves_bruta_mas_iva = teorico_ves * (1 + _iva_rate)
+            ves_neta = teorico_ves - desc_ves
+            ves_neta_mas_iva = ves_neta * (1 + _iva_rate)
+            usd_bruta_mas_iva = teorico_usd * (1 + _iva_rate)
+            usd_neta = teorico_usd - desc_usd
+            usd_neta_mas_iva = usd_neta * (1 + _iva_rate)
+            venta_bruta_teorica_auditoria.append(
+                {
+                    "so_id": o.so_id,
+                    "lista_ves": {
+                        "bruta_teorica": round(teorico_ves, 2),
+                        "bruta_teorica_mas_iva": round(ves_bruta_mas_iva, 2),
+                        "neta_teorica": round(ves_neta, 2),
+                        "neta_teorica_mas_iva": round(ves_neta_mas_iva, 2),
+                    },
+                    "lista_usd": {
+                        "bruta_teorica": round(teorico_usd, 2),
+                        "bruta_teorica_mas_iva": round(usd_bruta_mas_iva, 2),
+                        "neta_teorica": round(usd_neta, 2),
+                        "neta_teorica_mas_iva": round(usd_neta_mas_iva, 2),
+                    },
+                    "venta_real": {
+                        "orden_total": round(float(o.monto_total), 2),
+                        "factura_neto": round(float(b.total_motor), 2),
+                    },
+                }
+            )
+
         return {
             "operaciones_conformes": operaciones_conformes,
             "discrepancias": discrepancias_pendientes,
             "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
             "anomalias_aceptadas": anomalias_aceptadas,
+            "venta_bruta_teorica_auditoria": venta_bruta_teorica_auditoria,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),

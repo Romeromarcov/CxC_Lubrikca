@@ -4,9 +4,10 @@ Estado: Tarea 1 implementada y probada. Tarea 2 cerrada por hallazgo de
 auditoría (no había nada que unificar; el flujo reactivo Cobranza→Ventas
 queda diseñado, no implementado). Tarea 3a/3b implementadas y probadas
 (equivalente/teóricos por lista en `BandejaFacturacion`); 3c–3g diseñadas.
-Tarea 4a.2/b.2 (el insumo "descuentos correspondientes" dinámico) ya
-calculado por 3a/3b; el resto de 4 y la reorganización de Configuración
-quedan diseñados, no implementados (ver "Pendientes").
+Tarea 4 implementada (`venta_bruta_teorica_auditoria` en
+`GET /api/auditoria`, derivada de 3a/3b + IVA, sin UI todavía). Queda
+pendiente: la reorganización de Configuración en subpáginas (diseñada, no
+implementada) y lo detallado en "Dependencias abiertas".
 
 ## Tarea 1 — `requiere_pago_previo` en reglas de descuento (IMPLEMENTADA)
 
@@ -205,34 +206,65 @@ su propia revisión, no agregado apresuradamente a este.
 
 ---
 
-## Tarea 4 — Cálculos de auditoría de venta bruta teórica (DISEÑO)
+## Tarea 4 — Cálculos de auditoría de venta bruta teórica (IMPLEMENTADA)
 
-Con (3a)/(3b) implementados, los cálculos pedidos son puramente derivados:
+Con (3a)/(3b) ya calculando `teorico_lista_ves`/`teorico_lista_usd`/
+`descuentos_teorico_ves`/`descuentos_teorico_usd` en `BandejaFacturacion`,
+los cálculos de la Tarea 4 son puramente derivados (aritmética, sin ningún
+descuento nuevo) y se exponen en un campo nuevo del endpoint
+`GET /api/auditoria`: `venta_bruta_teorica_auditoria` (lista, una entrada
+por orden con bandeja calculada), con esta forma:
 
-- **a.1** `teorico_lista_ves + impuestos` (IVA/IGTF sobre `teorico_lista_ves`,
-  mismas tasas que ya usa `/api/ventas` para las columnas "+ IVA" actuales).
-- **a.2** `teorico_lista_ves − descuentos_correspondientes`. Aquí
-  "descuentos correspondientes" es la salida del motor recalculada con la
-  lista VES **forzada** en vez de la lista real aplicada — es decir, correr
-  `_calcular_componentes(inp, lista=lista_ves, pura_bcv=...)` (ya existe como
-  función interna) para obtener el desglose que aplicaría *si* la orden
-  hubiera nacido/cerrado en VES. Esto es dinámico por diseño (se
-  recalcula cuando cambian los pagos, igual que el resto del motor) — no es
-  un número fijo.
-- **a.3** `(a.2) + impuestos`.
-- **b.1–b.3** Idéntico con `lista_usd`.
-- **c** `Venta real` ya existe (Venta Bruta Real / Venta Neta Real /
-  Facturado columnas actuales) — sólo se pide **mostrarla junto a (a)/(b)**
-  en la misma vista de Auditoría, no un cálculo nuevo.
+```json
+{
+  "so_id": "S00123",
+  "lista_ves": {
+    "bruta_teorica": 3600.00,           // a.1 sin impuestos (= teorico_lista_ves)
+    "bruta_teorica_mas_iva": 4176.00,   // a.1 + IVA
+    "neta_teorica": 3564.00,            // a.2 = teorico_lista_ves - descuentos_teorico_ves
+    "neta_teorica_mas_iva": 4134.24     // a.3 = a.2 + IVA
+  },
+  "lista_usd": { "...": "idéntico con teorico_lista_usd/descuentos_teorico_usd (b.1-b.3)" },
+  "venta_real": {
+    "orden_total": 1000.00,             // c: OrdenVenta.monto_total (real, Odoo)
+    "factura_neto": 970.00              // c: BandejaFacturacion.total_motor (neto real del motor)
+  }
+}
+```
 
-**Diseño de dónde vive el cálculo:** para no violar "prohibido duplicar
-cálculo de descuentos fuera de Ventas", (a.2)/(b.2) deben ejecutarse
-llamando al motor con la lista alternativa como parámetro, dentro del mismo
-`calcular_factura`/`EngineRunner`, exponiendo el resultado como campos
-adicionales de salida (p.ej. `_Componentes` ya calcula esto internamente
-para la "Equiparación Binance" — el precedente de patrón ya existe en
-`discounts.py:503-509`). **No implementado en este cambio** — depende de que
-(3a)/(3b) existan primero, tal como pide el orden secuencial del `/loop`.
+- **a.1/b.1**: `teorico_lista_ves`/`teorico_lista_usd` (ya calculados por el
+  motor, Tarea 3a/3b) `* (1 + iva_rate)` — misma tasa (`config.engine.iva_rate`)
+  que usa `/api/ventas` para sus columnas "+ IVA".
+- **a.2/b.2**: `teorico_lista_ves − descuentos_teorico_ves` (idéntico para
+  USD) — el campo `descuentos_teorico_ves`/`_usd` ya es la salida dinámica
+  de `_calcular_componentes()` corrida con la lista forzada (Tarea 3a/3b);
+  se recalcula solo cuando el motor recalcula la orden (p. ej. tras un pago
+  nuevo), nunca es un número fijo.
+- **a.3/b.3**: `(a.2)/(b.2) * (1 + iva_rate)`.
+- **c**: `venta_real` — `OrdenVenta.monto_total` (real, espejo de Odoo) y
+  `BandejaFacturacion.total_motor` (neto real ya calculado por el motor),
+  sin recalcular nada — mismo dato que ya usa `/api/ventas`.
+- **Dónde vive el cálculo**: `get_auditoria()` en `src/cxc/web/app.py`
+  (bloque nuevo justo antes del `return`, no toca la lógica de discrepancias
+  existente) sólo lee `BandejaFacturacion` + aplica IVA — no llama al motor
+  ni duplica ninguna regla de descuento, cumpliendo la restricción
+  "prohibido duplicar cálculo de descuentos fuera de Ventas".
+- **No implementado**: IGTF sobre estos totales (el `/api/ventas` existente
+  sólo le aplica IGTF a la "venta neta teórica + impuestos", que depende de
+  si el pago fue en efectivo — un dato por-abono que no aplica de la misma
+  forma a un teórico "¿y si esta orden fuera 100% VES/100% USD?"; se dejó
+  fuera para no inventar una semántica de IGTF no pedida explícitamente).
+  Tampoco se agregó UI (tabla/gráfico en `index.html`) para mostrar esta
+  nueva sección de Auditoría — el campo está en la API, listo para
+  consumirse, pero la pestaña de Auditoría no lo renderiza todavía.
+- **Tests**: no se agregó un test de integración para `get_auditoria()`
+  (función de ~500 líneas sin tests previos, requeriría mockear Odoo/repo
+  extensivamente) — el cálculo derivado en sí reutiliza exclusivamente
+  campos de `BandejaFacturacion` ya cubiertos por
+  `tests/test_teoricos_por_lista.py`; el riesgo remanente es solo el
+  cableado de lectura + aritmética de impuestos en `web/app.py`, módulo
+  explícitamente excluido de mypy estricto y del gate de cobertura del
+  repo (ver `pyproject.toml`).
 
 ---
 
