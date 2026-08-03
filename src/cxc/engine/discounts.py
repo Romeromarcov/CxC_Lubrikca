@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from typing import TypeVar
 
 from ..config import EngineConfig
 from ..decimal_utils import q2
@@ -112,6 +113,21 @@ class _Componentes:
     flags: dict[str, bool] = field(default_factory=dict)
 
 
+_ReglaT = TypeVar("_ReglaT")
+
+
+def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_ReglaT]:
+    """Tarea 1: excluye reglas con ``requiere_pago_previo=True`` cuando la
+    orden/factura aún no tiene ningún abono vinculado (``inp.abonos`` vacío).
+
+    Reglas sin el atributo (compatibilidad hacia atrás) se tratan como
+    ``False`` -- no requieren pago previo.
+    """
+    if tiene_pago:
+        return reglas
+    return [r for r in reglas if not getattr(r, "requiere_pago_previo", False)]
+
+
 def _diferencial_binance(tasa_bcv: Decimal, tasa_binance: Decimal) -> Decimal:
     """Default conservador del descuento BCV-completo: (binance − bcv)/binance."""
     return (tasa_binance - tasa_bcv) / tasa_binance
@@ -185,8 +201,11 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
         if code_key.isdigit():
             code_key = str(int(code_key))
         hist_info = inp.historical_price_map.get(code_key)
-        if hist_info and hist_info["usd"] > Decimal("0"):
-            return hist_info["usd"]
+        if hist_info is not None:
+            precio_usd = hist_info["usd"]
+            assert isinstance(precio_usd, Decimal)
+            if precio_usd > Decimal("0"):
+                return precio_usd
     return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
 
 
@@ -197,6 +216,16 @@ def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
     fecha_orden = inp.orden.fecha
     precio_base = sum((_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0"))
+
+    # Tarea 1: reglas con requiere_pago_previo=True quedan excluidas si la
+    # orden/factura no tiene ningún abono vinculado todavía.
+    tiene_pago = bool(inp.abonos)
+    descuentos_ok = _filtrar_por_pago_previo(inp.descuentos, tiene_pago)
+    descuentos_volumen_ok = _filtrar_por_pago_previo(inp.descuentos_volumen, tiene_pago)
+    descuentos_recompra_ok = _filtrar_por_pago_previo(inp.descuentos_recompra, tiene_pago)
+    promociones_ok = _filtrar_por_pago_previo(inp.promociones_primera_compra, tiene_pago)
+    reglas_recurrencia_ok = _filtrar_por_pago_previo(inp.reglas_recurrencia, tiene_pago)
+    descuento_bcv_diario_ok = _filtrar_por_pago_previo(inp.descuento_bcv_diario, tiene_pago)
 
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
@@ -212,7 +241,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         )
         promos_activas = [
             p
-            for p in inp.promociones_primera_compra
+            for p in promociones_ok
             if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha_orden)
             and (not getattr(p, "solo_primera_compra", False) or inp.orden.es_primera_compra)
             and _match_lista(
@@ -325,7 +354,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     else:
         recompras_activas = [
             r
-            for r in inp.descuentos_recompra
+            for r in descuentos_recompra_ok
             if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
             and _match_lista(
                 getattr(r, "listas_aplicables", "*"),
@@ -334,9 +363,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 inp.valid_usd or None,
             )
         ]
-        if not recompras_activas and inp.reglas_recurrencia:
+        if not recompras_activas and reglas_recurrencia_ok:
             regla = regla_recurrencia_vigente(
-                inp.reglas_recurrencia, condicion=Condicion.RECOMPRA, fecha=fecha_orden
+                reglas_recurrencia_ok, condicion=Condicion.RECOMPRA, fecha=fecha_orden
             )
             if regla is not None and regla.tipo_beneficio == TipoBeneficio.PORCENTAJE:
                 recompras_activas = [
@@ -421,7 +450,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
 
         for ln in inp.lineas:
             d = descuento_vigente(
-                inp.descuentos,
+                descuentos_ok,
                 marca=ln.resolved_marca,
                 categoria=ln.categoria,
                 tipo=TipoDescuento.CONTADO,
@@ -458,7 +487,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     for (marca, categoria), total_litros in litros_por_mc.items():
         total_cajas = cajas_por_mc.get((marca, categoria), Decimal("0"))
         regla_vol = descuento_volumen_vigente(
-            inp.descuentos_volumen,
+            descuentos_volumen_ok,
             marca=marca,
             categoria=categoria,
             litros=total_litros,
@@ -521,7 +550,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         bcv_per_abono = Decimal("0")
         if pura_bcv and str(inp.orden.lista_precios) != str(inp.engine_config.lista_usd):
             bcv_per_abono = _bcv_completo_monto(
-                vincs, inp.descuento_bcv_diario, inp.engine_config.bcv_complete_formula
+                vincs, descuento_bcv_diario_ok, inp.engine_config.bcv_complete_formula
             )
 
         # 2. Valuaciones duales: Abonos Binance vs Abonos BCV
@@ -591,6 +620,54 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     )
 
 
+def _teoricos_por_lista(
+    inp: EngineInputs, pura_bcv: bool, lista_ves_name: str, lista_usd_name: str
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    """Tarea 3a/3b/4a/4b: teóricos y descuentos correspondientes en cada
+
+    lista vigente (VES y USD), reutilizando ``_calcular_componentes`` -- la
+    misma función que calcula el neto real -- para no duplicar la lógica de
+    descuentos fuera del motor. Devuelve
+    ``(teorico_ves, teorico_usd, equivalente_usd, descuentos_ves, descuentos_usd)``.
+    """
+    try:
+        comp_ves = _calcular_componentes(inp, lista_ves_name, pura_bcv=True)
+    except KeyError:
+        # Lista VES sin precio para algún producto en el resolver (ej. en
+        # tests con catálogos parciales) -- no se puede derivar el teórico.
+        comp_ves = _Componentes(
+            precio_base=Decimal("0"),
+            pct_recompra=Decimal("0"),
+            contado_proy=Decimal("0"),
+            bcv_completo=Decimal("0"),
+            volumen=Decimal("0"),
+            nc=Decimal("0"),
+        )
+    try:
+        comp_usd = _calcular_componentes(inp, lista_usd_name, pura_bcv=False)
+    except KeyError:
+        comp_usd = _Componentes(
+            precio_base=Decimal("0"),
+            pct_recompra=Decimal("0"),
+            contado_proy=Decimal("0"),
+            bcv_completo=Decimal("0"),
+            volumen=Decimal("0"),
+            nc=Decimal("0"),
+        )
+    descuentos_ves = comp_ves.pct_recompra + comp_ves.contado_proy + comp_ves.volumen
+    descuentos_usd = comp_usd.pct_recompra + comp_usd.contado_proy + comp_usd.volumen
+    # 3a: "igual si nació en USD; teórico si nació en VES" -- en ambos casos
+    # es el precio resuelto contra la lista USD vigente (mismo cálculo).
+    equivalente_usd = comp_usd.precio_base
+    return (
+        q2(comp_ves.precio_base),
+        q2(comp_usd.precio_base),
+        q2(equivalente_usd),
+        q2(descuentos_ves),
+        q2(descuentos_usd),
+    )
+
+
 def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     """Calcula la fila de BandejaFacturacion para una orden (cierre híbrido)."""
     cfg = inp.engine_config
@@ -601,6 +678,14 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     pura_bcv = es_ruta_bcv_pura(vincs)
     lista = _determinar_lista(inp, pura_bcv)
     comp = _calcular_componentes(inp, lista, pura_bcv)
+
+    (
+        teorico_ves,
+        teorico_usd,
+        equivalente_usd,
+        descuentos_teorico_ves,
+        descuentos_teorico_usd,
+    ) = _teoricos_por_lista(inp, pura_bcv, str(cfg.lista_bcv), str(cfg.lista_usd))
 
     contado_evaluable = comp.flags["contado_evaluable"]
     valor_pagado = valor_pagado_usd(vincs) if vincs else Decimal("0")
@@ -735,4 +820,9 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         requiere_revision=requiere_revision,
         candidata_a_cierre=candidata,
         estado=EstadoBandeja.CALCULADO,
+        equivalente_lista_usd=equivalente_usd,
+        teorico_lista_ves=teorico_ves,
+        teorico_lista_usd=teorico_usd,
+        descuentos_teorico_ves=descuentos_teorico_ves,
+        descuentos_teorico_usd=descuentos_teorico_usd,
     )

@@ -12,6 +12,7 @@ resuelva bien.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 
@@ -36,7 +37,7 @@ def es_orden_historica(fecha: date | None, lista_id_str: str, enabled: bool = Tr
     return HISTORICAL_PRICE_LIST_START <= fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
 
 
-def cargar_mapa_historico(rows: list[dict]) -> dict[str, dict[str, object]]:
+def cargar_mapa_historico(rows: Sequence[Mapping[str, str]]) -> dict[str, dict[str, object]]:
     """Convierte las filas crudas de ``listas_precios_historicas`` en un mapa
 
     ``codigo -> {"nombre", "usd", "eur"}`` -- mismo shape que usan los

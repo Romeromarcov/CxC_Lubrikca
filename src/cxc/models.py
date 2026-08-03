@@ -228,6 +228,9 @@ class DescuentoProntoPago:
     vigencia_hasta: date | None = None
     activo: bool = True
     tipo_descuento: TipoDescuento = TipoDescuento.CONTADO
+    # Pronto pago solo tiene sentido si ya existe al menos un abono
+    # vinculado a la orden/factura (ver EngineInputs.abonos).
+    requiere_pago_previo: bool = True
 
 
 # Legacy Alias for backward compatibility
@@ -252,6 +255,8 @@ class DescuentoVolumen:
     vigencia_hasta: date | None = None
     listas_aplicables: str = "*"
     activo: bool = True
+    # Descuento por volumen depende de la cantidad de la orden, no de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
@@ -261,6 +266,8 @@ class DescuentoBCVCompleto:
     porcentaje: Decimal
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Diferencial cambiario: se calcula por abono, requiere pago previo.
+    requiere_pago_previo: bool = True
 
 
 # --- 3.7c PromocionPrimeraCompra (configurable, effective dating) -----------
@@ -286,6 +293,8 @@ class PromocionPrimeraCompra:
         False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
     )
     activo: bool = True
+    # Promoción de primera compra depende del historial del cliente, no de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.7d DescuentoRecompra (configurable, recompra/recurrencia) -----------
@@ -307,6 +316,8 @@ class DescuentoRecompra:
     vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Recompra depende del historial de compras del cliente, no de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------
@@ -327,6 +338,8 @@ class DescuentoFidelizacion:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Fidelización depende de litros acumulados, no de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.7e DescuentoProducto (configurable, promoción específica por producto) -
@@ -346,6 +359,8 @@ class DescuentoProducto:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Descuento por producto depende del producto/orden, no de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.7f DescuentoDiferencialCambiario (configurable, diferencial camb) ----
@@ -369,6 +384,9 @@ class DescuentoDiferencialCambiario:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Diferencial cambiario: por definición se calcula sobre un abono ya
+    # vinculado (tasa del abono), requiere pago previo.
+    requiere_pago_previo: bool = True
 
 
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
@@ -380,6 +398,8 @@ class ReglaRecurrencia:
     vigencia_desde: date
     vigencia_hasta: date | None = None
     activo: bool = True
+    # Legado: recurrencia por historial, no depende de pagos.
+    requiere_pago_previo: bool = False
 
 
 # --- 3.8b Feriados (configurable) -------------------------------------------
@@ -442,6 +462,15 @@ class BandejaFacturacion:
     candidata_a_cierre: bool = False
     aprobado_por: str | None = None
     estado: EstadoBandeja = EstadoBandeja.CALCULADO
+    # Tarea 3 (rediseño de Ventas) -- equivalentes/teóricos por lista,
+    # calculados una vez por el motor (mismo precio_resolver que
+    # precio_base_calculado) para que Ventas/Auditoría los lean sin
+    # recalcular. Ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md.
+    equivalente_lista_usd: Decimal = Decimal("0")
+    teorico_lista_ves: Decimal = Decimal("0")
+    teorico_lista_usd: Decimal = Decimal("0")
+    descuentos_teorico_ves: Decimal = Decimal("0")
+    descuentos_teorico_usd: Decimal = Decimal("0")
 
 
 @dataclass

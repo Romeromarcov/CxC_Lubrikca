@@ -905,6 +905,7 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         tipo_descuento=TipoDescuento(r.tipo_descuento),
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -924,6 +925,7 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         vigencia_hasta=r.vigencia_hasta,
         listas_aplicables=r.listas_aplicables,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -945,6 +947,7 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -966,6 +969,7 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -1011,6 +1015,7 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -1022,6 +1027,7 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -1031,6 +1037,7 @@ def _row_to_bcv_completo(r: Any) -> DescuentoBCVCompleto:
         porcentaje=r.porcentaje,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -1054,6 +1061,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         listas_aplicables=r.listas_aplicables,
         solo_primera_compra=r.solo_primera_compra,
         activo=r.activo,
+        requiere_pago_previo=r.requiere_pago_previo,
     )
 
 
@@ -1125,6 +1133,11 @@ def _bandeja_to_row(b: BandejaFacturacion) -> dict[str, Any]:
         "candidata_a_cierre": b.candidata_a_cierre,
         "aprobado_por": b.aprobado_por,
         "estado": b.estado.value,
+        "equivalente_lista_usd": b.equivalente_lista_usd,
+        "teorico_lista_ves": b.teorico_lista_ves,
+        "teorico_lista_usd": b.teorico_lista_usd,
+        "descuentos_teorico_ves": b.descuentos_teorico_ves,
+        "descuentos_teorico_usd": b.descuentos_teorico_usd,
     }
 
 
@@ -1141,6 +1154,11 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
         candidata_a_cierre=r.candidata_a_cierre,
         aprobado_por=r.aprobado_por,
         estado=EstadoBandeja(r.estado),
+        equivalente_lista_usd=r.equivalente_lista_usd,
+        teorico_lista_ves=r.teorico_lista_ves,
+        teorico_lista_usd=r.teorico_lista_usd,
+        descuentos_teorico_ves=r.descuentos_teorico_ves,
+        descuentos_teorico_usd=r.descuentos_teorico_usd,
     )
 
 

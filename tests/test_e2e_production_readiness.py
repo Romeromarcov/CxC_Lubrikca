@@ -420,21 +420,21 @@ def test_e2e_08_executive_daily_report():
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [{"so_id": "SO_D1", "product_id": "101", "cantidad_entregada": "50"}]
         if sheet == "LineasOrden"
-        else (
-            [
-                {
-                    "pago_id": "P_D1",
-                    "fecha_pago": "2026-07-18",
-                    "monto": "600.0",
-                    "moneda": "USD",
-                    "metodo_pago": "Efectivo",
-                    "vendedor_email": "v1",
-                }
-            ]
-            if sheet == "Pagos"
-            else []
-        )
+        else []
     )
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_pagos.return_value = [
+        Pago(
+            pago_id="P_D1",
+            cliente_id="C1",
+            monto=Decimal("600.0"),
+            moneda=Moneda.USD,
+            metodo_pago="Efectivo",
+            fecha_pago=datetime(2026, 7, 18),
+            vendedor_email="v1",
+        )
+    ]
+    mock_repo.all_serie_tasas.return_value = []
 
     with patch("cxc.web.app.get_repo", return_value=mock_repo):
         res = client.get("/api/reporte/diario")
@@ -465,31 +465,37 @@ def test_e2e_08b_reporte_diario_resumen_cobranza_desglose_metodo_y_ves():
     """
     mock_repo = MagicMock()
     mock_repo.all_ordenes.return_value = []
+    mock_repo.all_lineas.return_value = []
     hoy = date.today().isoformat()
-    mock_repo._g.read_rows.side_effect = lambda sheet: (
-        [
-            {
-                "pago_id": "P_USD",
-                "fecha_pago": hoy,
-                "monto": "100.0",
-                "moneda": "USD",
-                "metodo_pago": "Efectivo",
-            },
-            {
-                "pago_id": "P_VES",
-                "fecha_pago": hoy,
-                "monto": "4000.0",
-                "moneda": "VES",
-                "metodo_pago": "Banco Bancamiga",
-            },
-        ]
-        if sheet == "Pagos"
-        else (
-            [{"timestamp": f"{hoy} 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "42.0"}]
-            if sheet == "SerieTasas"
-            else []
+    mock_repo._g.read_rows.side_effect = lambda sheet: []
+    mock_repo.all_pagos.return_value = [
+        Pago(
+            pago_id="P_USD",
+            cliente_id="C1",
+            monto=Decimal("100.0"),
+            moneda=Moneda.USD,
+            metodo_pago="Efectivo",
+            fecha_pago=datetime.strptime(hoy, "%Y-%m-%d"),
+            vendedor_email="",
+        ),
+        Pago(
+            pago_id="P_VES",
+            cliente_id="C1",
+            monto=Decimal("4000.0"),
+            moneda=Moneda.VES,
+            metodo_pago="Banco Bancamiga",
+            fecha_pago=datetime.strptime(hoy, "%Y-%m-%d"),
+            vendedor_email="",
+        ),
+    ]
+    mock_repo.all_serie_tasas.return_value = [
+        SerieTasa(
+            timestamp=datetime.strptime(f"{hoy} 12:00:00", "%Y-%m-%d %H:%M:%S"),
+            tasa_bcv=Decimal("40.0"),
+            tasa_binance=Decimal("42.0"),
+            fuente="test",
         )
-    )
+    ]
 
     with patch("cxc.web.app.get_repo", return_value=mock_repo):
         res = client.get("/api/reporte/diario")

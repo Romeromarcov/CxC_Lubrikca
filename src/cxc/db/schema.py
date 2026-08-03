@@ -177,6 +177,7 @@ descuentos_pronto_pago = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("tipo_descuento", String, nullable=False, server_default="contado"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
 )
 
 # --- 3.7_vol DescuentosVolumen (config) --------------------------------------
@@ -198,6 +199,7 @@ descuentos_volumen = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.7b DescuentoBCVCompleto (config, effective dating, sin id) -----------
@@ -209,6 +211,7 @@ descuento_bcv_completo = Table(
     Column("porcentaje", PCT, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
 )
 
 # --- 3.7c PromocionPrimeraCompra (config) ------------------------------------
@@ -233,6 +236,7 @@ promocion_primera_compra = Table(
     Column("listas_aplicables", String, nullable=False, server_default="*"),
     Column("solo_primera_compra", Boolean, nullable=False, server_default="false"),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.7d DescuentoRecompra (config) -----------------------------------------
@@ -255,6 +259,7 @@ descuentos_recompra = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------
@@ -275,6 +280,7 @@ descuentos_producto = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.7f DescuentoDiferencialCambiario (config) -----------------------------
@@ -297,6 +303,7 @@ descuentos_diferencial_cambiario = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
 )
 
 # --- 3.8 ReglasRecurrencia (config, effective dating, sin id natural) -------
@@ -310,6 +317,7 @@ reglas_recurrencia = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.8b Feriados (config) ---------------------------------------------------
@@ -365,6 +373,12 @@ bandeja_facturacion = Table(
     Column("candidata_a_cierre", Boolean, nullable=False, server_default="false"),
     Column("aprobado_por", String, nullable=True),
     Column("estado", estado_bandeja_enum, nullable=False, server_default="calculado"),
+    # Tarea 3 (rediseño de Ventas) -- equivalentes/teóricos por lista.
+    Column("equivalente_lista_usd", MONEY, nullable=False, server_default="0"),
+    Column("teorico_lista_ves", MONEY, nullable=False, server_default="0"),
+    Column("teorico_lista_usd", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_ves", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_usd", MONEY, nullable=False, server_default="0"),
 )
 
 # Hija normalizada de BandejaFacturacion.descuentos_detalle (antes un blob

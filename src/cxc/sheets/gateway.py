@@ -8,7 +8,7 @@ sin red; ``GspreadGateway`` es el binding real.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 # Nombres de las pestañas (deben coincidir con el Google Sheet real).
@@ -50,7 +50,7 @@ class SheetGateway(ABC):
     def delete_row(self, table: str, pk_field: str, pk_value: str) -> bool: ...
 
     @abstractmethod
-    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+    def replace_rows(self, table: str, rows: Sequence[Mapping[str, str]]) -> None:
         """Reemplaza el contenido completo de la pestaña (limpia + reescribe).
 
         Para tablas que se regeneran enteras desde una fuente externa cada
@@ -65,6 +65,10 @@ class SheetGateway(ABC):
 
     @abstractmethod
     def set_meta(self, key: str, value: str) -> None: ...
+
+    def invalidate_cache(self, table: str | None = None) -> None:
+        """Default no-op -- sólo ``GspreadGateway`` cachea lecturas."""
+        return None
 
 
 class InMemorySheetGateway(SheetGateway):
@@ -100,7 +104,7 @@ class InMemorySheetGateway(SheetGateway):
         self._tables[table] = nuevas
         return eliminado
 
-    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+    def replace_rows(self, table: str, rows: Sequence[Mapping[str, str]]) -> None:
         self._tables[table] = [dict(r) for r in rows]
 
     def get_meta(self, key: str) -> str | None:
@@ -484,7 +488,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 return True
         return False
 
-    def replace_rows(self, table: str, rows: list[Mapping[str, str]]) -> None:
+    def replace_rows(self, table: str, rows: Sequence[Mapping[str, str]]) -> None:
         self.invalidate_cache(table)
         ws = self._ws(table)
         ws.clear()
