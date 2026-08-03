@@ -1129,9 +1129,16 @@
 
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <div id="tab-config" class="tab-panel">
+            <div class="config-subnav tab-navigation" role="tablist" aria-label="Subpáginas de Configuración" style="margin-bottom:1rem;">
+                <button type="button" class="tab-btn config-subnav-btn active" data-config-subpage="descuentos">💰 Descuentos</button>
+                <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="usuarios">👤 Usuarios</button>
+                <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="listas">📋 Listas de Precio</button>
+                <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="otras">⚙️ Otras (Tasas, Feriados, Auditoría Odoo)</button>
+                <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="motor">🔄 Motor</button>
+            </div>
             <div class="config-grid">
                 <!-- RECÁLCULO MANUAL DEL MOTOR (solo Admin / Gerente de Ventas) -->
-                <section class="config-card card" id="recalcular-todo-container" style="grid-column: 1 / span 2; border-top: 4px solid #dc2626; display:none;">
+                <section class="config-card card" data-subpage="motor" id="recalcular-todo-container" style="grid-column: 1 / span 2; border-top: 4px solid #dc2626; display:none;">
                     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                         <div>
                             <h2>🔄 Forzar Recálculo Completo del Motor</h2>
@@ -1143,7 +1150,7 @@
                 </section>
 
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
                     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                         <div>
                             <h2>⚡ Matriz Consolidada de Reglas de Descuento (Motor CxC)</h2>
@@ -1178,7 +1185,7 @@
                 </section>
 
                 <!-- Días Feriados -->
-                <section class="config-card card">
+                <section class="config-card card" data-subpage="otras">
                     <div class="panel-header">
                         <h2>Días Feriados y No Laborables</h2>
                         <p>Registra feriados locales para el cálculo correcto del vencimiento de pronto pago</p>
@@ -1218,7 +1225,7 @@
                 </section>
 
                 <!-- Tasas de Cambio -->
-                <section class="config-card card">
+                <section class="config-card card" data-subpage="otras">
                     <div class="panel-header">
                         <h2>Tasas de Cambio (Odoo Sync + Manual)</h2>
                         <p>Carga manual o sincroniza las tasas registradas en Odoo desde enero 2026</p>
@@ -1262,7 +1269,7 @@
                 </section>
 
                 <!-- PANEL 1: Descuento por Recompra / Recurrencia -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #0284c7;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #0284c7;">
                     <div class="panel-header">
                         <h2>🔄 Descuento por Recompra / Recurrencia</h2>
                         <p>Configura porcentaje por recompras consecutivas, tramo de cajas, ventana de días y uso por mes</p>
@@ -1370,7 +1377,7 @@
                 </section>
 
                 <!-- PANEL 2: Descuento por Pronto Pago (con Días de Gracia) -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #10b981;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #10b981;">
                     <div class="panel-header">
                         <h2>⏱️ Descuento por Pronto Pago (Días de Gracia)</h2>
                         <p>Configura días de gracia, marcas, categorías, listas y porcentaje de pronto pago</p>
@@ -1478,7 +1485,7 @@
                 </section>
 
                 <!-- PANEL 3: Reglas de Descuentos por Volumen -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #f59e0b;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #f59e0b;">
                     <div class="panel-header">
                         <h2>📊 Reglas de Descuentos por Volumen (Litros / Cajas)</h2>
                         <p>Define descuentos basados en la cantidad acumulada o por orden comprada por marca y categoría</p>
@@ -1588,7 +1595,7 @@
                 </section>
 
                 <!-- PANEL 4: Reglas de Obsequio y Promociones -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #8b5cf6;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #8b5cf6;">
                     <div class="panel-header">
                         <h2>🎁 Reglas de Obsequio y Promociones (12+1, Recurrente o Primera Compra)</h2>
                         <p>Configura obsequios de producto por compra (ej: por 12 cajas 1 de regalo), recurrencia por cliente, marca, tramo mínimo y listas</p>
@@ -1718,7 +1725,7 @@
                 </section>
 
                 <!-- PANEL 5: Descuento por Producto / Marca / Categoría -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #ec4899;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #ec4899;">
                     <div class="panel-header">
                         <h2>🏷️ Descuento por Producto / Marca / Categoría (Promoción Específica)</h2>
                         <p>Promociona SKUs específicos fijando marcas, categorías, tramos, porcentaje y vigencia commercial</p>
@@ -1829,7 +1836,7 @@
                 </section>
 
                 <!-- PANEL 6: Descuento por Diferencial Cambiario -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #3b82f6;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #3b82f6;">
                     <div class="panel-header">
                         <h2>💱 Descuentos por Diferencial Cambiario</h2>
                         <p>35% Fijo VES a USD, Equiparación a Tasa Binance N/C y Diferencial BCV vs Binance al Cierre</p>
@@ -1953,7 +1960,7 @@
                 </section>
 
                 <!-- Exclusiones Mutuas entre Descuentos/Promociones -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-top: 3px solid #64748b;">
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #64748b;">
                     <div class="panel-header">
                         <h2>🚫 Exclusiones Mutuas de Descuentos</h2>
                         <p>Define pares de descuentos/promociones que no pueden aplicarse simultáneamente. Se aplica el de mayor valor.</p>
@@ -2008,7 +2015,7 @@
 
 
                 <!-- GESTIÓN DE USUARIOS Y ROLES DE LA PLATAFORMA (SOLO ADMINS) -->
-                <section class="config-card card" id="admin-user-mgmt-panel" style="grid-column: 1 / span 2; border-left: 5px solid #2563eb;">
+                <section class="config-card card" data-subpage="usuarios" id="admin-user-mgmt-panel" style="grid-column: 1 / span 2; border-left: 5px solid #2563eb;">
                     <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <div>
                             <h2 style="color: #1e40af; display: flex; align-items: center; gap: 0.5rem;">
@@ -2041,7 +2048,7 @@
                 </section>
 
                 <!-- Mapeo Configurable de Listas de Precios Históricas (USD y VES) -->
-                <section class="config-card card" style="grid-column: 1 / span 2; border-left: 5px solid var(--accent-blue, #2563eb);">
+                <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2; border-left: 5px solid var(--accent-blue, #2563eb);">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
                             <h2 style="color: #1e40af; margin:0;">Mapeo Configurable de Listas de Precios Históricas (USD y VES)</h2>
@@ -2077,7 +2084,7 @@
                 </section>
 
                 <!-- Listas de Precios de Odoo -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
+                <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
                         <h2>Listas de Precios Importadas de Odoo</h2>
                         <p>Visualiza todas las listas de precios vigentes o archivadas, su moneda y fechas de vigencia</p>
@@ -2105,7 +2112,7 @@
                 </section>
 
                 <!-- Auditoría de Clientes y Recurrencia -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
+                <section class="config-card card" data-subpage="otras" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
                         <h2>Auditoría de Clientes y Recurrencia (Odoo)</h2>
                         <p>Consulte la fecha de creación del cliente, total de órdenes de venta facturadas y última fecha de compra para validar promociones de primera compra y recurrencias</p>
@@ -2135,7 +2142,7 @@
                 </section>
 
                 <!-- Catálogo de Productos y Precios Odoo -->
-                <section class="config-card card" style="grid-column: 1 / span 2;">
+                <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2;">
                     <div class="panel-header">
                         <h2>Catálogo de Productos y Precios en Odoo</h2>
                         <p>Consulte y audite los precios de sus productos en las principales listas USD y VES vigentes</p>

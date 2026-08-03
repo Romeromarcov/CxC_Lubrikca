@@ -578,6 +578,14 @@ body {
     box-sizing: border-box;
 }
 
+/* Subpáginas de Configuración (Descuentos / Usuarios / Listas de Precio /
+   Otras / Motor) -- oculta secciones fuera de la subpágina seleccionada sin
+   tocar la visibilidad por rol que ya controlan algunas secciones via
+   style="display:none" inline (ver app.js applyConfigSubpage). */
+.config-subpage-hidden {
+    display: none !important;
+}
+
 .mini-table-wrapper {
     margin-top: 1.5rem;
     border: 1px solid #e2e8f0;

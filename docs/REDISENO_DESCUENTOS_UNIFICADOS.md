@@ -5,9 +5,10 @@ auditoría (no había nada que unificar; el flujo reactivo Cobranza→Ventas
 queda diseñado, no implementado). Tarea 3a/3b implementadas y probadas
 (equivalente/teóricos por lista en `BandejaFacturacion`); 3c–3g diseñadas.
 Tarea 4 implementada (`venta_bruta_teorica_auditoria` en
-`GET /api/auditoria`, derivada de 3a/3b + IVA, sin UI todavía). Queda
-pendiente: la reorganización de Configuración en subpáginas (diseñada, no
-implementada) y lo detallado en "Dependencias abiertas".
+`GET /api/auditoria`, derivada de 3a/3b + IVA, sin UI todavía). La
+reorganización de Configuración en subpáginas está implementada (versión
+ligera, client-side, verificada con Playwright). Queda pendiente lo
+detallado en "Dependencias abiertas" (3c–3g, N/D, recálculo reactivo).
 
 ## Tarea 1 — `requiere_pago_previo` en reglas de descuento (IMPLEMENTADA)
 
@@ -268,58 +269,63 @@ por orden con bandeja calculada), con esta forma:
 
 ---
 
-## Diseño de IA de Configuración en subpáginas (DISEÑO, no implementado)
+## Diseño de IA de Configuración en subpáginas (IMPLEMENTADA — versión ligera)
 
-### Estado actual
+### Estado antes de este cambio
 
-`Configuración` es **una sola página larga** (`index.html`, `tab-configuracion`)
-con ~14 secciones `<section class="card">` en scroll continuo, cada una con
-su propio mini-CRUD y su propio par de endpoints `/api/config/...`. No hay
-subpáginas ni navegación lateral.
+`Configuración` era **una sola página larga** (`index.html`, `tab-config`)
+con 16 secciones `<section class="config-card card">` en scroll continuo,
+cada una con su propio mini-CRUD y su propio par de endpoints
+`/api/config/...`. No había subpáginas ni navegación interna. (Corrección a
+una nota anterior de este documento: sí existe un CRUD de usuarios dentro de
+Configuración — `admin-user-mgmt-panel` — no había que construirlo desde
+cero, sólo agruparlo.)
 
-### Propuesta de subpáginas
+### Qué se implementó
 
-Agrupación por dominio, manteniendo cada endpoint `/api/config/...`
-existente sin cambios (la reorganización es de navegación/IA, no de API):
+Se agregó una barra de sub-navegación (mismo componente visual `.tab-btn`
+que ya usa la navegación principal) dentro de `#tab-config`, con 5 grupos,
+sin mover ni renombrar ningún endpoint `/api/config/...` ni ningún `id`
+existente — cada `<section class="config-card">` sólo ganó un atributo
+`data-subpage="..."`:
 
-1. **Descuentos** (la más grande — agrupa las 8 secciones de reglas):
-   - Pronto Pago (Días de Gracia) — incluye ahora el toggle
-     `requiere_pago_previo`.
-   - Volumen.
-   - Recompra/Recurrencia.
-   - Obsequios y Promociones (primera compra).
-   - Producto/Marca/Categoría *(marcar visualmente como "sin efecto en el
-     motor todavía" — ver Tarea 2)*.
-   - Diferencial Cambiario *(marcar visualmente como "sin efecto en el motor
-     todavía, usa Matriz Consolidada/BCV-completo en su lugar")*.
-   - Matriz Consolidada (vista de solo lectura, sección informativa).
-   - Exclusiones Mutuas.
-   - Sub-navegación por tabs internas (no accordion) dado el volumen.
-2. **Usuarios** — gestión de `usuarios_plataforma` (alta/roles/activo). Hoy
-   vive fuera de `Configuración` (revisar si ya existe en otra pestaña del
-   admin — no se encontró un CRUD web de usuarios en la investigación; si no
-   existe, es trabajo nuevo, no sólo reubicación).
-3. **Listas de Precio** — "Listas de Precios Importadas de Odoo" (hoy
-   sección de solo lectura dentro de Configuración) + la futura UI de
-   "Lista Histórica de Auditoría" si se expone edición.
-4. **Tasas de Cambio** — sección ya existente ("Tasas de Cambio: Odoo Sync +
-   Manual").
-5. **Feriados** — sección ya existente.
-6. **Catálogo Odoo** — "Auditoría de Clientes y Recurrencia" + "Catálogo de
-   Productos y Precios en Odoo" (ambas de solo lectura, informativas).
-7. **Recálculo del Motor** — botón/acción "Forzar Recálculo Completo".
+1. **💰 Descuentos** — Matriz Consolidada, Recompra/Recurrencia, Pronto
+   Pago (con el nuevo toggle `requiere_pago_previo`), Volumen, Obsequios y
+   Promociones, Producto/Marca/Categoría, Diferencial Cambiario, Exclusiones
+   Mutuas.
+2. **👤 Usuarios** — `admin-user-mgmt-panel` (ya existía, solo se agrupó).
+3. **📋 Listas de Precio** — Mapeo de Lista Histórica de Auditoría, Listas
+   de Precios Importadas de Odoo, Catálogo de Productos y Precios en Odoo.
+4. **⚙️ Otras** — Feriados, Tasas de Cambio, Auditoría de Clientes y
+   Recurrencia (Odoo).
+5. **🔄 Motor** — Forzar Recálculo Completo.
 
-### Por qué no se implementó en este cambio
+**Cómo funciona** (`src/cxc/web/static/app.js`, función `applyConfigSubpage`):
+al hacer clic en un botón de la subnav, se le agrega la clase
+`config-subpage-hidden` (`display: none !important`, definida en
+`styles.css`) a toda `[data-subpage]` que no coincida con la subpágina
+elegida, y se quita de las que sí — sin tocar `style.display` inline, que es
+lo que ya usan algunas secciones para su propio control de visibilidad por
+rol (p. ej. "Forzar Recálculo" solo se muestra a Admin/Gerente de Ventas).
+La selección se recuerda en `sessionStorage` para no resetear la subpágina
+al recargar. Verificado con un navegador headless (Chromium, vía
+Playwright): estado inicial correcto (Descuentos visible, el resto oculto),
+clic en "Usuarios" oculta Descuentos y muestra Usuarios, y el botón activo
+cambia — sin errores de JS en consola.
 
-Reorganizar la IA implica: (i) agregar navegación lateral/tabs en
-`index.html`+`app.js` (cambio de UI transversal, con riesgo de romper JS ya
-enganchado a IDs de sección existentes), (ii) decidir si las rutas
-`/configuracion/descuentos`, `/configuracion/usuarios`, etc. son URLs reales
-o anclas de una SPA — decisión de producto que no estaba definida antes de
-este cambio. El `/loop` pide diseñar antes de tocar UI (paso 2 del orden
-secuencial) — este documento es ese diseño; la implementación queda
-pendiente y se recomienda como su propio cambio, después de validar esta
-propuesta con el usuario final del panel.
+### Qué se dejó fuera de esta versión (deuda de diseño, no de esta tarea)
+
+- **Sin URLs reales por subpágina** (`/configuracion/descuentos`, etc.) —
+  es navegación puramente client-side dentro de una sola carga de página,
+  no hay bookmark/deep-link a una subpágina específica. Decidir si vale la
+  pena introducir rutas reales es una decisión de producto aparte.
+- **Sin indicador visual explícito de "regla huérfana"** en las secciones
+  Producto/Marca/Categoría y Diferencial Cambiario (ver Tarea 2 — el motor
+  no las lee) — quedó documentado aquí, pero no se agregó un badge/aviso en
+  la UI para no mezclar dos cambios de UI distintos en el mismo commit.
+- **Sin tests automatizados de la UI** (no hay suite de tests de frontend en
+  el repo — la verificación fue manual con Playwright, no un test que corra
+  en CI).
 
 ---
 

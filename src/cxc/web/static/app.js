@@ -12,6 +12,45 @@ document.addEventListener("DOMContentLoaded", () => {
     const tabButtons = document.querySelectorAll(".tab-btn");
     const tabPanels = document.querySelectorAll(".tab-panel");
 
+    // Subpáginas de Configuración (Descuentos / Usuarios / Listas de Precio /
+    // Otras / Motor) -- agrupa las secciones existentes de #tab-config sin
+    // mover sus endpoints ni su markup interno, solo oculta/muestra por
+    // data-subpage. Ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md.
+    const configSubnavButtons = document.querySelectorAll(".config-subnav-btn");
+    const configSubpageSections = document.querySelectorAll("#tab-config [data-subpage]");
+
+    function applyConfigSubpage(subpage) {
+        configSubpageSections.forEach((section) => {
+            section.classList.toggle(
+                "config-subpage-hidden",
+                section.getAttribute("data-subpage") !== subpage
+            );
+        });
+        configSubnavButtons.forEach((btn) => {
+            btn.classList.toggle("active", btn.getAttribute("data-config-subpage") === subpage);
+        });
+        try {
+            sessionStorage.setItem("cxc_config_subpage", subpage);
+        } catch (_e) {
+            // sessionStorage no disponible (modo privado, etc.) -- no es crítico.
+        }
+    }
+
+    if (configSubnavButtons.length) {
+        configSubnavButtons.forEach((btn) => {
+            btn.addEventListener("click", () => {
+                applyConfigSubpage(btn.getAttribute("data-config-subpage"));
+            });
+        });
+        let initialSubpage = "descuentos";
+        try {
+            initialSubpage = sessionStorage.getItem("cxc_config_subpage") || "descuentos";
+        } catch (_e) {
+            // ignorar
+        }
+        applyConfigSubpage(initialSubpage);
+    }
+
     // Elements - KPIs
     const kpiCobrables = document.getElementById("kpi-cobrables");
     const kpiSinAsignar = document.getElementById("kpi-sin-asignar");
