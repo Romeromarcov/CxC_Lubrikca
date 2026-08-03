@@ -343,6 +343,26 @@ def _migrate_anomalias_aceptadas(
     return TableResult("anomalias_aceptadas", len(raw_rows), len(raw_rows) if apply else 0)
 
 
+def _decimal_locale_safe(value: object) -> Decimal:
+    """Decimal desde texto que puede venir en formato es_ES (coma decimal,
+
+    ej. "42,24") -- ListasPreciosHistoricas en Sheets guarda los precios
+    asi. Mismo criterio que ``cxc.web.app.parse_decimal_safe``.
+    """
+    s = str(value or "0").strip()
+    if not s:
+        return Decimal("0")
+    if "," in s:
+        if "." in s and s.find(".") < s.find(","):
+            s = s.replace(".", "").replace(",", ".")
+        elif "." not in s:
+            s = s.replace(",", ".")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0")
+
+
 def _migrate_listas_precios_historicas(
     sheets_repo: SheetsRepository, engine: Engine, apply: bool
 ) -> TableResult:
@@ -352,8 +372,8 @@ def _migrate_listas_precios_historicas(
             {
                 "codigo": str(r.get("codigo", "")).strip(),
                 "producto_nombre": r.get("producto_nombre", ""),
-                "precio_usd": Decimal(str(r.get("precio_usd", "0") or "0")),
-                "precio_bcv_euro": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
+                "precio_usd": _decimal_locale_safe(r.get("precio_usd", "0")),
+                "precio_bcv_euro": _decimal_locale_safe(r.get("precio_bcv_euro", "0")),
             }
             for r in raw_rows
             if str(r.get("codigo", "")).strip()
