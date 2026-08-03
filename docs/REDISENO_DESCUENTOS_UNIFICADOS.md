@@ -422,18 +422,26 @@ Tarea 3c más arriba con las dos alternativas de diseño.
       (`.github/workflows/ci.yml`) también corre `alembic upgrade head`
       contra un servicio Postgres antes de la suite de tests — confirmado
       verde en el PR.
-- [ ] **Pendiente en producción — confirmado por logs reales**: un despliegue
-      de `main` a producción (Railway) mostró en logs `UndefinedColumn` para
-      `descuentos_pronto_pago.requiere_pago_previo` y
+- [x] **Incidente en producción, mitigado con red de seguridad en código**:
+      un despliegue de `main` a producción (Railway) mostró en logs
+      `UndefinedColumn` para `descuentos_pronto_pago.requiere_pago_previo` y
       `bandeja_facturacion.equivalente_lista_usd`/`teorico_lista_ves`/etc.,
-      con `/api/reporte-saldos` y `/api/ventas` devolviendo 500. Ambas
-      migraciones nunca se aplicaron contra la base de datos real de
-      producción — el `Procfile` ya tiene `release: alembic upgrade head`,
-      que debería correr automáticamente en cada deploy; revisar por qué esa
-      fase no se ejecutó (o falló silenciosamente) en ese despliegue. Fix:
-      correr `alembic upgrade head` contra la DB de producción (aditivo,
-      sin downtime); no se pudo ejecutar desde este entorno de desarrollo
-      por no tener credenciales válidas de acceso a Railway.
-- [ ] Tarea 3c–3g (descuentos aplicados/pendientes por orden-factura, N/D)
-      requerirán migraciones nuevas cuando se implementen — no incluidas
-      en este cambio.
+      con `/api/reporte-saldos` y `/api/ventas` devolviendo 500. Causa: el
+      `Procfile` ya tiene `release: alembic upgrade head`, pero esa fase no
+      corrió (o falló en silencio) en ese despliegue — quedó sin
+      diagnosticar el motivo exacto (revisar logs de la fase "Release" de
+      ese deploy en Railway). Mitigación agregada: `startup_event()`
+      (`src/cxc/web/app.py`) ahora corre `alembic upgrade head`
+      programáticamente al arrancar el proceso `web`, como respaldo si la
+      fase `release` no aplicó las migraciones — best-effort, nunca tumba
+      el arranque si falla (backend Sheets, DB no disponible, permisos).
+      Verificado end-to-end: se hizo `alembic downgrade -2` contra un
+      Postgres real (simulando el esquema desactualizado de producción) y
+      se confirmó que `_aplicar_migraciones_pendientes()` deja las columnas
+      al día sin intervención manual (`tests/test_startup_migraciones.py`).
+      No reemplaza correr la migración una vez en producción para las
+      instancias que ya están corriendo el código viejo sin este respaldo
+      — solo previene la recurrencia en despliegues futuros.
+- [x] Tarea 3c–3g (descuentos aplicados/pendientes por orden-factura, N/C/N/D)
+      implementadas sin necesidad de migración nueva — son lecturas de Odoo
+      y comparaciones puras en `/api/ventas`, ningún campo persistido nuevo.
