@@ -1365,10 +1365,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1421,7 +1421,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1451,7 +1451,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="15" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1473,10 +1473,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${item.cliente_nombre}</td>
                 <td><small>${item.vendedor}</small></td>
                 <td><small>${item.fecha}</small></td>
+                <td><small>${item.lista_nacimiento ?? '—'}</small></td>
+                <td><small>${item.lista_aplicada ?? '—'}</small></td>
                 <td>${fmt(item.venta_bruta_teorica)}</td>
                 <td>${fmt(item.venta_bruta_teorica_iva)}</td>
                 <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica)}</strong></td>
                 <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica_impuestos)}</strong></td>
+                <td>${item.teorico_lista_usd != null ? fmt(item.teorico_lista_usd) : '—'}</td>
+                <td>${item.teorico_lista_ves != null ? fmt(item.teorico_lista_ves) : '—'}</td>
+                <td>${item.descuentos_teorico_usd != null ? fmt(item.descuentos_teorico_usd) : '—'}</td>
+                <td>${item.descuentos_teorico_ves != null ? fmt(item.descuentos_teorico_ves) : '—'}</td>
+                <td><strong>${item.teorico_neto_usd != null ? fmt(item.teorico_neto_usd) : '—'}</strong></td>
+                <td><strong>${item.teorico_neto_ves != null ? fmt(item.teorico_neto_ves) : '—'}</strong></td>
                 <td>${fmt(item.venta_bruta_real)}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
                 <td>${fmt(item.total_facturado_antes_impuestos)}</td>

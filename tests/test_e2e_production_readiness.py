@@ -1632,6 +1632,77 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
         assert abs(data["kpis"]["venta_bruta_teorica_iva_total"] - 510.4) < 0.01
 
 
+def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
+    """/api/ventas debe exponer, por orden: la lista de precios con la que
+
+    nació la venta (``lista_nacimiento``), la lista que terminó aplicando
+    el motor (``lista_aplicada`` -- puede ganar la del método de pago sobre
+    la de nacimiento), los teóricos/equivalentes en ambas listas y los
+    descuentos + netos teóricos correspondientes a cada una (Tarea 3a/3b,
+    ya calculados por el motor en ``BandejaFacturacion`` -- este endpoint
+    solo los lee y expone, no recalcula nada).
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import BandejaFacturacion
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_LISTA1",
+            cliente_id="CLI_L",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",  # nació en VES (lista_bcv)
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_LISTA1",
+            lista_aplicada="4",  # el método de pago la reselecciona a USD
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("90.00"),
+            equivalente_lista_usd=Decimal("102.00"),
+            teorico_lista_ves=Decimal("3600.00"),
+            teorico_lista_usd=Decimal("102.00"),
+            descuentos_teorico_ves=Decimal("360.00"),
+            descuentos_teorico_usd=Decimal("10.20"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+        lista_usd="4",
+        lista_bcv="5",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=lambda *a, **k: []),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = res.json()["items"][0]
+
+        assert item["lista_nacimiento"] == "5"
+        assert item["lista_aplicada"] == "4"
+        assert item["equivalente_lista_usd"] == 102.0
+        assert item["teorico_lista_ves"] == 3600.0
+        assert item["teorico_lista_usd"] == 102.0
+        assert item["descuentos_teorico_ves"] == 360.0
+        assert item["descuentos_teorico_usd"] == 10.2
+        assert item["teorico_neto_ves"] == 3240.0
+        assert item["teorico_neto_usd"] == 91.8
+
+
 def test_e2e_25_recalcular_todo_requiere_admin_o_gerente():
     """POST /api/admin/recalcular-todo debe rechazar roles sin permiso
 

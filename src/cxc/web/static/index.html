@@ -874,10 +874,18 @@
                                     <th>Cliente</th>
                                     <th>Vendedor</th>
                                     <th>Fecha</th>
+                                    <th title="Lista de precios con la que nació la orden">Lista Nacimiento</th>
+                                    <th title="Lista que terminó aplicando el motor (puede ganar la del método de pago sobre la de nacimiento)">Lista Aplicada</th>
                                     <th title="Precio de lista correcto, sin descuentos, sin impuestos">Venta Bruta Teórica</th>
                                     <th title="Venta Bruta Teórica + IVA">Bruta Teórica + IVA</th>
                                     <th title="Bruta teórica menos los descuentos que calcula el motor (incluye los que requieren pago registrado)">Venta Neta Teórica</th>
                                     <th title="Venta Neta Teórica + Impuestos (IVA / IGTF si aplica)">Neta Teórica + Imp.</th>
+                                    <th title="Equivalente/teórico de la orden en la lista USD -- igual a la bruta teórica si nació en USD">Teórico Lista USD</th>
+                                    <th title="Equivalente/teórico de la orden en la lista VES -- igual a la bruta teórica si nació en VES">Teórico Lista VES</th>
+                                    <th title="Descuentos que aplicarían si la orden se hubiera facturado en la lista USD (dinámico, se recalcula post-pago)">Desc. Teórico USD</th>
+                                    <th title="Descuentos que aplicarían si la orden se hubiera facturado en la lista VES (dinámico, se recalcula post-pago)">Desc. Teórico VES</th>
+                                    <th title="Teórico Lista USD menos Desc. Teórico USD">Neto Teórico USD</th>
+                                    <th title="Teórico Lista VES menos Desc. Teórico VES">Neto Teórico VES</th>
                                     <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
                                     <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
                                     <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
@@ -889,7 +897,7 @@
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="15" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="23" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
