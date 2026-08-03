@@ -7302,11 +7302,29 @@ async def get_ventas(
                     # Tarea 3a/3b: equivalentes/teóricos por lista, calculados
                     # por el motor (BandejaFacturacion) -- no se recalculan
                     # aquí, solo se leen y formatean.
+                    "lista_nacimiento": o.lista_precios,
+                    "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
                     "equivalente_lista_usd": (
                         round(float(b.equivalente_lista_usd), 2) if b else None
                     ),
                     "teorico_lista_ves": round(float(b.teorico_lista_ves), 2) if b else None,
                     "teorico_lista_usd": round(float(b.teorico_lista_usd), 2) if b else None,
+                    "descuentos_teorico_ves": (
+                        round(float(b.descuentos_teorico_ves), 2) if b else None
+                    ),
+                    "descuentos_teorico_usd": (
+                        round(float(b.descuentos_teorico_usd), 2) if b else None
+                    ),
+                    "teorico_neto_ves": (
+                        round(float(b.teorico_lista_ves) - float(b.descuentos_teorico_ves), 2)
+                        if b
+                        else None
+                    ),
+                    "teorico_neto_usd": (
+                        round(float(b.teorico_lista_usd) - float(b.descuentos_teorico_usd), 2)
+                        if b
+                        else None
+                    ),
                     # Tarea 3c: descuentos aplicados en Odoo (orden/factura) +
                     # validación visual vs. lo que dictamina el motor.
                     "descuento_aplicado_orden": round(descuento_aplicado_orden, 2),
