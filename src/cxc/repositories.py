@@ -16,6 +16,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from .models import (
     BandejaFacturacion,
@@ -574,8 +575,8 @@ class InMemoryRepository(Repository):
     def append_promocion_primera_compra(self, promo: PromocionPrimeraCompra) -> None:
         self._promos.append(promo)
 
-    def _regla_list(self, tabla: str) -> list | None:
-        return {
+    def _regla_list(self, tabla: str) -> list[Any] | None:
+        mapa: dict[str, list[Any]] = {
             "DescuentosRecompra": self._descuentos_recompra,
             "DescuentosProntoPago": self._descuentos,
             "DescuentosMarcaCategoria": self._descuentos,
@@ -583,7 +584,8 @@ class InMemoryRepository(Repository):
             "PromocionPrimeraCompra": self._promos,
             "DescuentosProducto": self._descuentos_producto,
             "DescuentosDiferencialCambiario": self._descuentos_diferencial,
-        }.get(tabla)
+        }
+        return mapa.get(tabla)
 
     def delete_regla(self, tabla: str, regla_id: str) -> bool:
         lst = self._regla_list(tabla)

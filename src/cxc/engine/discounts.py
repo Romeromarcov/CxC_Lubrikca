@@ -201,8 +201,11 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
         if code_key.isdigit():
             code_key = str(int(code_key))
         hist_info = inp.historical_price_map.get(code_key)
-        if hist_info and hist_info["usd"] > Decimal("0"):
-            return hist_info["usd"]
+        if hist_info is not None:
+            precio_usd = hist_info["usd"]
+            assert isinstance(precio_usd, Decimal)
+            if precio_usd > Decimal("0"):
+                return precio_usd
     return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
 
 

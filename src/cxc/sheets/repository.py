@@ -107,9 +107,9 @@ class SheetsRepository(Repository):
 
     def all_config(self) -> dict[str, str]:
         return {
-            r.get("key"): r.get("value", "")
+            key: r.get("value", "")
             for r in self._g.read_rows(g.T_META)
-            if r.get("key")
+            if (key := r.get("key"))
         }
 
     def invalidate_cache(self, table: str | None = None) -> None:
