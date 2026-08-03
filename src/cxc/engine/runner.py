@@ -15,6 +15,7 @@ from datetime import date
 from ..models import BandejaFacturacion, MetodoPago, Vinculacion
 from ..repositories import Repository
 from .discounts import EngineInputs, calcular_factura
+from .historical_pricing import cargar_mapa_historico, es_orden_historica
 from .price_resolver import PriceResolver
 
 logger = logging.getLogger("cxc.engine")
@@ -89,6 +90,28 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer listas de precio validas de _Meta: %s", e)
 
+        # Tarea 2 (Lista Histórica de Auditoría): sin esto BandejaFacturacion
+        # (lo que alimenta /api/ventas) nunca sabia de la excepcion historica
+        # y mostraba teorico $0.00 para ordenes sin lista o del periodo
+        # 20-feb al 12-mar-2026 -- solo los endpoints de reporte la conocian.
+        historical_enabled = True
+        historical_price_map: dict[str, dict[str, object]] = {}
+        try:
+            toggle = self._repo.get_config("historical_pricelist_enabled")
+            historical_enabled = toggle is None or toggle.strip().lower() not in (
+                "false",
+                "0",
+                "no",
+            )
+            historical_price_map = cargar_mapa_historico(
+                self._repo.all_listas_precios_historicas()
+            )
+        except Exception as e:
+            logger.warning("Error al leer Lista Historica de Auditoria: %s", e)
+        orden_es_historica = es_orden_historica(
+            orden.fecha, orden.lista_precios, historical_enabled
+        )
+
         inputs = EngineInputs(
             orden=orden,
             lineas=lineas,
@@ -108,6 +131,8 @@ class EngineRunner:
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
             valid_ves=valid_ves,
             valid_usd=valid_usd,
+            orden_es_historica=orden_es_historica,
+            historical_price_map=historical_price_map,
         )
         bandeja = calcular_factura(inputs)
         # Equivalentes congelados estampados durante el cálculo -- se

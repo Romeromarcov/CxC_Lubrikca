@@ -85,6 +85,11 @@ class EngineInputs:
     # hardcodeado de effective_dating._match_lista (comportamiento previo).
     valid_ves: list[str] = field(default_factory=list)
     valid_usd: list[str] = field(default_factory=list)
+    # Tarea 2 (Lista Histórica de Auditoría): si la orden cae en la
+    # excepción histórica, el precio unitario de cada línea sale de este
+    # mapa (codigo producto -> precio usd) en vez de la pricelist normal.
+    orden_es_historica: bool = False
+    historical_price_map: dict[str, dict[str, object]] = field(default_factory=dict)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -171,10 +176,22 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
     return linea.cantidad
 
 
+def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
+    """Precio unitario de la línea -- Lista Histórica de Auditoría si la
+
+    orden cae en esa excepción (Tarea 2), si no la pricelist normal."""
+    if inp.orden_es_historica and inp.historical_price_map:
+        code_key = str(linea.producto).strip()
+        if code_key.isdigit():
+            code_key = str(int(code_key))
+        hist_info = inp.historical_price_map.get(code_key)
+        if hist_info and hist_info["usd"] > Decimal("0"):
+            return hist_info["usd"]
+    return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
+
+
 def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
-    return inp.price_resolver.precio(
-        linea.producto, lista, fecha=inp.orden.fecha
-    ) * _cantidad_efectiva(inp, linea)
+    return _precio_unitario_linea(inp, linea, lista) * _cantidad_efectiva(inp, linea)
 
 
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
