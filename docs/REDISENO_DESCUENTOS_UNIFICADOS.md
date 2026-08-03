@@ -2,13 +2,15 @@
 
 Estado: Tarea 1 implementada y probada. Tarea 2 cerrada por hallazgo de
 auditoría (no había nada que unificar; el flujo reactivo Cobranza→Ventas
-queda diseñado, no implementado). Tarea 3a/3b implementadas y probadas
-(equivalente/teóricos por lista en `BandejaFacturacion`); 3c–3g diseñadas.
-Tarea 4 implementada (`venta_bruta_teorica_auditoria` en
-`GET /api/auditoria`, derivada de 3a/3b + IVA, sin UI todavía). La
+queda diseñado, no implementado). Tarea 3 implementada completa (3a-3g:
+equivalente/teóricos por lista en `BandejaFacturacion`, descuentos
+aplicados orden/factura + validación visual, pendientes de aplicar, N/C y
+N/D en `/api/ventas`). Tarea 4 implementada (`venta_bruta_teorica_auditoria`
+en `GET /api/auditoria`, derivada de 3a/3b + IVA, sin UI todavía). La
 reorganización de Configuración en subpáginas está implementada (versión
 ligera, client-side, verificada con Playwright). Queda pendiente lo
-detallado en "Dependencias abiertas" (3c–3g, N/D, recálculo reactivo).
+detallado en "Dependencias abiertas" (3e, recálculo reactivo, persistencia
+de `bandeja_auditoria` en Postgres, aplicar migraciones en producción).
 
 ## Tarea 1 — `requiere_pago_previo` en reglas de descuento (IMPLEMENTADA)
 
@@ -171,39 +173,31 @@ tipos de regla (documentado, no resuelto).
 - Tests: `tests/test_teoricos_por_lista.py` (orden nacida en USD, orden
   nacida en VES, catálogo parcial sin romper el cálculo).
 
-### 3c–3g — DISEÑO (no implementado)
+### 3c–3g — IMPLEMENTADAS
 
-Estado actual de `/api/ventas` (`src/cxc/web/app.py:~6800-7005`) y su tabla:
-Orden, Cliente, Vendedor, Fecha, Venta Bruta Teórica, Bruta Teórica + IVA,
-Venta Neta Teórica, Neta Teórica + Imp., Venta Bruta Real, Venta Neta Real,
-Facturado antes Imp., Facturado con Imp., Facturado Neto, Diferencia, Alerta.
+Todas viven en `/api/ventas` (`src/cxc/web/app.py`), sin migración nueva
+(ninguna es un campo persistido — son lecturas de Odoo + comparaciones
+puras contra `BandejaFacturacion`, calculadas en cada request):
 
-Diseño de las columnas pedidas, en el orden de la tarea:
+| # | Columna(s) en la respuesta | Cómo se resolvió |
+|---|---|---|
+| c | `descuento_aplicado_orden`, `descuento_aplicado_factura`, `descuento_motor_total`, `descuento_validacion_orden`, `descuento_validacion_factura` | Nuevo helper `_leer_descuentos_lineas_odoo()` lee `sale.order.line.discount`/`account.move.line.discount` (mismo patrón de dos-formas-de-descuento que ya usaba `get_reporte_saldos`, extraído a función reutilizable en vez de reescrito). La "validación visual" reutiliza **las mismas funciones puras** que ya usa `/api/auditoria` — `discount_audit.auditar_descuento_orden`/`auditar_descuento_factura` — llamadas **en línea, sin persistir a `bandeja_auditoria`** (opción (ii) del diseño original: evita depender del hallazgo de que `PostgresRepository` no implementa esa tabla — ver "Hallazgo no contemplado" abajo, que sigue abierto para `/api/auditoria-descuentos`, pero ya no bloquea Ventas). |
+| d | `descuento_pendiente_aplicar` | `audit_orden.descuento_adicional_a_aplicar` (campo que `discount_audit` ya calculaba: `max(0, motor - odoo)`) — cero nueva lógica, solo se expone. |
+| e | `descuento_aplicado_sistema` | `None` explícito en cada fila, con comentario en código apuntando a esta dependencia abierta. Deliberadamente `None` y no `0`, para no afirmar "no hay ninguno" cuando en realidad "no se sabe todavía" (depende de Facturación, no construida). |
+| f | `total_nc_aplicada` (ya existía, ahora expuesta como columna propia), `total_nd_aplicada` (nueva) | N/C: sin cambios (`move_type=out_refund`). N/D: nuevo helper `_leer_notas_debito_odoo()` — Odoo no distingue N/D con un `move_type` propio; son `account.move` con `move_type=out_invoice` y `debit_origin_id` apuntando a la factura original (no siempre traen `invoice_origin`), así que se buscan por ese campo contra los ids de facturas `out_invoice` ya encontradas. |
+| g | `total_facturado_neto` | `facturado_con_impuestos − nc + nd` (antes solo restaba NC). |
 
-| # | Columna | Fuente de datos | Notas de diseño |
-|---|---|---|---|
-| a | Equivalente lista USD | Si `orden.lista_precios == lista_usd`: mismo valor que "Venta Bruta Teórica". Si nació en VES: `Σ price_resolver.precio(producto, lista_usd, fecha_orden) * cantidad` — **mismo cálculo que ya hace el motor internamente** (`precio_target_usd` en `discounts.py:503-509`) para el "Equiparación Binance". Reutilizar esa lógica, no reimplementarla — exponer `precio_target_usd` como un campo nuevo de `BandejaFacturacion` (p.ej. `equivalente_lista_usd`) para que Ventas lo lea, no lo recalcule. |
-| b | Teóricos VES/USD vigentes | Igual patrón: el motor ya resuelve precio por lista y fecha (`_precio_linea`) respetando la excepción de Lista Histórica de Auditoría (`orden_es_historica`/`historical_price_map`, ya implementada). Exponer dos campos nuevos en `BandejaFacturacion`: `teorico_lista_ves`, `teorico_lista_usd`, calculados una vez en `calcular_factura()` reutilizando `_precio_linea` con `lista_bcv`/`lista_usd` fijas (no la lista aplicada real de la orden). |
-| c | Descuentos aplicados (orden/factura) + validación visual | "Aplicados en orden" = lo que Odoo trae en `sale.order.line.discount` (ya se lee para otros propósitos). "Aplicados en factura" = `account.move.line.discount` / notas ya reflejadas en Odoo. La "validación visual" es una comparación contra `BandejaFacturacion.descuentos_detalle` (lo que el motor dictamina) — **esto ya es, conceptualmente, lo que hace `discount_audit.py`** (`auditar_descuento_orden`/`auditar_descuento_factura`). Diseño: exponer el resultado de `discount_audit` como 2 columnas nuevas en la fila de Ventas en vez de sólo en la pestaña de Auditoría — no duplicar el cálculo, sólo mostrarlo en otra vista. **Bloqueante encontrado, ver "Hallazgo no contemplado #2" abajo: la persistencia de este resultado (`bandeja_auditoria`, vía `repo.all_auditoria()`/`append_auditoria_rows()`) sólo existe en `SheetsRepository` — `PostgresRepository` no la implementa, así que hoy `/api/auditoria-descuentos` es un no-op silencioso en producción (Postgres).** Antes de construir 3c hay que decidir: (i) agregar esos métodos a `PostgresRepository` (con su propia migración para leer/escribir `bandeja_auditoria`, tabla que sí existe en `schema.py` pero sin código que la use), o (ii) llamar `discount_audit.py` en línea dentro de `/api/ventas` sin depender de esa persistencia. |
-| d | Descuentos pendientes de aplicar | `BandejaFacturacion.total_descuentos` (lo que el motor dictamina) menos lo que ya está aplicado en Odoo (columna c). Cálculo derivado, no nueva lógica de descuento — se apoya en (c). |
-| e | Descuentos aplicados desde el sistema (uso interno, posteriores a orden/factura en Odoo) | **Dependencia abierta explícita** (ver más abajo) — depende de una lógica de Facturación aún no construida. Se deja el campo modelado (columna nullable en la respuesta de `/api/ventas`, valor `null`/`"pendiente"` hasta que exista esa lógica) pero **no se implementa el cálculo** en este cambio. |
-| f | N/C (reutilizar lógica existente) y N/D (nueva) atadas a la factura | N/C: ya se lee de Odoo `account.move` con `move_type=out_refund` y se compara en `/api/auditoria` y `reconcile.py` — reutilizar esa función tal cual. N/D: **no existe hoy ninguna lectura de notas de débito** (`move_type=out_invoice` con referencia a otra factura, o el tipo que Odoo use en esta instancia — a confirmar en `docs/ODOO_MAPEO.md`, que no documenta N/D). Diseño: nueva función `odoo_notas_debito(so_id_or_factura_id)` en el mismo módulo/patrón que ya lee N/C, de solo lectura (Odoo nunca se escribe). |
-| g | Facturado en Odoo − N/C + N/D | Cálculo derivado puro de (f), sin nueva lógica de descuento. |
+Tests: `tests/test_ventas_columnas_3c_3g.py` — 5 casos cubriendo la matriz
+pedida (validación OK vs. discrepancia con pendiente > 0, N/C reduciendo
+neto, N/D atada a factura incrementando neto, y que 3e sea siempre `None`).
+Regresión verificada contra el test e2e preexistente de `/api/ventas`
+(`test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta`), que sigue en verde.
 
-**Regla de diseño transversal para toda la Tarea 3:** ninguna columna nueva
-debe calcular un descuento — todas son (1) lecturas directas de Odoo, (2)
-campos ya calculados por el motor pero no expuestos todavía, o (3)
-comparaciones/derivaciones aritméticas entre (1) y (2). Esto es lo que exige
-la restricción "prohibido duplicar cálculo de descuentos fuera de Ventas".
-
-**No implementado en este cambio** — requiere: (i) agregar los campos
-nuevos a `BandejaFacturacion` + migración Alembic para `bandeja_facturacion`
-(columnas `equivalente_lista_usd`, `teorico_lista_ves`, `teorico_lista_usd`),
-(ii) tocar `calcular_factura()` para poblarlos, (iii) tocar `/api/ventas` y
-la tabla HTML para mostrarlos, (iv) construir la lectura de N/D desde Odoo.
-Volumen de trabajo estimado: comparable a la Tarea 1, pero toca la tabla más
-usada del sistema (Ventas) — se recomienda hacerlo en un cambio separado con
-su propia revisión, no agregado apresuradamente a este.
+**Regla de diseño transversal respetada:** ninguna columna nueva calcula un
+descuento — todas son (1) lecturas directas de Odoo, (2) campos ya
+calculados por el motor, o (3) comparaciones/derivaciones aritméticas entre
+(1) y (2), reusando `discount_audit.py` en vez de reimplementar la
+comparación.
 
 ---
 
@@ -388,10 +382,14 @@ Tarea 3c más arriba con las dos alternativas de diseño.
 2. **3e — Descuentos aplicados desde el sistema**: depende explícitamente de
    una lógica de Facturación aún no construida (mencionado en el propio
    `/goal`). Campo dejado listo/documentado, sin cálculo.
-3. **N/D (notas de débito) atadas a factura** (3f): no existe hoy ninguna
-   lectura de Odoo para N/D — a diferencia de N/C, que sí se reutiliza. Hay
-   que confirmar primero en Odoo cómo se modelan las N/D en esta instancia
-   (`docs/ODOO_MAPEO.md` no las documenta).
+3. **N/D (notas de débito) atadas a factura** (3f): implementada
+   (`_leer_notas_debito_odoo()` en `web/app.py`, busca `account.move` con
+   `move_type=out_invoice` y `debit_origin_id` apuntando a la factura
+   original) pero **no verificada contra datos reales de Odoo** — Lubrikca
+   podría no usar N/D en absoluto, o modelarlas distinto (`docs/ODOO_MAPEO.md`
+   no las documenta). Antes de confiar en `total_nd_aplicada` en producción,
+   confirmar con al menos una N/D real que el campo `debit_origin_id` se
+   pobla como se asume aquí.
 4. **`DescuentoDiferencialCambiario` y `DescuentoProducto` huérfanas**: si
    el negocio decide que deben tener efecto real, hace falta cablearlas en
    `EngineInputs`/`_calcular_componentes` — hoy sólo existen en Config/DB.
@@ -424,8 +422,18 @@ Tarea 3c más arriba con las dos alternativas de diseño.
       (`.github/workflows/ci.yml`) también corre `alembic upgrade head`
       contra un servicio Postgres antes de la suite de tests — confirmado
       verde en el PR.
-- [ ] Verificar `alembic current` en staging/producción antes de desplegar
-      (no se tocó ningún entorno real fuera de CI/este sandbox).
+- [ ] **Pendiente en producción — confirmado por logs reales**: un despliegue
+      de `main` a producción (Railway) mostró en logs `UndefinedColumn` para
+      `descuentos_pronto_pago.requiere_pago_previo` y
+      `bandeja_facturacion.equivalente_lista_usd`/`teorico_lista_ves`/etc.,
+      con `/api/reporte-saldos` y `/api/ventas` devolviendo 500. Ambas
+      migraciones nunca se aplicaron contra la base de datos real de
+      producción — el `Procfile` ya tiene `release: alembic upgrade head`,
+      que debería correr automáticamente en cada deploy; revisar por qué esa
+      fase no se ejecutó (o falló silenciosamente) en ese despliegue. Fix:
+      correr `alembic upgrade head` contra la DB de producción (aditivo,
+      sin downtime); no se pudo ejecutar desde este entorno de desarrollo
+      por no tener credenciales válidas de acceso a Railway.
 - [ ] Tarea 3c–3g (descuentos aplicados/pendientes por orden-factura, N/D)
       requerirán migraciones nuevas cuando se implementen — no incluidas
       en este cambio.

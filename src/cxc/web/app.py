@@ -6861,6 +6861,152 @@ async def get_auditoria():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _leer_descuentos_lineas_odoo(
+    execute: Any,
+    so_names: list[str],
+    invoice_ids: list[int],
+    inv_id_to_so: dict[int, str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Lee los descuentos ya materializados en Odoo por orden y por factura.
+
+    Tarea 3c: no CALCULA ningún descuento -- solo lee lo que Odoo ya tiene
+    guardado por línea (campo ``discount`` % en ``sale.order.line``/
+    ``account.move.line``, o una línea aparte de producto "Descuento" con
+    ``price_subtotal`` negativo, patrón también usado en Lubrikca). Sirve
+    para comparar contra lo que el motor dictamina
+    (``BandejaFacturacion.total_descuentos``), nunca para sustituirlo.
+    """
+    desc_orden: dict[str, float] = {}
+    desc_factura: dict[str, float] = {}
+    if not execute:
+        return desc_orden, desc_factura
+    try:
+        if so_names:
+            sol_lines = execute(
+                "sale.order.line",
+                "search_read",
+                [
+                    [
+                        ["order_id.name", "in", so_names],
+                        "|",
+                        ["discount", ">", 0],
+                        "&",
+                        ["product_id.name", "ilike", "descuento"],
+                        ["price_subtotal", "<", 0],
+                    ]
+                ],
+                {
+                    "fields": [
+                        "order_id",
+                        "product_uom_qty",
+                        "price_unit",
+                        "discount",
+                        "price_subtotal",
+                    ]
+                },
+            )
+            for sol in sol_lines:
+                order_raw = sol.get("order_id")
+                so_name = (
+                    order_raw[1]
+                    if isinstance(order_raw, list | tuple) and len(order_raw) > 1
+                    else str(order_raw or "")
+                )
+                if not so_name:
+                    continue
+                disc_pct = float(sol.get("discount") or 0)
+                if disc_pct > 0:
+                    monto = (
+                        float(sol.get("product_uom_qty") or 0)
+                        * float(sol.get("price_unit") or 0)
+                        * (disc_pct / 100.0)
+                    )
+                else:
+                    monto = abs(float(sol.get("price_subtotal") or 0))
+                desc_orden[so_name] = desc_orden.get(so_name, 0.0) + monto
+    except Exception as e_sol:
+        logger.warning("Error leyendo descuentos de sale.order.line en get_ventas: %s", e_sol)
+    try:
+        if invoice_ids:
+            inv_lines = execute(
+                "account.move.line",
+                "search_read",
+                [
+                    [
+                        ["move_id", "in", invoice_ids],
+                        ["display_type", "in", ["product", False]],
+                        "|",
+                        ["discount", ">", 0],
+                        "&",
+                        ["product_id.name", "ilike", "descuento"],
+                        ["price_subtotal", "<", 0],
+                    ]
+                ],
+                {"fields": ["move_id", "quantity", "price_unit", "discount", "price_subtotal"]},
+            )
+            for il in inv_lines:
+                move_raw = il.get("move_id")
+                move_id = move_raw[0] if isinstance(move_raw, list | tuple) else int(move_raw or 0)
+                so_name = inv_id_to_so.get(move_id, "")
+                if not so_name:
+                    continue
+                disc_pct = float(il.get("discount") or 0)
+                if disc_pct > 0:
+                    monto = (
+                        float(il.get("quantity") or 0)
+                        * float(il.get("price_unit") or 0)
+                        * (disc_pct / 100.0)
+                    )
+                else:
+                    monto = abs(float(il.get("price_subtotal") or 0))
+                desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto
+    except Exception as e_il:
+        logger.warning("Error leyendo descuentos de account.move.line en get_ventas: %s", e_il)
+    return desc_orden, desc_factura
+
+
+def _leer_notas_debito_odoo(
+    execute: Any, original_invoice_ids: list[int], inv_id_to_so: dict[int, str]
+) -> dict[str, float]:
+    """Tarea 3f: notas de débito (N/D) atadas a una factura ya emitida.
+
+    A diferencia de las notas de crédito (``move_type == "out_refund"``,
+    lógica ya existente y reutilizada tal cual), Odoo no marca las N/D con
+    un ``move_type`` propio -- son ``account.move`` con
+    ``move_type == "out_invoice"`` y ``debit_origin_id`` apuntando a la
+    factura original. Se buscan por ese campo, no por ``invoice_origin``
+    (una N/D no necesariamente lo trae).
+    """
+    nd_by_so: dict[str, float] = {}
+    if not execute or not original_invoice_ids:
+        return nd_by_so
+    try:
+        debit_notes = execute(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["debit_origin_id", "in", original_invoice_ids],
+                    ["state", "=", "posted"],
+                    ["move_type", "=", "out_invoice"],
+                ]
+            ],
+            {"fields": ["debit_origin_id", "amount_total_signed_usd"]},
+        )
+        for dn in debit_notes:
+            origin_raw = dn.get("debit_origin_id")
+            origin_id = origin_raw[0] if isinstance(origin_raw, list | tuple) else origin_raw
+            so_name = inv_id_to_so.get(origin_id, "") if origin_id else ""
+            if not so_name:
+                continue
+            nd_by_so[so_name] = nd_by_so.get(so_name, 0.0) + abs(
+                float(dn.get("amount_total_signed_usd") or 0.0)
+            )
+    except Exception as e_nd:
+        logger.warning("Error leyendo notas de débito en get_ventas: %s", e_nd)
+    return nd_by_so
+
+
 @app.get("/api/ventas")
 async def get_ventas(
     vendedor: str | None = None,
@@ -6884,15 +7030,31 @@ async def get_ventas(
 
     Total facturado: de las facturas "posted" ligadas por ``invoice_origin``,
     en equivalente USD vía los campos ``*_signed_usd`` de Odoo. Neto = con
-    impuestos menos las notas de crédito (``out_refund``) aplicadas.
+    impuestos, menos las notas de crédito (``out_refund``, lógica ya
+    existente) más las notas de débito (Tarea 3f/3g: ``move_type ==
+    "out_invoice"`` con ``debit_origin_id`` apuntando a la factura original --
+    Odoo no las distingue con un ``move_type`` propio).
 
     Alerta: solo si la orden YA tiene factura y lo realmente facturado neto
     quedó por debajo de lo que el motor dice que debió facturarse neto (ya
     con impuestos) -- eso es un faltante real de facturación o un descuento
     indebido. El resto (diferencias explicadas por descuentos válidos,
     redondeo, u órdenes aún sin facturar) es informativo y subsanable.
+
+    Tarea 3c/3d: ``descuento_aplicado_orden``/``_factura`` leen (no calculan)
+    el descuento que Odoo ya tiene guardado por línea; se comparan contra
+    ``BandejaFacturacion.total_descuentos`` (lo que dictamina el motor) vía
+    ``discount_audit`` (mismas funciones puras que usa ``/api/auditoria``,
+    sin duplicar la lógica de comparación). ``descuento_pendiente_aplicar``
+    es la parte que el motor exige y Odoo todavía no refleja.
+
+    Tarea 3e: ``descuento_aplicado_sistema`` queda en ``None`` a propósito --
+    depende de una lógica de Facturación aún no construida (dependencia
+    documentada en docs/REDISENO_DESCUENTOS_UNIFICADOS.md).
     """
     try:
+        from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
+
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
         config = AppConfig.from_env()
@@ -6916,6 +7078,11 @@ async def get_ventas(
         facturado_antes_imp_map: dict[str, float] = {}
         facturado_con_imp_map: dict[str, float] = {}
         nc_con_imp_map: dict[str, float] = {}
+        nd_con_imp_map: dict[str, float] = {}
+        desc_orden_odoo_map: dict[str, float] = {}
+        desc_factura_odoo_map: dict[str, float] = {}
+        invoice_ids_out_invoice: list[int] = []
+        inv_id_to_so: dict[int, str] = {}
 
         if execute and so_names:
             try:
@@ -6945,6 +7112,7 @@ async def get_ventas(
                     ],
                     {
                         "fields": [
+                            "id",
                             "invoice_origin",
                             "move_type",
                             "amount_untaxed_signed_usd",
@@ -6952,10 +7120,15 @@ async def get_ventas(
                         ]
                     },
                 )
+                invoice_ids_all: list[int] = []
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
                     if not so:
                         continue
+                    inv_id = int(inv.get("id") or 0)
+                    if inv_id:
+                        invoice_ids_all.append(inv_id)
+                        inv_id_to_so[inv_id] = so
                     con_imp = abs(float(inv.get("amount_total_signed_usd") or 0.0))
                     antes_imp = abs(float(inv.get("amount_untaxed_signed_usd") or 0.0))
                     if str(inv.get("move_type")) == "out_refund":
@@ -6965,6 +7138,17 @@ async def get_ventas(
                         facturado_antes_imp_map[so] = (
                             facturado_antes_imp_map.get(so, 0.0) + antes_imp
                         )
+                        if inv_id:
+                            invoice_ids_out_invoice.append(inv_id)
+
+                # Tarea 3c: descuentos ya materializados en Odoo (lectura, no cálculo).
+                desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
+                    execute, so_names, invoice_ids_all, inv_id_to_so
+                )
+                # Tarea 3f: N/D atadas a las facturas out_invoice de estas órdenes.
+                nd_con_imp_map = _leer_notas_debito_odoo(
+                    execute, invoice_ids_out_invoice, inv_id_to_so
+                )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
 
@@ -7003,8 +7187,34 @@ async def get_ventas(
             total_facturado_antes_impuestos = facturado_antes_imp_map.get(o.so_id, 0.0)
             total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
             total_nc_aplicada = nc_con_imp_map.get(o.so_id, 0.0)
-            total_facturado_neto = total_facturado_con_impuestos - total_nc_aplicada
+            # Tarea 3g: facturado en Odoo - N/C (lógica existente) + N/D (nueva).
+            total_nd_aplicada = nd_con_imp_map.get(o.so_id, 0.0)
+            total_facturado_neto = (
+                total_facturado_con_impuestos - total_nc_aplicada + total_nd_aplicada
+            )
             tiene_factura = total_facturado_con_impuestos > 0.005
+
+            # Tarea 3c: descuentos ya aplicados en Odoo (orden/factura, columnas
+            # separadas) + validación visual contra lo que dictamina el motor.
+            motor_total_descuentos = Decimal(str(b.total_descuentos)) if b else Decimal("0")
+            descuento_aplicado_orden = desc_orden_odoo_map.get(o.so_id, 0.0)
+            descuento_aplicado_factura = desc_factura_odoo_map.get(o.so_id, 0.0)
+            audit_orden = auditar_descuento_orden(
+                so_id=o.so_id,
+                motor_total_descuentos=motor_total_descuentos,
+                odoo_descuento_aplicado=Decimal(str(descuento_aplicado_orden)),
+            )
+            audit_factura = auditar_descuento_factura(
+                so_id=o.so_id,
+                motor_total_descuentos=motor_total_descuentos,
+                odoo_descuento_factura=Decimal(str(descuento_aplicado_factura)),
+            )
+            # Tarea 3d: lo que el motor determina pendiente de aplicar (solo la
+            # parte positiva -- si Odoo ya tiene más descuento del que el motor
+            # exige, no hay "pendiente", ya está materializado).
+            descuento_pendiente_aplicar = round(
+                float(audit_orden.descuento_adicional_a_aplicar), 2
+            )
 
             if tiene_factura:
                 diferencia = round(venta_bruta_teorica_iva - total_facturado_neto, 2)
@@ -7036,6 +7246,8 @@ async def get_ventas(
                     "venta_neta_real": round(venta_neta_real, 2),
                     "total_facturado_antes_impuestos": round(total_facturado_antes_impuestos, 2),
                     "total_facturado_con_impuestos": round(total_facturado_con_impuestos, 2),
+                    "total_nc_aplicada": round(total_nc_aplicada, 2),
+                    "total_nd_aplicada": round(total_nd_aplicada, 2),
                     "total_facturado_neto": round(total_facturado_neto, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
@@ -7047,6 +7259,22 @@ async def get_ventas(
                     ),
                     "teorico_lista_ves": round(float(b.teorico_lista_ves), 2) if b else None,
                     "teorico_lista_usd": round(float(b.teorico_lista_usd), 2) if b else None,
+                    # Tarea 3c: descuentos aplicados en Odoo (orden/factura) +
+                    # validación visual vs. lo que dictamina el motor.
+                    "descuento_aplicado_orden": round(descuento_aplicado_orden, 2),
+                    "descuento_aplicado_factura": round(descuento_aplicado_factura, 2),
+                    "descuento_motor_total": round(float(motor_total_descuentos), 2),
+                    "descuento_validacion_orden": audit_orden.estado.value,
+                    "descuento_validacion_factura": audit_factura.estado.value,
+                    # Tarea 3d: descuento que el motor exige y aún no está en Odoo.
+                    "descuento_pendiente_aplicar": descuento_pendiente_aplicar,
+                    # Tarea 3e: descuentos aplicados desde el sistema (uso interno,
+                    # posteriores a orden/factura en Odoo) -- DEPENDE de lógica de
+                    # Facturación aún no construida (ver docs/REDISENO_
+                    # DESCUENTOS_UNIFICADOS.md, dependencia abierta). Campo listo,
+                    # sin dato real todavía: `None` explícito, no 0 (0 afirmaría
+                    # "no hay ninguno" cuando en realidad "no se sabe todavía").
+                    "descuento_aplicado_sistema": None,
                 }
             )
 
@@ -7069,6 +7297,11 @@ async def get_ventas(
                 "venta_neta_real_total": round(sum(i["venta_neta_real"] for i in items), 2),
                 "total_facturado_neto_total": round(
                     sum(i["total_facturado_neto"] for i in items), 2
+                ),
+                "total_nc_aplicada_total": round(sum(i["total_nc_aplicada"] for i in items), 2),
+                "total_nd_aplicada_total": round(sum(i["total_nd_aplicada"] for i in items), 2),
+                "descuento_pendiente_aplicar_total": round(
+                    sum(i["descuento_pendiente_aplicar"] for i in items), 2
                 ),
             },
         }
