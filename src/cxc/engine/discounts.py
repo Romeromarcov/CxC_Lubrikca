@@ -40,6 +40,7 @@ from ..models import (
 from .business_days import fin_ventana_contado
 from .effective_dating import (
     _match_categoria,
+    _match_lista,
     _vigente,
     descuento_vigente,
     descuento_volumen_vigente,
@@ -78,6 +79,12 @@ class EngineInputs:
     exclusiones: list[ExclusionRegla] = field(default_factory=list)
     descuentos_recompra: list[DescuentoRecompra] = field(default_factory=list)
     descuentos_diferencial: list[DescuentoDiferencialCambiario] = field(default_factory=list)
+    # Tarea 3 (auditoria reglas por lista): listas de precio (ids de Odoo)
+    # configuradas en Configuración como VES/USD -- vacías = el matching de
+    # "LISTAS_VES"/"LISTAS_USD" en listas_aplicables cae al default
+    # hardcodeado de effective_dating._match_lista (comportamiento previo).
+    valid_ves: list[str] = field(default_factory=list)
+    valid_usd: list[str] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -191,6 +198,12 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             for p in inp.promociones_primera_compra
             if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha_orden)
             and (not getattr(p, "solo_primera_compra", False) or inp.orden.es_primera_compra)
+            and _match_lista(
+                getattr(p, "listas_aplicables", "*"),
+                lista,
+                inp.valid_ves or None,
+                inp.valid_usd or None,
+            )
         ]
 
         # Calculate quantities for each promo based on its specific categorias_aplica
@@ -297,6 +310,12 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             r
             for r in inp.descuentos_recompra
             if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
+            and _match_lista(
+                getattr(r, "listas_aplicables", "*"),
+                lista,
+                inp.valid_ves or None,
+                inp.valid_usd or None,
+            )
         ]
         if not recompras_activas and inp.reglas_recurrencia:
             regla = regla_recurrencia_vigente(
@@ -394,6 +413,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 producto=ln.producto,
                 moneda_pago=moneda_pago,
                 presentacion=ln.presentacion,
+                valid_ves=inp.valid_ves or None,
+                valid_usd=inp.valid_usd or None,
             )
             if d is not None:
                 contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
@@ -427,6 +448,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             cantidad_unidades=total_cajas,
             fecha=fecha_orden,
             lista_precios=lista,
+            valid_ves=inp.valid_ves or None,
+            valid_usd=inp.valid_usd or None,
         )
         if regla_vol is not None and regla_vol.porcentaje > 0:
             subt = subtotal_por_mc[(marca, categoria)]

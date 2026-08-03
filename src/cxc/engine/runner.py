@@ -75,6 +75,20 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)
 
+        # Tarea 3 (auditoria reglas por lista): listas de precio configuradas
+        # en Configuración -- sin esto, el matching de "LISTAS_VES"/
+        # "LISTAS_USD" en listas_aplicables usa el default hardcodeado de
+        # effective_dating._match_lista en vez de lo que el usuario tildó.
+        valid_ves: list[str] = []
+        valid_usd: list[str] = []
+        try:
+            ves_str = self._repo.get_config("valid_pricelists_ves")
+            usd_str = self._repo.get_config("valid_pricelists_usd")
+            valid_ves = [x.strip() for x in (ves_str or "").split(",") if x.strip()]
+            valid_usd = [x.strip() for x in (usd_str or "").split(",") if x.strip()]
+        except Exception as e:
+            logger.warning("Error al leer listas de precio validas de _Meta: %s", e)
+
         inputs = EngineInputs(
             orden=orden,
             lineas=lineas,
@@ -92,6 +106,8 @@ class EngineRunner:
             exclusiones=self._repo.exclusiones(),
             descuentos_recompra=self._repo.descuentos_recompra(),
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
+            valid_ves=valid_ves,
+            valid_usd=valid_usd,
         )
         bandeja = calcular_factura(inputs)
         # Equivalentes congelados estampados durante el cálculo -- se

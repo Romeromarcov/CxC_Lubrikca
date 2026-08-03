@@ -3042,6 +3042,11 @@ document.addEventListener("DOMContentLoaded", () => {
             const validUSD = (Array.isArray(mapData.valid_pricelists_usd) && mapData.valid_pricelists_usd.length > 0) ? mapData.valid_pricelists_usd.map(String) : ["4"];
             const validVES = (Array.isArray(mapData.valid_pricelists_ves) && mapData.valid_pricelists_ves.length > 0) ? mapData.valid_pricelists_ves.map(String) : ["5"];
 
+            const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
+            if (histCheckbox) {
+                histCheckbox.checked = mapData.historical_pricelist_enabled !== false;
+            }
+
             if (!Array.isArray(pricelists) || pricelists.length === 0) {
                 usdBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
                 vesBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
@@ -3116,13 +3121,17 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
+        const histEnabled = histCheckbox ? histCheckbox.checked : true;
+
         try {
             const res = await fetch('/api/config/listas-precio-mapeo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     valid_pricelists_usd: usdChecked,
-                    valid_pricelists_ves: vesChecked
+                    valid_pricelists_ves: vesChecked,
+                    historical_pricelist_enabled: histEnabled
                 })
             });
             const data = await res.json();

@@ -369,7 +369,16 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
                 return [dict(r) for r in cached_records]
 
         try:
-            records = self._ws(table).get_all_records()
+            # numericise_ignore=['all']: gspread por defecto intenta convertir
+            # celdas de texto que "parecen numero" a int/float antes de que
+            # lleguen aca -- con el locale es_ES del spreadsheet (coma
+            # decimal), valores de texto con coma como separador de listas
+            # (ej. "7,8" en el mapeo de listas de precio) se leen mal,
+            # perdiendo la coma como si fuera separador de miles ("7,8" ->
+            # 78). Deshabilitarlo preserva el string literal de la celda --
+            # todo el resto del codigo ya parsea explicitamente a
+            # Decimal/date/etc via serde.py, no depende de esta conversion.
+            records = self._ws(table).get_all_records(numericise_ignore=["all"])
             res = [{k: str(v) for k, v in rec.items()} for rec in records]
             self._read_cache[table] = (now, res)
             return [dict(r) for r in res]
@@ -436,7 +445,7 @@ class GspreadGateway(SheetGateway):  # pragma: no cover - red externa (Google AP
             header = [*header, *columnas_nuevas]
             ws.update("A1", [header])
 
-        existentes = ws.get_all_records()
+        existentes = ws.get_all_records(numericise_ignore=["all"])
         matriz = [[str(rec.get(col, "")) for col in header] for rec in existentes]
         indice = {str(rec.get(pk_field)): i for i, rec in enumerate(existentes)}
         for row in rows:
