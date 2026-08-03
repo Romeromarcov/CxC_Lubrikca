@@ -350,11 +350,20 @@ otra en un cambio aparte.
 
 ## Dependencias abiertas
 
-1. **Recálculo reactivo Cobranza → Ventas** (Tarea 2): un pago nuevo debe
-   disparar `EngineRunner.run_orden` para que las reglas
-   `requiere_pago_previo=True` (ya excluidas antes del pago) se evalúen. No
-   implementado — requiere decidir síncrono vs. asíncrono y dónde engancha
-   en el flujo de aprobación de `Vinculacion`.
+1. ~~**Recálculo reactivo Cobranza → Ventas**~~ — **CORRECCIÓN: ya estaba
+   implementado antes de este cambio**, no era una dependencia abierta. Se
+   verificó que `POST /api/vincular`, `/api/vincular-masivo`,
+   `/api/vinculacion/{id}/tasa-binance` y `/api/vinculacion/{id}/tasa-bcv-tipo`
+   (todos en `src/cxc/web/app.py`) ya disparan
+   `background_tasks.add_task(recalculate_all, so_id)`, que instancia un
+   `EngineRunner` y corre `run_orden(so_id, ...)` — así que un pago nuevo sí
+   dispara el recálculo y las reglas `requiere_pago_previo=True` (antes
+   excluidas por falta de abono) se evalúan en cuanto se vincula el pago.
+   Además, `recalculate_all_orders()` corre `runner.run_all()` tras cada
+   ciclo del sync incremental. La primera versión de este documento afirmó
+   incorrectamente que esto faltaba — quedó corregido tras revisar
+   `web/app.py` directamente en vez de inferirlo del reporte de
+   investigación inicial.
 2. **3e — Descuentos aplicados desde el sistema**: depende explícitamente de
    una lógica de Facturación aún no construida (mencionado en el propio
    `/goal`). Campo dejado listo/documentado, sin cálculo.
