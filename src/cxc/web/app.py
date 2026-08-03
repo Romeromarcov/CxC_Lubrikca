@@ -1175,8 +1175,56 @@ async def run_scraper_in_background():
         await asyncio.sleep(3600)
 
 
+def _aplicar_migraciones_pendientes() -> None:
+    """Red de seguridad: corre ``alembic upgrade head`` al arrancar.
+
+    El `Procfile` ya declara ``release: alembic upgrade head``, que Railway
+    debería ejecutar en cada deploy antes de levantar el proceso `web` --
+    pero si esa fase de release no corre (o falla en silencio, como pasó en
+    producción: ver ``UndefinedColumn`` en ``descuentos_pronto_pago.
+    requiere_pago_previo``/``bandeja_facturacion.equivalente_lista_usd``),
+    el proceso `web` arrancaba de todos modos contra un esquema
+    desactualizado. Esto es best-effort y no debe tumbar el arranque: si
+    falla (backend Sheets sin Postgres, DB no disponible, permisos), solo
+    se loggea -- el resto de la app sigue funcionando igual que antes de
+    este cambio.
+    """
+    config = AppConfig.from_env()
+    if config.database.repo_backend != "postgres":
+        return
+    try:
+        from pathlib import Path
+
+        from alembic import command
+        from alembic.config import Config as AlembicConfig
+
+        repo_root = Path(__file__).resolve().parents[3]
+        alembic_ini = repo_root / "alembic.ini"
+        if not alembic_ini.exists():
+            logger.warning(
+                "alembic.ini no encontrado en %s -- se omite la migración automática de arranque.",
+                alembic_ini,
+            )
+            return
+        cfg = AlembicConfig(str(alembic_ini))
+        cfg.set_main_option("script_location", str(repo_root / "alembic"))
+        command.upgrade(cfg, "head")
+        logger.info("Migraciones Alembic verificadas/aplicadas al arrancar (alembic upgrade head).")
+    except Exception as e:
+        logger.error(
+            "No se pudieron aplicar migraciones Alembic al arrancar -- "
+            "la app seguirá corriendo, pero el esquema puede estar desactualizado: %s",
+            e,
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
+    # Red de seguridad: si la fase `release` de Railway no corrió (o falló
+    # en silencio), esto evita que el proceso `web` sirva requests contra
+    # un esquema desactualizado -- ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md,
+    # sección "Checklist de migraciones Alembic".
+    _aplicar_migraciones_pendientes()
     # Start the synchronization and scraping daemon loops in the background
     asyncio.create_task(run_sync_in_background())
     asyncio.create_task(run_scraper_in_background())
