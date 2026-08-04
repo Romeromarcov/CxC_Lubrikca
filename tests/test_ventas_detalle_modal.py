@@ -444,3 +444,95 @@ def test_detalle_pagos_usa_account_payment_directo_si_no_hay_vinculaciones() -> 
     assert pago["monto_aplicado"] == 100.0
     assert pago["moneda_abono"] == "USD (equiv.)"
     assert pago["tipo_tasa_abono"] == "Banco Bancamiga"
+
+
+def test_detalle_pagos_odoo_calcula_equivalentes_bcv_binance_y_totales() -> None:
+    """Bug real: la rama "odoo" (mayoritaria en producción) nunca calculaba
+
+    tasa_bcv_aplicada/tasa_binance_aplicada/equiv_usd_bcv/equiv_usd_binance
+    ni monto_original -- el frontend ya sabía pintarlos pero llegaban
+    ausentes. Se recalculan con calcular_equivalentes() sobre el monto
+    ORIGINAL del pago (en su moneda real) y la tasa del día (sin tasas
+    configuradas, get_rate_for_datetime cae al default 36.5/38.0)."""
+
+    def _fake_execute_pago_odoo(model, method, args, kwargs=None):
+        if model == "product.pricelist":
+            return [{"id": 4, "name": "USD"}, {"id": 5, "name": "BCV"}]
+        if model == "sale.order.line":
+            return []
+        if model == "account.move" and method == "search_read":
+            return [
+                {
+                    "id": 950,
+                    "amount_total": 100.0,
+                    "amount_total_signed_usd": 100.0,
+                }
+            ]
+        if model == "account.move" and method == "read":
+            return [
+                {
+                    "id": 950,
+                    "name": "00000950",
+                    "invoice_origin": "SO_DETALLE",
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                    "amount_total_signed_usd": 100.0,
+                    "amount_residual_usd": 0.0,
+                }
+            ]
+        if model == "account.move.line":
+            return []
+        if model == "account.payment":
+            return [
+                {
+                    "id": 1,
+                    "partner_id": False,
+                    "amount": 3650.0,
+                    "amount_ref": 100.0,
+                    "amount_available_for_refund": 0.0,
+                    "currency_id": [166, "VES"],
+                    "journal_id": [30, "Banco Bancamiga"],
+                    "date": "2026-07-21",
+                    "reconciled_invoice_ids": [950],
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = []
+    mock_repo.all_serie_tasas.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_pago_odoo),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200
+        data = res.json()
+
+    pago = data["pagos"][0]
+    assert pago["monto_original"] == 3650.0
+    assert pago["moneda_original"] == "VES"
+    # Sin tasas configuradas -> default get_rate_for_datetime = 36.5/38.0.
+    assert pago["tasa_bcv_aplicada"] == 36.5
+    assert pago["tasa_binance_aplicada"] == 38.0
+    assert pago["equiv_usd_bcv"] == round(3650.0 / 36.5, 2)
+    assert pago["equiv_usd_binance"] == round(3650.0 / 38.0, 2)
+
+    totales = data["pagos_totales"]
+    assert totales["monto_original"] == 3650.0
+    assert totales["monedas_originales_mixtas"] is False
+    assert totales["monto_aplicado"] == 100.0
+    assert totales["equiv_usd_bcv"] == round(3650.0 / 36.5, 2)
+    assert totales["equiv_usd_binance"] == round(3650.0 / 38.0, 2)

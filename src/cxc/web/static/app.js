@@ -1734,6 +1734,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             const data = await res.json();
             const pagos = data.pagos || [];
+            const totales = data.pagos_totales || null;
             if (pagos.length === 0) {
                 body.innerHTML = '<p class="table-empty">Esta orden no tiene pagos vinculados todavía.</p>';
                 return;
@@ -1743,6 +1744,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>${fuenteBadge(p.fuente)}</td>
                     <td>${p.pago_id}</td>
                     <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ') || '—'}</small></td>
+                    <td style="text-align:right">${fmtMonto(p.monto_original, p.moneda_original)}</td>
                     <td style="text-align:right"><strong>${fmtMonto(p.monto_aplicado, p.moneda_abono)}</strong></td>
                     <td>${p.tipo_tasa_abono || '—'}</td>
                     <td style="text-align:right">${fmtTasa(p.tasa_bcv_aplicada)}</td>
@@ -1753,8 +1755,19 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td><small>${p.estado || '—'}</small></td>
                 </tr>
             `).join('');
+            const totalesRow = totales ? `
+                <tr style="font-weight:600;background:#f8fafc;">
+                    <td colspan="3">Totales${totales.monedas_originales_mixtas ? ' <small style="font-weight:400;color:#b91c1c;">(monedas originales mixtas, suma referencial)</small>' : ''}</td>
+                    <td style="text-align:right">${new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totales.monto_original || 0)}</td>
+                    <td style="text-align:right">${fmt(totales.monto_aplicado)}</td>
+                    <td colspan="3"></td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_bcv)}</td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_binance)}</td>
+                    <td colspan="2"></td>
+                </tr>
+            ` : '';
             body.innerHTML = `
-                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD).</p>
+                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD; el total de importe original es referencial si hay monedas mixtas).</p>
                 <div style="overflow-x:auto;">
                     <table class="cxc-table">
                         <thead>
@@ -1762,7 +1775,8 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <th>Fuente</th>
                                 <th>Pago</th>
                                 <th>Fecha</th>
-                                <th style="text-align:right">Monto Aplicado</th>
+                                <th style="text-align:right">Importe Original</th>
+                                <th style="text-align:right">Importe Referencia (Odoo)</th>
                                 <th>Ruta</th>
                                 <th style="text-align:right">Tasa BCV</th>
                                 <th style="text-align:right">Tasa Binance</th>
@@ -1772,7 +1786,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <th>Estado</th>
                             </tr>
                         </thead>
-                        <tbody>${rows}</tbody>
+                        <tbody>${rows}${totalesRow}</tbody>
                     </table>
                 </div>
             `;

@@ -29,7 +29,11 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
-from cxc.engine.equivalents import valor_pagado_bcv_usd, valor_pagado_binance_usd
+from cxc.engine.equivalents import (
+    calcular_equivalentes,
+    valor_pagado_bcv_usd,
+    valor_pagado_binance_usd,
+)
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.runner import EngineRunner
 from cxc.models import Cliente, EstadoVinculacion, Moneda, OrdenVenta, TipoTasa, Vinculacion
@@ -8229,16 +8233,19 @@ async def get_ventas_detalle(so_id: str):
         # en Odoo -- mismo bug de fondo que el estatus de pago (Fase 9). ---
         pagos: list[dict[str, Any]] = []
         for v in repo.vinculaciones_de_orden(so_id):
+            moneda_abono_str = (
+                v.moneda_abono.value if hasattr(v.moneda_abono, "value") else str(v.moneda_abono)
+            )
             pagos.append(
                 {
                     "fuente": "vinculacion",
                     "vinc_id": v.vinc_id,
                     "pago_id": v.pago_id,
                     "fecha": v.hora_pago_confirmada.isoformat() if v.hora_pago_confirmada else None,
+                    "monto_original": round(float(v.monto_aplicado), 2),
+                    "moneda_original": moneda_abono_str,
                     "monto_aplicado": round(float(v.monto_aplicado), 2),
-                    "moneda_abono": v.moneda_abono.value
-                    if hasattr(v.moneda_abono, "value")
-                    else str(v.moneda_abono),
+                    "moneda_abono": moneda_abono_str,
                     "tipo_tasa_abono": v.tipo_tasa_abono.value
                     if hasattr(v.tipo_tasa_abono, "value")
                     else str(v.tipo_tasa_abono),
@@ -8257,6 +8264,7 @@ async def get_ventas_detalle(so_id: str):
 
         if not pagos and execute:
             try:
+                tasas_rows_pagos = _all_serie_tasas_rows(repo)
                 for pago in get_live_pagos_conciliados(execute):
                     facturas_orden = [f for f in pago["facturas"] if f.get("so_id") == so_id]
                     if not facturas_orden:
@@ -8271,18 +8279,65 @@ async def get_ventas_detalle(so_id: str):
                     estado = "conciliado (Odoo)"
                     if otras_ordenes:
                         estado += f" -- también cubre: {', '.join(otras_ordenes)}"
+
+                    # Odoo no distingue ruta BCV/Binance por pago -- para
+                    # poder comparar contra los mismos dos equivalentes que
+                    # ya muestra la rama "vinculacion", se recalculan aquí
+                    # con la MISMA función pura del motor
+                    # (``calcular_equivalentes``), usando la tasa del día del
+                    # pago (``get_rate_for_datetime``, ya usado en el resto
+                    # de la app para este propósito) sobre el monto ORIGINAL
+                    # del pago (``monto_original``, en su moneda real) -- no
+                    # sobre ``monto_conciliado_usd`` (que ya es la conversión
+                    # propia de Odoo y serviría de referencia, no de insumo).
+                    moneda_str = str(pago.get("moneda") or "USD").upper().strip()
+                    moneda_enum = Moneda.USD if "USD" in moneda_str else Moneda.VES
+                    fecha_str = str(pago.get("fecha_pago") or "")[:10]
+                    try:
+                        fecha_dt = (
+                            datetime.strptime(fecha_str, "%Y-%m-%d")
+                            if fecha_str
+                            else datetime.now()
+                        )
+                    except ValueError:
+                        fecha_dt = datetime.now()
+                    tasa_bcv_dia, tasa_binance_dia = get_rate_for_datetime(
+                        fecha_dt, tasas_rows_pagos
+                    )
+                    try:
+                        eq = calcular_equivalentes(
+                            parse_decimal_safe(str(pago.get("monto_original") or "0")),
+                            moneda_enum,
+                            tasa_bcv_dia,
+                            tasa_binance_dia,
+                        )
+                        equiv_usd_bcv = round(float(eq.equiv_usd_bcv), 2)
+                        equiv_usd_binance = round(float(eq.equiv_usd_binance), 2)
+                    except (ValueError, ArithmeticError):
+                        equiv_usd_bcv = None
+                        equiv_usd_binance = None
+
                     pagos.append(
                         {
                             "fuente": "odoo",
                             "pago_id": pago["pago_id"],
                             "fecha": pago["fecha_pago"],
+                            "monto_original": round(float(pago.get("monto_original") or 0.0), 2),
+                            "moneda_original": moneda_str,
                             # monto_conciliado_usd ya viene en USD (mismo
                             # cálculo que Cobranza) -- monto TOTAL del pago,
                             # no prorrateado si cubre varias órdenes (ver
-                            # "estado" arriba para transparencia).
+                            # "estado" arriba para transparencia). Es la
+                            # referencia oficial de Odoo, distinta de los
+                            # equivalentes BCV/Binance de abajo (calculados
+                            # con nuestras propias tasas del día).
                             "monto_aplicado": round(pago["monto_conciliado_usd"], 2),
                             "moneda_abono": "USD (equiv.)",
                             "tipo_tasa_abono": pago.get("metodo_pago") or "",
+                            "tasa_bcv_aplicada": round(float(tasa_bcv_dia), 4),
+                            "tasa_binance_aplicada": round(float(tasa_binance_dia), 4),
+                            "equiv_usd_bcv": equiv_usd_bcv,
+                            "equiv_usd_binance": equiv_usd_binance,
                             "confirmado_por": "",
                             "estado": estado,
                         }
@@ -8293,6 +8348,17 @@ async def get_ventas_detalle(so_id: str):
                 )
 
         pagos.sort(key=lambda p: p["fecha"] or "")
+
+        monedas_originales_pagos = {
+            p.get("moneda_original") for p in pagos if p.get("moneda_original")
+        }
+        pagos_totales = {
+            "monto_original": round(sum(p.get("monto_original") or 0.0 for p in pagos), 2),
+            "monedas_originales_mixtas": len(monedas_originales_pagos) > 1,
+            "monto_aplicado": round(sum(p.get("monto_aplicado") or 0.0 for p in pagos), 2),
+            "equiv_usd_bcv": round(sum(p.get("equiv_usd_bcv") or 0.0 for p in pagos), 2),
+            "equiv_usd_binance": round(sum(p.get("equiv_usd_binance") or 0.0 for p in pagos), 2),
+        }
 
         return {
             "so_id": so_id,
@@ -8343,6 +8409,7 @@ async def get_ventas_detalle(so_id: str):
                 ),
             },
             "pagos": pagos,
+            "pagos_totales": pagos_totales,
         }
     except HTTPException:
         raise
