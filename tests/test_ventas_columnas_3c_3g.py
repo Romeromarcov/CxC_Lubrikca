@@ -10,14 +10,14 @@ Odoo y el motor (``BandejaFacturacion``) ya tienen, y que la comparación
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from cxc.config import EngineConfig
-from cxc.models import BandejaFacturacion, OrdenVenta
+from cxc.models import BandejaFacturacion, OrdenVenta, Vinculacion
 from cxc.web.app import app
 
 client = TestClient(app)
@@ -126,9 +126,14 @@ def _fake_execute(model, method, args, kwargs=None):
     return []
 
 
-def _run_get_ventas():
+def _run_get_ventas(
+    descuentos_sistema: list[dict] | None = None,
+    vinculaciones: list | None = None,
+):
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = descuentos_sistema or []
+    mock_repo.all_vinculaciones.return_value = vinculaciones or []
     mock_repo.all_ordenes.return_value = [
         _orden("SO_OK", lista="4", monto_total="95.00"),
         _orden("SO_PENDIENTE", lista="4", monto_total="97.00"),
@@ -188,7 +193,7 @@ def test_descuento_aplicado_orden_coincide_con_motor_es_ok() -> None:
     assert ok["descuento_motor_total"] == 5.0
     assert ok["descuento_validacion_orden"] == "ok"
     assert ok["descuento_pendiente_aplicar"] == 0.0
-    assert ok["descuento_aplicado_sistema"] is None
+    assert ok["descuento_aplicado_sistema"] == 0.0
 
 
 def test_descuento_pendiente_aplicar_cuando_motor_exige_mas_que_odoo() -> None:
@@ -221,8 +226,150 @@ def test_nota_debito_atada_a_factura_incrementa_facturado_neto() -> None:
     assert nd["total_facturado_neto"] == 110.0
 
 
-def test_descuento_aplicado_sistema_siempre_none_hasta_que_exista_facturacion() -> None:
-    """Tarea 3e: campo listo, sin dato real todavía (depende de Facturación)."""
+def test_descuento_aplicado_sistema_cero_sin_aprobaciones() -> None:
+    """Fase 3: sin aprobaciones en descuentos_sistema_aprobados, el campo es 0.0
+
+    (ya no None -- la lógica de Facturación existe, simplemente no hay nada
+    aprobado para estas órdenes de prueba)."""
     by_so = _run_get_ventas()
     for it in by_so.values():
-        assert it["descuento_aplicado_sistema"] is None
+        assert it["descuento_aplicado_sistema"] == 0.0
+        assert it["saldo_pendiente_cxc"] >= 0.0
+
+
+def test_descuento_aplicado_sistema_ajusta_saldo_pendiente_cxc() -> None:
+    """Un descuento de sistema activo se refleja en el monto Y en
+
+    saldo_pendiente_cxc (target real de CxC), sin tocar Odoo."""
+    by_so = _run_get_ventas(
+        descuentos_sistema=[
+            {
+                "so_id": "SO_OK",
+                "monto": "10.00",
+                "motivo": "Ajuste de prueba",
+                "aprobado_por": "Tester",
+                "timestamp_aprobacion": "2026-07-01T00:00:00",
+                "activo": "true",
+            },
+            # Registro revocado -- NO debe afectar SO_PENDIENTE.
+            {
+                "so_id": "SO_PENDIENTE",
+                "monto": "50.00",
+                "motivo": "Revocado",
+                "aprobado_por": "Tester",
+                "timestamp_aprobacion": "2026-07-01T00:00:00",
+                "activo": "false",
+            },
+        ]
+    )
+    ok = by_so["SO_OK"]
+    assert ok["descuento_aplicado_sistema"] == 10.0
+    assert ok["descuento_aplicado_sistema_motivo"] == "Ajuste de prueba"
+    # SO_OK está facturada (tiene_factura=True) -> saldo = total_facturado_neto - 10
+    assert ok["saldo_pendiente_cxc"] == round(ok["total_facturado_neto"] - 10.0, 2)
+
+    pend = by_so["SO_PENDIENTE"]
+    assert pend["descuento_aplicado_sistema"] == 0.0
+
+
+def test_post_aprobar_descuento_sistema_nunca_toca_odoo() -> None:
+    """El endpoint de aprobación solo persiste en el repo -- no debe
+
+    invocar Odoo/_connect en absoluto (invariante: Odoo es solo lectura)."""
+    mock_repo = MagicMock()
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.post(
+            "/api/facturacion/aprobar-descuento-sistema",
+            json={
+                "so_id": "SO_APROBAR",
+                "monto": 15.5,
+                "motivo": "Ajuste por reclamo del cliente",
+                "aprobado_por": "gerencia@lubrikca.com",
+            },
+        )
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    mock_repo.upsert_descuento_sistema_aprobado.assert_called_once()
+    saved_row = mock_repo.upsert_descuento_sistema_aprobado.call_args[0][0]
+    assert saved_row["so_id"] == "SO_APROBAR"
+    assert saved_row["monto"] == "15.5"
+    assert saved_row["motivo"] == "Ajuste por reclamo del cliente"
+    assert saved_row["activo"] == "true"
+
+
+def _vinc(so_id: str, *, equiv_bcv=None, equiv_binance=None, monto="0") -> Vinculacion:
+    return Vinculacion(
+        vinc_id=f"VC_{so_id}",
+        pago_id=f"PG_{so_id}",
+        so_id=so_id,
+        monto_aplicado=Decimal(monto),
+        hora_pago_confirmada=datetime(2026, 7, 1, 10, 0),
+        tasa_bcv_aplicada=Decimal("40.0"),
+        tasa_binance_aplicada=Decimal("42.0"),
+        es_tasa_heredada=False,
+        equiv_usd_bcv=Decimal(str(equiv_bcv)) if equiv_bcv is not None else None,
+        equiv_usd_binance=Decimal(str(equiv_binance)) if equiv_binance is not None else None,
+    )
+
+
+def test_estatus_pago_real_orden_lista_usd_usa_binance_pagada() -> None:
+    """SO_OK nace en lista "4" (USD, ver default de get_ui_pricelist_ids) --
+
+    el estatus real debe comparar contra el equivalente Binance, no BCV."""
+    by_so = _run_get_ventas(
+        vinculaciones=[_vinc("SO_OK", equiv_binance=95.0, equiv_bcv=40.0)]
+    )
+    ok = by_so["SO_OK"]
+    assert ok["estatus_pago_real_orden"] == "pagada"
+    assert ok["estatus_pago_real_factura"] == "pagada"
+
+
+def test_estatus_pago_real_orden_lista_ves_usa_bcv_parcial() -> None:
+    """SO_ND nace en lista "5" (VES) -- el estatus real debe comparar
+
+    contra el equivalente BCV, no Binance. Con solo la mitad pagado en BCV
+    queda "parcial"."""
+    by_so = _run_get_ventas(
+        vinculaciones=[_vinc("SO_ND", equiv_bcv=55.0, equiv_binance=999.0)]
+    )
+    nd = by_so["SO_ND"]
+    # venta_neta_real de SO_ND = 90.0 (monto_total) -> 55 < 90 - eps.
+    assert nd["estatus_pago_real_orden"] == "parcial"
+
+
+def test_estatus_pago_sin_pago_y_sin_factura() -> None:
+    """Sin ninguna vinculación: sin_pago en real orden; SO_PENDIENTE (no
+
+    facturada por diseño del fixture -- amount_total_signed_usd solo cubre
+    parte de las órdenes) usa "sin_factura" cuando total_facturado_con_impuestos
+    es 0."""
+    by_so = _run_get_ventas()
+    ok = by_so["SO_OK"]
+    assert ok["estatus_pago_real_orden"] == "sin_pago"
+    assert ok["estatus_pago_teorico_ves"] in ("sin_pago", "pagada")
+    assert ok["estatus_pago_teorico_usd"] in ("sin_pago", "pagada")
+
+
+def test_estatus_pago_real_factura_descuenta_descuento_de_sistema() -> None:
+    """Un descuento de sistema aprobado reduce el target -- una orden que
+
+    antes estaba "parcial" puede pasar a "pagada" si el descuento cubre la
+    diferencia."""
+    by_so = _run_get_ventas(
+        descuentos_sistema=[
+            {
+                "so_id": "SO_ND",
+                "monto": "35.00",
+                "motivo": "Ajuste",
+                "aprobado_por": "Tester",
+                "timestamp_aprobacion": "2026-07-01T00:00:00",
+                "activo": "true",
+            }
+        ],
+        vinculaciones=[_vinc("SO_ND", equiv_bcv=55.0)],
+    )
+    nd = by_so["SO_ND"]
+    # target_orden = 90 - 35 = 55; pagado = 55 -> pagada (antes era "parcial").
+    assert nd["estatus_pago_real_orden"] == "pagada"

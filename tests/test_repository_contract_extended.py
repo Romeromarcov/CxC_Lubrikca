@@ -341,6 +341,44 @@ def test_pagos_huerfanos_cerrados_upsert_y_lectura(repo: Repository) -> None:
     assert rows[0]["pago_id"] == "PG_HUERFANO"
 
 
+# --- Descuentos de sistema aprobados (Bandeja 1 de Facturación) ---------------
+
+
+def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None:
+    assert repo.all_descuentos_sistema_aprobados() == []
+    repo.upsert_descuento_sistema_aprobado(
+        {
+            "so_id": "SO_DESC_SISTEMA",
+            "monto": "10.00",
+            "motivo": "Ajuste comercial",
+            "aprobado_por": "admin@lubrikca.com",
+            "timestamp_aprobacion": datetime(2026, 1, 1, 10, 0).isoformat(),
+            "activo": "true",
+        }
+    )
+    rows = repo.all_descuentos_sistema_aprobados()
+    assert len(rows) == 1
+    assert rows[0]["so_id"] == "SO_DESC_SISTEMA"
+    assert rows[0]["monto"] == "10.00"
+    assert rows[0]["activo"] == "true"
+
+    # Upsert por PK natural (so_id) actualiza en vez de duplicar, y permite
+    # "revocar" sin perder el registro (activo=false).
+    repo.upsert_descuento_sistema_aprobado(
+        {
+            "so_id": "SO_DESC_SISTEMA",
+            "monto": "10.00",
+            "motivo": "Ajuste comercial",
+            "aprobado_por": "admin@lubrikca.com",
+            "timestamp_aprobacion": datetime(2026, 1, 1, 10, 0).isoformat(),
+            "activo": "false",
+        }
+    )
+    rows2 = repo.all_descuentos_sistema_aprobados()
+    assert len(rows2) == 1
+    assert rows2[0]["activo"] == "false"
+
+
 # --- Listas de precios históricas (solo lectura) ------------------------------
 
 

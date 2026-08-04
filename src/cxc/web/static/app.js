@@ -630,6 +630,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // Fase 3: aprobación de descuento de sistema (Bandeja 1) -- SOLO ajusta
+    // saldos internos de CxC, NUNCA factura ni escribe nada en Odoo.
+    async function aprobarDescuentoSistema(soId, montoSugerido) {
+        const montoStr = prompt(`Monto de descuento a aprobar para ${soId} (USD):`, (montoSugerido || 0).toFixed(2));
+        if (montoStr === null) return;
+        const monto = parseFloat(montoStr);
+        if (isNaN(monto) || monto < 0) {
+            alert("Monto inválido.");
+            return;
+        }
+        const motivo = prompt("Motivo de la aprobación:", "Descuento aprobado en Bandeja de Facturación");
+        if (motivo === null) return;
+
+        try {
+            const res = await fetch("/api/facturacion/aprobar-descuento-sistema", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ so_id: soId, monto: monto, motivo: motivo }),
+            });
+            if (res.ok) {
+                alert(`✅ Descuento de sistema aprobado para ${soId}.`);
+                loadBandeja();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`❌ Error al aprobar descuento: ${err.detail || res.statusText}`);
+            }
+        } catch (err) {
+            alert("❌ Error de red al aprobar el descuento.");
+            console.error(err);
+        }
+    }
+    window.aprobarDescuentoSistema = aprobarDescuentoSistema;
+
     // Fetch and render the 3 Dashboard Approval Trays
     async function loadBandeja() {
         try {
@@ -657,7 +690,12 @@ document.addEventListener("DOMContentLoaded", () => {
                             const row = document.createElement("tr");
                             const isAgent = item.wh_iva_agent ? `<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Agente (${item.wh_iva_rate || 75}%)</span>` : '<span class="state-badge">No</span>';
                             const descText = item.descuento_aplicar_monto > 0 ? `${fmt(item.descuento_aplicar_monto)} (${(item.descuento_aplicar_pct || 0).toFixed(1)}%)` : '$0.00 (0%)';
-                            
+                            const sugerido = item.descuento_aplicar_monto || 0;
+                            const accionHtml = item.descuento_sistema_aprobado != null
+                                ? `<span class="state-badge cierre" style="background:#dcfce7;color:#166534" title="${(item.descuento_sistema_motivo || '').replace(/"/g, '&quot;')}">Descuento aprobado: ${fmt(item.descuento_sistema_aprobado)}</span>
+                                   <button class="btn-primary" style="padding:4px 8px;font-size:0.7rem;margin-left:4px" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Editar</button>`
+                                : `<button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Aprobar Descuento</button>`;
+
                             row.innerHTML = `
                                 <td><strong>${item.so_id}</strong></td>
                                 <td>${item.cliente_nombre || item.so_id}</td>
@@ -667,7 +705,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${fmt(item.subtotal_neto || item.precio_base || 0)}</td>
                                 <td><strong>${fmt(item.total_motor || 0)}</strong></td>
                                 <td><strong style="color:#d97706">${descText}</strong></td>
-                                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="alert('Facturar SO ${item.so_id} en Odoo')">Aprobar Factura</button></td>
+                                <td>${accionHtml}</td>
                             `;
                             bandeja1TableBody.appendChild(row);
                         });
@@ -1365,10 +1403,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1422,7 +1460,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1452,7 +1490,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1472,6 +1510,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const naVal = (v) => v != null ? fmt(v) : '—';
             const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
             const valLabel = (v) => v === 'ok' ? '✓ OK' : (v === 'discrepancia_menor' ? '~ Menor' : '⚠ Discrepancia');
+            const pctTxt = (p) => p != null ? ` (${(p * 100).toFixed(1)}%)` : '';
+            const descMontoPct = (monto, pct) => `${fmt(monto)}<small style="color:#64748b;">${pctTxt(pct)}</small>`;
+            const estatusPagoBadge = (estado) => {
+                const map = {
+                    pagada: ['#dcfce7', '#15803d', '✓ Pagada'],
+                    parcial: ['#fef3c7', '#b45309', '~ Parcial'],
+                    sin_pago: ['#fee2e2', '#991b1b', '✗ Sin pago'],
+                    sin_factura: ['#f1f5f9', '#64748b', '— Sin factura'],
+                };
+                const [bg, fg, label] = map[estado] || ['#f1f5f9', '#64748b', estado || '—'];
+                return `<span class="state-badge" style="background:${bg};color:${fg};font-weight:600;">${label}</span>`;
+            };
 
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
@@ -1484,27 +1534,137 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${naVal(item.ves_bruta_teorica_iva)}</td>
                 <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica)}</strong></td>
                 <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                <td>${estatusPagoBadge(item.estatus_pago_teorico_ves)}</td>
                 <td>${naVal(item.usd_bruta_teorica)}</td>
                 <td>${naVal(item.usd_bruta_teorica_iva)}</td>
                 <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica)}</strong></td>
                 <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
+                <td>${estatusPagoBadge(item.estatus_pago_teorico_usd)}</td>
                 <td>${fmt(item.venta_bruta_real)}</td>
+                <td>${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
+                <td>${estatusPagoBadge(item.estatus_pago_real_orden)}</td>
                 <td>${fmt(item.total_facturado_antes_impuestos)}</td>
+                <td>${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
                 <td>${fmt(item.total_facturado_con_impuestos)}</td>
                 <td>${fmt(item.total_nc_aplicada)}</td>
                 <td>${fmt(item.total_nd_aplicada)}</td>
                 <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
-                <td>${fmt(item.descuento_aplicado_orden)}</td>
-                <td>${fmt(item.descuento_aplicado_factura)}</td>
-                <td>${fmt(item.descuento_motor_total)}</td>
+                <td>${estatusPagoBadge(item.estatus_pago_real_factura)}</td>
                 <td><span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span></td>
                 <td><span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span></td>
-                <td>${fmt(item.descuento_pendiente_aplicar)}</td>
+                <td>${descMontoPct(item.descuento_motor_total, item.descuento_motor_total_pct)}</td>
+                <td>${descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)}</td>
+                <td title="${item.descuento_aplicado_sistema_motivo ?? ''}">${descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct)}</td>
+                <td>${fmt(item.saldo_pendiente_cxc)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
                 <td>${alertaCell}</td>
+                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
             `;
             tbody.appendChild(row);
+        });
+    }
+
+    // ── Modal de detalle de orden (Fase 5) ────────────────────────────────────
+    let _detalleOrdenData = null;
+
+    function _renderDetalleOrdenModo(modo) {
+        const body = document.getElementById("modal-detalle-orden-body");
+        if (!body || !_detalleOrdenData) return;
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+        const bloque = _detalleOrdenData[modo];
+        if (!bloque || !bloque.lineas || bloque.lineas.length === 0) {
+            body.innerHTML = '<p class="table-empty">Sin líneas para este modo.</p>';
+            return;
+        }
+        const tieneDescuento = modo === "real_orden" || modo === "real_factura";
+        const listaLabel = bloque.lista_label ? `<p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Lista: ${bloque.lista_label}</p>` : '';
+
+        let rows = bloque.lineas.map(l => `
+            <tr>
+                <td>${l.producto}</td>
+                <td style="text-align:right">${l.cantidad}</td>
+                <td style="text-align:right">${fmt(l.precio_unitario)}</td>
+                ${tieneDescuento ? `<td style="text-align:right">${fmt(l.descuento_monto)} (${(l.descuento_pct || 0).toFixed(1)}%)</td>` : ''}
+                <td style="text-align:right"><strong>${fmt(l.subtotal)}</strong></td>
+            </tr>
+        `).join('');
+
+        body.innerHTML = `
+            ${listaLabel}
+            <div style="overflow-x:auto;">
+                <table class="cxc-table">
+                    <thead>
+                        <tr>
+                            <th>Producto</th>
+                            <th style="text-align:right">Cantidad</th>
+                            <th style="text-align:right">Precio Unit.</th>
+                            ${tieneDescuento ? '<th style="text-align:right">Descuento</th>' : ''}
+                            <th style="text-align:right">Subtotal</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+            <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
+                ${tieneDescuento ? `<div>Descuento total: <strong>${fmt(bloque.descuento_total)}</strong></div>` : ''}
+                <div>Subtotal: <strong style="font-size:1.05rem;">${fmt(bloque.subtotal)}</strong></div>
+            </div>
+        `;
+    }
+
+    async function abrirModalDetalleOrden(soId) {
+        const modal = document.getElementById("modal-detalle-orden");
+        const titulo = document.getElementById("modal-detalle-orden-titulo");
+        const subtitulo = document.getElementById("modal-detalle-orden-subtitulo");
+        const body = document.getElementById("modal-detalle-orden-body");
+        const modoSelect = document.getElementById("modal-detalle-orden-modo");
+        if (!modal) return;
+
+        titulo.textContent = `Detalle de Orden ${soId}`;
+        subtitulo.textContent = "Cargando...";
+        body.innerHTML = '<p class="table-empty">Cargando líneas...</p>';
+        modal.style.display = "flex";
+        _detalleOrdenData = null;
+
+        try {
+            const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
+            if (!res.ok) {
+                subtitulo.textContent = "";
+                body.innerHTML = '<p class="table-empty">Error al cargar el detalle de la orden.</p>';
+                return;
+            }
+            const data = await res.json();
+            _detalleOrdenData = {
+                real_orden: data.real_orden,
+                real_factura: data.real_factura,
+                teorico_ves: data.teorico_ves,
+                teorico_usd: data.teorico_usd,
+            };
+            subtitulo.textContent = `${data.cliente_nombre || ''} — Lista nacimiento: ${data.lista_nacimiento_label || '—'}`;
+            if (modoSelect) modoSelect.value = "real_orden";
+            _renderDetalleOrdenModo("real_orden");
+        } catch (err) {
+            subtitulo.textContent = "";
+            body.innerHTML = '<p class="table-empty">Error de red al cargar el detalle de la orden.</p>';
+            console.error(err);
+        }
+    }
+
+    function cerrarModalDetalleOrden() {
+        const modal = document.getElementById("modal-detalle-orden");
+        if (modal) modal.style.display = "none";
+        _detalleOrdenData = null;
+    }
+
+    window.abrirModalDetalleOrden = abrirModalDetalleOrden;
+    window.cerrarModalDetalleOrden = cerrarModalDetalleOrden;
+
+    const modalDetalleOrdenModoSelect = document.getElementById("modal-detalle-orden-modo");
+    if (modalDetalleOrdenModoSelect) {
+        modalDetalleOrdenModoSelect.addEventListener("change", (e) => {
+            _renderDetalleOrdenModo(e.target.value);
         });
     }
 
@@ -1647,7 +1807,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
                 vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
-                activo: true
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
@@ -1692,7 +1854,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 listas_aplicables: listas,
                 vigencia_desde: document.getElementById("cfg-pp-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
-                activo: true
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-pp-requiere-pago-previo")?.checked ?? true,
+                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/descuentos-pronto-pago", {
@@ -1741,7 +1905,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 solo_primera_compra: (document.getElementById("cfg-promo-solo-primera")?.value === "true"),
                 vigencia_desde: document.getElementById("cfg-promo-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
-                activo: true
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -1787,7 +1953,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 listas_aplicables: listas,
                 vigencia_desde: document.getElementById("cfg-prod-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
-                activo: true
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-prod-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/descuentos-producto", {
@@ -1833,7 +2001,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 max_cantidad: parseFloat(document.getElementById("cfg-dif-max")?.value || 999999),
                 vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
-                activo: true
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-dif-requiere-pago-previo")?.checked ?? true,
+                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/descuentos-diferencial-cambiario", {
@@ -2742,7 +2912,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 listas_aplicables: listas,
                 unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
                 vigencia_desde: cfgPromoDesde.value,
-                vigencia_hasta: cfgPromoHasta.value || null
+                vigencia_hasta: cfgPromoHasta.value || null,
+                requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -2872,7 +3044,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "UNIDADES",
                 tipo_beneficio: document.getElementById("cfg-desc-vol-tipo-benef")?.value || "descuento",
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: cfgDescVolHasta.value || null
+                vigencia_hasta: cfgDescVolHasta.value || null,
+                requiere_pago_previo: document.getElementById("cfg-desc-vol-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea"
             };
             try {
                 const res = await fetch("/api/config/descuentos-volumen", {

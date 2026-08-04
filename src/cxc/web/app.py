@@ -29,6 +29,8 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
+from cxc.engine.equivalents import valor_pagado_bcv_usd, valor_pagado_binance_usd
+from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.runner import EngineRunner
 from cxc.models import Cliente, EstadoVinculacion, Moneda, OrdenVenta, TipoTasa, Vinculacion
 from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
@@ -632,6 +634,7 @@ class PromocionRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 class ExclusionRequest(BaseModel):
@@ -655,6 +658,7 @@ class ProntoPagoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = True
+    aplica_a: str = "linea"
 
 
 class VolumenRequest(BaseModel):
@@ -672,6 +676,7 @@ class VolumenRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 class EliminarDescuentoRequest(BaseModel):
@@ -787,6 +792,7 @@ class RecompraRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 class ProductoPromoRequest(BaseModel):
@@ -804,6 +810,7 @@ class ProductoPromoRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 class DiferencialCambiarioRequest(BaseModel):
@@ -822,6 +829,7 @@ class DiferencialCambiarioRequest(BaseModel):
     vigencia_hasta: str | None = None
     activo: bool = True
     requiere_pago_previo: bool = True
+    aplica_a: str = "linea"
 
 
 class ToggleDescuentoRequest(BaseModel):
@@ -841,6 +849,7 @@ class DescuentoVolumenRequest(BaseModel):
     vigencia_hasta: str | None = None
     listas_aplicables: str = "*"
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
@@ -4324,6 +4333,14 @@ async def get_bandeja_facturacion():
             )
             pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, Decimal("0")) + eq
 
+        # Fase 3: descuentos de sistema ya aprobados (activos), para mostrar
+        # el badge "Descuento aprobado" en Bandeja 1 sin llamada aparte.
+        descuento_sistema_map = {
+            r["so_id"]: r
+            for r in repo.all_descuentos_sistema_aprobados()
+            if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
+        }
+
         ordenes_por_facturar = []
         notas_credito_pendientes = []
         iva_pendiente_agentes = []
@@ -4387,6 +4404,16 @@ async def get_bandeja_facturacion():
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         "precio_base": monto_orig,
+                        "descuento_sistema_aprobado": (
+                            round(float(descuento_sistema_map[o.so_id]["monto"]), 2)
+                            if o.so_id in descuento_sistema_map
+                            else None
+                        ),
+                        "descuento_sistema_motivo": (
+                            descuento_sistema_map[o.so_id]["motivo"]
+                            if o.so_id in descuento_sistema_map
+                            else None
+                        ),
                     }
                 )
             elif o.facturada:
@@ -5062,6 +5089,8 @@ async def get_config_promociones():
                 "vigencia_desde": p.vigencia_desde.isoformat(),
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
                 "activo": p.activo,
+                "requiere_pago_previo": p.requiere_pago_previo,
+                "aplica_a": getattr(p, "aplica_a", "linea"),
             }
             for p in promos
         ]
@@ -5113,6 +5142,7 @@ async def post_config_promociones(req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_promocion_primera_compra(promo)
         return {"status": "success", "message": "Promoción registrada correctamente."}
@@ -5170,6 +5200,7 @@ async def get_config_descuentos_volumen():
                 "listas_aplicables": r.listas_aplicables,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "aplica_a": getattr(r, "aplica_a", "linea"),
             }
             for r in rules
         ]
@@ -5203,6 +5234,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             listas_aplicables=req.listas_aplicables,
             activo=True,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
@@ -5242,6 +5274,7 @@ async def get_todas_reglas_descuento():
                         "dias_ventana": r.dias_ventana,
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5268,6 +5301,7 @@ async def get_todas_reglas_descuento():
                         "monedas_aplicables": r.monedas_aplicables,
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5306,6 +5340,7 @@ async def get_todas_reglas_descuento():
                         "dias_evaluacion": r.dias_evaluacion,
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5339,6 +5374,7 @@ async def get_todas_reglas_descuento():
                         "descuento_fallback": float(getattr(r, "descuento_fallback", 0)),
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5365,6 +5401,7 @@ async def get_todas_reglas_descuento():
                         "monedas_aplicables": r.monedas_aplicables,
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5393,6 +5430,7 @@ async def get_todas_reglas_descuento():
                         "monedas_aplicables": r.monedas_aplicables,
                     },
                     "activo": r.activo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
 
@@ -5421,6 +5459,7 @@ async def get_config_pronto_pago():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "aplica_a": getattr(r, "aplica_a", "linea"),
             }
             for r in rules
         ]
@@ -5459,6 +5498,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_pronto_pago(rule)
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
@@ -5503,6 +5543,7 @@ async def get_config_volumen():
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "activo": r.activo,
                     "requiere_pago_previo": r.requiere_pago_previo,
+                    "aplica_a": getattr(r, "aplica_a", "linea"),
                 }
             )
         return res
@@ -5544,6 +5585,7 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
         return {"status": "success", "message": "Regla de descuento por volumen registrada."}
@@ -5572,6 +5614,7 @@ async def get_config_recompra():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "aplica_a": getattr(r, "aplica_a", "linea"),
             }
             for r in rules
         ]
@@ -5605,6 +5648,7 @@ async def post_config_recompra(req: RecompraRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
@@ -5632,6 +5676,7 @@ async def get_config_producto():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "aplica_a": getattr(r, "aplica_a", "linea"),
             }
             for r in rules
         ]
@@ -5664,6 +5709,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_producto(rule)
         return {"status": "success", "message": "Regla de descuento por producto registrada."}
@@ -5691,6 +5737,7 @@ async def get_config_diferencial():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "aplica_a": getattr(r, "aplica_a", "linea"),
             }
             for r in rules
         ]
@@ -5723,6 +5770,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            aplica_a=req.aplica_a,
         )
         repo.append_descuento_diferencial_cambiario(rule)
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
@@ -7119,9 +7167,27 @@ async def get_ventas(
     sin duplicar la lógica de comparación). ``descuento_pendiente_aplicar``
     es la parte que el motor exige y Odoo todavía no refleja.
 
-    Tarea 3e: ``descuento_aplicado_sistema`` queda en ``None`` a propósito --
-    depende de una lógica de Facturación aún no construida (dependencia
-    documentada en docs/REDISENO_DESCUENTOS_UNIFICADOS.md).
+    Tarea 3e/Fase 3: ``descuento_aplicado_sistema`` lee de
+    ``descuentos_sistema_aprobados`` (aprobación manual desde la Bandeja 1 de
+    Facturación vía ``POST /api/facturacion/aprobar-descuento-sistema`` --
+    NUNCA se escribe a Odoo). ``saldo_pendiente_cxc`` es el target real de
+    CxC (facturado neto u orden neta real, según corresponda, menos ese
+    descuento) que deben usar Cobranza/estatus de pago.
+
+    Fase 4 (estatus de pago): 4 columnas, cada una comparando el equivalente
+    USD ya congelado por abono (``engine/equivalents.py::valor_pagado_bcv_usd``/
+    ``valor_pagado_binance_usd`` -- NUNCA se compara contra VES directo)
+    contra SU PROPIO total de referencia:
+    - ``estatus_pago_real_orden``/``_real_factura``: usan BCV o Binance
+      según la lista con la que NACIÓ la orden (BCV si VES o Lista Histórica
+      de Auditoría -- ``historical_pricing.es_orden_historica`` --, Binance
+      si USD), comparado contra ``venta_neta_real``/``total_facturado_neto``
+      ya netos del descuento de sistema (Fase 3). ``_real_factura`` es
+      ``"sin_factura"`` si la orden aún no tiene factura.
+    - ``estatus_pago_teorico_ves``: SIEMPRE BCV vs. ``ves_neta_teorica_iva``.
+    - ``estatus_pago_teorico_usd``: SIEMPRE Binance vs. ``usd_neta_teorica_iva``.
+    Estados: ``"pagada"``/``"parcial"``/``"sin_pago"``, tolerancia 0.05
+    (mismo epsilon que ya usa "alerta").
     """
     try:
         from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
@@ -7135,6 +7201,26 @@ async def get_ventas(
         ordenes = repo.all_ordenes()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        # Tarea 3e: descuentos aprobados manualmente desde la Bandeja 1 de
+        # Facturación (nunca se escriben a Odoo) -- solo el registro activo
+        # más reciente por orden cuenta para efectos de saldo interno.
+        descuento_sistema_map: dict[str, dict[str, str]] = {
+            r["so_id"]: r
+            for r in repo.all_descuentos_sistema_aprobados()
+            if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
+        }
+
+        # Fase 4 (estatus de pago): equivalentes de pago congelados por
+        # abono (ya calculados en engine/equivalents.py -- NUNCA se compara
+        # contra VES directo). Agrupados por orden en una sola pasada para
+        # no golpear la BD/Sheets una vez por fila.
+        vincs_por_so: dict[str, list[Vinculacion]] = {}
+        for v in repo.all_vinculaciones():
+            vincs_por_so.setdefault(v.so_id, []).append(v)
+
+        usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
+        usd_ids_str = {str(x) for x in usd_pricelist_ids}
+        historical_enabled = is_historical_pricelist_enabled(repo)
 
         so_names = [o.so_id for o in ordenes]
         execute = None
@@ -7246,6 +7332,20 @@ async def get_ventas(
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
 
+        def _pct(monto: float, base: float) -> float | None:
+            return round(monto / base, 4) if base > 0.005 else None
+
+        _EPS_PAGO = 0.05
+
+        def _estado_pago(pagado: float, target: float) -> str:
+            if target <= _EPS_PAGO:
+                return "pagada"
+            if pagado >= target - _EPS_PAGO:
+                return "pagada"
+            if pagado > _EPS_PAGO:
+                return "parcial"
+            return "sin_pago"
+
         items = []
         total_alertas = 0
         for o in ordenes:
@@ -7295,6 +7395,16 @@ async def get_ventas(
             usd_desc_teorico = float(b.descuentos_teorico_usd) if b else 0.0
             ves_neta_teorica = (ves_bruta_teorica - ves_desc_teorico) if b else None
             usd_neta_teorica = (usd_bruta_teorica - usd_desc_teorico) if b else None
+            ves_neta_teorica_iva = (
+                ves_neta_teorica * (1 + iva_rate + igtf_rate)
+                if ves_neta_teorica is not None
+                else None
+            )
+            usd_neta_teorica_iva = (
+                usd_neta_teorica * (1 + iva_rate + igtf_rate)
+                if usd_neta_teorica is not None
+                else None
+            )
 
             total_facturado_antes_impuestos = facturado_antes_imp_map.get(o.so_id, 0.0)
             total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
@@ -7326,6 +7436,55 @@ async def get_ventas(
             # exige, no hay "pendiente", ya está materializado).
             descuento_pendiente_aplicar = round(
                 float(audit_orden.descuento_adicional_a_aplicar), 2
+            )
+
+            # Tarea 3e/Fase 3: descuento aprobado manualmente desde la
+            # Bandeja 1 de Facturación -- ajusta el saldo interno de CxC sin
+            # tocar Odoo. `saldo_pendiente_cxc` es el target real que debe
+            # usar Cobranza/estatus de pago (Fase 4), no venta_neta_real/
+            # total_facturado_neto en crudo.
+            desc_sistema_row = descuento_sistema_map.get(o.so_id)
+            descuento_aplicado_sistema = (
+                round(float(desc_sistema_row["monto"]), 2) if desc_sistema_row else 0.0
+            )
+            base_sistema = total_facturado_neto if tiene_factura else venta_neta_real
+            saldo_pendiente_cxc = round(max(0.0, base_sistema - descuento_aplicado_sistema), 2)
+
+            precio_base_calculado = float(b.precio_base_calculado) if b else 0.0
+
+            # Fase 4: estatus de pago -- BCV/Binance según a qué lista
+            # corresponde cada columna (ver docstring del endpoint y el
+            # plan aprobado: "Equivalentes de pago"). "Real Orden"/"Real
+            # Factura" usan la referencia de la lista con la que NACIÓ la
+            # orden (BCV si VES o Lista Histórica de Auditoría, Binance si
+            # USD); "Teórico VES" siempre BCV, "Teórico USD" siempre Binance.
+            vincs_orden = vincs_por_so.get(o.so_id, [])
+            val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
+            val_binance = float(valor_pagado_binance_usd(vincs_orden))
+            es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            es_lista_usd_nacimiento = (
+                str(o.lista_precios) in usd_ids_str and not es_historica_o
+            )
+            val_ref_nacimiento = val_binance if es_lista_usd_nacimiento else val_bcv
+
+            target_orden = max(0.0, venta_neta_real - descuento_aplicado_sistema)
+            estatus_pago_real_orden = _estado_pago(val_ref_nacimiento, target_orden)
+
+            if tiene_factura:
+                target_factura = max(0.0, total_facturado_neto - descuento_aplicado_sistema)
+                estatus_pago_real_factura = _estado_pago(val_ref_nacimiento, target_factura)
+            else:
+                estatus_pago_real_factura = "sin_factura"
+
+            estatus_pago_teorico_ves = (
+                _estado_pago(val_bcv, ves_neta_teorica_iva)
+                if ves_neta_teorica_iva is not None
+                else "sin_pago"
+            )
+            estatus_pago_teorico_usd = (
+                _estado_pago(val_binance, usd_neta_teorica_iva)
+                if usd_neta_teorica_iva is not None
+                else "sin_pago"
             )
 
             if tiene_factura:
@@ -7387,9 +7546,7 @@ async def get_ventas(
                         round(ves_neta_teorica, 2) if ves_neta_teorica is not None else None
                     ),
                     "ves_neta_teorica_iva": (
-                        round(ves_neta_teorica * (1 + iva_rate + igtf_rate), 2)
-                        if ves_neta_teorica is not None
-                        else None
+                        round(ves_neta_teorica_iva, 2) if ves_neta_teorica_iva is not None else None
                     ),
                     "usd_bruta_teorica": (
                         round(usd_bruta_teorica, 2) if usd_bruta_teorica is not None else None
@@ -7403,26 +7560,50 @@ async def get_ventas(
                         round(usd_neta_teorica, 2) if usd_neta_teorica is not None else None
                     ),
                     "usd_neta_teorica_iva": (
-                        round(usd_neta_teorica * (1 + iva_rate + igtf_rate), 2)
-                        if usd_neta_teorica is not None
-                        else None
+                        round(usd_neta_teorica_iva, 2) if usd_neta_teorica_iva is not None else None
                     ),
                     # Tarea 3c: descuentos aplicados en Odoo (orden/factura) +
-                    # validación visual vs. lo que dictamina el motor.
+                    # validación visual vs. lo que dictamina el motor. Monto
+                    # Y porcentaje en todos los campos de descuento (pedido
+                    # explícito del usuario).
                     "descuento_aplicado_orden": round(descuento_aplicado_orden, 2),
+                    "descuento_aplicado_orden_pct": _pct(
+                        descuento_aplicado_orden, venta_bruta_real
+                    ),
                     "descuento_aplicado_factura": round(descuento_aplicado_factura, 2),
+                    "descuento_aplicado_factura_pct": _pct(
+                        descuento_aplicado_factura, total_facturado_antes_impuestos
+                    ),
                     "descuento_motor_total": round(float(motor_total_descuentos), 2),
+                    "descuento_motor_total_pct": _pct(
+                        float(motor_total_descuentos), precio_base_calculado
+                    ),
                     "descuento_validacion_orden": audit_orden.estado.value,
                     "descuento_validacion_factura": audit_factura.estado.value,
                     # Tarea 3d: descuento que el motor exige y aún no está en Odoo.
                     "descuento_pendiente_aplicar": descuento_pendiente_aplicar,
-                    # Tarea 3e: descuentos aplicados desde el sistema (uso interno,
-                    # posteriores a orden/factura en Odoo) -- DEPENDE de lógica de
-                    # Facturación aún no construida (ver docs/REDISENO_
-                    # DESCUENTOS_UNIFICADOS.md, dependencia abierta). Campo listo,
-                    # sin dato real todavía: `None` explícito, no 0 (0 afirmaría
-                    # "no hay ninguno" cuando en realidad "no se sabe todavía").
-                    "descuento_aplicado_sistema": None,
+                    "descuento_pendiente_aplicar_pct": _pct(
+                        descuento_pendiente_aplicar, precio_base_calculado
+                    ),
+                    # Fase 3: descuento aprobado manualmente desde la Bandeja 1
+                    # de Facturación (nunca se escribe a Odoo, solo ajusta el
+                    # saldo interno de CxC).
+                    "descuento_aplicado_sistema": descuento_aplicado_sistema,
+                    "descuento_aplicado_sistema_pct": _pct(
+                        descuento_aplicado_sistema, venta_bruta_real
+                    ),
+                    "descuento_aplicado_sistema_motivo": (
+                        desc_sistema_row["motivo"] if desc_sistema_row else None
+                    ),
+                    "saldo_pendiente_cxc": saldo_pendiente_cxc,
+                    # Fase 4: estatus de pago -- "pagada"/"parcial"/"sin_pago"
+                    # (+ "sin_factura" en real_factura si aún no hay factura).
+                    # Ver docstring del endpoint para la selección BCV/Binance
+                    # de cada columna.
+                    "estatus_pago_real_orden": estatus_pago_real_orden,
+                    "estatus_pago_real_factura": estatus_pago_real_factura,
+                    "estatus_pago_teorico_ves": estatus_pago_teorico_ves,
+                    "estatus_pago_teorico_usd": estatus_pago_teorico_usd,
                 }
             )
 
@@ -7467,6 +7648,264 @@ async def get_ventas(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.get("/api/ventas/{so_id}/detalle")
+async def get_ventas_detalle(so_id: str):
+    """Fase 5 (modal de detalle de orden): desglose por línea de producto en
+
+    4 modos -- Real Orden, Real Factura, Teórico VES, Teórico USD. Un solo
+    fetch trae los 4 modos; el front re-pinta al cambiar de selector sin
+    volver a golpear el backend.
+
+    Real Orden/Real Factura leen (no calculan) lo que Odoo ya tiene por
+    línea -- TODAS las líneas de producto, a diferencia de
+    ``_leer_descuentos_lineas_odoo`` (que solo trae las que ya tienen
+    ``discount > 0``, útil para el total agregado de ``/api/ventas`` pero no
+    para un desglose completo).
+
+    Teórico VES/USD usa ``EngineRunner.build_inputs`` (mismo cableo repo ->
+    EngineInputs que usa el cálculo real de la bandeja, sin duplicar lógica)
+    + ``discounts.lineas_con_precio`` para resolver el precio unitario de
+    cada línea contra la lista VES/USD vigente. El motor no distribuye sus
+    descuentos por línea (los calcula por grupo/orden, ver
+    ``engine/discounts.py::_calcular_componentes``) -- el desglose teórico
+    por línea es precio unitario x cantidad SIN descuento; el descuento
+    total de esa lista ya se muestra a nivel de orden en ``/api/ventas``
+    (``descuento_motor_total``). Documentado como criterio elegido, no
+    pendiente.
+    """
+    try:
+        repo = get_repo()
+        config = AppConfig.from_env()
+        orden = repo.get_orden(so_id)
+        if orden is None:
+            raise HTTPException(status_code=404, detail=f"Orden {so_id} no encontrada")
+
+        clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        cliente_nombre = clientes_map.get(orden.cliente_id, f"Cliente ID: {orden.cliente_id}")
+
+        execute = None
+        try:
+            execute = _connect(config.odoo)
+        except Exception as e_conn:
+            logger.warning("No se pudo conectar a Odoo en get_ventas_detalle: %s", e_conn)
+
+        pricelist_name_map: dict[str, str] = {}
+        if execute:
+            try:
+                pls = execute(
+                    "product.pricelist",
+                    "search_read",
+                    [[]],
+                    {"fields": ["id", "name"], "context": {"active_test": False}},
+                )
+                pricelist_name_map = {str(p["id"]): str(p.get("name") or "") for p in pls}
+            except Exception as e_pl:
+                logger.warning(
+                    "No se pudieron leer nombres de pricelist en get_ventas_detalle: %s", e_pl
+                )
+
+        def _lista_label(lista_id: str | None) -> str | None:
+            if not lista_id:
+                return None
+            nombre = pricelist_name_map.get(str(lista_id))
+            return f"#{lista_id} - {nombre}" if nombre else f"#{lista_id}"
+
+        def _nombre_producto(raw: Any) -> str:
+            if isinstance(raw, list | tuple) and len(raw) > 1:
+                return str(raw[1])
+            return str(raw or "")
+
+        # --- Real Orden: sale.order.line COMPLETO (todas las líneas, no
+        # solo las que tienen discount > 0 -- a diferencia del agregado que
+        # usa /api/ventas). ---
+        lineas_real_orden: list[dict[str, Any]] = []
+        if execute:
+            try:
+                sol = execute(
+                    "sale.order.line",
+                    "search_read",
+                    [[["order_id.name", "=", so_id], ["display_type", "=", False]]],
+                    {
+                        "fields": [
+                            "product_id",
+                            "product_uom_qty",
+                            "price_unit",
+                            "discount",
+                            "price_subtotal",
+                        ]
+                    },
+                )
+                for line in sol:
+                    if not line.get("product_id"):
+                        continue
+                    qty = float(line.get("product_uom_qty") or 0)
+                    price_unit = float(line.get("price_unit") or 0)
+                    disc_pct = float(line.get("discount") or 0)
+                    subtotal = float(line.get("price_subtotal") or 0)
+                    lineas_real_orden.append(
+                        {
+                            "producto": _nombre_producto(line.get("product_id")),
+                            "cantidad": qty,
+                            "precio_unitario": round(price_unit, 2),
+                            "descuento_pct": round(disc_pct, 2),
+                            "descuento_monto": round(qty * price_unit * (disc_pct / 100.0), 2),
+                            "subtotal": round(subtotal, 2),
+                        }
+                    )
+            except Exception as e_sol:
+                logger.warning(
+                    "Error leyendo sale.order.line en get_ventas_detalle: %s", e_sol
+                )
+
+        # --- Real Factura: account.move.line de facturas posted ligadas por
+        # invoice_origin (mismo criterio que el resto del rediseño). ---
+        lineas_real_factura: list[dict[str, Any]] = []
+        if execute:
+            try:
+                invs = execute(
+                    "account.move",
+                    "search_read",
+                    [
+                        [
+                            ["invoice_origin", "=", so_id],
+                            ["move_type", "=", "out_invoice"],
+                            ["state", "=", "posted"],
+                        ]
+                    ],
+                    {"fields": ["id"]},
+                )
+                inv_ids = [i["id"] for i in invs]
+                if inv_ids:
+                    aml = execute(
+                        "account.move.line",
+                        "search_read",
+                        [
+                            [
+                                ["move_id", "in", inv_ids],
+                                ["display_type", "in", ["product", False]],
+                            ]
+                        ],
+                        {
+                            "fields": [
+                                "product_id",
+                                "quantity",
+                                "price_unit",
+                                "discount",
+                                "price_subtotal",
+                            ]
+                        },
+                    )
+                    for line in aml:
+                        if not line.get("product_id"):
+                            continue
+                        qty = float(line.get("quantity") or 0)
+                        price_unit = float(line.get("price_unit") or 0)
+                        disc_pct = float(line.get("discount") or 0)
+                        subtotal = float(line.get("price_subtotal") or 0)
+                        lineas_real_factura.append(
+                            {
+                                "producto": _nombre_producto(line.get("product_id")),
+                                "cantidad": qty,
+                                "precio_unitario": round(price_unit, 2),
+                                "descuento_pct": round(disc_pct, 2),
+                                "descuento_monto": round(
+                                    qty * price_unit * (disc_pct / 100.0), 2
+                                ),
+                                "subtotal": round(subtotal, 2),
+                            }
+                        )
+            except Exception as e_aml:
+                logger.warning(
+                    "Error leyendo account.move.line en get_ventas_detalle: %s", e_aml
+                )
+
+        # --- Teórico VES / Teórico USD: EngineRunner.build_inputs +
+        # discounts.lineas_con_precio (mismo cableo que el cálculo real). ---
+        lineas_teorico_ves: list[dict[str, Any]] = []
+        lineas_teorico_usd: list[dict[str, Any]] = []
+        lista_ves_id: str | None = None
+        lista_usd_id: str | None = None
+        if execute:
+            try:
+                from cxc.engine.discounts import (
+                    _lista_usd_activa,
+                    _lista_ves_activa,
+                    lineas_con_precio,
+                )
+
+                usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+                pricelist_ids_map = {
+                    "USD": int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
+                    "BCV": int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
+                }
+                fallback_pl_ids = [
+                    int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()
+                ]
+                price_resolver = OdooPriceResolver(execute, pricelist_ids_map, fallback_pl_ids)
+                runner = EngineRunner(repo, price_resolver, config.engine)
+                inputs = runner.build_inputs(so_id, date.today())
+                if inputs is not None:
+                    lista_ves_id = _lista_ves_activa(inputs)
+                    lista_usd_id = _lista_usd_activa(inputs)
+                    for fila in lineas_con_precio(inputs, lista_ves_id):
+                        lineas_teorico_ves.append(
+                            {
+                                "producto": fila["producto"],
+                                "cantidad": float(fila["cantidad"]),
+                                "precio_unitario": round(float(fila["precio_unitario"]), 2),
+                                "subtotal": round(float(fila["subtotal"]), 2),
+                            }
+                        )
+                    for fila in lineas_con_precio(inputs, lista_usd_id):
+                        lineas_teorico_usd.append(
+                            {
+                                "producto": fila["producto"],
+                                "cantidad": float(fila["cantidad"]),
+                                "precio_unitario": round(float(fila["precio_unitario"]), 2),
+                                "subtotal": round(float(fila["subtotal"]), 2),
+                            }
+                        )
+            except Exception as e_motor:
+                logger.warning(
+                    "Error calculando teóricos por línea en get_ventas_detalle: %s", e_motor
+                )
+
+        return {
+            "so_id": so_id,
+            "cliente_nombre": cliente_nombre,
+            "lista_nacimiento_label": _lista_label(orden.lista_precios),
+            "real_orden": {
+                "lineas": lineas_real_orden,
+                "subtotal": round(sum(line["subtotal"] for line in lineas_real_orden), 2),
+                "descuento_total": round(
+                    sum(line["descuento_monto"] for line in lineas_real_orden), 2
+                ),
+            },
+            "real_factura": {
+                "lineas": lineas_real_factura,
+                "subtotal": round(sum(line["subtotal"] for line in lineas_real_factura), 2),
+                "descuento_total": round(
+                    sum(line["descuento_monto"] for line in lineas_real_factura), 2
+                ),
+            },
+            "teorico_ves": {
+                "lista_label": _lista_label(lista_ves_id),
+                "lineas": lineas_teorico_ves,
+                "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_ves), 2),
+            },
+            "teorico_usd": {
+                "lista_label": _lista_label(lista_usd_id),
+                "lineas": lineas_teorico_usd,
+                "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_usd), 2),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 class AceptarAnomaliaRequest(BaseModel):
     anomalia_id: str
     so_id: str
@@ -7493,6 +7932,44 @@ async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
         return {
             "status": "success",
             "message": "Anomalía aceptada y movida al historial de revisiones.",
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class AprobarDescuentoSistemaRequest(BaseModel):
+    so_id: str
+    monto: float
+    motivo: str = "Descuento aprobado en Bandeja de Facturación"
+    aprobado_por: str = "Dirección / Facturación"
+    activo: bool = True
+
+
+@app.post("/api/facturacion/aprobar-descuento-sistema")
+async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
+    """Aprueba (o revoca, con ``activo=false``) un descuento manual interno
+
+    para una orden. NUNCA se escribe a Odoo -- solo ajusta los saldos
+    internos de CxC que expone ``/api/ventas`` (``descuento_aplicado_sistema``
+    y ``saldo_pendiente_cxc``).
+    """
+    try:
+        repo = get_repo()
+        row = {
+            "so_id": req.so_id,
+            "monto": str(req.monto),
+            "motivo": req.motivo,
+            "aprobado_por": req.aprobado_por,
+            "timestamp_aprobacion": datetime.now().isoformat(),
+            "activo": "true" if req.activo else "false",
+        }
+        repo.upsert_descuento_sistema_aprobado(row)
+        return {
+            "status": "success",
+            "message": "Descuento de sistema aprobado correctamente."
+            if req.activo
+            else "Descuento de sistema revocado.",
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)

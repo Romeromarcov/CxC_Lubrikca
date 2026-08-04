@@ -178,6 +178,7 @@ descuentos_pronto_pago = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("tipo_descuento", String, nullable=False, server_default="contado"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7_vol DescuentosVolumen (config) --------------------------------------
@@ -200,6 +201,7 @@ descuentos_volumen = Table(
     Column("listas_aplicables", String, nullable=False, server_default="*"),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7b DescuentoBCVCompleto (config, effective dating, sin id) -----------
@@ -212,6 +214,7 @@ descuento_bcv_completo = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7c PromocionPrimeraCompra (config) ------------------------------------
@@ -237,6 +240,7 @@ promocion_primera_compra = Table(
     Column("solo_primera_compra", Boolean, nullable=False, server_default="false"),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7d DescuentoRecompra (config) -----------------------------------------
@@ -260,6 +264,7 @@ descuentos_recompra = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------
@@ -281,6 +286,7 @@ descuentos_producto = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.7f DescuentoDiferencialCambiario (config) -----------------------------
@@ -304,6 +310,7 @@ descuentos_diferencial_cambiario = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.8 ReglasRecurrencia (config, effective dating, sin id natural) -------
@@ -318,6 +325,7 @@ reglas_recurrencia = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("aplica_a", String, nullable=False, server_default="linea"),
 )
 
 # --- 3.8b Feriados (config) ---------------------------------------------------
@@ -521,6 +529,21 @@ pagos_huerfanos_cerrados = Table(
     Column("motivo", String, nullable=False, server_default=""),
     Column("cerrado_por", String, nullable=False, server_default=""),
     Column("timestamp_cierre", DateTime(timezone=False), nullable=False),
+)
+
+# --- DescuentosSistemaAprobados (descuento aprobado manualmente desde la
+# Bandeja 1 de Facturación -- NUNCA se escribe a Odoo, solo ajusta los
+# saldos internos de CxC en /api/ventas. Un registro activo por orden;
+# "activo=false" revoca sin perder el historial de aprobaciones previas) ---
+descuentos_sistema_aprobados = Table(
+    "descuentos_sistema_aprobados",
+    metadata,
+    Column("so_id", String, ForeignKey("ordenes_venta.so_id"), primary_key=True),
+    Column("monto", MONEY, nullable=False, server_default="0"),
+    Column("motivo", String, nullable=False, server_default=""),
+    Column("aprobado_por", String, nullable=False, server_default=""),
+    Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),
+    Column("activo", Boolean, nullable=False, server_default="true"),
 )
 
 # --- FechasHistoricas (fecha histórica alterna por orden) -------------------

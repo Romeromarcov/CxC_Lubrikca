@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from ..config import EngineConfig
 from ..decimal_utils import q2
@@ -239,6 +239,33 @@ def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
     return _precio_unitario_linea(inp, linea, lista) * _cantidad_efectiva(inp, linea)
 
 
+def lineas_con_precio(inp: EngineInputs, lista: str) -> list[dict[str, Any]]:
+    """Desglose por línea del precio teórico resuelto para ``lista`` (Fase 5,
+
+    modal de detalle de orden en ``/api/ventas/{so_id}/detalle``). A
+    diferencia de ``_calcular_componentes`` (que solo agrega totales), esto
+    devuelve una fila por línea con su precio unitario, cantidad efectiva y
+    subtotal para ESA lista específica -- reusa ``_precio_unitario_linea``
+    (misma resolución de precio, incluida la excepción de Lista Histórica de
+    Auditoría) sin duplicar la lógica.
+    """
+    filas: list[dict[str, Any]] = []
+    for ln in inp.lineas:
+        precio_unit = _precio_unitario_linea(inp, ln, lista)
+        cantidad = _cantidad_efectiva(inp, ln)
+        filas.append(
+            {
+                "producto": ln.producto,
+                "marca": ln.resolved_marca,
+                "categoria": ln.categoria,
+                "cantidad": cantidad,
+                "precio_unitario": precio_unit,
+                "subtotal": precio_unit * cantidad,
+            }
+        )
+    return filas
+
+
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
     fecha_orden = inp.orden.fecha
     precio_base = sum((_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0"))
@@ -252,6 +279,13 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     promociones_ok = _filtrar_por_pago_previo(inp.promociones_primera_compra, tiene_pago)
     reglas_recurrencia_ok = _filtrar_por_pago_previo(inp.reglas_recurrencia, tiene_pago)
     descuento_bcv_diario_ok = _filtrar_por_pago_previo(inp.descuento_bcv_diario, tiene_pago)
+    # NOTA (aplica_a línea/subtotal): PromocionPrimeraCompra, DescuentoBCVCompleto
+    # y DescuentoDiferencialCambiario también tienen el campo `aplica_a` en
+    # esquema (por consistencia), pero NO lo leen aquí -- no son cálculos por
+    # línea hoy (primera compra ya opera sobre "todas las líneas"/"solo
+    # Industrial" según otra lógica; BCV-completo/diferencial se calculan por
+    # abono, no por línea). Es una limitación real de estos 3 tipos de
+    # descuento, no un olvido.
 
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
@@ -425,6 +459,10 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
 
             if is_first_in_month:
                 recompra_monto = Decimal("0")
+                # Reglas en modo "subtotal" se deduplican por regla_id: el %
+                # se aplica UNA sola vez sobre precio_base, sin importar
+                # cuántas líneas matcheen esa misma regla.
+                reglas_recompra_subtotal: dict[str, Any] = {}
                 for ln in inp.lineas:
                     cajas_linea = _cantidad_efectiva(inp, ln)
                     best_r = None
@@ -447,7 +485,15 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         ):
                             best_r = r
                     if best_r is not None:
-                        recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
+                        if getattr(best_r, "aplica_a", "linea") == "subtotal":
+                            existente = reglas_recompra_subtotal.get(best_r.regla_id)
+                            if existente is None or best_r.porcentaje > existente.porcentaje:
+                                reglas_recompra_subtotal[best_r.regla_id] = best_r
+                        else:
+                            recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
+
+                for best_r in reglas_recompra_subtotal.values():
+                    recompra_monto += precio_base * best_r.porcentaje
 
                 if recompra_monto > 0:
                     pct_recompra = recompra_monto
@@ -474,6 +520,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             if "VES" in monedas_usadas:
                 moneda_pago = "VES"
 
+        reglas_contado_subtotal: dict[str, Any] = {}
         for ln in inp.lineas:
             d = descuento_vigente(
                 descuentos_ok,
@@ -489,7 +536,15 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 valid_usd=inp.valid_usd or None,
             )
             if d is not None:
-                contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
+                if getattr(d, "aplica_a", "linea") == "subtotal":
+                    existente = reglas_contado_subtotal.get(d.regla_id)
+                    if existente is None or d.porcentaje > existente.porcentaje:
+                        reglas_contado_subtotal[d.regla_id] = d
+                else:
+                    contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
+
+        for d in reglas_contado_subtotal.values():
+            contado_proy += precio_base * d.porcentaje
 
     # (d) Descuento por Volumen (Litros o Unidades/Cajas)
     litros_por_mc: dict[tuple[str, str], Decimal] = {}
@@ -509,6 +564,10 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     volumen_desc = Decimal("0.0")
     detalle_volumen: DescuentoAplicado | None = None
     detalles_vol = []
+    # Reglas en modo "subtotal" se deduplican por regla_id (una sola reglas
+    # puede matchear varios grupos marca/categoria vía comodines "*"; el %
+    # solo debe aplicarse UNA vez sobre precio_base, no una vez por grupo).
+    reglas_vol_subtotal: dict[str, tuple[Any, str]] = {}
 
     for (marca, categoria), total_litros in litros_por_mc.items():
         total_cajas = cajas_por_mc.get((marca, categoria), Decimal("0"))
@@ -524,18 +583,25 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             valid_usd=inp.valid_usd or None,
         )
         if regla_vol is not None and regla_vol.porcentaje > 0:
-            subt = subtotal_por_mc[(marca, categoria)]
-            monto_desc = subt * regla_vol.porcentaje
-            volumen_desc += monto_desc
             unidad_tag = "L" if str(regla_vol.unidad_medida).upper() == "LITROS" else " Unid"
             min_tag = (
                 regla_vol.litros_minimo
                 if str(regla_vol.unidad_medida).upper() == "LITROS"
                 else regla_vol.min_cantidad
             )
-            detalles_vol.append(
-                f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje * 100}%"
-            )
+            tag = f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje * 100}%"
+            if getattr(regla_vol, "aplica_a", "linea") == "subtotal":
+                existente = reglas_vol_subtotal.get(regla_vol.regla_id)
+                if existente is None or regla_vol.porcentaje > existente[0].porcentaje:
+                    reglas_vol_subtotal[regla_vol.regla_id] = (regla_vol, tag)
+            else:
+                subt = subtotal_por_mc[(marca, categoria)]
+                volumen_desc += subt * regla_vol.porcentaje
+                detalles_vol.append(tag)
+
+    for regla_vol, tag in reglas_vol_subtotal.values():
+        volumen_desc += precio_base * regla_vol.porcentaje
+        detalles_vol.append(tag)
 
     if volumen_desc > 0:
         detalle_volumen = DescuentoAplicado(
@@ -826,6 +892,16 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     if final_volumen > 0 and comp.detalle_volumen is not None:
         detalle.append(comp.detalle_volumen)
 
+    # HALLAZGO (revisión de apilamiento, no corregido sin confirmar con
+    # negocio primero): no hay piso/tope explícito aquí -- si varias reglas
+    # en modo "subtotal" (o incluso "línea") se apilan sin una exclusión
+    # configurada entre ellas, total_descuentos podría en teoría superar
+    # precio_base y dejar `neto` negativo. Este riesgo ya existía antes de
+    # aplica_a="subtotal" (con suficientes reglas "línea" apiladas también
+    # se llega ahí); aplica_a solo lo hace más fácil de alcanzar porque cada
+    # regla subtotal pesa sobre precio_base completo en vez de un subgrupo.
+    # No se agrega un límite nuevo sin instrucción explícita porque
+    # cambiaría montos ya validados en producción.
     total_descuentos = final_recompra + final_contado + final_bcv + final_volumen
     neto = comp.precio_base - total_descuentos - final_nc
     candidata = bool(vincs) and valor_pagado >= neto - _EPS

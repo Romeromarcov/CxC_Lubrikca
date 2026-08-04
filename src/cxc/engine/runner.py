@@ -50,10 +50,14 @@ class EngineRunner:
             abonos.append((v, metodo))
         return abonos
 
-    def _calcular(
-        self, so_id: str, fecha_calculo: date
-    ) -> tuple[BandejaFacturacion, list[Vinculacion]] | None:
-        """Calcula la bandeja de una orden SIN persistir (para batchear en run_all)."""
+    def build_inputs(self, so_id: str, fecha_calculo: date) -> EngineInputs | None:
+        """Arma ``EngineInputs`` para una orden, SIN correr ``calcular_factura``.
+
+        Extraído de ``_calcular`` para que llamadores que solo necesitan los
+        inputs (ej. ``/api/ventas/{so_id}/detalle`` -- Fase 5, desglose por
+        línea vía ``discounts.lineas_con_precio``) no dupliquen esta lógica
+        de cableo repo -> EngineInputs.
+        """
         orden = self._repo.get_orden(so_id)
         if orden is None:
             logger.warning("Orden %s inexistente", so_id)
@@ -134,11 +138,20 @@ class EngineRunner:
             orden_es_historica=orden_es_historica,
             historical_price_map=historical_price_map,
         )
+        return inputs
+
+    def _calcular(
+        self, so_id: str, fecha_calculo: date
+    ) -> tuple[BandejaFacturacion, list[Vinculacion]] | None:
+        """Calcula la bandeja de una orden SIN persistir (para batchear en run_all)."""
+        inputs = self.build_inputs(so_id, fecha_calculo)
+        if inputs is None:
+            return None
         bandeja = calcular_factura(inputs)
         # Equivalentes congelados estampados durante el cálculo -- se
         # devuelven junto a la bandeja para que el llamador decida cómo
         # persistirlos (uno por uno o en lote).
-        return bandeja, [v for v, _ in abonos]
+        return bandeja, [v for v, _ in inputs.abonos]
 
     def run_orden(self, so_id: str, fecha_calculo: date) -> BandejaFacturacion | None:
         resultado = self._calcular(so_id, fecha_calculo)
