@@ -1791,9 +1791,13 @@ def recalculate_all(so_id: str):
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
         primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
+        # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
+        # valid_ves (Configuración), este dict solo cubre el caso residual
+        # de que algo la pase por nombre lógico en vez de id numerico.
         pricelist_ids = {
-            config.engine.lista_usd: primary_usd_id,
-            config.engine.lista_bcv: primary_ves_id,
+            "USD": primary_usd_id,
+            "BCV": primary_ves_id,
         }
         # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
         # puntual de la orden no tiene item propio para un producto, probar
@@ -1843,9 +1847,13 @@ def recalculate_all_orders():
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
         primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
+        # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
+        # valid_ves (Configuración), este dict solo cubre el caso residual
+        # de que algo la pase por nombre lógico en vez de id numerico.
         pricelist_ids = {
-            config.engine.lista_usd: primary_usd_id,
-            config.engine.lista_bcv: primary_ves_id,
+            "USD": primary_usd_id,
+            "BCV": primary_ves_id,
         }
         # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
         # puntual de la orden no tiene item propio para un producto, probar
@@ -2602,14 +2610,11 @@ async def get_reporte_saldos(refresh: bool = False):
         from cxc.engine.price_resolver import PriceResolver
         from cxc.odoo.price import OdooPriceResolver
 
+        # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py).
         engine_cfg_obj = config.engine
         pricelist_ids_map = {
-            engine_cfg_obj.lista_usd: int(usd_ids[0])
-            if usd_ids and str(usd_ids[0]).isdigit()
-            else 4,
-            engine_cfg_obj.lista_bcv: int(ves_ids[0])
-            if ves_ids and str(ves_ids[0]).isdigit()
-            else 5,
+            "USD": int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
+            "BCV": int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
         }
         _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
         price_resolver_engine = (
@@ -2882,6 +2887,8 @@ async def get_reporte_saldos(refresh: bool = False):
                         exclusiones=all_exclusiones,
                         descuentos_recompra=all_desc_recompra,
                         descuentos_diferencial=all_desc_diferencial,
+                        valid_usd=[str(x) for x in usd_ids],
+                        valid_ves=[str(x) for x in ves_ids],
                     )
                     b = calcular_factura(inputs)
                 except Exception as e_calc:
@@ -7060,17 +7067,33 @@ async def get_ventas(
     vendedor: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
-    """Reporte "Ventas": venta bruta/neta teórica vs real, por orden.
+    """Reporte "Ventas": comparación teórica VES/USD vs real, por orden.
 
-    Venta bruta teórica = precio de lista correcto, SIN descuentos
-    (``BandejaFacturacion.precio_base_calculado``). Venta neta teórica =
-    bruta menos los descuentos que el motor calcula (``total_motor``) --
-    incluye los que solo se pueden calcular una vez que hay pagos
-    registrados (contado/BCV-completo se computan por abono real, ver
-    ``engine/discounts.py``), así que se actualiza sola cuando el runner
-    recalcula tras un nuevo pago. Ambas son SIN impuestos; se les aplica
-    ``config.engine.iva_rate`` (+ IGTF si está activo) para las columnas
-    "+ Impuestos".
+    Tarea 2 (rediseño de columnas, ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md):
+    se eliminaron las columnas genéricas "venta bruta/neta teórica" (y sus
+    variantes "+ impuestos") -- toda orden nace en una lista VES o USD
+    vigente para su fecha, y el teórico existe justamente para EVIDENCIAR
+    la discrepancia entre ambas listas, no para repetir un cálculo genérico
+    igual al de la lista aplicada. En su lugar se exponen 8 columnas
+    explícitas, ``{ves,usd}_{bruta,neta}_teorica[_iva]``, leídas de
+    ``BandejaFacturacion.teorico_lista_{ves,usd}``/``descuentos_teorico_
+    {ves,usd}`` (ya calculadas por el motor -- este endpoint solo aplica
+    impuestos, no recalcula ningún descuento). Ambos bloques (VES y USD)
+    coexisten siempre, incluso si la orden nació en una sola lista.
+
+    Causa raíz corregida (bug orden 771, antes VES y USD salían idénticos):
+    ``_determinar_lista``/``_teoricos_por_lista`` (``engine/discounts.py``)
+    usaban ``ENGINE_LISTA_USD``/``ENGINE_LISTA_BCV`` (env vars, valor real
+    en producción: pricelist 4 -- inactiva, con los mismos precios que la
+    VES id 5 por coincidencia histórica) en vez de la lista USD realmente
+    vigente (id 8). Esas variables se eliminaron; ahora se deriva de
+    ``EngineInputs.valid_usd``/``valid_ves`` (Configuración, misma fuente
+    que ya usa el selector de listas y las reglas por lista).
+
+    "diferencia"/"alerta" (abajo) siguen comparando contra el teórico de la
+    LISTA APLICADA (``BandejaFacturacion.precio_base_calculado``/
+    ``total_motor`` -- coincide por construcción con el bloque VES o USD
+    correspondiente), no contra un genérico aparte.
 
     Venta bruta real = ``amount_untaxed`` de la orden en Odoo. Venta neta
     real = ``monto_total`` (``amount_total``, YA con impuestos -- es el
@@ -7119,6 +7142,29 @@ async def get_ventas(
             execute = _connect(config.odoo)
         except Exception as e_conn:
             logger.warning("No se pudo conectar a Odoo en get_ventas: %s", e_conn)
+
+        # Tarea 1 (limpieza Ventas): nombre de cada pricelist para mostrar
+        # "#id - Nombre" en las columnas de lista -- active_test False trae
+        # también las archivadas (órdenes viejas pueden seguir apuntando a
+        # una lista ya inactiva).
+        pricelist_name_map: dict[str, str] = {}
+        if execute:
+            try:
+                pls = execute(
+                    "product.pricelist",
+                    "search_read",
+                    [[]],
+                    {"fields": ["id", "name"], "context": {"active_test": False}},
+                )
+                pricelist_name_map = {str(p["id"]): str(p.get("name") or "") for p in pls}
+            except Exception as e_pl:
+                logger.warning("No se pudieron leer nombres de pricelist en get_ventas: %s", e_pl)
+
+        def _lista_label(lista_id: str | None) -> str | None:
+            if not lista_id:
+                return None
+            nombre = pricelist_name_map.get(str(lista_id))
+            return f"#{lista_id} - {nombre}" if nombre else f"#{lista_id}"
 
         so_states_map: dict[str, str] = {}
         so_untaxed_map: dict[str, float] = {}
@@ -7226,11 +7272,29 @@ async def get_ventas(
 
             # Sin cálculo del motor aún (bandeja no recalculada) -- mejor
             # estimación disponible es el subtotal real, sin descuento conocido.
+            # Estos dos NO se exponen como columnas (Tarea 2: redundantes con
+            # el bloque VES/USD explícito de abajo) -- se usan solo para
+            # "diferencia"/"alerta" contra la lista realmente aplicada.
             venta_bruta_teorica = float(b.precio_base_calculado) if b else venta_bruta_real
             venta_neta_teorica = float(b.total_motor) if b else venta_bruta_teorica
 
             venta_bruta_teorica_iva = venta_bruta_teorica * (1 + iva_rate)
             venta_neta_teorica_impuestos = venta_neta_teorica * (1 + iva_rate + igtf_rate)
+
+            # Tarea 2: comparación explícita VES vs USD -- toda orden nace en
+            # una lista VES o USD vigente, y el teórico existe para EVIDENCIAR
+            # la discrepancia entre ambas, no para repetir un cálculo genérico
+            # ya cubierto por "aplicada". Ambos bloques coexisten siempre,
+            # incluso si la orden nació en una sola lista (ver bug orden 771:
+            # antes salían idénticos por una causa raíz en el motor, ya
+            # corregida -- estas columnas son las que hacen visible ese tipo
+            # de discrepancia si volviera a ocurrir).
+            ves_bruta_teorica = float(b.teorico_lista_ves) if b else None
+            usd_bruta_teorica = float(b.teorico_lista_usd) if b else None
+            ves_desc_teorico = float(b.descuentos_teorico_ves) if b else 0.0
+            usd_desc_teorico = float(b.descuentos_teorico_usd) if b else 0.0
+            ves_neta_teorica = (ves_bruta_teorica - ves_desc_teorico) if b else None
+            usd_neta_teorica = (usd_bruta_teorica - usd_desc_teorico) if b else None
 
             total_facturado_antes_impuestos = facturado_antes_imp_map.get(o.so_id, 0.0)
             total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
@@ -7286,10 +7350,6 @@ async def get_ventas(
                     "vendedor": o.vendedor_email or "Sin Vendedor",
                     "fecha": o.fecha.isoformat(),
                     "facturada": o.facturada,
-                    "venta_bruta_teorica": round(venta_bruta_teorica, 2),
-                    "venta_bruta_teorica_iva": round(venta_bruta_teorica_iva, 2),
-                    "venta_neta_teorica": round(venta_neta_teorica, 2),
-                    "venta_neta_teorica_impuestos": round(venta_neta_teorica_impuestos, 2),
                     "venta_bruta_real": round(venta_bruta_real, 2),
                     "venta_neta_real": round(venta_neta_real, 2),
                     "total_facturado_antes_impuestos": round(total_facturado_antes_impuestos, 2),
@@ -7299,30 +7359,52 @@ async def get_ventas(
                     "total_facturado_neto": round(total_facturado_neto, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
-                    # Tarea 3a/3b: equivalentes/teóricos por lista, calculados
-                    # por el motor (BandejaFacturacion) -- no se recalculan
-                    # aquí, solo se leen y formatean.
+                    # Tarea 1: lista con la que nació la orden vs. la que
+                    # terminó aplicando el motor (puede diferir por
+                    # reselección según método de pago -- ver docstring del
+                    # endpoint). Id crudo + "#id - Nombre" para mostrar.
                     "lista_nacimiento": o.lista_precios,
+                    "lista_nacimiento_label": _lista_label(o.lista_precios),
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
-                    "equivalente_lista_usd": (
-                        round(float(b.equivalente_lista_usd), 2) if b else None
+                    "lista_aplicada_label": _lista_label(
+                        b.lista_aplicada if b else o.lista_precios
                     ),
-                    "teorico_lista_ves": round(float(b.teorico_lista_ves), 2) if b else None,
-                    "teorico_lista_usd": round(float(b.teorico_lista_usd), 2) if b else None,
-                    "descuentos_teorico_ves": (
-                        round(float(b.descuentos_teorico_ves), 2) if b else None
+                    # Tarea 2: comparación explícita por lista (VES/USD), cada
+                    # una con su bruta/neta y su "+ impuestos" -- reemplaza
+                    # las columnas genéricas "venta bruta/neta teórica"
+                    # (redundantes: toda orden nace en VES o USD, y el
+                    # teórico existe para EVIDENCIAR la discrepancia entre
+                    # ambas, no para repetir un cálculo genérico).
+                    "ves_bruta_teorica": (
+                        round(ves_bruta_teorica, 2) if ves_bruta_teorica is not None else None
                     ),
-                    "descuentos_teorico_usd": (
-                        round(float(b.descuentos_teorico_usd), 2) if b else None
-                    ),
-                    "teorico_neto_ves": (
-                        round(float(b.teorico_lista_ves) - float(b.descuentos_teorico_ves), 2)
-                        if b
+                    "ves_bruta_teorica_iva": (
+                        round(ves_bruta_teorica * (1 + iva_rate), 2)
+                        if ves_bruta_teorica is not None
                         else None
                     ),
-                    "teorico_neto_usd": (
-                        round(float(b.teorico_lista_usd) - float(b.descuentos_teorico_usd), 2)
-                        if b
+                    "ves_neta_teorica": (
+                        round(ves_neta_teorica, 2) if ves_neta_teorica is not None else None
+                    ),
+                    "ves_neta_teorica_iva": (
+                        round(ves_neta_teorica * (1 + iva_rate + igtf_rate), 2)
+                        if ves_neta_teorica is not None
+                        else None
+                    ),
+                    "usd_bruta_teorica": (
+                        round(usd_bruta_teorica, 2) if usd_bruta_teorica is not None else None
+                    ),
+                    "usd_bruta_teorica_iva": (
+                        round(usd_bruta_teorica * (1 + iva_rate), 2)
+                        if usd_bruta_teorica is not None
+                        else None
+                    ),
+                    "usd_neta_teorica": (
+                        round(usd_neta_teorica, 2) if usd_neta_teorica is not None else None
+                    ),
+                    "usd_neta_teorica_iva": (
+                        round(usd_neta_teorica * (1 + iva_rate + igtf_rate), 2)
+                        if usd_neta_teorica is not None
                         else None
                     ),
                     # Tarea 3c: descuentos aplicados en Odoo (orden/factura) +
@@ -7355,11 +7437,20 @@ async def get_ventas(
                 "igtf_rate": igtf_rate,
                 "igtf_activo": config.engine.igtf_activo,
                 "subtotal_real_total": round(sum(i["venta_bruta_real"] for i in items), 2),
-                "venta_bruta_teorica_total": round(sum(i["venta_bruta_teorica"] for i in items), 2),
-                "venta_bruta_teorica_iva_total": round(
-                    sum(i["venta_bruta_teorica_iva"] for i in items), 2
+                # Tarea 2: totales por lista VES/USD (reemplaza los KPIs
+                # genéricos "venta bruta/neta teórica").
+                "ves_bruta_teorica_total": round(
+                    sum(i["ves_bruta_teorica"] or 0 for i in items), 2
                 ),
-                "venta_neta_teorica_total": round(sum(i["venta_neta_teorica"] for i in items), 2),
+                "ves_neta_teorica_iva_total": round(
+                    sum(i["ves_neta_teorica_iva"] or 0 for i in items), 2
+                ),
+                "usd_bruta_teorica_total": round(
+                    sum(i["usd_bruta_teorica"] or 0 for i in items), 2
+                ),
+                "usd_neta_teorica_iva_total": round(
+                    sum(i["usd_neta_teorica_iva"] or 0 for i in items), 2
+                ),
                 "venta_neta_real_total": round(sum(i["venta_neta_real"] for i in items), 2),
                 "total_facturado_neto_total": round(
                     sum(i["total_facturado_neto"] for i in items), 2

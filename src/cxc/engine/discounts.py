@@ -164,16 +164,42 @@ def _bcv_completo_monto(
     return total
 
 
+
+# Nombres lógicos usados SOLO como fallback cuando EngineInputs no trae
+# valid_usd/valid_ves poblados (tests que construyen EngineInputs a mano
+# con un DictPriceResolver keyeado por estos strings). En producción real
+# el runner SIEMPRE puebla valid_usd/valid_ves desde Configuración
+# (valid_pricelists_usd/ves en _Meta) -- causa raíz confirmada del bug de
+# orden 771: existían ``ENGINE_LISTA_USD``/``ENGINE_LISTA_BCV`` (env vars)
+# como fuente PARALELA e independiente de "cuál es la lista USD/VES
+# activa", desincronizada de Configuración -- apuntaban a la pricelist 4
+# (inactiva, con los mismos precios que la lista VES id 5 por coincidencia
+# histórica) en vez de la 8 (la lista USD real activa). Se eliminaron esas
+# variables por completo -- Configuración (``valid_pricelists_usd/ves``)
+# es ahora la ÚNICA fuente de verdad de qué pricelist es USD/VES.
+_LISTA_USD_FALLBACK = "USD"
+_LISTA_VES_FALLBACK = "BCV"
+
+
+def _lista_usd_activa(inp: EngineInputs) -> str:
+    """Id de pricelist USD vigente, según Configuración (``valid_usd``)."""
+    return inp.valid_usd[0] if inp.valid_usd else _LISTA_USD_FALLBACK
+
+
+def _lista_ves_activa(inp: EngineInputs) -> str:
+    """Id de pricelist VES vigente, según Configuración (``valid_ves``)."""
+    return inp.valid_ves[0] if inp.valid_ves else _LISTA_VES_FALLBACK
+
+
 def _determinar_lista(inp: EngineInputs, pura_bcv: bool) -> str:
     """Paso 1 (sección 4.2): la lista la define el método de pago.
 
     Gana sobre la lista especial de nacimiento. Sin abonos aún, se usa la lista
     de nacimiento como techo provisional.
     """
-    cfg = inp.engine_config
     if not inp.abonos:
         return inp.orden.lista_precios
-    return cfg.lista_bcv if pura_bcv else cfg.lista_usd
+    return _lista_ves_activa(inp) if pura_bcv else _lista_usd_activa(inp)
 
 
 def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
@@ -529,7 +555,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             pct_recompra = Decimal("0")
             detalle_recompra = None
 
-    lista_usd_name = str(inp.engine_config.lista_usd)
+    lista_usd_name = _lista_usd_activa(inp)
     try:
         precio_target_usd = sum(
             (_precio_linea(inp, ln, lista_usd_name) for ln in inp.lineas), Decimal("0")
@@ -541,14 +567,17 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     bcv_completo = Decimal("0")
     detalle_bcv: DescuentoAplicado | None = None
 
-    es_lista_usd = str(inp.orden.lista_precios) == str(inp.engine_config.lista_usd) or str(
-        inp.orden.lista_precios
-    ) in ("4", "8", "USD")
+    # Cualquier pricelist USD vigente (no solo la primaria/activa) cuenta --
+    # una orden nacida en una lista USD histórica (ej. id 7, superada por la
+    # 8 pero aún vigente para su fecha) sigue siendo "lista USD" a efectos
+    # de esta regla.
+    listas_usd_validas = set(inp.valid_usd) if inp.valid_usd else {lista_usd_name}
+    es_lista_usd = str(inp.orden.lista_precios) in listas_usd_validas
     if inp.abonos and not es_lista_usd:
         vincs = [v for v, _ in inp.abonos]
         # 1. Per-abono fixed discount
         bcv_per_abono = Decimal("0")
-        if pura_bcv and str(inp.orden.lista_precios) != str(inp.engine_config.lista_usd):
+        if pura_bcv and str(inp.orden.lista_precios) not in listas_usd_validas:
             bcv_per_abono = _bcv_completo_monto(
                 vincs, descuento_bcv_diario_ok, inp.engine_config.bcv_complete_formula
             )
@@ -685,7 +714,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         equivalente_usd,
         descuentos_teorico_ves,
         descuentos_teorico_usd,
-    ) = _teoricos_por_lista(inp, pura_bcv, str(cfg.lista_bcv), str(cfg.lista_usd))
+    ) = _teoricos_por_lista(inp, pura_bcv, _lista_ves_activa(inp), _lista_usd_activa(inp))
 
     contado_evaluable = comp.flags["contado_evaluable"]
     valor_pagado = valor_pagado_usd(vincs) if vincs else Decimal("0")

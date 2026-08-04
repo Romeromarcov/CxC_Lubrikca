@@ -31,11 +31,13 @@ def main() -> None:  # pragma: no cover - wiring de producción (red)
     execute = _connect(config.odoo)
     # Mantener viva la referencia al reader no es necesario; usamos execute directo.
     _ = OdooXmlRpcReader
-    pricelist_ids = {
-        config.engine.lista_usd: int(os.environ["ODOO_PRICELIST_USD"]),
-        config.engine.lista_bcv: int(os.environ["ODOO_PRICELIST_BCV"]),
-    }
-    resolver = OdooPriceResolver(execute, pricelist_ids)
+    usd_id = int(os.environ["ODOO_PRICELIST_USD"])
+    ves_id = int(os.environ["ODOO_PRICELIST_BCV"])
+    # "USD"/"BCV": mismos nombres lógicos de fallback que usa el motor
+    # (engine/discounts.py) cuando EngineInputs no trae valid_usd/valid_ves
+    # poblados -- este entrypoint standalone no los puebla.
+    pricelist_ids = {"USD": usd_id, "BCV": ves_id}
+    resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids=[usd_id, ves_id])
     runner = EngineRunner(repo, resolver, config.engine)
     resultados = runner.run_all(date.today())
     logging.getLogger("cxc").info("Motor: %s órdenes calculadas", len(resultados))

@@ -169,8 +169,6 @@ class AlertConfig:
 class EngineConfig:
     cash_window_business_days: int
     bcv_complete_formula: str
-    lista_usd: str
-    lista_bcv: str
     valid_pricelists_ves: list[str] = field(default_factory=lambda: ["5", "3"])
     valid_pricelists_usd: list[str] = field(default_factory=lambda: ["4", "8", "USD"])
     # Tasa de IVA aplicada a las ventas teóricas (motor) -- Venezuela: 16%
@@ -189,8 +187,6 @@ class EngineConfig:
         return cls(
             cash_window_business_days=_get_int("CASH_WINDOW_BUSINESS_DAYS", 3),
             bcv_complete_formula=_get("BCV_COMPLETE_FORMULA", "differential_over_binance"),
-            lista_usd=_get("ENGINE_LISTA_USD", "USD"),
-            lista_bcv=_get("ENGINE_LISTA_BCV", "BCV"),
             valid_pricelists_ves=valid_ves,
             valid_pricelists_usd=valid_usd,
             iva_rate=_get_decimal("ENGINE_IVA_RATE", "0.16"),

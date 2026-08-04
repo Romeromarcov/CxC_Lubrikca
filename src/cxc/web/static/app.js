@@ -1365,10 +1365,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1378,9 +1378,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
             setText("ventas-kpi-subtotal-real", fmt(kpis.subtotal_real_total));
-            setText("ventas-kpi-bruta-teorica", fmt(kpis.venta_bruta_teorica_total));
-            setText("ventas-kpi-bruta-teorica-iva", fmt(kpis.venta_bruta_teorica_iva_total));
-            setText("ventas-kpi-neta-teorica", fmt(kpis.venta_neta_teorica_total));
+            setText("ventas-kpi-ves-bruta", fmt(kpis.ves_bruta_teorica_total));
+            setText("ventas-kpi-ves-neta-iva", fmt(kpis.ves_neta_teorica_iva_total));
+            setText("ventas-kpi-usd-bruta", fmt(kpis.usd_bruta_teorica_total));
+            setText("ventas-kpi-usd-neta-iva", fmt(kpis.usd_neta_teorica_iva_total));
             setText("ventas-kpi-neta-real", fmt(kpis.venta_neta_real_total));
             setText("ventas-kpi-facturado-neto", fmt(kpis.total_facturado_neto_total));
 
@@ -1421,7 +1422,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1451,7 +1452,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="23" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="29" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1468,28 +1469,38 @@ document.addEventListener("DOMContentLoaded", () => {
                     ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">OK</span>'
                     : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>');
 
+            const naVal = (v) => v != null ? fmt(v) : '—';
+            const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
+            const valLabel = (v) => v === 'ok' ? '✓ OK' : (v === 'discrepancia_menor' ? '~ Menor' : '⚠ Discrepancia');
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td>${item.cliente_nombre}</td>
                 <td><small>${item.vendedor}</small></td>
                 <td><small>${item.fecha}</small></td>
-                <td><small>${item.lista_nacimiento ?? '—'}</small></td>
-                <td><small>${item.lista_aplicada ?? '—'}</small></td>
-                <td>${fmt(item.venta_bruta_teorica)}</td>
-                <td>${fmt(item.venta_bruta_teorica_iva)}</td>
-                <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica)}</strong></td>
-                <td><strong style="color:#2563eb;">${fmt(item.venta_neta_teorica_impuestos)}</strong></td>
-                <td>${item.teorico_lista_usd != null ? fmt(item.teorico_lista_usd) : '—'}</td>
-                <td>${item.teorico_lista_ves != null ? fmt(item.teorico_lista_ves) : '—'}</td>
-                <td>${item.descuentos_teorico_usd != null ? fmt(item.descuentos_teorico_usd) : '—'}</td>
-                <td>${item.descuentos_teorico_ves != null ? fmt(item.descuentos_teorico_ves) : '—'}</td>
-                <td><strong>${item.teorico_neto_usd != null ? fmt(item.teorico_neto_usd) : '—'}</strong></td>
-                <td><strong>${item.teorico_neto_ves != null ? fmt(item.teorico_neto_ves) : '—'}</strong></td>
+                <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
+                <td><small title="${item.lista_aplicada ?? ''}">${item.lista_aplicada_label ?? '—'}</small></td>
+                <td>${naVal(item.ves_bruta_teorica)}</td>
+                <td>${naVal(item.ves_bruta_teorica_iva)}</td>
+                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica)}</strong></td>
+                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                <td>${naVal(item.usd_bruta_teorica)}</td>
+                <td>${naVal(item.usd_bruta_teorica_iva)}</td>
+                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica)}</strong></td>
+                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
                 <td>${fmt(item.venta_bruta_real)}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
                 <td>${fmt(item.total_facturado_antes_impuestos)}</td>
                 <td>${fmt(item.total_facturado_con_impuestos)}</td>
+                <td>${fmt(item.total_nc_aplicada)}</td>
+                <td>${fmt(item.total_nd_aplicada)}</td>
                 <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
+                <td>${fmt(item.descuento_aplicado_orden)}</td>
+                <td>${fmt(item.descuento_aplicado_factura)}</td>
+                <td>${fmt(item.descuento_motor_total)}</td>
+                <td><span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span></td>
+                <td><span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span></td>
+                <td>${fmt(item.descuento_pendiente_aplicar)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
                 <td>${alertaCell}</td>
             `;
@@ -3799,9 +3810,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>${escapeHtml(it.cliente_nombre)}</td>
                     <td><small>${escapeHtml(it.vendedor)}</small></td>
                     <td><small>${escapeHtml(it.fecha)}</small></td>
-                    <td>${fmt(it.venta_neta_teorica_impuestos)}</td>
+                    <td>${fmt((it.total_facturado_neto || 0) + (it.diferencia || 0))}</td>
                     <td>${fmt(it.total_facturado_neto)}</td>
-                    <td><strong style="color:#b91c1c;">${fmt(it.venta_neta_teorica_impuestos - it.total_facturado_neto)}</strong></td>
+                    <td><strong style="color:#b91c1c;">${fmt(it.diferencia)}</strong></td>
                 </tr>
             `).join('');
         } catch (err) {

@@ -823,19 +823,24 @@
                         <span>Subtotal real de la orden en Odoo, sin impuestos</span>
                     </div>
                     <div class="kpi-card">
-                        <h3>Venta Bruta Teórica (Total)</h3>
-                        <p id="ventas-kpi-bruta-teorica">$0.00</p>
-                        <span>Precio de lista correcto, sin descuentos</span>
+                        <h3>Teórica Bruta VES (Total)</h3>
+                        <p id="ventas-kpi-ves-bruta">$0.00</p>
+                        <span>Precio de lista VES vigente, sin descuentos</span>
                     </div>
                     <div class="kpi-card">
-                        <h3>Venta Bruta Teórica + Imp. (Total)</h3>
-                        <p id="ventas-kpi-bruta-teorica-iva">$0.00</p>
-                        <span>Precio de lista correcto, sin descuentos, con impuestos</span>
+                        <h3>Teórica Neta VES + Imp. (Total)</h3>
+                        <p id="ventas-kpi-ves-neta-iva">$0.00</p>
+                        <span>Lista VES, con descuentos del motor e impuestos</span>
                     </div>
                     <div class="kpi-card">
-                        <h3>Venta Neta Teórica (Total)</h3>
-                        <p id="ventas-kpi-neta-teorica">$0.00</p>
-                        <span>Con los descuentos que corresponden según el motor</span>
+                        <h3>Teórica Bruta USD (Total)</h3>
+                        <p id="ventas-kpi-usd-bruta">$0.00</p>
+                        <span>Precio de lista USD vigente, sin descuentos</span>
+                    </div>
+                    <div class="kpi-card">
+                        <h3>Teórica Neta USD + Imp. (Total)</h3>
+                        <p id="ventas-kpi-usd-neta-iva">$0.00</p>
+                        <span>Lista USD, con descuentos del motor e impuestos</span>
                     </div>
                     <div class="kpi-card">
                         <h3>Venta Neta Real (Total)</h3>
@@ -875,23 +880,29 @@
                                     <th>Vendedor</th>
                                     <th>Fecha</th>
                                     <th title="Lista de precios con la que nació la orden">Lista Nacimiento</th>
-                                    <th title="Lista que terminó aplicando el motor (puede ganar la del método de pago sobre la de nacimiento)">Lista Aplicada</th>
-                                    <th title="Precio de lista correcto, sin descuentos, sin impuestos">Venta Bruta Teórica</th>
-                                    <th title="Venta Bruta Teórica + IVA">Bruta Teórica + IVA</th>
-                                    <th title="Bruta teórica menos los descuentos que calcula el motor (incluye los que requieren pago registrado)">Venta Neta Teórica</th>
-                                    <th title="Venta Neta Teórica + Impuestos (IVA / IGTF si aplica)">Neta Teórica + Imp.</th>
-                                    <th title="Equivalente/teórico de la orden en la lista USD -- igual a la bruta teórica si nació en USD">Teórico Lista USD</th>
-                                    <th title="Equivalente/teórico de la orden en la lista VES -- igual a la bruta teórica si nació en VES">Teórico Lista VES</th>
-                                    <th title="Descuentos que aplicarían si la orden se hubiera facturado en la lista USD (dinámico, se recalcula post-pago)">Desc. Teórico USD</th>
-                                    <th title="Descuentos que aplicarían si la orden se hubiera facturado en la lista VES (dinámico, se recalcula post-pago)">Desc. Teórico VES</th>
-                                    <th title="Teórico Lista USD menos Desc. Teórico USD">Neto Teórico USD</th>
-                                    <th title="Teórico Lista VES menos Desc. Teórico VES">Neto Teórico VES</th>
+                                    <th title="Lista que terminó aplicando el motor (puede ganar la del método de pago sobre la de nacimiento -- hoy siempre igual a Nacimiento porque el sistema aún no tiene pagos vinculados; el mecanismo de reselección ya está probado y listo para cuando existan)">Lista Aplicada</th>
+                                    <th title="Precio de lista VES vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta VES</th>
+                                    <th title="Teórica Bruta VES + IVA">Teórica Bruta VES + Imp.</th>
+                                    <th title="Teórica Bruta VES menos los descuentos que calcula el motor para esa lista">Teórica Neta VES</th>
+                                    <th title="Teórica Neta VES + IVA (+ IGTF si aplica)">Teórica Neta VES + Imp.</th>
+                                    <th title="Precio de lista USD vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta USD</th>
+                                    <th title="Teórica Bruta USD + IVA">Teórica Bruta USD + Imp.</th>
+                                    <th title="Teórica Bruta USD menos los descuentos que calcula el motor para esa lista">Teórica Neta USD</th>
+                                    <th title="Teórica Neta USD + IVA (+ IGTF si aplica)">Teórica Neta USD + Imp.</th>
                                     <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
                                     <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
                                     <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
                                     <th title="Suma de facturas posted, con impuestos">Facturado con Imp.</th>
-                                    <th title="Facturado con impuestos menos Notas de Crédito aplicadas">Facturado Neto</th>
-                                    <th title="Venta Bruta Teórica + IVA − Facturado Neto">Diferencia</th>
+                                    <th title="Notas de Crédito aplicadas a la(s) factura(s) de esta orden">N/C Aplicada</th>
+                                    <th title="Notas de Débito aplicadas a la(s) factura(s) de esta orden">N/D Aplicada</th>
+                                    <th title="Facturado con impuestos, menos Notas de Crédito, más Notas de Débito">Facturado Neto</th>
+                                    <th title="Descuento que Odoo ya tiene aplicado en la orden (líneas)">Desc. Aplicado (Orden)</th>
+                                    <th title="Descuento que Odoo ya tiene aplicado en la factura">Desc. Aplicado (Factura)</th>
+                                    <th title="Total de descuentos que dictamina el motor (BandejaFacturacion) -- referencia para validar lo de Odoo">Desc. Motor</th>
+                                    <th title="¿El descuento de la orden en Odoo coincide con lo que dictamina el motor?">Validación Orden</th>
+                                    <th title="¿El descuento de la factura en Odoo coincide con lo que dictamina el motor?">Validación Factura</th>
+                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo">Desc. Pendiente</th>
+                                    <th title="Venta teórica (según la lista aplicada) + IVA − Facturado Neto">Diferencia</th>
                                     <th title="Facturado Neto por debajo de la Venta Neta Teórica + Impuestos en una orden ya facturada">Alerta</th>
                                 </tr>
                             </thead>

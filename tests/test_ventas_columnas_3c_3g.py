@@ -168,8 +168,6 @@ def _run_get_ventas():
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
         bcv_complete_formula="differential_over_binance",
-        lista_usd="4",
-        lista_bcv="5",
     )
 
     with (

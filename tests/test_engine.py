@@ -20,8 +20,6 @@ from . import builders as b
 CFG = EngineConfig(
     cash_window_business_days=3,
     bcv_complete_formula="differential_over_binance",
-    lista_usd="USD",
-    lista_bcv="BCV",
 )
 
 
@@ -49,6 +47,8 @@ def _inputs(
     fecha_calculo=date(2026, 6, 8),
     all_ordenes=None,
     engine_config=None,
+    valid_usd=(),
+    valid_ves=(),
 ) -> EngineInputs:
     cfg = engine_config or CFG
     return EngineInputs(
@@ -65,6 +65,8 @@ def _inputs(
         engine_config=cfg,
         fecha_calculo=fecha_calculo,
         all_ordenes=list(all_ordenes) if all_ordenes is not None else [],
+        valid_usd=list(valid_usd),
+        valid_ves=list(valid_ves),
     )
 
 
@@ -1017,8 +1019,6 @@ def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
     from cxc.config import EngineConfig
 
     cfg = EngineConfig(
-        lista_usd="4",
-        lista_bcv="5",
         cash_window_business_days=3,
         bcv_complete_formula="differential_over_binance",
     )
@@ -1028,6 +1028,8 @@ def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
         abonos=[(v_usd, m_usd), (v_ves, m_ves)],
         resolver=resolver,
         engine_config=cfg,
+        valid_usd=["4"],
+        valid_ves=["5"],
     )
     res = calcular_factura(inp)
 

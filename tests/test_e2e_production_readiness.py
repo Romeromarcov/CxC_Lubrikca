@@ -220,9 +220,7 @@ def test_e2e_04_discount_engine_evaluation():
 
     from cxc.config import EngineConfig
 
-    cfg = EngineConfig(
-        cash_window_business_days=3, bcv_complete_formula="full", lista_usd="4", lista_bcv="5"
-    )
+    cfg = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
     resolver = MagicMock()
     resolver.volumen.return_value = Decimal("100.0")
     resolver.precio.return_value = Decimal("10.00")
@@ -1566,8 +1564,6 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
         bcv_complete_formula="differential_over_binance",
-        lista_usd="4",
-        lista_bcv="5",
     )  # iva_rate=0.16, igtf_activo=False por defecto
 
     def fake_execute(model, method, args, kwargs=None):
@@ -1608,11 +1604,11 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
         data = res.json()
         by_so = {it["so_id"]: it for it in data["items"]}
 
+        # Tarea 2 (limpieza Ventas): "venta_bruta_teorica"/"venta_neta_teorica"
+        # y sus variantes +impuestos ya no se exponen (redundantes con el
+        # bloque VES/USD explícito, ver test_e2e_24b) -- pero siguen
+        # calculándose internamente para diferencia/alerta, sin cambios.
         v1 = by_so["SO_V1"]
-        assert v1["venta_bruta_teorica"] == 100.0
-        assert v1["venta_bruta_teorica_iva"] == 116.0
-        assert v1["venta_neta_teorica"] == 90.0
-        assert abs(v1["venta_neta_teorica_impuestos"] - 104.4) < 0.01
         assert v1["venta_bruta_real"] == 100.0
         assert v1["venta_neta_real"] == 116.0
         assert v1["total_facturado_con_impuestos"] == 116.0
@@ -1622,7 +1618,6 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
 
         v2 = by_so["SO_V2"]
         assert v2["total_facturado_neto"] == 162.40
-        assert abs(v2["venta_neta_teorica_impuestos"] - 208.8) < 0.01
         assert v2["alerta"] is True
 
         # SO_V3: sin factura -- "diferencia" NO debe ser toda la venta bruta
@@ -1632,14 +1627,12 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
         v3 = by_so["SO_V3"]
         assert v3["total_facturado_neto"] == 0.0
         assert v3["venta_neta_real"] == 150.0
-        assert abs(v3["venta_neta_teorica_impuestos"] - 150.8) < 0.01
         assert abs(v3["diferencia"] - 0.8) < 0.01
         assert v3["alerta"] is False
 
         assert data["kpis"]["total_alertas"] == 1
         assert data["kpis"]["iva_rate"] == 0.16
         assert abs(data["kpis"]["subtotal_real_total"] - 440.0) < 0.01
-        assert abs(data["kpis"]["venta_bruta_teorica_iva_total"] - 510.4) < 0.01
 
 
 def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
@@ -1647,10 +1640,10 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
 
     nació la venta (``lista_nacimiento``), la lista que terminó aplicando
     el motor (``lista_aplicada`` -- puede ganar la del método de pago sobre
-    la de nacimiento), los teóricos/equivalentes en ambas listas y los
-    descuentos + netos teóricos correspondientes a cada una (Tarea 3a/3b,
-    ya calculados por el motor en ``BandejaFacturacion`` -- este endpoint
-    solo los lee y expone, no recalcula nada).
+    la de nacimiento), y la comparación teórica explícita VES vs USD
+    (bruta/neta, con y sin impuestos -- Tarea 2 del rediseño de Ventas),
+    calculados por el motor en ``BandejaFacturacion``: este endpoint solo
+    los lee y aplica impuestos, no recalcula ningún descuento.
     """
     from cxc.config import EngineConfig
     from cxc.models import BandejaFacturacion
@@ -1665,7 +1658,7 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
             fecha=date(2026, 7, 1),
             fecha_entrega=None,
             monto_total=Decimal("116.00"),
-            lista_precios="5",  # nació en VES (lista_bcv)
+            lista_precios="5",  # nació en VES
             es_primera_compra=False,
             estado_orden="sale",
             facturada=False,
@@ -1689,8 +1682,6 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
         bcv_complete_formula="differential_over_binance",
-        lista_usd="4",
-        lista_bcv="5",
     )
 
     with (
@@ -1704,13 +1695,33 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
 
         assert item["lista_nacimiento"] == "5"
         assert item["lista_aplicada"] == "4"
-        assert item["equivalente_lista_usd"] == 102.0
-        assert item["teorico_lista_ves"] == 3600.0
-        assert item["teorico_lista_usd"] == 102.0
-        assert item["descuentos_teorico_ves"] == 360.0
-        assert item["descuentos_teorico_usd"] == 10.2
-        assert item["teorico_neto_ves"] == 3240.0
-        assert item["teorico_neto_usd"] == 91.8
+        assert item["lista_nacimiento_label"] == "#5"
+        assert item["lista_aplicada_label"] == "#4"
+        # VES: bruta 3600, descuento teórico 360 -> neta 3240; +IVA 16%.
+        assert item["ves_bruta_teorica"] == 3600.0
+        assert item["ves_bruta_teorica_iva"] == 4176.0
+        assert item["ves_neta_teorica"] == 3240.0
+        assert item["ves_neta_teorica_iva"] == 3758.4
+        # USD: bruta 102, descuento teórico 10.20 -> neta 91.8; +IVA 16%.
+        assert item["usd_bruta_teorica"] == 102.0
+        assert item["usd_bruta_teorica_iva"] == 118.32
+        assert item["usd_neta_teorica"] == 91.8
+        assert item["usd_neta_teorica_iva"] == 106.49
+        # Campos genéricos/redundantes eliminados del payload (Tarea 2).
+        for campo_eliminado in (
+            "venta_bruta_teorica",
+            "venta_bruta_teorica_iva",
+            "venta_neta_teorica",
+            "venta_neta_teorica_impuestos",
+            "equivalente_lista_usd",
+            "teorico_lista_ves",
+            "teorico_lista_usd",
+            "descuentos_teorico_ves",
+            "descuentos_teorico_usd",
+            "teorico_neto_ves",
+            "teorico_neto_usd",
+        ):
+            assert campo_eliminado not in item
 
 
 def test_e2e_25_recalcular_todo_requiere_admin_o_gerente():
