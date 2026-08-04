@@ -64,9 +64,12 @@ def test_aplica_migraciones_pendientes_contra_postgres_real() -> None:
     cfg = AlembicConfig("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", to_psycopg_url(_DATABASE_URL))
 
-    # Simula el estado de producción encontrado en los logs: las últimas
-    # dos migraciones nunca se aplicaron.
-    command.downgrade(cfg, "-2")
+    # Simula el estado de producción encontrado en los logs: las
+    # migraciones que agregan requiere_pago_previo/equivalente_lista_usd
+    # nunca se aplicaron. Se apunta a la revisión explícita anterior a
+    # 'e5f6a7b8c9d0' (no un offset relativo tipo "-2") para que este test no
+    # se rompa cada vez que se agregue una migración nueva al head.
+    command.downgrade(cfg, "d4e5f6a7b8c9")
     with engine.connect() as conn:
         cols = {
             c["name"]

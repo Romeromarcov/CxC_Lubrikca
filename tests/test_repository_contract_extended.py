@@ -30,6 +30,7 @@ from cxc.models import (
     ExclusionRegla,
     Feriado,
     Moneda,
+    OrdenVenta,
     Pago,
     PromocionPrimeraCompra,
     TipoBeneficio,
@@ -345,6 +346,21 @@ def test_pagos_huerfanos_cerrados_upsert_y_lectura(repo: Repository) -> None:
 
 
 def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None:
+    # so_id tiene FK a ordenes_venta -- se necesita la orden padre primero.
+    repo.upsert_ordenes(
+        [
+            OrdenVenta(
+                so_id="SO_DESC_SISTEMA",
+                cliente_id="CLI_DESC_SISTEMA",
+                fecha=date(2026, 1, 1),
+                fecha_entrega=None,
+                monto_total=Decimal("100.00"),
+                lista_precios="4",
+                vendedor_email="ana@lubrikca.com",
+                es_primera_compra=False,
+            )
+        ]
+    )
     assert repo.all_descuentos_sistema_aprobados() == []
     repo.upsert_descuento_sistema_aprobado(
         {

@@ -7675,10 +7675,10 @@ async def get_ventas_detalle(so_id: str):
     """
     try:
         repo = get_repo()
-        config = AppConfig.from_env()
         orden = repo.get_orden(so_id)
         if orden is None:
             raise HTTPException(status_code=404, detail=f"Orden {so_id} no encontrada")
+        config = AppConfig.from_env()
 
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         cliente_nombre = clientes_map.get(orden.cliente_id, f"Cliente ID: {orden.cliente_id}")
