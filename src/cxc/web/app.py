@@ -5423,7 +5423,7 @@ async def get_todas_reglas_descuento():
             )
 
         # 2. Pronto Pago
-        for r in repo.descuentos_pronto_pago():
+        for r in repo.descuentos_marca_categoria():
             todas.append(
                 {
                     "tabla": "DescuentosProntoPago",
@@ -5589,7 +5589,7 @@ async def get_todas_reglas_descuento():
 async def get_config_pronto_pago():
     try:
         repo = get_repo()
-        rules = repo.descuentos_pronto_pago()
+        rules = repo.descuentos_marca_categoria()
         return [
             {
                 "regla_id": r.regla_id,
