@@ -715,6 +715,38 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     )
 
 
+def conceptos_descuento_teorico(
+    inp: EngineInputs, lista: str, pura_bcv: bool
+) -> list[dict[str, Any]]:
+    """Desglose de conceptos que conforman ``descuentos_teorico_ves``/``_usd``
+
+    (Fase 6, modal de detalle en ``/api/ventas/{so_id}/detalle``): qué
+    reglas explican el descuento teórico de ESA lista específica. Mismos 3
+    componentes que suma ``_teoricos_por_lista`` (recompra + contado +
+    volumen) -- NO incluye BCV-completo/primera-compra, que no son
+    específicos de una lista (se calculan por abono o de forma orden-wide,
+    ver nota en ``_teoricos_por_lista``).
+    """
+    try:
+        comp = _calcular_componentes(inp, lista, pura_bcv)
+    except KeyError:
+        return []
+    conceptos: list[dict[str, Any]] = []
+    if comp.detalle_recompra is not None and comp.pct_recompra > 0:
+        conceptos.append(
+            {"concepto": comp.detalle_recompra.descripcion, "monto": comp.detalle_recompra.monto}
+        )
+    if comp.contado_proy > 0:
+        conceptos.append(
+            {"concepto": "Contado por marca/categoría", "monto": q2(comp.contado_proy)}
+        )
+    if comp.detalle_volumen is not None and comp.volumen > 0:
+        conceptos.append(
+            {"concepto": comp.detalle_volumen.descripcion, "monto": comp.detalle_volumen.monto}
+        )
+    return conceptos
+
+
 def _teoricos_por_lista(
     inp: EngineInputs, pura_bcv: bool, lista_ves_name: str, lista_usd_name: str
 ) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:

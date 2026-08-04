@@ -1403,10 +1403,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="38" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="38" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1460,7 +1460,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="38" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1490,7 +1490,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="36" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="38" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1532,11 +1532,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><small title="${item.lista_aplicada ?? ''}">${item.lista_aplicada_label ?? '—'}</small></td>
                 <td>${naVal(item.ves_bruta_teorica)}</td>
                 <td>${naVal(item.ves_bruta_teorica_iva)}</td>
+                <td>${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
                 <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica)}</strong></td>
                 <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
                 <td>${estatusPagoBadge(item.estatus_pago_teorico_ves)}</td>
                 <td>${naVal(item.usd_bruta_teorica)}</td>
                 <td>${naVal(item.usd_bruta_teorica_iva)}</td>
+                <td>${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
                 <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica)}</strong></td>
                 <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
                 <td>${estatusPagoBadge(item.estatus_pago_teorico_usd)}</td>
@@ -1553,13 +1555,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${estatusPagoBadge(item.estatus_pago_real_factura)}</td>
                 <td><span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span></td>
                 <td><span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span></td>
-                <td>${descMontoPct(item.descuento_motor_total, item.descuento_motor_total_pct)}</td>
                 <td>${descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)}</td>
                 <td title="${item.descuento_aplicado_sistema_motivo ?? ''}">${descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct)}</td>
                 <td>${fmt(item.saldo_pendiente_cxc)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
                 <td>${alertaCell}</td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
+                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
             `;
             tbody.appendChild(row);
         });
@@ -1579,6 +1581,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         const tieneDescuento = modo === "real_orden" || modo === "real_factura";
+        const esTeorico = modo === "teorico_ves" || modo === "teorico_usd";
         const listaLabel = bloque.lista_label ? `<p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Lista: ${bloque.lista_label}</p>` : '';
 
         let rows = bloque.lineas.map(l => `
@@ -1590,6 +1593,23 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td style="text-align:right"><strong>${fmt(l.subtotal)}</strong></td>
             </tr>
         `).join('');
+
+        // Fase 6: el motor no distribuye sus descuentos por línea (los
+        // calcula por grupo/orden) -- para los modos teóricos se muestra un
+        // desglose de CONCEPTOS a nivel de orden (qué reglas aplicaron:
+        // recompra/contado/volumen) en vez de una columna de descuento por
+        // línea, que sería inventada.
+        const conceptos = bloque.conceptos || [];
+        const conceptosHtml = esTeorico
+            ? `<div style="margin-top:1rem;">
+                <h4 style="margin:0 0 0.5rem 0;font-size:0.9rem;">Conceptos de descuento aplicados</h4>
+                ${conceptos.length === 0
+                    ? '<p class="table-empty" style="margin:0;">Ningún concepto de descuento aplica para esta lista.</p>'
+                    : `<ul style="margin:0;padding-left:1.2rem;font-size:0.85rem;">${
+                        conceptos.map(c => `<li>${c.concepto}: <strong>${fmt(c.monto)}</strong></li>`).join('')
+                    }</ul>`}
+              </div>`
+            : '';
 
         body.innerHTML = `
             ${listaLabel}
@@ -1608,9 +1628,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 </table>
             </div>
             <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
-                ${tieneDescuento ? `<div>Descuento total: <strong>${fmt(bloque.descuento_total)}</strong></div>` : ''}
+                ${(tieneDescuento || esTeorico) ? `<div>Descuento total: <strong>${fmt(bloque.descuento_total)}</strong></div>` : ''}
                 <div>Subtotal: <strong style="font-size:1.05rem;">${fmt(bloque.subtotal)}</strong></div>
             </div>
+            ${conceptosHtml}
         `;
     }
 
@@ -1667,6 +1688,85 @@ document.addEventListener("DOMContentLoaded", () => {
             _renderDetalleOrdenModo(e.target.value);
         });
     }
+
+    // ── Modal de pagos aplicados a una orden (Fase 6) ─────────────────────────
+    async function abrirModalPagosOrden(soId) {
+        const modal = document.getElementById("modal-pagos-orden");
+        const titulo = document.getElementById("modal-pagos-orden-titulo");
+        const body = document.getElementById("modal-pagos-orden-body");
+        if (!modal) return;
+
+        titulo.textContent = `Pagos de la Orden ${soId}`;
+        body.innerHTML = '<p class="table-empty">Cargando pagos...</p>';
+        modal.style.display = "flex";
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const fmtTasa = (val) => val != null ? new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(val) : '—';
+
+        try {
+            const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
+            if (!res.ok) {
+                body.innerHTML = '<p class="table-empty">Error al cargar los pagos de la orden.</p>';
+                return;
+            }
+            const data = await res.json();
+            const pagos = data.pagos || [];
+            if (pagos.length === 0) {
+                body.innerHTML = '<p class="table-empty">Esta orden no tiene pagos vinculados todavía.</p>';
+                return;
+            }
+            const rows = pagos.map(p => `
+                <tr>
+                    <td>${p.pago_id}</td>
+                    <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ')}</small></td>
+                    <td style="text-align:right"><strong>${fmt(p.monto_aplicado)}</strong> ${p.moneda_abono || ''}</td>
+                    <td>${p.tipo_tasa_abono || '—'}</td>
+                    <td style="text-align:right">${fmtTasa(p.tasa_bcv_aplicada)}</td>
+                    <td style="text-align:right">${fmtTasa(p.tasa_binance_aplicada)}</td>
+                    <td style="text-align:right">${p.equiv_usd_bcv != null ? fmt(p.equiv_usd_bcv) : '—'}</td>
+                    <td style="text-align:right">${p.equiv_usd_binance != null ? fmt(p.equiv_usd_binance) : '—'}</td>
+                    <td><small>${p.confirmado_por || '—'}</small></td>
+                    <td><small>${p.estado || '—'}</small></td>
+                </tr>
+            `).join('');
+            const totalAplicado = pagos.reduce((acc, p) => acc + (p.monto_aplicado || 0), 0);
+            body.innerHTML = `
+                <div style="overflow-x:auto;">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Pago</th>
+                                <th>Fecha</th>
+                                <th style="text-align:right">Monto Aplicado</th>
+                                <th>Ruta</th>
+                                <th style="text-align:right">Tasa BCV</th>
+                                <th style="text-align:right">Tasa Binance</th>
+                                <th style="text-align:right">Equiv. USD BCV</th>
+                                <th style="text-align:right">Equiv. USD Binance</th>
+                                <th>Confirmado por</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+                <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
+                    <div>Total aplicado: <strong style="font-size:1.05rem;">${fmt(totalAplicado)}</strong></div>
+                </div>
+            `;
+        } catch (err) {
+            body.innerHTML = '<p class="table-empty">Error de red al cargar los pagos de la orden.</p>';
+            console.error(err);
+        }
+    }
+
+    function cerrarModalPagosOrden() {
+        const modal = document.getElementById("modal-pagos-orden");
+        if (modal) modal.style.display = "none";
+    }
+
+    window.abrirModalPagosOrden = abrirModalPagosOrden;
+    window.cerrarModalPagosOrden = cerrarModalPagosOrden;
 
     // ── Bandeja Auditoría de Descuentos y NCs ─────────────────────────────────
     async function loadAuditoriaDescuentos() {
