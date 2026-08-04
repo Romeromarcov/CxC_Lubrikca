@@ -145,6 +145,115 @@ def test_detalle_teorico_ves_y_usd_resuelven_precio_por_pricelist() -> None:
     assert usd["lineas"][0]["precio_unitario"] == 55.0
     assert ves["lineas"][0]["subtotal"] == 90.0  # 2 * 45
     assert usd["lineas"][0]["subtotal"] == 110.0  # 2 * 55
+    # Fase 6: nombre de producto (via el mapa armado con sale.order.line),
+    # no el id crudo.
+    assert ves["lineas"][0]["producto"] == "Producto Sinoco"
+    assert usd["lineas"][0]["producto"] == "Producto Sinoco"
+    # Sin reglas de descuento configuradas (mock_repo vacío) -> sin conceptos.
+    assert ves["conceptos"] == []
+    assert usd["conceptos"] == []
+    assert ves["descuento_total"] == 0.0
+    assert usd["descuento_total"] == 0.0
+
+
+def test_detalle_teorico_conceptos_muestra_reglas_que_aplican_por_lista() -> None:
+    """Fase 6: una regla de volumen con listas_aplicables="USD" debe
+
+    aparecer en los conceptos de teorico_usd, no en teorico_ves."""
+    from cxc.models import DescuentoVolumen
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = []
+    mock_repo.descuentos_volumen.return_value = [
+        DescuentoVolumen(
+            regla_id="VOL_USD",
+            marca="Sinoco",
+            categoria="Comercial",
+            litros_minimo=Decimal("0"),
+            min_cantidad=Decimal("1"),
+            max_cantidad=Decimal("999"),
+            unidad_medida="CAJAS",
+            porcentaje=Decimal("0.10"),
+            activo=True,
+            # Sin repo.get_config real (mock vacío), EngineRunner.build_inputs
+            # deja valid_usd=[] -> _lista_usd_activa cae al fallback logico
+            # "USD" (no al id numerico "4") -- ver discounts.py:_LISTA_USD_FALLBACK.
+            listas_aplicables="USD",
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200
+        data = res.json()
+
+    assert data["teorico_usd"]["conceptos"] != []
+    assert data["teorico_usd"]["descuento_total"] == 11.0  # 2*55*0.10
+    assert data["teorico_ves"]["conceptos"] == []
+
+
+def test_detalle_pagos_trae_vinculaciones_de_la_orden() -> None:
+    from datetime import datetime
+
+    from cxc.models import Vinculacion
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = [
+        Vinculacion(
+            vinc_id="VC1",
+            pago_id="PG1",
+            so_id="SO_DETALLE",
+            monto_aplicado=Decimal("50.00"),
+            hora_pago_confirmada=datetime(2026, 7, 2, 9, 0),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("42.0"),
+            es_tasa_heredada=False,
+            equiv_usd_bcv=Decimal("48.50"),
+            equiv_usd_binance=Decimal("47.00"),
+            confirmado_por="ana@lubrikca.com",
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200
+        data = res.json()
+
+    assert len(data["pagos"]) == 1
+    pago = data["pagos"][0]
+    assert pago["pago_id"] == "PG1"
+    assert pago["monto_aplicado"] == 50.00
+    assert pago["equiv_usd_bcv"] == 48.50
+    assert pago["equiv_usd_binance"] == 47.00
+    assert pago["confirmado_por"] == "ana@lubrikca.com"
 
 
 def test_detalle_orden_inexistente_da_404() -> None:

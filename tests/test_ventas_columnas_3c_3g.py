@@ -123,6 +123,31 @@ def _fake_execute(model, method, args, kwargs=None):
             },
         ]
 
+    if model == "account.move.line":
+        # SO_OK/SO_PENDIENTE ya están facturadas (ver account.move arriba) --
+        # la factura es el documento de referencia para "pendiente" una vez
+        # facturada (Fase 6), así que copia el mismo % que sale.order.line
+        # para que estos fixtures representen el flujo normal de Odoo
+        # (factura generada desde la SO hereda su descuento).
+        return [
+            {
+                "move_id": 900,
+                "product_uom_qty": 1.0,
+                "quantity": 1.0,
+                "price_unit": 100.0,
+                "discount": 5.0,
+                "price_subtotal": 95.0,
+            },
+            {
+                "move_id": 902,
+                "product_uom_qty": 1.0,
+                "quantity": 1.0,
+                "price_unit": 100.0,
+                "discount": 3.0,
+                "price_subtotal": 97.0,
+            },
+        ]
+
     return []
 
 
@@ -147,6 +172,13 @@ def _run_get_ventas(
             precio_base_calculado=Decimal("100.00"),
             total_descuentos=Decimal("5.00"),
             total_motor=Decimal("95.00"),
+            # Fase 6: descuentos_teorico_ves/_usd son DISTINTOS entre sí
+            # (reglas con listas_aplicables distintas por lista) -- reemplaza
+            # la columna única "Desc. Motor".
+            teorico_lista_ves=Decimal("120.00"),
+            teorico_lista_usd=Decimal("100.00"),
+            descuentos_teorico_ves=Decimal("8.00"),
+            descuentos_teorico_usd=Decimal("3.00"),
         ),
         BandejaFacturacion(
             so_id="SO_PENDIENTE",
@@ -160,6 +192,11 @@ def _run_get_ventas(
             lista_aplicada="4",
             precio_base_calculado=Decimal("200.00"),
             total_motor=Decimal("200.00"),
+            # Fase 6: motor exige 30 de descuento -- la N/C ($30, ver
+            # account.move arriba) es la que lo materializa, sin tocar la
+            # línea de la orden/factura (descuento_aplicado_orden/_factura
+            # quedan en 0 para esta SO).
+            total_descuentos=Decimal("30.00"),
         ),
         BandejaFacturacion(
             so_id="SO_ND",
@@ -196,6 +233,18 @@ def test_descuento_aplicado_orden_coincide_con_motor_es_ok() -> None:
     assert ok["descuento_aplicado_sistema"] == 0.0
 
 
+def test_descuento_teorico_ves_y_usd_son_columnas_independientes() -> None:
+    """Fase 6: reemplaza "Desc. Motor" -- descuentos_teorico_ves/_usd son
+
+    valores distintos (reglas por lista distintas), monto y %."""
+    by_so = _run_get_ventas()
+    ok = by_so["SO_OK"]
+    assert ok["descuento_teorico_ves"] == 8.0
+    assert ok["descuento_teorico_ves_pct"] == round(8.0 / 120.0, 4)
+    assert ok["descuento_teorico_usd"] == 3.0
+    assert ok["descuento_teorico_usd_pct"] == round(3.0 / 100.0, 4)
+
+
 def test_descuento_pendiente_aplicar_cuando_motor_exige_mas_que_odoo() -> None:
     """El motor calculó 10 de descuento; Odoo solo tiene 3 -> pendiente = 7."""
     by_so = _run_get_ventas()
@@ -214,6 +263,44 @@ def test_nota_credito_reduce_facturado_neto_logica_reutilizada() -> None:
     assert nc["total_nc_aplicada"] == 30.0
     assert nc["total_nd_aplicada"] == 0.0
     assert nc["total_facturado_neto"] == 170.0
+
+
+def test_descuento_pendiente_aplicar_dinamico_lo_reduce_una_nota_de_credito() -> None:
+    """Fase 6: el pendiente es dinámico -- una N/C que materializa el
+
+    descuento (sin tocar la línea de orden/factura) también lo resta,
+    igual que si se hubiera aplicado en la línea."""
+    by_so = _run_get_ventas()
+    nc = by_so["SO_NC"]
+    # motor exige 30; SO_NC no tiene descuento en la línea de orden/factura
+    # (0), pero la N/C ($30) cubre exactamente ese monto -> pendiente = 0,
+    # NO 30 (que es lo que hubiera dado la lógica vieja, que ignoraba NC).
+    assert nc["descuento_motor_total"] == 30.0
+    assert nc["descuento_aplicado_orden"] == 0.0
+    assert nc["descuento_aplicado_factura"] == 0.0
+    assert nc["descuento_pendiente_aplicar"] == 0.0
+
+
+def test_descuento_pendiente_aplicar_dinamico_lo_reduce_descuento_de_sistema() -> None:
+    """Fase 6: aprobar un descuento de sistema también resta del pendiente,
+
+    sin tocar Odoo -- dinámico igual que la N/C."""
+    by_so = _run_get_ventas(
+        descuentos_sistema=[
+            {
+                "so_id": "SO_PENDIENTE",
+                "monto": "4.00",
+                "motivo": "Ajuste manual",
+                "aprobado_por": "Tester",
+                "timestamp_aprobacion": "2026-07-01T00:00:00",
+                "activo": "true",
+            }
+        ]
+    )
+    pend = by_so["SO_PENDIENTE"]
+    # motor=10; SO_PENDIENTE ya está facturada -> referencia = factura (3,
+    # copiado de la orden) -> 10-3=7 antes del ajuste; menos 4 aprobados = 3.
+    assert pend["descuento_pendiente_aplicar"] == 3.0
 
 
 def test_nota_debito_atada_a_factura_incrementa_facturado_neto() -> None:

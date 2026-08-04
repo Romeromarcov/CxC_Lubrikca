@@ -1315,3 +1315,49 @@ def test_lineas_con_precio_resuelve_por_linea_para_lista_dada() -> None:
     filas_bcv = lineas_con_precio(inp, "BCV")
     assert filas_bcv[0]["precio_unitario"] == Decimal("90")
     assert filas_bcv[0]["subtotal"] == Decimal("270")
+
+
+def test_conceptos_descuento_teorico_respeta_listas_aplicables() -> None:
+    """Fase 6 (modal de detalle): conceptos_descuento_teorico devuelve los
+
+    conceptos (recompra/contado/volumen) que explican descuentos_teorico_ves
+    o _usd para ESA lista -- una regla de volumen con listas_aplicables="USD"
+    solo debe aparecer en el desglose de la lista USD, no en BCV."""
+    from cxc.engine.discounts import conceptos_descuento_teorico
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden(primera=False)
+    linea = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="10", precio="100"
+    )
+    resolver = _resolver(**{"P1@USD": "100", "P1@BCV": "90"})
+    resolver.set_volumen("P1", Decimal("25.0"))  # 250 L
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_USD_ONLY",
+        marca="Sinoco",
+        categoria="Comercial",
+        litros_minimo=Decimal("200"),
+        porcentaje=Decimal("0.05"),
+        activo=True,
+        listas_aplicables="USD",
+    )
+
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+        valid_usd=["USD"],
+        valid_ves=["BCV"],
+    )
+
+    conceptos_usd = conceptos_descuento_teorico(inp, "USD", pura_bcv=False)
+    conceptos_bcv = conceptos_descuento_teorico(inp, "BCV", pura_bcv=True)
+
+    assert len(conceptos_usd) == 1
+    assert "Sinoco/Comercial" in conceptos_usd[0]["concepto"]
+    assert conceptos_usd[0]["monto"] == Decimal("50.00")  # 10*100*0.05
+
+    assert conceptos_bcv == []

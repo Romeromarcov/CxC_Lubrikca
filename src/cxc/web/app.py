@@ -7431,13 +7431,6 @@ async def get_ventas(
                 motor_total_descuentos=motor_total_descuentos,
                 odoo_descuento_factura=Decimal(str(descuento_aplicado_factura)),
             )
-            # Tarea 3d: lo que el motor determina pendiente de aplicar (solo la
-            # parte positiva -- si Odoo ya tiene más descuento del que el motor
-            # exige, no hay "pendiente", ya está materializado).
-            descuento_pendiente_aplicar = round(
-                float(audit_orden.descuento_adicional_a_aplicar), 2
-            )
-
             # Tarea 3e/Fase 3: descuento aprobado manualmente desde la
             # Bandeja 1 de Facturación -- ajusta el saldo interno de CxC sin
             # tocar Odoo. `saldo_pendiente_cxc` es el target real que debe
@@ -7449,6 +7442,32 @@ async def get_ventas(
             )
             base_sistema = total_facturado_neto if tiene_factura else venta_neta_real
             saldo_pendiente_cxc = round(max(0.0, base_sistema - descuento_aplicado_sistema), 2)
+
+            # Fase 6: descuento pendiente por aplicar, DINÁMICO -- se resta
+            # todo lo que ya materializa el descuento que el motor exige,
+            # sin importar por qué mecanismo se formalizó:
+            #   1. Descuento ya aplicado en el DOCUMENTO de referencia --
+            #      la factura si ya existe (es la que manda una vez
+            #      facturado), si no la orden (única referencia disponible
+            #      antes de facturar). NUNCA se suman orden + factura: son
+            #      el mismo descuento visto en dos documentos, no dos
+            #      descuentos distintos.
+            #   2. Notas de crédito ya emitidas (mecanismo alterno para
+            #      materializar el mismo descuento sin editar la línea).
+            #   3. Descuento de sistema ya aprobado (Fase 3, Bandeja 1).
+            # max(0, ...) en cada paso: si Odoo/NC/sistema ya cubren más de
+            # lo que el motor exige, no hay pendiente negativo -- ese exceso
+            # ya se refleja como discrepancia en descuento_validacion_orden/
+            # _factura (validación de que lo aplicado no exceda el cálculo
+            # del motor), no se resta de vuelta aquí.
+            aplicado_documento = (
+                descuento_aplicado_factura if tiene_factura else descuento_aplicado_orden
+            )
+            pendiente_tras_documento = max(0.0, float(motor_total_descuentos) - aplicado_documento)
+            pendiente_tras_nc = max(0.0, pendiente_tras_documento - total_nc_aplicada)
+            descuento_pendiente_aplicar = round(
+                max(0.0, pendiente_tras_nc - descuento_aplicado_sistema), 2
+            )
 
             precio_base_calculado = float(b.precio_base_calculado) if b else 0.0
 
@@ -7548,6 +7567,13 @@ async def get_ventas(
                     "ves_neta_teorica_iva": (
                         round(ves_neta_teorica_iva, 2) if ves_neta_teorica_iva is not None else None
                     ),
+                    # Fase 6: reemplaza la columna genérica "Desc. Motor" --
+                    # el motor calcula un descuento distinto para VES y para
+                    # USD (reglas con listas_aplicables distintas por lista),
+                    # así que un solo número era ambiguo/incorrecto para
+                    # comparar contra cada teórico.
+                    "descuento_teorico_ves": round(ves_desc_teorico, 2),
+                    "descuento_teorico_ves_pct": _pct(ves_desc_teorico, ves_bruta_teorica or 0.0),
                     "usd_bruta_teorica": (
                         round(usd_bruta_teorica, 2) if usd_bruta_teorica is not None else None
                     ),
@@ -7562,6 +7588,8 @@ async def get_ventas(
                     "usd_neta_teorica_iva": (
                         round(usd_neta_teorica_iva, 2) if usd_neta_teorica_iva is not None else None
                     ),
+                    "descuento_teorico_usd": round(usd_desc_teorico, 2),
+                    "descuento_teorico_usd_pct": _pct(usd_desc_teorico, usd_bruta_teorica or 0.0),
                     # Tarea 3c: descuentos aplicados en Odoo (orden/factura) +
                     # validación visual vs. lo que dictamina el motor. Monto
                     # Y porcentaje en todos los campos de descuento (pedido
@@ -7665,13 +7693,17 @@ async def get_ventas_detalle(so_id: str):
     Teórico VES/USD usa ``EngineRunner.build_inputs`` (mismo cableo repo ->
     EngineInputs que usa el cálculo real de la bandeja, sin duplicar lógica)
     + ``discounts.lineas_con_precio`` para resolver el precio unitario de
-    cada línea contra la lista VES/USD vigente. El motor no distribuye sus
-    descuentos por línea (los calcula por grupo/orden, ver
-    ``engine/discounts.py::_calcular_componentes``) -- el desglose teórico
-    por línea es precio unitario x cantidad SIN descuento; el descuento
-    total de esa lista ya se muestra a nivel de orden en ``/api/ventas``
-    (``descuento_motor_total``). Documentado como criterio elegido, no
-    pendiente.
+    cada línea contra la lista VES/USD vigente, con el NOMBRE del producto
+    (via el mapa id->nombre armado con las líneas reales, ``sale.order.
+    line`` ya trae ``[id, nombre]``). El motor no distribuye sus descuentos
+    por línea (los calcula por grupo/orden, ver ``engine/discounts.py::
+    _calcular_componentes``) -- cada bloque teórico trae un ``conceptos``
+    a nivel de orden (``discounts.conceptos_descuento_teorico``, mismos 3
+    componentes -- recompra/contado/volumen -- que suma ``BandejaFacturacion.
+    descuentos_teorico_ves``/``_usd``) en vez de un desglose por línea.
+
+    También trae ``pagos`` (vinculaciones de la orden con sus equivalentes
+    congelados) para el botón "Ver Pagos".
     """
     try:
         repo = get_repo()
@@ -7717,8 +7749,11 @@ async def get_ventas_detalle(so_id: str):
 
         # --- Real Orden: sale.order.line COMPLETO (todas las líneas, no
         # solo las que tienen discount > 0 -- a diferencia del agregado que
-        # usa /api/ventas). ---
+        # usa /api/ventas). También arma el mapa id -> nombre de producto
+        # (Fase 6) que se reusa para las líneas teóricas VES/USD, que solo
+        # traen el id crudo (``LineaOrden.producto``, sin nombre).
         lineas_real_orden: list[dict[str, Any]] = []
+        producto_nombre_map: dict[str, str] = {}
         if execute:
             try:
                 sol = execute(
@@ -7736,15 +7771,18 @@ async def get_ventas_detalle(so_id: str):
                     },
                 )
                 for line in sol:
-                    if not line.get("product_id"):
+                    prod_raw = line.get("product_id")
+                    if not prod_raw:
                         continue
+                    if isinstance(prod_raw, list | tuple) and len(prod_raw) > 1:
+                        producto_nombre_map[str(prod_raw[0])] = str(prod_raw[1])
                     qty = float(line.get("product_uom_qty") or 0)
                     price_unit = float(line.get("price_unit") or 0)
                     disc_pct = float(line.get("discount") or 0)
                     subtotal = float(line.get("price_subtotal") or 0)
                     lineas_real_orden.append(
                         {
-                            "producto": _nombre_producto(line.get("product_id")),
+                            "producto": _nombre_producto(prod_raw),
                             "cantidad": qty,
                             "precio_unitario": round(price_unit, 2),
                             "descuento_pct": round(disc_pct, 2),
@@ -7820,9 +7858,18 @@ async def get_ventas_detalle(so_id: str):
                 )
 
         # --- Teórico VES / Teórico USD: EngineRunner.build_inputs +
-        # discounts.lineas_con_precio (mismo cableo que el cálculo real). ---
+        # discounts.lineas_con_precio (mismo cableo que el cálculo real).
+        # Fase 6: nombre de producto (via producto_nombre_map, armado arriba
+        # con las líneas reales de la orden -- mismos ids de producto) +
+        # conceptos de descuento por lista (discounts.conceptos_descuento_
+        # teorico, MISMOS 3 componentes -- recompra/contado/volumen -- que
+        # suma BandejaFacturacion.descuentos_teorico_ves/_usd). Son
+        # conceptos a nivel de orden, no por línea (el motor no distribuye
+        # sus descuentos por línea, ver docstring del helper). ---
         lineas_teorico_ves: list[dict[str, Any]] = []
         lineas_teorico_usd: list[dict[str, Any]] = []
+        conceptos_teorico_ves: list[dict[str, Any]] = []
+        conceptos_teorico_usd: list[dict[str, Any]] = []
         lista_ves_id: str | None = None
         lista_usd_id: str | None = None
         if execute:
@@ -7830,6 +7877,7 @@ async def get_ventas_detalle(so_id: str):
                 from cxc.engine.discounts import (
                     _lista_usd_activa,
                     _lista_ves_activa,
+                    conceptos_descuento_teorico,
                     lineas_con_precio,
                 )
 
@@ -7850,7 +7898,9 @@ async def get_ventas_detalle(so_id: str):
                     for fila in lineas_con_precio(inputs, lista_ves_id):
                         lineas_teorico_ves.append(
                             {
-                                "producto": fila["producto"],
+                                "producto": producto_nombre_map.get(
+                                    str(fila["producto"]), str(fila["producto"])
+                                ),
                                 "cantidad": float(fila["cantidad"]),
                                 "precio_unitario": round(float(fila["precio_unitario"]), 2),
                                 "subtotal": round(float(fila["subtotal"]), 2),
@@ -7859,16 +7909,56 @@ async def get_ventas_detalle(so_id: str):
                     for fila in lineas_con_precio(inputs, lista_usd_id):
                         lineas_teorico_usd.append(
                             {
-                                "producto": fila["producto"],
+                                "producto": producto_nombre_map.get(
+                                    str(fila["producto"]), str(fila["producto"])
+                                ),
                                 "cantidad": float(fila["cantidad"]),
                                 "precio_unitario": round(float(fila["precio_unitario"]), 2),
                                 "subtotal": round(float(fila["subtotal"]), 2),
                             }
                         )
+                    conceptos_teorico_ves = [
+                        {"concepto": c["concepto"], "monto": round(float(c["monto"]), 2)}
+                        for c in conceptos_descuento_teorico(inputs, lista_ves_id, pura_bcv=True)
+                    ]
+                    conceptos_teorico_usd = [
+                        {"concepto": c["concepto"], "monto": round(float(c["monto"]), 2)}
+                        for c in conceptos_descuento_teorico(inputs, lista_usd_id, pura_bcv=False)
+                    ]
             except Exception as e_motor:
                 logger.warning(
                     "Error calculando teóricos por línea en get_ventas_detalle: %s", e_motor
                 )
+
+        # --- Pagos (vinculaciones) aplicados a la orden -- para el botón
+        # "Ver Pagos" del modal (Fase 6). ---
+        pagos: list[dict[str, Any]] = []
+        for v in repo.vinculaciones_de_orden(so_id):
+            pagos.append(
+                {
+                    "vinc_id": v.vinc_id,
+                    "pago_id": v.pago_id,
+                    "fecha": v.hora_pago_confirmada.isoformat() if v.hora_pago_confirmada else None,
+                    "monto_aplicado": round(float(v.monto_aplicado), 2),
+                    "moneda_abono": v.moneda_abono.value
+                    if hasattr(v.moneda_abono, "value")
+                    else str(v.moneda_abono),
+                    "tipo_tasa_abono": v.tipo_tasa_abono.value
+                    if hasattr(v.tipo_tasa_abono, "value")
+                    else str(v.tipo_tasa_abono),
+                    "tasa_bcv_aplicada": round(float(v.tasa_bcv_aplicada), 4),
+                    "tasa_binance_aplicada": round(float(v.tasa_binance_aplicada), 4),
+                    "equiv_usd_bcv": round(float(v.equiv_usd_bcv), 2)
+                    if v.equiv_usd_bcv is not None
+                    else None,
+                    "equiv_usd_binance": round(float(v.equiv_usd_binance), 2)
+                    if v.equiv_usd_binance is not None
+                    else None,
+                    "confirmado_por": v.confirmado_por,
+                    "estado": v.estado.value if hasattr(v.estado, "value") else str(v.estado),
+                }
+            )
+        pagos.sort(key=lambda p: p["fecha"] or "")
 
         return {
             "so_id": so_id,
@@ -7892,12 +7982,21 @@ async def get_ventas_detalle(so_id: str):
                 "lista_label": _lista_label(lista_ves_id),
                 "lineas": lineas_teorico_ves,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_ves), 2),
+                "conceptos": conceptos_teorico_ves,
+                "descuento_total": round(
+                    sum(c["monto"] for c in conceptos_teorico_ves), 2
+                ),
             },
             "teorico_usd": {
                 "lista_label": _lista_label(lista_usd_id),
                 "lineas": lineas_teorico_usd,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_usd), 2),
+                "conceptos": conceptos_teorico_usd,
+                "descuento_total": round(
+                    sum(c["monto"] for c in conceptos_teorico_usd), 2
+                ),
             },
+            "pagos": pagos,
         }
     except HTTPException:
         raise
