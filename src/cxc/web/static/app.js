@@ -1952,7 +1952,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-rec-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
@@ -1999,7 +2000,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-pp-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-pp-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-pronto-pago", {
@@ -2050,7 +2052,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -2098,7 +2101,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-prod-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-prod-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-producto", {
@@ -2146,7 +2150,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-dif-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-dif-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-diferencial-cambiario", {
@@ -3057,7 +3062,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_desde: cfgPromoDesde.value,
                 vigencia_hasta: cfgPromoHasta.value || null,
                 requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -3189,7 +3195,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: cfgDescVolHasta.value || null,
                 requiere_pago_previo: document.getElementById("cfg-desc-vol-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-desc-vol-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-volumen", {

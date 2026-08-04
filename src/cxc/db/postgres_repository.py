@@ -961,6 +961,7 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         tipo_descuento=TipoDescuento(r.tipo_descuento),
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -982,6 +983,7 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1005,6 +1007,7 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1028,6 +1031,7 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1075,6 +1079,7 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1088,6 +1093,7 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1099,6 +1105,7 @@ def _row_to_bcv_completo(r: Any) -> DescuentoBCVCompleto:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1124,6 +1131,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 

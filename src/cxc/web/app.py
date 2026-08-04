@@ -672,6 +672,7 @@ class PromocionRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class ExclusionRequest(BaseModel):
@@ -696,6 +697,7 @@ class ProntoPagoRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = True
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class VolumenRequest(BaseModel):
@@ -714,6 +716,7 @@ class VolumenRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class EliminarDescuentoRequest(BaseModel):
@@ -830,6 +833,7 @@ class RecompraRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class ProductoPromoRequest(BaseModel):
@@ -848,6 +852,7 @@ class ProductoPromoRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class DiferencialCambiarioRequest(BaseModel):
@@ -867,6 +872,7 @@ class DiferencialCambiarioRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = True
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class ToggleDescuentoRequest(BaseModel):
@@ -887,6 +893,7 @@ class DescuentoVolumenRequest(BaseModel):
     listas_aplicables: str = "*"
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
@@ -5239,6 +5246,7 @@ async def get_config_promociones():
                 "activo": p.activo,
                 "requiere_pago_previo": p.requiere_pago_previo,
                 "aplica_a": getattr(p, "aplica_a", "linea"),
+                "descripcion": getattr(p, "descripcion", ""),
             }
             for p in promos
         ]
@@ -5290,6 +5298,7 @@ async def post_config_promociones(req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_promocion_primera_compra(promo)
@@ -5349,6 +5358,7 @@ async def get_config_descuentos_volumen():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5382,6 +5392,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             listas_aplicables=req.listas_aplicables,
             activo=True,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -5423,6 +5434,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5450,6 +5462,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5489,6 +5502,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5523,6 +5537,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5550,6 +5565,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5579,6 +5595,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5608,6 +5625,7 @@ async def get_config_pronto_pago():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5646,6 +5664,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_pronto_pago(rule)
@@ -5692,6 +5711,7 @@ async def get_config_volumen():
                     "activo": r.activo,
                     "requiere_pago_previo": r.requiere_pago_previo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
         return res
@@ -5733,6 +5753,7 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -5763,6 +5784,7 @@ async def get_config_recompra():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5796,6 +5818,7 @@ async def post_config_recompra(req: RecompraRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_recompra(rule)
@@ -5825,6 +5848,7 @@ async def get_config_producto():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5857,6 +5881,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_producto(rule)
@@ -5886,6 +5911,7 @@ async def get_config_diferencial():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5918,6 +5944,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_diferencial_cambiario(rule)

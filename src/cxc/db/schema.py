@@ -179,6 +179,7 @@ descuentos_pronto_pago = Table(
     Column("tipo_descuento", String, nullable=False, server_default="contado"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7_vol DescuentosVolumen (config) --------------------------------------
@@ -202,6 +203,7 @@ descuentos_volumen = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7b DescuentoBCVCompleto (config, effective dating, sin id) -----------
@@ -215,6 +217,7 @@ descuento_bcv_completo = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7c PromocionPrimeraCompra (config) ------------------------------------
@@ -241,6 +244,7 @@ promocion_primera_compra = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7d DescuentoRecompra (config) -----------------------------------------
@@ -265,6 +269,7 @@ descuentos_recompra = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------
@@ -287,6 +292,7 @@ descuentos_producto = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7f DescuentoDiferencialCambiario (config) -----------------------------
@@ -311,6 +317,7 @@ descuentos_diferencial_cambiario = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.8 ReglasRecurrencia (config, effective dating, sin id natural) -------
@@ -326,6 +333,7 @@ reglas_recurrencia = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.8b Feriados (config) ---------------------------------------------------
