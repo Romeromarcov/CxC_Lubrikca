@@ -412,6 +412,39 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _pagos_por_so_desde_cobranza(execute: Any) -> dict[str, float]:
+    """Pagos por orden en equivalente USD, para ``/api/ventas`` (Fase 9).
+
+    Reusa ``get_live_pagos_conciliados`` -- la MISMA función que ya usa
+    ``/api/cobranza/pagos`` -- en vez de reinventar una conversión USD
+    propia contra Odoo (ver historial: una versión anterior armaba su
+    propia consulta a ``account.payment`` + conversión manual por tasa
+    BCV, duplicando lo que Cobranza ya resuelve mejor via los campos
+    ``amount_total_signed_usd``/``amount_residual_usd`` que Odoo calcula
+    por factura).
+
+    Las facturas vienen repetidas una vez por cada pago que las reconcilia
+    parcialmente -- se dedupean por ``factura_id`` antes de sumar (si no,
+    una factura pagada con 2 abonos parciales se contaría dos veces).
+    """
+    if not execute:
+        return {}
+    facturas_por_id: dict[str, dict[str, Any]] = {}
+    for pago in get_live_pagos_conciliados(execute):
+        for f in pago["facturas"]:
+            if f.get("tipo") == "out_invoice":
+                facturas_por_id[f["factura_id"]] = f
+
+    totales: dict[str, float] = {}
+    for f in facturas_por_id.values():
+        so = f.get("so_id")
+        if not so:
+            continue
+        pagado = max(0.0, f["monto_usd"] - f["residual_usd"])
+        totales[so] = totales.get(so, 0.0) + pagado
+    return totales
+
+
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -1957,12 +1990,15 @@ def _pagos_odoo_por_orden(
 ) -> dict[str, dict[str, Any]]:
     """Pagos por orden en equivalente USD, calculados directo contra Odoo --
 
-    extraído de ``/api/reporte-saldos`` (Cuentas por Cobrar) para
-    reutilizarlo también en ``/api/ventas`` (Fase 7). NO depende de la
-    tabla ``Vinculaciones``: en producción real esa tabla está vacía (el
-    flujo de pagos vive enteramente en Odoo), así que basar el estatus de
-    pago solo en Vinculaciones hacía que TODAS las órdenes salieran "sin
-    pagar" en Ventas aunque el reporte de CxC sí las mostrara pagadas.
+    usado internamente por ``/api/reporte-saldos`` (Cuentas por Cobrar).
+    NO depende de la tabla ``Vinculaciones``: en producción real esa tabla
+    está vacía (el flujo de pagos vive enteramente en Odoo).
+
+    ``/api/ventas`` usa una fuente distinta para el mismo propósito --
+    ``_pagos_por_so_desde_cobranza`` -- que reusa ``get_live_pagos_
+    conciliados`` (la función que ya usa ``/api/cobranza/pagos``) en vez de
+    esta, para no mantener dos conversiones a USD independientes que
+    podrían divergir entre reportes.
 
     Ruta principal: ``account.payment`` reconciliado contra las facturas de
     la orden (exacto, importe real cobrado). Fallback (sin
@@ -2598,8 +2634,7 @@ async def get_reporte_saldos(refresh: bool = False):
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
         # ─── ABONOS DESDE ODOO (account.payment reconciliado, fallback a
-        # amount_residual de factura) -- extraído a _pagos_odoo_por_orden
-        # (Fase 7) para reutilizarlo también en /api/ventas. ───────────────
+        # amount_residual de factura) -- ver _pagos_odoo_por_orden. ────────
         ordenes_map = {o.so_id: o for o in ordenes}
         pagos_odoo = _pagos_odoo_por_orden(
             execute,
@@ -7321,11 +7356,6 @@ async def get_ventas(
         invoice_ids_out_invoice: list[int] = []
         invoice_ids_all: list[int] = []
         inv_id_to_so: dict[int, str] = {}
-        # Fase 7: facturas out_invoice con los campos que necesita
-        # _pagos_odoo_por_orden (amount_total/amount_residual/currency_id/
-        # invoice_date) -- migrado de /api/reporte-saldos, NO depende de la
-        # tabla Vinculaciones (vacía en producción real).
-        invoices_by_so: dict[str, list[dict]] = {}
 
         if execute and so_names:
             try:
@@ -7360,10 +7390,6 @@ async def get_ventas(
                             "move_type",
                             "amount_untaxed_signed_usd",
                             "amount_total_signed_usd",
-                            "amount_total",
-                            "amount_residual",
-                            "currency_id",
-                            "invoice_date",
                         ]
                     },
                 )
@@ -7386,7 +7412,6 @@ async def get_ventas(
                         )
                         if inv_id:
                             invoice_ids_out_invoice.append(inv_id)
-                            invoices_by_so.setdefault(so, []).append(inv)
 
                 # Tarea 3c: descuentos ya materializados en Odoo (lectura, no cálculo).
                 desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
@@ -7399,36 +7424,21 @@ async def get_ventas(
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
 
-        # Fase 7: pagos por orden -- Vinculaciones (fuente teórica, hoy
+        # Fase 9: pagos por orden -- Vinculaciones (fuente teórica, hoy
         # vacía en producción real) tiene precedencia si existe para una
-        # orden; si no, se usa _pagos_odoo_por_orden (migrado de /api/
-        # reporte-saldos, la fuente que SÍ tiene datos reales hoy: lee
-        # directo de Odoo -- account.payment reconciliado, con fallback a
-        # amount_residual de factura). Antes de esto, TODAS las órdenes
-        # salían "sin pagar" en Ventas porque solo se miraba Vinculaciones.
+        # orden; si no, se reusa ``get_live_pagos_conciliados`` (la MISMA
+        # función que ya usa ``/api/cobranza/pagos`` para calcular los
+        # equivalentes USD) en vez de reinventar una conversión propia
+        # contra Odoo -- evita duplicar esa lógica. Antes de esto, TODAS
+        # las órdenes salían "sin pagar" en Ventas porque solo se miraba
+        # Vinculaciones.
         pagos_odoo_map: dict[str, dict[str, Any]] = {}
         if execute:
-            tasas_rows_ventas = _all_serie_tasas_rows(repo)
-            rates_map_ventas: dict[str, float] = {}
-            for r in tasas_rows_ventas:
-                ts = str(r.get("timestamp", ""))[:10]
-                tbcv = r.get("tasa_bcv")
-                if ts and tbcv:
-                    with contextlib.suppress(Exception):
-                        rates_map_ventas[ts] = float(tbcv)
-            last_bcv_val_ventas = (
-                list(rates_map_ventas.values())[-1] if rates_map_ventas else 742.23
-            )
-            ordenes_map_ventas = {o.so_id: o for o in ordenes}
-            pagos_odoo_map = _pagos_odoo_por_orden(
-                execute,
-                invoice_ids_all,
-                inv_id_to_so,
-                invoices_by_so,
-                ordenes_map_ventas,
-                rates_map_ventas,
-                last_bcv_val_ventas,
-            )
+            for so_pagado, monto_usd in _pagos_por_so_desde_cobranza(execute).items():
+                pagos_odoo_map[so_pagado] = {
+                    "abono_bcv": monto_usd,
+                    "abono_binance": monto_usd,
+                }
 
         def _pct(monto: float, base: float) -> float | None:
             return round(monto / base, 4) if base > 0.005 else None
@@ -7443,6 +7453,19 @@ async def get_ventas(
             if pagado > _EPS_PAGO:
                 return "parcial"
             return "sin_pago"
+
+        def _sin_datos_teorico(
+            b_row: Any, bruta: float | None, precio_base: float
+        ) -> bool:
+            # Bandeja inexistente, o existente pero con el teórico de ESTA
+            # lista en 0 mientras el precio base sí se calculó (hueco de
+            # datos -- ej. KeyError silencioso en _teoricos_por_lista por
+            # falta de precio de algún producto en esa lista específica,
+            # ver engine/discounts.py) -- NO es lo mismo que "nada que
+            # pagar" (target real 0).
+            if b_row is None or bruta is None:
+                return True
+            return bruta <= 0.005 and precio_base > 0.005
 
         items = []
         total_alertas = 0
@@ -7575,10 +7598,11 @@ async def get_ventas(
             # Factura" usan la referencia de la lista con la que NACIÓ la
             # orden (BCV si VES o Lista Histórica de Auditoría, Binance si
             # USD); "Teórico VES" siempre BCV, "Teórico USD" siempre Binance.
-            # Fase 7: Vinculaciones (fuente teórica) tiene precedencia si la
+            # Fase 9: Vinculaciones (fuente teórica) tiene precedencia si la
             # orden tiene alguna registrada; si no (caso real hoy: esa
-            # tabla está vacía), se usa lo calculado directo contra Odoo
-            # (_pagos_odoo_por_orden, migrado de /api/reporte-saldos).
+            # tabla está vacía), se usa lo calculado vía
+            # _pagos_por_so_desde_cobranza (reusa get_live_pagos_
+            # conciliados, la misma función de /api/cobranza/pagos).
             vincs_orden = vincs_por_so.get(o.so_id, [])
             if vincs_orden:
                 val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
@@ -7602,15 +7626,25 @@ async def get_ventas(
             else:
                 estatus_pago_real_factura = "sin_factura"
 
+            # Fase 9 -- bug real (S00696 y similares): antes ambos huecos
+            # de datos (sin bandeja, o teórico en 0 con precio base > 0)
+            # caían en "pagada"/"sin_pago" indistinguibles de un estado
+            # real -- ahora "sin_datos" explícito.
             estatus_pago_teorico_ves = (
-                _estado_pago(val_bcv, ves_neta_teorica_iva)
-                if ves_neta_teorica_iva is not None
-                else "sin_pago"
+                "sin_datos"
+                if (
+                    _sin_datos_teorico(b, ves_bruta_teorica, precio_base_calculado)
+                    or ves_neta_teorica_iva is None
+                )
+                else _estado_pago(val_bcv, ves_neta_teorica_iva)
             )
             estatus_pago_teorico_usd = (
-                _estado_pago(val_binance, usd_neta_teorica_iva)
-                if usd_neta_teorica_iva is not None
-                else "sin_pago"
+                "sin_datos"
+                if (
+                    _sin_datos_teorico(b, usd_bruta_teorica, precio_base_calculado)
+                    or usd_neta_teorica_iva is None
+                )
+                else _estado_pago(val_binance, usd_neta_teorica_iva)
             )
 
             if tiene_factura:
@@ -7947,8 +7981,21 @@ async def get_ventas_detalle(so_id: str):
                 )
 
         # --- Real Factura: account.move.line de facturas posted ligadas por
-        # invoice_origin (mismo criterio que el resto del rediseño). ---
+        # invoice_origin (mismo criterio que el resto del rediseño).
+        # Fase 9 -- bug real: facturas en VES (moneda de la compañía)
+        # mostraban price_unit/price_subtotal CRUDOS (en bolívares, ej.
+        # $27,708.03 por una caja de aceite) porque Odoo no expone un
+        # "price_unit en USD" por línea. Se usa la MISMA proporción que ya
+        # calcula Odoo a nivel de factura (amount_total_signed_usd /
+        # amount_total, su propia conversión con la tasa de la fecha de
+        # contabilización) y se aplica a cada línea de esa factura --
+        # evita reinventar una tasa BCV propia que podría no coincidir con
+        # la que Odoo ya usó para el asiento contable. Puede haber MÁS de
+        # una factura por orden (reflejadas todas aquí, agregadas) -- si
+        # una orden fue facturada más de una vez, esto no es un error del
+        # reporte, es un reflejo fiel de Odoo. ---
         lineas_real_factura: list[dict[str, Any]] = []
+        inv_ids: list[int] = []
         if execute:
             try:
                 invs = execute(
@@ -7961,9 +8008,14 @@ async def get_ventas_detalle(so_id: str):
                             ["state", "=", "posted"],
                         ]
                     ],
-                    {"fields": ["id"]},
+                    {"fields": ["id", "amount_total", "amount_total_signed_usd"]},
                 )
                 inv_ids = [i["id"] for i in invs]
+                inv_usd_ratio: dict[int, float] = {}
+                for inv in invs:
+                    tot = float(inv.get("amount_total") or 0)
+                    tot_usd = abs(float(inv.get("amount_total_signed_usd") or 0))
+                    inv_usd_ratio[int(inv["id"])] = (tot_usd / tot) if tot > 0.005 else 1.0
                 if inv_ids:
                     aml = execute(
                         "account.move.line",
@@ -7976,6 +8028,7 @@ async def get_ventas_detalle(so_id: str):
                         ],
                         {
                             "fields": [
+                                "move_id",
                                 "product_id",
                                 "quantity",
                                 "price_unit",
@@ -7988,10 +8041,17 @@ async def get_ventas_detalle(so_id: str):
                         prod_raw_f = line.get("product_id")
                         if not prod_raw_f:
                             continue
+                        move_raw = line.get("move_id")
+                        move_id = (
+                            int(move_raw[0])
+                            if isinstance(move_raw, list | tuple)
+                            else int(move_raw or 0)
+                        )
+                        ratio = inv_usd_ratio.get(move_id, 1.0)
                         qty = float(line.get("quantity") or 0)
-                        price_unit = float(line.get("price_unit") or 0)
+                        price_unit = float(line.get("price_unit") or 0) * ratio
                         disc_pct = float(line.get("discount") or 0)
-                        subtotal = float(line.get("price_subtotal") or 0)
+                        subtotal = float(line.get("price_subtotal") or 0) * ratio
                         litros_unit, litros_tot = _litros(_producto_id(prod_raw_f), qty)
                         lineas_real_factura.append(
                             {
@@ -8091,12 +8151,22 @@ async def get_ventas_detalle(so_id: str):
                     "Error calculando teóricos por línea en get_ventas_detalle: %s", e_motor
                 )
 
-        # --- Pagos (vinculaciones) aplicados a la orden -- para el botón
-        # "Ver Pagos" del modal (Fase 6). ---
+        # --- Pagos aplicados a la orden -- para el botón "Ver Pagos" del
+        # modal. Vinculaciones (fuente teórica) primero; si la orden no
+        # tiene ninguna (caso real hoy: tabla vacía en producción), se
+        # reusa ``get_live_pagos_conciliados`` -- la MISMA función que ya
+        # usa ``/api/cobranza/pagos`` -- filtrando por esta orden, en vez
+        # de reinventar una consulta a account.payment con conversión
+        # propia (esa función ya devuelve el monto conciliado en USD
+        # equivalente, via los mismos campos que usa Cobranza). Antes de
+        # esto, el modal SIEMPRE decía "sin pagos vinculados" para
+        # cualquier orden sin Vinculaciones, aunque sí tuviera pagos reales
+        # en Odoo -- mismo bug de fondo que el estatus de pago (Fase 9). ---
         pagos: list[dict[str, Any]] = []
         for v in repo.vinculaciones_de_orden(so_id):
             pagos.append(
                 {
+                    "fuente": "vinculacion",
                     "vinc_id": v.vinc_id,
                     "pago_id": v.pago_id,
                     "fecha": v.hora_pago_confirmada.isoformat() if v.hora_pago_confirmada else None,
@@ -8119,6 +8189,44 @@ async def get_ventas_detalle(so_id: str):
                     "estado": v.estado.value if hasattr(v.estado, "value") else str(v.estado),
                 }
             )
+
+        if not pagos and execute:
+            try:
+                for pago in get_live_pagos_conciliados(execute):
+                    facturas_orden = [f for f in pago["facturas"] if f.get("so_id") == so_id]
+                    if not facturas_orden:
+                        continue
+                    otras_ordenes = sorted(
+                        {
+                            f["so_id"]
+                            for f in pago["facturas"]
+                            if f.get("so_id") and f["so_id"] != so_id
+                        }
+                    )
+                    estado = "conciliado (Odoo)"
+                    if otras_ordenes:
+                        estado += f" -- también cubre: {', '.join(otras_ordenes)}"
+                    pagos.append(
+                        {
+                            "fuente": "odoo",
+                            "pago_id": pago["pago_id"],
+                            "fecha": pago["fecha_pago"],
+                            # monto_conciliado_usd ya viene en USD (mismo
+                            # cálculo que Cobranza) -- monto TOTAL del pago,
+                            # no prorrateado si cubre varias órdenes (ver
+                            # "estado" arriba para transparencia).
+                            "monto_aplicado": round(pago["monto_conciliado_usd"], 2),
+                            "moneda_abono": "USD (equiv.)",
+                            "tipo_tasa_abono": pago.get("metodo_pago") or "",
+                            "confirmado_por": "",
+                            "estado": estado,
+                        }
+                    )
+            except Exception as e_pay:
+                logger.warning(
+                    "Error leyendo get_live_pagos_conciliados en get_ventas_detalle: %s", e_pay
+                )
+
         pagos.sort(key=lambda p: p["fecha"] or "")
 
         return {
