@@ -280,3 +280,167 @@ def test_detalle_orden_inexistente_da_404() -> None:
     with patch("cxc.web.app.get_repo", return_value=mock_repo):
         res = client.get("/api/ventas/SO_NO_EXISTE/detalle")
     assert res.status_code == 404
+
+
+def _fake_execute_factura_ves(model, method, args, kwargs=None):
+    """Bug real (S00017): factura en VES -- price_unit/price_subtotal
+
+    vienen en bolívares crudos; el fix debe convertirlos a USD usando la
+    MISMA proporción que ya calculó Odoo a nivel de factura
+    (amount_total_signed_usd / amount_total)."""
+    if model == "product.pricelist":
+        return [{"id": 4, "name": "USD"}, {"id": 5, "name": "BCV"}]
+    if model == "product.pricelist.item":
+        return []
+    if model == "sale.order.line":
+        return [
+            {
+                "product_id": [101, "Producto Sinoco"],
+                "product_uom_qty": 1.0,
+                "price_unit": 100.0,
+                "discount": 0.0,
+                "price_subtotal": 100.0,
+            }
+        ]
+    if model == "account.move":
+        # amount_total=47455.08 VES, amount_total_signed_usd=99.99 ->
+        # ratio ~= 0.0021075...
+        return [
+            {
+                "id": 1475,
+                "name": "00000029",
+                "amount_total": 47455.08,
+                "amount_total_signed_usd": 99.99,
+                "amount_residual": 0.0,
+            }
+        ]
+    if model == "account.move.line":
+        return [
+            {
+                "move_id": 1475,
+                "product_id": [101, "Producto Sinoco"],
+                "quantity": 1.0,
+                "price_unit": 27708.028582,
+                "discount": 0.0,
+                "price_subtotal": 27708.03,
+            }
+        ]
+    return []
+
+
+def test_detalle_real_factura_convierte_ves_a_usd_con_ratio_de_la_factura() -> None:
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_factura_ves),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200
+        data = res.json()
+
+    lineas = data["real_factura"]["lineas"]
+    assert len(lineas) == 1
+    linea = lineas[0]
+    # ratio = 99.99 / 47455.08 ~= 0.0021075; 27708.028582 * ratio ~= 58.4
+    ratio = 99.99 / 47455.08
+    assert linea["precio_unitario"] == round(27708.028582 * ratio, 2)
+    assert linea["precio_unitario"] < 100.0  # NUNCA en miles/bolívares crudos
+    assert linea["subtotal"] == round(27708.03 * ratio, 2)
+
+
+def test_detalle_pagos_usa_account_payment_directo_si_no_hay_vinculaciones() -> None:
+    """Fase 9 -- bug real (S00696): el modal "Ver Pagos" decía "sin pagos
+
+    vinculados" para CUALQUIER orden sin Vinculaciones, aunque tuviera
+    pagos reales reconciliados en Odoo (account.payment)."""
+
+    def _fake_execute_pago_odoo(model, method, args, kwargs=None):
+        if model == "product.pricelist":
+            return [{"id": 4, "name": "USD"}, {"id": 5, "name": "BCV"}]
+        if model == "sale.order.line":
+            return []
+        if model == "account.move" and method == "search_read":
+            # Consulta de get_ventas_detalle para "Real Factura".
+            return [
+                {
+                    "id": 950,
+                    "amount_total": 100.0,
+                    "amount_total_signed_usd": 100.0,
+                }
+            ]
+        if model == "account.move" and method == "read":
+            # Consulta de get_live_pagos_conciliados (Cobranza) para las
+            # facturas reconciliadas por el pago.
+            return [
+                {
+                    "id": 950,
+                    "name": "00000950",
+                    "invoice_origin": "SO_DETALLE",
+                    "move_type": "out_invoice",
+                    "state": "posted",
+                    "amount_total_signed_usd": 100.0,
+                    "amount_residual_usd": 0.0,
+                }
+            ]
+        if model == "account.move.line":
+            return []
+        if model == "account.payment":
+            return [
+                {
+                    "id": 1,
+                    "partner_id": False,
+                    "amount": 943654.4,
+                    "amount_ref": 100.0,
+                    "amount_available_for_refund": 0.0,
+                    "currency_id": [166, "VES"],
+                    "journal_id": [30, "Banco Bancamiga"],
+                    "date": "2026-07-21",
+                    "reconciled_invoice_ids": [950],
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_pago_odoo),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200
+        data = res.json()
+
+    assert len(data["pagos"]) == 1
+    pago = data["pagos"][0]
+    assert pago["fuente"] == "odoo"
+    # monto_conciliado_usd = amount_ref - amount_available_for_refund =
+    # 100.0 - 0.0 = 100.0 -- ya en USD equivalente (mismo cálculo que usa
+    # Cobranza), NO el monto crudo en VES (943654.4).
+    assert pago["monto_aplicado"] == 100.0
+    assert pago["moneda_abono"] == "USD (equiv.)"
+    assert pago["tipo_tasa_abono"] == "Banco Bancamiga"

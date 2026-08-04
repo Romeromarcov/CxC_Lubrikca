@@ -1518,6 +1518,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     parcial: ['#fef3c7', '#b45309', '~ Parcial'],
                     sin_pago: ['#fee2e2', '#991b1b', '✗ Sin pago'],
                     sin_factura: ['#f1f5f9', '#64748b', '— Sin factura'],
+                    sin_datos: ['#e0e7ff', '#4338ca', '? Sin datos teóricos'],
                 };
                 const [bg, fg, label] = map[estado] || ['#f1f5f9', '#64748b', estado || '—'];
                 return `<span class="state-badge" style="background:${bg};color:${fg};font-weight:600;">${label}</span>`;
@@ -1710,6 +1711,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
         const fmtTasa = (val) => val != null ? new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(val) : '—';
+        // monto_aplicado viene en la moneda ORIGINAL del abono para
+        // Vinculaciones (VES o USD, según moneda_abono) y ya en USD
+        // equivalente para pagos de fuente "odoo" ("USD (equiv.)",
+        // reusando get_live_pagos_conciliados de Cobranza) -- NUNCA asumir
+        // USD ciegamente (bug real: mostraba montos VES con el símbolo $,
+        // ej. "$943,654.40" para un pago que en realidad era Bs.
+        // 943.654,40).
+        const fmtMonto = (val, moneda) => {
+            const num = new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
+            return (moneda || '').toUpperCase().startsWith('USD') ? `$${num}` : `${num} ${moneda || ''}`;
+        };
+        const fuenteBadge = (f) => f === 'odoo'
+            ? '<span class="state-badge" style="background:#e0f2fe;color:#0369a1;">Odoo directo</span>'
+            : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Vinculación</span>';
 
         try {
             const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
@@ -1725,9 +1740,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             const rows = pagos.map(p => `
                 <tr>
+                    <td>${fuenteBadge(p.fuente)}</td>
                     <td>${p.pago_id}</td>
-                    <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ')}</small></td>
-                    <td style="text-align:right"><strong>${fmt(p.monto_aplicado)}</strong> ${p.moneda_abono || ''}</td>
+                    <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ') || '—'}</small></td>
+                    <td style="text-align:right"><strong>${fmtMonto(p.monto_aplicado, p.moneda_abono)}</strong></td>
                     <td>${p.tipo_tasa_abono || '—'}</td>
                     <td style="text-align:right">${fmtTasa(p.tasa_bcv_aplicada)}</td>
                     <td style="text-align:right">${fmtTasa(p.tasa_binance_aplicada)}</td>
@@ -1737,12 +1753,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td><small>${p.estado || '—'}</small></td>
                 </tr>
             `).join('');
-            const totalAplicado = pagos.reduce((acc, p) => acc + (p.monto_aplicado || 0), 0);
             body.innerHTML = `
+                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD).</p>
                 <div style="overflow-x:auto;">
                     <table class="cxc-table">
                         <thead>
                             <tr>
+                                <th>Fuente</th>
                                 <th>Pago</th>
                                 <th>Fecha</th>
                                 <th style="text-align:right">Monto Aplicado</th>
@@ -1757,9 +1774,6 @@ document.addEventListener("DOMContentLoaded", () => {
                         </thead>
                         <tbody>${rows}</tbody>
                     </table>
-                </div>
-                <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
-                    <div>Total aplicado: <strong style="font-size:1.05rem;">${fmt(totalAplicado)}</strong></div>
                 </div>
             `;
         } catch (err) {

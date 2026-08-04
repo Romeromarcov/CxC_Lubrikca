@@ -435,8 +435,27 @@ def test_estatus_pago_sin_pago_y_sin_factura() -> None:
     by_so = _run_get_ventas()
     ok = by_so["SO_OK"]
     assert ok["estatus_pago_real_orden"] == "sin_pago"
-    assert ok["estatus_pago_teorico_ves"] in ("sin_pago", "pagada")
-    assert ok["estatus_pago_teorico_usd"] in ("sin_pago", "pagada")
+    # SO_OK tiene teorico_lista_ves/_usd explícitos y no nulos (120/100,
+    # ver fixture) -- sin pagos, el estado real es "sin_pago", determinista.
+    assert ok["estatus_pago_teorico_ves"] == "sin_pago"
+    assert ok["estatus_pago_teorico_usd"] == "sin_pago"
+
+
+def test_estatus_pago_teorico_sin_datos_si_bandeja_no_calculo_ese_teorico() -> None:
+    """Fase 9 -- bug real (S00696): BandejaFacturacion puede existir con
+
+    precio_base_calculado > 0 (el cálculo real SÍ corrió) pero su teórico
+    VES/USD en 0 (hueco de datos, ej. KeyError silencioso por falta de
+    precio de algún producto en esa lista específica) -- eso NO es "nada
+    que pagar", es "no sabemos" -- debe ser "sin_datos", nunca "pagada"
+    (antes el piso target<=EPS de _estado_pago lo marcaba "pagada" sin
+    importar el pago real, aunque la orden tuviera saldo pendiente real)."""
+    by_so = _run_get_ventas()
+    nd = by_so["SO_ND"]
+    # SO_ND: precio_base_calculado=90 (bandeja real), pero sin
+    # teorico_lista_ves/_usd explícitos en el fixture -> quedan en 0.
+    assert nd["estatus_pago_teorico_ves"] == "sin_datos"
+    assert nd["estatus_pago_teorico_usd"] == "sin_datos"
 
 
 def test_estatus_pago_real_factura_descuenta_descuento_de_sistema() -> None:
