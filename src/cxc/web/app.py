@@ -7419,6 +7419,23 @@ async def get_ventas(
             nombre = pricelist_name_map.get(str(lista_id))
             return f"#{lista_id} - {nombre}" if nombre else f"#{lista_id}"
 
+        _HISTORICA_TXT = "Lista Histórica de Auditoría (Euro, ref. VES)"
+
+        def _lista_label_hist(lista_id: str | None, es_historica: bool) -> str | None:
+            # Tarea "lista histórica": para las órdenes de la ventana
+            # histórica (20-Feb a 12-Mar-2026, o sin lista de precios
+            # asignada -- ver ``historical_pricing.es_orden_historica``), el
+            # precio VES real usado por el motor viene de esta lista de
+            # respaldo, no de la pricelist normal (que puede estar vacía o
+            # ser irrelevante para esa orden). Antes esto quedaba invisible
+            # en Ventas cuando la orden no tenía ``lista_precios`` asignada
+            # (el campo salía en blanco, sin explicar por qué el teórico VES
+            # sí tenía un valor).
+            base = _lista_label(lista_id)
+            if not es_historica:
+                return base
+            return f"{base} + {_HISTORICA_TXT}" if base else _HISTORICA_TXT
+
         so_states_map: dict[str, str] = {}
         so_untaxed_map: dict[str, float] = {}
         entrega_valida_set: set[str] = set()
@@ -7779,10 +7796,10 @@ async def get_ventas(
                     # reselección según método de pago -- ver docstring del
                     # endpoint). Id crudo + "#id - Nombre" para mostrar.
                     "lista_nacimiento": o.lista_precios,
-                    "lista_nacimiento_label": _lista_label(o.lista_precios),
+                    "lista_nacimiento_label": _lista_label_hist(o.lista_precios, es_historica_o),
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
-                    "lista_aplicada_label": _lista_label(
-                        b.lista_aplicada if b else o.lista_precios
+                    "lista_aplicada_label": _lista_label_hist(
+                        b.lista_aplicada if b else o.lista_precios, es_historica_o
                     ),
                     # Tarea 2: comparación explícita por lista (VES/USD), cada
                     # una con su bruta/neta y su "+ impuestos" -- reemplaza

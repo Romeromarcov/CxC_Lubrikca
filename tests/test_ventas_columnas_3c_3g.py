@@ -680,3 +680,92 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
     assert "Entrega de más" in by_so["SO_ENTREGA_MAS"]["revisar_motivo"]
     assert "cancelada" in by_so["SO_CANCELADA_SIN_DEV"]["revisar_motivo"].lower()
     assert by_so["SO_LIMPIA"]["revisar_motivo"] is None
+
+
+def test_lista_aplicada_label_indica_lista_historica_para_ordenes_de_la_ventana() -> None:
+    """Órdenes anteriores a S00092/13-3-2026 (o sin lista de precios
+
+    asignada) usan la Lista Histórica de Auditoría (Euro) para el cálculo
+    VES -- antes esto quedaba invisible en "lista aplicada" cuando la orden
+    no tenía ``lista_precios`` asignada (label salía en blanco)."""
+
+    def _fake_execute_hist(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_HIST_SIN_LISTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_HIST_CON_LISTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_NO_HIST", "state": "sale", "amount_untaxed": 100.0},
+            ]
+        if model == "product.pricelist":
+            return [{"id": 3, "name": "USD"}]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        # Sin lista asignada -- histórica INCONDICIONAL (cualquier fecha).
+        OrdenVenta(
+            so_id="SO_HIST_SIN_LISTA",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 5),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        # Con lista asignada pero fecha dentro de la ventana histórica.
+        OrdenVenta(
+            so_id="SO_HIST_CON_LISTA",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="3",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        # Fuera de la ventana -- como S00092 (13-3-2026 en adelante).
+        OrdenVenta(
+            so_id="SO_NO_HIST",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 13),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="3",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_hist),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_SIN_LISTA"]["lista_aplicada_label"]
+    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
+    # Con lista asignada, el label combina el id/nombre real + la nota histórica.
+    assert "#3" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
+    assert "Lista Histórica de Auditoría" not in (by_so["SO_NO_HIST"]["lista_aplicada_label"] or "")
