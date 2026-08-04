@@ -492,8 +492,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         else:
                             recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
 
-                for best_r in reglas_recompra_subtotal.values():
-                    recompra_monto += precio_base * best_r.porcentaje
+                for regla_subtotal in reglas_recompra_subtotal.values():
+                    recompra_monto += precio_base * regla_subtotal.porcentaje
 
                 if recompra_monto > 0:
                     pct_recompra = recompra_monto
@@ -543,8 +543,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 else:
                     contado_proy += _precio_linea(inp, ln, lista) * d.porcentaje
 
-        for d in reglas_contado_subtotal.values():
-            contado_proy += precio_base * d.porcentaje
+        for regla_subtotal in reglas_contado_subtotal.values():
+            contado_proy += precio_base * regla_subtotal.porcentaje
 
     # (d) Descuento por Volumen (Litros o Unidades/Cajas)
     litros_por_mc: dict[tuple[str, str], Decimal] = {}
@@ -599,8 +599,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 volumen_desc += subt * regla_vol.porcentaje
                 detalles_vol.append(tag)
 
-    for regla_vol, tag in reglas_vol_subtotal.values():
-        volumen_desc += precio_base * regla_vol.porcentaje
+    for regla_subtotal, tag in reglas_vol_subtotal.values():
+        volumen_desc += precio_base * regla_subtotal.porcentaje
         detalles_vol.append(tag)
 
     if volumen_desc > 0:
