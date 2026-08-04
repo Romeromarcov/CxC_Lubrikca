@@ -813,6 +813,27 @@
             </div>
         </div>
 
+        <!-- Modal de detalle de orden (Fase 5 -- líneas de producto por modo) -->
+        <div id="modal-detalle-orden" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+            <div class="card" style="max-width:900px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                    <h2 style="margin:0;" id="modal-detalle-orden-titulo">Detalle de Orden</h2>
+                    <button class="btn btn-secondary" onclick="cerrarModalDetalleOrden()" style="padding:0.3rem 0.7rem;">✕</button>
+                </div>
+                <p id="modal-detalle-orden-subtitulo" style="margin:0 0 1rem 0; color:#64748b; font-size:0.85rem;"></p>
+                <div style="margin-bottom:1rem;">
+                    <label for="modal-detalle-orden-modo" style="font-size:0.85rem; font-weight:600; margin-right:0.5rem;">Modo:</label>
+                    <select id="modal-detalle-orden-modo" style="padding:0.4rem 0.7rem; border-radius:8px; border:1px solid hsl(var(--border-card)); font-family:inherit; font-size:0.85rem;">
+                        <option value="real_orden">Real Orden</option>
+                        <option value="real_factura">Real Factura</option>
+                        <option value="teorico_ves">Teórico VES</option>
+                        <option value="teorico_usd">Teórico USD</option>
+                    </select>
+                </div>
+                <div id="modal-detalle-orden-body"></div>
+            </div>
+        </div>
+
         <!-- PESTAÑA: VENTAS (teórico vs real, por orden) -->
         <div id="tab-ventas" class="tab-panel">
             <div class="ventas-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -885,30 +906,37 @@
                                     <th title="Teórica Bruta VES + IVA">Teórica Bruta VES + Imp.</th>
                                     <th title="Teórica Bruta VES menos los descuentos que calcula el motor para esa lista">Teórica Neta VES</th>
                                     <th title="Teórica Neta VES + IVA (+ IGTF si aplica)">Teórica Neta VES + Imp.</th>
+                                    <th title="Equivalente pagado a referencia BCV (SIEMPRE) vs. Teórica Neta VES + Imp.">Estatus Pago Teórico VES</th>
                                     <th title="Precio de lista USD vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta USD</th>
                                     <th title="Teórica Bruta USD + IVA">Teórica Bruta USD + Imp.</th>
                                     <th title="Teórica Bruta USD menos los descuentos que calcula el motor para esa lista">Teórica Neta USD</th>
                                     <th title="Teórica Neta USD + IVA (+ IGTF si aplica)">Teórica Neta USD + Imp.</th>
+                                    <th title="Equivalente pagado a referencia Binance (SIEMPRE) vs. Teórica Neta USD + Imp.">Estatus Pago Teórico USD</th>
                                     <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
+                                    <th title="Descuento que Odoo ya tiene aplicado en la orden (líneas) -- monto y %">Desc. Aplicado (Orden)</th>
                                     <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
+                                    <th title="Equivalente pagado (BCV si nació en VES/Lista Histórica, Binance si USD) vs. Venta Neta Real menos Desc. Sistema">Estatus Pago (Real Orden)</th>
                                     <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
+                                    <th title="Descuento que Odoo ya tiene aplicado en la factura -- monto y %">Desc. Aplicado (Factura)</th>
                                     <th title="Suma de facturas posted, con impuestos">Facturado con Imp.</th>
                                     <th title="Notas de Crédito aplicadas a la(s) factura(s) de esta orden">N/C Aplicada</th>
                                     <th title="Notas de Débito aplicadas a la(s) factura(s) de esta orden">N/D Aplicada</th>
                                     <th title="Facturado con impuestos, menos Notas de Crédito, más Notas de Débito">Facturado Neto</th>
-                                    <th title="Descuento que Odoo ya tiene aplicado en la orden (líneas)">Desc. Aplicado (Orden)</th>
-                                    <th title="Descuento que Odoo ya tiene aplicado en la factura">Desc. Aplicado (Factura)</th>
-                                    <th title="Total de descuentos que dictamina el motor (BandejaFacturacion) -- referencia para validar lo de Odoo">Desc. Motor</th>
+                                    <th title="Equivalente pagado (BCV/Binance según lista de nacimiento) vs. Facturado Neto menos Desc. Sistema -- 'sin_factura' si aún no hay factura">Estatus Pago (Real Factura)</th>
                                     <th title="¿El descuento de la orden en Odoo coincide con lo que dictamina el motor?">Validación Orden</th>
                                     <th title="¿El descuento de la factura en Odoo coincide con lo que dictamina el motor?">Validación Factura</th>
-                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo">Desc. Pendiente</th>
+                                    <th title="Total de descuentos que dictamina el motor (BandejaFacturacion) -- monto y %, referencia para validar lo de Odoo">Desc. Motor</th>
+                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo -- monto y %">Desc. Pendiente</th>
+                                    <th title="Descuento aprobado manualmente desde la Bandeja 1 de Facturación (nunca se escribe a Odoo, solo ajusta el saldo interno de CxC) -- monto y %">Desc. Sistema</th>
+                                    <th title="Facturado Neto (u orden neta real si no facturada) menos Desc. Sistema -- target real de CxC para efectos internos">Saldo Pendiente CxC</th>
                                     <th title="Venta teórica (según la lista aplicada) + IVA − Facturado Neto">Diferencia</th>
                                     <th title="Facturado Neto por debajo de la Venta Neta Teórica + Impuestos en una orden ya facturada">Alerta</th>
+                                    <th>Detalle</th>
                                 </tr>
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="23" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="36" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1368,6 +1396,21 @@
                             </div>
                         </div>
 
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-rec-requiere-pago-previo"> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
+                                <select id="cfg-rec-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <button type="submit" class="btn-primary">Registrar Regla Recompra</button>
                     </form>
 
@@ -1473,6 +1516,21 @@
                             <div class="form-group" style="flex:1">
                                 <label>Fecha Finalización</label>
                                 <input type="date" id="cfg-pp-hasta">
+                            </div>
+                        </div>
+
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-pp-requiere-pago-previo" checked> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
+                                <select id="cfg-pp-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
                             </div>
                         </div>
 
@@ -1584,6 +1642,20 @@
                             <div class="form-group" style="flex:1">
                                 <label>Fecha de Finalización</label>
                                 <input type="date" id="cfg-desc-vol-hasta">
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-desc-vol-requiere-pago-previo"> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
+                                <select id="cfg-desc-vol-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
                             </div>
                         </div>
                         <button type="submit" class="btn-primary">Registrar Regla de Volumen</button>
@@ -1716,6 +1788,21 @@
                             </div>
                         </div>
 
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-promo-requiere-pago-previo"> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
+                                <select id="cfg-promo-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <button type="submit" class="btn-primary">Registrar Regla de Obsequio / Promoción</button>
                     </form>
 
@@ -1827,6 +1914,20 @@
                             </div>
                         </div>
 
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-prod-requiere-pago-previo"> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
+                                <select id="cfg-prod-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
+                            </div>
+                        </div>
                         <button type="submit" class="btn-primary">Registrar Promoción Producto</button>
                     </form>
 
@@ -1951,6 +2052,20 @@
                             </div>
                         </div>
 
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
+                                    <input type="checkbox" id="cfg-dif-requiere-pago-previo" checked> Requiere pago previo
+                                </label>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="No aplica para este tipo de descuento (se calcula por abono, no por línea) -- se guarda por consistencia de esquema">Aplica a</label>
+                                <select id="cfg-dif-aplica-a">
+                                    <option value="linea" selected>Línea de producto</option>
+                                    <option value="subtotal">Subtotal de la orden</option>
+                                </select>
+                            </div>
+                        </div>
                         <button type="submit" class="btn-primary">Registrar Regla Diferencial</button>
                     </form>
 

@@ -670,6 +670,156 @@ def test_descuento_por_volumen_unidades_cajas() -> None:
     assert res2.total_descuentos == Decimal("0.00")
 
 
+def test_descuento_volumen_aplica_a_subtotal() -> None:
+    """Con aplica_a="subtotal", el % se calcula sobre TODO precio_base de la
+
+    orden, no solo sobre el subtotal del grupo marca/categoría que matcheó.
+    """
+    orden = b.orden(primera=False)
+    linea_sinoco = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="10", precio="100"
+    )
+    linea_otra = b.linea(
+        producto="P2", marca="GlobalOil", categoria="Industrial", cantidad="5", precio="100"
+    )
+
+    resolver = _resolver(
+        **{"P1@USD": "100", "P1@BCV": "100", "P2@USD": "100", "P2@BCV": "100"}
+    )
+    resolver.set_volumen("P1", Decimal("25.0"))  # 10 * 25 L = 250 L
+    resolver.set_volumen("P2", Decimal("1.0"))
+
+    from cxc.models import DescuentoVolumen
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_SUBTOTAL_1",
+        marca="Sinoco",
+        categoria="Comercial",
+        litros_minimo=Decimal("200"),
+        porcentaje=Decimal("0.05"),
+        activo=True,
+        aplica_a="subtotal",
+    )
+
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_sinoco, linea_otra],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+    )
+    res = calcular_factura(inp)
+
+    # precio_base total = 1000 (Sinoco) + 500 (GlobalOil) = 1500
+    # Modo subtotal: descuento = 1500 * 0.05 = 75, NO 1000 * 0.05 = 50
+    assert res.total_descuentos == Decimal("75.00")
+    assert res.total_motor == Decimal("1425.00")
+
+
+def test_descuento_volumen_subtotal_no_duplica_entre_grupos() -> None:
+    """Una regla marca="*" en modo subtotal que matchea 2 grupos distintos
+
+    (marca/categoría) debe aplicarse UNA sola vez sobre precio_base, no una
+    vez por cada grupo que matchea.
+    """
+    orden = b.orden(primera=False)
+    linea_a = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="10", precio="100"
+    )
+    linea_b = b.linea(
+        producto="P2", marca="GlobalOil", categoria="Industrial", cantidad="10", precio="100"
+    )
+
+    resolver = _resolver(
+        **{"P1@USD": "100", "P1@BCV": "100", "P2@USD": "100", "P2@BCV": "100"}
+    )
+    resolver.set_volumen("P1", Decimal("25.0"))  # 250 L
+    resolver.set_volumen("P2", Decimal("25.0"))  # 250 L
+
+    from cxc.models import DescuentoVolumen
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_WILDCARD",
+        marca="*",
+        categoria="*",
+        litros_minimo=Decimal("200"),
+        porcentaje=Decimal("0.05"),
+        activo=True,
+        aplica_a="subtotal",
+    )
+
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_a, linea_b],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+    )
+    res = calcular_factura(inp)
+
+    # precio_base = 2000; la misma regla matchea ambos grupos pero solo debe
+    # descontar 2000 * 0.05 = 100 una sola vez, NO 200 (doble conteo).
+    assert res.total_descuentos == Decimal("100.00")
+    assert res.total_motor == Decimal("1900.00")
+
+
+def test_recompra_aplica_a_subtotal_deduplica_por_regla() -> None:
+    """DescuentoRecompra con aplica_a="subtotal": el % se aplica sobre TODO
+
+    precio_base una sola vez, aunque varias líneas de distinta marca/
+    categoría matcheen la misma regla comodín.
+    """
+    from cxc.models import DescuentoRecompra
+
+    orden = b.orden(primera=False, fecha=date(2026, 6, 5))
+    orden.so_id = "SO_SUBTOTAL_REC"
+    orden.cliente_id = "C_SUBTOTAL"
+
+    linea_a = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="3", precio="100"
+    )
+    linea_b = b.linea(
+        producto="P2", marca="GlobalOil", categoria="Industrial", cantidad="3", precio="100"
+    )
+
+    regla = DescuentoRecompra(
+        regla_id="REC_SUBTOTAL",
+        marca="*",
+        categoria="*",
+        min_cajas=1,
+        max_cajas=999,
+        porcentaje=Decimal("0.05"),
+        aplica_a="subtotal",
+    )
+
+    inp = EngineInputs(
+        orden=orden,
+        lineas=[linea_a, linea_b],
+        abonos=[],
+        descuentos=[],
+        descuentos_volumen=[],
+        reglas_recurrencia=[],
+        descuento_bcv_diario=[],
+        promociones_primera_compra=[],
+        feriados_tabla=[],
+        price_resolver=_resolver(
+            **{"P1@USD": "100", "P1@BCV": "100", "P2@USD": "100", "P2@BCV": "100"}
+        ),
+        engine_config=CFG,
+        fecha_calculo=date(2026, 6, 8),
+        all_ordenes=[orden],
+        descuentos_recompra=[regla],
+    )
+    res = calcular_factura(inp)
+
+    # precio_base = 600; ambas líneas matchean la misma regla comodín pero
+    # el % solo debe aplicarse una vez: 600 * 0.05 = 30, NO 60.
+    recompra_d = [d for d in res.descuentos_detalle if d.origen == "recurrencia"]
+    assert len(recompra_d) == 1
+    assert recompra_d[0].monto == Decimal("30.00")
+    assert res.total_descuentos == Decimal("30.00")
+
+
 def test_recompra_aplica_solo_primera_compra_del_mes() -> None:
     # First purchase in month should get recompra, subsequent one should not
     orden1 = b.orden(primera=False, fecha=date(2026, 6, 5))
@@ -1128,3 +1278,40 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
     runner.run_all(date.today())
     assert "SO_ACTIVE" in called
     assert "SO_CANCEL" not in called
+
+
+def test_lineas_con_precio_resuelve_por_linea_para_lista_dada() -> None:
+    """Fase 5 (modal de detalle): lineas_con_precio devuelve una fila por
+
+    línea con el precio unitario resuelto para la lista pedida, sin agregar
+    -- reusa la misma resolución de precio que el motor usa para totales."""
+    from cxc.engine.discounts import lineas_con_precio
+
+    orden = b.orden(primera=False)
+    linea1 = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="3", precio="100"
+    )
+    linea2 = b.linea(
+        producto="P2", marca="GlobalOil", categoria="Industrial", cantidad="2", precio="50"
+    )
+
+    resolver = _resolver(
+        **{
+            "P1@USD": "100", "P1@BCV": "90",
+            "P2@USD": "50", "P2@BCV": "45",
+        }
+    )
+
+    inp = _inputs(orden=orden, lineas=[linea1, linea2], abonos=[], resolver=resolver)
+
+    filas_usd = lineas_con_precio(inp, "USD")
+    assert len(filas_usd) == 2
+    assert filas_usd[0]["producto"] == "P1"
+    assert filas_usd[0]["precio_unitario"] == Decimal("100")
+    assert filas_usd[0]["cantidad"] == Decimal("3")
+    assert filas_usd[0]["subtotal"] == Decimal("300")
+    assert filas_usd[1]["subtotal"] == Decimal("100")
+
+    filas_bcv = lineas_con_precio(inp, "BCV")
+    assert filas_bcv[0]["precio_unitario"] == Decimal("90")
+    assert filas_bcv[0]["subtotal"] == Decimal("270")

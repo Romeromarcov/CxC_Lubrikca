@@ -231,6 +231,9 @@ class DescuentoProntoPago:
     # Pronto pago solo tiene sentido si ya existe al menos un abono
     # vinculado a la orden/factura (ver EngineInputs.abonos).
     requiere_pago_previo: bool = True
+    # "linea" (% solo sobre las líneas que hacen match) o "subtotal" (mismo %
+    # sobre el subtotal completo de la orden) -- ver engine/discounts.py.
+    aplica_a: str = "linea"
 
 
 # Legacy Alias for backward compatibility
@@ -257,6 +260,7 @@ class DescuentoVolumen:
     activo: bool = True
     # Descuento por volumen depende de la cantidad de la orden, no de pagos.
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 # --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
@@ -268,6 +272,9 @@ class DescuentoBCVCompleto:
     activo: bool = True
     # Diferencial cambiario: se calcula por abono, requiere pago previo.
     requiere_pago_previo: bool = True
+    # No cambia el cálculo (BCV-completo no es por línea) -- se guarda por
+    # consistencia de esquema con el resto de tablas de reglas.
+    aplica_a: str = "linea"
 
 
 # --- 3.7c PromocionPrimeraCompra (configurable, effective dating) -----------
@@ -295,6 +302,9 @@ class PromocionPrimeraCompra:
     activo: bool = True
     # Promoción de primera compra depende del historial del cliente, no de pagos.
     requiere_pago_previo: bool = False
+    # No cambia el cálculo (ya opera sobre "todas las líneas" o solo
+    # Industrial según otra lógica) -- se guarda por consistencia de esquema.
+    aplica_a: str = "linea"
 
 
 # --- 3.7d DescuentoRecompra (configurable, recompra/recurrencia) -----------
@@ -318,6 +328,7 @@ class DescuentoRecompra:
     activo: bool = True
     # Recompra depende del historial de compras del cliente, no de pagos.
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 # --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------
@@ -361,6 +372,7 @@ class DescuentoProducto:
     activo: bool = True
     # Descuento por producto depende del producto/orden, no de pagos.
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 # --- 3.7f DescuentoDiferencialCambiario (configurable, diferencial camb) ----
@@ -387,6 +399,9 @@ class DescuentoDiferencialCambiario:
     # Diferencial cambiario: por definición se calcula sobre un abono ya
     # vinculado (tasa del abono), requiere pago previo.
     requiere_pago_previo: bool = True
+    # No cambia el cálculo (se calcula por abono, no por línea) -- se guarda
+    # por consistencia de esquema.
+    aplica_a: str = "linea"
 
 
 # --- 3.8 ReglasRecurrencia (configurable, effective dating) ------------------
@@ -400,6 +415,7 @@ class ReglaRecurrencia:
     activo: bool = True
     # Legado: recurrencia por historial, no depende de pagos.
     requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
 
 
 # --- 3.8b Feriados (configurable) -------------------------------------------

@@ -30,6 +30,7 @@ from cxc.models import (
     ExclusionRegla,
     Feriado,
     Moneda,
+    OrdenVenta,
     Pago,
     PromocionPrimeraCompra,
     TipoBeneficio,
@@ -339,6 +340,71 @@ def test_pagos_huerfanos_cerrados_upsert_y_lectura(repo: Repository) -> None:
     rows = repo.all_pagos_huerfanos_cerrados()
     assert len(rows) == 1
     assert rows[0]["pago_id"] == "PG_HUERFANO"
+
+
+# --- Descuentos de sistema aprobados (Bandeja 1 de Facturación) ---------------
+
+
+def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None:
+    # so_id tiene FK a ordenes_venta, que a su vez tiene FK a clientes --
+    # se necesitan ambos padres primero.
+    repo.upsert_clientes(
+        [
+            Cliente(
+                cliente_id="CLI_DESC_SISTEMA",
+                nombre="Cliente Desc Sistema",
+                vendedor_email="ana@lubrikca.com",
+            )
+        ]
+    )
+    repo.upsert_ordenes(
+        [
+            OrdenVenta(
+                so_id="SO_DESC_SISTEMA",
+                cliente_id="CLI_DESC_SISTEMA",
+                fecha=date(2026, 1, 1),
+                fecha_entrega=None,
+                monto_total=Decimal("100.00"),
+                lista_precios="4",
+                vendedor_email="ana@lubrikca.com",
+                es_primera_compra=False,
+            )
+        ]
+    )
+    assert repo.all_descuentos_sistema_aprobados() == []
+    repo.upsert_descuento_sistema_aprobado(
+        {
+            "so_id": "SO_DESC_SISTEMA",
+            "monto": "10.00",
+            "motivo": "Ajuste comercial",
+            "aprobado_por": "admin@lubrikca.com",
+            "timestamp_aprobacion": datetime(2026, 1, 1, 10, 0).isoformat(),
+            "activo": "true",
+        }
+    )
+    rows = repo.all_descuentos_sistema_aprobados()
+    assert len(rows) == 1
+    assert rows[0]["so_id"] == "SO_DESC_SISTEMA"
+    # MONEY en Postgres devuelve "10.0000" (4 decimales); InMemory conserva
+    # el string tal cual se guardo -- comparar via Decimal para ambos.
+    assert Decimal(rows[0]["monto"]) == Decimal("10.00")
+    assert rows[0]["activo"] == "true"
+
+    # Upsert por PK natural (so_id) actualiza en vez de duplicar, y permite
+    # "revocar" sin perder el registro (activo=false).
+    repo.upsert_descuento_sistema_aprobado(
+        {
+            "so_id": "SO_DESC_SISTEMA",
+            "monto": "10.00",
+            "motivo": "Ajuste comercial",
+            "aprobado_por": "admin@lubrikca.com",
+            "timestamp_aprobacion": datetime(2026, 1, 1, 10, 0).isoformat(),
+            "activo": "false",
+        }
+    )
+    rows2 = repo.all_descuentos_sistema_aprobados()
+    assert len(rows2) == 1
+    assert rows2[0]["activo"] == "false"
 
 
 # --- Listas de precios históricas (solo lectura) ------------------------------

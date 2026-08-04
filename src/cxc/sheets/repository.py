@@ -363,6 +363,12 @@ class SheetsRepository(Repository):
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
         self._g.upsert_row("PagosHuerfanosCerrados", "pago_id", row)
 
+    def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
+        return self._g.read_rows("DescuentosSistemaAprobados")
+
+    def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None:
+        self._g.upsert_row("DescuentosSistemaAprobados", "so_id", row)
+
     def feriados(self) -> list[Feriado]:
         return [serde.feriado_from_row(r) for r in self._g.read_rows(g.T_FERIADOS)]
 

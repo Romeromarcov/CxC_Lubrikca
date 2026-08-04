@@ -247,6 +247,17 @@ class Repository(ABC):
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None: ...
 
     @abstractmethod
+    def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
+        """Descuentos aprobados manualmente desde la Bandeja 1 de
+
+        Facturación -- nunca se escriben a Odoo, solo ajustan los saldos
+        internos de CxC en /api/ventas.
+        """
+
+    @abstractmethod
+    def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         """Reemplaza la tabla completa (scripts/cargar_tasas_historicas.py
 
@@ -341,6 +352,7 @@ class InMemoryRepository(Repository):
         self._listas_precios_historicas: list[dict[str, str]] = []
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
+        self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
 
     # --- Configuración genérica -----------------------------------------------
     def get_config(self, key: str) -> str | None:
@@ -627,6 +639,12 @@ class InMemoryRepository(Repository):
 
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
         self._pagos_huerfanos_cerrados[row["pago_id"]] = dict(row)
+
+    def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._descuentos_sistema_aprobados.values()]
+
+    def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None:
+        self._descuentos_sistema_aprobados[row["so_id"]] = dict(row)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)

@@ -590,6 +590,42 @@ class PostgresRepository(Repository):
                 ["pago_id"],
             )
 
+    def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.descuentos_sistema_aprobados)).all()
+        return [
+            {
+                "so_id": r.so_id,
+                "monto": str(r.monto),
+                "motivo": r.motivo or "",
+                "aprobado_por": r.aprobado_por or "",
+                "timestamp_aprobacion": r.timestamp_aprobacion.isoformat(),
+                "activo": "true" if r.activo else "false",
+            }
+            for r in rows
+        ]
+
+    def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.descuentos_sistema_aprobados,
+                [
+                    {
+                        "so_id": row["so_id"],
+                        "monto": Decimal(str(row.get("monto") or "0")),
+                        "motivo": row.get("motivo") or "",
+                        "aprobado_por": row.get("aprobado_por") or "",
+                        "timestamp_aprobacion": datetime.fromisoformat(
+                            row["timestamp_aprobacion"]
+                        ),
+                        "activo": str(row.get("activo", "true")).strip().lower()
+                        not in ("false", "0", "no"),
+                    }
+                ],
+                ["so_id"],
+            )
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()
@@ -906,6 +942,7 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         activo=r.activo,
         tipo_descuento=TipoDescuento(r.tipo_descuento),
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -926,6 +963,7 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         listas_aplicables=r.listas_aplicables,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -948,6 +986,7 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -970,6 +1009,7 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -1016,6 +1056,7 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -1028,6 +1069,7 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -1038,6 +1080,7 @@ def _row_to_bcv_completo(r: Any) -> DescuentoBCVCompleto:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
@@ -1062,6 +1105,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         solo_primera_compra=r.solo_primera_compra,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        aplica_a=r.aplica_a,
     )
 
 
