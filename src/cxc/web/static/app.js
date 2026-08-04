@@ -1583,14 +1583,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const tieneDescuento = modo === "real_orden" || modo === "real_factura";
         const esTeorico = modo === "teorico_ves" || modo === "teorico_usd";
         const listaLabel = bloque.lista_label ? `<p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Lista: ${bloque.lista_label}</p>` : '';
+        const fmtLitros = (v) => new Intl.NumberFormat('es-US', { minimumFractionDigits: 1, maximumFractionDigits: 3 }).format(v || 0);
 
         let rows = bloque.lineas.map(l => `
             <tr>
                 <td>${l.producto}</td>
                 <td style="text-align:right">${l.cantidad}</td>
+                <td style="text-align:right">${fmtLitros(l.litros_unitario)} L</td>
+                <td style="text-align:right"><strong>${fmtLitros(l.litros_total)} L</strong></td>
                 <td style="text-align:right">${fmt(l.precio_unitario)}</td>
+                <td style="text-align:right">${fmt(l.subtotal_antes_descuento)}</td>
                 ${tieneDescuento ? `<td style="text-align:right">${fmt(l.descuento_monto)} (${(l.descuento_pct || 0).toFixed(1)}%)</td>` : ''}
-                <td style="text-align:right"><strong>${fmt(l.subtotal)}</strong></td>
+                <td style="text-align:right"><strong>${fmt(l.subtotal_despues_descuento)}</strong></td>
             </tr>
         `).join('');
 
@@ -1619,9 +1623,12 @@ document.addEventListener("DOMContentLoaded", () => {
                         <tr>
                             <th>Producto</th>
                             <th style="text-align:right">Cantidad</th>
+                            <th style="text-align:right">Litros/Unid.</th>
+                            <th style="text-align:right">Litros Línea</th>
                             <th style="text-align:right">Precio Unit.</th>
+                            <th style="text-align:right">Subtotal antes Desc.</th>
                             ${tieneDescuento ? '<th style="text-align:right">Descuento</th>' : ''}
-                            <th style="text-align:right">Subtotal</th>
+                            <th style="text-align:right">Subtotal después Desc.</th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
@@ -1629,6 +1636,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
                 ${(tieneDescuento || esTeorico) ? `<div>Descuento total: <strong>${fmt(bloque.descuento_total)}</strong></div>` : ''}
+                <div>Total litros: <strong>${fmtLitros(bloque.litros_total)} L</strong></div>
                 <div>Subtotal: <strong style="font-size:1.05rem;">${fmt(bloque.subtotal)}</strong></div>
             </div>
             ${conceptosHtml}

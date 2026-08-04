@@ -86,6 +86,9 @@ def _fake_execute(model, method, args, kwargs=None):
             }
         ]
 
+    if model == "product.template" and method == "read":
+        return [{"product_volume": 10.5}]
+
     return []
 
 
@@ -124,6 +127,12 @@ def test_detalle_real_orden_trae_todas_las_lineas_con_pct_y_monto() -> None:
     assert linea["descuento_monto"] == 10.0  # 2*50*0.10
     assert linea["subtotal"] == 90.0
     assert data["real_orden"]["descuento_total"] == 10.0
+    # Fase 8: subtotal antes/después de descuento + litros por línea.
+    assert linea["subtotal_antes_descuento"] == 100.0  # 2*50, sin descuento
+    assert linea["subtotal_despues_descuento"] == 90.0
+    assert linea["litros_unitario"] == 10.5
+    assert linea["litros_total"] == 21.0  # 2 * 10.5
+    assert data["real_orden"]["litros_total"] == 21.0
 
 
 def test_detalle_real_factura_lee_de_account_move_line() -> None:
@@ -154,6 +163,15 @@ def test_detalle_teorico_ves_y_usd_resuelven_precio_por_pricelist() -> None:
     assert usd["conceptos"] == []
     assert ves["descuento_total"] == 0.0
     assert usd["descuento_total"] == 0.0
+    # Fase 8: litros por línea + total del bloque; sin descuento por línea
+    # en teóricos (documentado), antes y después coinciden a propósito.
+    assert ves["lineas"][0]["litros_unitario"] == 10.5
+    assert ves["lineas"][0]["litros_total"] == 21.0
+    assert ves["litros_total"] == 21.0
+    assert ves["lineas"][0]["subtotal_antes_descuento"] == 90.0
+    assert ves["lineas"][0]["subtotal_despues_descuento"] == 90.0
+    assert usd["lineas"][0]["litros_total"] == 21.0
+    assert usd["litros_total"] == 21.0
 
 
 def test_detalle_teorico_conceptos_muestra_reglas_que_aplican_por_lista() -> None:
