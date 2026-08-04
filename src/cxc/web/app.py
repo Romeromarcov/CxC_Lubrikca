@@ -1946,6 +1946,174 @@ async def patch_auditoria_estado(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _pagos_odoo_por_orden(
+    execute: Any,
+    invoice_ids_all: list[int],
+    inv_id_to_so: dict[int, str],
+    invoices_by_so: dict[str, list[dict]],
+    ordenes_map: dict[str, OrdenVenta],
+    rates_map: dict[str, float],
+    last_bcv_val: float,
+) -> dict[str, dict[str, Any]]:
+    """Pagos por orden en equivalente USD, calculados directo contra Odoo --
+
+    extraído de ``/api/reporte-saldos`` (Cuentas por Cobrar) para
+    reutilizarlo también en ``/api/ventas`` (Fase 7). NO depende de la
+    tabla ``Vinculaciones``: en producción real esa tabla está vacía (el
+    flujo de pagos vive enteramente en Odoo), así que basar el estatus de
+    pago solo en Vinculaciones hacía que TODAS las órdenes salieran "sin
+    pagar" en Ventas aunque el reporte de CxC sí las mostrara pagadas.
+
+    Ruta principal: ``account.payment`` reconciliado contra las facturas de
+    la orden (exacto, importe real cobrado). Fallback (sin
+    ``account.payment`` reconciliado -- ej. el pago se aplicó directo en la
+    factura sin generar un registro de pago separado): ``amount_total -
+    amount_residual`` de cada factura, convertido a USD equivalente.
+
+    ATENCIÓN -- limitación heredada del reporte de CxC, no introducida por
+    esta extracción: para pagos en VES, "abono_bcv" y "abono_binance" salen
+    IGUALES (ambos a tasa BCV) porque Odoo no distingue la ruta de pago
+    (BCV oficial vs Binance/P2P) a nivel de ``account.payment``, solo la
+    moneda -- se intentó inferir la ruta por el nombre del diario contable
+    y se quitó (ver comentario más abajo): daba falsos positivos.
+    """
+    pagos: dict[str, dict[str, Any]] = {}
+    if not execute:
+        return pagos
+
+    # ─── ABONOS DESDE ODOO CONSULTANDO account.payment DIRECTAMENTE ───────────
+    # Consulta los pagos reales reconciliados en account.payment:
+    # - Importe pagado en la moneda original (amount, currency_id)
+    # - Fecha del pago (date)
+    # - Si es USD -> 1:1 ($1 pagado = $1 abonado).
+    # - Si es VES -> Se convierte a la tasa BCV/Binance a la fecha del pago (date).
+    payments_by_so: dict[str, dict[str, Any]] = {}
+    if invoice_ids_all:
+        try:
+            payments_raw = execute(
+                "account.payment",
+                "search_read",
+                [
+                    [
+                        ["reconciled_invoice_ids", "in", invoice_ids_all],
+                        ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+                    ]
+                ],
+                {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
+            )
+            for p in payments_raw:
+                p_amt = Decimal(str(p.get("amount") or "0"))
+                p_curr_raw = p.get("currency_id")
+                p_curr = (
+                    p_curr_raw[1]
+                    if isinstance(p_curr_raw, list | tuple) and len(p_curr_raw) > 1
+                    else "USD"
+                )
+                p_date = str(p.get("date") or "")[:10]
+
+                rec_invs = p.get("reconciled_invoice_ids", [])
+                matched_sos = set()
+                for r_id in rec_invs:
+                    so_m = inv_id_to_so.get(int(r_id))
+                    if so_m:
+                        matched_sos.add(so_m)
+
+                # NOTA: aqui hubo una heuristica que intentaba distinguir
+                # Notas de Credito de abonos en efectivo buscando palabras
+                # clave ("nota"/"credito"/"nc"/"refund"/"reversion") en el
+                # nombre del diario o del pago. Se elimino: el substring
+                # "nc" hacia match con cualquier diario que contuviera
+                # "banco" (baNCo), "bancamiga" (baNCamiga), "banesco"
+                # (baNCesco... y demas), "binance" (biNANCe) -- es decir,
+                # con la mayoria de los diarios bancarios reales -- asi
+                # que pagos normales (ej. PBAMI/2026/00283, un abono real
+                # via Banco Bancamiga) se mostraban como Notas de Credito.
+                # Verificado en vivo contra Odoo: ninguna Nota de Credito
+                # real (account.move move_type=out_refund, diario "Notas
+                # de credito de clientes") aparece jamas como
+                # account.payment -- las NC reales ya se detectan de
+                # forma confiable via out_refund. Todo lo que llega aqui
+                # es, por definicion de Odoo, un pago real.
+                for so_m in matched_sos:
+                    p_info = payments_by_so.setdefault(
+                        so_m,
+                        {
+                            "abono_bcv": Decimal("0"),
+                            "abono_binance": Decimal("0"),
+                            "latest_date": None,
+                        },
+                    )
+                    if p_curr == "USD":
+                        p_bcv = p_amt
+                        p_bin = p_amt
+                    else:
+                        rate_bcv = rates_map.get(p_date, last_bcv_val)
+                        p_bcv = (
+                            p_amt / Decimal(str(rate_bcv))
+                            if rate_bcv and float(rate_bcv) > 0
+                            else Decimal("0")
+                        )
+                        p_bin = p_bcv
+
+                    p_info["abono_bcv"] += p_bcv
+                    p_info["abono_binance"] += p_bin
+                    if p_date and (not p_info["latest_date"] or p_date > p_info["latest_date"]):
+                        p_info["latest_date"] = p_date
+        except Exception as e_pay:
+            logger.warning("Error al consultar account.payment en _pagos_odoo_por_orden: %s", e_pay)
+
+    for so_name, inv_list in invoices_by_so.items():
+        p_direct = payments_by_so.get(so_name)
+        if p_direct and p_direct["abono_bcv"] > Decimal("0"):
+            total_paid_bcv = p_direct["abono_bcv"]
+            total_paid_binance = p_direct["abono_binance"]
+            latest_inv_date = p_direct["latest_date"]
+        else:
+            total_paid_bcv = Decimal("0")
+            total_paid_binance = Decimal("0")
+            latest_inv_date = None
+            o_obj = ordenes_map.get(so_name)
+            order_usd_total = o_obj.monto_total if o_obj else Decimal("0")
+
+            for inv in inv_list:
+                tot = Decimal(str(inv.get("amount_total") or "0"))
+                res = Decimal(str(inv.get("amount_residual") or "0"))
+                paid_inv = max(Decimal("0"), tot - res)
+
+                curr = inv.get("currency_id")
+                c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
+                inv_dt = str(inv.get("invoice_date") or "")[:10]
+
+                if c_name == "VES":
+                    if order_usd_total > Decimal("0") and tot > Decimal("0"):
+                        effective_rate = tot / order_usd_total
+                    else:
+                        rate_val = rates_map.get(inv_dt, last_bcv_val)
+                        effective_rate = (
+                            Decimal(str(rate_val))
+                            if rate_val and float(rate_val) > 0
+                            else Decimal("1")
+                        )
+                    paid_inv_usd = (
+                        paid_inv / effective_rate if effective_rate > Decimal("0") else Decimal("0")
+                    )
+                else:
+                    paid_inv_usd = paid_inv
+
+                total_paid_bcv += paid_inv_usd
+                total_paid_binance += paid_inv_usd
+                if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
+                    latest_inv_date = inv_dt
+
+        if total_paid_bcv > Decimal("0") or total_paid_binance > Decimal("0"):
+            pagos[so_name] = {
+                "abono_bcv": total_paid_bcv,
+                "abono_binance": total_paid_binance,
+                "ultimo_abono": latest_inv_date,
+            }
+    return pagos
+
+
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
     try:
@@ -2429,159 +2597,48 @@ async def get_reporte_saldos(refresh: bool = False):
             except Exception as e_sol:
                 logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
 
-        # ─── ABONOS DESDE ODOO CONSULTANDO account.payment DIRECTAMENTE ───────────
-        # Consulta los pagos reales reconciliados en account.payment:
-        # - Importe pagado en la moneda original (amount, currency_id)
-        # - Fecha del pago (date)
-        # - Si es USD -> 1:1 ($1 pagado = $1 abonado).
-        # - Si es VES -> Se convierte a la tasa BCV/Binance a la fecha del pago (date).
-        payments_by_so: dict[str, dict] = {}
-        if execute and invoice_ids_all:
-            try:
-                payments_raw = execute(
-                    "account.payment",
-                    "search_read",
-                    [
-                        [
-                            ["reconciled_invoice_ids", "in", invoice_ids_all],
-                            ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
-                        ]
-                    ],
-                    {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
-                )
-                for p in payments_raw:
-                    p_amt = Decimal(str(p.get("amount") or "0"))
-                    p_curr_raw = p.get("currency_id")
-                    p_curr = (
-                        p_curr_raw[1]
-                        if isinstance(p_curr_raw, list | tuple) and len(p_curr_raw) > 1
-                        else "USD"
-                    )
-                    p_date = str(p.get("date") or "")[:10]
-
-                    rec_invs = p.get("reconciled_invoice_ids", [])
-                    matched_sos = set()
-                    for r_id in rec_invs:
-                        so_m = inv_id_to_so.get(int(r_id))
-                        if so_m:
-                            matched_sos.add(so_m)
-
-                    # NOTA: aqui hubo una heuristica que intentaba distinguir
-                    # Notas de Credito de abonos en efectivo buscando palabras
-                    # clave ("nota"/"credito"/"nc"/"refund"/"reversion") en el
-                    # nombre del diario o del pago. Se elimino: el substring
-                    # "nc" hacia match con cualquier diario que contuviera
-                    # "banco" (baNCo), "bancamiga" (baNCamiga), "banesco"
-                    # (baNCesco... y demas), "binance" (biNANCe) -- es decir,
-                    # con la mayoria de los diarios bancarios reales -- asi
-                    # que pagos normales (ej. PBAMI/2026/00283, un abono real
-                    # via Banco Bancamiga) se mostraban como Notas de Credito.
-                    # Verificado en vivo contra Odoo: ninguna Nota de Credito
-                    # real (account.move move_type=out_refund, diario "Notas
-                    # de credito de clientes") aparece jamas como
-                    # account.payment -- las NC reales ya se detectan de
-                    # forma confiable en el bloque de arriba (paso 2, via
-                    # out_refund). Todo lo que llega aqui es, por definicion
-                    # de Odoo, un pago real.
-                    for so_m in matched_sos:
-                        p_info = payments_by_so.setdefault(
-                            so_m,
-                            {
-                                "abono_bcv": Decimal("0"),
-                                "abono_binance": Decimal("0"),
-                                "latest_date": None,
-                            },
-                        )
-                        if p_curr == "USD":
-                            p_bcv = p_amt
-                            p_bin = p_amt
-                        else:
-                            rate_bcv = rates_map.get(p_date, last_bcv_val)
-                            p_bcv = (
-                                p_amt / Decimal(str(rate_bcv))
-                                if rate_bcv and float(rate_bcv) > 0
-                                else Decimal("0")
-                            )
-                            p_bin = p_bcv
-
-                        p_info["abono_bcv"] += p_bcv
-                        p_info["abono_binance"] += p_bin
-                        if p_date and (not p_info["latest_date"] or p_date > p_info["latest_date"]):
-                            p_info["latest_date"] = p_date
-            except Exception as e_pay:
-                logger.warning("Error al consultar account.payment directo: %s", e_pay)
-
-        for so_name, inv_list in invoices_by_so.items():
+        # ─── ABONOS DESDE ODOO (account.payment reconciliado, fallback a
+        # amount_residual de factura) -- extraído a _pagos_odoo_por_orden
+        # (Fase 7) para reutilizarlo también en /api/ventas. ───────────────
+        ordenes_map = {o.so_id: o for o in ordenes}
+        pagos_odoo = _pagos_odoo_por_orden(
+            execute,
+            invoice_ids_all,
+            inv_id_to_so,
+            invoices_by_so,
+            ordenes_map,
+            rates_map,
+            last_bcv_val,
+        )
+        for so_name, p_odoo in pagos_odoo.items():
             existing = pagos_by_so.get(so_name, {})
             if existing.get("tiene_vinc_manual", False):
                 continue
+            total_paid_bcv = p_odoo["abono_bcv"]
+            total_paid_binance = p_odoo["abono_binance"]
+            latest_inv_date = p_odoo["ultimo_abono"]
 
-            p_direct = payments_by_so.get(so_name)
-            if p_direct and p_direct["abono_bcv"] > Decimal("0"):
-                total_paid_bcv = p_direct["abono_bcv"]
-                total_paid_binance = p_direct["abono_binance"]
-                latest_inv_date = p_direct["latest_date"]
+            if so_name not in pagos_by_so:
+                pagos_by_so[so_name] = {
+                    "abono_bcv": total_paid_bcv,
+                    "abono_binance": total_paid_binance,
+                    "ultimo_abono": latest_inv_date,
+                    "desde_odoo": True,
+                    "tiene_vinc_manual": False,
+                }
             else:
-                total_paid_bcv = Decimal("0")
-                total_paid_binance = Decimal("0")
-                latest_inv_date = None
-                o_obj = next((o for o in ordenes if o.so_id == so_name), None)
-                order_usd_total = o_obj.monto_total if o_obj else Decimal("0")
-
-                for inv in inv_list:
-                    tot = Decimal(str(inv.get("amount_total") or "0"))
-                    res = Decimal(str(inv.get("amount_residual") or "0"))
-                    paid_inv = max(Decimal("0"), tot - res)
-
-                    curr = inv.get("currency_id")
-                    c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
-                    inv_dt = str(inv.get("invoice_date") or "")[:10]
-
-                    if c_name == "VES":
-                        if order_usd_total > Decimal("0") and tot > Decimal("0"):
-                            effective_rate = tot / order_usd_total
-                        else:
-                            rate_val = rates_map.get(inv_dt, last_bcv_val)
-                            effective_rate = (
-                                Decimal(str(rate_val))
-                                if rate_val and float(rate_val) > 0
-                                else Decimal("1")
-                            )
-                        paid_inv_usd = (
-                            paid_inv / effective_rate
-                            if effective_rate > Decimal("0")
-                            else Decimal("0")
-                        )
-                    else:
-                        paid_inv_usd = paid_inv
-
-                    total_paid_bcv += paid_inv_usd
-                    total_paid_binance += paid_inv_usd
-                    if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
-                        latest_inv_date = inv_dt
-
-            if total_paid_bcv > Decimal("0"):
-                if so_name not in pagos_by_so:
-                    pagos_by_so[so_name] = {
-                        "abono_bcv": total_paid_bcv,
-                        "abono_binance": total_paid_binance,
-                        "ultimo_abono": latest_inv_date,
-                        "desde_odoo": True,
-                        "tiene_vinc_manual": False,
-                    }
-                else:
-                    pagos_by_so[so_name]["abono_bcv"] = max(
-                        Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv
-                    )
-                    pagos_by_so[so_name]["abono_binance"] = max(
-                        Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))),
-                        total_paid_binance,
-                    )
-                    pagos_by_so[so_name]["desde_odoo"] = True
-                    if latest_inv_date:
-                        curr_last = pagos_by_so[so_name].get("ultimo_abono")
-                        if not curr_last or latest_inv_date > curr_last:
-                            pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
+                pagos_by_so[so_name]["abono_bcv"] = max(
+                    Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv
+                )
+                pagos_by_so[so_name]["abono_binance"] = max(
+                    Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))),
+                    total_paid_binance,
+                )
+                pagos_by_so[so_name]["desde_odoo"] = True
+                if latest_inv_date:
+                    curr_last = pagos_by_so[so_name].get("ultimo_abono")
+                    if not curr_last or latest_inv_date > curr_last:
+                        pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
         hist_rows = repo.all_listas_precios_historicas()
@@ -7262,7 +7319,13 @@ async def get_ventas(
         desc_orden_odoo_map: dict[str, float] = {}
         desc_factura_odoo_map: dict[str, float] = {}
         invoice_ids_out_invoice: list[int] = []
+        invoice_ids_all: list[int] = []
         inv_id_to_so: dict[int, str] = {}
+        # Fase 7: facturas out_invoice con los campos que necesita
+        # _pagos_odoo_por_orden (amount_total/amount_residual/currency_id/
+        # invoice_date) -- migrado de /api/reporte-saldos, NO depende de la
+        # tabla Vinculaciones (vacía en producción real).
+        invoices_by_so: dict[str, list[dict]] = {}
 
         if execute and so_names:
             try:
@@ -7297,10 +7360,13 @@ async def get_ventas(
                             "move_type",
                             "amount_untaxed_signed_usd",
                             "amount_total_signed_usd",
+                            "amount_total",
+                            "amount_residual",
+                            "currency_id",
+                            "invoice_date",
                         ]
                     },
                 )
-                invoice_ids_all: list[int] = []
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
                     if not so:
@@ -7320,6 +7386,7 @@ async def get_ventas(
                         )
                         if inv_id:
                             invoice_ids_out_invoice.append(inv_id)
+                            invoices_by_so.setdefault(so, []).append(inv)
 
                 # Tarea 3c: descuentos ya materializados en Odoo (lectura, no cálculo).
                 desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
@@ -7331,6 +7398,37 @@ async def get_ventas(
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
+
+        # Fase 7: pagos por orden -- Vinculaciones (fuente teórica, hoy
+        # vacía en producción real) tiene precedencia si existe para una
+        # orden; si no, se usa _pagos_odoo_por_orden (migrado de /api/
+        # reporte-saldos, la fuente que SÍ tiene datos reales hoy: lee
+        # directo de Odoo -- account.payment reconciliado, con fallback a
+        # amount_residual de factura). Antes de esto, TODAS las órdenes
+        # salían "sin pagar" en Ventas porque solo se miraba Vinculaciones.
+        pagos_odoo_map: dict[str, dict[str, Any]] = {}
+        if execute:
+            tasas_rows_ventas = _all_serie_tasas_rows(repo)
+            rates_map_ventas: dict[str, float] = {}
+            for r in tasas_rows_ventas:
+                ts = str(r.get("timestamp", ""))[:10]
+                tbcv = r.get("tasa_bcv")
+                if ts and tbcv:
+                    with contextlib.suppress(Exception):
+                        rates_map_ventas[ts] = float(tbcv)
+            last_bcv_val_ventas = (
+                list(rates_map_ventas.values())[-1] if rates_map_ventas else 742.23
+            )
+            ordenes_map_ventas = {o.so_id: o for o in ordenes}
+            pagos_odoo_map = _pagos_odoo_por_orden(
+                execute,
+                invoice_ids_all,
+                inv_id_to_so,
+                invoices_by_so,
+                ordenes_map_ventas,
+                rates_map_ventas,
+                last_bcv_val_ventas,
+            )
 
         def _pct(monto: float, base: float) -> float | None:
             return round(monto / base, 4) if base > 0.005 else None
@@ -7477,9 +7575,18 @@ async def get_ventas(
             # Factura" usan la referencia de la lista con la que NACIÓ la
             # orden (BCV si VES o Lista Histórica de Auditoría, Binance si
             # USD); "Teórico VES" siempre BCV, "Teórico USD" siempre Binance.
+            # Fase 7: Vinculaciones (fuente teórica) tiene precedencia si la
+            # orden tiene alguna registrada; si no (caso real hoy: esa
+            # tabla está vacía), se usa lo calculado directo contra Odoo
+            # (_pagos_odoo_por_orden, migrado de /api/reporte-saldos).
             vincs_orden = vincs_por_so.get(o.so_id, [])
-            val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
-            val_binance = float(valor_pagado_binance_usd(vincs_orden))
+            if vincs_orden:
+                val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
+                val_binance = float(valor_pagado_binance_usd(vincs_orden))
+            else:
+                p_odoo_orden = pagos_odoo_map.get(o.so_id)
+                val_bcv = float(p_odoo_orden["abono_bcv"]) if p_odoo_orden else 0.0
+                val_binance = float(p_odoo_orden["abono_binance"]) if p_odoo_orden else 0.0
             es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
@@ -7702,6 +7809,14 @@ async def get_ventas_detalle(so_id: str):
     componentes -- recompra/contado/volumen -- que suma ``BandejaFacturacion.
     descuentos_teorico_ves``/``_usd``) en vez de un desglose por línea.
 
+    Fase 8: cada línea trae también litros (``litros_unitario``/``_total``,
+    vía ``product.template.product_volume`` -- mismo campo que usa el motor
+    para las reglas de Descuento por Volumen) y el subtotal antes/después
+    de descuento (``subtotal_antes_descuento``/``_despues_descuento`` --
+    en los teóricos ambos coinciden a propósito, el motor no reparte su
+    descuento por línea). Cada bloque también trae ``litros_total``
+    agregado.
+
     También trae ``pagos`` (vinculaciones de la orden con sus equivalentes
     congelados) para el botón "Ver Pagos".
     """
@@ -7747,6 +7862,37 @@ async def get_ventas_detalle(so_id: str):
                 return str(raw[1])
             return str(raw or "")
 
+        def _producto_id(raw: Any) -> str:
+            if isinstance(raw, list | tuple) and len(raw) > 0:
+                return str(raw[0])
+            return str(raw or "")
+
+        # Price resolver construido una sola vez (Fase 8) -- lo usan tanto
+        # las líneas reales (litros por línea, vía ``.volumen(producto)``,
+        # mismo campo Odoo ``product.template.product_volume`` que usa el
+        # motor para las reglas de Descuento por Volumen) como las líneas
+        # teóricas (precio unitario por lista, ver más abajo).
+        price_resolver: OdooPriceResolver | None = None
+        if execute:
+            usd_ids_pr, ves_ids_pr = get_ui_pricelist_ids(repo)
+            pricelist_ids_map_pr = {
+                "USD": int(usd_ids_pr[0]) if usd_ids_pr and str(usd_ids_pr[0]).isdigit() else 4,
+                "BCV": int(ves_ids_pr[0]) if ves_ids_pr and str(ves_ids_pr[0]).isdigit() else 5,
+            }
+            fallback_pl_ids_pr = [
+                int(x) for x in (*usd_ids_pr, *ves_ids_pr) if str(x).isdigit()
+            ]
+            price_resolver = OdooPriceResolver(execute, pricelist_ids_map_pr, fallback_pl_ids_pr)
+
+        def _litros(producto_id: str, cantidad: float) -> tuple[float, float]:
+            if price_resolver is None or not producto_id:
+                return 0.0, 0.0
+            try:
+                vol_unit = float(price_resolver.volumen(producto_id))
+            except Exception:
+                vol_unit = 0.0
+            return round(vol_unit, 3), round(vol_unit * cantidad, 3)
+
         # --- Real Orden: sale.order.line COMPLETO (todas las líneas, no
         # solo las que tienen discount > 0 -- a diferencia del agregado que
         # usa /api/ventas). También arma el mapa id -> nombre de producto
@@ -7780,6 +7926,7 @@ async def get_ventas_detalle(so_id: str):
                     price_unit = float(line.get("price_unit") or 0)
                     disc_pct = float(line.get("discount") or 0)
                     subtotal = float(line.get("price_subtotal") or 0)
+                    litros_unit, litros_tot = _litros(_producto_id(prod_raw), qty)
                     lineas_real_orden.append(
                         {
                             "producto": _nombre_producto(prod_raw),
@@ -7787,7 +7934,11 @@ async def get_ventas_detalle(so_id: str):
                             "precio_unitario": round(price_unit, 2),
                             "descuento_pct": round(disc_pct, 2),
                             "descuento_monto": round(qty * price_unit * (disc_pct / 100.0), 2),
+                            "subtotal_antes_descuento": round(qty * price_unit, 2),
+                            "subtotal_despues_descuento": round(subtotal, 2),
                             "subtotal": round(subtotal, 2),
+                            "litros_unitario": litros_unit,
+                            "litros_total": litros_tot,
                         }
                     )
             except Exception as e_sol:
@@ -7834,22 +7985,28 @@ async def get_ventas_detalle(so_id: str):
                         },
                     )
                     for line in aml:
-                        if not line.get("product_id"):
+                        prod_raw_f = line.get("product_id")
+                        if not prod_raw_f:
                             continue
                         qty = float(line.get("quantity") or 0)
                         price_unit = float(line.get("price_unit") or 0)
                         disc_pct = float(line.get("discount") or 0)
                         subtotal = float(line.get("price_subtotal") or 0)
+                        litros_unit, litros_tot = _litros(_producto_id(prod_raw_f), qty)
                         lineas_real_factura.append(
                             {
-                                "producto": _nombre_producto(line.get("product_id")),
+                                "producto": _nombre_producto(prod_raw_f),
                                 "cantidad": qty,
                                 "precio_unitario": round(price_unit, 2),
                                 "descuento_pct": round(disc_pct, 2),
                                 "descuento_monto": round(
                                     qty * price_unit * (disc_pct / 100.0), 2
                                 ),
+                                "subtotal_antes_descuento": round(qty * price_unit, 2),
+                                "subtotal_despues_descuento": round(subtotal, 2),
                                 "subtotal": round(subtotal, 2),
+                                "litros_unitario": litros_unit,
+                                "litros_total": litros_tot,
                             }
                         )
             except Exception as e_aml:
@@ -7872,7 +8029,7 @@ async def get_ventas_detalle(so_id: str):
         conceptos_teorico_usd: list[dict[str, Any]] = []
         lista_ves_id: str | None = None
         lista_usd_id: str | None = None
-        if execute:
+        if execute and price_resolver is not None:
             try:
                 from cxc.engine.discounts import (
                     _lista_usd_activa,
@@ -7881,21 +8038,13 @@ async def get_ventas_detalle(so_id: str):
                     lineas_con_precio,
                 )
 
-                usd_ids, ves_ids = get_ui_pricelist_ids(repo)
-                pricelist_ids_map = {
-                    "USD": int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
-                    "BCV": int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
-                }
-                fallback_pl_ids = [
-                    int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()
-                ]
-                price_resolver = OdooPriceResolver(execute, pricelist_ids_map, fallback_pl_ids)
                 runner = EngineRunner(repo, price_resolver, config.engine)
                 inputs = runner.build_inputs(so_id, date.today())
                 if inputs is not None:
                     lista_ves_id = _lista_ves_activa(inputs)
                     lista_usd_id = _lista_usd_activa(inputs)
                     for fila in lineas_con_precio(inputs, lista_ves_id):
+                        subt = round(float(fila["subtotal"]), 2)
                         lineas_teorico_ves.append(
                             {
                                 "producto": producto_nombre_map.get(
@@ -7903,10 +8052,18 @@ async def get_ventas_detalle(so_id: str):
                                 ),
                                 "cantidad": float(fila["cantidad"]),
                                 "precio_unitario": round(float(fila["precio_unitario"]), 2),
-                                "subtotal": round(float(fila["subtotal"]), 2),
+                                # El motor no asigna descuento por línea (se
+                                # calcula por grupo/orden) -- antes y después
+                                # coinciden a propósito, no es un olvido.
+                                "subtotal_antes_descuento": subt,
+                                "subtotal_despues_descuento": subt,
+                                "subtotal": subt,
+                                "litros_unitario": round(float(fila["litros_unitario"]), 3),
+                                "litros_total": round(float(fila["litros_total"]), 3),
                             }
                         )
                     for fila in lineas_con_precio(inputs, lista_usd_id):
+                        subt = round(float(fila["subtotal"]), 2)
                         lineas_teorico_usd.append(
                             {
                                 "producto": producto_nombre_map.get(
@@ -7914,7 +8071,11 @@ async def get_ventas_detalle(so_id: str):
                                 ),
                                 "cantidad": float(fila["cantidad"]),
                                 "precio_unitario": round(float(fila["precio_unitario"]), 2),
-                                "subtotal": round(float(fila["subtotal"]), 2),
+                                "subtotal_antes_descuento": subt,
+                                "subtotal_despues_descuento": subt,
+                                "subtotal": subt,
+                                "litros_unitario": round(float(fila["litros_unitario"]), 3),
+                                "litros_total": round(float(fila["litros_total"]), 3),
                             }
                         )
                     conceptos_teorico_ves = [
@@ -7970,12 +8131,18 @@ async def get_ventas_detalle(so_id: str):
                 "descuento_total": round(
                     sum(line["descuento_monto"] for line in lineas_real_orden), 2
                 ),
+                "litros_total": round(
+                    sum(line["litros_total"] for line in lineas_real_orden), 3
+                ),
             },
             "real_factura": {
                 "lineas": lineas_real_factura,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_real_factura), 2),
                 "descuento_total": round(
                     sum(line["descuento_monto"] for line in lineas_real_factura), 2
+                ),
+                "litros_total": round(
+                    sum(line["litros_total"] for line in lineas_real_factura), 3
                 ),
             },
             "teorico_ves": {
@@ -7986,6 +8153,9 @@ async def get_ventas_detalle(so_id: str):
                 "descuento_total": round(
                     sum(c["monto"] for c in conceptos_teorico_ves), 2
                 ),
+                "litros_total": round(
+                    sum(line["litros_total"] for line in lineas_teorico_ves), 3
+                ),
             },
             "teorico_usd": {
                 "lista_label": _lista_label(lista_usd_id),
@@ -7994,6 +8164,9 @@ async def get_ventas_detalle(so_id: str):
                 "conceptos": conceptos_teorico_usd,
                 "descuento_total": round(
                     sum(c["monto"] for c in conceptos_teorico_usd), 2
+                ),
+                "litros_total": round(
+                    sum(line["litros_total"] for line in lineas_teorico_usd), 3
                 ),
             },
             "pagos": pagos,

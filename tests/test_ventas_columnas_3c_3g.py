@@ -460,3 +460,88 @@ def test_estatus_pago_real_factura_descuenta_descuento_de_sistema() -> None:
     nd = by_so["SO_ND"]
     # target_orden = 90 - 35 = 55; pagado = 55 -> pagada (antes era "parcial").
     assert nd["estatus_pago_real_orden"] == "pagada"
+
+
+def test_estatus_pago_usa_pagos_odoo_directos_sin_vinculaciones() -> None:
+    """Fase 7: bug real -- la tabla Vinculaciones está vacía en producción,
+
+    así que TODAS las órdenes salían "sin pagar" en Ventas aunque el
+    reporte de CxC (que lee directo de Odoo) sí las mostraba pagadas. Esta
+    orden está 100% pagada vía account.payment reconciliado (sin ninguna
+    Vinculacion) -- debe salir "pagada", no "sin_pago"."""
+
+    def _fake_execute_pago_odoo(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_PAGADA_ODOO", "state": "sale", "amount_untaxed": 90.0}]
+        if model == "account.move":
+            return [
+                {
+                    "id": 950,
+                    "invoice_origin": "SO_PAGADA_ODOO",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 90.0,
+                    "amount_total_signed_usd": 100.0,
+                    "amount_total": 100.0,
+                    "amount_residual": 0.0,
+                    "currency_id": [1, "USD"],
+                    "invoice_date": "2026-07-05",
+                }
+            ]
+        if model == "account.payment":
+            return [
+                {
+                    "id": 1,
+                    "amount": 100.0,
+                    "currency_id": [1, "USD"],
+                    "date": "2026-07-05",
+                    "reconciled_invoice_ids": [950],
+                }
+            ]
+        if model == "sale.order.line":
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []  # sin Vinculaciones (caso real)
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_PAGADA_ODOO",
+            cliente_id="CLI_ODOO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        )
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_PAGADA_ODOO",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("100.00"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_pago_odoo),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = next(it for it in res.json()["items"] if it["so_id"] == "SO_PAGADA_ODOO")
+
+    assert item["estatus_pago_real_orden"] == "pagada"
+    assert item["estatus_pago_real_factura"] == "pagada"

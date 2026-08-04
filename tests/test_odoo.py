@@ -27,6 +27,35 @@ def test_map_cliente() -> None:
     c = map_cliente({"id": 181, "name": "ACME", "vendedor_email": "rep@x.com"})
     assert c.cliente_id == "181"
     assert c.vendedor_email == "rep@x.com"
+    assert c.nombre == "ACME"
+
+
+def test_map_cliente_subcontacto_sin_nombre_usa_contacto_principal() -> None:
+    """Bug real S00768: el partner de la orden es un subcontacto (ej.
+
+    dirección de entrega) con ``name=False`` en Odoo -- antes se guardaba
+    literal ``str(False) == "False"``. Ahora resuelve al contacto principal
+    vía ``commercial_partner_id`` (campo nativo de Odoo, mismo criterio que
+    usa Odoo en contabilidad para agrupar subcontactos)."""
+    c = map_cliente(
+        {
+            "id": 1563,
+            "name": False,
+            "commercial_partner_id": [1455, "Inversiones El Rey Jesucristo 41930 C.A"],
+            "vendedor_email": "",
+        }
+    )
+    assert c.cliente_id == "1563"
+    assert c.nombre == "Inversiones El Rey Jesucristo 41930 C.A"
+    assert c.nombre != "False"
+
+
+def test_map_cliente_sin_nombre_ni_commercial_partner_queda_vacio() -> None:
+    """Sin ninguna fuente de nombre disponible, queda vacío -- NUNCA
+
+    ``str(False)``."""
+    c = map_cliente({"id": 999, "name": False, "vendedor_email": ""})
+    assert c.nombre == ""
 
 
 def test_map_orden_usa_name_como_so_id() -> None:

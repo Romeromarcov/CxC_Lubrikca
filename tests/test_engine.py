@@ -1301,6 +1301,8 @@ def test_lineas_con_precio_resuelve_por_linea_para_lista_dada() -> None:
             "P2@USD": "50", "P2@BCV": "45",
         }
     )
+    resolver.set_volumen("P1", Decimal("20.0"))
+    resolver.set_volumen("P2", Decimal("5.0"))
 
     inp = _inputs(orden=orden, lineas=[linea1, linea2], abonos=[], resolver=resolver)
 
@@ -1311,6 +1313,11 @@ def test_lineas_con_precio_resuelve_por_linea_para_lista_dada() -> None:
     assert filas_usd[0]["cantidad"] == Decimal("3")
     assert filas_usd[0]["subtotal"] == Decimal("300")
     assert filas_usd[1]["subtotal"] == Decimal("100")
+    # Litros: unitario tal cual el resolver, total = unitario * cantidad.
+    assert filas_usd[0]["litros_unitario"] == Decimal("20.0")
+    assert filas_usd[0]["litros_total"] == Decimal("60.0")
+    assert filas_usd[1]["litros_unitario"] == Decimal("5.0")
+    assert filas_usd[1]["litros_total"] == Decimal("10.0")
 
     filas_bcv = lineas_con_precio(inp, "BCV")
     assert filas_bcv[0]["precio_unitario"] == Decimal("90")

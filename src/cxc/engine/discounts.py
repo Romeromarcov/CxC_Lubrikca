@@ -244,15 +244,21 @@ def lineas_con_precio(inp: EngineInputs, lista: str) -> list[dict[str, Any]]:
 
     modal de detalle de orden en ``/api/ventas/{so_id}/detalle``). A
     diferencia de ``_calcular_componentes`` (que solo agrega totales), esto
-    devuelve una fila por línea con su precio unitario, cantidad efectiva y
-    subtotal para ESA lista específica -- reusa ``_precio_unitario_linea``
-    (misma resolución de precio, incluida la excepción de Lista Histórica de
-    Auditoría) sin duplicar la lógica.
+    devuelve una fila por línea con su precio unitario, cantidad efectiva,
+    subtotal y litros (unitario y total) para ESA lista específica -- reusa
+    ``_precio_unitario_linea`` (misma resolución de precio, incluida la
+    excepción de Lista Histórica de Auditoría) y la misma resolución de
+    volumen que usa el motor para las reglas de Descuento por Volumen
+    (``_calcular_componentes``, sección litros_por_mc) sin duplicar lógica.
     """
     filas: list[dict[str, Any]] = []
     for ln in inp.lineas:
         precio_unit = _precio_unitario_linea(inp, ln, lista)
         cantidad = _cantidad_efectiva(inp, ln)
+        try:
+            vol_unit = inp.price_resolver.volumen(ln.producto)
+        except Exception:
+            vol_unit = Decimal("0.0")
         filas.append(
             {
                 "producto": ln.producto,
@@ -261,6 +267,8 @@ def lineas_con_precio(inp: EngineInputs, lista: str) -> list[dict[str, Any]]:
                 "cantidad": cantidad,
                 "precio_unitario": precio_unit,
                 "subtotal": precio_unit * cantidad,
+                "litros_unitario": vol_unit,
+                "litros_total": vol_unit * cantidad,
             }
         )
     return filas

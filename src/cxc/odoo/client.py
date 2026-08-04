@@ -87,9 +87,22 @@ def _ids_of(recs: list[dict[str, Any]], field: str) -> set[int]:
 
 
 def map_cliente(rec: dict[str, Any]) -> Cliente:
+    """``name`` sale ``False`` (booleano de Odoo, NUNCA como ``str(False)`` --
+
+    bug real detectado en S00768: el partner de la orden es un subcontacto
+    -- ej. una dirección de entrega, ``type != "contact"`` -- sin nombre
+    propio) para contactos hijos/direcciones sin nombre propio. En esos
+    casos se usa ``commercial_partner_id`` (campo nativo de Odoo que
+    resuelve SIEMPRE a la entidad comercial raíz -- la empresa/contacto
+    principal, o el mismo partner si ya es la raíz), igual que hace Odoo en
+    contabilidad para agrupar subcontactos bajo su empresa.
+    """
+    nombre = str(rec.get("name") or "").strip()
+    if not nombre:
+        nombre = _m2o_name(rec.get("commercial_partner_id"))
     return Cliente(
         cliente_id=str(rec["id"]),
-        nombre=str(rec.get("name", "")),
+        nombre=nombre,
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
         wh_iva_agent=bool(rec.get("wh_iva_agent")),
         wh_iva_rate=float(rec.get("wh_iva_rate") or 75.0)
@@ -259,7 +272,7 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_PARTNER,
             self._delta(since),
-            ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate"],
+            ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate", "commercial_partner_id"],
         )
         uids = {int(_m2o_id(r.get("user_id"))) for r in recs if _m2o_id(r.get("user_id"))}
         logins = self._user_logins(uids)
