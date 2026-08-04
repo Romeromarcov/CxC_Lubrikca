@@ -35,6 +35,7 @@ from ..models import (
     ReglaRecurrencia,
     SerieTasa,
     TipoBeneficio,
+    VentasTeorico,
     Vinculacion,
 )
 from ..repositories import Repository
@@ -422,6 +423,19 @@ class SheetsRepository(Repository):
 
     def all_bandeja(self) -> list[BandejaFacturacion]:
         return [serde.bandeja_from_row(r) for r in self._g.read_rows(g.T_BANDEJA)]
+
+    # --- Teóricos de Ventas (Fase 10) -----------------------------------------
+    def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        self._g.upsert_row(g.T_VENTAS_TEORICOS, "so_id", serde.ventas_teorico_to_row(fila))
+
+    def get_ventas_teorico(self, so_id: str) -> VentasTeorico | None:
+        for r in self._g.read_rows(g.T_VENTAS_TEORICOS):
+            if r.get("so_id") == so_id:
+                return serde.ventas_teorico_from_row(r)
+        return None
+
+    def all_ventas_teoricos(self) -> list[VentasTeorico]:
+        return [serde.ventas_teorico_from_row(r) for r in self._g.read_rows(g.T_VENTAS_TEORICOS)]
 
     # --- Conciliación --------------------------------------------------------
     def upsert_conciliacion(self, fila: Conciliacion) -> None:

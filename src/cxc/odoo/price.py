@@ -53,6 +53,9 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         # Claves de forma variable: (producto, lista, fecha) en precio(),
         # (producto, "volumen") en volumen().
         self._cache: dict[tuple[str, ...], Decimal] = {}
+        # (producto, lista) -> True si el último precio() resuelto para ese
+        # par NO vino de una regla fija en `lista` -- ver fue_fallback().
+        self._fallback_flags: dict[tuple[str, str], bool] = {}
 
     def _precio_fijo_en_lista(
         self, pricelist_id: int, prod_id: int, fecha: date | None
@@ -124,9 +127,11 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             prod_id = None
 
         precio: Decimal | None = None
+        es_fallback = False
         if prod_id:
             precio = self._precio_fijo_en_lista(pricelist_id, prod_id, fecha)
             if precio is None:
+                es_fallback = True
                 for fallback_id in self._fallback_pricelist_ids:
                     if fallback_id == pricelist_id:
                         continue
@@ -142,6 +147,7 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             # Verificado en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W
             # SAE 40 (Tambor)" sin regla en la lista de la orden -- list_price
             # devuelve 1,457,052.51 (VES) vs list_price_usd 1,961.54 (USD).
+            es_fallback = True
             precio = Decimal("0.0")
             if prod_id:
                 try:
@@ -154,7 +160,11 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                     precio = Decimal("0.0")
 
         self._cache[clave] = precio
+        self._fallback_flags[(producto, lista)] = es_fallback
         return precio
+
+    def fue_fallback(self, producto: str, lista: str) -> bool:
+        return self._fallback_flags.get((producto, lista), False)
 
     def volumen(self, producto: str) -> Decimal:
         clave = (producto, "volumen")

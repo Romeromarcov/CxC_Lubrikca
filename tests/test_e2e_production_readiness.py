@@ -1646,7 +1646,7 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
     los lee y aplica impuestos, no recalcula ningún descuento.
     """
     from cxc.config import EngineConfig
-    from cxc.models import BandejaFacturacion
+    from cxc.models import BandejaFacturacion, VentasTeorico
 
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
@@ -1671,10 +1671,19 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
             precio_base_calculado=Decimal("100.00"),
             total_motor=Decimal("90.00"),
             equivalente_lista_usd=Decimal("102.00"),
-            teorico_lista_ves=Decimal("3600.00"),
-            teorico_lista_usd=Decimal("102.00"),
+        ),
+    ]
+    # Fase 10: los teóricos VES/USD ya no viven en BandejaFacturacion --
+    # ver ventas_teoricos (tabla fija, cubre también órdenes facturadas).
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(
+            so_id="SO_LISTA1",
+            teorico_ves=Decimal("3600.00"),
+            teorico_usd=Decimal("102.00"),
             descuentos_teorico_ves=Decimal("360.00"),
             descuentos_teorico_usd=Decimal("10.20"),
+            lista_ves_id="5",
+            lista_usd_id="4",
         ),
     ]
 

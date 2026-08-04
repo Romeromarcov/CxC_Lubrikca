@@ -490,6 +490,30 @@ class BandejaFacturacion:
 
 
 @dataclass
+class VentasTeorico:
+    """Teórico VES/USD de una orden -- Fase 10, módulo Ventas.
+
+    Punto de comparación FIJO (a diferencia de BandejaFacturacion, que se
+    recalcula constantemente y salta órdenes ya facturadas): se calcula UNA
+    vez por orden y no cambia salvo que ``usa_fallback_ves``/``_usd`` sea
+    True (algún producto no tenía precio fijo en esa lista específica y se
+    resolvió por fallback -- señal de que hay que re-verificar cuando esa
+    lista se complete).
+    """
+
+    so_id: str
+    teorico_ves: Decimal = Decimal("0")
+    teorico_usd: Decimal = Decimal("0")
+    descuentos_teorico_ves: Decimal = Decimal("0")
+    descuentos_teorico_usd: Decimal = Decimal("0")
+    lista_ves_id: str = ""
+    lista_usd_id: str = ""
+    usa_fallback_ves: bool = False
+    usa_fallback_usd: bool = False
+    calculado_en: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
 class DescuentoAplicado:
     """Un componente del desglose de descuentos (apilamiento aditivo)."""
 

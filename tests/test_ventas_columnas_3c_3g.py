@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from cxc.config import EngineConfig
-from cxc.models import BandejaFacturacion, OrdenVenta, Vinculacion
+from cxc.models import BandejaFacturacion, OrdenVenta, VentasTeorico, Vinculacion
 from cxc.web.app import app
 
 client = TestClient(app)
@@ -165,6 +165,21 @@ def _run_get_ventas(
         _orden("SO_NC", lista="4", monto_total="200.00"),
         _orden("SO_ND", lista="5", monto_total="90.00"),
     ]
+    # Fase 10: los teóricos VES/USD ya no viven en BandejaFacturacion.
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(
+            so_id="SO_OK",
+            # Fase 6: descuentos_teorico_ves/_usd son DISTINTOS entre sí
+            # (reglas con listas_aplicables distintas por lista) -- reemplaza
+            # la columna única "Desc. Motor".
+            teorico_ves=Decimal("120.00"),
+            teorico_usd=Decimal("100.00"),
+            descuentos_teorico_ves=Decimal("8.00"),
+            descuentos_teorico_usd=Decimal("3.00"),
+            lista_ves_id="5",
+            lista_usd_id="4",
+        ),
+    ]
     mock_repo.all_bandeja.return_value = [
         BandejaFacturacion(
             so_id="SO_OK",
@@ -172,13 +187,6 @@ def _run_get_ventas(
             precio_base_calculado=Decimal("100.00"),
             total_descuentos=Decimal("5.00"),
             total_motor=Decimal("95.00"),
-            # Fase 6: descuentos_teorico_ves/_usd son DISTINTOS entre sí
-            # (reglas con listas_aplicables distintas por lista) -- reemplaza
-            # la columna única "Desc. Motor".
-            teorico_lista_ves=Decimal("120.00"),
-            teorico_lista_usd=Decimal("100.00"),
-            descuentos_teorico_ves=Decimal("8.00"),
-            descuentos_teorico_usd=Decimal("3.00"),
         ),
         BandejaFacturacion(
             so_id="SO_PENDIENTE",

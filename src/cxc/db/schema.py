@@ -389,6 +389,36 @@ bandeja_facturacion = Table(
     Column("descuentos_teorico_usd", MONEY, nullable=False, server_default="0"),
 )
 
+# --- VentasTeoricos (Fase 10) -----------------------------------------------
+# El teórico VES/USD de una orden es el punto de comparación FIJO contra el
+# que se audita lo real (venta/factura) -- por eso vive en su propia tabla
+# del módulo Ventas, NO en BandejaFacturacion (que es la bandeja de trabajo
+# de Facturación: se recalcula constantemente y explícitamente SALTA
+# órdenes ya facturadas -- EngineRunner.run_all -- así que sus teóricos
+# quedaban ausentes justo para las órdenes donde más se necesita comparar).
+# Se calcula UNA VEZ por orden (nueva orden que llega, o backfill) y NO se
+# recalcula salvo que algún producto de la orden haya usado el precio de
+# fallback de la ficha (no encontrado en la lista VES/USD específica) --
+# ahí sí puede cambiar si luego se completa esa lista de precios.
+ventas_teoricos = Table(
+    "ventas_teoricos",
+    metadata,
+    Column("so_id", String, ForeignKey("ordenes_venta.so_id"), primary_key=True),
+    Column("teorico_ves", MONEY, nullable=False, server_default="0"),
+    Column("teorico_usd", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_ves", MONEY, nullable=False, server_default="0"),
+    Column("descuentos_teorico_usd", MONEY, nullable=False, server_default="0"),
+    Column("lista_ves_id", String, nullable=False, server_default=""),
+    Column("lista_usd_id", String, nullable=False, server_default=""),
+    # True si algún producto de la orden NO tenía precio fijo en la lista
+    # VES/USD específica y se resolvió por fallback (otra pricelist
+    # configurada, o el precio de venta $ de la ficha) -- señal de que este
+    # teórico debe re-verificarse cuando esa lista se complete.
+    Column("usa_fallback_ves", Boolean, nullable=False, server_default="false"),
+    Column("usa_fallback_usd", Boolean, nullable=False, server_default="false"),
+    Column("calculado_en", DateTime(timezone=False), nullable=False),
+)
+
 # Hija normalizada de BandejaFacturacion.descuentos_detalle (antes un blob
 # JSON en una celda de Sheets) -- DescuentoAplicado ya es un dataclass propio.
 descuento_aplicado = Table(

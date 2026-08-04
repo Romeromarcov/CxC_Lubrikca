@@ -803,6 +803,52 @@ def _teoricos_por_lista(
     )
 
 
+def calcular_teorico_orden_con_fallback(inp: EngineInputs) -> dict[str, Any]:
+    """Teórico VES/USD de una orden + si usó precio de fallback (Fase 10,
+
+    tabla ``ventas_teoricos`` -- punto de comparación FIJO fuera de
+    BandejaFacturacion, ver docstring de esa tabla en ``db/schema.py``).
+
+    Reusa ``_teoricos_por_lista`` (misma lógica que ``calcular_factura``,
+    sin duplicarla) para los montos, y ``PriceResolver.fue_fallback`` --
+    poblado por ``OdooPriceResolver.precio()`` durante ese mismo cálculo --
+    para saber si ALGUNA línea de la orden no tenía precio fijo en la lista
+    VES/USD específica (se resolvió con otra pricelist de respaldo o el
+    precio de venta $ de la ficha). Esa señal (``usa_fallback_ves``/``_usd``)
+    es la única razón para re-verificar un teórico ya guardado: si la lista
+    se completa después con el precio faltante, el teórico cambiaría.
+    """
+    # Mismo freeze de equivalentes que calcular_factura -- _calcular_
+    # componentes (via BCV-completo) exige v.equiv_usd_bcv ya congelado.
+    for v, _ in inp.abonos:
+        congelar_en_vinculacion(v)
+
+    lista_ves = _lista_ves_activa(inp)
+    lista_usd = _lista_usd_activa(inp)
+    (
+        teorico_ves,
+        teorico_usd,
+        _equivalente_usd,
+        descuentos_ves,
+        descuentos_usd,
+    ) = _teoricos_por_lista(inp, pura_bcv=True, lista_ves_name=lista_ves, lista_usd_name=lista_usd)
+
+    resolver = inp.price_resolver
+    usa_fallback_ves = any(resolver.fue_fallback(ln.producto, lista_ves) for ln in inp.lineas)
+    usa_fallback_usd = any(resolver.fue_fallback(ln.producto, lista_usd) for ln in inp.lineas)
+
+    return {
+        "teorico_ves": teorico_ves,
+        "teorico_usd": teorico_usd,
+        "descuentos_teorico_ves": descuentos_ves,
+        "descuentos_teorico_usd": descuentos_usd,
+        "lista_ves_id": lista_ves,
+        "lista_usd_id": lista_usd,
+        "usa_fallback_ves": usa_fallback_ves,
+        "usa_fallback_usd": usa_fallback_usd,
+    }
+
+
 def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     """Calcula la fila de BandejaFacturacion para una orden (cierre híbrido)."""
     cfg = inp.engine_config
