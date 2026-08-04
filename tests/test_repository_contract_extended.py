@@ -346,7 +346,17 @@ def test_pagos_huerfanos_cerrados_upsert_y_lectura(repo: Repository) -> None:
 
 
 def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None:
-    # so_id tiene FK a ordenes_venta -- se necesita la orden padre primero.
+    # so_id tiene FK a ordenes_venta, que a su vez tiene FK a clientes --
+    # se necesitan ambos padres primero.
+    repo.upsert_clientes(
+        [
+            Cliente(
+                cliente_id="CLI_DESC_SISTEMA",
+                nombre="Cliente Desc Sistema",
+                vendedor_email="ana@lubrikca.com",
+            )
+        ]
+    )
     repo.upsert_ordenes(
         [
             OrdenVenta(
