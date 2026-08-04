@@ -1368,3 +1368,62 @@ def test_conceptos_descuento_teorico_respeta_listas_aplicables() -> None:
     assert conceptos_usd[0]["monto"] == Decimal("50.00")  # 10*100*0.05
 
     assert conceptos_bcv == []
+
+
+def test_calcular_teorico_orden_con_fallback_detecta_fallback_por_lista() -> None:
+    """Fase 10: calcular_teorico_orden_con_fallback devuelve los teóricos +
+
+    si alguna línea usó precio de fallback (no encontrado en la lista
+    específica) -- señal para saber cuándo re-verificar un teórico ya
+    guardado en ventas_teoricos."""
+    from cxc.engine.discounts import calcular_teorico_orden_con_fallback
+    from cxc.engine.price_resolver import PriceResolver
+
+    class _ResolverConFallback(PriceResolver):
+        """Simula OdooPriceResolver: P2 no tiene precio propio en BCV,
+
+        usa fallback (mismo valor que USD)."""
+
+        def precio(self, producto, lista, fecha=None):
+            precios = {
+                ("P1", "USD"): Decimal("100"),
+                ("P1", "BCV"): Decimal("90"),
+                ("P2", "USD"): Decimal("50"),
+            }
+            clave = (producto, lista)
+            if clave in precios:
+                return precios[clave]
+            # Fallback: P2 en BCV no existe, usa el de USD.
+            return precios[(producto, "USD")]
+
+        def volumen(self, producto):
+            return Decimal("0")
+
+        def fue_fallback(self, producto, lista):
+            return producto == "P2" and lista == "BCV"
+
+    orden = b.orden(primera=False)
+    linea1 = b.linea(
+        producto="P1", marca="Sinoco", categoria="Comercial", cantidad="1", precio="100"
+    )
+    linea2 = b.linea(
+        producto="P2", marca="Sinoco", categoria="Comercial", cantidad="1", precio="50"
+    )
+
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea1, linea2],
+        abonos=[],
+        resolver=_ResolverConFallback(),
+        valid_usd=["USD"],
+        valid_ves=["BCV"],
+    )
+
+    resultado = calcular_teorico_orden_con_fallback(inp)
+
+    assert resultado["lista_ves_id"] == "BCV"
+    assert resultado["lista_usd_id"] == "USD"
+    assert resultado["usa_fallback_ves"] is True  # P2 usó fallback en BCV
+    assert resultado["usa_fallback_usd"] is False  # ambos tienen precio propio en USD
+    assert resultado["teorico_ves"] == Decimal("140.00")  # 90 (P1) + 50 (P2 fallback)
+    assert resultado["teorico_usd"] == Decimal("150.00")  # 100 + 50

@@ -33,3 +33,47 @@ def test_odoo_price_resolver_fallback_usa_list_price_usd_no_list_price():
 
     resolver = OdooPriceResolver(fake_execute, {"USD": 4})
     assert resolver.precio("1012", "4") == Decimal("1961.54")
+
+
+def test_odoo_price_resolver_fue_fallback_false_si_regla_fija_en_la_lista_pedida():
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.pricelist.item":
+            return [{"fixed_price": "100.0", "date_start": False, "date_end": False}]
+        return []
+
+    resolver = OdooPriceResolver(fake_execute, {"USD": 4})
+    resolver.precio("923", "4")
+    assert resolver.fue_fallback("923", "4") is False
+
+
+def test_odoo_price_resolver_fue_fallback_true_si_uso_otra_pricelist_de_respaldo():
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.pricelist.item":
+            pl_id = next((c[2] for c in (args[0] if args else []) if c[0] == "pricelist_id"), None)
+            if pl_id == 5:  # solo la pricelist de respaldo (5) tiene regla
+                return [{"fixed_price": "90.0", "date_start": False, "date_end": False}]
+            return []
+        return []
+
+    resolver = OdooPriceResolver(fake_execute, {"USD": 4}, fallback_pricelist_ids=[5])
+    precio = resolver.precio("923", "4")
+    assert precio == Decimal("90.0")
+    assert resolver.fue_fallback("923", "4") is True
+
+
+def test_odoo_price_resolver_fue_fallback_true_si_uso_precio_de_ficha():
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.pricelist.item":
+            return []
+        if model == "product.product":
+            return [{"list_price_usd": 50.0}]
+        return []
+
+    resolver = OdooPriceResolver(fake_execute, {"USD": 4})
+    resolver.precio("1012", "4")
+    assert resolver.fue_fallback("1012", "4") is True
+
+
+def test_odoo_price_resolver_fue_fallback_default_false_sin_consultar_antes():
+    resolver = OdooPriceResolver(lambda *a, **k: [], {"USD": 4})
+    assert resolver.fue_fallback("999", "4") is False

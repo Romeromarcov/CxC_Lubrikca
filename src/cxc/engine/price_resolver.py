@@ -22,6 +22,20 @@ class PriceResolver(ABC):
     def volumen(self, producto: str) -> Decimal:
         """Volumen en litros del producto template."""
 
+    def fue_fallback(self, producto: str, lista: str) -> bool:
+        """True si el último ``precio()`` resuelto para (producto, lista)
+
+        NO vino de una regla fija en ``lista`` -- vino de otra pricelist
+        configurada como respaldo, o del precio de venta $ de la ficha del
+        producto (Fase 10: señal para saber cuándo un teórico guardado en
+        ``ventas_teoricos`` necesita re-verificarse -- si esa lista se
+        completa más tarde con el precio faltante). Default False: los
+        resolvers en memoria (``DictPriceResolver``, usado en tests) no
+        tienen esa ambigüedad -- cada (producto, lista) mapea a un único
+        precio explícito.
+        """
+        return False
+
 
 class DictPriceResolver(PriceResolver):
     """Resolver en memoria — ``{(producto, lista): precio}``."""

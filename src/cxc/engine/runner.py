@@ -12,9 +12,9 @@ import dataclasses
 import logging
 from datetime import date
 
-from ..models import BandejaFacturacion, MetodoPago, Vinculacion
+from ..models import BandejaFacturacion, MetodoPago, VentasTeorico, Vinculacion
 from ..repositories import Repository
-from .discounts import EngineInputs, calcular_factura
+from .discounts import EngineInputs, calcular_factura, calcular_teorico_orden_con_fallback
 from .historical_pricing import cargar_mapa_historico, es_orden_historica
 from .price_resolver import PriceResolver
 
@@ -189,3 +189,55 @@ class EngineRunner:
         self._repo.upsert_bandejas(resultados)
         self._repo.update_vinculaciones(todas_vincs)
         return resultados
+
+    def run_teoricos_pendientes(self, fecha_calculo: date, limite: int | None = None) -> int:
+        """Calcula ``ventas_teoricos`` (Fase 10) para órdenes que AÚN no lo
+
+        tienen, o que sí lo tienen pero quedaron marcadas
+        ``usa_fallback_ves``/``_usd`` (su precio no estaba en la lista
+        específica -- se re-verifica por si esa lista ya se completó).
+
+        A diferencia de ``run_all``, procesa órdenes SIN importar si ya
+        están facturadas -- el teórico es precisamente el punto de
+        comparación que más se necesita para órdenes ya facturadas (ver
+        docstring de la tabla en ``db/schema.py``). Órdenes canceladas/
+        borrador se saltan igual que ``run_all`` (no tiene sentido un
+        teórico para una orden que nunca se concretó).
+
+        ``limite``: tope de órdenes a procesar en esta corrida (cada una
+        implica varias llamadas a Odoo vía el price resolver) -- None
+        procesa todas las pendientes.
+        """
+        existentes = {v.so_id: v for v in self._repo.all_ventas_teoricos()}
+        procesadas = 0
+        for o in self._repo.all_ordenes():
+            if limite is not None and procesadas >= limite:
+                break
+            st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
+            if st in ("cancel", "cancelled", "draft"):
+                continue
+            existente = existentes.get(o.so_id)
+            if existente is not None and not (
+                existente.usa_fallback_ves or existente.usa_fallback_usd
+            ):
+                continue  # ya calculado y sin fallback -- el teórico es fijo, no se toca
+
+            inputs = self.build_inputs(o.so_id, fecha_calculo)
+            if inputs is None:
+                continue
+            resultado = calcular_teorico_orden_con_fallback(inputs)
+            self._repo.upsert_ventas_teorico(
+                VentasTeorico(
+                    so_id=o.so_id,
+                    teorico_ves=resultado["teorico_ves"],
+                    teorico_usd=resultado["teorico_usd"],
+                    descuentos_teorico_ves=resultado["descuentos_teorico_ves"],
+                    descuentos_teorico_usd=resultado["descuentos_teorico_usd"],
+                    lista_ves_id=resultado["lista_ves_id"],
+                    lista_usd_id=resultado["lista_usd_id"],
+                    usa_fallback_ves=resultado["usa_fallback_ves"],
+                    usa_fallback_usd=resultado["usa_fallback_usd"],
+                )
+            )
+            procesadas += 1
+        return procesadas

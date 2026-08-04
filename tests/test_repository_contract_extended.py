@@ -35,6 +35,7 @@ from cxc.models import (
     PromocionPrimeraCompra,
     TipoBeneficio,
     TipoFeriado,
+    VentasTeorico,
 )
 from cxc.repositories import InMemoryRepository, Repository
 
@@ -405,6 +406,72 @@ def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None
     rows2 = repo.all_descuentos_sistema_aprobados()
     assert len(rows2) == 1
     assert rows2[0]["activo"] == "false"
+
+
+# --- Teóricos de Ventas (Fase 10) ---------------------------------------------
+
+
+def test_ventas_teoricos_upsert_y_lectura(repo: Repository) -> None:
+    repo.upsert_clientes(
+        [Cliente(cliente_id="CLI_VT", nombre="Cliente VT", vendedor_email="ana@lubrikca.com")]
+    )
+    repo.upsert_ordenes(
+        [
+            OrdenVenta(
+                so_id="SO_VT",
+                cliente_id="CLI_VT",
+                fecha=date(2026, 1, 1),
+                fecha_entrega=None,
+                monto_total=Decimal("100.00"),
+                lista_precios="4",
+                vendedor_email="ana@lubrikca.com",
+                es_primera_compra=False,
+            )
+        ]
+    )
+    assert repo.all_ventas_teoricos() == []
+    assert repo.get_ventas_teorico("SO_VT") is None
+
+    repo.upsert_ventas_teorico(
+        VentasTeorico(
+            so_id="SO_VT",
+            teorico_ves=Decimal("120.00"),
+            teorico_usd=Decimal("100.00"),
+            descuentos_teorico_ves=Decimal("6.00"),
+            descuentos_teorico_usd=Decimal("5.00"),
+            lista_ves_id="5",
+            lista_usd_id="4",
+            usa_fallback_ves=False,
+            usa_fallback_usd=True,
+            calculado_en=datetime(2026, 1, 2, 10, 0),
+        )
+    )
+    fila = repo.get_ventas_teorico("SO_VT")
+    assert fila is not None
+    assert fila.teorico_ves == Decimal("120.00")
+    assert fila.usa_fallback_ves is False
+    assert fila.usa_fallback_usd is True
+    assert len(repo.all_ventas_teoricos()) == 1
+
+    # Upsert por PK natural (so_id) actualiza en vez de duplicar -- así se
+    # re-verifica una orden marcada usa_fallback sin crear una fila nueva.
+    repo.upsert_ventas_teorico(
+        VentasTeorico(
+            so_id="SO_VT",
+            teorico_ves=Decimal("120.00"),
+            teorico_usd=Decimal("100.00"),
+            descuentos_teorico_ves=Decimal("6.00"),
+            descuentos_teorico_usd=Decimal("5.00"),
+            lista_ves_id="5",
+            lista_usd_id="4",
+            usa_fallback_ves=False,
+            usa_fallback_usd=False,
+            calculado_en=datetime(2026, 1, 3, 10, 0),
+        )
+    )
+    filas = repo.all_ventas_teoricos()
+    assert len(filas) == 1
+    assert filas[0].usa_fallback_usd is False
 
 
 # --- Listas de precios históricas (solo lectura) ------------------------------

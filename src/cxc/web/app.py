@@ -1181,6 +1181,46 @@ async def api_sync_manual(lookback_days: int = 7):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.api_route("/api/backfill/ventas-teoricos", methods=["GET", "POST"])
+async def api_backfill_ventas_teoricos(limite: int | None = None):
+    """Backfill manual de ``ventas_teoricos`` (Fase 10) -- corre en el
+
+    request (no en el daemon de 5 min) para el llenado inicial masivo de
+    órdenes existentes; el daemon (``recalculate_all_orders``) se encarga
+    de las nuevas/re-verificaciones con un tope de 50 por ciclo. Puede
+    tardar varios minutos contra cientos de órdenes -- pensado para
+    correrse una vez (o con ``limite`` para ir en tandas).
+    """
+    try:
+        config = AppConfig.from_env()
+        repo = get_repo()
+        execute = _connect(config.odoo)
+        if not execute:
+            raise HTTPException(status_code=503, detail="Sin conexión a Odoo")
+
+        usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
+        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
+        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        pricelist_ids = {"USD": primary_usd_id, "BCV": primary_ves_id}
+        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
+        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
+        runner = EngineRunner(repo, resolver, config.engine)
+
+        procesadas = await asyncio.to_thread(
+            runner.run_teoricos_pendientes, date.today(), limite
+        )
+        return {
+            "status": "ok",
+            "ordenes_procesadas": procesadas,
+            "mensaje": f"{procesadas} orden(es) calculada(s)/re-verificada(s) en ventas_teoricos.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 async def run_scraper_in_background():
     # Esperar 30 segundos tras el arranque inicial antes del primer scrape de tasas
     await asyncio.sleep(30)
@@ -1905,6 +1945,18 @@ def recalculate_all_orders():
         runner = EngineRunner(repo, resolver, config.engine)
 
         resultados = runner.run_all(date.today())
+
+        # Fase 10: teóricos de Ventas -- a diferencia de run_all, SÍ cubre
+        # órdenes ya facturadas (por eso vive aparte de Bandeja). Tope por
+        # ciclo (no todas de una) para no golpear Odoo con cientos de
+        # órdenes pendientes en una sola corrida de 5 min -- el backfill
+        # inicial masivo se dispara aparte via /api/backfill/ventas-teoricos.
+        try:
+            n_teoricos = runner.run_teoricos_pendientes(date.today(), limite=50)
+            if n_teoricos:
+                print(f"Teóricos de Ventas: {n_teoricos} orden(es) calculada(s)/re-verificada(s).")
+        except Exception as e_teo:
+            print(f"Error calculando teóricos de Ventas: {e_teo}", file=sys.stderr)
 
         facturas = OdooFacturasReader(execute)
         Reconciler(repo, facturas, config.reconciliation).run()
@@ -6543,6 +6595,9 @@ async def get_auditoria():
         lines_rows = _all_lineas_rows(repo)
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
+        # Fase 10: teóricos VES/USD viven en su propia tabla (fija, cubre
+        # también órdenes facturadas) -- ver ventas_teoricos en db/schema.py.
+        teoricos_map = {v.so_id: v for v in repo.all_ventas_teoricos()}
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
 
         # Load UI configured pricelists (USD & VES) from _Meta
@@ -6994,20 +7049,20 @@ async def get_auditoria():
                 discrepancias_pendientes.append(item)
 
         # Tarea 4 (venta bruta teórica derivada, VES/USD): a/b/c del diseño
-        # -- lee equivalente_lista_usd/teorico_lista_ves/teorico_lista_usd/
-        # descuentos_teorico_ves/descuentos_teorico_usd de BandejaFacturacion
-        # (Tarea 3a/3b, ya calculados por el motor) y solo aplica impuestos +
-        # resta -- no recalcula ningún descuento aquí.
+        # -- Fase 10: lee de ventas_teoricos (tabla fija, cubre también
+        # órdenes facturadas), NO de BandejaFacturacion -- y solo aplica
+        # impuestos + resta, no recalcula ningún descuento aquí.
         _iva_rate = float(config.engine.iva_rate)
         venta_bruta_teorica_auditoria = []
         for o in ordenes:
-            b = bandeja_map.get(o.so_id)
-            if b is None:
+            teorico_row = teoricos_map.get(o.so_id)
+            if teorico_row is None:
                 continue
-            teorico_ves = float(b.teorico_lista_ves)
-            teorico_usd = float(b.teorico_lista_usd)
-            desc_ves = float(b.descuentos_teorico_ves)
-            desc_usd = float(b.descuentos_teorico_usd)
+            b = bandeja_map.get(o.so_id)
+            teorico_ves = float(teorico_row.teorico_ves)
+            teorico_usd = float(teorico_row.teorico_usd)
+            desc_ves = float(teorico_row.descuentos_teorico_ves)
+            desc_usd = float(teorico_row.descuentos_teorico_usd)
             ves_bruta_mas_iva = teorico_ves * (1 + _iva_rate)
             ves_neta = teorico_ves - desc_ves
             ves_neta_mas_iva = ves_neta * (1 + _iva_rate)
@@ -7031,7 +7086,7 @@ async def get_auditoria():
                     },
                     "venta_real": {
                         "orden_total": round(float(o.monto_total), 2),
-                        "factura_neto": round(float(b.total_motor), 2),
+                        "factura_neto": round(float(b.total_motor), 2) if b else None,
                     },
                 }
             )
@@ -7215,11 +7270,16 @@ async def get_ventas(
     vigente para su fecha, y el teórico existe justamente para EVIDENCIAR
     la discrepancia entre ambas listas, no para repetir un cálculo genérico
     igual al de la lista aplicada. En su lugar se exponen 8 columnas
-    explícitas, ``{ves,usd}_{bruta,neta}_teorica[_iva]``, leídas de
-    ``BandejaFacturacion.teorico_lista_{ves,usd}``/``descuentos_teorico_
-    {ves,usd}`` (ya calculadas por el motor -- este endpoint solo aplica
-    impuestos, no recalcula ningún descuento). Ambos bloques (VES y USD)
-    coexisten siempre, incluso si la orden nació en una sola lista.
+    explícitas, ``{ves,usd}_{bruta,neta}_teorica[_iva]``, leídas de la tabla
+    ``ventas_teoricos`` (Fase 10 -- punto de comparación FIJO, calculado
+    una vez por orden y NO recalculado en cada ciclo, a diferencia de
+    ``BandejaFacturacion`` que se recalcula constantemente y explícitamente
+    SALTA órdenes ya facturadas -- ver docstring de la tabla en db/schema.py).
+    Este endpoint solo aplica impuestos, no recalcula ningún descuento.
+    Ambos bloques (VES y USD) coexisten siempre, incluso si la orden nació
+    en una sola lista. Si ``ventas_teoricos`` aún no tiene fila para una
+    orden (nunca calculado -- ver ``/api/backfill/ventas-teoricos``), los 4
+    campos de estatus de pago teórico devuelven ``"sin_datos"``.
 
     Causa raíz corregida (bug orden 771, antes VES y USD salían idénticos):
     ``_determinar_lista``/``_teoricos_por_lista`` (``engine/discounts.py``)
@@ -7292,6 +7352,10 @@ async def get_ventas(
 
         ordenes = repo.all_ordenes()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
+        # Fase 10: los teóricos VES/USD viven en su propia tabla (fija, NO
+        # se recalcula cada ciclo y SÍ cubre órdenes facturadas -- ver
+        # docstring de ventas_teoricos en db/schema.py), no en Bandeja.
+        teoricos_map = {v.so_id: v for v in repo.all_ventas_teoricos()}
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         # Tarea 3e: descuentos aprobados manualmente desde la Bandeja 1 de
         # Facturación (nunca se escriben a Odoo) -- solo el registro activo
@@ -7455,15 +7519,15 @@ async def get_ventas(
             return "sin_pago"
 
         def _sin_datos_teorico(
-            b_row: Any, bruta: float | None, precio_base: float
+            teorico_row: Any, bruta: float | None, precio_base: float
         ) -> bool:
-            # Bandeja inexistente, o existente pero con el teórico de ESTA
-            # lista en 0 mientras el precio base sí se calculó (hueco de
-            # datos -- ej. KeyError silencioso en _teoricos_por_lista por
-            # falta de precio de algún producto en esa lista específica,
-            # ver engine/discounts.py) -- NO es lo mismo que "nada que
-            # pagar" (target real 0).
-            if b_row is None or bruta is None:
+            # Fase 10: ventas_teoricos aún sin fila para esta orden (nunca
+            # calculado -- ver /api/backfill/ventas-teoricos y el daemon).
+            # Extra: incluso con fila, un teórico en 0 mientras el precio
+            # base real sí se calculó es sospechoso (ej. producto sin
+            # precio en NINGUNA lista/ficha) -- se trata igual como "sin
+            # datos" en vez de "nada que pagar".
+            if teorico_row is None or bruta is None:
                 return True
             return bruta <= 0.005 and precio_base > 0.005
 
@@ -7510,12 +7574,13 @@ async def get_ventas(
             # antes salían idénticos por una causa raíz en el motor, ya
             # corregida -- estas columnas son las que hacen visible ese tipo
             # de discrepancia si volviera a ocurrir).
-            ves_bruta_teorica = float(b.teorico_lista_ves) if b else None
-            usd_bruta_teorica = float(b.teorico_lista_usd) if b else None
-            ves_desc_teorico = float(b.descuentos_teorico_ves) if b else 0.0
-            usd_desc_teorico = float(b.descuentos_teorico_usd) if b else 0.0
-            ves_neta_teorica = (ves_bruta_teorica - ves_desc_teorico) if b else None
-            usd_neta_teorica = (usd_bruta_teorica - usd_desc_teorico) if b else None
+            teorico_row = teoricos_map.get(o.so_id)
+            ves_bruta_teorica = float(teorico_row.teorico_ves) if teorico_row else None
+            usd_bruta_teorica = float(teorico_row.teorico_usd) if teorico_row else None
+            ves_desc_teorico = float(teorico_row.descuentos_teorico_ves) if teorico_row else 0.0
+            usd_desc_teorico = float(teorico_row.descuentos_teorico_usd) if teorico_row else 0.0
+            ves_neta_teorica = (ves_bruta_teorica - ves_desc_teorico) if teorico_row else None
+            usd_neta_teorica = (usd_bruta_teorica - usd_desc_teorico) if teorico_row else None
             ves_neta_teorica_iva = (
                 ves_neta_teorica * (1 + iva_rate + igtf_rate)
                 if ves_neta_teorica is not None
@@ -7633,7 +7698,7 @@ async def get_ventas(
             estatus_pago_teorico_ves = (
                 "sin_datos"
                 if (
-                    _sin_datos_teorico(b, ves_bruta_teorica, precio_base_calculado)
+                    _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
                     or ves_neta_teorica_iva is None
                 )
                 else _estado_pago(val_bcv, ves_neta_teorica_iva)
@@ -7641,7 +7706,7 @@ async def get_ventas(
             estatus_pago_teorico_usd = (
                 "sin_datos"
                 if (
-                    _sin_datos_teorico(b, usd_bruta_teorica, precio_base_calculado)
+                    _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
                     or usd_neta_teorica_iva is None
                 )
                 else _estado_pago(val_binance, usd_neta_teorica_iva)

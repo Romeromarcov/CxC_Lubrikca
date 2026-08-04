@@ -41,6 +41,7 @@ from ..models import (
     TipoBeneficio,
     TipoFeriado,
     TipoTasa,
+    VentasTeorico,
     Vinculacion,
 )
 
@@ -724,6 +725,37 @@ def bandeja_from_row(r: Mapping[str, str]) -> BandejaFacturacion:
         teorico_lista_usd=p_dec(r.get("teorico_lista_usd", "0")),
         descuentos_teorico_ves=p_dec(r.get("descuentos_teorico_ves", "0")),
         descuentos_teorico_usd=p_dec(r.get("descuentos_teorico_usd", "0")),
+    )
+
+
+# --- VentasTeoricos (Fase 10) -------------------------------------------------
+def ventas_teorico_to_row(v: VentasTeorico) -> Row:
+    return {
+        "so_id": v.so_id,
+        "teorico_ves": str(v.teorico_ves),
+        "teorico_usd": str(v.teorico_usd),
+        "descuentos_teorico_ves": str(v.descuentos_teorico_ves),
+        "descuentos_teorico_usd": str(v.descuentos_teorico_usd),
+        "lista_ves_id": v.lista_ves_id,
+        "lista_usd_id": v.lista_usd_id,
+        "usa_fallback_ves": s_bool(v.usa_fallback_ves),
+        "usa_fallback_usd": s_bool(v.usa_fallback_usd),
+        "calculado_en": s_dt(v.calculado_en),
+    }
+
+
+def ventas_teorico_from_row(r: Mapping[str, str]) -> VentasTeorico:
+    return VentasTeorico(
+        so_id=r["so_id"],
+        teorico_ves=p_dec(r.get("teorico_ves", "0")),
+        teorico_usd=p_dec(r.get("teorico_usd", "0")),
+        descuentos_teorico_ves=p_dec(r.get("descuentos_teorico_ves", "0")),
+        descuentos_teorico_usd=p_dec(r.get("descuentos_teorico_usd", "0")),
+        lista_ves_id=r.get("lista_ves_id", ""),
+        lista_usd_id=r.get("lista_usd_id", ""),
+        usa_fallback_ves=p_bool(r.get("usa_fallback_ves", "FALSE")),
+        usa_fallback_usd=p_bool(r.get("usa_fallback_usd", "FALSE")),
+        calculado_en=p_dt(r["calculado_en"]) if r.get("calculado_en") else datetime.now(),
     )
 
 

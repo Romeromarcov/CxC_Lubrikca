@@ -53,6 +53,7 @@ from ..models import (
     TipoDescuento,
     TipoFeriado,
     TipoTasa,
+    VentasTeorico,
     Vinculacion,
 )
 from ..repositories import Repository
@@ -732,6 +733,23 @@ class PostgresRepository(Repository):
             descuentos_por_so.setdefault(d.so_id, []).append(_row_to_descuento_aplicado(d))
         return [_row_to_bandeja(r, descuentos_por_so.get(r.so_id, [])) for r in rows]
 
+    # --- Teóricos de Ventas (Fase 10) -----------------------------------------
+    def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.ventas_teoricos, [_dataclass_row(fila)], ["so_id"])
+
+    def get_ventas_teorico(self, so_id: str) -> VentasTeorico | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(t.ventas_teoricos).where(t.ventas_teoricos.c.so_id == so_id)
+            ).first()
+        return _row_to_ventas_teorico(row) if row else None
+
+    def all_ventas_teoricos(self) -> list[VentasTeorico]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.ventas_teoricos)).all()
+        return [_row_to_ventas_teorico(r) for r in rows]
+
     # --- Conciliación ----------------------------------------------------------
     def upsert_conciliacion(self, fila: Conciliacion) -> None:
         self.upsert_conciliaciones([fila])
@@ -1208,6 +1226,21 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
 
 def _row_to_descuento_aplicado(r: Any) -> DescuentoAplicado:
     return DescuentoAplicado(origen=r.origen, descripcion=r.descripcion, monto=r.monto)
+
+
+def _row_to_ventas_teorico(r: Any) -> VentasTeorico:
+    return VentasTeorico(
+        so_id=r.so_id,
+        teorico_ves=r.teorico_ves,
+        teorico_usd=r.teorico_usd,
+        descuentos_teorico_ves=r.descuentos_teorico_ves,
+        descuentos_teorico_usd=r.descuentos_teorico_usd,
+        lista_ves_id=r.lista_ves_id,
+        lista_usd_id=r.lista_usd_id,
+        usa_fallback_ves=r.usa_fallback_ves,
+        usa_fallback_usd=r.usa_fallback_usd,
+        calculado_en=r.calculado_en,
+    )
 
 
 def _conciliacion_to_row(c: Conciliacion) -> dict[str, Any]:

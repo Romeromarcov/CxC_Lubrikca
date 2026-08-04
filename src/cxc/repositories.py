@@ -39,6 +39,7 @@ from .models import (
     ReglaRecurrencia,
     SerieTasa,
     TipoBeneficio,
+    VentasTeorico,
     Vinculacion,
 )
 
@@ -309,6 +310,16 @@ class Repository(ABC):
     @abstractmethod
     def all_bandeja(self) -> list[BandejaFacturacion]: ...
 
+    # --- Teóricos de Ventas (Fase 10 -- fijos, fuera de Bandeja) --------------
+    @abstractmethod
+    def upsert_ventas_teorico(self, fila: VentasTeorico) -> None: ...
+
+    @abstractmethod
+    def get_ventas_teorico(self, so_id: str) -> VentasTeorico | None: ...
+
+    @abstractmethod
+    def all_ventas_teoricos(self) -> list[VentasTeorico]: ...
+
     # --- Conciliación --------------------------------------------------------
     @abstractmethod
     def upsert_conciliacion(self, fila: Conciliacion) -> None: ...
@@ -341,6 +352,7 @@ class InMemoryRepository(Repository):
         self._feriados: list[Feriado] = []
         self._exclusiones: list[ExclusionRegla] = []
         self._bandeja: dict[str, BandejaFacturacion] = {}
+        self._ventas_teoricos: dict[str, VentasTeorico] = {}
         self._conciliaciones: dict[str, Conciliacion] = {}
         self._config: dict[str, str] = {}
         self._descuentos_producto: list[DescuentoProducto] = []
@@ -682,6 +694,16 @@ class InMemoryRepository(Repository):
 
     def all_bandeja(self) -> list[BandejaFacturacion]:
         return list(self._bandeja.values())
+
+    # --- Teóricos de Ventas (Fase 10) -----------------------------------------
+    def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        self._ventas_teoricos[fila.so_id] = fila
+
+    def get_ventas_teorico(self, so_id: str) -> VentasTeorico | None:
+        return self._ventas_teoricos.get(so_id)
+
+    def all_ventas_teoricos(self) -> list[VentasTeorico]:
+        return list(self._ventas_teoricos.values())
 
     # --- Conciliación --------------------------------------------------------
     def upsert_conciliacion(self, fila: Conciliacion) -> None:
