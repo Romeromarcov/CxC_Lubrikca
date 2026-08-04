@@ -572,3 +572,111 @@ def test_estatus_pago_usa_pagos_odoo_directos_sin_vinculaciones() -> None:
 
     assert item["estatus_pago_real_orden"] == "pagada"
     assert item["estatus_pago_real_factura"] == "pagada"
+
+
+def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> None:
+    """Alerta "Revisar" -- 3 casos reales encontrados en producción (SO 465/485):
+
+    devolución registrada, entrega de más (cantidad_entregada > cantidad
+    pedida), y orden cancelada en Odoo cuya mercancía nunca fue devuelta.
+    Una orden sin ninguno de los 3 casos debe salir con revisar_motivo=None.
+    """
+    from cxc.models import LineaOrden
+
+    def _fake_execute_revisar(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_DEVUELTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_ENTREGA_MAS", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_CANCELADA_SIN_DEV", "state": "cancel", "amount_untaxed": 100.0},
+                {"name": "SO_LIMPIA", "state": "sale", "amount_untaxed": 100.0},
+            ]
+        if model == "sale.order" and method == "search_read":
+            pass
+        if model == "sale.order.line":
+            return []
+        if model == "account.move":
+            return []
+        if model == "account.move.line":
+            return []
+        # get_live_delivered_not_returned: SO_CANCELADA_SIN_DEV tiene un
+        # picking de salida "done" sin devolución -- es la excepción de
+        # negocio que la deja pasar el filtro de orden_excluida.
+        if model == "sale.order" and "picking_ids" in str(kwargs):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+
+    def _orden_revisar(so_id, *, tiene_devolucion=False, estado_orden="sale"):
+        return OrdenVenta(
+            so_id=so_id,
+            cliente_id="CLI_REV",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden=estado_orden,
+            facturada=False,
+            tiene_devolucion=tiene_devolucion,
+        )
+
+    mock_repo.all_ordenes.return_value = [
+        _orden_revisar("SO_DEVUELTA", tiene_devolucion=True),
+        _orden_revisar("SO_ENTREGA_MAS"),
+        _orden_revisar("SO_CANCELADA_SIN_DEV", estado_orden="cancel"),
+        _orden_revisar("SO_LIMPIA"),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_lineas.return_value = [
+        LineaOrden(
+            linea_id="L_MAS",
+            so_id="SO_ENTREGA_MAS",
+            producto="101",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+            cantidad_entregada=Decimal("12"),
+        ),
+        LineaOrden(
+            linea_id="L_LIMPIA",
+            so_id="SO_LIMPIA",
+            producto="101",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+            cantidad_entregada=Decimal("10"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_revisar),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+        patch(
+            "cxc.web.app.get_live_delivered_not_returned",
+            return_value={"SO_CANCELADA_SIN_DEV"},
+        ),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Devolución" in by_so["SO_DEVUELTA"]["revisar_motivo"]
+    assert "Entrega de más" in by_so["SO_ENTREGA_MAS"]["revisar_motivo"]
+    assert "cancelada" in by_so["SO_CANCELADA_SIN_DEV"]["revisar_motivo"].lower()
+    assert by_so["SO_LIMPIA"]["revisar_motivo"] is None

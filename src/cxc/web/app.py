@@ -7378,6 +7378,13 @@ async def get_ventas(
         for v in repo.all_vinculaciones():
             vincs_por_so.setdefault(v.so_id, []).append(v)
 
+        # Alerta "Revisar" (devolución/entrega de más/cancelada sin
+        # devolver): cantidades pedida vs entregada, una sola pasada
+        # agrupada por orden (no golpear la BD una vez por fila).
+        lineas_por_so: dict[str, list[Any]] = {}
+        for ln in repo.all_lineas():
+            lineas_por_so.setdefault(ln.so_id, []).append(ln)
+
         usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
         usd_ids_str = {str(x) for x in usd_pricelist_ids}
         historical_enabled = is_historical_pricelist_enabled(repo)
@@ -7549,6 +7556,25 @@ async def get_ventas(
                 v_email = str(o.vendedor_email or "").strip().lower()
                 if v_email != u_name and user["email"].strip().lower() not in v_email:
                     continue
+
+            # Alerta "Revisar" -- 3 casos independientes, se combinan en un
+            # solo campo con motivos separados por "; " (columna única en
+            # Ventas, tooltip lista cuál aplica; ver docs de esta fase).
+            revisar_motivos: list[str] = []
+            if o.tiene_devolucion:
+                revisar_motivos.append("Devolución registrada (total o parcial)")
+            lineas_o = lineas_por_so.get(o.so_id, [])
+            if lineas_o:
+                cant_pedida = sum(float(ln.cantidad) for ln in lineas_o)
+                cant_entregada = sum(float(ln.cantidad_entregada) for ln in lineas_o)
+                if cant_entregada > cant_pedida + 0.005:
+                    revisar_motivos.append(
+                        f"Entrega de más ({cant_entregada:.2f} entregado "
+                        f"vs {cant_pedida:.2f} pedido)"
+                    )
+            if live_state in ("cancel", "cancelled") and entrega_valida:
+                revisar_motivos.append("Orden cancelada en Odoo, mercancía sin devolver")
+            revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
 
             b = bandeja_map.get(o.so_id)
             monto_orig = float(o.monto_total)  # amount_total Odoo: YA con impuestos
@@ -7747,6 +7773,7 @@ async def get_ventas(
                     "total_facturado_neto": round(total_facturado_neto, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
+                    "revisar_motivo": revisar_motivo,
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por
                     # reselección según método de pago -- ver docstring del

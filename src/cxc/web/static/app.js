@@ -1490,7 +1490,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="38" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="39" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1506,6 +1506,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 : (item.facturada
                     ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">OK</span>'
                     : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>');
+            if (item.revisar_motivo) {
+                row.style.background = "#fffbeb";
+            }
+            const revisarCell = item.revisar_motivo
+                ? `<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;cursor:help;" title="${item.revisar_motivo}">🔍 Revisar</span>`
+                : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>';
 
             const naVal = (v) => v != null ? fmt(v) : '—';
             const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
@@ -1561,6 +1567,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${fmt(item.saldo_pendiente_cxc)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
                 <td>${alertaCell}</td>
+                <td>${revisarCell}</td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
             `;
