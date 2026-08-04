@@ -436,7 +436,14 @@ def test_e2e_08_executive_daily_report():
     ]
     mock_repo.all_serie_tasas.return_value = []
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+    # _connect debe ir mockeada a None (sin Odoo real) -- si no, el
+    # endpoint consulta account.payment EN VIVO y pisa por completo los
+    # datos mockeados de arriba con lo que sea que Odoo tenga hoy,
+    # volviendo el test no-determinista según el entorno donde corra.
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
         res = client.get("/api/reporte/diario")
         assert res.status_code == 200
         data = res.json()
@@ -497,7 +504,10 @@ def test_e2e_08b_reporte_diario_resumen_cobranza_desglose_metodo_y_ves():
         )
     ]
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
         res = client.get("/api/reporte/diario")
         assert res.status_code == 200
         cobranza_hoy = res.json()["resumen"]["cobranza"]["hoy"]
