@@ -385,7 +385,9 @@ def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None
     rows = repo.all_descuentos_sistema_aprobados()
     assert len(rows) == 1
     assert rows[0]["so_id"] == "SO_DESC_SISTEMA"
-    assert rows[0]["monto"] == "10.00"
+    # MONEY en Postgres devuelve "10.0000" (4 decimales); InMemory conserva
+    # el string tal cual se guardo -- comparar via Decimal para ambos.
+    assert Decimal(rows[0]["monto"]) == Decimal("10.00")
     assert rows[0]["activo"] == "true"
 
     # Upsert por PK natural (so_id) actualiza en vez de duplicar, y permite
