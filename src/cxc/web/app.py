@@ -1034,19 +1034,70 @@ def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
 
 
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
+    """Tasa BCV/Binance más cercana a ``dt``.
+
+    Orden de fuentes (nunca un default hardcodeado -- auditoría de tasas
+    históricas, agosto 2026): 1) ``SerieTasas`` (scraper horario, solo
+    cubre desde que el cron corre -- en producción, desde 2026-07-25) si
+    tiene una captura del MISMO día que ``dt``; 2) si no, cae a
+    ``TasasHistoricasAuditoria`` (tabla poblada con la tasa BCV real de
+    Odoo día a día desde 2026-02-01, y Binance real donde ``SerieTasas`` sí
+    la capturó, o estimada con el diferencial de mercado donde no --
+    ``scripts/cargar_tasas_historicas.py``); 3) como ÚLTIMO recurso, si
+    ninguna fuente tiene NADA (no debería pasar tras la siembra inicial),
+    usa la fila de ``SerieTasas`` más cercana aunque sea de otro día.
+    """
+    repo = get_repo()
     if rows is None:
-        repo = get_repo()
         rows = _all_serie_tasas_rows(repo)
-    if not rows:
-        return Decimal("36.5"), Decimal("38.0")
 
-    closest_row = _closest_serie_row(dt, rows)
-    if closest_row:
-        return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
-            closest_row.get("tasa_binance")
+    fecha_str = dt.date().isoformat()
+    if rows:
+        closest_row = _closest_serie_row(dt, rows)
+        if closest_row and str(closest_row.get("timestamp", ""))[:10] == fecha_str:
+            return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
+                closest_row.get("tasa_binance")
+            )
+
+    try:
+        hist_rows = repo.all_tasas_historicas_auditoria()
+    except Exception as e_hist:
+        logger.warning(
+            "Error leyendo TasasHistoricasAuditoria en get_rate_for_datetime: %s", e_hist
         )
+        hist_rows = []
+    bcv_hist = get_bcv_usd_rate_for_date(dt.date(), hist_rows)
+    binance_hist = get_binance_rate_for_date(dt.date(), hist_rows)
+    if bcv_hist is not None and binance_hist is not None:
+        return bcv_hist, binance_hist
 
+    if rows:
+        closest_row = _closest_serie_row(dt, rows)
+        if closest_row:
+            return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
+                closest_row.get("tasa_binance")
+            )
+
+    logger.warning(
+        "Sin ninguna tasa disponible (SerieTasas ni TasasHistoricasAuditoria) para %s -- "
+        "revisar que la siembra inicial se haya corrido.",
+        fecha_str,
+    )
     return Decimal("36.5"), Decimal("38.0")
+
+
+def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
+    """Tasa BCV-USD oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
+
+    Mismo criterio que ``get_binance_rate_for_date``/``get_eur_rate_for_date``
+    (lookup por día exacto, sin caer a otro día)."""
+    fecha_str = fecha.isoformat()
+    for r in rows:
+        if str(r.get("fecha", ""))[:10] == fecha_str:
+            val = parse_decimal_safe(r.get("tasa_bcv_usd", "0"))
+            if val > Decimal("0"):
+                return val
+    return None
 
 
 def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
