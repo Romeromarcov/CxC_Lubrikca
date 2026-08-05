@@ -668,8 +668,8 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
         patch("cxc.web.app._connect", return_value=_fake_execute_revisar),
         patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
         patch(
-            "cxc.web.app.get_live_delivered_not_returned",
-            return_value={"SO_CANCELADA_SIN_DEV"},
+            "cxc.web.app.get_live_entregas_info",
+            return_value=({"SO_CANCELADA_SIN_DEV"}, {}),
         ),
     ):
         res = client.get("/api/ventas")
@@ -969,3 +969,78 @@ def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura(
     esperado = round(5000.0 * ratio, 2)
     assert item["descuento_aplicado_factura"] == esperado
     assert item["descuento_aplicado_factura"] < 100.0  # NUNCA en miles/bolívares crudos
+
+
+def test_dias_credito_y_fecha_entrega_en_ventas() -> None:
+    """Nuevas columnas pedidas: días de crédito reales (payment_term de
+
+    Odoo) y fecha de entrega efectiva (ALM/OUT), mismo criterio que ya usa
+    el reporte de Cuentas por Cobrar."""
+
+    def _fake_execute_credito_entrega(model, method, args, kwargs=None):
+        if model == "sale.order" and method == "search_read":
+            fields = (kwargs or {}).get("fields", [])
+            if "picking_ids" in fields and "payment_term_id" not in fields:
+                return [{"name": "SO_CREDITO_ENTREGA", "picking_ids": [900]}]
+            return [
+                {
+                    "name": "SO_CREDITO_ENTREGA",
+                    "state": "sale",
+                    "amount_untaxed": 100.0,
+                    "payment_term_id": [7, "45 días"],
+                }
+            ]
+        if model == "stock.picking":
+            return [
+                {
+                    "id": 900,
+                    "picking_type_code": "outgoing",
+                    "return_id": False,
+                    "date_done": "2026-07-10 14:00:00",
+                }
+            ]
+        if model in ("sale.order.line", "account.move", "account.move.line"):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_CREDITO_ENTREGA",
+            cliente_id="CLI_CE",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+            dias_credito=0,
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_credito_entrega),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = next(it for it in res.json()["items"] if it["so_id"] == "SO_CREDITO_ENTREGA")
+
+    assert item["dias_credito"] == 45
+    assert item["fecha_entrega"] == "2026-07-10"

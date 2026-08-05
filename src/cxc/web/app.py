@@ -138,26 +138,29 @@ def get_live_so_states(so_names: list[str]) -> dict[str, str]:
         return {}
 
 
-def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:
-    """SO names con entrega ALM/OUT (stock.picking saliente, estado "done") y SIN devolución.
+def get_live_entregas_info(
+    so_names: list[str], execute: Any = None
+) -> tuple[set[str], dict[str, str]]:
+    """(delivered_not_returned, fecha_entrega_map) -- una sola consulta a
 
-    Es la excepción de negocio de ESTADOS_ORDEN_EXCLUIDOS: una orden CANCELADA
-    en Odoo después de que la mercancía ya salió de almacén sigue siendo una
-    venta real -- cancelar la SO no deshace el despacho. Acepta un `execute`
-    ya conectado para reusar la conexión del llamador; si no se provee, abre
-    una propia. Best-effort: ante cualquier error devuelve vacío.
+    stock.picking para ambas cosas. ``fecha_entrega_map`` es la fecha
+    (YYYY-MM-DD) de la entrega ALM/OUT más reciente por orden, mismo
+    criterio que ya usa el reporte de CxC (``get_reporte_saldos``). Acepta
+    un `execute` ya conectado para reusar la conexión del llamador; si no
+    se provee, abre una propia. Best-effort: ante cualquier error devuelve
+    vacío.
     """
     if not so_names:
-        return set()
+        return set(), {}
     if execute is None:
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
         except Exception as e:
-            logger.warning("Error conectando a Odoo en get_live_delivered_not_returned: %s", e)
-            return set()
+            logger.warning("Error conectando a Odoo en get_live_entregas_info: %s", e)
+            return set(), {}
     if not execute:
-        return set()
+        return set(), {}
     try:
         so_records = execute(
             "sale.order",
@@ -173,15 +176,16 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
                 for pid in p_ids:
                     picking_to_so[pid] = sname
         if not picking_to_so:
-            return set()
+            return set(), {}
         pickings = execute(
             "stock.picking",
             "search_read",
             [[["id", "in", list(picking_to_so.keys())], ["state", "=", "done"]]],
-            {"fields": ["id", "picking_type_code", "return_id"]},
+            {"fields": ["id", "picking_type_code", "return_id", "date_done"]},
         )
         delivered: set[str] = set()
         returned: set[str] = set()
+        fecha_entrega_map: dict[str, str] = {}
         for p in pickings:
             so_name = picking_to_so.get(p["id"])
             if not so_name:
@@ -190,10 +194,26 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
                 returned.add(so_name)
             elif str(p.get("picking_type_code")) == "outgoing":
                 delivered.add(so_name)
-        return delivered - returned
+                dt_done = p.get("date_done")
+                if dt_done:
+                    dt_str = str(dt_done).split(" ")[0]
+                    if so_name not in fecha_entrega_map or dt_str > fecha_entrega_map[so_name]:
+                        fecha_entrega_map[so_name] = dt_str
+        return delivered - returned, fecha_entrega_map
     except Exception as e:
-        logger.warning("Error consultando entregas en get_live_delivered_not_returned: %s", e)
-        return set()
+        logger.warning("Error consultando entregas en get_live_entregas_info: %s", e)
+        return set(), {}
+
+
+def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:
+    """SO names con entrega ALM/OUT (stock.picking saliente, estado "done") y SIN devolución.
+
+    Es la excepción de negocio de ESTADOS_ORDEN_EXCLUIDOS: una orden CANCELADA
+    en Odoo después de que la mercancía ya salió de almacén sigue siendo una
+    venta real -- cancelar la SO no deshace el despacho.
+    """
+    delivered, _ = get_live_entregas_info(so_names, execute)
+    return delivered
 
 
 def _parse_payment_term_days(t_name: str) -> int:
@@ -7519,6 +7539,7 @@ async def get_ventas(
         so_untaxed_map: dict[str, float] = {}
         dias_credito_odoo_map: dict[str, int] = {}
         litros_por_so: dict[str, float] = {}
+        fecha_entrega_map: dict[str, str] = {}
         entrega_valida_set: set[str] = set()
         facturado_antes_imp_map: dict[str, float] = {}
         facturado_con_imp_map: dict[str, float] = {}
@@ -7549,7 +7570,9 @@ async def get_ventas(
                         )
                         dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
-                entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
+                entrega_valida_set, fecha_entrega_map = get_live_entregas_info(
+                    so_names, execute=execute
+                )
 
                 # Alerta "Revisar" (días de crédito por volumen): litros de
                 # cada orden, para comparar el volumen contra los rangos de
@@ -7930,6 +7953,11 @@ async def get_ventas(
                     "diferencia": diferencia,
                     "alerta": alerta,
                     "revisar_motivo": revisar_motivo,
+                    # Días de crédito reales (payment_term de Odoo) y fecha
+                    # de entrega efectiva (ALM/OUT, stock.picking saliente
+                    # "done") -- mismo criterio que ya usa el reporte de CxC.
+                    "dias_credito": dias_credito_odoo_map.get(o.so_id, o.dias_credito or 0),
+                    "fecha_entrega": fecha_entrega_map.get(o.so_id),
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por
                     # reselección según método de pago -- ver docstring del
