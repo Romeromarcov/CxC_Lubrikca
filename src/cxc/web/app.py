@@ -138,26 +138,29 @@ def get_live_so_states(so_names: list[str]) -> dict[str, str]:
         return {}
 
 
-def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:
-    """SO names con entrega ALM/OUT (stock.picking saliente, estado "done") y SIN devolución.
+def get_live_entregas_info(
+    so_names: list[str], execute: Any = None
+) -> tuple[set[str], dict[str, str]]:
+    """(delivered_not_returned, fecha_entrega_map) -- una sola consulta a
 
-    Es la excepción de negocio de ESTADOS_ORDEN_EXCLUIDOS: una orden CANCELADA
-    en Odoo después de que la mercancía ya salió de almacén sigue siendo una
-    venta real -- cancelar la SO no deshace el despacho. Acepta un `execute`
-    ya conectado para reusar la conexión del llamador; si no se provee, abre
-    una propia. Best-effort: ante cualquier error devuelve vacío.
+    stock.picking para ambas cosas. ``fecha_entrega_map`` es la fecha
+    (YYYY-MM-DD) de la entrega ALM/OUT más reciente por orden, mismo
+    criterio que ya usa el reporte de CxC (``get_reporte_saldos``). Acepta
+    un `execute` ya conectado para reusar la conexión del llamador; si no
+    se provee, abre una propia. Best-effort: ante cualquier error devuelve
+    vacío.
     """
     if not so_names:
-        return set()
+        return set(), {}
     if execute is None:
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
         except Exception as e:
-            logger.warning("Error conectando a Odoo en get_live_delivered_not_returned: %s", e)
-            return set()
+            logger.warning("Error conectando a Odoo en get_live_entregas_info: %s", e)
+            return set(), {}
     if not execute:
-        return set()
+        return set(), {}
     try:
         so_records = execute(
             "sale.order",
@@ -173,15 +176,16 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
                 for pid in p_ids:
                     picking_to_so[pid] = sname
         if not picking_to_so:
-            return set()
+            return set(), {}
         pickings = execute(
             "stock.picking",
             "search_read",
             [[["id", "in", list(picking_to_so.keys())], ["state", "=", "done"]]],
-            {"fields": ["id", "picking_type_code", "return_id"]},
+            {"fields": ["id", "picking_type_code", "return_id", "date_done"]},
         )
         delivered: set[str] = set()
         returned: set[str] = set()
+        fecha_entrega_map: dict[str, str] = {}
         for p in pickings:
             so_name = picking_to_so.get(p["id"])
             if not so_name:
@@ -190,10 +194,26 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
                 returned.add(so_name)
             elif str(p.get("picking_type_code")) == "outgoing":
                 delivered.add(so_name)
-        return delivered - returned
+                dt_done = p.get("date_done")
+                if dt_done:
+                    dt_str = str(dt_done).split(" ")[0]
+                    if so_name not in fecha_entrega_map or dt_str > fecha_entrega_map[so_name]:
+                        fecha_entrega_map[so_name] = dt_str
+        return delivered - returned, fecha_entrega_map
     except Exception as e:
-        logger.warning("Error consultando entregas en get_live_delivered_not_returned: %s", e)
-        return set()
+        logger.warning("Error consultando entregas en get_live_entregas_info: %s", e)
+        return set(), {}
+
+
+def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:
+    """SO names con entrega ALM/OUT (stock.picking saliente, estado "done") y SIN devolución.
+
+    Es la excepción de negocio de ESTADOS_ORDEN_EXCLUIDOS: una orden CANCELADA
+    en Odoo después de que la mercancía ya salió de almacén sigue siendo una
+    venta real -- cancelar la SO no deshace el despacho.
+    """
+    delivered, _ = get_live_entregas_info(so_names, execute)
+    return delivered
 
 
 def _parse_payment_term_days(t_name: str) -> int:
@@ -320,8 +340,20 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
     de la(s) factura(s) asociada(s) (``amount_residual_usd``) -- si sigue
     siendo > 0, esa factura quedó parcialmente pagada por este (u otro)
     pago.
+
+    Bug real (orden S00010 y 113 pagos más, ~12% del total en producción):
+    ``is_reconciled`` en el DOMINIO excluía pagos que SÍ están vinculados
+    (``reconciled_invoice_ids`` poblado, factura con ``amount_residual=0``
+    en Odoo) pero cuyo ``is_reconciled`` calculado da ``False`` -- Odoo
+    distingue "conciliado con extracto bancario" (lo que mueve
+    ``is_reconciled``) de "aplicado a factura vía Registrar Pago"
+    (``payment_state='in_payment'``, lo que realmente nos interesa acá).
+    Se filtra ahora por ``reconciled_invoice_ids`` no vacío en Python (no
+    hay forma robusta de expresar "many2many no vacío" en el dominio XML-RPC
+    de esta versión de Odoo -- se probó y falla con
+    ``TypeError: 'NotImplementedType' object is not iterable``).
     """
-    pagos = execute(
+    pagos_todos = execute(
         "account.payment",
         "search_read",
         [
@@ -329,7 +361,6 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
                 ["payment_type", "=", "inbound"],
                 ["partner_type", "=", "customer"],
                 ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
-                ["is_reconciled", "=", True],
             ]
         ],
         {
@@ -346,6 +377,7 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
             ]
         },
     )
+    pagos = [p for p in pagos_todos if p.get("reconciled_invoice_ids")]
     if not pagos:
         return []
 
@@ -7166,6 +7198,7 @@ def _leer_descuentos_lineas_odoo(
     so_names: list[str],
     invoice_ids: list[int],
     inv_id_to_so: dict[int, str],
+    inv_usd_ratio_map: dict[int, float] | None = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Lee los descuentos ya materializados en Odoo por orden y por factura.
 
@@ -7259,7 +7292,8 @@ def _leer_descuentos_lineas_odoo(
                     )
                 else:
                     monto = abs(float(il.get("price_subtotal") or 0))
-                desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto
+                ratio = (inv_usd_ratio_map or {}).get(move_id, 1.0)
+                desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
     except Exception as e_il:
         logger.warning("Error leyendo descuentos de account.move.line en get_ventas: %s", e_il)
     return desc_orden, desc_factura
@@ -7505,6 +7539,7 @@ async def get_ventas(
         so_untaxed_map: dict[str, float] = {}
         dias_credito_odoo_map: dict[str, int] = {}
         litros_por_so: dict[str, float] = {}
+        fecha_entrega_map: dict[str, str] = {}
         entrega_valida_set: set[str] = set()
         facturado_antes_imp_map: dict[str, float] = {}
         facturado_con_imp_map: dict[str, float] = {}
@@ -7535,7 +7570,9 @@ async def get_ventas(
                         )
                         dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
-                entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
+                entrega_valida_set, fecha_entrega_map = get_live_entregas_info(
+                    so_names, execute=execute
+                )
 
                 # Alerta "Revisar" (días de crédito por volumen): litros de
                 # cada orden, para comparar el volumen contra los rangos de
@@ -7582,9 +7619,11 @@ async def get_ventas(
                             "move_type",
                             "amount_untaxed_signed_usd",
                             "amount_total_signed_usd",
+                            "amount_total",
                         ]
                     },
                 )
+                inv_usd_ratio_map: dict[int, float] = {}
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
                     if not so:
@@ -7593,6 +7632,20 @@ async def get_ventas(
                     if inv_id:
                         invoice_ids_all.append(inv_id)
                         inv_id_to_so[inv_id] = so
+                        # Bug real (S00010 y similares): account.move.line
+                        # viene en la moneda de la FACTURA (a veces VES),
+                        # NUNCA se puede usar tal cual como si fuera USD --
+                        # mismo ratio (amount_total_signed_usd/amount_total)
+                        # que ya usa get_ventas_detalle para las líneas de
+                        # Real Factura, aplicado aquí también a los
+                        # descuentos leídos de esas líneas.
+                        amount_total_raw = float(inv.get("amount_total") or 0.0)
+                        inv_usd_ratio_map[inv_id] = (
+                            abs(float(inv.get("amount_total_signed_usd") or 0.0))
+                            / amount_total_raw
+                            if amount_total_raw > 0.005
+                            else 1.0
+                        )
                     con_imp = abs(float(inv.get("amount_total_signed_usd") or 0.0))
                     antes_imp = abs(float(inv.get("amount_untaxed_signed_usd") or 0.0))
                     if str(inv.get("move_type")) == "out_refund":
@@ -7607,7 +7660,7 @@ async def get_ventas(
 
                 # Tarea 3c: descuentos ya materializados en Odoo (lectura, no cálculo).
                 desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
-                    execute, so_names, invoice_ids_all, inv_id_to_so
+                    execute, so_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map
                 )
                 # Tarea 3f: N/D atadas a las facturas out_invoice de estas órdenes.
                 nd_con_imp_map = _leer_notas_debito_odoo(
@@ -7900,6 +7953,11 @@ async def get_ventas(
                     "diferencia": diferencia,
                     "alerta": alerta,
                     "revisar_motivo": revisar_motivo,
+                    # Días de crédito reales (payment_term de Odoo) y fecha
+                    # de entrega efectiva (ALM/OUT, stock.picking saliente
+                    # "done") -- mismo criterio que ya usa el reporte de CxC.
+                    "dias_credito": dias_credito_odoo_map.get(o.so_id, o.dias_credito or 0),
+                    "fecha_entrega": fecha_entrega_map.get(o.so_id),
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por
                     # reselección según método de pago -- ver docstring del
