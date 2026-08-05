@@ -1044,3 +1044,95 @@ def test_dias_credito_y_fecha_entrega_en_ventas() -> None:
 
     assert item["dias_credito"] == 45
     assert item["fecha_entrega"] == "2026-07-10"
+
+
+def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> None:
+    """Bug real (orden S00357 y otras del mismo cliente, agosto 2026):
+
+    verificado en vivo contra Odoo -- las N/D reales tienen
+    move_type="out_debit" (NUNCA "out_invoice") y las N/C reales tienen
+    invoice_origin=False, enlazadas a la factura original vía
+    reversed_entry_id (NUNCA invoice_origin). Antes de este fix, ambas
+    quedaban invisibles en /api/ventas."""
+
+    def _fake_execute_nd_nc_reales(model, method, args, kwargs=None):
+        domain = args[0] if args else []
+        if model == "sale.order":
+            return [{"name": "SO_ND_NC", "state": "sale", "amount_untaxed": 3000.0}]
+        if model == "sale.order.line":
+            return []
+        if model == "account.move":
+            is_debit_query = any(
+                isinstance(c, list | tuple) and c and c[0] == "debit_origin_id" for c in domain
+            )
+            is_credit_query = any(
+                isinstance(c, list | tuple) and c and c[0] == "reversed_entry_id"
+                for c in domain
+            )
+            if is_debit_query:
+                # Caso real: move_type="out_debit", debit_origin_id SÍ
+                # apunta a la factura original.
+                return [{"debit_origin_id": [900, "00000052"], "amount_total_signed_usd": 375.94}]
+            if is_credit_query:
+                # Caso real: reversed_entry_id apunta a la factura original,
+                # invoice_origin queda vacío (no se consulta acá).
+                return [
+                    {
+                        "id": 6283,
+                        "reversed_entry_id": [900, "00000052"],
+                        "amount_total_signed_usd": -516.89,
+                    }
+                ]
+            # Consulta principal de facturas (invoice_origin in so_names).
+            return [
+                {
+                    "id": 900,
+                    "invoice_origin": "SO_ND_NC",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 3000.0,
+                    "amount_total_signed_usd": 3082.0,
+                    "amount_total": 3082.0,
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_ND_NC",
+            cliente_id="CLI_ND_NC",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 5, 14),
+            fecha_entrega=None,
+            monto_total=Decimal("3457.96"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_nd_nc_reales),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = next(it for it in res.json()["items"] if it["so_id"] == "SO_ND_NC")
+
+    assert item["total_nd_aplicada"] == 375.94
+    assert item["total_nc_aplicada"] == 516.89
