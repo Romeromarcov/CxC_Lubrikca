@@ -196,6 +196,21 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
         return set()
 
 
+def _parse_payment_term_days(t_name: str) -> int:
+    """Días de crédito otorgados según el nombre del payment term de Odoo.
+
+    Mismo criterio que ``parse_term_days`` (closure de ``get_reporte_saldos``,
+    duplicado aquí a nivel de módulo para reusar en ``get_ventas`` sin
+    acoplar ambos endpoints)."""
+    if not t_name:
+        return 0
+    t_low = t_name.lower().strip()
+    if "immediate" in t_low or "contado" in t_low:
+        return 0
+    m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
+    return int(m.group(1)) if m else 0
+
+
 def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[int, str]:
     """Email del vendedor (res.users.login) asignado a cada partner (res.partner.user_id).
 
@@ -7412,6 +7427,25 @@ async def get_ventas(
         for ln in repo.all_lineas():
             lineas_por_so.setdefault(ln.so_id, []).append(ln)
 
+        # Reglas de días de crédito máximo por volumen -- SOLO validación en
+        # Ventas contra el plazo real que Odoo otorgó (dias_credito_odoo_map,
+        # abajo); NO alimentan la fórmula de recompra.
+        reglas_credito_vol = [
+            r
+            for r in repo.all_reglas_dias_credito_volumen()
+            if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
+        ]
+
+        def _max_dias_credito_por_litros(litros: float) -> int | None:
+            candidatos = []
+            for r in reglas_credito_vol:
+                lit_min = float(r.get("litros_minimo") or 0)
+                lit_max_raw = r.get("litros_maximo")
+                lit_max = float(lit_max_raw) if lit_max_raw not in (None, "") else None
+                if litros >= lit_min and (lit_max is None or litros <= lit_max):
+                    candidatos.append(int(r.get("dias_credito_max") or 0))
+            return max(candidatos) if candidatos else None
+
         usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
         usd_ids_str = {str(x) for x in usd_pricelist_ids}
         historical_enabled = is_historical_pricelist_enabled(repo)
@@ -7465,6 +7499,8 @@ async def get_ventas(
 
         so_states_map: dict[str, str] = {}
         so_untaxed_map: dict[str, float] = {}
+        dias_credito_odoo_map: dict[str, int] = {}
+        litros_por_so: dict[str, float] = {}
         entrega_valida_set: set[str] = set()
         facturado_antes_imp_map: dict[str, float] = {}
         facturado_con_imp_map: dict[str, float] = {}
@@ -7482,15 +7518,48 @@ async def get_ventas(
                     "sale.order",
                     "search_read",
                     [[["name", "in", so_names]]],
-                    {"fields": ["name", "state", "amount_untaxed"]},
+                    {"fields": ["name", "state", "amount_untaxed", "payment_term_id"]},
                 )
                 for s in so_recs:
                     sname = str(s.get("name", "")).strip()
                     if sname:
                         so_states_map[sname] = str(s.get("state", "")).strip().lower()
                         so_untaxed_map[sname] = float(s.get("amount_untaxed") or 0.0)
+                        term = s.get("payment_term_id")
+                        term_name = (
+                            term[1] if isinstance(term, list | tuple) and len(term) > 1 else ""
+                        )
+                        dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
                 entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
+
+                # Alerta "Revisar" (días de crédito por volumen): litros de
+                # cada orden, para comparar el volumen contra los rangos de
+                # ``reglas_dias_credito_volumen`` -- una sola consulta bulk a
+                # product.template (mismo campo product_volume que usa el
+                # motor para Descuento por Volumen), no una por producto.
+                producto_ids = {
+                    int(ln.producto)
+                    for lns in lineas_por_so.values()
+                    for ln in lns
+                    if str(ln.producto).strip().isdigit()
+                }
+                vol_por_producto: dict[str, float] = {}
+                if producto_ids:
+                    prods_vol = execute(
+                        "product.template",
+                        "read",
+                        [list(producto_ids)],
+                        {"fields": ["id", "product_volume"]},
+                    )
+                    vol_por_producto = {
+                        str(p["id"]): float(p.get("product_volume") or 0.0) for p in prods_vol
+                    }
+                for so_id_lit, lns in lineas_por_so.items():
+                    litros_por_so[so_id_lit] = sum(
+                        float(ln.cantidad) * vol_por_producto.get(str(ln.producto), 0.0)
+                        for ln in lns
+                    )
 
                 invoices = execute(
                     "account.move",
@@ -7618,6 +7687,15 @@ async def get_ventas(
                     )
             if live_state in ("cancel", "cancelled") and entrega_valida:
                 revisar_motivos.append("Orden cancelada en Odoo, mercancía sin devolver")
+            litros_orden = litros_por_so.get(o.so_id, 0.0)
+            dias_credito_real = dias_credito_odoo_map.get(o.so_id, 0)
+            max_dias_permitido = _max_dias_credito_por_litros(litros_orden)
+            if max_dias_permitido is not None and dias_credito_real > max_dias_permitido:
+                revisar_motivos.append(
+                    f"Días de crédito excede el máximo por volumen "
+                    f"({dias_credito_real}d otorgados vs {max_dias_permitido}d "
+                    f"máximo para {litros_orden:.0f}L)"
+                )
             revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
 
             b = bandeja_map.get(o.so_id)
@@ -8554,6 +8632,61 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
             if req.activo
             else "Descuento de sistema revocado.",
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class ReglaDiasCreditoVolumenRequest(BaseModel):
+    regla_id: str
+    litros_minimo: float = 0.0
+    litros_maximo: float | None = None
+    dias_credito_max: int
+    descripcion: str = ""
+    activo: bool = True
+
+
+@app.get("/api/config/dias-credito-volumen")
+async def get_config_dias_credito_volumen():
+    """Rangos de litros -> máximo de días de crédito permitido (config).
+
+    Uso EXCLUSIVO: alerta en Ventas comparando el plazo de pago real que
+    Odoo otorgó contra este máximo -- NO alimenta la fórmula de recompra
+    (esa usa el plazo REAL de la orden anterior, no este tabulado).
+    """
+    try:
+        repo = get_repo()
+        rows = repo.all_reglas_dias_credito_volumen()
+        return [
+            {
+                "regla_id": r.get("regla_id", ""),
+                "litros_minimo": float(r.get("litros_minimo") or 0),
+                "litros_maximo": float(r["litros_maximo"]) if r.get("litros_maximo") else None,
+                "dias_credito_max": int(r.get("dias_credito_max") or 0),
+                "descripcion": r.get("descripcion", ""),
+                "activo": str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no"),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/config/dias-credito-volumen")
+async def post_config_dias_credito_volumen(req: ReglaDiasCreditoVolumenRequest):
+    try:
+        repo = get_repo()
+        row = {
+            "regla_id": req.regla_id,
+            "litros_minimo": str(req.litros_minimo),
+            "litros_maximo": str(req.litros_maximo) if req.litros_maximo is not None else "",
+            "dias_credito_max": str(req.dias_credito_max),
+            "descripcion": req.descripcion,
+            "activo": "true" if req.activo else "false",
+        }
+        repo.upsert_regla_dias_credito_volumen(row)
+        return {"status": "success", "message": "Regla de días de crédito registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

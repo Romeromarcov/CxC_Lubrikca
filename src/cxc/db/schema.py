@@ -584,6 +584,25 @@ descuentos_sistema_aprobados = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
 )
 
+# --- ReglasDiasCreditoVolumen (config; alerta, NO alimenta la formula de ----
+# recompra) -- rangos de volumen (litros) de la orden -> maximo de dias de
+# credito que Odoo debería haber otorgado. Se usa SOLO para comparar contra
+# el plazo de pago real (payment_term de la orden en Odoo) y generar una
+# alerta en Ventas si Odoo otorgó más días de los que correspondían -- la
+# ventana de recompra (dias de gracia) sigue usando el plazo REAL de pago de
+# la orden anterior, no este máximo tabulado.
+reglas_dias_credito_volumen = Table(
+    "reglas_dias_credito_volumen",
+    metadata,
+    Column("regla_id", String, primary_key=True),
+    Column("litros_minimo", MONEY, nullable=False, server_default="0"),
+    # NULL = sin tope superior (ej. "501 en adelante").
+    Column("litros_maximo", MONEY, nullable=True),
+    Column("dias_credito_max", Integer, nullable=False),
+    Column("descripcion", Text, nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true"),
+)
+
 # --- FechasHistoricas (fecha histórica alterna por orden) -------------------
 fechas_historicas = Table(
     "fechas_historicas",

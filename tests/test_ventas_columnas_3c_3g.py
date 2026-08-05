@@ -769,3 +769,121 @@ def test_lista_aplicada_label_indica_lista_historica_para_ordenes_de_la_ventana(
     # Con lista asignada, el label combina el id/nombre real + la nota histórica.
     assert "#3" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
     assert "Lista Histórica de Auditoría" not in (by_so["SO_NO_HIST"]["lista_aplicada_label"] or "")
+
+
+def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
+    """Regla 0-500L->21d: una orden de 600L (rango 501-2500L, max 30d) con
+
+    45 días de crédito otorgados por Odoo debe salir marcada "Revisar"; una
+    orden de 600L con 25 días (dentro del máximo) no debe marcarse."""
+    from cxc.models import LineaOrden
+
+    def _fake_execute_credito(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {
+                    "name": "SO_EXCEDE",
+                    "state": "sale",
+                    "amount_untaxed": 100.0,
+                    "payment_term_id": [1, "45 días"],
+                },
+                {
+                    "name": "SO_OK_CREDITO",
+                    "state": "sale",
+                    "amount_untaxed": 100.0,
+                    "payment_term_id": [2, "25 días"],
+                },
+            ]
+        if model == "product.template" and method == "read":
+            return [{"id": 500, "product_volume": 60.0}]
+        if model in ("sale.order.line", "account.move", "account.move.line"):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_EXCEDE",
+            cliente_id="CLI_CREDITO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        OrdenVenta(
+            so_id="SO_OK_CREDITO",
+            cliente_id="CLI_CREDITO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    # 10 cajas * 60L/caja = 600L -> rango 501-2500L, max 30 días.
+    mock_repo.all_lineas.return_value = [
+        LineaOrden(
+            linea_id="L1",
+            so_id="SO_EXCEDE",
+            producto="500",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+        ),
+        LineaOrden(
+            linea_id="L2",
+            so_id="SO_OK_CREDITO",
+            producto="500",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+        ),
+    ]
+    mock_repo.all_reglas_dias_credito_volumen.return_value = [
+        {
+            "regla_id": "CREDITO_0_500L",
+            "litros_minimo": "0",
+            "litros_maximo": "500",
+            "dias_credito_max": "21",
+            "activo": "true",
+        },
+        {
+            "regla_id": "CREDITO_501L_2500L",
+            "litros_minimo": "501",
+            "litros_maximo": "2500",
+            "dias_credito_max": "30",
+            "activo": "true",
+        },
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_credito),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Días de crédito excede el máximo" in by_so["SO_EXCEDE"]["revisar_motivo"]
+    assert by_so["SO_OK_CREDITO"]["revisar_motivo"] is None

@@ -259,6 +259,18 @@ class Repository(ABC):
     def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None: ...
 
     @abstractmethod
+    def all_reglas_dias_credito_volumen(self) -> list[dict[str, str]]:
+        """Rangos de litros -> máximo de días de crédito permitido.
+
+        Config pura, usada SOLO como validación/alerta en Ventas contra el
+        plazo de pago real que Odoo otorgó -- no alimenta la fórmula de
+        recompra (esa usa el plazo REAL de la orden anterior).
+        """
+
+    @abstractmethod
+    def upsert_regla_dias_credito_volumen(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         """Reemplaza la tabla completa (scripts/cargar_tasas_historicas.py
 
@@ -365,6 +377,7 @@ class InMemoryRepository(Repository):
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
         self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
+        self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
 
     # --- Configuración genérica -----------------------------------------------
     def get_config(self, key: str) -> str | None:
@@ -657,6 +670,12 @@ class InMemoryRepository(Repository):
 
     def upsert_descuento_sistema_aprobado(self, row: dict[str, str]) -> None:
         self._descuentos_sistema_aprobados[row["so_id"]] = dict(row)
+
+    def all_reglas_dias_credito_volumen(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._reglas_dias_credito_volumen.values()]
+
+    def upsert_regla_dias_credito_volumen(self, row: dict[str, str]) -> None:
+        self._reglas_dias_credito_volumen[row["regla_id"]] = dict(row)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)
