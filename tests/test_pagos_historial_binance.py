@@ -67,9 +67,13 @@ def test_pagos_historial_calcula_tasa_binance_para_pagos_ya_conciliados() -> Non
         }
     ]
 
+    fake_config = MagicMock()
+    fake_config.odoo = MagicMock()
+
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
         patch("cxc.web.app._connect", return_value=_fake_execute_pago_ves_conciliado),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
     ):
         res = client.get("/api/pagos-historial")
         assert res.status_code == 200
