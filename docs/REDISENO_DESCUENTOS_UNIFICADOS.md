@@ -403,6 +403,50 @@ Tarea 3c más arriba con las dos alternativas de diseño.
    debe agregar la columna manualmente si se sigue usando `REPO_BACKEND=sheets`
    en algún entorno.
 
+## Rediseño de Recompra (ventana días de crédito + gracia)
+
+Reemplaza el criterio anterior ("solo la primera orden del cliente en el
+mes calendario") por: aplica si la orden INMEDIATAMENTE anterior del
+cliente está totalmente pagada, y esta orden nueva llega dentro de (días
+de crédito reales de esa orden anterior + `DescuentoRecompra.dias_gracia`,
+nuevo campo, default 3). Ya no importa el mes calendario -- una segunda
+orden en el mismo mes puede calificar si la anterior fue pagada a tiempo.
+
+- **`OrdenVenta.dias_credito`** (nuevo, `models.py`/`schema.py`): plazo real
+  otorgado por Odoo (`payment_term_id`), poblado en el sync
+  (`odoo/client.py::parse_payment_term_days`, misma heurística de regex que
+  ya usaba `web/app.py` para el reporte de CxC).
+- **`EngineInputs.orden_anterior_cliente`/`_vincs`** (nuevo,
+  `engine/discounts.py`): la orden anterior del cliente (misma
+  `cliente_id`, fecha más reciente antes de esta orden) y sus
+  vinculaciones -- calculado en `EngineRunner.build_inputs` (necesita
+  `repo` para otra orden; `discounts.py` se mantiene puro). "Totalmente
+  pagada" = `valor_pagado_usd(vincs) >= orden_anterior.monto_total - EPS`,
+  mismo criterio que usa el resto del motor para `candidata_a_cierre` --
+  **limitación conocida y preexistente**: como el resto del motor, depende
+  de `Vinculaciones`, que hoy está vacía en producción (el flujo de pagos
+  real vive en Odoo directo, fuera del motor) -- no se resuelve aquí, es
+  una limitación arquitectónica más amplia del motor completo.
+- **`DescuentoRecompra.dias_gracia`** (nuevo, mismo patrón que
+  `DescuentoProntoPago.dias_gracia`): configurable por regla en
+  Configuración > Descuentos > Recompra.
+- El resto de la lógica (matching marca/categoría/rango de cajas,
+  porcentaje, `aplica_a` línea/subtotal) no cambió -- solo el gate
+  temporal.
+- **Regresión verificada**: `tests/test_engine.py::test_recompra_ya_no_exige_primera_compra_del_mes`
+  confirma que una segunda orden del mismo mes SÍ califica si la anterior
+  fue pagada dentro de ventana (antes era negada incondicionalmente).
+- **Hallazgo durante la implementación**: dos tests de apilamiento
+  (`test_apilamiento_sinoco_recompra_contado_6pct`,
+  `test_apilamiento_global_oil_sintetico_recompra_contado_11pct`) y el test
+  de integración `test_runner_calcula_y_persiste_bandeja` seguían "pasando"
+  tras el cambio aunque Recompra ya NO disparaba -- el monto de
+  `bcv_completo` coincidía por casualidad con el monto que antes daba
+  Recompra, enmascarando la regresión. Corregido agregando aserciones
+  explícitas sobre `origen` de cada descuento aplicado, no solo el monto
+  total -- lección para futuros cambios en el motor: verificar siempre el
+  desglose por origen, no solo el total.
+
 ## Checklist de migraciones Alembic
 
 - [x] `e5f6a7b8c9d0_add_requiere_pago_previo.py` creada y **verificada**

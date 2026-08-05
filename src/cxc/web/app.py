@@ -29,7 +29,11 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
-from cxc.engine.equivalents import valor_pagado_bcv_usd, valor_pagado_binance_usd
+from cxc.engine.equivalents import (
+    calcular_equivalentes,
+    valor_pagado_bcv_usd,
+    valor_pagado_binance_usd,
+)
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.runner import EngineRunner
 from cxc.models import Cliente, EstadoVinculacion, Moneda, OrdenVenta, TipoTasa, Vinculacion
@@ -190,6 +194,21 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
     except Exception as e:
         logger.warning("Error consultando entregas en get_live_delivered_not_returned: %s", e)
         return set()
+
+
+def _parse_payment_term_days(t_name: str) -> int:
+    """Días de crédito otorgados según el nombre del payment term de Odoo.
+
+    Mismo criterio que ``parse_term_days`` (closure de ``get_reporte_saldos``,
+    duplicado aquí a nivel de módulo para reusar en ``get_ventas`` sin
+    acoplar ambos endpoints)."""
+    if not t_name:
+        return 0
+    t_low = t_name.lower().strip()
+    if "immediate" in t_low or "contado" in t_low:
+        return 0
+    m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
+    return int(m.group(1)) if m else 0
 
 
 def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[int, str]:
@@ -668,6 +687,7 @@ class PromocionRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class ExclusionRequest(BaseModel):
@@ -692,6 +712,7 @@ class ProntoPagoRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = True
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class VolumenRequest(BaseModel):
@@ -710,6 +731,7 @@ class VolumenRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class EliminarDescuentoRequest(BaseModel):
@@ -826,6 +848,8 @@ class RecompraRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
+    dias_gracia: int = 3
 
 
 class ProductoPromoRequest(BaseModel):
@@ -844,6 +868,7 @@ class ProductoPromoRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class DiferencialCambiarioRequest(BaseModel):
@@ -863,6 +888,7 @@ class DiferencialCambiarioRequest(BaseModel):
     activo: bool = True
     requiere_pago_previo: bool = True
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 class ToggleDescuentoRequest(BaseModel):
@@ -883,6 +909,7 @@ class DescuentoVolumenRequest(BaseModel):
     listas_aplicables: str = "*"
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
+    descripcion: str = ""
 
 
 def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
@@ -5235,6 +5262,7 @@ async def get_config_promociones():
                 "activo": p.activo,
                 "requiere_pago_previo": p.requiere_pago_previo,
                 "aplica_a": getattr(p, "aplica_a", "linea"),
+                "descripcion": getattr(p, "descripcion", ""),
             }
             for p in promos
         ]
@@ -5286,6 +5314,7 @@ async def post_config_promociones(req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_promocion_primera_compra(promo)
@@ -5345,6 +5374,7 @@ async def get_config_descuentos_volumen():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5378,6 +5408,7 @@ async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
             listas_aplicables=req.listas_aplicables,
             activo=True,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -5416,9 +5447,11 @@ async def get_todas_reglas_descuento():
                     "campos_especiales": {
                         "max_usos_mes": r.max_usos_mes,
                         "dias_ventana": r.dias_ventana,
+                        "dias_gracia": getattr(r, "dias_gracia", 3),
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5446,6 +5479,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5485,6 +5519,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5519,6 +5554,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5546,6 +5582,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5575,6 +5612,7 @@ async def get_todas_reglas_descuento():
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
 
@@ -5604,6 +5642,7 @@ async def get_config_pronto_pago():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5642,6 +5681,7 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_pronto_pago(rule)
@@ -5688,6 +5728,7 @@ async def get_config_volumen():
                     "activo": r.activo,
                     "requiere_pago_previo": r.requiere_pago_previo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
+                    "descripcion": getattr(r, "descripcion", ""),
                 }
             )
         return res
@@ -5729,6 +5770,7 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -5759,6 +5801,8 @@ async def get_config_recompra():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
+                "dias_gracia": getattr(r, "dias_gracia", 3),
             }
             for r in rules
         ]
@@ -5792,7 +5836,9 @@ async def post_config_recompra(req: RecompraRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
+            dias_gracia=req.dias_gracia,
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
@@ -5821,6 +5867,7 @@ async def get_config_producto():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5853,6 +5900,7 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_producto(rule)
@@ -5882,6 +5930,7 @@ async def get_config_diferencial():
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
+                "descripcion": getattr(r, "descripcion", ""),
             }
             for r in rules
         ]
@@ -5914,6 +5963,7 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_diferencial_cambiario(rule)
@@ -7374,6 +7424,32 @@ async def get_ventas(
         for v in repo.all_vinculaciones():
             vincs_por_so.setdefault(v.so_id, []).append(v)
 
+        # Alerta "Revisar" (devolución/entrega de más/cancelada sin
+        # devolver): cantidades pedida vs entregada, una sola pasada
+        # agrupada por orden (no golpear la BD una vez por fila).
+        lineas_por_so: dict[str, list[Any]] = {}
+        for ln in repo.all_lineas():
+            lineas_por_so.setdefault(ln.so_id, []).append(ln)
+
+        # Reglas de días de crédito máximo por volumen -- SOLO validación en
+        # Ventas contra el plazo real que Odoo otorgó (dias_credito_odoo_map,
+        # abajo); NO alimentan la fórmula de recompra.
+        reglas_credito_vol = [
+            r
+            for r in repo.all_reglas_dias_credito_volumen()
+            if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
+        ]
+
+        def _max_dias_credito_por_litros(litros: float) -> int | None:
+            candidatos = []
+            for r in reglas_credito_vol:
+                lit_min = float(r.get("litros_minimo") or 0)
+                lit_max_raw = r.get("litros_maximo")
+                lit_max = float(lit_max_raw) if lit_max_raw not in (None, "") else None
+                if litros >= lit_min and (lit_max is None or litros <= lit_max):
+                    candidatos.append(int(r.get("dias_credito_max") or 0))
+            return max(candidatos) if candidatos else None
+
         usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
         usd_ids_str = {str(x) for x in usd_pricelist_ids}
         historical_enabled = is_historical_pricelist_enabled(repo)
@@ -7408,8 +7484,27 @@ async def get_ventas(
             nombre = pricelist_name_map.get(str(lista_id))
             return f"#{lista_id} - {nombre}" if nombre else f"#{lista_id}"
 
+        _HISTORICA_TXT = "Lista Histórica de Auditoría (Euro, ref. VES)"
+
+        def _lista_label_hist(lista_id: str | None, es_historica: bool) -> str | None:
+            # Tarea "lista histórica": para las órdenes de la ventana
+            # histórica (20-Feb a 12-Mar-2026, o sin lista de precios
+            # asignada -- ver ``historical_pricing.es_orden_historica``), el
+            # precio VES real usado por el motor viene de esta lista de
+            # respaldo, no de la pricelist normal (que puede estar vacía o
+            # ser irrelevante para esa orden). Antes esto quedaba invisible
+            # en Ventas cuando la orden no tenía ``lista_precios`` asignada
+            # (el campo salía en blanco, sin explicar por qué el teórico VES
+            # sí tenía un valor).
+            base = _lista_label(lista_id)
+            if not es_historica:
+                return base
+            return f"{base} + {_HISTORICA_TXT}" if base else _HISTORICA_TXT
+
         so_states_map: dict[str, str] = {}
         so_untaxed_map: dict[str, float] = {}
+        dias_credito_odoo_map: dict[str, int] = {}
+        litros_por_so: dict[str, float] = {}
         entrega_valida_set: set[str] = set()
         facturado_antes_imp_map: dict[str, float] = {}
         facturado_con_imp_map: dict[str, float] = {}
@@ -7427,15 +7522,48 @@ async def get_ventas(
                     "sale.order",
                     "search_read",
                     [[["name", "in", so_names]]],
-                    {"fields": ["name", "state", "amount_untaxed"]},
+                    {"fields": ["name", "state", "amount_untaxed", "payment_term_id"]},
                 )
                 for s in so_recs:
                     sname = str(s.get("name", "")).strip()
                     if sname:
                         so_states_map[sname] = str(s.get("state", "")).strip().lower()
                         so_untaxed_map[sname] = float(s.get("amount_untaxed") or 0.0)
+                        term = s.get("payment_term_id")
+                        term_name = (
+                            term[1] if isinstance(term, list | tuple) and len(term) > 1 else ""
+                        )
+                        dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
                 entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
+
+                # Alerta "Revisar" (días de crédito por volumen): litros de
+                # cada orden, para comparar el volumen contra los rangos de
+                # ``reglas_dias_credito_volumen`` -- una sola consulta bulk a
+                # product.template (mismo campo product_volume que usa el
+                # motor para Descuento por Volumen), no una por producto.
+                producto_ids = {
+                    int(ln.producto)
+                    for lns in lineas_por_so.values()
+                    for ln in lns
+                    if str(ln.producto).strip().isdigit()
+                }
+                vol_por_producto: dict[str, float] = {}
+                if producto_ids:
+                    prods_vol = execute(
+                        "product.template",
+                        "read",
+                        [list(producto_ids)],
+                        {"fields": ["id", "product_volume"]},
+                    )
+                    vol_por_producto = {
+                        str(p["id"]): float(p.get("product_volume") or 0.0) for p in prods_vol
+                    }
+                for so_id_lit, lns in lineas_por_so.items():
+                    litros_por_so[so_id_lit] = sum(
+                        float(ln.cantidad) * vol_por_producto.get(str(ln.producto), 0.0)
+                        for ln in lns
+                    )
 
                 invoices = execute(
                     "account.move",
@@ -7545,6 +7673,34 @@ async def get_ventas(
                 v_email = str(o.vendedor_email or "").strip().lower()
                 if v_email != u_name and user["email"].strip().lower() not in v_email:
                     continue
+
+            # Alerta "Revisar" -- 3 casos independientes, se combinan en un
+            # solo campo con motivos separados por "; " (columna única en
+            # Ventas, tooltip lista cuál aplica; ver docs de esta fase).
+            revisar_motivos: list[str] = []
+            if o.tiene_devolucion:
+                revisar_motivos.append("Devolución registrada (total o parcial)")
+            lineas_o = lineas_por_so.get(o.so_id, [])
+            if lineas_o:
+                cant_pedida = sum(float(ln.cantidad) for ln in lineas_o)
+                cant_entregada = sum(float(ln.cantidad_entregada) for ln in lineas_o)
+                if cant_entregada > cant_pedida + 0.005:
+                    revisar_motivos.append(
+                        f"Entrega de más ({cant_entregada:.2f} entregado "
+                        f"vs {cant_pedida:.2f} pedido)"
+                    )
+            if live_state in ("cancel", "cancelled") and entrega_valida:
+                revisar_motivos.append("Orden cancelada en Odoo, mercancía sin devolver")
+            litros_orden = litros_por_so.get(o.so_id, 0.0)
+            dias_credito_real = dias_credito_odoo_map.get(o.so_id, 0)
+            max_dias_permitido = _max_dias_credito_por_litros(litros_orden)
+            if max_dias_permitido is not None and dias_credito_real > max_dias_permitido:
+                revisar_motivos.append(
+                    f"Días de crédito excede el máximo por volumen "
+                    f"({dias_credito_real}d otorgados vs {max_dias_permitido}d "
+                    f"máximo para {litros_orden:.0f}L)"
+                )
+            revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
 
             b = bandeja_map.get(o.so_id)
             monto_orig = float(o.monto_total)  # amount_total Odoo: YA con impuestos
@@ -7743,15 +7899,16 @@ async def get_ventas(
                     "total_facturado_neto": round(total_facturado_neto, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
+                    "revisar_motivo": revisar_motivo,
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por
                     # reselección según método de pago -- ver docstring del
                     # endpoint). Id crudo + "#id - Nombre" para mostrar.
                     "lista_nacimiento": o.lista_precios,
-                    "lista_nacimiento_label": _lista_label(o.lista_precios),
+                    "lista_nacimiento_label": _lista_label_hist(o.lista_precios, es_historica_o),
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
-                    "lista_aplicada_label": _lista_label(
-                        b.lista_aplicada if b else o.lista_precios
+                    "lista_aplicada_label": _lista_label_hist(
+                        b.lista_aplicada if b else o.lista_precios, es_historica_o
                     ),
                     # Tarea 2: comparación explícita por lista (VES/USD), cada
                     # una con su bruta/neta y su "+ impuestos" -- reemplaza
@@ -8229,16 +8386,19 @@ async def get_ventas_detalle(so_id: str):
         # en Odoo -- mismo bug de fondo que el estatus de pago (Fase 9). ---
         pagos: list[dict[str, Any]] = []
         for v in repo.vinculaciones_de_orden(so_id):
+            moneda_abono_str = (
+                v.moneda_abono.value if hasattr(v.moneda_abono, "value") else str(v.moneda_abono)
+            )
             pagos.append(
                 {
                     "fuente": "vinculacion",
                     "vinc_id": v.vinc_id,
                     "pago_id": v.pago_id,
                     "fecha": v.hora_pago_confirmada.isoformat() if v.hora_pago_confirmada else None,
+                    "monto_original": round(float(v.monto_aplicado), 2),
+                    "moneda_original": moneda_abono_str,
                     "monto_aplicado": round(float(v.monto_aplicado), 2),
-                    "moneda_abono": v.moneda_abono.value
-                    if hasattr(v.moneda_abono, "value")
-                    else str(v.moneda_abono),
+                    "moneda_abono": moneda_abono_str,
                     "tipo_tasa_abono": v.tipo_tasa_abono.value
                     if hasattr(v.tipo_tasa_abono, "value")
                     else str(v.tipo_tasa_abono),
@@ -8257,6 +8417,7 @@ async def get_ventas_detalle(so_id: str):
 
         if not pagos and execute:
             try:
+                tasas_rows_pagos = _all_serie_tasas_rows(repo)
                 for pago in get_live_pagos_conciliados(execute):
                     facturas_orden = [f for f in pago["facturas"] if f.get("so_id") == so_id]
                     if not facturas_orden:
@@ -8271,18 +8432,65 @@ async def get_ventas_detalle(so_id: str):
                     estado = "conciliado (Odoo)"
                     if otras_ordenes:
                         estado += f" -- también cubre: {', '.join(otras_ordenes)}"
+
+                    # Odoo no distingue ruta BCV/Binance por pago -- para
+                    # poder comparar contra los mismos dos equivalentes que
+                    # ya muestra la rama "vinculacion", se recalculan aquí
+                    # con la MISMA función pura del motor
+                    # (``calcular_equivalentes``), usando la tasa del día del
+                    # pago (``get_rate_for_datetime``, ya usado en el resto
+                    # de la app para este propósito) sobre el monto ORIGINAL
+                    # del pago (``monto_original``, en su moneda real) -- no
+                    # sobre ``monto_conciliado_usd`` (que ya es la conversión
+                    # propia de Odoo y serviría de referencia, no de insumo).
+                    moneda_str = str(pago.get("moneda") or "USD").upper().strip()
+                    moneda_enum = Moneda.USD if "USD" in moneda_str else Moneda.VES
+                    fecha_str = str(pago.get("fecha_pago") or "")[:10]
+                    try:
+                        fecha_dt = (
+                            datetime.strptime(fecha_str, "%Y-%m-%d")
+                            if fecha_str
+                            else datetime.now()
+                        )
+                    except ValueError:
+                        fecha_dt = datetime.now()
+                    tasa_bcv_dia, tasa_binance_dia = get_rate_for_datetime(
+                        fecha_dt, tasas_rows_pagos
+                    )
+                    try:
+                        eq = calcular_equivalentes(
+                            parse_decimal_safe(str(pago.get("monto_original") or "0")),
+                            moneda_enum,
+                            tasa_bcv_dia,
+                            tasa_binance_dia,
+                        )
+                        equiv_usd_bcv = round(float(eq.equiv_usd_bcv), 2)
+                        equiv_usd_binance = round(float(eq.equiv_usd_binance), 2)
+                    except (ValueError, ArithmeticError):
+                        equiv_usd_bcv = None
+                        equiv_usd_binance = None
+
                     pagos.append(
                         {
                             "fuente": "odoo",
                             "pago_id": pago["pago_id"],
                             "fecha": pago["fecha_pago"],
+                            "monto_original": round(float(pago.get("monto_original") or 0.0), 2),
+                            "moneda_original": moneda_str,
                             # monto_conciliado_usd ya viene en USD (mismo
                             # cálculo que Cobranza) -- monto TOTAL del pago,
                             # no prorrateado si cubre varias órdenes (ver
-                            # "estado" arriba para transparencia).
+                            # "estado" arriba para transparencia). Es la
+                            # referencia oficial de Odoo, distinta de los
+                            # equivalentes BCV/Binance de abajo (calculados
+                            # con nuestras propias tasas del día).
                             "monto_aplicado": round(pago["monto_conciliado_usd"], 2),
                             "moneda_abono": "USD (equiv.)",
                             "tipo_tasa_abono": pago.get("metodo_pago") or "",
+                            "tasa_bcv_aplicada": round(float(tasa_bcv_dia), 4),
+                            "tasa_binance_aplicada": round(float(tasa_binance_dia), 4),
+                            "equiv_usd_bcv": equiv_usd_bcv,
+                            "equiv_usd_binance": equiv_usd_binance,
                             "confirmado_por": "",
                             "estado": estado,
                         }
@@ -8293,6 +8501,17 @@ async def get_ventas_detalle(so_id: str):
                 )
 
         pagos.sort(key=lambda p: p["fecha"] or "")
+
+        monedas_originales_pagos = {
+            p.get("moneda_original") for p in pagos if p.get("moneda_original")
+        }
+        pagos_totales = {
+            "monto_original": round(sum(p.get("monto_original") or 0.0 for p in pagos), 2),
+            "monedas_originales_mixtas": len(monedas_originales_pagos) > 1,
+            "monto_aplicado": round(sum(p.get("monto_aplicado") or 0.0 for p in pagos), 2),
+            "equiv_usd_bcv": round(sum(p.get("equiv_usd_bcv") or 0.0 for p in pagos), 2),
+            "equiv_usd_binance": round(sum(p.get("equiv_usd_binance") or 0.0 for p in pagos), 2),
+        }
 
         return {
             "so_id": so_id,
@@ -8343,6 +8562,7 @@ async def get_ventas_detalle(so_id: str):
                 ),
             },
             "pagos": pagos,
+            "pagos_totales": pagos_totales,
         }
     except HTTPException:
         raise
@@ -8416,6 +8636,61 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
             if req.activo
             else "Descuento de sistema revocado.",
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class ReglaDiasCreditoVolumenRequest(BaseModel):
+    regla_id: str
+    litros_minimo: float = 0.0
+    litros_maximo: float | None = None
+    dias_credito_max: int
+    descripcion: str = ""
+    activo: bool = True
+
+
+@app.get("/api/config/dias-credito-volumen")
+async def get_config_dias_credito_volumen():
+    """Rangos de litros -> máximo de días de crédito permitido (config).
+
+    Uso EXCLUSIVO: alerta en Ventas comparando el plazo de pago real que
+    Odoo otorgó contra este máximo -- NO alimenta la fórmula de recompra
+    (esa usa el plazo REAL de la orden anterior, no este tabulado).
+    """
+    try:
+        repo = get_repo()
+        rows = repo.all_reglas_dias_credito_volumen()
+        return [
+            {
+                "regla_id": r.get("regla_id", ""),
+                "litros_minimo": float(r.get("litros_minimo") or 0),
+                "litros_maximo": float(r["litros_maximo"]) if r.get("litros_maximo") else None,
+                "dias_credito_max": int(r.get("dias_credito_max") or 0),
+                "descripcion": r.get("descripcion", ""),
+                "activo": str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no"),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/config/dias-credito-volumen")
+async def post_config_dias_credito_volumen(req: ReglaDiasCreditoVolumenRequest):
+    try:
+        repo = get_repo()
+        row = {
+            "regla_id": req.regla_id,
+            "litros_minimo": str(req.litros_minimo),
+            "litros_maximo": str(req.litros_maximo) if req.litros_maximo is not None else "",
+            "dias_credito_max": str(req.dias_credito_max),
+            "descripcion": req.descripcion,
+            "activo": "true" if req.activo else "false",
+        }
+        repo.upsert_regla_dias_credito_volumen(row)
+        return {"status": "success", "message": "Regla de días de crédito registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -91,6 +91,14 @@ class EngineInputs:
     # mapa (codigo producto -> precio usd) en vez de la pricelist normal.
     orden_es_historica: bool = False
     historical_price_map: dict[str, dict[str, object]] = field(default_factory=dict)
+    # Recompra (ventana = días de crédito reales de la orden anterior del
+    # cliente + dias_gracia de la regla): la orden anterior más reciente
+    # (misma cliente_id, fecha < la de esta orden) y SUS vinculaciones, para
+    # poder verificar si quedó totalmente pagada. Calculado en
+    # ``EngineRunner.build_inputs`` (necesita repo para las vinculaciones de
+    # OTRA orden) -- ``discounts.py`` se queda puro, sin tocar el repo.
+    orden_anterior_cliente: OrdenVenta | None = None
+    orden_anterior_cliente_vincs: list[Vinculacion] = field(default_factory=list)
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -453,19 +461,29 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 ]
 
         if recompras_activas:
-            is_first_in_month = True
-            current_year_month = (fecha_orden.year, fecha_orden.month)
-            for o in inp.all_ordenes:
-                if o.cliente_id == inp.orden.cliente_id and o.so_id != inp.orden.so_id:
-                    o_ym = (o.fecha.year, o.fecha.month)
-                    if o_ym == current_year_month and (
-                        o.fecha < fecha_orden
-                        or (o.fecha == fecha_orden and o.so_id < inp.orden.so_id)
-                    ):
-                        is_first_in_month = False
-                        break
+            # Ventana de recompra (reemplaza el criterio "primera orden del
+            # mes"): aplica si la orden INMEDIATAMENTE anterior del cliente
+            # está totalmente pagada, y esta orden llega dentro de (días de
+            # crédito reales de esa orden anterior + dias_gracia de la
+            # regla). ``orden_anterior_cliente``/``_vincs`` los calcula
+            # ``EngineRunner.build_inputs`` (necesita repo para las
+            # vinculaciones de OTRA orden). Sin orden anterior (primer
+            # pedido del cliente) no hay recompra posible.
+            orden_anterior = inp.orden_anterior_cliente
+            pagada_completo = False
+            dias_desde_anterior = 0
+            if orden_anterior is not None:
+                for v in inp.orden_anterior_cliente_vincs:
+                    congelar_en_vinculacion(v)
+                pagado_anterior = (
+                    valor_pagado_usd(inp.orden_anterior_cliente_vincs)
+                    if inp.orden_anterior_cliente_vincs
+                    else Decimal("0")
+                )
+                pagada_completo = pagado_anterior >= orden_anterior.monto_total - _EPS
+                dias_desde_anterior = (fecha_orden - orden_anterior.fecha).days
 
-            if is_first_in_month:
+            if orden_anterior is not None and pagada_completo:
                 recompra_monto = Decimal("0")
                 # Reglas en modo "subtotal" se deduplican por regla_id: el %
                 # se aplica UNA sola vez sobre precio_base, sin importar
@@ -485,9 +503,14 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                             or _match_categoria(r.categoria, ln.presentacion)
                             or _match_categoria(r.categoria, ln.categoria_madre)
                         )
+                        dias_gracia_r = getattr(r, "dias_gracia", 3)
+                        ventana_ok = dias_desde_anterior <= (
+                            orden_anterior.dias_credito + dias_gracia_r
+                        )
                         if (
                             marca_ok
                             and cat_ok
+                            and ventana_ok
                             and r.min_cajas <= cajas_linea <= r.max_cajas
                             and (best_r is None or r.porcentaje > best_r.porcentaje)
                         ):

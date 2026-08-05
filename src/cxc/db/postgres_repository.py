@@ -627,6 +627,42 @@ class PostgresRepository(Repository):
                 ["so_id"],
             )
 
+    def all_reglas_dias_credito_volumen(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.reglas_dias_credito_volumen)).all()
+        return [
+            {
+                "regla_id": r.regla_id,
+                "litros_minimo": str(r.litros_minimo),
+                "litros_maximo": str(r.litros_maximo) if r.litros_maximo is not None else "",
+                "dias_credito_max": str(r.dias_credito_max),
+                "descripcion": r.descripcion or "",
+                "activo": "true" if r.activo else "false",
+            }
+            for r in rows
+        ]
+
+    def upsert_regla_dias_credito_volumen(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.reglas_dias_credito_volumen,
+                [
+                    {
+                        "regla_id": row["regla_id"],
+                        "litros_minimo": Decimal(str(row.get("litros_minimo") or "0")),
+                        "litros_maximo": Decimal(str(row["litros_maximo"]))
+                        if row.get("litros_maximo")
+                        else None,
+                        "dias_credito_max": int(row["dias_credito_max"]),
+                        "descripcion": row.get("descripcion") or "",
+                        "activo": str(row.get("activo", "true")).strip().lower()
+                        not in ("false", "0", "no"),
+                    }
+                ],
+                ["regla_id"],
+            )
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()
@@ -806,6 +842,7 @@ def _orden_to_row(o: OrdenVenta) -> dict[str, Any]:
         "estado_entrega": o.estado_entrega,
         "entregada_completa": o.entregada_completa,
         "tiene_devolucion": o.tiene_devolucion,
+        "dias_credito": o.dias_credito,
     }
 
 
@@ -826,6 +863,7 @@ def _row_to_orden(r: Any) -> OrdenVenta:
         estado_entrega=r.estado_entrega,
         entregada_completa=r.entregada_completa,
         tiene_devolucion=r.tiene_devolucion,
+        dias_credito=getattr(r, "dias_credito", 0) or 0,
     )
 
 
@@ -961,6 +999,7 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         tipo_descuento=TipoDescuento(r.tipo_descuento),
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -982,6 +1021,7 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1005,6 +1045,8 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
+        dias_gracia=r.dias_gracia,
     )
 
 
@@ -1028,6 +1070,7 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1075,6 +1118,7 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1088,6 +1132,7 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1099,6 +1144,7 @@ def _row_to_bcv_completo(r: Any) -> DescuentoBCVCompleto:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 
@@ -1124,6 +1170,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
+        descripcion=r.descripcion,
     )
 
 

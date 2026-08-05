@@ -116,6 +116,34 @@ class EngineRunner:
             orden.fecha, orden.lista_precios, historical_enabled
         )
 
+        # Recompra (ventana = días de crédito reales de la orden anterior +
+        # dias_gracia): la orden anterior del cliente es la de fecha más
+        # reciente ANTES de esta (mismo cliente_id), con desempate por
+        # so_id para fechas iguales (mismo criterio que usaba el gate
+        # "primera del mes" que esta ventana reemplaza).
+        todas_ordenes = self._repo.all_ordenes()
+        orden_anterior_cliente = None
+        for o in todas_ordenes:
+            if o.cliente_id != orden.cliente_id or o.so_id == orden.so_id:
+                continue
+            es_anterior = o.fecha < orden.fecha or (
+                o.fecha == orden.fecha and o.so_id < orden.so_id
+            )
+            if es_anterior and (
+                orden_anterior_cliente is None
+                or o.fecha > orden_anterior_cliente.fecha
+                or (
+                    o.fecha == orden_anterior_cliente.fecha
+                    and o.so_id > orden_anterior_cliente.so_id
+                )
+            ):
+                orden_anterior_cliente = o
+        orden_anterior_cliente_vincs = (
+            self._repo.vinculaciones_de_orden(orden_anterior_cliente.so_id)
+            if orden_anterior_cliente is not None
+            else []
+        )
+
         inputs = EngineInputs(
             orden=orden,
             lineas=lineas,
@@ -129,7 +157,7 @@ class EngineRunner:
             price_resolver=self._resolver,
             engine_config=self._cfg,
             fecha_calculo=fecha_calculo,
-            all_ordenes=self._repo.all_ordenes(),
+            all_ordenes=todas_ordenes,
             exclusiones=self._repo.exclusiones(),
             descuentos_recompra=self._repo.descuentos_recompra(),
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
@@ -137,6 +165,8 @@ class EngineRunner:
             valid_usd=valid_usd,
             orden_es_historica=orden_es_historica,
             historical_price_map=historical_price_map,
+            orden_anterior_cliente=orden_anterior_cliente,
+            orden_anterior_cliente_vincs=orden_anterior_cliente_vincs,
         )
         return inputs
 

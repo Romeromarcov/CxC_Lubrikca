@@ -49,6 +49,9 @@ def _inputs(
     engine_config=None,
     valid_usd=(),
     valid_ves=(),
+    descuentos_recompra=(),
+    orden_anterior=None,
+    orden_anterior_vincs=(),
 ) -> EngineInputs:
     cfg = engine_config or CFG
     return EngineInputs(
@@ -67,7 +70,28 @@ def _inputs(
         all_ordenes=list(all_ordenes) if all_ordenes is not None else [],
         valid_usd=list(valid_usd),
         valid_ves=list(valid_ves),
+        descuentos_recompra=list(descuentos_recompra),
+        orden_anterior_cliente=orden_anterior,
+        orden_anterior_cliente_vincs=list(orden_anterior_vincs),
     )
+
+
+def _orden_anterior_pagada(
+    *, so_id: str = "SO0", fecha: date = date(2026, 5, 1), dias_credito: int = 30
+) -> tuple:
+    """Orden anterior del cliente, totalmente pagada -- fixture compartida
+
+    por los tests de Recompra (ventana = dias_credito + dias_gracia desde
+    esta orden)."""
+    orden_ant = b.orden(so_id, fecha=fecha, monto_total="500", dias_credito=dias_credito)
+    vinc_ant = b.vinculacion(
+        "V_ANT",
+        so_id=so_id,
+        monto_aplicado="500",
+        moneda_abono=Moneda.USD,
+        hora=datetime.combine(fecha, datetime.min.time()),
+    )
+    return orden_ant, [vinc_ant]
 
 
 def test_apilamiento_sinoco_recompra_contado_6pct() -> None:
@@ -81,13 +105,16 @@ def test_apilamiento_sinoco_recompra_contado_6pct() -> None:
         tipo_tasa_abono=TipoTasa.N_A,
         hora=datetime(2026, 6, 5, 10, 0),
     )
+    orden_ant, vincs_ant = _orden_anterior_pagada()
     inp = _inputs(
         orden=orden,
         lineas=[linea],
         abonos=[(vinc, metodo)],
         descuentos=[b.descuento(marca="Sinoco", categoria="*", porcentaje="0.03")],
-        reglas=[b.regla_recompra("0.03")],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
         resolver=_resolver(**{"P1@USD": "100"}),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=vincs_ant,
     )
     res = calcular_factura(inp)
     assert res.lista_aplicada == "USD"
@@ -113,6 +140,7 @@ def test_apilamiento_global_oil_sintetico_recompra_contado_11pct() -> None:
         moneda_abono=Moneda.USD,
         hora=datetime(2026, 6, 5, 10, 0),
     )
+    orden_ant, vincs_ant = _orden_anterior_pagada()
     inp = _inputs(
         orden=orden,
         lineas=[linea],
@@ -124,13 +152,129 @@ def test_apilamiento_global_oil_sintetico_recompra_contado_11pct() -> None:
                 porcentaje="0.08",
             )
         ],
-        reglas=[b.regla_recompra("0.03")],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
         resolver=_resolver(**{"P1@USD": "100"}),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=vincs_ant,
     )
     res = calcular_factura(inp)
     # 3% + 8% = 11%
     assert res.total_descuentos == Decimal("11.00")
     assert res.total_motor == Decimal("89.00")
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "recurrencia" in origenes
+
+
+def test_recompra_no_aplica_sin_orden_anterior() -> None:
+    """Sin orden anterior del cliente (primer pedido), Recompra no puede
+
+    evaluarse -- no hay pago previo que verificar ni ventana que contar."""
+    orden = b.orden(primera=False)
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(
+        monto_aplicado="97",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 5, 10, 0),
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
+        resolver=_resolver(**{"P1@USD": "100"}),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "recurrencia" not in origenes
+
+
+def test_recompra_no_aplica_si_orden_anterior_no_pagada_completo() -> None:
+    orden = b.orden(primera=False)
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(
+        monto_aplicado="97",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 5, 10, 0),
+    )
+    orden_ant = b.orden("SO0", fecha=date(2026, 5, 1), monto_total="500", dias_credito=30)
+    # Solo pagó 400 de 500 -- NO está totalmente pagada.
+    vinc_ant = b.vinculacion(
+        "V_ANT",
+        so_id="SO0",
+        monto_aplicado="400",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 5, 1, 0, 0),
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
+        resolver=_resolver(**{"P1@USD": "100"}),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=[vinc_ant],
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "recurrencia" not in origenes
+
+
+def test_recompra_no_aplica_fuera_de_la_ventana_credito_mas_gracia() -> None:
+    """Orden anterior pagada, pero esta orden llega DESPUÉS de
+
+    (dias_credito + dias_gracia) desde esa orden anterior -- fuera de
+    ventana, no aplica."""
+    # orden_anterior: fecha 2026-01-01, 15 dias credito -- ventana real
+    # (con dias_gracia=3 de la regla) = hasta el 2026-01-19. Esta orden
+    # llega el 2026-06-01, muy fuera de ventana.
+    orden = b.orden(primera=False, fecha=date(2026, 6, 1))
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(
+        monto_aplicado="97",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 5, 10, 0),
+    )
+    orden_ant, vincs_ant = _orden_anterior_pagada(
+        fecha=date(2026, 1, 1), dias_credito=15
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*", dias_gracia=3)],
+        resolver=_resolver(**{"P1@USD": "100"}),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=vincs_ant,
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "recurrencia" not in origenes
+
+
+def test_recompra_aplica_justo_en_el_limite_de_la_ventana() -> None:
+    """dias_credito + dias_gracia = 33; la orden nueva llega EXACTAMENTE
+
+    33 dias despues de la orden anterior -- debe aplicar (limite inclusive)."""
+    orden_ant, vincs_ant = _orden_anterior_pagada(
+        fecha=date(2026, 5, 1), dias_credito=30
+    )
+    orden = b.orden(primera=False, fecha=date(2026, 6, 3))  # 33 dias despues
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*", dias_gracia=3)],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=vincs_ant,
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "recurrencia" in origenes
 
 
 def test_contado_vencido_pasa_a_credito_pierde_contado() -> None:
@@ -143,14 +287,17 @@ def test_contado_vencido_pasa_a_credito_pierde_contado() -> None:
         moneda_abono=Moneda.USD,
         hora=datetime(2026, 6, 15, 10, 0),
     )
+    orden_ant, vincs_ant = _orden_anterior_pagada()
     inp = _inputs(
         orden=orden,
         lineas=[linea],
         abonos=[(vinc, metodo)],
         descuentos=[b.descuento(marca="Sinoco", categoria="*", porcentaje="0.03")],
-        reglas=[b.regla_recompra("0.03")],
+        descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
         resolver=_resolver(**{"P1@USD": "100"}),
         fecha_calculo=date(2026, 6, 16),
+        orden_anterior=orden_ant,
+        orden_anterior_vincs=vincs_ant,
     )
     res = calcular_factura(inp)
     # Solo queda recompra 3%; el contado se negó por vencimiento.
@@ -792,6 +939,13 @@ def test_recompra_aplica_a_subtotal_deduplica_por_regla() -> None:
         aplica_a="subtotal",
     )
 
+    orden_ant, vincs_ant = _orden_anterior_pagada(
+        so_id="SO_SUBTOTAL_ANT", fecha=date(2026, 5, 5)
+    )
+    orden_ant.cliente_id = "C_SUBTOTAL"
+    for v in vincs_ant:
+        v.so_id = "SO_SUBTOTAL_ANT"
+
     inp = EngineInputs(
         orden=orden,
         lineas=[linea_a, linea_b],
@@ -809,6 +963,8 @@ def test_recompra_aplica_a_subtotal_deduplica_por_regla() -> None:
         fecha_calculo=date(2026, 6, 8),
         all_ordenes=[orden],
         descuentos_recompra=[regla],
+        orden_anterior_cliente=orden_ant,
+        orden_anterior_cliente_vincs=vincs_ant,
     )
     res = calcular_factura(inp)
 
@@ -820,45 +976,44 @@ def test_recompra_aplica_a_subtotal_deduplica_por_regla() -> None:
     assert res.total_descuentos == Decimal("30.00")
 
 
-def test_recompra_aplica_solo_primera_compra_del_mes() -> None:
-    # First purchase in month should get recompra, subsequent one should not
-    orden1 = b.orden(primera=False, fecha=date(2026, 6, 5))
-    orden1.so_id = "SO_FIRST"
-    orden1.cliente_id = "C1"
+def test_recompra_ya_no_exige_primera_compra_del_mes() -> None:
+    """Regresión del rediseño de Recompra: antes solo la PRIMERA orden del
 
-    orden2 = b.orden(primera=False, fecha=date(2026, 6, 15))
-    orden2.so_id = "SO_SECOND"
-    orden2.cliente_id = "C1"
+    mes calendario podía llevar recompra; ahora el criterio es la ventana
+    (días de crédito + gracia) desde la orden anterior pagada, sin importar
+    el mes -- una SEGUNDA orden en el mismo mes también debe calificar si
+    la anterior (aunque sea la primera del mes) quedó pagada y la nueva
+    llega dentro de ventana."""
+    orden1 = b.orden(
+        "SO_FIRST", cliente_id="C1", fecha=date(2026, 6, 5), monto_total="100", dias_credito=30
+    )
+    orden2 = b.orden("SO_SECOND", cliente_id="C1", fecha=date(2026, 6, 15))
 
     linea = b.linea(marca="Sinoco", categoria="Comercial", precio="100")
-    regla = b.regla_recompra("0.05")
+    regla = b.descuento_recompra("REC1", marca="*", categoria="*", porcentaje="0.05")
 
-    # 1. Calculation for first order (should apply 5% recompra)
-    inp1 = _inputs(
-        orden=orden1,
-        lineas=[linea],
-        abonos=[],
-        reglas=[regla],
-        all_ordenes=[orden1, orden2],
-        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+    # orden1 (la "anterior" de orden2) queda totalmente pagada.
+    vinc1 = b.vinculacion(
+        "V1", so_id="SO_FIRST", monto_aplicado="100", moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 5, 10, 0),
     )
-    res1 = calcular_factura(inp1)
-    recompra_d1 = [d for d in res1.descuentos_detalle if d.origen == "recurrencia"]
-    assert len(recompra_d1) == 1
-    assert recompra_d1[0].monto == Decimal("5.00")
 
-    # 2. Calculation for second order (should NOT apply recompra since it's the second)
+    # 2. orden2 llega 10 días después (dentro de 30+3 días de ventana) --
+    # ANTES esto hubiera sido negado por no ser la primera del mes.
     inp2 = _inputs(
         orden=orden2,
         lineas=[linea],
         abonos=[],
-        reglas=[regla],
+        descuentos_recompra=[regla],
         all_ordenes=[orden1, orden2],
         resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+        orden_anterior=orden1,
+        orden_anterior_vincs=[vinc1],
     )
     res2 = calcular_factura(inp2)
     recompra_d2 = [d for d in res2.descuentos_detalle if d.origen == "recurrencia"]
-    assert len(recompra_d2) == 0
+    assert len(recompra_d2) == 1
+    assert recompra_d2[0].monto == Decimal("5.00")
 
 
 def test_exclusion_mutua_volumen_vs_recompra() -> None:

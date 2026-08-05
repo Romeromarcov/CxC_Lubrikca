@@ -572,3 +572,318 @@ def test_estatus_pago_usa_pagos_odoo_directos_sin_vinculaciones() -> None:
 
     assert item["estatus_pago_real_orden"] == "pagada"
     assert item["estatus_pago_real_factura"] == "pagada"
+
+
+def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> None:
+    """Alerta "Revisar" -- 3 casos reales encontrados en producción (SO 465/485):
+
+    devolución registrada, entrega de más (cantidad_entregada > cantidad
+    pedida), y orden cancelada en Odoo cuya mercancía nunca fue devuelta.
+    Una orden sin ninguno de los 3 casos debe salir con revisar_motivo=None.
+    """
+    from cxc.models import LineaOrden
+
+    def _fake_execute_revisar(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_DEVUELTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_ENTREGA_MAS", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_CANCELADA_SIN_DEV", "state": "cancel", "amount_untaxed": 100.0},
+                {"name": "SO_LIMPIA", "state": "sale", "amount_untaxed": 100.0},
+            ]
+        if model == "sale.order" and method == "search_read":
+            pass
+        if model == "sale.order.line":
+            return []
+        if model == "account.move":
+            return []
+        if model == "account.move.line":
+            return []
+        # get_live_delivered_not_returned: SO_CANCELADA_SIN_DEV tiene un
+        # picking de salida "done" sin devolución -- es la excepción de
+        # negocio que la deja pasar el filtro de orden_excluida.
+        if model == "sale.order" and "picking_ids" in str(kwargs):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+
+    def _orden_revisar(so_id, *, tiene_devolucion=False, estado_orden="sale"):
+        return OrdenVenta(
+            so_id=so_id,
+            cliente_id="CLI_REV",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden=estado_orden,
+            facturada=False,
+            tiene_devolucion=tiene_devolucion,
+        )
+
+    mock_repo.all_ordenes.return_value = [
+        _orden_revisar("SO_DEVUELTA", tiene_devolucion=True),
+        _orden_revisar("SO_ENTREGA_MAS"),
+        _orden_revisar("SO_CANCELADA_SIN_DEV", estado_orden="cancel"),
+        _orden_revisar("SO_LIMPIA"),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_lineas.return_value = [
+        LineaOrden(
+            linea_id="L_MAS",
+            so_id="SO_ENTREGA_MAS",
+            producto="101",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+            cantidad_entregada=Decimal("12"),
+        ),
+        LineaOrden(
+            linea_id="L_LIMPIA",
+            so_id="SO_LIMPIA",
+            producto="101",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+            cantidad_entregada=Decimal("10"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_revisar),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+        patch(
+            "cxc.web.app.get_live_delivered_not_returned",
+            return_value={"SO_CANCELADA_SIN_DEV"},
+        ),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Devolución" in by_so["SO_DEVUELTA"]["revisar_motivo"]
+    assert "Entrega de más" in by_so["SO_ENTREGA_MAS"]["revisar_motivo"]
+    assert "cancelada" in by_so["SO_CANCELADA_SIN_DEV"]["revisar_motivo"].lower()
+    assert by_so["SO_LIMPIA"]["revisar_motivo"] is None
+
+
+def test_lista_aplicada_label_indica_lista_historica_para_ordenes_de_la_ventana() -> None:
+    """Órdenes anteriores a S00092/13-3-2026 (o sin lista de precios
+
+    asignada) usan la Lista Histórica de Auditoría (Euro) para el cálculo
+    VES -- antes esto quedaba invisible en "lista aplicada" cuando la orden
+    no tenía ``lista_precios`` asignada (label salía en blanco)."""
+
+    def _fake_execute_hist(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {"name": "SO_HIST_SIN_LISTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_HIST_CON_LISTA", "state": "sale", "amount_untaxed": 100.0},
+                {"name": "SO_NO_HIST", "state": "sale", "amount_untaxed": 100.0},
+            ]
+        if model == "product.pricelist":
+            return [{"id": 3, "name": "USD"}]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        # Sin lista asignada -- histórica INCONDICIONAL (cualquier fecha).
+        OrdenVenta(
+            so_id="SO_HIST_SIN_LISTA",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 5),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        # Con lista asignada pero fecha dentro de la ventana histórica.
+        OrdenVenta(
+            so_id="SO_HIST_CON_LISTA",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="3",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        # Fuera de la ventana -- como S00092 (13-3-2026 en adelante).
+        OrdenVenta(
+            so_id="SO_NO_HIST",
+            cliente_id="CLI_HIST",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 13),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="3",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_hist),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_SIN_LISTA"]["lista_aplicada_label"]
+    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
+    # Con lista asignada, el label combina el id/nombre real + la nota histórica.
+    assert "#3" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
+    assert "Lista Histórica de Auditoría" not in (by_so["SO_NO_HIST"]["lista_aplicada_label"] or "")
+
+
+def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
+    """Regla 0-500L->21d: una orden de 600L (rango 501-2500L, max 30d) con
+
+    45 días de crédito otorgados por Odoo debe salir marcada "Revisar"; una
+    orden de 600L con 25 días (dentro del máximo) no debe marcarse."""
+    from cxc.models import LineaOrden
+
+    def _fake_execute_credito(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [
+                {
+                    "name": "SO_EXCEDE",
+                    "state": "sale",
+                    "amount_untaxed": 100.0,
+                    "payment_term_id": [1, "45 días"],
+                },
+                {
+                    "name": "SO_OK_CREDITO",
+                    "state": "sale",
+                    "amount_untaxed": 100.0,
+                    "payment_term_id": [2, "25 días"],
+                },
+            ]
+        if model == "product.template" and method == "read":
+            return [{"id": 500, "product_volume": 60.0}]
+        if model in ("sale.order.line", "account.move", "account.move.line"):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_EXCEDE",
+            cliente_id="CLI_CREDITO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+        OrdenVenta(
+            so_id="SO_OK_CREDITO",
+            cliente_id="CLI_CREDITO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    # 10 cajas * 60L/caja = 600L -> rango 501-2500L, max 30 días.
+    mock_repo.all_lineas.return_value = [
+        LineaOrden(
+            linea_id="L1",
+            so_id="SO_EXCEDE",
+            producto="500",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+        ),
+        LineaOrden(
+            linea_id="L2",
+            so_id="SO_OK_CREDITO",
+            producto="500",
+            marca="Sinoco",
+            categoria="Comercial",
+            cantidad=Decimal("10"),
+            precio_unitario=Decimal("50"),
+        ),
+    ]
+    mock_repo.all_reglas_dias_credito_volumen.return_value = [
+        {
+            "regla_id": "CREDITO_0_500L",
+            "litros_minimo": "0",
+            "litros_maximo": "500",
+            "dias_credito_max": "21",
+            "activo": "true",
+        },
+        {
+            "regla_id": "CREDITO_501L_2500L",
+            "litros_minimo": "501",
+            "litros_maximo": "2500",
+            "dias_credito_max": "30",
+            "activo": "true",
+        },
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_credito),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        by_so = {it["so_id"]: it for it in res.json()["items"]}
+
+    assert "Días de crédito excede el máximo" in by_so["SO_EXCEDE"]["revisar_motivo"]
+    assert by_so["SO_OK_CREDITO"]["revisar_motivo"] is None

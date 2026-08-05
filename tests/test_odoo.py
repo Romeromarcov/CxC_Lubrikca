@@ -19,6 +19,7 @@ from cxc.odoo.client import (
     map_linea,
     map_orden,
     map_pago,
+    parse_payment_term_days,
 )
 
 
@@ -82,6 +83,46 @@ def test_map_orden_usa_name_como_so_id() -> None:
     assert o.fecha_entrega is not None and o.fecha_entrega.isoformat() == "2026-06-13"
     assert o.monto_total == Decimal("1650.44")
     assert o.lista_precios == "5"
+
+
+def test_parse_payment_term_days() -> None:
+    assert parse_payment_term_days("30 días") == 30
+    assert parse_payment_term_days("21 dias") == 21
+    assert parse_payment_term_days("Immediate Payment") == 0
+    assert parse_payment_term_days("Contado") == 0
+    assert parse_payment_term_days("") == 0
+    assert parse_payment_term_days("Sin patron reconocible") == 0
+
+
+def test_map_orden_dias_credito_desde_payment_term() -> None:
+    o = map_orden(
+        {
+            "id": 553,
+            "name": "S00553",
+            "partner_id": [181, "ACME"],
+            "date_order": "2026-06-12 15:49:16",
+            "amount_total": "100.00",
+            "pricelist_id": [5, "x"],
+            "invoice_status": "no",
+            "dias_credito": 30,
+        }
+    )
+    assert o.dias_credito == 30
+
+
+def test_map_orden_sin_dias_credito_default_cero() -> None:
+    o = map_orden(
+        {
+            "id": 553,
+            "name": "S00553",
+            "partner_id": [181, "ACME"],
+            "date_order": "2026-06-12 15:49:16",
+            "amount_total": "100.00",
+            "pricelist_id": [5, "x"],
+            "invoice_status": "no",
+        }
+    )
+    assert o.dias_credito == 0
 
 
 def test_map_orden_override_fecha_historica_csv() -> None:
@@ -283,9 +324,38 @@ def test_changed_ordenes_enriquece_todo() -> None:
     assert o.facturada is True
     assert o.factura_id == "3835"
     assert o.lista_precios == "5"
+    assert o.dias_credito == 0  # sin payment_term_id en el fixture
     # El dominio delta de la primera consulta usa write_date con margen de 48h.
     primera = fake.calls[0]
     assert primera[2][0] == [["write_date", ">", "2026-05-30 00:00:00"]]
+
+
+def test_changed_ordenes_calcula_dias_credito_del_payment_term() -> None:
+    fake = FakeExecute(
+        {
+            "ordenes": [
+                {
+                    "id": 553,
+                    "name": "S00553",
+                    "partner_id": [181, "ACME"],
+                    "date_order": "2026-06-12 15:49:16",
+                    "amount_total": 1650.44,
+                    "pricelist_id": [5, "x"],
+                    "user_id": [13, "TORO"],
+                    "invoice_status": "no",
+                    "delivery_status": "",
+                    "payment_term_id": [7, "30 días"],
+                }
+            ],
+            "users": [{"id": 13, "login": "ruta07@gmail.com"}],
+            "pickings": [],
+            "ordenes_primeras": [],
+            "facturas": [],
+        }
+    )
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    o = reader.changed_ordenes(None)[0]
+    assert o.dias_credito == 30
 
 
 def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:

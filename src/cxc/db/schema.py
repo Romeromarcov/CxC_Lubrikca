@@ -88,6 +88,7 @@ ordenes_venta = Table(
     Column("estado_entrega", String, nullable=False, server_default=""),
     Column("entregada_completa", Boolean, nullable=False, server_default="false"),
     Column("tiene_devolucion", Boolean, nullable=False, server_default="false"),
+    Column("dias_credito", Integer, nullable=False, server_default="0"),
 )
 
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
@@ -179,6 +180,7 @@ descuentos_pronto_pago = Table(
     Column("tipo_descuento", String, nullable=False, server_default="contado"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7_vol DescuentosVolumen (config) --------------------------------------
@@ -202,6 +204,7 @@ descuentos_volumen = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7b DescuentoBCVCompleto (config, effective dating, sin id) -----------
@@ -215,6 +218,7 @@ descuento_bcv_completo = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7c PromocionPrimeraCompra (config) ------------------------------------
@@ -241,6 +245,7 @@ promocion_primera_compra = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7d DescuentoRecompra (config) -----------------------------------------
@@ -265,6 +270,8 @@ descuentos_recompra = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
+    Column("dias_gracia", Integer, nullable=False, server_default="3"),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------
@@ -287,6 +294,7 @@ descuentos_producto = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.7f DescuentoDiferencialCambiario (config) -----------------------------
@@ -311,6 +319,7 @@ descuentos_diferencial_cambiario = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.8 ReglasRecurrencia (config, effective dating, sin id natural) -------
@@ -326,6 +335,7 @@ reglas_recurrencia = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
+    Column("descripcion", Text, nullable=False, server_default=""),
 )
 
 # --- 3.8b Feriados (config) ---------------------------------------------------
@@ -573,6 +583,25 @@ descuentos_sistema_aprobados = Table(
     Column("motivo", String, nullable=False, server_default=""),
     Column("aprobado_por", String, nullable=False, server_default=""),
     Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),
+    Column("activo", Boolean, nullable=False, server_default="true"),
+)
+
+# --- ReglasDiasCreditoVolumen (config; alerta, NO alimenta la formula de ----
+# recompra) -- rangos de volumen (litros) de la orden -> maximo de dias de
+# credito que Odoo debería haber otorgado. Se usa SOLO para comparar contra
+# el plazo de pago real (payment_term de la orden en Odoo) y generar una
+# alerta en Ventas si Odoo otorgó más días de los que correspondían -- la
+# ventana de recompra (dias de gracia) sigue usando el plazo REAL de pago de
+# la orden anterior, no este máximo tabulado.
+reglas_dias_credito_volumen = Table(
+    "reglas_dias_credito_volumen",
+    metadata,
+    Column("regla_id", String, primary_key=True),
+    Column("litros_minimo", MONEY, nullable=False, server_default="0"),
+    # NULL = sin tope superior (ej. "501 en adelante").
+    Column("litros_maximo", MONEY, nullable=True),
+    Column("dias_credito_max", Integer, nullable=False),
+    Column("descripcion", Text, nullable=False, server_default=""),
     Column("activo", Boolean, nullable=False, server_default="true"),
 )
 

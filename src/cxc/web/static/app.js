@@ -1490,7 +1490,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="38" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="39" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1506,6 +1506,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 : (item.facturada
                     ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">OK</span>'
                     : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>');
+            if (item.revisar_motivo) {
+                row.style.background = "#fffbeb";
+            }
+            const revisarCell = item.revisar_motivo
+                ? `<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;cursor:help;" title="${item.revisar_motivo}">🔍 Revisar</span>`
+                : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>';
 
             const naVal = (v) => v != null ? fmt(v) : '—';
             const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
@@ -1561,6 +1567,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${fmt(item.saldo_pendiente_cxc)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
                 <td>${alertaCell}</td>
+                <td>${revisarCell}</td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
             `;
@@ -1734,6 +1741,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             const data = await res.json();
             const pagos = data.pagos || [];
+            const totales = data.pagos_totales || null;
             if (pagos.length === 0) {
                 body.innerHTML = '<p class="table-empty">Esta orden no tiene pagos vinculados todavía.</p>';
                 return;
@@ -1743,6 +1751,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>${fuenteBadge(p.fuente)}</td>
                     <td>${p.pago_id}</td>
                     <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ') || '—'}</small></td>
+                    <td style="text-align:right">${fmtMonto(p.monto_original, p.moneda_original)}</td>
                     <td style="text-align:right"><strong>${fmtMonto(p.monto_aplicado, p.moneda_abono)}</strong></td>
                     <td>${p.tipo_tasa_abono || '—'}</td>
                     <td style="text-align:right">${fmtTasa(p.tasa_bcv_aplicada)}</td>
@@ -1753,8 +1762,19 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td><small>${p.estado || '—'}</small></td>
                 </tr>
             `).join('');
+            const totalesRow = totales ? `
+                <tr style="font-weight:600;background:#f8fafc;">
+                    <td colspan="3">Totales${totales.monedas_originales_mixtas ? ' <small style="font-weight:400;color:#b91c1c;">(monedas originales mixtas, suma referencial)</small>' : ''}</td>
+                    <td style="text-align:right">${new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totales.monto_original || 0)}</td>
+                    <td style="text-align:right">${fmt(totales.monto_aplicado)}</td>
+                    <td colspan="3"></td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_bcv)}</td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_binance)}</td>
+                    <td colspan="2"></td>
+                </tr>
+            ` : '';
             body.innerHTML = `
-                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD).</p>
+                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD; el total de importe original es referencial si hay monedas mixtas).</p>
                 <div style="overflow-x:auto;">
                     <table class="cxc-table">
                         <thead>
@@ -1762,7 +1782,8 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <th>Fuente</th>
                                 <th>Pago</th>
                                 <th>Fecha</th>
-                                <th style="text-align:right">Monto Aplicado</th>
+                                <th style="text-align:right">Importe Original</th>
+                                <th style="text-align:right">Importe Referencia (Odoo)</th>
                                 <th>Ruta</th>
                                 <th style="text-align:right">Tasa BCV</th>
                                 <th style="text-align:right">Tasa Binance</th>
@@ -1772,7 +1793,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <th>Estado</th>
                             </tr>
                         </thead>
-                        <tbody>${rows}</tbody>
+                        <tbody>${rows}${totalesRow}</tbody>
                     </table>
                 </div>
             `;
@@ -1931,7 +1952,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
+                dias_gracia: parseInt(document.getElementById("cfg-rec-dias-gracia")?.value || 3)
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
@@ -1978,7 +2001,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-pp-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-pp-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-pronto-pago", {
@@ -2029,7 +2053,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -2077,7 +2102,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-prod-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-prod-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-producto", {
@@ -2125,7 +2151,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-dif-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-dif-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-diferencial-cambiario", {
@@ -2157,6 +2184,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadRecompra,
             loadProductoPromo,
             loadDiferencial,
+            loadDiasCredito,
             loadTasas,
             loadFeriados,
             populateBrandsAndCategories,
@@ -2434,6 +2462,72 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadDescuentosDiferencial = loadDiferencial;
+
+    const diasCreditoForm = document.getElementById("dias-credito-form");
+    if (diasCreditoForm) {
+        diasCreditoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const litrosMaxRaw = document.getElementById("cfg-dc-litros-max")?.value;
+            const payload = {
+                regla_id: document.getElementById("cfg-dc-regla-id")?.value || "",
+                litros_minimo: parseFloat(document.getElementById("cfg-dc-litros-min")?.value || 0),
+                litros_maximo: litrosMaxRaw ? parseFloat(litrosMaxRaw) : null,
+                dias_credito_max: parseInt(document.getElementById("cfg-dc-dias-max")?.value || 0),
+                descripcion: document.getElementById("cfg-dc-descripcion")?.value || "",
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/dias-credito-volumen", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de días de crédito registrada.");
+                    diasCreditoForm.reset();
+                    loadDiasCredito();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando regla de días de crédito:", err);
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    async function loadDiasCredito() {
+        const tbody = document.getElementById("dias-credito-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando reglas de días de crédito...</td></tr>';
+            const res = await fetch("/api/config/dias-credito-volumen");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay reglas de días de crédito.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const tr = document.createElement("tr");
+                    const tramo = `${r.litros_minimo}L - ${r.litros_maximo != null ? r.litros_maximo + 'L' : 'sin tope'}`;
+                    tr.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${tramo}</td>
+                        <td>${r.dias_credito_max}</td>
+                        <td><small>${r.descripcion || ''}</small></td>
+                        <td>${r.activo ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">Activo</span>' : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;">Inactivo</span>'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Error al cargar reglas de días de crédito.</td></tr>';
+        }
+    }
+    window.loadDiasCredito = loadDiasCredito;
 
     async function loadFeriados() {
         try {
@@ -3036,7 +3130,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_desde: cfgPromoDesde.value,
                 vigencia_hasta: cfgPromoHasta.value || null,
                 requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/promociones", {
@@ -3168,7 +3263,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: cfgDescVolHasta.value || null,
                 requiere_pago_previo: document.getElementById("cfg-desc-vol-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea"
+                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-desc-vol-descripcion")?.value || ""
             };
             try {
                 const res = await fetch("/api/config/descuentos-volumen", {

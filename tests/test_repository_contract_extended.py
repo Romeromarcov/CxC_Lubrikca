@@ -408,6 +408,40 @@ def test_descuentos_sistema_aprobados_upsert_y_lectura(repo: Repository) -> None
     assert rows2[0]["activo"] == "false"
 
 
+def test_reglas_dias_credito_volumen_upsert_y_lectura(repo: Repository) -> None:
+    assert repo.all_reglas_dias_credito_volumen() == []
+    repo.upsert_regla_dias_credito_volumen(
+        {
+            "regla_id": "CREDITO_0_500L",
+            "litros_minimo": "0",
+            "litros_maximo": "500",
+            "dias_credito_max": "21",
+            "descripcion": "De 0 a 500 Lts: máximo 21 días de crédito.",
+            "activo": "true",
+        }
+    )
+    rows = repo.all_reglas_dias_credito_volumen()
+    assert len(rows) == 1
+    assert rows[0]["regla_id"] == "CREDITO_0_500L"
+    assert int(rows[0]["dias_credito_max"]) == 21
+    assert rows[0]["activo"] == "true"
+
+    # Upsert por PK natural (regla_id) actualiza en vez de duplicar.
+    repo.upsert_regla_dias_credito_volumen(
+        {
+            "regla_id": "CREDITO_0_500L",
+            "litros_minimo": "0",
+            "litros_maximo": "500",
+            "dias_credito_max": "25",
+            "descripcion": "Ajustado",
+            "activo": "true",
+        }
+    )
+    rows2 = repo.all_reglas_dias_credito_volumen()
+    assert len(rows2) == 1
+    assert int(rows2[0]["dias_credito_max"]) == 25
+
+
 # --- Teóricos de Ventas (Fase 10) ---------------------------------------------
 
 
