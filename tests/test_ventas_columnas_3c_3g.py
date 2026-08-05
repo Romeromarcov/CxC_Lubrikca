@@ -887,3 +887,85 @@ def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
 
     assert "Días de crédito excede el máximo" in by_so["SO_EXCEDE"]["revisar_motivo"]
     assert by_so["SO_OK_CREDITO"]["revisar_motivo"] is None
+
+
+def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura() -> None:
+    """Bug real (orden S00010): descuento_aplicado_factura leía
+
+    account.move.line.price_unit/price_subtotal tal cual, en la moneda de
+    la FACTURA (a veces VES) -- salía en miles/millones en la tabla de
+    Ventas aunque el modal de detalle (que sí convierte) mostraba bien."""
+
+    def _fake_execute_ves(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_VES_FACT", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move":
+            # amount_total=47455.08 VES, amount_total_signed_usd=99.99 ->
+            # ratio ~= 0.0021075...
+            return [
+                {
+                    "id": 1359,
+                    "invoice_origin": "SO_VES_FACT",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 90.0,
+                    "amount_total_signed_usd": 99.99,
+                    "amount_total": 47455.08,
+                }
+            ]
+        if model == "sale.order.line":
+            return []
+        if model == "account.move.line":
+            return [
+                {
+                    "move_id": 1359,
+                    "quantity": 1.0,
+                    "price_unit": 27708.028582,
+                    "discount": 0.0,
+                    # Línea de descuento explícita (price_subtotal negativo).
+                    "product_id": [1, "Descuento"],
+                    "price_subtotal": -5000.0,
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_VES_FACT",
+            cliente_id="CLI_VES",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute_ves),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = next(it for it in res.json()["items"] if it["so_id"] == "SO_VES_FACT")
+
+    ratio = 99.99 / 47455.08
+    esperado = round(5000.0 * ratio, 2)
+    assert item["descuento_aplicado_factura"] == esperado
+    assert item["descuento_aplicado_factura"] < 100.0  # NUNCA en miles/bolívares crudos
