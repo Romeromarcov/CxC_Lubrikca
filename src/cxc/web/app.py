@@ -496,6 +496,98 @@ def _pagos_por_so_desde_cobranza(execute: Any) -> dict[str, float]:
     return totales
 
 
+def _pagos_bcv_binance_por_orden(
+    execute: Any,
+    invoice_ids_all: list[int],
+    inv_id_to_so: dict[int, str],
+    es_historica_map: dict[str, bool],
+    tasas_rows: list[dict],
+    hist_rows: list[dict],
+) -> dict[str, dict[str, float]]:
+    """Monto pagado por orden convertido a USD con la tasa BCV y con la tasa
+
+    Binance del DÍA DEL PAGO, cada una por separado (a diferencia de
+    ``_pagos_odoo_por_orden``/``_pagos_por_so_desde_cobranza``, que hoy dan
+    el mismo número para ambas rutas -- limitación conocida, documentada,
+    NO corregida ahí a propósito porque ``/api/reporte-saldos`` se va a
+    sustituir). Pedido explícito del usuario para las columnas "Monto
+    pagado BCV"/"Monto pagado USD" de Ventas.
+
+    Si la orden cae en la ventana de la Lista Histórica de Auditoría
+    (Euro), la ruta BCV usa la tasa BCV-Euro del día (mismo criterio que
+    ``resolver_tasa_bcv_vinculacion`` para Vinculaciones nuevas) -- Binance
+    sigue usando la tasa Binance normal, el Euro solo sustituye la
+    referencia BCV.
+
+    Igual que el resto de estas funciones: si un pago reconcilia facturas
+    de varias órdenes, se suma el monto COMPLETO a cada una (no
+    prorrateado) -- mismo criterio ya usado en ``get_live_pagos_
+    conciliados``/``_pagos_odoo_por_orden``.
+    """
+    result: dict[str, dict[str, float]] = {}
+    if not execute or not invoice_ids_all:
+        return result
+    try:
+        payments = execute(
+            "account.payment",
+            "search_read",
+            [
+                [
+                    ["reconciled_invoice_ids", "in", invoice_ids_all],
+                    ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+                ]
+            ],
+            {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
+        )
+    except Exception as e:
+        logger.warning("Error consultando account.payment en _pagos_bcv_binance_por_orden: %s", e)
+        return result
+
+    for p in payments:
+        amt = Decimal(str(p.get("amount") or "0"))
+        if amt <= Decimal("0"):
+            continue
+        curr_raw = p.get("currency_id")
+        curr = curr_raw[1] if isinstance(curr_raw, list | tuple) and len(curr_raw) > 1 else "USD"
+        fecha_str = str(p.get("date") or "")[:10]
+        try:
+            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
+        except ValueError:
+            fecha_dt = datetime.now()
+
+        sos = {
+            inv_id_to_so[int(rid)]
+            for rid in (p.get("reconciled_invoice_ids") or [])
+            if int(rid) in inv_id_to_so
+        }
+        if not sos:
+            continue
+
+        if curr == "USD":
+            monto_bcv = amt
+            monto_binance = amt
+        else:
+            bcv_normal, tasa_binance = get_rate_for_datetime(fecha_dt, tasas_rows)
+            tasa_bcv = bcv_normal
+            if any(es_historica_map.get(so, False) for so in sos):
+                tasa_eur = get_bcv_euro_rate_for_datetime(fecha_dt, tasas_rows)
+                if not tasa_eur or tasa_eur <= Decimal("0"):
+                    tasa_eur = get_eur_rate_for_date(fecha_dt.date(), hist_rows)
+                if tasa_eur and tasa_eur > Decimal("0"):
+                    tasa_bcv = tasa_eur
+            monto_bcv = amt / tasa_bcv if tasa_bcv > Decimal("0") else Decimal("0")
+            monto_binance = amt / tasa_binance if tasa_binance > Decimal("0") else Decimal("0")
+
+        for so in sos:
+            entry = result.setdefault(
+                so, {"monto_pagado_bcv": 0.0, "monto_pagado_usd_binance": 0.0}
+            )
+            entry["monto_pagado_bcv"] += float(monto_bcv)
+            entry["monto_pagado_usd_binance"] += float(monto_binance)
+
+    return result
+
+
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -6309,6 +6401,28 @@ async def get_pagos_historial():
                     c_name = p["cliente_nombre"] or clientes_map.get(
                         p["cliente_id"], f"Cliente ID: {p['cliente_id']}"
                     )
+                    # Bug real (agosto 2026): para pagos YA reconciliados en
+                    # Odoo (la mayoría, una vez pasan unos días), tasa_binance
+                    # quedaba hardcodeada en None -- Binance no existe como
+                    # campo en Odoo, así que a diferencia de tasa_bcv (que sí
+                    # tiene el fallback "tax_today" más abajo, en
+                    # get_cobranza_pagos_unificado) esta tasa nunca se
+                    # calculaba, dejando el equivalente Binance en blanco
+                    # para todo pago ya conciliado (los "pendientes" sí la
+                    # calculan bien vía get_rate_for_datetime). Mismo
+                    # criterio de fallback (SerieTasas del día ->
+                    # TasasHistoricasAuditoria) que ya usa el resto del
+                    # sistema.
+                    fecha_pago_str = str(p["fecha_pago"] or "")[:10]
+                    try:
+                        fecha_pago_dt = (
+                            datetime.strptime(fecha_pago_str, "%Y-%m-%d")
+                            if fecha_pago_str
+                            else datetime.now()
+                        )
+                    except ValueError:
+                        fecha_pago_dt = datetime.now()
+                    _, tasa_binance_calc = get_rate_for_datetime(fecha_pago_dt, tasas_rows)
                     historial.append(
                         {
                             "vinc_id": None,
@@ -6327,7 +6441,11 @@ async def get_pagos_historial():
                             "estado": "CONCILIADO",
                             "origen": "Odoo (automático vía factura)",
                             "tasa_bcv": None,
-                            "tasa_binance": None,
+                            "tasa_binance": (
+                                float(tasa_binance_calc)
+                                if tasa_binance_calc and tasa_binance_calc > Decimal("0")
+                                else None
+                            ),
                             "bcv_variante": "USD",
                             "editable": False,
                             "metodo_pago_id": "",
@@ -7538,6 +7656,13 @@ async def get_ventas(
         usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
         usd_ids_str = {str(x) for x in usd_pricelist_ids}
         historical_enabled = is_historical_pricelist_enabled(repo)
+        # Precomputado una vez -- lo usan tanto el bloque de "lista aplicada"
+        # más abajo como el nuevo cálculo de Monto pagado BCV/USD (para
+        # decidir si la ruta BCV de un pago usa la tasa BCV-Euro histórica).
+        es_historica_map = {
+            o.so_id: es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            for o in ordenes
+        }
 
         so_names = [o.so_id for o in ordenes]
         execute = None
@@ -7601,6 +7726,7 @@ async def get_ventas(
         invoice_ids_out_invoice: list[int] = []
         invoice_ids_all: list[int] = []
         inv_id_to_so: dict[int, str] = {}
+        pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
 
         if execute and so_names:
             try:
@@ -7716,6 +7842,19 @@ async def get_ventas(
                 # Tarea 3f: N/D atadas a las facturas out_invoice de estas órdenes.
                 nd_con_imp_map = _leer_notas_debito_odoo(
                     execute, invoice_ids_out_invoice, inv_id_to_so
+                )
+                # Monto pagado BCV/USD (Binance) -- columnas nuevas, cada
+                # ruta con SU PROPIA tasa del día del pago (no duplicadas
+                # como en _pagos_odoo_por_orden/_pagos_por_so_desde_cobranza).
+                tasas_rows_pago = _all_serie_tasas_rows(repo)
+                hist_rows_pago = repo.all_tasas_historicas_auditoria()
+                pagos_bcv_binance_map = _pagos_bcv_binance_por_orden(
+                    execute,
+                    invoice_ids_all,
+                    inv_id_to_so,
+                    es_historica_map,
+                    tasas_rows_pago,
+                    hist_rows_pago,
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -8009,6 +8148,25 @@ async def get_ventas(
                     # "done") -- mismo criterio que ya usa el reporte de CxC.
                     "dias_credito": dias_credito_odoo_map.get(o.so_id, o.dias_credito or 0),
                     "fecha_entrega": fecha_entrega_map.get(o.so_id),
+                    # Total pagado según Odoo (mismo valor que ya usan
+                    # estatus_pago_real_orden/_factura internamente --
+                    # val_ref_nacimiento, BCV o Binance según la lista de
+                    # nacimiento de la orden), expuesto ahora como columna
+                    # propia junto a los totales de factura.
+                    "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # Monto pagado con SU PROPIA tasa por ruta (BCV vs
+                    # Binance del día del pago) -- distinto del "abono_bcv"/
+                    # "abono_binance" que usa estatus_pago_real_orden/_
+                    # factura (esos dan el mismo número para ambas rutas).
+                    "monto_pagado_bcv": round(
+                        pagos_bcv_binance_map.get(o.so_id, {}).get("monto_pagado_bcv", 0.0), 2
+                    ),
+                    "monto_pagado_usd": round(
+                        pagos_bcv_binance_map.get(o.so_id, {}).get(
+                            "monto_pagado_usd_binance", 0.0
+                        ),
+                        2,
+                    ),
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por
                     # reselección según método de pago -- ver docstring del
