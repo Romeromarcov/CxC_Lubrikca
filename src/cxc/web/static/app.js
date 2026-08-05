@@ -2183,6 +2183,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadRecompra,
             loadProductoPromo,
             loadDiferencial,
+            loadDiasCredito,
             loadTasas,
             loadFeriados,
             populateBrandsAndCategories,
@@ -2460,6 +2461,72 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadDescuentosDiferencial = loadDiferencial;
+
+    const diasCreditoForm = document.getElementById("dias-credito-form");
+    if (diasCreditoForm) {
+        diasCreditoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const litrosMaxRaw = document.getElementById("cfg-dc-litros-max")?.value;
+            const payload = {
+                regla_id: document.getElementById("cfg-dc-regla-id")?.value || "",
+                litros_minimo: parseFloat(document.getElementById("cfg-dc-litros-min")?.value || 0),
+                litros_maximo: litrosMaxRaw ? parseFloat(litrosMaxRaw) : null,
+                dias_credito_max: parseInt(document.getElementById("cfg-dc-dias-max")?.value || 0),
+                descripcion: document.getElementById("cfg-dc-descripcion")?.value || "",
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/dias-credito-volumen", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de días de crédito registrada.");
+                    diasCreditoForm.reset();
+                    loadDiasCredito();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando regla de días de crédito:", err);
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    async function loadDiasCredito() {
+        const tbody = document.getElementById("dias-credito-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando reglas de días de crédito...</td></tr>';
+            const res = await fetch("/api/config/dias-credito-volumen");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay reglas de días de crédito.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const tr = document.createElement("tr");
+                    const tramo = `${r.litros_minimo}L - ${r.litros_maximo != null ? r.litros_maximo + 'L' : 'sin tope'}`;
+                    tr.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${tramo}</td>
+                        <td>${r.dias_credito_max}</td>
+                        <td><small>${r.descripcion || ''}</small></td>
+                        <td>${r.activo ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">Activo</span>' : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;">Inactivo</span>'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Error al cargar reglas de días de crédito.</td></tr>';
+        }
+    }
+    window.loadDiasCredito = loadDiasCredito;
 
     async function loadFeriados() {
         try {

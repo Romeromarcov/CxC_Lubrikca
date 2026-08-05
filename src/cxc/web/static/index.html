@@ -2131,6 +2131,58 @@
                     </div>
                 </section>
 
+                <!-- Días de Crédito Máximo por Volumen (alerta, no alimenta recompra) -->
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #7c3aed;">
+                    <div class="panel-header">
+                        <h2>📆 Días de Crédito Máximo por Volumen</h2>
+                        <p>Rangos de litros de la orden → máximo de días de crédito que Odoo debería otorgar. Uso EXCLUSIVO: genera la alerta "Revisar" en Ventas cuando el plazo real supera este máximo -- NO alimenta la fórmula de Recompra (esa usa el plazo real de la orden anterior).</p>
+                    </div>
+
+                    <form id="dias-credito-form" class="cxc-form">
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>ID de la regla</label>
+                                <input type="text" id="cfg-dc-regla-id" placeholder="Ej: CREDITO_0_500L" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Litros Mínimo</label>
+                                <input type="number" id="cfg-dc-litros-min" min="0" step="0.01" value="0" required>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Litros Máximo (vacío = sin tope)</label>
+                                <input type="number" id="cfg-dc-litros-max" min="0" step="0.01">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Días de Crédito Máximo</label>
+                                <input type="number" id="cfg-dc-dias-max" min="0" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Descripción (cómo funciona esta regla)</label>
+                            <textarea id="cfg-dc-descripcion" rows="2" placeholder="Ej: De 0 a 500 Lts: máximo 21 días de crédito."></textarea>
+                        </div>
+                        <button type="submit" class="btn-primary">Registrar Regla de Días de Crédito</button>
+                    </form>
+
+                    <div class="mini-table-wrapper">
+                        <h3>Reglas de Días de Crédito Registradas</h3>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>ID / Regla</th>
+                                    <th>Tramo (Litros)</th>
+                                    <th>Días Máximo</th>
+                                    <th>Descripción</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dias-credito-table-body">
+                                <tr><td colspan="5" class="table-empty">Cargando reglas de días de crédito...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Exclusiones Mutuas entre Descuentos/Promociones -->
                 <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #64748b;">
                     <div class="panel-header">
