@@ -98,6 +98,11 @@ class OrdenVenta:
     estado_entrega: str = ""  # delivery_status de Odoo: pending/partial/full
     entregada_completa: bool = False
     tiene_devolucion: bool = False
+    # Días de crédito reales otorgados por Odoo (payment_term_id), en el
+    # momento en que la orden nació -- usado por Recompra (ventana de
+    # días de crédito + gracia desde la orden anterior) y por la alerta
+    # de días de crédito máximo por volumen.
+    dias_credito: int = 0
 
 
 # --- 3.3 LineasOrden (espejo) -----------------------------------------------

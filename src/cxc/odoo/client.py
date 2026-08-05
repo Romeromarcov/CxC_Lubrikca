@@ -138,6 +138,23 @@ def _resolve_fecha_orden(so_name: str, odoo_date_val: Any) -> date:
     return _to_datetime(odoo_date_val).date()
 
 
+def parse_payment_term_days(t_name: str) -> int:
+    """Días de crédito otorgados según el nombre del payment term de Odoo.
+
+    Usado para poblar ``OrdenVenta.dias_credito`` (Recompra -- ventana de
+    días de crédito + gracia -- y la alerta de días de crédito máximo por
+    volumen). Misma heurística de regex que ``web/app.py`` usa para el
+    reporte de CxC (nombre suele ser "30 días"/"Contado"/"Immediate
+    Payment")."""
+    if not t_name:
+        return 0
+    t_low = t_name.lower().strip()
+    if "immediate" in t_low or "contado" in t_low:
+        return 0
+    m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
+    return int(m.group(1)) if m else 0
+
+
 def map_orden(rec: dict[str, Any]) -> OrdenVenta:
     estado_entrega = str(rec.get("delivery_status", "") or "")
     entregada_completa = estado_entrega == "full"
@@ -163,6 +180,7 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
         estado_entrega=estado_entrega,
         entregada_completa=entregada_completa,
         tiene_devolucion=bool(rec.get("tiene_devolucion", False)),
+        dias_credito=int(rec.get("dias_credito") or 0),
     )
 
 
@@ -307,6 +325,7 @@ class OdooXmlRpcReader(OdooReader):
                 "invoice_status",
                 "delivery_status",
                 "state",
+                "payment_term_id",
             ],
         )
         if not recs:
@@ -330,6 +349,7 @@ class OdooXmlRpcReader(OdooReader):
             r["es_primera_compra"] = bool(partner) and primeras.get(int(partner)) == str(r["name"])
             r["factura_id"] = facturas.get(str(r["name"]))
             r["tiene_devolucion"] = int(r["id"]) in con_devolucion
+            r["dias_credito"] = parse_payment_term_days(_m2o_name(r.get("payment_term_id")))
         return [map_orden(r) for r in recs]
 
     def _ordenes_con_devolucion(self, so_ids: list[int]) -> set[int]:

@@ -842,6 +842,7 @@ def _orden_to_row(o: OrdenVenta) -> dict[str, Any]:
         "estado_entrega": o.estado_entrega,
         "entregada_completa": o.entregada_completa,
         "tiene_devolucion": o.tiene_devolucion,
+        "dias_credito": o.dias_credito,
     }
 
 
@@ -862,6 +863,7 @@ def _row_to_orden(r: Any) -> OrdenVenta:
         estado_entrega=r.estado_entrega,
         entregada_completa=r.entregada_completa,
         tiene_devolucion=r.tiene_devolucion,
+        dias_credito=getattr(r, "dias_credito", 0) or 0,
     )
 
 

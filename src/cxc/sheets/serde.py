@@ -170,6 +170,7 @@ def orden_to_row(o: OrdenVenta) -> Row:
         "estado_entrega": o.estado_entrega,
         "entregada_completa": s_bool(o.entregada_completa),
         "tiene_devolucion": s_bool(o.tiene_devolucion),
+        "dias_credito": str(getattr(o, "dias_credito", 0)),
     }
 
 
@@ -190,6 +191,7 @@ def orden_from_row(r: Mapping[str, str]) -> OrdenVenta:
         estado_entrega=r.get("estado_entrega", ""),
         entregada_completa=p_bool(r.get("entregada_completa", "FALSE")),
         tiene_devolucion=p_bool(r.get("tiene_devolucion", "FALSE")),
+        dias_credito=int(r.get("dias_credito", "0") or "0"),
     )
 
 

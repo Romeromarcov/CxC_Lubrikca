@@ -88,6 +88,7 @@ ordenes_venta = Table(
     Column("estado_entrega", String, nullable=False, server_default=""),
     Column("entregada_completa", Boolean, nullable=False, server_default="false"),
     Column("tiene_devolucion", Boolean, nullable=False, server_default="false"),
+    Column("dias_credito", Integer, nullable=False, server_default="0"),
 )
 
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
