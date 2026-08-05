@@ -1046,6 +1046,7 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
+        dias_gracia=r.dias_gracia,
     )
 
 

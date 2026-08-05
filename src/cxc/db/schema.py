@@ -271,6 +271,7 @@ descuentos_recompra = Table(
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
+    Column("dias_gracia", Integer, nullable=False, server_default="3"),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------

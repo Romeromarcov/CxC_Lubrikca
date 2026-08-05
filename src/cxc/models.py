@@ -339,6 +339,11 @@ class DescuentoRecompra:
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
     descripcion: str = ""
+    # Ventana de recompra: aplica si la orden anterior del cliente está
+    # totalmente pagada y la nueva orden llega dentro de (días de crédito
+    # reales de esa orden anterior + dias_gracia). Mismo patrón que
+    # DescuentoProntoPago.dias_gracia.
+    dias_gracia: int = 3
 
 
 # --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------

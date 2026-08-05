@@ -849,6 +849,7 @@ class RecompraRequest(BaseModel):
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
     descripcion: str = ""
+    dias_gracia: int = 3
 
 
 class ProductoPromoRequest(BaseModel):
@@ -5446,6 +5447,7 @@ async def get_todas_reglas_descuento():
                     "campos_especiales": {
                         "max_usos_mes": r.max_usos_mes,
                         "dias_ventana": r.dias_ventana,
+                        "dias_gracia": getattr(r, "dias_gracia", 3),
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
@@ -5800,6 +5802,7 @@ async def get_config_recompra():
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
+                "dias_gracia": getattr(r, "dias_gracia", 3),
             }
             for r in rules
         ]
@@ -5835,6 +5838,7 @@ async def post_config_recompra(req: RecompraRequest):
             requiere_pago_previo=req.requiere_pago_previo,
             descripcion=req.descripcion,
             aplica_a=req.aplica_a,
+            dias_gracia=req.dias_gracia,
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}

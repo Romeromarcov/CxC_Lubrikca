@@ -10,6 +10,7 @@ from cxc.models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoRecompra,
     DescuentoVolumen,
     Feriado,
     LineaOrden,
@@ -43,6 +44,7 @@ def orden(
     vendedor: str = "rep@lubrikca.com",
     facturada: bool = False,
     estado_orden: str = "sale",
+    dias_credito: int = 0,
 ) -> OrdenVenta:
     return OrdenVenta(
         so_id=so_id,
@@ -55,6 +57,7 @@ def orden(
         es_primera_compra=primera,
         facturada=facturada,
         estado_orden=estado_orden,
+        dias_credito=dias_credito,
     )
 
 
@@ -235,6 +238,35 @@ def regla_recompra(valor: str = "0.03", desde: date = date(2026, 1, 1)) -> Regla
         tipo_beneficio=TipoBeneficio.PORCENTAJE,
         valor=Decimal(valor),
         vigencia_desde=desde,
+    )
+
+
+def descuento_recompra(
+    regla_id: str = "REC1",
+    *,
+    marca: str = "*",
+    categoria: str = "*",
+    min_cajas: int = 1,
+    max_cajas: int = 9999,
+    porcentaje: str = "0.03",
+    vigencia_desde: date = date(2026, 1, 1),
+    vigencia_hasta: date | None = None,
+    activo: bool = True,
+    aplica_a: str = "linea",
+    dias_gracia: int = 3,
+) -> DescuentoRecompra:
+    return DescuentoRecompra(
+        regla_id=regla_id,
+        marca=marca,
+        categoria=categoria,
+        min_cajas=min_cajas,
+        max_cajas=max_cajas,
+        porcentaje=Decimal(porcentaje),
+        vigencia_desde=vigencia_desde,
+        vigencia_hasta=vigencia_hasta,
+        activo=activo,
+        aplica_a=aplica_a,
+        dias_gracia=dias_gracia,
     )
 
 

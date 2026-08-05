@@ -42,6 +42,40 @@ def _seed() -> InMemoryRepository:
     return repo
 
 
+def _seed_con_orden_anterior_pagada() -> InMemoryRepository:
+    """Igual que ``_seed()`` pero con una orden anterior (SO0) del mismo
+
+    cliente, totalmente pagada -- habilita la ventana de Recompra (días de
+    crédito + gracia) para SO1. Fixture separada de ``_seed()`` porque otros
+    tests de este archivo (``run_all``/``run_teoricos_pendientes``) asumen
+    un único pedido en el repo."""
+    repo = _seed()
+    repo.upsert_ordenes(
+        [
+            b.orden(
+                "SO0",
+                cliente_id="C1",
+                primera=False,
+                fecha=date(2026, 5, 1),
+                monto_total="500",
+                dias_credito=30,
+            )
+        ]
+    )
+    repo.upsert_pagos([b.pago("PG0", cliente_id="C1", monto="500", metodo_id="M1")])
+    repo.add_vinculacion(
+        b.vinculacion(
+            "V0",
+            pago_id="PG0",
+            so_id="SO0",
+            monto_aplicado="500",
+            moneda_abono=Moneda.USD,
+            hora=datetime(2026, 5, 1, 10, 0),
+        )
+    )
+    return repo
+
+
 def test_runner_calcula_y_persiste_bandeja() -> None:
     repo = _seed()
     resolver = DictPriceResolver({("P1", "USD"): Decimal("100")})
@@ -51,13 +85,68 @@ def test_runner_calcula_y_persiste_bandeja() -> None:
     assert len(resultados) == 1
     bandeja = repo.get_bandeja("SO1")
     assert bandeja is not None
-    assert bandeja.total_descuentos == Decimal("6.00")  # 3% + 3%
+    assert bandeja.total_descuentos == Decimal("6.00")
     assert bandeja.total_motor == Decimal("94.00")
     assert bandeja.candidata_a_cierre is True
+    # SO1 no tiene orden anterior en este repo (_seed() solo siembra un
+    # pedido) -- Recompra NO puede evaluarse (ver
+    # test_runner_recompra_aplica_con_orden_anterior_pagada para el caso con
+    # orden anterior). El 6% de aquí sale de contado (3%) + bcv_completo
+    # (3%, coincide en monto con lo que antes daba recompra) -- hallazgo de
+    # esta fase: antes de fijar esta aserción, este test "pasaba" aunque
+    # Recompra ya no disparaba, porque el monto total coincidía por
+    # casualidad con otro mecanismo.
+    origenes = {d.origen for d in bandeja.descuentos_detalle}
+    assert origenes == {"contado", "bcv_completo"}
 
     # Los equivalentes quedaron congelados en la vinculación.
     vinc = repo.vinculaciones_de_orden("SO1")[0]
     assert vinc.equiv_usd_binance is not None
+
+
+def test_runner_recompra_aplica_con_orden_anterior_pagada() -> None:
+    """Integración completa run_all -> build_inputs -> motor: con una orden
+
+    anterior del cliente totalmente pagada y dentro de ventana, Recompra sí
+    debe aparecer en descuentos_detalle."""
+    repo = _seed_con_orden_anterior_pagada()
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    runner.run_all(date(2026, 6, 8))
+    bandeja = repo.get_bandeja("SO1")
+    assert bandeja is not None
+    origenes = {d.origen for d in bandeja.descuentos_detalle}
+    assert "recurrencia" in origenes
+
+
+def test_build_inputs_encuentra_orden_anterior_del_cliente_y_sus_vincs() -> None:
+    """build_inputs (no run_all) debe resolver la orden anterior del
+
+    cliente (fecha más reciente antes de esta orden) y traer sus
+    vinculaciones -- sin esto Recompra no puede evaluar si quedó pagada."""
+    repo = _seed_con_orden_anterior_pagada()
+    runner = EngineRunner(repo, DictPriceResolver({("P1", "USD"): Decimal("100")}), CFG)
+    inp = runner.build_inputs("SO1", date(2026, 6, 8))
+    assert inp is not None
+    assert inp.orden_anterior_cliente is not None
+    assert inp.orden_anterior_cliente.so_id == "SO0"
+    assert len(inp.orden_anterior_cliente_vincs) == 1
+    assert inp.orden_anterior_cliente_vincs[0].vinc_id == "V0"
+
+
+def test_build_inputs_sin_orden_anterior_para_primer_pedido_del_cliente() -> None:
+    repo = InMemoryRepository()
+    repo.upsert_clientes([b.cliente("C_NUEVO")])
+    repo.upsert_ordenes([b.orden("SO_UNICA", cliente_id="C_NUEVO", primera=True)])
+    repo.upsert_lineas(
+        [b.linea("L1", so_id="SO_UNICA", marca="Sinoco", categoria="*", precio="100")]
+    )
+    runner = EngineRunner(repo, DictPriceResolver({("P1", "USD"): Decimal("100")}), CFG)
+    inp = runner.build_inputs("SO_UNICA", date(2026, 6, 8))
+    assert inp is not None
+    assert inp.orden_anterior_cliente is None
+    assert inp.orden_anterior_cliente_vincs == []
 
 
 def test_runner_omite_ordenes_facturadas() -> None:

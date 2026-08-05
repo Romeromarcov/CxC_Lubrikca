@@ -1953,7 +1953,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 activo: true,
                 requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
                 aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-rec-descripcion")?.value || ""
+                descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
+                dias_gracia: parseInt(document.getElementById("cfg-rec-dias-gracia")?.value || 3)
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
