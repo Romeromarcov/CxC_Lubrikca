@@ -7491,7 +7491,14 @@ def _leer_notas_debito_odoo(
                 [
                     ["debit_origin_id", "in", original_invoice_ids],
                     ["state", "=", "posted"],
-                    ["move_type", "=", "out_invoice"],
+                    # Bug real (orden S00357 y otras del mismo cliente,
+                    # agosto 2026): las notas de débito reales en Odoo 18
+                    # tienen move_type="out_debit" (journal dedicado "Notas
+                    # de débito clientes"), NUNCA "out_invoice" -- verificado
+                    # en vivo, debit_origin_id sí apunta correctamente a la
+                    # factura original, pero el filtro de move_type las
+                    # excluía todas.
+                    ["move_type", "=", "out_debit"],
                 ]
             ],
             {"fields": ["debit_origin_id", "amount_total_signed_usd"]},
@@ -7508,6 +7515,62 @@ def _leer_notas_debito_odoo(
     except Exception as e_nd:
         logger.warning("Error leyendo notas de débito en get_ventas: %s", e_nd)
     return nd_by_so
+
+
+def _leer_notas_credito_odoo(
+    execute: Any,
+    original_invoice_ids: list[int],
+    inv_id_to_so: dict[int, str],
+    ids_ya_contados: set[int],
+) -> dict[str, float]:
+    """Notas de crédito (N/C) atadas a una factura ya emitida, vía
+
+    ``reversed_entry_id`` (apunta a la factura original) -- NO vía
+    ``invoice_origin``.
+
+    Bug real (mismo patrón que las notas de débito, ver
+    ``_leer_notas_debito_odoo``): el código anterior encontraba N/C
+    únicamente dentro de la consulta principal de facturas, filtrada por
+    ``invoice_origin in so_names`` -- pero las N/C creadas con el asistente
+    normal de Odoo ("Agregar Nota de Crédito") dejan ``invoice_origin``
+    vacío; se enlazan a la factura original vía ``reversed_entry_id``.
+    Verificado en vivo contra varias N/C reales del sistema.
+
+    ``ids_ya_contados``: ids de account.move que la consulta principal ya
+    sumó a ``nc_con_imp_map`` (los pocos casos donde ``invoice_origin`` sí
+    viene poblado) -- se excluyen aquí para no contar el mismo documento
+    dos veces.
+    """
+    nc_by_so: dict[str, float] = {}
+    if not execute or not original_invoice_ids:
+        return nc_by_so
+    try:
+        credit_notes = execute(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["reversed_entry_id", "in", original_invoice_ids],
+                    ["state", "=", "posted"],
+                    ["move_type", "=", "out_refund"],
+                ]
+            ],
+            {"fields": ["id", "reversed_entry_id", "amount_total_signed_usd"]},
+        )
+        for cn in credit_notes:
+            if int(cn.get("id") or 0) in ids_ya_contados:
+                continue
+            origin_raw = cn.get("reversed_entry_id")
+            origin_id = origin_raw[0] if isinstance(origin_raw, list | tuple) else origin_raw
+            so_name = inv_id_to_so.get(origin_id, "") if origin_id else ""
+            if not so_name:
+                continue
+            nc_by_so[so_name] = nc_by_so.get(so_name, 0.0) + abs(
+                float(cn.get("amount_total_signed_usd") or 0.0)
+            )
+    except Exception as e_nc:
+        logger.warning("Error leyendo notas de crédito (reversed_entry_id) en get_ventas: %s", e_nc)
+    return nc_by_so
 
 
 @app.get("/api/ventas")
@@ -7801,6 +7864,7 @@ async def get_ventas(
                     },
                 )
                 inv_usd_ratio_map: dict[int, float] = {}
+                nc_ids_ya_contados: set[int] = set()
                 for inv in invoices:
                     so = str(inv.get("invoice_origin", "")).strip()
                     if not so:
@@ -7827,6 +7891,8 @@ async def get_ventas(
                     antes_imp = abs(float(inv.get("amount_untaxed_signed_usd") or 0.0))
                     if str(inv.get("move_type")) == "out_refund":
                         nc_con_imp_map[so] = nc_con_imp_map.get(so, 0.0) + con_imp
+                        if inv_id:
+                            nc_ids_ya_contados.add(inv_id)
                     else:
                         facturado_con_imp_map[so] = facturado_con_imp_map.get(so, 0.0) + con_imp
                         facturado_antes_imp_map[so] = (
@@ -7843,6 +7909,12 @@ async def get_ventas(
                 nd_con_imp_map = _leer_notas_debito_odoo(
                     execute, invoice_ids_out_invoice, inv_id_to_so
                 )
+                # N/C atadas vía reversed_entry_id (bug real S00357 y
+                # similares -- ver docstring de _leer_notas_credito_odoo).
+                for so_nc, monto_nc in _leer_notas_credito_odoo(
+                    execute, invoice_ids_out_invoice, inv_id_to_so, nc_ids_ya_contados
+                ).items():
+                    nc_con_imp_map[so_nc] = nc_con_imp_map.get(so_nc, 0.0) + monto_nc
                 # Monto pagado BCV/USD (Binance) -- columnas nuevas, cada
                 # ruta con SU PROPIA tasa del día del pago (no duplicadas
                 # como en _pagos_odoo_por_orden/_pagos_por_so_desde_cobranza).
