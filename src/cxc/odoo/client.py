@@ -269,10 +269,20 @@ class OdooXmlRpcReader(OdooReader):
 
     # --- Clientes ------------------------------------------------------------
     def changed_clientes(self, since: datetime | None) -> list[Cliente]:
-        recs = self._search_read(
+        # active_test=False: un contacto archivado en Odoo puede seguir
+        # siendo referenciado por órdenes históricas (sale.order.partner_id
+        # no se limpia al archivar el contacto) -- sin esto, un sync
+        # completo (since=None) puede traer una orden cuyo cliente nunca
+        # se sincroniza, violando la FK ordenes_venta.cliente_id.
+        recs = self._execute(
             self.MODEL_PARTNER,
-            self._delta(since),
-            ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate", "commercial_partner_id"],
+            "search_read",
+            [self._delta(since)],
+            {
+                "fields": ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate",
+                           "commercial_partner_id"],
+                "context": {"active_test": False},
+            },
         )
         uids = {int(_m2o_id(r.get("user_id"))) for r in recs if _m2o_id(r.get("user_id"))}
         logins = self._user_logins(uids)
