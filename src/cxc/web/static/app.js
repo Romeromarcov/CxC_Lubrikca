@@ -149,6 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja1TableBody = document.getElementById("bandeja1-table-body");
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
+    const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
 
     // Elements - Auditoria
     const auditKpiConformes = document.getElementById("audit-kpi-conformes");
@@ -669,6 +670,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por facturar...</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
+            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -679,6 +681,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray1 = data.ordenes_por_facturar || (Array.isArray(data) ? data.filter(x => !x.facturada) : []);
                 const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
                 const tray3 = data.iva_pendiente_agentes || [];
+                const tray4 = data.auditoria_precios || [];
 
                 // Render Tray 1
                 if (bandeja1TableBody) {
@@ -756,12 +759,37 @@ document.addEventListener("DOMContentLoaded", () => {
                         });
                     }
                 }
+
+                // Render Tray 4 (Bandeja de Auditoría de Precios)
+                if (bandejaAuditoriaPreciosTableBody) {
+                    if (tray4.length === 0) {
+                        bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes en auditoría de precios.</td></tr>';
+                    } else {
+                        bandejaAuditoriaPreciosTableBody.innerHTML = "";
+                        tray4.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${item.fecha || ''}</td>
+                                <td>${item.lista_aplicada_label || ''}</td>
+                                <td>${item.ves_neta_teorica_iva != null ? fmt(item.ves_neta_teorica_iva) : '-'}</td>
+                                <td>${item.usd_neta_teorica_iva != null ? fmt(item.usd_neta_teorica_iva) : '-'}</td>
+                                <td>${item.venta_neta_real != null ? fmt(item.venta_neta_real) : '-'}</td>
+                                <td><strong style="color:#dc2626">${item.total_facturado_neto != null ? fmt(item.total_facturado_neto) : '-'}</strong></td>
+                                <td>${item.motivo || ''}</td>
+                            `;
+                            bandejaAuditoriaPreciosTableBody.appendChild(row);
+                        });
+                    }
+                }
             }
         } catch (err) {
             console.error("Error loading bandeja:", err);
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar bandeja 1.</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
+            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
         }
     }
 

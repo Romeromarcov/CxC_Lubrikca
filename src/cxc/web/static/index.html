@@ -487,6 +487,36 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (nueva, Sección 5 del Manual) -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja de Auditoría de Precios</h2>
+                        <p>Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Estas órdenes permanecen visibles en el Reporte General de Saldos.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-auditoria-precios-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 
