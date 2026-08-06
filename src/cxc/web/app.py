@@ -3637,10 +3637,16 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
     asociada -- misma lista que ya calcula
     ``/api/conciliaciones/sugerencias``, dedup por ``pago_id`` tomando el
     saldo MÁXIMO entre sus filas de sugerencia FIFO, el residual real sin
-    aplicar) se muestran como documento NEGATIVO por cliente, reduciendo
-    los 4 saldos POR IGUAL (es efectivo real, no aplicado a ninguna
-    referencia en particular -- reduce la deuda del cliente sin importar
-    con cuál de las 4 se le compare).
+    aplicar) se muestran como documento NEGATIVO por cliente. Bug real
+    corregido (agosto 2026): antes se restaba el MISMO valor (la ruta BCV)
+    de las 4 columnas por igual, como si el pago fuera USD directo. Ahora
+    cada columna resta SU PROPIA ruta: ``teorico_bs``/``teorico_usd``
+    restan ``saldo_pago``/``saldo_pago_binance`` (ya calculados por
+    separado en ``get_conciliaciones_sugerencias``, con el ajuste BCV-EUR
+    para clientes con órdenes históricas); ``venta_real``/``factura_real``
+    restan la ruta que corresponde a la lista de nacimiento de la orden a
+    la que el FIFO sugirió aplicar el pago (BCV por defecto si no hay
+    orden sugerida -- ``so_id is None``).
 
     Limitación conocida (MVP, documentada para no aparentar más de lo que
     hace): Notas de Crédito y Notas de Débito NO se muestran como
@@ -3655,12 +3661,14 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
 
         ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
         sugerencias = await get_conciliaciones_sugerencias(cxc_session=cxc_session)
+        ventas_items_by_so = {it["so_id"]: it for it in ventas_data["items"]}
 
         # Dedup por pago_id: el saldo MÁXIMO visto en las filas de
         # sugerencia de ese pago es su residual sin aplicar (las filas
         # subsecuentes del mismo pago muestran el saldo YA descontado de
         # sugerencias anteriores -- ver bucle FIFO en
-        # get_conciliaciones_sugerencias).
+        # get_conciliaciones_sugerencias). Se toma la fila COMPLETA (no
+        # solo ``saldo_pago``) para no mezclar valores de distintas filas.
         pago_saldo_max: dict[str, float] = {}
         pago_info: dict[str, dict[str, Any]] = {}
         for s in sugerencias:
@@ -3715,6 +3723,23 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 "venta_real": saldo_venta_real,
                 "factura_real": saldo_factura_real,
             }
+            # Monto original (bruto de referencia, antes de restar lo
+            # pagado) por columna -- pedido explícito del usuario, para no
+            # mostrar solo el saldo sin poder ver contra qué se comparó.
+            montos_originales_orden = {
+                "teorico_bs": round(float(item.get("ves_neta_teorica_iva") or 0.0), 2),
+                "teorico_usd": round(float(item.get("usd_neta_teorica_iva") or 0.0), 2),
+                "venta_real": round(
+                    max(0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema), 2
+                ),
+                "factura_real": (
+                    round(
+                        max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema), 2
+                    )
+                    if facturada
+                    else None
+                ),
+            }
             if all((v or 0.0) <= 0.05 for v in saldos_orden.values() if v is not None):
                 continue
 
@@ -3727,18 +3752,23 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 if v is not None:
                     c["saldos"][k] += v
 
+            factura_id = (o.factura_id if o else None) or None
             c["documentos"].append(
                 {
                     "tipo": "orden",
                     "so_id": item["so_id"],
+                    "factura_id": factura_id if facturada else None,
                     "fecha": item.get("fecha"),
                     "facturada": facturada,
                     "dias_vencido": dias_vencido,
+                    "montos_originales": montos_originales_orden,
                     "saldos": {
                         k: (round(v, 2) if v is not None else None) for k, v in saldos_orden.items()
                     },
                     "descripcion": (
-                        f"Orden {item['so_id']} ({'facturada' if facturada else 'sin facturar'})"
+                        f"Orden {item['so_id']}"
+                        + (f" / Factura {factura_id}" if facturada and factura_id else "")
+                        + (" (facturada)" if facturada else " (sin facturar)")
                     ),
                     "bandeja_destino": item.get("bandeja_destino"),
                 }
@@ -3751,8 +3781,21 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             cliente_id = str(info.get("cliente_id") or "")
             c = _cliente_row(cliente_id, info.get("cliente_nombre") or f"Cliente {cliente_id}")
 
-            for k in _CXC_CLIENTE_SALDOS:
-                c["saldos"][k] -= saldo
+            saldo_bcv_ref = float(info.get("saldo_pago") or 0.0)
+            saldo_binance_ref = float(info.get("saldo_pago_binance") or 0.0)
+            so_sugerido = info.get("so_id")
+            item_sugerido = ventas_items_by_so.get(so_sugerido) if so_sugerido else None
+            usa_ref_binance = bool(item_sugerido and item_sugerido.get("nacio_en_lista_usd"))
+            saldo_real_ref = saldo_binance_ref if usa_ref_binance else saldo_bcv_ref
+
+            saldos_pago = {
+                "teorico_bs": -saldo_bcv_ref,
+                "teorico_usd": -saldo_binance_ref,
+                "venta_real": -saldo_real_ref,
+                "factura_real": -saldo_real_ref,
+            }
+            for k, v in saldos_pago.items():
+                c["saldos"][k] += v
             c["documentos"].append(
                 {
                     "tipo": "pago_huerfano",
@@ -3760,7 +3803,7 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     "numero_pago_odoo": info.get("numero_pago_odoo"),
                     "fecha": info.get("pago_fecha"),
                     "dias_vencido": 0,
-                    "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, round(-saldo, 2)),
+                    "saldos": {k: round(v, 2) for k, v in saldos_pago.items()},
                     "descripcion": f"Pago sin aplicar ({info.get('moneda_pago') or 'USD'})",
                 }
             )
@@ -4525,6 +4568,22 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + v.monto_aplicado
             linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
 
+        # Bug real (reportado por el usuario, cliente Emprendimiento Tomas
+        # Marcano 5): un pago huérfano (aún sin reconciliar en Odoo, así
+        # que ``tax_today`` no refleja ningún contexto de orden -- es solo
+        # la tasa BCV oficial genérica del día) de un cliente cuyas órdenes
+        # abiertas son de la ventana histórica debe convertirse a tasa
+        # BCV-EUR, no BCV-USD normal. Se resuelve por CLIENTE (no hay
+        # orden específica aún -- un pago huérfano por definición no está
+        # cruzado contra ninguna) usando el mismo criterio que ya usa
+        # ``_pagos_bcv_binance_por_orden``.
+        _historical_enabled_sug = is_historical_pricelist_enabled(repo)
+        clientes_con_orden_historica: set[str] = {
+            str(o.cliente_id)
+            for o in ordenes
+            if es_orden_historica(o.fecha, o.lista_precios, _historical_enabled_sug)
+        }
+
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
@@ -4559,6 +4618,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             odoo_info = odoo_pago_info.get(pid)
             numero_pago_odoo = odoo_info.get("name") if odoo_info else None
             monto_orig_usd_odoo: Decimal | None = None
+            cliente_id_pago = str(p.get("cliente_id", "")).strip()
             if moneda == "VES" and odoo_info:
                 tax_today = parse_decimal_safe(str(odoo_info.get("tax_today") or "0"))
                 if tax_today > Decimal("0"):
@@ -4566,6 +4626,20 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
+            if moneda == "VES" and cliente_id_pago in clientes_con_orden_historica:
+                # Pago aún sin reconciliar -- tax_today (si vino) es solo la
+                # tasa BCV genérica del día, sin contexto de orden histórica.
+                # Se sustituye por BCV-EUR (SerieTasas primero, luego
+                # TasasHistoricasAuditoria), invalidando también el
+                # amount_ref de Odoo (calculado con la tasa BCV normal).
+                tasa_eur_huerfano = get_bcv_euro_rate_for_datetime(fecha_dt, tasas_rows)
+                if not tasa_eur_huerfano or tasa_eur_huerfano <= Decimal("0"):
+                    tasa_eur_huerfano = get_eur_rate_for_date(
+                        fecha_dt.date(), tasas_historicas_rows
+                    )
+                if tasa_eur_huerfano and tasa_eur_huerfano > Decimal("0"):
+                    bcv_rate = tasa_eur_huerfano
+                    monto_orig_usd_odoo = None
             binance_del_dia = get_binance_rate_for_date(fecha_dt.date(), tasas_historicas_rows)
             # Guardia de plausibilidad: Binance y BCV son ambas tasas VES/USD del
             # mismo día, con una brecha de mercado normalmente < 100%. Si el dato
