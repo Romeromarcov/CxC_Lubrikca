@@ -677,6 +677,14 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             const fmt = (v) => v == null ? "-" : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
             const colorFmt = (v) => v == null ? "-" : `<span style="color:${v >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
+            // Monto original / saldo pendiente en la misma celda (pedido
+            // explícito del usuario) -- solo disponible para documentos
+            // "orden" (montos_originales); los pagos huérfanos no tienen
+            // un "original" propio distinto de su saldo.
+            const cellFmt = (original, saldo) => {
+                if (original == null) return colorFmt(saldo);
+                return `${fmt(original)}<br><span style="font-size:0.85em">${colorFmt(saldo)}</span>`;
+            };
             const clientes = data.clientes || [];
 
             if (clientes.length === 0) {
@@ -708,24 +716,39 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (toggle) toggle.textContent = "▼";
                     const detailRow = document.createElement("tr");
                     detailRow.id = rowId;
-                    const docsHtml = (c.documentos || []).map(d => `
+                    const docsHtml = (c.documentos || []).map(d => {
+                        const orig = d.montos_originales || {};
+                        const ref = d.tipo === 'orden'
+                            ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
+                            : (d.numero_pago_odoo || d.pago_id);
+                        return `
                         <tr>
-                            <td>${d.tipo === 'orden' ? d.so_id : (d.numero_pago_odoo || d.pago_id)}</td>
+                            <td>${ref}</td>
                             <td>${d.descripcion || (d.tipo === 'pago_huerfano' ? 'Pago sin aplicar' : '')}</td>
                             <td>${d.fecha || ''}</td>
                             <td>${d.dias_vencido || 0}</td>
-                            <td>${colorFmt(d.saldos.teorico_bs)}</td>
-                            <td>${colorFmt(d.saldos.teorico_usd)}</td>
-                            <td>${colorFmt(d.saldos.venta_real)}</td>
-                            <td>${colorFmt(d.saldos.factura_real)}</td>
+                            <td>${cellFmt(orig.teorico_bs, d.saldos.teorico_bs)}</td>
+                            <td>${cellFmt(orig.teorico_usd, d.saldos.teorico_usd)}</td>
+                            <td>${cellFmt(orig.venta_real, d.saldos.venta_real)}</td>
+                            <td>${cellFmt(orig.factura_real, d.saldos.factura_real)}</td>
                         </tr>
-                    `).join("");
+                        `;
+                    }).join("");
+                    const totalRow = `
+                        <tr style="border-top:2px solid #cbd5e1;font-weight:600">
+                            <td colspan="4">Total (saldo neto)</td>
+                            <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                            <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                            <td>${colorFmt(c.saldos.venta_real)}</td>
+                            <td>${colorFmt(c.saldos.factura_real)}</td>
+                        </tr>
+                    `;
                     detailRow.innerHTML = `
                         <td colspan="6" style="background:#f8fafc;padding:0.75rem 1.5rem">
                             <table class="cxc-table" style="margin:0">
                                 <thead>
                                     <tr>
-                                        <th>Referencia</th>
+                                        <th>Referencia (Orden / Factura)</th>
                                         <th>Descripción</th>
                                         <th>Fecha</th>
                                         <th>Días Vencido</th>
@@ -735,7 +758,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                         <th>Factura Neta Real ($)</th>
                                     </tr>
                                 </thead>
-                                <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}</tbody>
+                                <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}${docsHtml ? totalRow : ''}</tbody>
                             </table>
                         </td>
                     `;
