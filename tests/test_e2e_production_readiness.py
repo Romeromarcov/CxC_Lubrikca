@@ -1069,6 +1069,82 @@ def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
         assert "SO_AUD" not in {i["so_id"] for i in data["notas_credito_pendientes"]}
 
 
+def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo():
+    """/api/reporte-cxc-cliente: agrupa por cliente (saldo neto + buckets de
+
+    antigüedad), y un pago conciliado en Odoo pero sin orden específica
+    asociada ("huérfano") aparece como documento NEGATIVO reduciendo el
+    saldo neto del cliente, igual que el reporte "Aged Receivable" de Odoo
+    que el usuario tomó como referencia -- aunque ese pago no esté cruzado
+    contra ninguna orden todavía.
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import Pago
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_CLI1",
+            cliente_id="CLI1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 8, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("200.00"),
+            lista_precios="8",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_serie_tasas.return_value = []
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_pagos.return_value = [
+        Pago(
+            pago_id="P_ORPH",
+            cliente_id="CLI1",
+            monto=Decimal("50.00"),
+            moneda=Moneda.USD,
+            metodo_pago="Zelle",
+            fecha_pago=datetime(2026, 8, 1, 12, 0, 0),
+            vendedor_email="v@lubrikca.com",
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/reporte-cxc-cliente")
+        assert res.status_code == 200
+        data = res.json()
+
+        assert len(data["clientes"]) == 1
+        cliente = data["clientes"][0]
+        assert cliente["cliente_id"] == "CLI1"
+        # 200 (orden) - 50 (pago huérfano sin aplicar) = 150 neto.
+        assert cliente["saldo_neto"] == 150.0
+
+        tipos = {d["tipo"] for d in cliente["documentos"]}
+        assert tipos == {"orden", "pago_huerfano"}
+        pago_doc = next(d for d in cliente["documentos"] if d["tipo"] == "pago_huerfano")
+        assert pago_doc["monto"] == -50.0
+        orden_doc = next(d for d in cliente["documentos"] if d["tipo"] == "orden")
+        assert orden_doc["monto"] == 200.0
+
+
 def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
     """Tarjeta "Pagos Sin Asignar": debe reportar USD y VES, y usar el
 

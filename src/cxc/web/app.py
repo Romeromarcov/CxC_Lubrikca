@@ -3619,6 +3619,177 @@ async def get_reporte_saldos(refresh: bool = False):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_CXC_CLIENTE_BUCKETS = ["a_la_fecha", "1_30", "31_60", "61_90", "91_120", "antiguos"]
+
+
+def _bucket_antiguedad(dias_vencido: int) -> str:
+    if dias_vencido <= 0:
+        return "a_la_fecha"
+    if dias_vencido <= 30:
+        return "1_30"
+    if dias_vencido <= 60:
+        return "31_60"
+    if dias_vencido <= 90:
+        return "61_90"
+    if dias_vencido <= 120:
+        return "91_120"
+    return "antiguos"
+
+
+@app.get("/api/reporte-cxc-cliente")
+async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)):
+    """Cuentas por Cobrar agrupadas por CLIENTE, estilo "Aged Receivable"
+
+    de Odoo (referencia visual del usuario): fila resumen por cliente con
+    saldo neto total + buckets de antigüedad (A la fecha/1-30/31-60/61-90/
+    91-120/Antiguos), expandible a filas de detalle por documento.
+
+    Fuente única de verdad: ``/api/ventas`` (``saldo_pendiente_cxc``, ya
+    neto de NC/ND y descuento de sistema -- ver Fase 3/6) filtrado por
+    ``sale_de_cxc`` (árbol de enrutamiento, ``cxc_routing.py``) para
+    excluir órdenes que ya salieron de CxC activa (facturadas/cerradas por
+    Bandeja 1/2). Antigüedad = ``fecha_entrega`` (o ``fecha`` si no hay
+    entrega registrada) + ``dias_credito`` real, mismo criterio que
+    ``/api/reporte-saldos``.
+
+    Pagos huérfanos (conciliados en Odoo pero SIN orden específica
+    asociada -- vía ``get_live_pagos_conciliados``, reusando la misma
+    lista que ya calcula ``/api/conciliaciones/sugerencias``) se muestran
+    como documento NEGATIVO por cliente, reduciendo el saldo neto aunque
+    el pago no esté cruzado contra ninguna orden -- igual que el ejemplo
+    de Odoo que mostró el usuario. Se deduplica por ``pago_id`` tomando el
+    saldo MÁXIMO entre las filas de sugerencia de ese pago (ese máximo es
+    el residual ANTES de aplicar cualquier sugerencia FIFO, es decir, el
+    monto realmente sin aplicar todavía).
+
+    Limitación conocida (MVP, documentada para no aparentar más de lo que
+    hace): Notas de Crédito y Notas de Débito NO se muestran como
+    documentos separados -- ya están netas dentro de
+    ``saldo_pendiente_cxc`` de su orden (más conservador que duplicarlas
+    como filas aparte, que sumaría el mismo efecto dos veces). Si más
+    adelante se necesita verlas como líneas independientes (por ejemplo
+    para una NC emitida sin orden asociada), hay que agregarlas aquí como
+    un tercer tipo de documento.
+    """
+    try:
+        repo = get_repo()
+        ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+
+        ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
+        sugerencias = await get_conciliaciones_sugerencias(cxc_session=cxc_session)
+
+        # Dedup por pago_id: el saldo MÁXIMO visto en las filas de
+        # sugerencia de ese pago es su residual sin aplicar (las filas
+        # subsecuentes del mismo pago muestran el saldo YA descontado de
+        # sugerencias anteriores -- ver bucle FIFO en
+        # get_conciliaciones_sugerencias).
+        pago_saldo_max: dict[str, float] = {}
+        pago_info: dict[str, dict[str, Any]] = {}
+        for s in sugerencias:
+            pid = s.get("pago_id")
+            if not pid:
+                continue
+            saldo = float(s.get("saldo_pago") or 0.0)
+            if saldo > pago_saldo_max.get(pid, 0.0):
+                pago_saldo_max[pid] = saldo
+                pago_info[pid] = s
+
+        today = date.today()
+        clientes: dict[str, dict[str, Any]] = {}
+
+        def _cliente_row(cliente_id: str, cliente_nombre: str) -> dict[str, Any]:
+            return clientes.setdefault(
+                cliente_id,
+                {
+                    "cliente_id": cliente_id,
+                    "cliente_nombre": cliente_nombre,
+                    "saldo_neto": 0.0,
+                    "buckets": dict.fromkeys(_CXC_CLIENTE_BUCKETS, 0.0),
+                    "documentos": [],
+                },
+            )
+
+        for item in ventas_data["items"]:
+            if item.get("sale_de_cxc"):
+                continue
+            saldo = float(item.get("saldo_pendiente_cxc") or 0.0)
+            if saldo <= 0.05:
+                continue
+
+            o = ordenes_map.get(item["so_id"])
+            cliente_id = str(o.cliente_id) if o else item["so_id"]
+            c = _cliente_row(cliente_id, item["cliente_nombre"])
+
+            fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
+            try:
+                dt_base = datetime.strptime(str(fecha_base_raw)[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                dt_base = today
+            dt_venc = dt_base + timedelta(days=int(item.get("dias_credito") or 0))
+            dias_vencido = max(0, (today - dt_venc).days)
+            bucket = _bucket_antiguedad(dias_vencido)
+
+            c["saldo_neto"] += saldo
+            c["buckets"][bucket] += saldo
+            c["documentos"].append(
+                {
+                    "tipo": "orden",
+                    "so_id": item["so_id"],
+                    "fecha": item.get("fecha"),
+                    "facturada": item.get("facturada"),
+                    "dias_vencido": dias_vencido,
+                    "bucket": bucket,
+                    "monto": round(saldo, 2),
+                    "descripcion": (
+                        f"Orden {item['so_id']} "
+                        f"({'facturada' if item.get('facturada') else 'sin facturar'})"
+                    ),
+                    "bandeja_destino": item.get("bandeja_destino"),
+                }
+            )
+
+        for pid, saldo in pago_saldo_max.items():
+            if saldo <= 0.05:
+                continue
+            info = pago_info[pid]
+            cliente_id = str(info.get("cliente_id") or "")
+            c = _cliente_row(cliente_id, info.get("cliente_nombre") or f"Cliente {cliente_id}")
+
+            c["saldo_neto"] -= saldo
+            c["buckets"]["a_la_fecha"] -= saldo
+            c["documentos"].append(
+                {
+                    "tipo": "pago_huerfano",
+                    "pago_id": pid,
+                    "numero_pago_odoo": info.get("numero_pago_odoo"),
+                    "fecha": info.get("pago_fecha"),
+                    "dias_vencido": 0,
+                    "bucket": "a_la_fecha",
+                    "monto": round(-saldo, 2),
+                    "descripcion": f"Pago sin aplicar ({info.get('moneda_pago') or 'USD'})",
+                }
+            )
+
+        for c in clientes.values():
+            c["saldo_neto"] = round(c["saldo_neto"], 2)
+            for k in _CXC_CLIENTE_BUCKETS:
+                c["buckets"][k] = round(c["buckets"][k], 2)
+            c["documentos"].sort(key=lambda d: str(d.get("fecha") or ""))
+
+        clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_neto"])
+
+        totales: dict[str, Any] = {
+            "saldo_neto": round(sum(c["saldo_neto"] for c in clientes_list), 2)
+        }
+        for k in _CXC_CLIENTE_BUCKETS:
+            totales[k] = round(sum(c["buckets"][k] for c in clientes_list), 2)
+
+        return {"clientes": clientes_list, "totales": totales}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/config/tasas")
 async def get_config_tasas():
     try:
