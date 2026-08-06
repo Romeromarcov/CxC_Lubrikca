@@ -239,6 +239,9 @@ class Repository(ABC):
     def all_listas_precios_historicas(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
+    def replace_listas_precios_historicas(self, rows: list[dict[str, str]]) -> None: ...
+
+    @abstractmethod
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
@@ -652,6 +655,9 @@ class InMemoryRepository(Repository):
 
     def all_listas_precios_historicas(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._listas_precios_historicas]
+
+    def replace_listas_precios_historicas(self, rows: list[dict[str, str]]) -> None:
+        self._listas_precios_historicas = [dict(r) for r in rows]
 
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._tasas_historicas_auditoria]
