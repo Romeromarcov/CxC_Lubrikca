@@ -3325,14 +3325,27 @@ async def get_reporte_saldos(refresh: bool = False):
             venta_bruta_teorica_con_iva = venta_bruta_teorica * (1 + float(config.engine.iva_rate))
             diferencia_precio_lista = round(venta_bruta_teorica_con_iva - monto_orig, 2)
 
-            # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
-            # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
-            # se oculta del reporte general y pasa a la tabla de "pendientes
-            # por cerrar (saldo <= $1)". No aplica a ordenes sin facturar
-            # (esas se manejan por la Tarea 3.1 / bandeja de facturacion).
-            if o.facturada and (
-                saldo_con_descuento_bcv <= 1.0 or saldo_con_descuento_lista_usd <= 1.0
-            ):
+            # Árbol de enrutamiento de CxC (Sección 5 del Manual) -- ver
+            # src/cxc/engine/cxc_routing.py, misma fuente de verdad que
+            # /api/ventas y /api/bandeja. Para órdenes YA facturadas,
+            # "pagado vs algún teórico" (BS o USD, tolerancia $1 -- igual
+            # que el umbral de cierre histórico de este reporte) hace que
+            # la orden salga de CxC activa (antes el criterio era idéntico
+            # pero sin pasar por la función compartida). El caso NUEVO:
+            # pagado vs Factura Real en Odoo pero NO vs ningún teórico ->
+            # NO se oculta, permanece visible + se marca para la nueva
+            # Bandeja de Auditoría de Precios (sospecha de precio/lista por
+            # debajo del estándar).
+            clasificacion_cxc = clasificar_estado_cxc(
+                so_id=o.so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=saldo_con_descuento_bcv <= 1.0,
+                teorico_usd_pagado=saldo_con_descuento_lista_usd <= 1.0,
+                factura_real_pagada=bool(o.facturada)
+                and (saldo_factura_odoo if saldo_factura_odoo is not None else 0.0) <= 1.0,
+            )
+
+            if clasificacion_cxc.sale_de_cxc:
                 saldo_minimo_items.append(
                     {
                         "so_id": o.so_id,
@@ -3344,6 +3357,10 @@ async def get_reporte_saldos(refresh: bool = False):
                         "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
                         "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
                         "saldo_factura_odoo": saldo_factura_odoo,
+                        "bandeja_destino": clasificacion_cxc.bandeja_destino.value
+                        if clasificacion_cxc.bandeja_destino
+                        else None,
+                        "cxc_routing_motivo": clasificacion_cxc.motivo,
                     }
                 )
                 continue
@@ -3552,6 +3569,15 @@ async def get_reporte_saldos(refresh: bool = False):
                     "reconciliacion": {"resultado": conc.resultado.value if conc else "pendiente"}
                     if conc
                     else None,
+                    # Árbol de enrutamiento de CxC -- la orden llegó hasta
+                    # aquí porque clasificacion_cxc.sale_de_cxc es False;
+                    # bandeja_destino solo puede ser None (caso normal) o
+                    # "auditoria_precios" (pagado vs factura real pero no
+                    # vs ningún teórico -- permanece visible + se marca).
+                    "bandeja_destino": clasificacion_cxc.bandeja_destino.value
+                    if clasificacion_cxc.bandeja_destino
+                    else None,
+                    "cxc_routing_motivo": clasificacion_cxc.motivo,
                 }
             )
 
