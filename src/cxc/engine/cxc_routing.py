@@ -25,6 +25,14 @@ Regla de negocio (Manual del Proceso Administrativo, sección 5):
   4. Cualquier otro caso: permanece en CxC activa, sin enrutamiento
      especial.
 
+Aclaratoria del usuario (agosto 2026) sobre las reglas 1/2: la lista con
+la que NACIÓ la orden importa. Una orden nacida en Lista USD NO se puede
+considerar pagada solo porque el Teórico BS esté pagado si el Teórico USD
+(su referencia nativa) NO lo está -- exige el Teórico USD específicamente.
+Una orden nacida en Lista VES (o en la ventana histórica) sí puede salir
+con cualquiera de los dos teóricos pagado (el OR original, sin cambios).
+Ver el parámetro `nacio_en_lista_usd`.
+
 Nota: la comparación es binaria (pagada / no pagada) contra cada
 columna con una tolerancia; no se involucra aquí el concepto de "parcial"
 — eso es responsabilidad de las columnas de estatus de pago ya existentes
@@ -60,6 +68,7 @@ def clasificar_estado_cxc(
     teorico_bs_pagado: bool,
     teorico_usd_pagado: bool,
     factura_real_pagada: bool,
+    nacio_en_lista_usd: bool = False,
     tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
@@ -68,6 +77,14 @@ def clasificar_estado_cxc(
     (ej. desde las columnas `estatus_pago_teorico_ves`/`_usd`/
     `estatus_pago_real_factura` de `/api/ventas`, colapsando su estado
     a booleano: True solo si el estado es "pagada").
+
+    `nacio_en_lista_usd`: True si la orden nació en una lista de precios
+    USD (no VES, no ventana histórica). Cambia la evaluación de las
+    reglas 1/2: para una orden USD, `teorico_usd_pagado` es la ÚNICA
+    condición que exporta por teórico (BS pagado solo, sin USD pagado, NO
+    alcanza -- ver aclaratoria en el docstring del módulo). Para una orden
+    VES/histórica (`False`, default), se mantiene el OR original: cualquiera
+    de los dos teóricos pagado es suficiente.
 
     `tolerance` se documenta pero no se usa dentro de esta función —
     la tolerancia ya debe haberse aplicado al calcular los flags de
@@ -84,7 +101,7 @@ def clasificar_estado_cxc(
             motivo="Pagado vs Teórico Lista USD (referencia Binance)",
         )
 
-    if teorico_bs_pagado:
+    if teorico_bs_pagado and not nacio_en_lista_usd:
         bandeja = BandejaDestino.FACTURACION_2 if facturada else BandejaDestino.FACTURACION_1
         return ClasificacionCxC(
             so_id=so_id,
@@ -102,6 +119,18 @@ def clasificar_estado_cxc(
                 "Pagado vs Factura Neta Real en Odoo pero NO vs ningún "
                 "teórico -- posible facturación con precio/lista por "
                 "debajo del estándar autorizado"
+            ),
+        )
+
+    if teorico_bs_pagado and nacio_en_lista_usd:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=False,
+            bandeja_destino=None,
+            motivo=(
+                "Pagado vs Teórico Lista BS pero la orden nació en Lista "
+                "USD -- no alcanza sin el Teórico USD (su referencia "
+                "nativa) también pagado"
             ),
         )
 

@@ -464,39 +464,6 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _pagos_por_so_desde_cobranza(execute: Any) -> dict[str, float]:
-    """Pagos por orden en equivalente USD, para ``/api/ventas`` (Fase 9).
-
-    Reusa ``get_live_pagos_conciliados`` -- la MISMA función que ya usa
-    ``/api/cobranza/pagos`` -- en vez de reinventar una conversión USD
-    propia contra Odoo (ver historial: una versión anterior armaba su
-    propia consulta a ``account.payment`` + conversión manual por tasa
-    BCV, duplicando lo que Cobranza ya resuelve mejor via los campos
-    ``amount_total_signed_usd``/``amount_residual_usd`` que Odoo calcula
-    por factura).
-
-    Las facturas vienen repetidas una vez por cada pago que las reconcilia
-    parcialmente -- se dedupean por ``factura_id`` antes de sumar (si no,
-    una factura pagada con 2 abonos parciales se contaría dos veces).
-    """
-    if not execute:
-        return {}
-    facturas_por_id: dict[str, dict[str, Any]] = {}
-    for pago in get_live_pagos_conciliados(execute):
-        for f in pago["facturas"]:
-            if f.get("tipo") == "out_invoice":
-                facturas_por_id[f["factura_id"]] = f
-
-    totales: dict[str, float] = {}
-    for f in facturas_por_id.values():
-        so = f.get("so_id")
-        if not so:
-            continue
-        pagado = max(0.0, f["monto_usd"] - f["residual_usd"])
-        totales[so] = totales.get(so, 0.0) + pagado
-    return totales
-
-
 def _pagos_bcv_binance_por_orden(
     execute: Any,
     invoice_ids_all: list[int],
@@ -3343,6 +3310,9 @@ async def get_reporte_saldos(refresh: bool = False):
                 teorico_usd_pagado=saldo_con_descuento_lista_usd <= 1.0,
                 factura_real_pagada=bool(o.facturada)
                 and (saldo_factura_odoo if saldo_factura_odoo is not None else 0.0) <= 1.0,
+                nacio_en_lista_usd=(
+                    not is_historical and lista_id_str in [str(x) for x in usd_ids]
+                ),
             )
 
             if clasificacion_cxc.sale_de_cxc:
@@ -4983,6 +4953,7 @@ async def get_bandeja_facturacion():
                 teorico_bs_pagado=teorico_bs_pagado,
                 teorico_usd_pagado=teorico_usd_pagado,
                 factura_real_pagada=factura_real_pagada,
+                nacio_en_lista_usd=bool(item.get("nacio_en_lista_usd")),
             )
 
             if clasificacion.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS:
@@ -6773,6 +6744,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
         tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
+        tasas_rows_eur = _all_serie_tasas_rows(repo)
 
         # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
         # reconcilió contra una orden distinta a la Vinculación local (ver
@@ -6846,7 +6818,19 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     fecha_dt = datetime.strptime(str(fecha_pago)[:10], "%Y-%m-%d").date()
             except ValueError:
                 fecha_dt = None
-            tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows) if fecha_dt else None
+            # Bug real (screenshot del usuario, agosto 2026): pagos con fecha
+            # posterior al último día sembrado en TasasHistoricasAuditoria
+            # (2026-07-30) salían con "EUR: -" porque get_eur_rate_for_date
+            # busca SOLO el día exacto en esa tabla, sin fallback -- mismo
+            # patrón que ya usa _pagos_bcv_binance_por_orden (línea ~574):
+            # primero SerieTasas (scraper, más reciente), luego el histórico.
+            tasa_eur = None
+            if fecha_dt:
+                tasa_eur = get_bcv_euro_rate_for_datetime(
+                    datetime.combine(fecha_dt, datetime.min.time()), tasas_rows_eur
+                )
+                if not tasa_eur or tasa_eur <= Decimal("0"):
+                    tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows)
 
             reasignado = reasignados_por_pago.get(pid)
 
@@ -8210,22 +8194,6 @@ async def get_ventas(
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
 
-        # Fase 9: pagos por orden -- Vinculaciones (fuente teórica, hoy
-        # vacía en producción real) tiene precedencia si existe para una
-        # orden; si no, se reusa ``get_live_pagos_conciliados`` (la MISMA
-        # función que ya usa ``/api/cobranza/pagos`` para calcular los
-        # equivalentes USD) en vez de reinventar una conversión propia
-        # contra Odoo -- evita duplicar esa lógica. Antes de esto, TODAS
-        # las órdenes salían "sin pagar" en Ventas porque solo se miraba
-        # Vinculaciones.
-        pagos_odoo_map: dict[str, dict[str, Any]] = {}
-        if execute:
-            for so_pagado, monto_usd in _pagos_por_so_desde_cobranza(execute).items():
-                pagos_odoo_map[so_pagado] = {
-                    "abono_bcv": monto_usd,
-                    "abono_binance": monto_usd,
-                }
-
         def _pct(monto: float, base: float) -> float | None:
             return round(monto / base, 4) if base > 0.005 else None
 
@@ -8415,17 +8383,24 @@ async def get_ventas(
             # USD); "Teórico VES" siempre BCV, "Teórico USD" siempre Binance.
             # Fase 9: Vinculaciones (fuente teórica) tiene precedencia si la
             # orden tiene alguna registrada; si no (caso real hoy: esa
-            # tabla está vacía), se usa lo calculado vía
-            # _pagos_por_so_desde_cobranza (reusa get_live_pagos_
-            # conciliados, la misma función de /api/cobranza/pagos).
+            # tabla está vacía casi siempre), se usa ``pagos_bcv_binance_map``
+            # (``_pagos_bcv_binance_por_orden``, la MISMA fuente que ya
+            # alimenta "Monto Pagado BCV"/"USD" en esta tabla) -- ANTES se
+            # usaba ``pagos_odoo_map`` (fallback de ``_pagos_por_so_desde_
+            # cobranza``), que daba el MISMO número duplicado para BCV y
+            # Binance y NUNCA aplicaba el ajuste de tasa BCV-EUR para
+            # órdenes de la ventana histórica (bug real reportado por el
+            # usuario: un pago en VES se restaba igual de ambos teóricos, y
+            # para una orden histórica se restaba a tasa BCV normal en vez
+            # de EUR).
             vincs_orden = vincs_por_so.get(o.so_id, [])
             if vincs_orden:
                 val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
                 val_binance = float(valor_pagado_binance_usd(vincs_orden))
             else:
-                p_odoo_orden = pagos_odoo_map.get(o.so_id)
-                val_bcv = float(p_odoo_orden["abono_bcv"]) if p_odoo_orden else 0.0
-                val_binance = float(p_odoo_orden["abono_binance"]) if p_odoo_orden else 0.0
+                p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
+                val_bcv = float(p_bcv_binance.get("monto_pagado_bcv", 0.0))
+                val_binance = float(p_bcv_binance.get("monto_pagado_usd_binance", 0.0))
             es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
@@ -8487,6 +8462,7 @@ async def get_ventas(
                 teorico_bs_pagado=estatus_pago_teorico_ves == "pagada",
                 teorico_usd_pagado=estatus_pago_teorico_usd == "pagada",
                 factura_real_pagada=estatus_pago_real_factura == "pagada",
+                nacio_en_lista_usd=es_lista_usd_nacimiento,
             )
 
             items.append(
@@ -8545,6 +8521,11 @@ async def get_ventas(
                     # endpoint). Id crudo + "#id - Nombre" para mostrar.
                     "lista_nacimiento": o.lista_precios,
                     "lista_nacimiento_label": _lista_label_hist(o.lista_precios, es_historica_o),
+                    # Árbol de enrutamiento: True solo si nació en lista USD
+                    # y NO es histórica (ver clasificar_estado_cxc -- una
+                    # orden USD exige el Teórico USD específicamente pagado,
+                    # no le basta el Teórico BS).
+                    "nacio_en_lista_usd": es_lista_usd_nacimiento,
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
                     "lista_aplicada_label": _lista_label_hist(
                         b.lista_aplicada if b else o.lista_precios, es_historica_o
