@@ -670,16 +670,17 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadReporteCxcCliente() {
         const tbody = document.getElementById("reporte-cxc-cliente-table-body");
         if (!tbody) return;
-        tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando cuentas por cobrar por cliente...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td></tr>';
         try {
             const res = await fetch("/api/reporte-cxc-cliente");
             if (!res.ok) throw new Error("HTTP " + res.status);
             const data = await res.json();
-            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
+            const fmt = (v) => v == null ? "-" : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+            const colorFmt = (v) => v == null ? "-" : `<span style="color:${v >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
             const clientes = data.clientes || [];
 
             if (clientes.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay saldos pendientes.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay saldos pendientes.</td></tr>';
                 return;
             }
 
@@ -691,13 +692,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 row.innerHTML = `
                     <td><span id="${rowId}-toggle">▶</span></td>
                     <td><strong>${c.cliente_nombre || c.cliente_id}</strong></td>
-                    <td><strong style="color:${c.saldo_neto >= 0 ? '#dc2626' : '#059669'}">${fmt(c.saldo_neto)}</strong></td>
-                    <td>${fmt(c.buckets.a_la_fecha)}</td>
-                    <td>${fmt(c.buckets['1_30'])}</td>
-                    <td>${fmt(c.buckets['31_60'])}</td>
-                    <td>${fmt(c.buckets['61_90'])}</td>
-                    <td>${fmt(c.buckets['91_120'])}</td>
-                    <td>${fmt(c.buckets.antiguos)}</td>
+                    <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                    <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                    <td>${colorFmt(c.saldos.venta_real)}</td>
+                    <td>${colorFmt(c.saldos.factura_real)}</td>
                 `;
                 row.addEventListener("click", () => {
                     const existing = document.getElementById(rowId);
@@ -716,12 +714,14 @@ document.addEventListener("DOMContentLoaded", () => {
                             <td>${d.descripcion || (d.tipo === 'pago_huerfano' ? 'Pago sin aplicar' : '')}</td>
                             <td>${d.fecha || ''}</td>
                             <td>${d.dias_vencido || 0}</td>
-                            <td>${(d.bucket || '').replace(/_/g, '-')}</td>
-                            <td style="color:${d.monto >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(d.monto)}</strong></td>
+                            <td>${colorFmt(d.saldos.teorico_bs)}</td>
+                            <td>${colorFmt(d.saldos.teorico_usd)}</td>
+                            <td>${colorFmt(d.saldos.venta_real)}</td>
+                            <td>${colorFmt(d.saldos.factura_real)}</td>
                         </tr>
                     `).join("");
                     detailRow.innerHTML = `
-                        <td colspan="9" style="background:#f8fafc;padding:0.75rem 1.5rem">
+                        <td colspan="6" style="background:#f8fafc;padding:0.75rem 1.5rem">
                             <table class="cxc-table" style="margin:0">
                                 <thead>
                                     <tr>
@@ -729,11 +729,13 @@ document.addEventListener("DOMContentLoaded", () => {
                                         <th>Descripción</th>
                                         <th>Fecha</th>
                                         <th>Días Vencido</th>
-                                        <th>Bucket</th>
-                                        <th>Monto ($)</th>
+                                        <th>Teórico Lista BS ($)</th>
+                                        <th>Teórico Lista USD ($)</th>
+                                        <th>Venta Real ($)</th>
+                                        <th>Factura Neta Real ($)</th>
                                     </tr>
                                 </thead>
-                                <tbody>${docsHtml || '<tr><td colspan="6" class="table-empty">Sin documentos.</td></tr>'}</tbody>
+                                <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}</tbody>
                             </table>
                         </td>
                     `;
@@ -743,7 +745,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (err) {
             console.error("Error loading reporte-cxc-cliente:", err);
-            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar cuentas por cobrar por cliente.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar cuentas por cobrar por cliente.</td></tr>';
         }
     }
     window.loadReporteCxcCliente = loadReporteCxcCliente;

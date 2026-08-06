@@ -1070,13 +1070,16 @@ def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
 
 
 def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo():
-    """/api/reporte-cxc-cliente: agrupa por cliente (saldo neto + buckets de
+    """/api/reporte-cxc-cliente: agrupa por cliente con los 4 saldos propios
 
-    antigüedad), y un pago conciliado en Odoo pero sin orden específica
-    asociada ("huérfano") aparece como documento NEGATIVO reduciendo el
-    saldo neto del cliente, igual que el reporte "Aged Receivable" de Odoo
-    que el usuario tomó como referencia -- aunque ese pago no esté cruzado
-    contra ninguna orden todavía.
+    del sistema (Teórico BS, Teórico USD, Venta Real, Factura Real -- en
+    vez de un único saldo neto + buckets de antigüedad, decisión explícita
+    del usuario porque un solo número mezcla 4 referencias distintas), y
+    un pago conciliado en Odoo pero sin orden específica asociada
+    ("huérfano") aparece como documento NEGATIVO reduciendo los 4 saldos
+    por igual, igual que el reporte "Aged Receivable" de Odoo que el
+    usuario tomó como referencia -- aunque ese pago no esté cruzado contra
+    ninguna orden todavía.
     """
     from cxc.config import EngineConfig
     from cxc.models import Pago
@@ -1134,15 +1137,32 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
         assert len(data["clientes"]) == 1
         cliente = data["clientes"][0]
         assert cliente["cliente_id"] == "CLI1"
-        # 200 (orden) - 50 (pago huérfano sin aplicar) = 150 neto.
-        assert cliente["saldo_neto"] == 150.0
+
+        # Orden sin facturar, sin teóricos calculados (ventas_teoricos
+        # vacío) y sin pago aplicado: solo "venta_real" tiene un saldo real
+        # (200, el monto_total de la orden); teóricos quedan en 0 (sin
+        # datos) y "factura_real" en None (aún no facturada). El pago
+        # huérfano de 50 resta por igual a los 4 -- incluido "factura_real",
+        # que pasa de None (nunca sumado) a -50.
+        assert cliente["saldos"] == {
+            "teorico_bs": -50.0,
+            "teorico_usd": -50.0,
+            "venta_real": 150.0,
+            "factura_real": -50.0,
+        }
 
         tipos = {d["tipo"] for d in cliente["documentos"]}
         assert tipos == {"orden", "pago_huerfano"}
         pago_doc = next(d for d in cliente["documentos"] if d["tipo"] == "pago_huerfano")
-        assert pago_doc["monto"] == -50.0
+        assert pago_doc["saldos"] == {
+            "teorico_bs": -50.0,
+            "teorico_usd": -50.0,
+            "venta_real": -50.0,
+            "factura_real": -50.0,
+        }
         orden_doc = next(d for d in cliente["documentos"] if d["tipo"] == "orden")
-        assert orden_doc["monto"] == 200.0
+        assert orden_doc["saldos"]["venta_real"] == 200.0
+        assert orden_doc["saldos"]["factura_real"] is None
 
 
 def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():

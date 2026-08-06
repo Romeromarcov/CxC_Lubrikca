@@ -3619,57 +3619,65 @@ async def get_reporte_saldos(refresh: bool = False):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-_CXC_CLIENTE_BUCKETS = ["a_la_fecha", "1_30", "31_60", "61_90", "91_120", "antiguos"]
+_CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
-def _bucket_antiguedad(dias_vencido: int) -> str:
-    if dias_vencido <= 0:
-        return "a_la_fecha"
-    if dias_vencido <= 30:
-        return "1_30"
-    if dias_vencido <= 60:
-        return "31_60"
-    if dias_vencido <= 90:
-        return "61_90"
-    if dias_vencido <= 120:
-        return "91_120"
-    return "antiguos"
+def _dias_vencido_orden(item: dict[str, Any], today: date) -> int:
+    fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
+    try:
+        dt_base = datetime.strptime(str(fecha_base_raw)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        dt_base = today
+    dt_venc = dt_base + timedelta(days=int(item.get("dias_credito") or 0))
+    return max(0, (today - dt_venc).days)
 
 
 @app.get("/api/reporte-cxc-cliente")
 async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)):
     """Cuentas por Cobrar agrupadas por CLIENTE, estilo "Aged Receivable"
 
-    de Odoo (referencia visual del usuario): fila resumen por cliente con
-    saldo neto total + buckets de antigüedad (A la fecha/1-30/31-60/61-90/
-    91-120/Antiguos), expandible a filas de detalle por documento.
+    de Odoo (referencia visual del usuario), pero con las 4 referencias de
+    saldo propias del sistema en vez de un único "saldo neto" (un solo
+    número mezclaría 4 saldos que pueden ser bien distintos entre sí --
+    decisión explícita del usuario tras ver la primera versión con un solo
+    saldo neto + buckets de antigüedad). Fila resumen por cliente con los
+    4 saldos (Teórico Lista BS, Teórico Lista USD, Venta Real, Factura
+    Neta Real), expandible a filas de detalle por documento.
 
-    Fuente única de verdad: ``/api/ventas`` (``saldo_pendiente_cxc``, ya
-    neto de NC/ND y descuento de sistema -- ver Fase 3/6) filtrado por
-    ``sale_de_cxc`` (árbol de enrutamiento, ``cxc_routing.py``) para
-    excluir órdenes que ya salieron de CxC activa (facturadas/cerradas por
-    Bandeja 1/2). Antigüedad = ``fecha_entrega`` (o ``fecha`` si no hay
-    entrega registrada) + ``dias_credito`` real, mismo criterio que
-    ``/api/reporte-saldos``.
+    Fuente única de verdad: ``/api/ventas`` (mismos campos que alimentan
+    las columnas de Ventas y el árbol de enrutamiento -- ver
+    ``cxc_routing.py``), filtrado por ``sale_de_cxc`` para excluir órdenes
+    que ya salieron de CxC activa (Bandeja 1/2). Por cada orden se calcula
+    un saldo pendiente independiente por referencia:
+
+    - ``teorico_bs``  = max(0, ``ves_neta_teorica_iva`` - ``pagado_teorico_bcv``)
+    - ``teorico_usd`` = max(0, ``usd_neta_teorica_iva`` - ``pagado_teorico_binance``)
+    - ``venta_real``  = max(0, ``venta_neta_real`` - desc. sistema - ``monto_pagado_factura_odoo``)
+    - ``factura_real``= max(0, ``total_facturado_neto`` - desc. sistema
+      - ``monto_pagado_factura_odoo``) (``None`` si la orden aún no está
+      facturada -- no hay factura real contra qué comparar).
+
+    Antigüedad (``dias_vencido``) = ``fecha_entrega`` (o ``fecha`` si no
+    hay entrega registrada) + ``dias_credito`` real, mismo criterio que
+    ``/api/reporte-saldos``; se expone por documento pero ya NO se usa
+    para agrupar en buckets a nivel de cliente (reemplazado por las 4
+    columnas de saldo).
 
     Pagos huérfanos (conciliados en Odoo pero SIN orden específica
-    asociada -- vía ``get_live_pagos_conciliados``, reusando la misma
-    lista que ya calcula ``/api/conciliaciones/sugerencias``) se muestran
-    como documento NEGATIVO por cliente, reduciendo el saldo neto aunque
-    el pago no esté cruzado contra ninguna orden -- igual que el ejemplo
-    de Odoo que mostró el usuario. Se deduplica por ``pago_id`` tomando el
-    saldo MÁXIMO entre las filas de sugerencia de ese pago (ese máximo es
-    el residual ANTES de aplicar cualquier sugerencia FIFO, es decir, el
-    monto realmente sin aplicar todavía).
+    asociada -- misma lista que ya calcula
+    ``/api/conciliaciones/sugerencias``, dedup por ``pago_id`` tomando el
+    saldo MÁXIMO entre sus filas de sugerencia FIFO, el residual real sin
+    aplicar) se muestran como documento NEGATIVO por cliente, reduciendo
+    los 4 saldos POR IGUAL (es efectivo real, no aplicado a ninguna
+    referencia en particular -- reduce la deuda del cliente sin importar
+    con cuál de las 4 se le compare).
 
     Limitación conocida (MVP, documentada para no aparentar más de lo que
     hace): Notas de Crédito y Notas de Débito NO se muestran como
     documentos separados -- ya están netas dentro de
-    ``saldo_pendiente_cxc`` de su orden (más conservador que duplicarlas
-    como filas aparte, que sumaría el mismo efecto dos veces). Si más
-    adelante se necesita verlas como líneas independientes (por ejemplo
-    para una NC emitida sin orden asociada), hay que agregarlas aquí como
-    un tercer tipo de documento.
+    ``total_facturado_neto``/``venta_neta_real`` de su orden (más
+    conservador que duplicarlas como filas aparte, que sumaría el mismo
+    efecto dos veces).
     """
     try:
         repo = get_repo()
@@ -3703,8 +3711,7 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 {
                     "cliente_id": cliente_id,
                     "cliente_nombre": cliente_nombre,
-                    "saldo_neto": 0.0,
-                    "buckets": dict.fromkeys(_CXC_CLIENTE_BUCKETS, 0.0),
+                    "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, 0.0),
                     "documentos": [],
                 },
             )
@@ -3712,37 +3719,56 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
         for item in ventas_data["items"]:
             if item.get("sale_de_cxc"):
                 continue
-            saldo = float(item.get("saldo_pendiente_cxc") or 0.0)
-            if saldo <= 0.05:
+
+            desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
+            pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
+            pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
+            pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
+
+            saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
+            saldo_teorico_usd = max(
+                0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance
+            )
+            saldo_venta_real = max(
+                0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema - pagado_ref
+            )
+            facturada = bool(item.get("facturada"))
+            saldo_factura_real = (
+                max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema - pagado_ref)
+                if facturada
+                else None
+            )
+
+            saldos_orden = {
+                "teorico_bs": saldo_teorico_bs,
+                "teorico_usd": saldo_teorico_usd,
+                "venta_real": saldo_venta_real,
+                "factura_real": saldo_factura_real,
+            }
+            if all((v or 0.0) <= 0.05 for v in saldos_orden.values() if v is not None):
                 continue
 
             o = ordenes_map.get(item["so_id"])
             cliente_id = str(o.cliente_id) if o else item["so_id"]
             c = _cliente_row(cliente_id, item["cliente_nombre"])
+            dias_vencido = _dias_vencido_orden(item, today)
 
-            fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
-            try:
-                dt_base = datetime.strptime(str(fecha_base_raw)[:10], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                dt_base = today
-            dt_venc = dt_base + timedelta(days=int(item.get("dias_credito") or 0))
-            dias_vencido = max(0, (today - dt_venc).days)
-            bucket = _bucket_antiguedad(dias_vencido)
+            for k, v in saldos_orden.items():
+                if v is not None:
+                    c["saldos"][k] += v
 
-            c["saldo_neto"] += saldo
-            c["buckets"][bucket] += saldo
             c["documentos"].append(
                 {
                     "tipo": "orden",
                     "so_id": item["so_id"],
                     "fecha": item.get("fecha"),
-                    "facturada": item.get("facturada"),
+                    "facturada": facturada,
                     "dias_vencido": dias_vencido,
-                    "bucket": bucket,
-                    "monto": round(saldo, 2),
+                    "saldos": {
+                        k: (round(v, 2) if v is not None else None) for k, v in saldos_orden.items()
+                    },
                     "descripcion": (
-                        f"Orden {item['so_id']} "
-                        f"({'facturada' if item.get('facturada') else 'sin facturar'})"
+                        f"Orden {item['so_id']} ({'facturada' if facturada else 'sin facturar'})"
                     ),
                     "bandeja_destino": item.get("bandeja_destino"),
                 }
@@ -3755,8 +3781,8 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             cliente_id = str(info.get("cliente_id") or "")
             c = _cliente_row(cliente_id, info.get("cliente_nombre") or f"Cliente {cliente_id}")
 
-            c["saldo_neto"] -= saldo
-            c["buckets"]["a_la_fecha"] -= saldo
+            for k in _CXC_CLIENTE_SALDOS:
+                c["saldos"][k] -= saldo
             c["documentos"].append(
                 {
                     "tipo": "pago_huerfano",
@@ -3764,25 +3790,23 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     "numero_pago_odoo": info.get("numero_pago_odoo"),
                     "fecha": info.get("pago_fecha"),
                     "dias_vencido": 0,
-                    "bucket": "a_la_fecha",
-                    "monto": round(-saldo, 2),
+                    "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, round(-saldo, 2)),
                     "descripcion": f"Pago sin aplicar ({info.get('moneda_pago') or 'USD'})",
                 }
             )
 
         for c in clientes.values():
-            c["saldo_neto"] = round(c["saldo_neto"], 2)
-            for k in _CXC_CLIENTE_BUCKETS:
-                c["buckets"][k] = round(c["buckets"][k], 2)
+            for k in _CXC_CLIENTE_SALDOS:
+                c["saldos"][k] = round(c["saldos"][k], 2)
             c["documentos"].sort(key=lambda d: str(d.get("fecha") or ""))
 
-        clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_neto"])
+        clientes_list = sorted(
+            clientes.values(), key=lambda c: -max(c["saldos"].values(), default=0.0)
+        )
 
-        totales: dict[str, Any] = {
-            "saldo_neto": round(sum(c["saldo_neto"] for c in clientes_list), 2)
-        }
-        for k in _CXC_CLIENTE_BUCKETS:
-            totales[k] = round(sum(c["buckets"][k] for c in clientes_list), 2)
+        totales: dict[str, Any] = {}
+        for k in _CXC_CLIENTE_SALDOS:
+            totales[k] = round(sum(c["saldos"][k] for c in clientes_list), 2)
 
         return {"clientes": clientes_list, "totales": totales}
     except Exception as e:

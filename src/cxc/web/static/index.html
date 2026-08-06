@@ -529,7 +529,7 @@
                     <div class="panel-header-row">
                         <div>
                             <h2>Cuentas por Cobrar por Cliente</h2>
-                            <p>Saldo neto real por cliente (incluye pagos sin aplicar como reducción, aunque no estén cruzados contra una orden específica) con antigüedad por buckets. Clic en una fila para ver el detalle por documento.</p>
+                            <p>Saldo pendiente real por cliente según las 4 referencias del sistema (Teórico Lista BS, Teórico Lista USD, Venta Real y Factura Neta Real -- un solo "saldo neto" mezclaría 4 saldos que pueden ser bien distintos entre sí). Incluye pagos sin aplicar como reducción, aunque no estén cruzados contra una orden específica. Clic en una fila para ver el detalle por documento.</p>
                         </div>
                         <div class="filter-actions">
                             <button type="button" class="btn-secondary" onclick="loadReporteCxcCliente()">🔄 Actualizar</button>
@@ -541,18 +541,15 @@
                                 <tr>
                                     <th></th>
                                     <th>Cliente</th>
-                                    <th>Saldo Neto ($)</th>
-                                    <th>A la Fecha</th>
-                                    <th>1-30</th>
-                                    <th>31-60</th>
-                                    <th>61-90</th>
-                                    <th>91-120</th>
-                                    <th>Antiguos</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
                                 </tr>
                             </thead>
                             <tbody id="reporte-cxc-cliente-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando cuentas por cobrar por cliente...</td>
+                                    <td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td>
                                 </tr>
                             </tbody>
                         </table>
