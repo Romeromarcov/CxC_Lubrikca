@@ -29,6 +29,7 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
+from cxc.engine.cxc_routing import BandejaDestino, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     valor_pagado_bcv_usd,
@@ -4639,36 +4640,44 @@ async def post_cerrar_pago_huerfano(
 
 @app.get("/api/bandeja")
 async def get_bandeja_facturacion():
+    """Bandeja 1/2 de Facturación + Bandeja de Auditoría de Precios.
+
+    Fuente única de verdad para pagado-vs-teóricos/facturada: reusa
+    ``/api/ventas`` (mismos cálculos, incluye el árbol de enrutamiento de
+    CxC -- ver ``cxc_routing.clasificar_estado_cxc`` y la Sección 5 del
+    Manual del Proceso Administrativo). Antes esta bandeja recalculaba su
+    propio criterio (un único ``saldo_motor`` blend BCV+Binance contra
+    ``BandejaFacturacion.total_motor``); ahora entra a Bandeja 1/2 según
+    ``item["bandeja_destino"]`` calculado allá, que compara por separado
+    el Teórico Lista BS (BCV) y el Teórico Lista USD (Binance).
+
+    - **Bandeja 1** (``facturacion_1``): pagado vs algún teórico, orden
+      SIN factura todavía -- lista para facturar en Odoo.
+    - **Bandeja 2** (``facturacion_2``): igual pero orden YA facturada --
+      pendiente ajustes (diferencial cambiario o pronto pago).
+    - **Bandeja de Auditoría de Precios** (``auditoria_precios``, NUEVA):
+      pagado vs la Factura Neta Real en Odoo pero NO vs ningún teórico --
+      sospecha de facturación con precio/lista por debajo del estándar
+      autorizado. La orden permanece en CxC activa (no sale de ninguna
+      bandeja anterior), esta es visibilidad adicional.
+
+    Retención de IVA (clientes agentes de retención): en Bandeja 1 (orden
+    SIN facturar todavía), un cliente agente de retención no paga en
+    efectivo la porción de IVA que retiene (entrega comprobante en su
+    lugar) -- se aplica una tolerancia sobre el teórico correspondiente
+    antes de exigir "pagada" (ver ``_tolerancia_retencion`` abajo). Esta
+    tolerancia NO aplica a Bandeja 2 ni a Auditoría de Precios (ya
+    facturadas -- la retención post-factura la maneja Bandeja 3,
+    ``iva_pendiente_agentes``, sin cambios en este endpoint).
+    """
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
+        ordenes_map = {o.so_id: o for o in ordenes}
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
         clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
         vincs = repo.all_vinculaciones()
-
-        # Batch query live Odoo state
-        so_odoo_states = {}
-        entrega_valida_set: set[str] = set()
-        try:
-            config = AppConfig.from_env()
-            execute = _connect(config.odoo)
-            if execute:
-                so_names = [o.so_id for o in ordenes]
-                if so_names:
-                    so_recs = execute(
-                        "sale.order",
-                        "search_read",
-                        [[["name", "in", so_names]]],
-                        {"fields": ["name", "state"]},
-                    )
-                    for s in so_recs:
-                        sname = str(s.get("name", "")).strip()
-                        if sname:
-                            so_odoo_states[sname] = str(s.get("state", "")).strip().lower()
-                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
-        except Exception as e_odoo:
-            logger.warning("Error consultando Odoo en get_bandeja: %s", e_odoo)
 
         pagos_by_so = {}
         for v in vincs:
@@ -4687,20 +4696,32 @@ async def get_bandeja_facturacion():
             if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
         }
 
+        ventas_data = await get_ventas(vendedor=None, cxc_session=None)
+        ventas_items = {it["so_id"]: it for it in ventas_data["items"]}
+
+        def _tolerancia_retencion(
+            target: float, pagado: float, wh_rate: float
+        ) -> bool:
+            """True si lo pagado cubre el teórico salvo la porción de IVA
+            retenida (agentes de retención no pagan esa porción en efectivo)."""
+            if target <= 0.05:
+                return True
+            subtotal = target / 1.16
+            iva_retenido = (target - subtotal) * (wh_rate / 100.0)
+            return pagado >= target - iva_retenido - 0.05
+
         ordenes_por_facturar = []
         notas_credito_pendientes = []
         iva_pendiente_agentes = []
+        auditoria_precios = []
 
-        for o in ordenes:
-            if orden_excluida(
-                o,
-                live_state=so_odoo_states.get(o.so_id),
-                entrega_valida=o.so_id in entrega_valida_set,
-            ):
+        for so_id, item in ventas_items.items():
+            o = ordenes_map.get(so_id)
+            if o is None:
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id))
-            c_name = (c_info.nombre if c_info else "") or f"Cliente {o.cliente_id}"
+            c_name = item["cliente_nombre"]
             wh_agent = bool(c_info.wh_iva_agent) if c_info else False
             wh_rate = float(c_info.wh_iva_rate) if c_info else 75.0
 
@@ -4714,25 +4735,53 @@ async def get_bandeja_facturacion():
                 (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
             )
 
-            # Bandeja 1: ordenes SIN factura listas para facturar.
-            # - Cliente NO agente de retencion: debe estar pagada al 100%
-            #   segun el motor (reglas estandar).
-            # - Cliente SI agente de retencion de IVA: le basta con haber
-            #   pagado el Subtotal (monto sin IVA); lo que falta es
-            #   exactamente la porcion de IVA que retiene (no paga esa
-            #   porcion en efectivo, entrega comprobante de retencion mas
-            #   adelante -- ver Bandeja 3, que aplica una vez facturada).
-            # IVA Venezuela = 16%; se estima el subtotal despejando el total
-            # que calculo el motor (tot_motor, ya con descuentos aplicados).
-            subtotal_neto_motor = tot_motor / 1.16
-            iva_estimado_motor = tot_motor - subtotal_neto_motor
-            saldo_motor = tot_motor - abono
-            if wh_agent:
-                listo_para_facturar = saldo_motor <= iva_estimado_motor + 0.05
-            else:
-                listo_para_facturar = saldo_motor <= 0.05
+            teorico_bs_pagado = item["estatus_pago_teorico_ves"] == "pagada"
+            teorico_usd_pagado = item["estatus_pago_teorico_usd"] == "pagada"
+            factura_real_pagada = item["estatus_pago_real_factura"] == "pagada"
 
-            if not o.facturada and listo_para_facturar:
+            # Tolerancia de retención de IVA -- solo relevante mientras la
+            # orden no está facturada (gate de Bandeja 1); una vez
+            # facturada, la retención la maneja Bandeja 3 por separado.
+            if wh_agent and not o.facturada:
+                if not teorico_bs_pagado:
+                    teorico_bs_pagado = _tolerancia_retencion(
+                        item.get("ves_neta_teorica_iva") or 0.0,
+                        item.get("pagado_teorico_bcv", 0.0),
+                        wh_rate,
+                    )
+                if not teorico_usd_pagado:
+                    teorico_usd_pagado = _tolerancia_retencion(
+                        item.get("usd_neta_teorica_iva") or 0.0,
+                        item.get("pagado_teorico_binance", 0.0),
+                        wh_rate,
+                    )
+
+            clasificacion = clasificar_estado_cxc(
+                so_id=so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=teorico_bs_pagado,
+                teorico_usd_pagado=teorico_usd_pagado,
+                factura_real_pagada=factura_real_pagada,
+            )
+
+            if clasificacion.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS:
+                auditoria_precios.append(
+                    {
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "fecha": o.fecha.isoformat()
+                        if hasattr(o.fecha, "isoformat")
+                        else str(o.fecha),
+                        "ves_neta_teorica_iva": item.get("ves_neta_teorica_iva"),
+                        "usd_neta_teorica_iva": item.get("usd_neta_teorica_iva"),
+                        "venta_neta_real": item.get("venta_neta_real"),
+                        "total_facturado_neto": item.get("total_facturado_neto"),
+                        "lista_aplicada_label": item.get("lista_aplicada_label"),
+                        "motivo": clasificacion.motivo,
+                    }
+                )
+
+            if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_1:
                 ordenes_por_facturar.append(
                     {
                         "so_id": o.so_id,
@@ -4743,10 +4792,12 @@ async def get_bandeja_facturacion():
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
                         "monto_pagado": abono,
-                        "subtotal_neto": round(subtotal_neto_motor, 2),
-                        "iva_estimado": round(iva_estimado_motor, 2),
+                        "subtotal_neto": round(tot_motor / 1.16, 2) if tot_motor else 0.0,
+                        "iva_estimado": (
+                            round(tot_motor - tot_motor / 1.16, 2) if tot_motor else 0.0
+                        ),
                         "total_motor": tot_motor,
-                        "saldo_pendiente": round(saldo_motor, 2),
+                        "saldo_pendiente": round(max(0.0, tot_motor - abono), 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         "precio_base": monto_orig,
@@ -4760,6 +4811,7 @@ async def get_bandeja_facturacion():
                             if o.so_id in descuento_sistema_map
                             else None
                         ),
+                        "cxc_routing_motivo": clasificacion.motivo,
                     }
                 )
             elif o.facturada:
@@ -4768,17 +4820,21 @@ async def get_bandeja_facturacion():
                 # factura pero con saldo pendiente (> $0.05) caigan aqui por
                 # error -- NC pendiente y retencion de IVA solo aplican a
                 # ordenes ya facturadas en Odoo.
-                nc_calc = float(b.ncs_calculadas) if b else 0.0
-                if nc_calc > 0.01:
-                    # El concepto real (obsequio de producto vs. % de
-                    # descuento de primera compra) vive en el detalle que ya
-                    # calculó el motor -- se usa en vez de un texto generico.
+                if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_2:
+                    # Bandeja 2 (nuevo criterio, Sección 5 del Manual): pagado
+                    # vs algún teórico Y ya facturada -- pendiente ajustes
+                    # (diferencial cambiario o pronto pago). Antes se usaba
+                    # "tiene NC calculada por el motor > 0.01" como criterio
+                    # de entrada, un concepto distinto (ver docstring del
+                    # endpoint); si el motor sí calculó una NC pendiente, se
+                    # sigue mostrando aquí como dato adicional (nc_monto).
+                    nc_calc = float(b.ncs_calculadas) if b else 0.0
                     detalles_b = b.descuentos_detalle if b else []
                     detalle_nc = next((d for d in detalles_b if d.origen == "primera_compra"), None)
                     concepto = (
                         detalle_nc.descripcion
                         if detalle_nc
-                        else "Obsequio / Descuento de primera compra no aplicado en factura"
+                        else "Pendiente ajuste (diferencial cambiario o pronto pago)"
                     )
                     notas_credito_pendientes.append(
                         {
@@ -4791,6 +4847,7 @@ async def get_bandeja_facturacion():
                             if monto_orig > 0
                             else 0.0,
                             "concepto": concepto,
+                            "cxc_routing_motivo": clasificacion.motivo,
                         }
                     )
 
@@ -4834,6 +4891,7 @@ async def get_bandeja_facturacion():
             "ordenes_por_facturar": ordenes_por_facturar,
             "notas_credito_pendientes": notas_credito_pendientes,
             "iva_pendiente_agentes": iva_pendiente_agentes,
+            "auditoria_precios": auditoria_precios,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -8198,6 +8256,18 @@ async def get_ventas(
             if alerta:
                 total_alertas += 1
 
+            # Árbol de enrutamiento de CxC (Sección 5 del Manual): decide si
+            # la orden sale de CxC activa y a qué bandeja se enruta, en
+            # base a los mismos 3 estatus de pago ya calculados arriba
+            # (colapsados a booleano: True solo si el estado es "pagada").
+            clasificacion_cxc = clasificar_estado_cxc(
+                so_id=o.so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=estatus_pago_teorico_ves == "pagada",
+                teorico_usd_pagado=estatus_pago_teorico_usd == "pagada",
+                factura_real_pagada=estatus_pago_real_factura == "pagada",
+            )
+
             items.append(
                 {
                     "so_id": o.so_id,
@@ -8226,6 +8296,15 @@ async def get_ventas(
                     # nacimiento de la orden), expuesto ahora como columna
                     # propia junto a los totales de factura.
                     "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # Montos crudos usados para comparar contra cada
+                    # teórico (val_bcv/val_binance -- distintos de
+                    # monto_pagado_bcv/_usd, que solo existen una vez
+                    # facturada la orden porque se leen de pagos
+                    # reconciliados contra la FACTURA en Odoo). Expuestos
+                    # para que /api/bandeja pueda aplicar la tolerancia de
+                    # retención de IVA sin recalcular la conversión.
+                    "pagado_teorico_bcv": round(val_bcv, 2),
+                    "pagado_teorico_binance": round(val_binance, 2),
                     # Monto pagado con SU PROPIA tasa por ruta (BCV vs
                     # Binance del día del pago) -- distinto del "abono_bcv"/
                     # "abono_binance" que usa estatus_pago_real_orden/_
@@ -8334,6 +8413,17 @@ async def get_ventas(
                     "estatus_pago_real_factura": estatus_pago_real_factura,
                     "estatus_pago_teorico_ves": estatus_pago_teorico_ves,
                     "estatus_pago_teorico_usd": estatus_pago_teorico_usd,
+                    # Árbol de enrutamiento de CxC (Sección 5 del Manual):
+                    # ver src/cxc/engine/cxc_routing.py -- fuente única de
+                    # verdad para Bandeja 1/2, Reporte de Saldos y la nueva
+                    # Bandeja de Auditoría de Precios.
+                    "sale_de_cxc": clasificacion_cxc.sale_de_cxc,
+                    "bandeja_destino": (
+                        clasificacion_cxc.bandeja_destino.value
+                        if clasificacion_cxc.bandeja_destino
+                        else None
+                    ),
+                    "cxc_routing_motivo": clasificacion_cxc.motivo,
                 }
             )
 

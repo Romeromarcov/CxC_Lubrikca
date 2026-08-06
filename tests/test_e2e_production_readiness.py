@@ -275,8 +275,22 @@ def test_e2e_05_reconciliation_trays():
     ]
     mock_repo.all_bandeja.return_value = []
     mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+    from cxc.config import EngineConfig
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         data = res.json()
@@ -284,6 +298,7 @@ def test_e2e_05_reconciliation_trays():
         assert "ordenes_por_facturar" in data
         assert "notas_credito_pendientes" in data
         assert "iva_pendiente_agentes" in data
+        assert "auditoria_precios" in data
 
 
 def test_e2e_06_vendor_scoping_and_roles():
@@ -689,7 +704,17 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
 
     (falta solo el IVA retenido); un cliente normal con el mismo saldo
     pendiente NO debe entrar -- para él aplica la regla estándar (100%).
+
+    Desde el árbol de enrutamiento (cxc_routing.clasificar_estado_cxc),
+    Bandeja 1 se decide comparando lo pagado contra el Teórico Lista BS/USD
+    (``VentasTeorico``, vía ``/api/ventas``) -- no contra ``BandejaFacturacion
+    .total_motor`` como antes. Se agrega una fila de ``ventas_teoricos``
+    (100 USD netos, IVA 16% -> 116 con impuestos) para ambas órdenes; la
+    tolerancia de retención de IVA se aplica solo al agente.
     """
+    from cxc.config import EngineConfig
+    from cxc.models import VentasTeorico
+
     mock_repo = _mock_repo_with_gateway_bridge()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
@@ -729,6 +754,10 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
         ),
     ]
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_AGENTE", teorico_ves=Decimal("100"), teorico_usd=Decimal("100")),
+        VentasTeorico(so_id="SO_NORMAL", teorico_ves=Decimal("100"), teorico_usd=Decimal("100")),
+    ]
     # Ambas órdenes recibieron $100 de abono (el subtotal sin IVA de $116 a
     # 16%); a ninguna le falta más que la porción de IVA ($16).
     mock_repo.all_vinculaciones.return_value = [
@@ -756,7 +785,14 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
         ),
     ]
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         data = res.json()
@@ -770,11 +806,24 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
 
     motor (obsequio de producto o % de primera compra), no de un texto
     genérico fijo.
+
+    Desde el árbol de enrutamiento, Bandeja 2 exige "pagado vs algún
+    teórico Y ya facturada" (no basta con que el motor haya calculado una
+    NC pendiente, como antes) -- se agrega una Vinculación que cubre el
+    Teórico USD (455, mismo neto que el motor) para que la orden
+    legítimamente clasifique como ``facturacion_2``.
     """
+    from cxc.config import EngineConfig
+    from cxc.models import VentasTeorico
+
     mock_repo = MagicMock()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [{"cliente_id": "C_NC", "nombre": "Cliente NC"}] if sheet == "Clientes" else []
     )
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_NC",
@@ -806,9 +855,34 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
             total_motor=Decimal("455.00"),
         ),
     ]
-    mock_repo.all_vinculaciones.return_value = []
+    # Teórico USD neto con IVA = 400 * 1.16 = 464 -- el pago de 470 lo cubre
+    # (valor_pagado_binance_usd cae a monto_aplicado si no hay equivalentes
+    # congelados, ver engine/equivalents.py).
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_NC", teorico_ves=Decimal("500"), teorico_usd=Decimal("400")),
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_NC",
+            pago_id="P_NC",
+            so_id="SO_NC",
+            monto_aplicado=Decimal("470.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         nc_items = res.json()["notas_credito_pendientes"]
@@ -826,6 +900,8 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
     cuánto IVA se retuvo y esconden un saldo real pendiente como si solo
     faltara el comprobante.
     """
+    from cxc.config import EngineConfig
+
     mock_repo = MagicMock()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [
@@ -878,8 +954,20 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
             estado=EstadoVinculacion.CONCILIADO,
         ),
     ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
 
-    with patch("cxc.web.app.get_repo", return_value=mock_repo), patch("cxc.web.app._connect"):
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         so_ids = {item["so_id"] for item in res.json()["iva_pendiente_agentes"]}
@@ -887,6 +975,98 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
         # de IVA sobre el total del motor ($16), aunque calculado sobre el
         # monto bruto ($300) sí hubiera "cabido" (bug que se corrige aquí).
         assert "SO_IVA2" not in so_ids
+
+
+def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
+    """Bandeja de Auditoría de Precios (nueva, Sección 5 del Manual): una
+
+    orden facturada cuyo pago cubre la Factura Neta Real en Odoo pero NO
+    cubre ningún teórico (BS/USD) -- sospecha de facturación con precio o
+    lista por debajo del estándar autorizado. Debe aparecer en
+    ``auditoria_precios`` y NO salir de Bandeja 1/2 (caso real: S00357).
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import VentasTeorico
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_AUD", "state": "sale", "amount_untaxed": 300.0}]
+        if model == "account.move":
+            return [
+                {
+                    "id": 9001,
+                    "invoice_origin": "SO_AUD",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 258.62,
+                    "amount_total_signed_usd": 300.0,
+                    "amount_total": 300.0,
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_AUD", "nombre": "Cliente Auditoria"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_AUD",
+            cliente_id="C_AUD",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("300.00"),
+            lista_precios="8",  # lista USD
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-AUD",
+        ),
+    ]
+    # Teóricos muy por encima de lo realmente pagado/facturado -- el precio
+    # de lista debió ser mayor (500 netos, 580 con IVA).
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_AUD", teorico_ves=Decimal("500"), teorico_usd=Decimal("500")),
+    ]
+    # Pago de 300 USD directo -- cubre exactamente lo facturado (300) pero
+    # queda muy por debajo de cualquiera de los dos teóricos (580).
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_AUD",
+            pago_id="P_AUD",
+            so_id="SO_AUD",
+            monto_aplicado=Decimal("300.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        data = res.json()
+
+        aud_ids = {item["so_id"] for item in data["auditoria_precios"]}
+        assert "SO_AUD" in aud_ids
+
+        # No debe salir de CxC por ninguna otra vía -- ni Bandeja 1 (ya
+        # facturada, no aplica) ni Bandeja 2 (no pagó vs ningún teórico).
+        assert "SO_AUD" not in {i["so_id"] for i in data["ordenes_por_facturar"]}
+        assert "SO_AUD" not in {i["so_id"] for i in data["notas_credito_pendientes"]}
 
 
 def test_e2e_15_pagos_sin_asignar_usd_y_ves_saldo_parcial():
