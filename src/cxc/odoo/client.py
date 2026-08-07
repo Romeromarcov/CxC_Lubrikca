@@ -195,6 +195,7 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
         precio_unitario=_dec(rec.get("price_unit")),
         cantidad_entregada=_dec(rec.get("qty_delivered")),
         descuento=_dec(rec.get("discount")),
+        subcategoria=str(rec.get("subcategoria", "") or ""),
     )
 
 
@@ -461,19 +462,30 @@ class OdooXmlRpcReader(OdooReader):
         productos = self._productos(prod_ids)
         for r in recs:
             pid = _m2o_id(r.get("product_id"))
-            marca, categoria = productos.get(int(pid), ("", "")) if pid else ("", "")
+            marca, categoria, subcategoria = (
+                productos.get(int(pid), ("", "", "")) if pid else ("", "", "")
+            )
             r["marca"] = marca
             r["categoria"] = categoria
+            r["subcategoria"] = subcategoria
         return [map_linea(r) for r in recs]
 
-    def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str]]:
-        """Mapa producto → (marca, categoría raíz). categoría = Comercial / Industrial."""
+    def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str, str]]:
+        """Mapa producto → (marca, categoría raíz, subcategoría).
+
+        categoría raíz = Comercial / Industrial (1er nivel del path de
+        ``categ_id``). subcategoría = 2do nivel (ej. "Comercial/Elite" →
+        "Elite"), vacío si el producto no tiene ese nivel -- usada para
+        afinar el match de reglas de descuento por debajo de Comercial/
+        Industrial (ver engine/discounts.py).
+        """
         recs = self._read(self.MODEL_PRODUCT, sorted(prod_ids), ["id", "brand_id", "categ_id"])
-        out: dict[int, tuple[str, str]] = {}
+        out: dict[int, tuple[str, str, str]] = {}
         for r in recs:
             marca = _m2o_name(r.get("brand_id"))
             categoria_full = _m2o_name(r.get("categ_id"))
             categoria = ""
+            subcategoria = ""
             if categoria_full:
                 parts = [p.strip() for p in categoria_full.split("/")]
                 if "Comercial" in parts:
@@ -484,7 +496,11 @@ class OdooXmlRpcReader(OdooReader):
                     # Fallback to first non-All part
                     non_all = [p for p in parts if p != "All"]
                     categoria = non_all[0] if non_all else parts[0]
-            out[int(r["id"])] = (marca, categoria)
+                if categoria in parts:
+                    idx = parts.index(categoria)
+                    if idx + 1 < len(parts):
+                        subcategoria = parts[idx + 1]
+            out[int(r["id"])] = (marca, categoria, subcategoria)
         return out
 
     # --- Pagos ---------------------------------------------------------------

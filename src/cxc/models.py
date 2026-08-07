@@ -118,6 +118,10 @@ class LineaOrden:
     # Cantidad realmente entregada (neta de devoluciones) — seguimiento visual.
     cantidad_entregada: Decimal = Decimal("0")
     descuento: Decimal = Decimal("0")
+    # Subcategoría real de Odoo (2do nivel del path de categ_id, ej.
+    # "Comercial/Elite" -> "Elite"). Vacío si el producto no tiene ese nivel.
+    # Ver OdooClient._productos.
+    subcategoria: str = ""
 
     @property
     def resolved_marca(self) -> str:
@@ -227,8 +231,11 @@ class DescuentoProntoPago:
     tipo_beneficio: str = "descuento"
     # "Ventana de pago" (reemplaza "Días de gracia"): desde cuándo se
     # cuentan los `ventana_pago_dias` de margen -- ver
-    # engine/discounts.py::ventana_pago_vigente.
-    ventana_pago_tipo: str = "vencimiento"
+    # engine/discounts.py::ventana_pago_vigente. Default "entrega" (no
+    # "vencimiento"): el pronto pago premia pagar CERCA de la entrega, no
+    # cerca del vencimiento del crédito -- usar "vencimiento" aquí anularía
+    # el propósito del descuento por contado.
+    ventana_pago_tipo: str = "entrega"
     ventana_pago_dias: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"

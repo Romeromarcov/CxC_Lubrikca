@@ -161,6 +161,7 @@ class EngineRunner:
             exclusiones=self._repo.exclusiones(),
             descuentos_recompra=self._repo.descuentos_recompra(),
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
+            descuentos_producto=self._repo.descuentos_producto(),
             valid_ves=valid_ves,
             valid_usd=valid_usd,
             orden_es_historica=orden_es_historica,

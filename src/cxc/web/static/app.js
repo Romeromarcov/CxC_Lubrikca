@@ -3690,17 +3690,23 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (inputs.length > 0) {
                     const parent = inputs[0].parentElement?.parentElement || document.getElementById(cfg.parent);
                     if (parent) {
+                        // Solo los checks de mapeo (por vigencia VES/USD) + Todas --
+                        // se quitaron los checks de listas individuales harcodeadas
+                        // (#3, #4, #5...) por pedido explícito: las listas concretas
+                        // cambian con el tiempo, el mapeo por vigencia ya resuelve
+                        // cuál aplica en cada momento.
                         const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
-                        const isVesChecked = currentChecked.includes('LISTAS_VES') || (elClass === 'm2m-dif-lista' && currentChecked.length === 0);
+                        const esListaEspecificaVieja = currentChecked.some(
+                            v => v !== 'LISTAS_VES' && v !== 'LISTAS_USD' && v !== '*'
+                        );
+                        const isVesChecked = currentChecked.includes('LISTAS_VES')
+                            || (elClass === 'm2m-dif-lista' && currentChecked.length === 0);
                         const isUsdChecked = currentChecked.includes('LISTAS_USD');
-                        
+                        const isTodasChecked = currentChecked.includes('*') || esListaEspecificaVieja;
+
                         let html = `<label><input type="checkbox" class="${elClass}" value="LISTAS_VES" ${isVesChecked ? 'checked' : ''}> Listas VES (Mapeo)</label> `;
                         html += `<label><input type="checkbox" class="${elClass}" value="LISTAS_USD" ${isUsdChecked ? 'checked' : ''}> Listas USD (Mapeo)</label> `;
-                        html += pricelists.map(pl => {
-                            const isChecked = currentChecked.includes(String(pl.id)) ? 'checked' : '';
-                            return `<label><input type="checkbox" class="${elClass}" value="${pl.id}" ${isChecked}> #${pl.id} ${pl.name}</label>`;
-                        }).join(' ');
-                        html += ` <label><input type="checkbox" class="${elClass}" value="*" ${currentChecked.includes('*') ? 'checked' : ''}> Todas (*)</label>`;
+                        html += `<label><input type="checkbox" class="${elClass}" value="*" ${isTodasChecked ? 'checked' : ''}> Todas (*)</label>`;
                         parent.innerHTML = html;
                     }
                 }

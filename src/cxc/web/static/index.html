@@ -1431,9 +1431,9 @@
                                 <div class="form-group" style="flex:1">
                                     <label>Listas Aplicables (M2M)</label>
                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="4"> Lista USD (#4)</label>
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="*" checked> Todas (*)</label>
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-rec-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>
                             </div>
@@ -1563,9 +1563,9 @@
                                 <div class="form-group" style="flex:1">
                                     <label>Listas Aplicables (M2M)</label>
                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="4"> Lista USD (#4)</label>
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="*" checked> Todas (*)</label>
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-pp-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>
                             </div>
@@ -1596,11 +1596,11 @@
 
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label title="Desde cuándo se cuentan los días de la ventana">Ventana de Pago</label>
+                                <label title="Desde cuándo se cuentan los días de la ventana. 'Desde la entrega' es lo usual para pronto pago -- premia pagar cerca de la entrega, no cerca del vencimiento del crédito">Ventana de Pago</label>
                                 <select id="cfg-pp-ventana-tipo">
-                                    <option value="vencimiento" selected>Desde el vencimiento</option>
+                                    <option value="entrega" selected>Desde la entrega</option>
                                     <option value="emision">Desde la emisión de la orden</option>
-                                    <option value="entrega">Desde la entrega</option>
+                                    <option value="vencimiento">Desde el vencimiento</option>
                                     <option value="no_aplica">No aplica</option>
                                 </select>
                             </div>
@@ -1699,9 +1699,9 @@
                                 <div class="form-group" style="flex:1">
                                     <label>Listas Aplicables (M2M)</label>
                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="4"> Lista USD (#4)</label>
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="*" checked> Todas (*)</label>
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-vol-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>
                             </div>
@@ -1827,9 +1827,9 @@
                                 <div class="form-group" style="flex:1">
                                     <label>Listas Aplicables (M2M)</label>
                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="4"> Lista USD (#4)</label>
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="*" checked> Todas (*)</label>
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-promo-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>
                             </div>
@@ -1976,9 +1976,9 @@
                                 <div class="form-group" style="flex:1">
                                     <label>Listas Aplicables (M2M)</label>
                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="4"> Lista USD (#4)</label>
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="*" checked> Todas (*)</label>
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
+                                        <label><input type="checkbox" class="m2m-prod-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>
                             </div>
@@ -2079,6 +2079,12 @@
                     <div class="panel-header">
                         <h2>💱 Descuentos por Diferencial Cambiario</h2>
                         <p>35% Fijo VES a USD, Equiparación a Tasa Binance N/C y Diferencial BCV vs Binance al Cierre</p>
+                        <p style="background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; padding:8px 12px; color:#92400e; font-size:0.85rem; margin-top:8px;">
+                            ⚠️ Estas reglas se guardan pero <strong>el motor de cálculo todavía NO las aplica</strong>
+                            (existe ambigüedad entre sus 3 fórmulas y el riesgo de doble-contar el diferencial ya
+                            cubierto por "BCV-completo", que sí es real). No crear reglas aquí esperando que afecten
+                            los totales hasta que esto se resuelva explícitamente con negocio.
+                        </p>
                     </div>
 
                     <form id="diferencial-form" class="cxc-form">
@@ -2107,8 +2113,6 @@
                                     <div id="m2m-dif-listas-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
                                         <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-dif-lista" value="5"> Lista VES (#5)</label>
-                                        <label><input type="checkbox" class="m2m-dif-lista" value="4"> Lista USD (#4)</label>
                                         <label><input type="checkbox" class="m2m-dif-lista" value="*"> Todas (*)</label>
                                     </div>
                                 </div>

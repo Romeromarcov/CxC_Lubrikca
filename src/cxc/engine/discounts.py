@@ -24,6 +24,7 @@ from ..models import (
     DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
     EstadoBandeja,
@@ -43,6 +44,7 @@ from .effective_dating import (
     _match_categoria,
     _match_lista,
     _vigente,
+    descuento_producto_vigente,
     descuento_vigente,
     descuento_volumen_vigente,
     regla_recurrencia_vigente,
@@ -80,6 +82,7 @@ class EngineInputs:
     exclusiones: list[ExclusionRegla] = field(default_factory=list)
     descuentos_recompra: list[DescuentoRecompra] = field(default_factory=list)
     descuentos_diferencial: list[DescuentoDiferencialCambiario] = field(default_factory=list)
+    descuentos_producto: list[DescuentoProducto] = field(default_factory=list)
     # Tarea 3 (auditoria reglas por lista): listas de precio (ids de Odoo)
     # configuradas en Configuración como VES/USD -- vacías = el matching de
     # "LISTAS_VES"/"LISTAS_USD" en listas_aplicables cae al default
@@ -119,6 +122,12 @@ class _Componentes:
     detalle_volumen: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     flags: dict[str, bool] = field(default_factory=dict)
+    # Regla de Pronto Pago (CONTADO) que más contribuyó al contado_proy --
+    # su "Ventana de pago" decide si el contado se confirma (ver
+    # calcular_factura). None si ninguna regla CONTADO matcheó.
+    regla_contado_dominante: DescuentoMarcaCategoria | None = None
+    producto: Decimal = Decimal("0")
+    detalle_producto: DescuentoAplicado | None = None
 
 
 _ReglaT = TypeVar("_ReglaT")
@@ -180,6 +189,31 @@ def _bcv_completo_monto(
 VENTANA_PAGO_TIPOS = ("entrega", "emision", "vencimiento", "no_aplica")
 
 
+def limite_ventana_pago(
+    tipo: str,
+    dias: int,
+    *,
+    fecha_emision: date,
+    fecha_entrega: date | None,
+    dias_credito: int,
+) -> date | None:
+    """Fecha límite (inclusive) de una "Ventana de pago", o ``None`` si el
+
+    tipo es "no_aplica"/vacío/desconocido (sin restricción por esta ventana).
+    Ver ``ventana_pago_vigente`` para la semántica de cada tipo.
+    """
+    if not tipo or tipo == "no_aplica" or tipo not in VENTANA_PAGO_TIPOS:
+        return None
+    if tipo == "emision":
+        return fecha_emision + timedelta(days=dias)
+    if tipo == "entrega":
+        base = fecha_entrega or fecha_emision
+        return base + timedelta(days=dias)
+    # "vencimiento"
+    base = fecha_entrega or fecha_emision
+    return base + timedelta(days=dias_credito) + timedelta(days=dias)
+
+
 def ventana_pago_vigente(
     tipo: str,
     dias: int,
@@ -203,16 +237,15 @@ def ventana_pago_vigente(
     - ``"no_aplica"`` (o vacío/desconocido): sin restricción de esta
       ventana -- siempre vigente por este criterio.
     """
-    if not tipo or tipo == "no_aplica" or tipo not in VENTANA_PAGO_TIPOS:
+    limite = limite_ventana_pago(
+        tipo,
+        dias,
+        fecha_emision=fecha_emision,
+        fecha_entrega=fecha_entrega,
+        dias_credito=dias_credito,
+    )
+    if limite is None:
         return True
-    if tipo == "emision":
-        limite = fecha_emision + timedelta(days=dias)
-    elif tipo == "entrega":
-        base = fecha_entrega or fecha_emision
-        limite = base + timedelta(days=dias)
-    else:  # "vencimiento"
-        base = fecha_entrega or fecha_emision
-        limite = base + timedelta(days=dias_credito) + timedelta(days=dias)
     return fecha_evaluacion <= limite
 
 
@@ -365,6 +398,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     promociones_ok = _filtrar_por_pago_previo(inp.promociones_primera_compra, tiene_pago)
     reglas_recurrencia_ok = _filtrar_por_pago_previo(inp.reglas_recurrencia, tiene_pago)
     descuento_bcv_diario_ok = _filtrar_por_pago_previo(inp.descuento_bcv_diario, tiene_pago)
+    descuentos_producto_ok = _filtrar_por_pago_previo(inp.descuentos_producto, tiene_pago)
     # NOTA (aplica_a línea/subtotal): PromocionPrimeraCompra, DescuentoBCVCompleto
     # y DescuentoDiferencialCambiario también tienen el campo `aplica_a` en
     # esquema (por consistencia), pero NO lo leen aquí -- no son cálculos por
@@ -568,6 +602,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                             _match_categoria(r.categoria, ln.categoria)
                             or _match_categoria(r.categoria, ln.presentacion)
                             or _match_categoria(r.categoria, ln.categoria_madre)
+                            or _match_categoria(r.categoria, getattr(ln, "subcategoria", ""))
                         )
                         ventana_ok = ventana_pago_vigente(
                             getattr(r, "ventana_pago_tipo", "vencimiento"),
@@ -610,6 +645,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     # requiere que haya abonos y un ancla de entrega.
     contado_evaluable = bool(inp.abonos) and inp.orden.fecha_entrega is not None
     contado_proy = Decimal("0")
+    regla_contado_dominante: DescuentoMarcaCategoria | None = None
     if contado_evaluable:
         moneda_pago = "USD"
         if inp.abonos:
@@ -633,10 +669,16 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 producto=ln.producto,
                 moneda_pago=moneda_pago,
                 presentacion=ln.presentacion,
+                subcategoria=getattr(ln, "subcategoria", ""),
                 valid_ves=inp.valid_ves or None,
                 valid_usd=inp.valid_usd or None,
             )
             if d is not None:
+                if (
+                    regla_contado_dominante is None
+                    or d.porcentaje > regla_contado_dominante.porcentaje
+                ):
+                    regla_contado_dominante = d
                 if getattr(d, "aplica_a", "linea") == "subtotal":
                     existente = reglas_contado_subtotal.get(d.regla_id)
                     if existente is None or d.porcentaje > existente.porcentaje:
@@ -721,6 +763,55 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         if ("volumen", "recompra") in exclusiones_activas:
             pct_recompra = Decimal("0")
             detalle_recompra = None
+
+    # (e) Descuento por Producto específico (SKU/código) -- independiente de
+    # marca/categoría genérica, para promociones puntuales por producto.
+    producto_desc = Decimal("0")
+    detalle_producto: DescuentoAplicado | None = None
+    if descuentos_producto_ok:
+        moneda_pago_prod = "USD"
+        if inp.abonos:
+            monedas_usadas_prod = {
+                pago.moneda.value
+                for _, pago in inp.abonos
+                if hasattr(pago, "moneda") and pago.moneda
+            }
+            if "VES" in monedas_usadas_prod:
+                moneda_pago_prod = "VES"
+
+        reglas_producto_subtotal: dict[str, Any] = {}
+        detalles_prod = []
+        for ln in inp.lineas:
+            d_prod = descuento_producto_vigente(
+                descuentos_producto_ok,
+                marca=ln.resolved_marca,
+                categoria=ln.categoria,
+                producto=ln.producto,
+                fecha=fecha_orden,
+                lista_precios=lista,
+                moneda_pago=moneda_pago_prod,
+                valid_ves=inp.valid_ves or None,
+                valid_usd=inp.valid_usd or None,
+            )
+            if d_prod is not None:
+                if getattr(d_prod, "aplica_a", "linea") == "subtotal":
+                    existente = reglas_producto_subtotal.get(d_prod.regla_id)
+                    if existente is None or d_prod.porcentaje > existente.porcentaje:
+                        reglas_producto_subtotal[d_prod.regla_id] = d_prod
+                else:
+                    producto_desc += _precio_linea(inp, ln, lista) * d_prod.porcentaje
+                    detalles_prod.append(f"{ln.producto}: {d_prod.porcentaje * 100}%")
+
+        for regla_subtotal in reglas_producto_subtotal.values():
+            producto_desc += precio_base * regla_subtotal.porcentaje
+            detalles_prod.append(f"{regla_subtotal.regla_id}: {regla_subtotal.porcentaje * 100}%")
+
+        if producto_desc > 0:
+            detalle_producto = DescuentoAplicado(
+                origen="producto",
+                descripcion="Dcto producto " + ", ".join(detalles_prod),
+                monto=q2(producto_desc),
+            )
 
     lista_usd_name = _lista_usd_activa(inp)
     try:
@@ -809,6 +900,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         detalle_volumen=detalle_volumen,
         detalle_bcv=detalle_bcv,
         detalle_nc=detalle_nc,
+        regla_contado_dominante=regla_contado_dominante,
+        producto=producto_desc,
+        detalle_producto=detalle_producto,
         flags={
             "contado_evaluable": contado_evaluable,
             "promo_sin_precio": promo_sin_precio,
@@ -964,13 +1058,29 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     contado_evaluable = comp.flags["contado_evaluable"]
     valor_pagado = valor_pagado_usd(vincs) if vincs else Decimal("0")
 
-    # Ventana de contado (sección 4.6) sobre la fecha de entrega.
+    # Ventana de contado (sección 4.6) sobre la fecha de entrega. Si la
+    # regla de Pronto Pago que matcheó especifica su propia "Ventana de
+    # pago" (ventana_pago_tipo != "no_aplica"), esa ventana por-regla
+    # reemplaza la ventana global de días hábiles (cash_window_business_days)
+    # -- así el campo configurado en la regla realmente decide si el
+    # contado se confirma, en vez de quedar sin efecto.
     fin_ventana: date | None = None
     within_window = False
     if inp.orden.fecha_entrega is not None:
-        fin_ventana = fin_ventana_contado(
-            inp.orden.fecha_entrega, cfg.cash_window_business_days, inp.feriados
-        )
+        regla_dominante = comp.regla_contado_dominante
+        fin_ventana = None
+        if regla_dominante is not None:
+            fin_ventana = limite_ventana_pago(
+                getattr(regla_dominante, "ventana_pago_tipo", "entrega"),
+                getattr(regla_dominante, "ventana_pago_dias", 3),
+                fecha_emision=inp.orden.fecha,
+                fecha_entrega=inp.orden.fecha_entrega,
+                dias_credito=inp.orden.dias_credito,
+            )
+        if fin_ventana is None:
+            fin_ventana = fin_ventana_contado(
+                inp.orden.fecha_entrega, cfg.cash_window_business_days, inp.feriados
+            )
         fechas_abono = [v.hora_pago_confirmada.date() for v in vincs]
         if fechas_abono:
             within_window = max(fechas_abono) <= fin_ventana
@@ -982,6 +1092,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "contado": comp.contado_proy,
         "volumen": comp.volumen,
         "bcv_completo": comp.bcv_completo,
+        "producto": comp.producto,
     }
     for exc in inp.exclusiones:
         if exc.activo:
@@ -995,7 +1106,11 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
                         val_opt[ta] = Decimal("0")
 
     descuentos_optimista = (
-        val_opt["recurrencia"] + val_opt["contado"] + val_opt["bcv_completo"] + val_opt["volumen"]
+        val_opt["recurrencia"]
+        + val_opt["contado"]
+        + val_opt["bcv_completo"]
+        + val_opt["volumen"]
+        + val_opt["producto"]
     )
     neto_optimista = comp.precio_base - descuentos_optimista - val_opt["primera_compra"]
     liquidado_optimista = valor_pagado >= neto_optimista - _EPS
@@ -1022,6 +1137,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "contado": contado_aplicado_base,
         "volumen": comp.volumen,
         "bcv_completo": comp.bcv_completo,
+        "producto": comp.producto,
     }
     for exc in inp.exclusiones:
         if exc.activo:
@@ -1039,6 +1155,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     final_contado = valores["contado"]
     final_volumen = valores["volumen"]
     final_bcv = valores["bcv_completo"]
+    final_producto = valores["producto"]
 
     # Apilamiento aditivo final (sección 4.1).
     detalle: list[DescuentoAplicado] = []
@@ -1070,6 +1187,8 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             )
     if final_volumen > 0 and comp.detalle_volumen is not None:
         detalle.append(comp.detalle_volumen)
+    if final_producto > 0 and comp.detalle_producto is not None:
+        detalle.append(comp.detalle_producto)
 
     # HALLAZGO (revisión de apilamiento, no corregido sin confirmar con
     # negocio primero): no hay piso/tope explícito aquí -- si varias reglas
@@ -1081,7 +1200,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     # regla subtotal pesa sobre precio_base completo en vez de un subgrupo.
     # No se agrega un límite nuevo sin instrucción explícita porque
     # cambiaría montos ya validados en producción.
-    total_descuentos = final_recompra + final_contado + final_bcv + final_volumen
+    total_descuentos = final_recompra + final_contado + final_bcv + final_volumen + final_producto
     neto = comp.precio_base - total_descuentos - final_nc
     candidata = bool(vincs) and valor_pagado >= neto - _EPS
 

@@ -10,6 +10,7 @@ from cxc.models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
     Feriado,
@@ -157,6 +158,8 @@ def descuento(
     desde: date = date(2026, 1, 1),
     hasta: date | None = None,
     requiere_pago_previo: bool = True,
+    ventana_pago_tipo: str = "no_aplica",
+    ventana_pago_dias: int = 3,
 ) -> DescuentoMarcaCategoria:
     return DescuentoMarcaCategoria(
         regla_id=regla_id,
@@ -167,6 +170,8 @@ def descuento(
         vigencia_desde=desde,
         vigencia_hasta=hasta,
         requiere_pago_previo=requiere_pago_previo,
+        ventana_pago_tipo=ventana_pago_tipo,
+        ventana_pago_dias=ventana_pago_dias,
     )
 
 
@@ -190,6 +195,29 @@ def descuento_volumen(
         vigencia_desde=desde,
         vigencia_hasta=hasta,
         requiere_pago_previo=requiere_pago_previo,
+    )
+
+
+def descuento_producto(
+    regla_id: str = "PROD1",
+    *,
+    productos: str = "*",
+    marca: str = "*",
+    categoria: str = "*",
+    porcentaje: str = "0.05",
+    desde: date = date(2026, 1, 1),
+    hasta: date | None = None,
+    aplica_a: str = "linea",
+) -> DescuentoProducto:
+    return DescuentoProducto(
+        regla_id=regla_id,
+        productos=productos,
+        marca=marca,
+        categoria=categoria,
+        porcentaje=Decimal(porcentaje),
+        vigencia_desde=desde,
+        vigencia_hasta=hasta,
+        aplica_a=aplica_a,
     )
 
 

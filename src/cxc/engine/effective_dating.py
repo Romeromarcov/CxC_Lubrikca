@@ -14,6 +14,7 @@ from ..models import (
     Condicion,
     DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoVolumen,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
@@ -48,18 +49,23 @@ def _especificidad(regla: DescuentoMarcaCategoria) -> int:
     return score
 
 
-def _match_categoria(regla_cat: str, target_cat: str, presentacion: str = "") -> bool:
+def _match_categoria(
+    regla_cat: str, target_cat: str, presentacion: str = "", subcategoria: str = ""
+) -> bool:
     if not regla_cat or regla_cat == "*":
         return True
     rcs = [x.strip().upper() for x in regla_cat.split(",") if x.strip()]
     tc = (target_cat or "").strip().upper()
     pres = (presentacion or "").strip().upper()
+    subcat = (subcategoria or "").strip().upper()
     if (
         "*" in rcs
         or tc in rcs
         or pres in rcs
+        or subcat in rcs
         or any(rc in tc for rc in rcs)
         or any(tc in rc for rc in rcs)
+        or (subcat and any(rc in subcat or subcat in rc for rc in rcs))
     ):
         return True
     if any(rc in ("CAJA", "COMERCIAL") for rc in rcs) and (
@@ -149,6 +155,7 @@ def descuento_vigente(
     producto: str = "",
     moneda_pago: str = "USD",
     presentacion: str = "",
+    subcategoria: str = "",
     valid_ves: list[str] | None = None,
     valid_usd: list[str] | None = None,
 ) -> DescuentoMarcaCategoria | None:
@@ -160,7 +167,7 @@ def descuento_vigente(
             continue
         if not _match_marca(r.marca, marca):
             continue
-        if not _match_categoria(r.categoria, categoria, presentacion):
+        if not _match_categoria(r.categoria, categoria, presentacion, subcategoria):
             continue
         if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
             continue
@@ -301,4 +308,70 @@ def descuento_volumen_vigente(
     return max(
         candidatas,
         key=lambda r: (specificity(r), r.porcentaje),
+    )
+
+
+def _match_producto_codigo(regla_productos: str, producto: str) -> bool:
+    if not regla_productos or regla_productos == "*":
+        return True
+    if not producto:
+        return False
+    codigos = [p.strip().upper() for p in str(regla_productos).split(",") if p.strip()]
+    prod_u = str(producto).strip().upper()
+    return "*" in codigos or prod_u in codigos or any(c in prod_u for c in codigos)
+
+
+def descuento_producto_vigente(
+    reglas: list[DescuentoProducto],
+    *,
+    marca: str,
+    categoria: str,
+    producto: str,
+    fecha: date,
+    lista_precios: str = "*",
+    moneda_pago: str = "USD",
+    valid_ves: list[str] | None = None,
+    valid_usd: list[str] | None = None,
+) -> DescuentoProducto | None:
+    """Regla de descuento por producto específico (SKU/código) vigente.
+
+    Empate: gana la más específica (código de producto exacto sobre '*',
+    luego marca/categoría exacta), luego el mayor porcentaje.
+    """
+    candidatas = []
+    for r in reglas:
+        if not _match_producto_codigo(r.productos, producto):
+            continue
+        if not _match_marca(r.marca, marca):
+            continue
+        if not _match_categoria(r.categoria, categoria):
+            continue
+        if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
+            continue
+        if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
+            continue
+        if r.monedas_aplicables and r.monedas_aplicables != "*":
+            valid_monedas = [
+                m.strip().upper() for m in r.monedas_aplicables.split(",") if m.strip()
+            ]
+            if moneda_pago.upper() not in valid_monedas:
+                continue
+        candidatas.append(r)
+
+    if not candidatas:
+        return None
+
+    def specificity(r: DescuentoProducto) -> int:
+        score = 0
+        if r.productos and r.productos != "*":
+            score += 4
+        if r.marca != "*":
+            score += 2
+        if r.categoria != "*":
+            score += 1
+        return score
+
+    return max(
+        candidatas,
+        key=lambda r: (specificity(r), r.porcentaje, r.regla_id),
     )

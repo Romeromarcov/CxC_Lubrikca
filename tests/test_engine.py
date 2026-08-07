@@ -52,6 +52,7 @@ def _inputs(
     descuentos_recompra=(),
     orden_anterior=None,
     orden_anterior_vincs=(),
+    descuentos_producto=(),
 ) -> EngineInputs:
     cfg = engine_config or CFG
     return EngineInputs(
@@ -73,6 +74,7 @@ def _inputs(
         descuentos_recompra=list(descuentos_recompra),
         orden_anterior_cliente=orden_anterior,
         orden_anterior_cliente_vincs=list(orden_anterior_vincs),
+        descuentos_producto=list(descuentos_producto),
     )
 
 
@@ -720,6 +722,76 @@ def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "contado" in origenes
     assert res.total_descuentos == Decimal("6.00")
+
+
+def test_ventana_pago_de_la_regla_pronto_pago_confirma_contado_dentro_de_ventana() -> None:
+    """Regla de Pronto Pago con ventana_pago_tipo="entrega" + 3 dias --
+
+    abono el mismo dia de la entrega (2026-06-05), dentro de la ventana
+    -- el contado debe confirmarse usando la ventana POR REGLA, no la
+    global (cash_window_business_days)."""
+    orden = b.orden(primera=False, fecha_entrega=date(2026, 6, 5))
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(
+        monto_aplicado="97",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 8, 10, 0),
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        descuentos=[
+            b.descuento(
+                marca="Sinoco",
+                categoria="*",
+                porcentaje="0.03",
+                ventana_pago_tipo="entrega",
+                ventana_pago_dias=3,
+            )
+        ],
+        resolver=_resolver(**{"P1@USD": "100"}),
+        fecha_calculo=date(2026, 6, 8),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "contado" in origenes
+    assert res.total_descuentos == Decimal("3.00")
+
+
+def test_ventana_pago_de_la_regla_pronto_pago_niega_contado_fuera_de_ventana() -> None:
+    """Mismo escenario pero el abono llega el dia 9 (4 dias tras la
+
+    entrega) -- fuera de la ventana "entrega"+3, el contado se niega aunque
+    el neto se haya liquidado."""
+    orden = b.orden(primera=False, fecha_entrega=date(2026, 6, 5))
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(
+        monto_aplicado="97",
+        moneda_abono=Moneda.USD,
+        hora=datetime(2026, 6, 9, 10, 0),
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        descuentos=[
+            b.descuento(
+                marca="Sinoco",
+                categoria="*",
+                porcentaje="0.03",
+                ventana_pago_tipo="entrega",
+                ventana_pago_dias=3,
+            )
+        ],
+        resolver=_resolver(**{"P1@USD": "100"}),
+        fecha_calculo=date(2026, 6, 9),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "contado" not in origenes
 
 
 def test_descuento_por_volumen_litros() -> None:
@@ -1582,3 +1654,40 @@ def test_calcular_teorico_orden_con_fallback_detecta_fallback_por_lista() -> Non
     assert resultado["usa_fallback_usd"] is False  # ambos tienen precio propio en USD
     assert resultado["teorico_ves"] == Decimal("140.00")  # 90 (P1) + 50 (P2 fallback)
     assert resultado["teorico_usd"] == Decimal("150.00")  # 100 + 50
+
+
+def test_descuento_por_producto_especifico_se_aplica() -> None:
+    """DescuentoProducto (por SKU) hoy no se calculaba en absoluto -- este
+
+    test confirma que quedó cableado: una regla por código de producto se
+    aplica sobre la línea que matchea, independiente de marca/categoría."""
+    orden = b.orden(primera=False)
+    linea1 = b.linea(producto="P1", marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    linea2 = b.linea(producto="P2", marca="Sinoco", categoria="*", precio="50", cantidad="1")
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea1, linea2],
+        abonos=[],
+        descuentos_producto=[b.descuento_producto("PROD1", productos="P1", porcentaje="0.10")],
+        resolver=_resolver(**{"P1@USD": "100", "P2@USD": "50", "P1@BCV": "100", "P2@BCV": "50"}),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "producto" in origenes
+    # 10% solo sobre P1 (100) -- P2 no matchea el código.
+    assert res.total_descuentos == Decimal("10.00")
+
+
+def test_descuento_por_producto_no_matchea_otro_sku() -> None:
+    orden = b.orden(primera=False)
+    linea = b.linea(producto="P2", marca="Sinoco", categoria="*", precio="50", cantidad="1")
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_producto=[b.descuento_producto("PROD1", productos="P1", porcentaje="0.10")],
+        resolver=_resolver(**{"P2@USD": "50", "P2@BCV": "50"}),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "producto" not in origenes
