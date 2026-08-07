@@ -1398,16 +1398,25 @@ async def run_scraper_in_background():
         try:
             print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
             from cxc.alerts import build_alerter
-            from cxc.scraper.bcv import OdooBcvClient
+            from cxc.scraper.bcv import BcvClient
             from cxc.scraper.binance import BinanceClient
             from cxc.scraper.rates_scraper import RatesScraper
 
             config = AppConfig.from_env()
             repo = get_repo()
+            # BcvClient hace scraping directo del sitio del BCV (USD y EUR),
+            # NO depende de que alguien cargue la tasa en Odoo. Bug real
+            # encontrado en auditoría (agosto 2026): OdooBcvClient lee
+            # res.currency.rate, y la fila de EUR (currency_id=125) llevaba
+            # congelada desde 2026-07-07 -- casi un mes sin actualizarse en
+            # Odoo, mientras USD sí se mantenía al día -- todo el sistema
+            # mostraba/calculaba con esa tasa EUR vieja sin ninguna señal de
+            # error. El scraping directo trae ambas tasas frescas cada hora,
+            # igual que ya hacía antes de migrar (temporalmente) a Odoo.
             scraper = RatesScraper(
                 repo,
                 BinanceClient(config.binance),
-                OdooBcvClient(config.odoo),
+                BcvClient(config.bcv),
                 build_alerter(config.alert),
                 config.scraper_policy,
             )
