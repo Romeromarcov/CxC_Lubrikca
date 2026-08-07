@@ -1841,3 +1841,104 @@ def test_descuento_por_volumen_orden_ignora_historial() -> None:
     res = calcular_factura(inp)
     # Solo esta orden (1000L) cuenta -- el historial se ignora para "orden".
     assert res.total_descuentos == Decimal("0.00")
+
+
+def test_promocion_recurrente_aplica_fuera_de_primera_compra() -> None:
+    """Bug real corregido (auditoria agosto 2026, PROMO_12_MAS_1): una
+
+    promocion con solo_primera_compra=False ("Recurrente") debe aplicar en
+    CUALQUIER orden que cumpla la condicion, no solo en la primerisima
+    orden del cliente -- antes toda la evaluacion de PromocionPrimeraCompra
+    vivia detras de un "if es_primera_compra", asi que las reglas
+    "Recurrente" nunca disparaban fuera de esa primera orden."""
+    orden = b.orden(primera=False, lista="BCV")
+    linea_com = b.linea(
+        linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial",
+        precio="100", cantidad="1",
+    )
+    linea_liga = b.linea(
+        linea_id="L2", producto="LIGA", marca="Sinoco", categoria="Comercial",
+        precio="5", cantidad="1", descuento="0",
+    )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="1", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_com, linea_liga],
+        abonos=[(vinc, metodo)],
+        promociones=[
+            b.promo_primera(
+                "LIGA", compra_minima="1", valor="1", regalo_tipo="solo_uno",
+                solo_primera_compra=False,
+            )
+        ],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "5"}),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "primera_compra" in origenes
+    assert res.ncs_calculadas == Decimal("5.00")
+
+
+def test_promocion_solo_primera_compra_no_aplica_fuera_de_primera() -> None:
+    """Complemento del test anterior: una promo con solo_primera_compra=True
+
+    SI debe seguir restringida a la primera orden del cliente (sin
+    regresion)."""
+    orden = b.orden(primera=False, lista="BCV")
+    linea_com = b.linea(
+        linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial",
+        precio="100", cantidad="1",
+    )
+    linea_liga = b.linea(
+        linea_id="L2", producto="LIGA", marca="Sinoco", categoria="Comercial",
+        precio="5", cantidad="1", descuento="0",
+    )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="1", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_com, linea_liga],
+        abonos=[(vinc, metodo)],
+        promociones=[
+            b.promo_primera(
+                "LIGA", compra_minima="1", valor="1", regalo_tipo="solo_uno",
+                solo_primera_compra=True,
+            )
+        ],
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "5"}),
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "primera_compra" not in origenes
+    assert res.ncs_calculadas == Decimal("0.00")
+
+
+def test_promocion_recurrente_sin_promos_no_inventa_2pct_industrial() -> None:
+    """El fallback "2% Industrial sin promos configuradas" es especifico del
+
+    incentivo de primera compra -- una orden NO-primera sin promos
+    "recurrente" configuradas no debe recibir ningun descuento por
+    defecto."""
+    orden = b.orden(primera=False, lista="BCV")
+    linea_ind = b.linea(
+        linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+        precio="100", cantidad="1",
+    )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="1", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_ind],
+        abonos=[(vinc, metodo)],
+        promociones=[],
+        resolver=_resolver(**{"P1@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    assert res.ncs_calculadas == Decimal("0.00")

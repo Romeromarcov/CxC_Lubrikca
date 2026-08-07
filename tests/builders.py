@@ -245,6 +245,7 @@ def promo_primera(
     regalo_tipo: str = "solo_uno",
     descuento_fallback: str = "0",
     categorias_aplica: str = "Comercial",
+    solo_primera_compra: bool = False,
 ) -> PromocionPrimeraCompra:
     return PromocionPrimeraCompra(
         regla_id="TEST_PROMO",
@@ -257,6 +258,7 @@ def promo_primera(
         vigencia_hasta=hasta,
         descuento_fallback=Decimal(descuento_fallback),
         categorias_aplica=categorias_aplica,
+        solo_primera_compra=solo_primera_compra,
     )
 
 

@@ -403,6 +403,123 @@ def lineas_con_precio(inp: EngineInputs, lista: str) -> list[dict[str, Any]]:
     return filas
 
 
+def _evaluar_promociones_producto(
+    promos_activas: list[PromocionPrimeraCompra],
+    inp: EngineInputs,
+    lista: str,
+    *,
+    fallback_industrial: bool,
+) -> tuple[Decimal, DescuentoAplicado | None]:
+    """Obsequio de producto (conjunto/solo_uno) o, si ninguno matchea,
+
+    descuento porcentual general -- misma lógica para "Primera Compra" y
+    para promociones "Recurrente" (``solo_primera_compra=False``), ver
+    ``_calcular_componentes``. ``fallback_industrial`` controla si, cuando
+    NO hay ninguna promo configurada, se aplica el 2% por defecto solo a
+    líneas Industrial (comportamiento histórico de "primera compra sin
+    promos") -- las promos "recurrente" fuera de la primera compra NO
+    deben inventar ese 2% de la nada, solo actúan si hay una regla
+    explícitamente configurada.
+    """
+    nc = Decimal("0")
+    detalle_nc: DescuentoAplicado | None = None
+
+    prod_promos_califican = []
+    for p in promos_activas:
+        if p.tipo_beneficio == "producto":
+            cats = [c.strip() for c in p.categorias_aplica.split(",") if c.strip()]
+            units = sum(
+                _cantidad_efectiva(inp, ln)
+                for ln in inp.lineas
+                if p.categorias_aplica == "*"
+                or ln.categoria in cats
+                or ln.categoria_madre in cats
+                or ln.presentacion in cats
+            )
+            if units >= p.compra_minima:
+                prod_promos_califican.append(p)
+
+    if prod_promos_califican:
+        best_promo = max(prod_promos_califican, key=lambda p: p.compra_minima)
+        lista_prod = [x.strip() for x in best_promo.productos.split(",") if x.strip()]
+        if best_promo.regalo_tipo == "conjunto":
+            nc_acum = Decimal("0")
+            for prod in lista_prod:
+                matching_lines = [ln for ln in inp.lineas if ln.producto == prod]
+                if matching_lines:
+                    for ln in matching_lines:
+                        if ln.descuento < Decimal("99.9"):
+                            nc_acum += min(ln.cantidad, best_promo.valor) * ln.precio_unitario
+            nc = nc_acum
+            if nc > 0:
+                detalle_nc = DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion=f"NC obsequio conjunto ({', '.join(lista_prod)})",
+                    monto=q2(nc),
+                )
+        else:  # "solo_uno"
+            gifted_in_lines = any(
+                ln.descuento >= Decimal("99.9") for ln in inp.lineas if ln.producto in lista_prod
+            )
+            if not gifted_in_lines:
+                matching_lines = [
+                    ln
+                    for ln in inp.lineas
+                    if ln.producto in lista_prod and ln.descuento < Decimal("99.9")
+                ]
+                if matching_lines:
+                    best_line = max(
+                        matching_lines,
+                        key=lambda ln: min(ln.cantidad, best_promo.valor) * ln.precio_unitario,
+                    )
+                    nc = min(best_line.cantidad, best_promo.valor) * best_line.precio_unitario
+                    detalle_nc = DescuentoAplicado(
+                        origen="primera_compra",
+                        descripcion=f"NC obsequio ({best_line.producto})",
+                        monto=q2(nc),
+                    )
+    else:
+        pct_general = Decimal("0.0")
+        if promos_activas:
+            pcts = []
+            for p in promos_activas:
+                if p.tipo_beneficio == "porcentaje":
+                    pcts.append(p.valor)
+                else:
+                    pcts.append(p.descuento_fallback)
+            pct_general = max(pcts) if pcts else Decimal("0.02")
+            if pct_general == 0:
+                pct_general = Decimal("0.02")
+        elif fallback_industrial:
+            pct_general = Decimal("0.02")
+
+        if promos_activas:
+            nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
+            if nc > 0:
+                detalle_nc = DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
+                    monto=q2(nc),
+                )
+        elif fallback_industrial:
+            nc = (
+                sum(
+                    _precio_linea(inp, ln, lista)
+                    for ln in inp.lineas
+                    if (ln.categoria or "").upper() == "INDUSTRIAL"
+                )
+                * pct_general
+            )
+            if nc > 0:
+                detalle_nc = DescuentoAplicado(
+                    origen="primera_compra",
+                    descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
+                    monto=q2(nc),
+                )
+
+    return nc, detalle_nc
+
+
 def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
     fecha_orden = inp.orden.fecha
     precio_base = sum((_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0"))
@@ -432,16 +549,10 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     detalle_recompra: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     if inp.orden.es_primera_compra:
-        sum(
-            _cantidad_efectiva(inp, ln)
-            for ln in inp.lineas
-            if ln.categoria_madre == "Comercial" or ln.presentacion == "CAJA"
-        )
         promos_activas = [
             p
             for p in promociones_ok
             if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha_orden)
-            and (not getattr(p, "solo_primera_compra", False) or inp.orden.es_primera_compra)
             and _match_lista(
                 getattr(p, "listas_aplicables", "*"),
                 lista,
@@ -449,106 +560,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                 inp.valid_usd or None,
             )
         ]
-
-        # Calculate quantities for each promo based on its specific categorias_aplica
-        prod_promos_califican = []
-        for p in promos_activas:
-            if p.tipo_beneficio == "producto":
-                cats = [c.strip() for c in p.categorias_aplica.split(",") if c.strip()]
-                units = sum(
-                    _cantidad_efectiva(inp, ln)
-                    for ln in inp.lineas
-                    if p.categorias_aplica == "*"
-                    or ln.categoria in cats
-                    or ln.categoria_madre in cats
-                    or ln.presentacion in cats
-                )
-                if units >= p.compra_minima:
-                    prod_promos_califican.append(p)
-
-        if prod_promos_califican:
-            # Gana la de mayor compra_minima
-            best_promo = max(prod_promos_califican, key=lambda p: p.compra_minima)
-            lista_prod = [x.strip() for x in best_promo.productos.split(",") if x.strip()]
-            if best_promo.regalo_tipo == "conjunto":
-                nc_acum = Decimal("0")
-                for prod in lista_prod:
-                    matching_lines = [ln for ln in inp.lineas if ln.producto == prod]
-                    if matching_lines:
-                        for ln in matching_lines:
-                            if ln.descuento < Decimal("99.9"):
-                                nc_acum += min(ln.cantidad, best_promo.valor) * ln.precio_unitario
-                nc = nc_acum
-                if nc > 0:
-                    detalle_nc = DescuentoAplicado(
-                        origen="primera_compra",
-                        descripcion=f"NC obsequio conjunto ({', '.join(lista_prod)})",
-                        monto=q2(nc),
-                    )
-            else:  # "solo_uno"
-                gifted_in_lines = any(
-                    ln.descuento >= Decimal("99.9")
-                    for ln in inp.lineas
-                    if ln.producto in lista_prod
-                )
-                if not gifted_in_lines:
-                    matching_lines = [
-                        ln
-                        for ln in inp.lineas
-                        if ln.producto in lista_prod and ln.descuento < Decimal("99.9")
-                    ]
-                    if matching_lines:
-                        best_line = max(
-                            matching_lines,
-                            key=lambda ln: min(ln.cantidad, best_promo.valor) * ln.precio_unitario,
-                        )
-                        nc = min(best_line.cantidad, best_promo.valor) * best_line.precio_unitario
-                        detalle_nc = DescuentoAplicado(
-                            origen="primera_compra",
-                            descripcion=f"NC obsequio ({best_line.producto})",
-                            monto=q2(nc),
-                        )
-        else:
-            # Fallback a porcentaje general / Industrial 2%
-            pct_general = Decimal("0.0")
-            if promos_activas:
-                pcts = []
-                for p in promos_activas:
-                    if p.tipo_beneficio == "porcentaje":
-                        pcts.append(p.valor)
-                    else:
-                        pcts.append(p.descuento_fallback)
-                pct_general = max(pcts) if pcts else Decimal("0.02")
-                if pct_general == 0:
-                    pct_general = Decimal("0.02")
-            else:
-                pct_general = Decimal("0.02")
-
-            if promos_activas:
-                # Si hay promos configuradas, aplica el fallback de manera general a la orden
-                nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
-                if nc > 0:
-                    detalle_nc = DescuentoAplicado(
-                        origen="primera_compra",
-                        descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
-                        monto=q2(nc),
-                    )
-            else:
-                # Si no hay promos, el 2% aplica únicamente a productos de la categoría Industrial
-                nc = (
-                    sum(
-                        _precio_linea(inp, ln, lista)
-                        for ln in inp.lineas
-                        if (ln.categoria or "").upper() == "INDUSTRIAL"
-                    )
-                    * pct_general
-                )
-                if nc > 0:
-                    detalle_nc = DescuentoAplicado(
-                        origen="primera_compra",
-                        descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
-                        monto=q2(nc),
-                    )
+        nc, detalle_nc = _evaluar_promociones_producto(
+            promos_activas, inp, lista, fallback_industrial=True
+        )
     else:
         recompras_activas = [
             r
@@ -656,6 +670,35 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         descripcion="Recompra recurrencia",
                         monto=q2(recompra_monto),
                     )
+
+        # Promociones "Recurrente" (solo_primera_compra=False, ej. 12+1)
+        # aplican en CUALQUIER orden que cumpla la condición, no solo la
+        # primera. Bug real corregido (auditoría agosto 2026): esta
+        # evaluación vivía SOLO dentro del bloque "es_primera_compra" de
+        # arriba (el chequeo `not solo_primera_compra or es_primera_compra`
+        # era un no-op ahí, porque es_primera_compra ya era True) -- una
+        # regla marcada "Recurrente" (ej. PROMO_12_MAS_1) nunca disparaba
+        # fuera de la primerísima orden del cliente, aunque su propio
+        # nombre/documentación dice que debe aplicar en cada compra que
+        # cumpla la condición. Sin fallback industrial-2% aquí a propósito
+        # (ese es específico del incentivo de primera compra sin promos
+        # configuradas, no debe inventarse en órdenes recurrentes).
+        promos_recurrentes = [
+            p
+            for p in promociones_ok
+            if not getattr(p, "solo_primera_compra", False)
+            and _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha_orden)
+            and _match_lista(
+                getattr(p, "listas_aplicables", "*"),
+                lista,
+                inp.valid_ves or None,
+                inp.valid_usd or None,
+            )
+        ]
+        if promos_recurrentes:
+            nc, detalle_nc = _evaluar_promociones_producto(
+                promos_recurrentes, inp, lista, fallback_industrial=False
+            )
 
     # (b) Contado por marca×categoría — proyección (sección 4.3b).
     # El método NO determina el contado: lo determina pagar el neto total dentro
