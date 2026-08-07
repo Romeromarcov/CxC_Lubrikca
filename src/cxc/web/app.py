@@ -3030,6 +3030,35 @@ async def get_reporte_saldos(refresh: bool = False):
                 continue
             historial_por_cliente.setdefault(orden_h.cliente_id, []).append((orden_h, lineas_h))
 
+        # Diferencial Cambiario, regla "Equiparar": clientes con algún pago
+        # sin aplicar/conciliar en Odoo ("pago huérfano"). Reusa la MISMA
+        # fuente que el reporte CxC por Cliente (get_conciliaciones_
+        # sugerencias) en vez de reimplementar la detección -- ese endpoint
+        # ya excluye los huérfanos cerrados manualmente (pagos_huerfanos_
+        # cerrados) y ya dedup por pago_id tomando el saldo MÁXIMO (residual
+        # real sin aplicar). Calculado UNA vez por ciclo de caché, no por
+        # orden -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
+        clientes_con_huerfanos: set[str] = set()
+        try:
+            sugerencias_huerfanas = await get_conciliaciones_sugerencias(cxc_session=None)
+            _pago_saldo_max_h: dict[str, float] = {}
+            _pago_cliente_h: dict[str, str] = {}
+            for s in sugerencias_huerfanas:
+                pid = s.get("pago_id")
+                if not pid:
+                    continue
+                saldo = float(s.get("saldo_pago") or 0.0)
+                if saldo > _pago_saldo_max_h.get(pid, 0.0):
+                    _pago_saldo_max_h[pid] = saldo
+                    _pago_cliente_h[pid] = str(s.get("cliente_id") or "")
+            for pid, saldo in _pago_saldo_max_h.items():
+                if saldo > 0.05 and _pago_cliente_h.get(pid):
+                    clientes_con_huerfanos.add(_pago_cliente_h[pid])
+        except Exception as e_huerf:
+            logger.warning(
+                "No se pudieron calcular pagos huérfanos para Diferencial Cambiario: %s", e_huerf
+            )
+
         class FastPriceResolver(PriceResolver):
             def __init__(self, lines_map, fallback_resolver=None):
                 self._prices = {}
@@ -3306,6 +3335,7 @@ async def get_reporte_saldos(refresh: bool = False):
                             for oh, lh in historial_por_cliente.get(o.cliente_id, [])
                             if oh.so_id != o.so_id
                         ],
+                        cliente_tiene_pagos_huerfanos=o.cliente_id in clientes_con_huerfanos,
                     )
                     b = calcular_factura(inputs)
                 except Exception as e_calc:
@@ -5816,7 +5846,11 @@ async def get_odoo_productos():
                     "list_price_usd",
                     "product_volume",
                 ],
-                "limit": 100,
+                # Bug real (agosto 2026): "limit": 100 recortaba el catálogo --
+                # el selector de productos de la promoción de obsequio (que
+                # reusa esta misma lista) mostraba solo un subconjunto
+                # arbitrario, ocultando la mayoría de los SKUs reales.
+                "limit": 5000,
             },
         )
 

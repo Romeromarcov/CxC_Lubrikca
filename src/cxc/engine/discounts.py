@@ -11,7 +11,7 @@ El motor es una función PURA: recibe dataclasses, devuelve una
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, TypeVar
 
@@ -32,6 +32,7 @@ from ..models import (
     Feriado,
     LineaOrden,
     MetodoPago,
+    Moneda,
     OrdenVenta,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
@@ -47,7 +48,6 @@ from .effective_dating import (
     descuento_producto_vigente,
     descuento_vigente,
     regla_recurrencia_vigente,
-    tasa_bcv_completo_vigente,
 )
 from .equivalents import (
     congelar_en_vinculacion,
@@ -109,6 +109,19 @@ class EngineInputs:
     # OTRA orden) -- ``discounts.py`` se queda puro, sin tocar el repo.
     orden_anterior_cliente: OrdenVenta | None = None
     orden_anterior_cliente_vincs: list[Vinculacion] = field(default_factory=list)
+    # Diferencial Cambiario, regla "Equiparar" (agosto 2026): True si el
+    # CLIENTE de esta orden tiene, en Odoo, algún pago sin aplicar/conciliar
+    # contra ninguna factura ("pago huérfano" -- mismo concepto que ya usa
+    # el reporte CxC por Cliente), sin importar si ese huérfano pertenece a
+    # esta orden u otra del mismo cliente. Bloquea la regla "Equiparar"
+    # mientras haya CUALQUIER huérfano abierto (uno ya cerrado manualmente
+    # vía ``pagos_huerfanos_cerrados`` no cuenta). Requiere datos EN VIVO de
+    # Odoo para calcularse correctamente -- ``discounts.py`` se queda puro,
+    # sin tocar Odoo/el repo, así que el default conservador es False (no
+    # se otorga el descuento) cuando el llamador no puede determinarlo (ej.
+    # ``EngineRunner.build_inputs``, que no tiene la data de conciliación
+    # con Odoo que sí tiene ``get_reporte_saldos``).
+    cliente_tiene_pagos_huerfanos: bool = False
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -150,43 +163,6 @@ def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_R
     if tiene_pago:
         return reglas
     return [r for r in reglas if not getattr(r, "requiere_pago_previo", False)]
-
-
-def _diferencial_binance(tasa_bcv: Decimal, tasa_binance: Decimal) -> Decimal:
-    """Default conservador del descuento BCV-completo: (binance − bcv)/binance."""
-    return (tasa_binance - tasa_bcv) / tasa_binance
-
-
-def _bcv_completo_monto(
-    vinculaciones: list[Vinculacion],
-    reglas_bcv: list[DescuentoBCVCompleto],
-    formula: str,
-) -> Decimal:
-    """Descuento BCV-completo, calculado POR ABONO (sección 4.3c).
-
-    La gerencia fija un porcentaje diario; el descuento aplicado por abono es
-    ``min(porcentaje_gerencia, diferencial_real)`` y nunca menos de 0. Si no hay
-    porcentaje configurado para la fecha del abono, no se otorga (conservador).
-    La base es el equivalente USD a BCV ya congelado del abono.
-    """
-    if formula != "differential_over_binance":
-        raise ValueError(
-            f"Fórmula BCV-completo desconocida: {formula!r}. "
-            "Configurar BCV_COMPLETE_FORMULA con un valor soportado."
-        )
-    total = Decimal("0")
-    for v in vinculaciones:
-        diferencial = _diferencial_binance(v.tasa_bcv_aplicada, v.tasa_binance_aplicada)
-        tasa_gerencia = tasa_bcv_completo_vigente(reglas_bcv, fecha=v.hora_pago_confirmada.date())
-        if tasa_gerencia is None:
-            rate = Decimal("0")
-        else:
-            rate = max(Decimal("0"), min(tasa_gerencia, diferencial))
-        base = v.equiv_usd_bcv
-        assert base is not None  # congelado antes
-        total += base * rate
-    return total
-
 
 
 # "Ventana de pago" (reemplaza "Días de gracia" -- pedido explícito del
@@ -531,15 +507,16 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     descuentos_recompra_ok = _filtrar_por_pago_previo(inp.descuentos_recompra, tiene_pago)
     promociones_ok = _filtrar_por_pago_previo(inp.promociones_primera_compra, tiene_pago)
     reglas_recurrencia_ok = _filtrar_por_pago_previo(inp.reglas_recurrencia, tiene_pago)
-    descuento_bcv_diario_ok = _filtrar_por_pago_previo(inp.descuento_bcv_diario, tiene_pago)
     descuentos_producto_ok = _filtrar_por_pago_previo(inp.descuentos_producto, tiene_pago)
-    # NOTA (aplica_a línea/subtotal): PromocionPrimeraCompra, DescuentoBCVCompleto
-    # y DescuentoDiferencialCambiario también tienen el campo `aplica_a` en
+    # NOTA (aplica_a línea/subtotal): PromocionPrimeraCompra y
+    # DescuentoDiferencialCambiario también tienen el campo `aplica_a` en
     # esquema (por consistencia), pero NO lo leen aquí -- no son cálculos por
     # línea hoy (primera compra ya opera sobre "todas las líneas"/"solo
-    # Industrial" según otra lógica; BCV-completo/diferencial se calculan por
-    # abono, no por línea). Es una limitación real de estos 3 tipos de
-    # descuento, no un olvido.
+    # Industrial" según otra lógica; diferencial cambiario se calcula por
+    # abono, no por línea). Es una limitación real de estos 2 tipos de
+    # descuento, no un olvido. ``inp.descuento_bcv_diario`` (BCV-completo,
+    # legacy confirmado por el usuario agosto 2026) ya NO se lee -- ver
+    # comentario en el bloque (c) más abajo.
 
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
@@ -997,73 +974,102 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     except KeyError:
         precio_target_usd = precio_base
 
-    # (c) BCV-completo / Diferencial Cambiario / Equiparación Binance / USD Cash (sección 4.3c)
+    # (c) Diferencial Cambiario (sección 4.3c) -- explicado por el usuario,
+    # agosto 2026. Solo para órdenes NACIDAS en lista VES, y solo se suma al
+    # teórico/lista VES (nunca al USD) -- por eso todo el bloque está detrás
+    # de ``pura_bcv``, que en TODOS los call sites de ``_calcular_componentes``
+    # es exactamente "estamos evaluando la lista VES de esta orden" (ver
+    # ``_teoricos_por_lista``/``calcular_factura``: pura_bcv=True siempre
+    # acompaña lista=lista_ves, nunca lista_usd).
+    #
+    # Reemplaza 3 mecanismos legacy (bcv_per_abono/nc_equiparar/bcv_cierre)
+    # que no correspondían a ninguna de las 2 reglas reales de negocio:
+    #   - Regla 1 (fijo): pago EXCLUSIVAMENTE en USD (moneda_abono=USD en
+    #     TODOS los abonos) y orden pagada 100% según el teórico USD ->
+    #     descuento fijo (``porcentaje_fijo`` de la regla vigente
+    #     tipo_diferencial='fijo_35_ves_usd', ese mismo % es también el
+    #     TOPE de la regla 2).
+    #   - Regla 2 ("equiparar"): pago mixto (VES+USD) o solo VES valorado a
+    #     tasa Binance, orden pagada 100% según el teórico USD, Y el
+    #     cliente sin NINGÚN pago huérfano abierto en Odoo (ver
+    #     ``EngineInputs.cliente_tiene_pagos_huerfanos``) -> NC variable =
+    #     brecha entre el teórico VES y lo pagado a tasa BCV, topada por el
+    #     % máximo de la regla 1.
+    # Si ambas califican a la vez, se aplica la más favorable al cliente
+    # (monto mayor) -- confirmado con el usuario.
+    #
+    # La "Regla 3" (candidatos a cierre de factura por diferencial del día)
+    # NO es un descuento automático del motor -- es un reporte de
+    # candidatos aparte (ver endpoint de candidatos de cierre) que gerencia
+    # aprueba manualmente vía "Aprobar Descuento de Sistema".
     bcv_completo = Decimal("0")
     detalle_bcv: DescuentoAplicado | None = None
 
-    # Cualquier pricelist USD vigente (no solo la primaria/activa) cuenta --
-    # una orden nacida en una lista USD histórica (ej. id 7, superada por la
-    # 8 pero aún vigente para su fecha) sigue siendo "lista USD" a efectos
-    # de esta regla.
-    listas_usd_validas = set(inp.valid_usd) if inp.valid_usd else {lista_usd_name}
-    es_lista_usd = str(inp.orden.lista_precios) in listas_usd_validas
-    if inp.abonos and not es_lista_usd:
+    listas_ves_validas = set(inp.valid_ves) if inp.valid_ves else {_lista_ves_activa(inp)}
+    es_lista_ves_nativa = str(inp.orden.lista_precios) in listas_ves_validas
+
+    if inp.abonos and pura_bcv and es_lista_ves_nativa:
         vincs = [v for v, _ in inp.abonos]
-        # 1. Per-abono fixed discount
-        bcv_per_abono = Decimal("0")
-        if pura_bcv and str(inp.orden.lista_precios) not in listas_usd_validas:
-            bcv_per_abono = _bcv_completo_monto(
-                vincs, descuento_bcv_diario_ok, inp.engine_config.bcv_complete_formula
+
+        diferenciales_ok = _filtrar_por_pago_previo(inp.descuentos_diferencial, tiene_pago)
+        reglas_dif_vigentes = [
+            r
+            for r in diferenciales_ok
+            if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
+            and _match_lista(
+                getattr(r, "listas_aplicables", "*"),
+                lista,
+                inp.valid_ves or None,
+                inp.valid_usd or None,
             )
-
-        # 2. Valuaciones duales: Abonos Binance vs Abonos BCV
-        val_binance = valor_pagado_binance_usd(vincs)
-        val_bcv = valor_pagado_bcv_usd(vincs)
-
-        # 3. Equiparación Tasa Binance / USD Cash
-        # Si los abonos en Binance / USD Cash cubren el 100% de la meta en Lista USD
-        nc_equiparar = Decimal("0")
-        if val_binance >= (precio_target_usd or Decimal("0")) - _EPS and precio_base > val_bcv:
-            otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-            nc_equiparar = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
-
-        # 4. Diferencial Brecha Cierre Variable (evaluado a la fecha del último pago)
-        fechas_pago = [
-            v.hora_pago_confirmada.date() for v, _ in inp.abonos if v.hora_pago_confirmada
         ]
-        fecha_ultimo_pago = max(fechas_pago) if fechas_pago else fecha_orden
-
-        ult_vinc = max(
-            vincs, key=lambda v: v.hora_pago_confirmada if v.hora_pago_confirmada else datetime.min
+        regla_max = next(
+            (r for r in reglas_dif_vigentes if r.tipo_diferencial == "fijo_35_ves_usd"), None
         )
-        tasa_bcv_ult = ult_vinc.tasa_bcv_aplicada
-        tasa_binance_ult = ult_vinc.tasa_binance_aplicada
-        brecha_pct = Decimal("0")
-        if tasa_binance_ult > 0:
-            brecha_pct = max(Decimal("0"), (tasa_binance_ult - tasa_bcv_ult) / tasa_binance_ult)
+        regla_equiparar_activa = any(
+            r.tipo_diferencial == "equiparar_binance" for r in reglas_dif_vigentes
+        )
 
-        otros_descuentos = nc + pct_recompra + contado_proy + volumen_desc
-        unpaid_usd = precio_base - otros_descuentos - val_bcv
-        max_brecha_usd = precio_base * brecha_pct
+        if regla_max is not None:
+            diferencial_maximo = regla_max.porcentaje_fijo
+            todos_usd_puro = all(v.moneda_abono == Moneda.USD for v in vincs)
 
-        bcv_cierre = Decimal("0")
-        if brecha_pct > 0 and unpaid_usd > 0 and unpaid_usd <= max_brecha_usd + _EPS:
-            # El cliente ha pagado >= 100% - brecha% de la orden
-            bcv_cierre = min(unpaid_usd, max_brecha_usd)
+            # Regla 1: fijo, pago 100% USD, orden pagada según teórico USD.
+            monto_fijo = Decimal("0")
+            if todos_usd_puro:
+                pagado_usd = valor_pagado_usd(vincs)
+                if pagado_usd >= (precio_target_usd or Decimal("0")) - _EPS:
+                    monto_fijo = precio_base * diferencial_maximo
 
-        bcv_completo = max(bcv_per_abono, bcv_cierre, nc_equiparar)
-        if bcv_completo > 0:
-            if nc_equiparar >= bcv_cierre and nc_equiparar > bcv_per_abono:
-                desc_str = f"Equiparación Binance / USD Cash (NC sugerida por ${q2(bcv_completo)})"
-            else:
-                brecha_fecha = fecha_ultimo_pago.isoformat()
-                brecha_pct_str = f"{brecha_pct * 100:.1f}%"
-                desc_str = f"Diferencial brecha cierre ({brecha_pct_str} brecha al {brecha_fecha})"
-            detalle_bcv = DescuentoAplicado(
-                origen="bcv_completo",
-                descripcion=desc_str,
-                monto=q2(bcv_completo),
-            )
+            # Regla 2: "equiparar", pago mixto/Binance, sin huérfanos.
+            monto_equiparar = Decimal("0")
+            if (
+                regla_equiparar_activa
+                and not todos_usd_puro
+                and not inp.cliente_tiene_pagos_huerfanos
+            ):
+                val_binance = valor_pagado_binance_usd(vincs)
+                val_bcv = valor_pagado_bcv_usd(vincs)
+                if (
+                    val_binance >= (precio_target_usd or Decimal("0")) - _EPS
+                    and precio_base > val_bcv
+                ):
+                    otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
+                    gap = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
+                    monto_equiparar = min(gap, precio_base * diferencial_maximo)
+
+            bcv_completo = max(monto_fijo, monto_equiparar)
+            if bcv_completo > 0:
+                if monto_fijo >= monto_equiparar:
+                    pct_str = f"{diferencial_maximo * 100:.1f}%"
+                    desc_str = f"Diferencial Cambiario fijo ({pct_str}, pago 100% USD)"
+                else:
+                    desc_str = f"Diferencial Cambiario - Equiparación (${q2(bcv_completo)})"
+                detalle_bcv = DescuentoAplicado(
+                    origen="bcv_completo",
+                    descripcion=desc_str,
+                    monto=q2(bcv_completo),
+                )
 
     return _Componentes(
         precio_base=precio_base,

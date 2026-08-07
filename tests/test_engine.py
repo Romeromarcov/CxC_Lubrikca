@@ -54,6 +54,8 @@ def _inputs(
     orden_anterior_vincs=(),
     descuentos_producto=(),
     historial_cliente_lineas=(),
+    descuentos_diferencial=(),
+    cliente_tiene_pagos_huerfanos=False,
 ) -> EngineInputs:
     cfg = engine_config or CFG
     return EngineInputs(
@@ -77,6 +79,8 @@ def _inputs(
         orden_anterior_cliente_vincs=list(orden_anterior_vincs),
         descuentos_producto=list(descuentos_producto),
         historial_cliente_lineas=list(historial_cliente_lineas),
+        descuentos_diferencial=list(descuentos_diferencial),
+        cliente_tiene_pagos_huerfanos=cliente_tiene_pagos_huerfanos,
     )
 
 
@@ -347,14 +351,25 @@ def test_mezcla_de_rutas_migra_a_binance_y_pierde_bcv_completo() -> None:
     assert "bcv_completo" not in origenes
 
 
-def test_bcv_completo_aplica_en_ruta_bcv_pura() -> None:
+def test_diferencial_regla1_fijo_pago_100pct_usd() -> None:
+    """Regla 1 (fijo, agosto 2026): orden nacida VES, TODOS los abonos en
+
+    USD puro (moneda_abono=USD), orden pagada 100% segun el teorico USD ->
+    descuento fijo = porcentaje_fijo de la regla vigente tipo_diferencial=
+    'fijo_35_ves_usd', aplicado sobre el precio_base de la lista VES."""
+    from cxc.models import DescuentoDiferencialCambiario
+
     orden = b.orden(primera=False, lista="BCV")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100")
-    metodo_bcv = b.metodo("MB", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
-    # VES 3600 a bcv 36 → 100 USD ; binance 40 → diferencial 10%.
+    metodo_usd = b.metodo("MU", moneda=Moneda.USD, es_contado=False)
+    # moneda_abono=USD (pagó en dólares en efectivo) pero tipo_tasa_abono=BCV
+    # (para efectos de conciliación/cierre de la factura VES formal se
+    # clasifica por la ruta BCV) -- misma "regla de mezcla" que ya usa el
+    # resto del motor (ver equivalents.py), necesaria para que la pasada
+    # REAL (no solo el teórico VES informativo) resuelva sobre la lista VES.
     vinc = b.vinculacion(
-        monto_aplicado="3600",
-        moneda_abono=Moneda.VES,
+        monto_aplicado="100",
+        moneda_abono=Moneda.USD,
         tipo_tasa_abono=TipoTasa.BCV,
         tasa_bcv="36.0",
         tasa_binance="40.0",
@@ -362,25 +377,36 @@ def test_bcv_completo_aplica_en_ruta_bcv_pura() -> None:
     inp = _inputs(
         orden=orden,
         lineas=[linea],
-        abonos=[(vinc, metodo_bcv)],
-        reglas=[b.regla_recompra("0.03")],
-        bcv_diario=[b.regla_bcv_completo("0.15")],  # gerencia 15% > diferencial
-        resolver=_resolver(**{"P1@BCV": "100"}),
+        abonos=[(vinc, metodo_usd)],
+        resolver=_resolver(**{"P1@BCV": "100", "P1@USD": "100"}),
+        valid_ves=["BCV"],
+        valid_usd=["USD"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.35"),
+            )
+        ],
     )
     res = calcular_factura(inp)
-    assert res.lista_aplicada == "BCV"
     bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
     assert len(bcv) == 1
-    # min(15%, diferencial 10%) = 10% sobre 100 USD = 10.00
-    assert bcv[0].monto == Decimal("10.00")
+    assert bcv[0].monto == Decimal("35.00")  # 35% de 100
     assert res.requiere_revision is True
 
 
-def test_bcv_completo_topado_al_porcentaje_de_gerencia() -> None:
-    # Gerencia fija 5% aunque el diferencial real sea 10% -> aplica 5%.
+def test_diferencial_regla1_no_aplica_con_pago_mixto_sin_regla_equiparar() -> None:
+    """Pago mixto (parte VES) no califica para la regla 1 (exige 100% USD),
+
+    y sin la regla 'equiparar_binance' habilitada tampoco cae en regla 2 ->
+    no se otorga nada."""
+    from cxc.models import DescuentoDiferencialCambiario
+
     orden = b.orden(primera=False, lista="BCV")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100")
-    metodo_bcv = b.metodo("MB", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    metodo_ves = b.metodo("MV", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
     vinc = b.vinculacion(
         monto_aplicado="3600",
         moneda_abono=Moneda.VES,
@@ -391,32 +417,40 @@ def test_bcv_completo_topado_al_porcentaje_de_gerencia() -> None:
     inp = _inputs(
         orden=orden,
         lineas=[linea],
-        abonos=[(vinc, metodo_bcv)],
-        bcv_diario=[b.regla_bcv_completo("0.05")],
+        abonos=[(vinc, metodo_ves)],
         resolver=_resolver(**{"P1@BCV": "100"}),
+        valid_ves=["BCV"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.35"),
+            )
+        ],  # sin fila 'equiparar_binance' -> regla 2 deshabilitada
     )
     res = calcular_factura(inp)
-    bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
-    assert bcv[0].monto == Decimal("5.00")  # min(5%, 10%) = 5% sobre 100 USD
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "bcv_completo" not in origenes
 
 
-def test_bcv_completo_sin_tasa_diaria_no_se_otorga() -> None:
-    # Sin porcentaje configurado para la fecha -> no se regala (conservador).
+def test_diferencial_sin_regla_max_configurada_no_se_otorga() -> None:
+    # Sin ninguna fila 'fijo_35_ves_usd' vigente -> no hay tope, no se
+    # otorga nada (conservador), aunque el pago sea 100% USD.
     orden = b.orden(primera=False, lista="BCV")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100")
-    metodo_bcv = b.metodo("MB", moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    metodo_usd = b.metodo("MU", moneda=Moneda.USD, es_contado=False)
     vinc = b.vinculacion(
-        monto_aplicado="3600",
-        moneda_abono=Moneda.VES,
-        tipo_tasa_abono=TipoTasa.BCV,
-        tasa_bcv="36.0",
-        tasa_binance="40.0",
+        monto_aplicado="100", moneda_abono=Moneda.USD, tipo_tasa_abono=TipoTasa.BCV
     )
     inp = _inputs(
         orden=orden,
         lineas=[linea],
-        abonos=[(vinc, metodo_bcv)],
-        resolver=_resolver(**{"P1@BCV": "100"}),  # sin bcv_diario
+        abonos=[(vinc, metodo_usd)],
+        resolver=_resolver(**{"P1@BCV": "100", "P1@USD": "100"}),
+        valid_ves=["BCV"],
+        valid_usd=["USD"],
+        # sin descuentos_diferencial
     )
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}
@@ -723,7 +757,12 @@ def test_dia_habil_con_feriado_mantiene_contado_dentro_de_ventana() -> None:
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "contado" in origenes
-    assert res.total_descuentos == Decimal("6.00")
+    # Antes (agosto 2026) este total incluía $3 de "brecha cierre" que se
+    # auto-aplicaba SOLO por el spread entre las tasas default del builder
+    # de tests (36/40), sin ninguna regla de Diferencial Cambiario
+    # configurada -- ese mecanismo se retiró (ver bloque "(c) Diferencial
+    # Cambiario" en discounts.py); solo queda el 3% de contado.
+    assert res.total_descuentos == Decimal("3.00")
 
 
 def test_ventana_pago_de_la_regla_pronto_pago_confirma_contado_dentro_de_ventana() -> None:
@@ -1258,108 +1297,30 @@ def test_in_memory_gateway_delete_row() -> None:
     assert not_deleted is False
 
 
-def test_diferencial_brecha_cierre_sugiere_nc_si_pagado_86pct_o_mas() -> None:
-    """Si el cliente paga 86% o mas (de una orden con 14% de brecha BCV/Binance),
-    el motor sugiere la NC exacta de brecha cierre para cerrar la factura (candidata_a_cierre=True).
-    """
-    from cxc.models import DescuentoDiferencialCambiario
-
-    orden = b.orden(primera=False, lista="BCV")
-    linea = b.linea(
-        linea_id="L1",
-        producto="P1",
-        marca="GLOBAL OIL",
-        categoria="CAJA",
-        cantidad="10",
-        precio="100",
-    )  # Total = $1000
-    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
-    # Abono de $860 equivalentes a BCV (86% pagado a tasa BCV 36, Binance 41.86 => 14% brecha)
-    # 860 * 36 = 30960 VES
-    vinc = b.vinculacion(
-        monto_aplicado="30960",
-        moneda_abono=Moneda.VES,
-        tipo_tasa_abono=TipoTasa.BCV,
-        tasa_bcv="36.0",
-        tasa_binance="41.86",
-        hora=datetime(2026, 4, 15, 10, 0),
-    )
-    DescuentoDiferencialCambiario(
-        regla_id="DIF1",
-        nombre="Brecha Cierre",
-        tipo_diferencial="diferencial_bcv_binance",
-        tipo_calculo="variable",
-        porcentaje_fijo=Decimal("0.14"),
-    )
-    inp = _inputs(
-        orden=orden,
-        lineas=[linea],
-        abonos=[(vinc, metodo)],
-        resolver=_resolver(**{"P1@BCV": "100"}),
-    )
-    res = calcular_factura(inp)
-    # NC sugerida debe ser exactamente los $140 restantes (14% de brecha)
-    assert res.candidata_a_cierre is True
-    assert res.requiere_revision is True
-    assert res.total_descuentos in (Decimal("140.00"), Decimal("139.99"))
-    assert res.total_motor in (Decimal("860.00"), Decimal("860.01"))
-    assert any(
-        d.origen == "bcv_completo" and "brecha cierre" in d.descripcion
-        for d in res.descuentos_detalle
-    )
+# NOTA (agosto 2026): "brecha cierre" (auto-aplicado por abono, sin ninguna
+# regla configurada) y la vieja "equiparación" sin tope fueron RETIRADOS del
+# motor -- ver bloque "(c) Diferencial Cambiario" en discounts.py. La
+# "Regla 3" (candidatos a cierre) del usuario NO es un descuento automático
+# de ``calcular_factura`` -- es un reporte de candidatos aparte, gerencia
+# aprueba manualmente. Los tests de esas 2 rutas legacy se eliminan; el
+# ejemplo real de equiparación se reescribe abajo con el tope explícito de
+# la regla 1 y el requisito de "sin pagos huérfanos".
 
 
-def test_diferencial_brecha_cierre_no_aplica_si_falta_mas_de_brecha() -> None:
-    """Si el cliente solo ha pagado el 50% (falta 50% > 14% brecha), no aplica brecha cierre."""
-    from cxc.models import DescuentoDiferencialCambiario
+def test_diferencial_regla2_equiparar_sin_exceder_tope() -> None:
+    """Ejemplo real del usuario (regla 2, "equiparar"), con un tope
 
-    orden = b.orden(primera=False, lista="BCV")
-    linea = b.linea(
-        linea_id="L1",
-        producto="P1",
-        marca="GLOBAL OIL",
-        categoria="CAJA",
-        cantidad="10",
-        precio="100",
-    )  # Total = $1000
-    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
-    # Abono de solo 50% = $500 (500 * 36 = 18000 VES)
-    vinc = b.vinculacion(
-        monto_aplicado="18000",
-        moneda_abono=Moneda.VES,
-        tipo_tasa_abono=TipoTasa.BCV,
-        tasa_bcv="36.0",
-        tasa_binance="41.86",
-        hora=datetime(2026, 4, 15, 10, 0),
-    )
-    DescuentoDiferencialCambiario(
-        regla_id="DIF1",
-        nombre="Brecha Cierre",
-        tipo_diferencial="diferencial_bcv_binance",
-        tipo_calculo="variable",
-        porcentaje_fijo=Decimal("0.14"),
-    )
-    inp = _inputs(
-        orden=orden,
-        lineas=[linea],
-        abonos=[(vinc, metodo)],
-        resolver=_resolver(**{"P1@BCV": "100"}),
-    )
-    res = calcular_factura(inp)
-    assert res.candidata_a_cierre is False
-    assert res.total_descuentos == Decimal("0.00")
-    assert res.total_motor == Decimal("1000.00")
-
-
-def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
-    """Ejemplo real del usuario:
+    generoso (50%) que NO topa este caso -- confirma la fórmula base:
     Monto Odoo (Lista VES): $58.46
     Monto Meta (Lista USD): $32.76
     Pagos: $10 USD cash + 19560.85 VES (859.44 Binance = $22.76 USD; 742.23 BCV = $26.35 USD)
     Abonos Binance = $32.76 USD >= $32.76 USD (Lista USD) -> Cumplido 100%!
     Abonos BCV = $36.35 USD
-    NC Sugerida = $58.46 - $36.35 = $22.11 USD.
+    NC Sugerida = $58.46 - $36.35 = $22.11 USD (37.8% del teórico VES, por
+    debajo del tope de 50% usado en este test).
     """
+    from cxc.models import DescuentoDiferencialCambiario
+
     orden = b.orden(primera=False, lista="5")  # Lista VES #5
     linea = b.linea(
         linea_id="L1",
@@ -1394,30 +1355,143 @@ def test_equiparacion_binance_y_usd_cash_sugiere_nc_correcta() -> None:
 
     # Resolver que tiene P1 a $58.46 en Lista 5 (VES) y $32.76 en Lista 4 (USD)
     resolver = _resolver(**{"P1@5": "58.46", "P1@4": "32.76"})
-
-    from cxc.config import EngineConfig
-
-    cfg = EngineConfig(
-        cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
-    )
     inp = _inputs(
         orden=orden,
         lineas=[linea],
         abonos=[(v_usd, m_usd), (v_ves, m_ves)],
         resolver=resolver,
-        engine_config=cfg,
         valid_usd=["4"],
         valid_ves=["5"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.50"),
+            ),
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_EQ",
+                nombre="Equiparar",
+                tipo_diferencial="equiparar_binance",
+            ),
+        ],
     )
     res = calcular_factura(inp)
 
     assert res.candidata_a_cierre is True
     assert res.requiere_revision is True
-    # NC calculada debe ser exactamente $22.11 ($58.46 - $36.35)
     assert res.total_descuentos == Decimal("22.11")
     assert res.total_motor == Decimal("36.35")
-    assert any("Equiparación Binance" in d.descripcion for d in res.descuentos_detalle)
+    assert any("Equiparación" in d.descripcion for d in res.descuentos_detalle)
+
+
+def test_diferencial_regla2_equiparar_topada_al_diferencial_maximo() -> None:
+    """Mismo escenario, pero con el tope real (35%) -- el gap real (37.8%)
+
+    excede el tope, así que la NC se limita a 58.46 * 0.35 = 20.46, no a
+    los $22.11 completos."""
+    from cxc.models import DescuentoDiferencialCambiario
+
+    orden = b.orden(primera=False, lista="5")
+    linea = b.linea(
+        linea_id="L1", producto="P1", marca="GLOBAL OIL", categoria="CAJA", precio="58.46"
+    )
+    m_usd = b.metodo(moneda=Moneda.USD, es_contado=False)
+    v_usd = b.vinculacion(
+        monto_aplicado="10.00",
+        moneda_abono=Moneda.USD,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="1.0",
+        tasa_binance="1.0",
+        hora=datetime(2026, 4, 15, 10, 0),
+    )
+    m_ves = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    v_ves = b.vinculacion(
+        monto_aplicado="19560.85",
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="742.23",
+        tasa_binance="859.44",
+        hora=datetime(2026, 4, 15, 11, 0),
+    )
+    resolver = _resolver(**{"P1@5": "58.46", "P1@4": "32.76"})
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(v_usd, m_usd), (v_ves, m_ves)],
+        resolver=resolver,
+        valid_usd=["4"],
+        valid_ves=["5"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.35"),
+            ),
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+            ),
+        ],
+    )
+    res = calcular_factura(inp)
+    assert res.total_descuentos == Decimal("20.46")  # 58.46 * 0.35, no 22.11
+
+
+def test_diferencial_regla2_bloqueada_por_pago_huerfano() -> None:
+    """Mismo escenario que el tope generoso, pero el cliente tiene un pago
+
+    huérfano abierto en Odoo -- la regla 2 debe bloquearse por completo
+    (pedido explícito del usuario: "cualquier huérfano del cliente")."""
+    from cxc.models import DescuentoDiferencialCambiario
+
+    orden = b.orden(primera=False, lista="5")
+    linea = b.linea(
+        linea_id="L1", producto="P1", marca="GLOBAL OIL", categoria="CAJA", precio="58.46"
+    )
+    m_usd = b.metodo(moneda=Moneda.USD, es_contado=False)
+    v_usd = b.vinculacion(
+        monto_aplicado="10.00",
+        moneda_abono=Moneda.USD,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="1.0",
+        tasa_binance="1.0",
+        hora=datetime(2026, 4, 15, 10, 0),
+    )
+    m_ves = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    v_ves = b.vinculacion(
+        monto_aplicado="19560.85",
+        moneda_abono=Moneda.VES,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="742.23",
+        tasa_binance="859.44",
+        hora=datetime(2026, 4, 15, 11, 0),
+    )
+    resolver = _resolver(**{"P1@5": "58.46", "P1@4": "32.76"})
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(v_usd, m_usd), (v_ves, m_ves)],
+        resolver=resolver,
+        valid_usd=["4"],
+        valid_ves=["5"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.50"),
+            ),
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+            ),
+        ],
+        cliente_tiene_pagos_huerfanos=True,
+    )
+    res = calcular_factura(inp)
+    origenes = {d.origen for d in res.descuentos_detalle}
+    assert "bcv_completo" not in origenes
+    assert res.total_descuentos == Decimal("0.00")
 
 
 def test_match_lista_con_keywords_dinamicas_listas_ves_y_usd() -> None:
