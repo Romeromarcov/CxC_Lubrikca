@@ -1164,13 +1164,32 @@ def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | 
     """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`.
 
     None si no hay ninguna fila con esa columna capturada (huérfana en la
-    mayoría de los despliegues -- el scraper la captura pero nada la usaba).
+    mayoría de los despliegues -- el scraper la captura pero nada la usaba),
+    o si la fila más cercana falla la guardia de plausibilidad (ver abajo)
+    -- en ese caso quien llama debe caer al fallback de
+    ``TasasHistoricasAuditoria`` (``get_eur_rate_for_date``).
+
+    Guardia de plausibilidad (bug real, agosto 2026): ``OdooBcvClient``
+    (fuente del scraper hasta este fix) lee la tasa EUR de
+    ``res.currency.rate`` en Odoo, que llevaba congelada desde 2026-07-07
+    (casi un mes) mientras BCV-USD sí se actualizaba a diario -- el scraper
+    repetía fielmente ese valor viejo hora tras hora en ``SerieTasas`` sin
+    ninguna señal de error. Empíricamente EUR/BCV-USD nunca baja de ~1.05
+    en los datos reales de esta serie (BCV siempre devalúa más rápido que
+    EUR en términos relativos); una fila cuyo ratio cae por debajo de ese
+    piso es casi con certeza una tasa EUR estancada, no real.
     """
     candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
     closest_row = _closest_serie_row(dt, candidatas)
-    if closest_row:
-        return parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
-    return None
+    if not closest_row:
+        return None
+    tasa_eur = parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
+    tasa_bcv_fila = parse_decimal_safe(closest_row.get("tasa_bcv", "0"))
+    if tasa_bcv_fila > Decimal("0"):
+        ratio = tasa_eur / tasa_bcv_fila
+        if ratio < Decimal("1.05"):
+            return None
+    return tasa_eur
 
 
 def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
@@ -5325,6 +5344,10 @@ async def post_cambiar_tipo_tasa_bcv(
 
         if variante == "EUR":
             tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            if tasa_bcv_nueva is None:
+                tasa_bcv_nueva = get_eur_rate_for_date(
+                    vinc.hora_pago_confirmada.date(), repo.all_tasas_historicas_auditoria()
+                )
             if tasa_bcv_nueva is None:
                 raise HTTPException(
                     status_code=400,
