@@ -58,8 +58,16 @@ def test_teorico_ves_usa_lista_historica_pero_usd_usa_lista_7():
     Histórica de Auditoría SOLO sustituye la lista VES en ese período --
     el teórico USD debe seguir usando la lista USD vigente entonces
     (pricelist Odoo id 7, "Pago USD Marzo"), NO el mismo precio histórico.
-    Bug real: antes ambos teóricos salían idénticos (mismo precio
-    histórico para las dos listas)."""
+    Bug real #1: antes ambos teóricos salían idénticos (mismo precio
+    histórico para las dos listas).
+
+    Bug real #2 (auditoría agosto 2026, S00059/S00020): el teórico VES
+    leía la columna ``precio_usd`` (== ``hist_info["usd"]``) del CSV
+    histórico, que en los datos reales resultó ser el MISMO precio ya
+    usado por la lista USD vigente -- no el precio VES/BCV-Euro real
+    (~25% más alto, columna ``precio_bcv_euro`` == ``hist_info["eur"]``,
+    nunca leída). Por eso teórico VES y teórico USD salían casi
+    idénticos en vez de reflejar la brecha real de ese período."""
     orden = OrdenVenta(
         so_id="SO_HIST",
         cliente_id="C_HIST",
@@ -82,9 +90,11 @@ def test_teorico_ves_usa_lista_historica_pero_usd_usa_lista_7():
             precio_unitario=Decimal("53.45"),
         )
     ]
-    # Precio histórico (VES) = 53.45; precio real en la lista USD vigente
-    # entonces (id "7") = 86.21 -- deliberadamente distintos para exponer
-    # el bug si algún día se reintroduce.
+    # Precio histórico VES/BCV-Euro (precio_bcv_euro) = 66.81 (~25% mas alto
+    # que el USD, consistente con la brecha real del período); precio real
+    # en la lista USD vigente entonces (id "7") = 86.21 -- las 3 cifras
+    # deliberadamente distintas para exponer cualquiera de los 2 bugs si
+    # algún día se reintroduce.
     resolver = DictPriceResolver({("1059", "7"): Decimal("86.21")})
     inputs = EngineInputs(
         orden=orden,
@@ -103,13 +113,13 @@ def test_teorico_ves_usa_lista_historica_pero_usd_usa_lista_7():
         valid_ves=["5"],
         orden_es_historica=True,
         historical_price_map={
-            "1059": {"nombre": "x", "usd": Decimal("53.45"), "eur": Decimal("0")}
+            "1059": {"nombre": "x", "usd": Decimal("53.45"), "eur": Decimal("66.81")}
         },
     )
 
     resultado = calcular_teorico_orden_con_fallback(inputs)
 
     assert resultado["lista_usd_id"] == "7"
-    assert resultado["teorico_ves"] == Decimal("53.45")
+    assert resultado["teorico_ves"] == Decimal("66.81")
     assert resultado["teorico_usd"] == Decimal("86.21")
     assert resultado["teorico_ves"] != resultado["teorico_usd"]

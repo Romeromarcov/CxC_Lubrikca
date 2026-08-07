@@ -336,7 +336,17 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
     orden cae en esa excepción (Tarea 2) Y la lista solicitada es la VES
     (la Lista Histórica solo sustituye esa, no la USD -- ver
     ``_LISTA_USD_HISTORICA``); si no, la pricelist normal (o la 7 para el
-    lado USD de una orden histórica, resuelta por ``_lista_usd_activa``)."""
+    lado USD de una orden histórica, resuelta por ``_lista_usd_activa``).
+
+    Bug real corregido (auditoría agosto 2026): esta rama VES leía
+    ``hist_info["usd"]`` (columna ``precio_usd`` de
+    ``listas_precios_historicas``) -- pero esa columna resultó ser el MISMO
+    precio que ya tenía la línea real (la orden ya nació bajo la lista USD
+    vigente entonces), no el precio VES/BCV-Euro histórico. La columna que
+    SÍ representa ese precio es ``precio_bcv_euro`` (~25% más alta que la
+    USD en los datos reales, consistente con la brecha BCV-Euro conocida de
+    ese período) y nunca se leía -- por eso teórico VES y teórico USD
+    salían casi idénticos para las órdenes de la ventana histórica."""
     if (
         inp.orden_es_historica
         and inp.historical_price_map
@@ -347,10 +357,10 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
             code_key = str(int(code_key))
         hist_info = inp.historical_price_map.get(code_key)
         if hist_info is not None:
-            precio_usd = hist_info["usd"]
-            assert isinstance(precio_usd, Decimal)
-            if precio_usd > Decimal("0"):
-                return precio_usd
+            precio_ves = hist_info["eur"]
+            assert isinstance(precio_ves, Decimal)
+            if precio_ves > Decimal("0"):
+                return precio_ves
     return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
 
 
