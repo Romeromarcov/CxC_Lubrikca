@@ -3653,6 +3653,41 @@ async def get_reporte_saldos(refresh: bool = False):
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
+def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
+    """Los 4 saldos pendientes de una orden (mismos campos de ``/api/ventas``),
+
+    en tiempo real -- fuente única de verdad reusada por
+    ``/api/reporte-cxc-cliente`` y ``/api/cobranza/pagos`` (el "Saldo Orden
+    (CxC)" del modal de detalle de pago). Antes ``/api/cobranza/pagos``
+    mostraba un solo saldo blended (``saldo_con_descuento_bcv`` de
+    ``get_reporte_saldos``, o un cálculo naive) -- ahora son las mismas 4
+    referencias que el resto del sistema ya usa (Teórico Lista BS, Teórico
+    Lista USD, Venta Real, Factura Neta Real).
+    """
+    desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
+    pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
+    pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
+    pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
+
+    saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
+    saldo_teorico_usd = max(0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance)
+    saldo_venta_real = max(
+        0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema - pagado_ref
+    )
+    facturada = bool(item.get("facturada"))
+    saldo_factura_real = (
+        max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema - pagado_ref)
+        if facturada
+        else None
+    )
+    return {
+        "teorico_bs": saldo_teorico_bs,
+        "teorico_usd": saldo_teorico_usd,
+        "venta_real": saldo_venta_real,
+        "factura_real": saldo_factura_real,
+    }
+
+
 def _dias_vencido_orden(item: dict[str, Any], today: date) -> int:
     fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
     try:
@@ -3760,30 +3795,8 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 continue
 
             desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
-            pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
-            pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
-            pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
-
-            saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
-            saldo_teorico_usd = max(
-                0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance
-            )
-            saldo_venta_real = max(
-                0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema - pagado_ref
-            )
             facturada = bool(item.get("facturada"))
-            saldo_factura_real = (
-                max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema - pagado_ref)
-                if facturada
-                else None
-            )
-
-            saldos_orden = {
-                "teorico_bs": saldo_teorico_bs,
-                "teorico_usd": saldo_teorico_usd,
-                "venta_real": saldo_venta_real,
-                "factura_real": saldo_factura_real,
-            }
+            saldos_orden = _saldos_4_columnas_item(item)
             # Monto original (bruto de referencia, antes de restar lo
             # pagado) por columna -- pedido explícito del usuario, para no
             # mostrar solo el saldo sin poder ver contra qué se comparó.
@@ -6949,6 +6962,48 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
         tasas_rows_eur = _all_serie_tasas_rows(repo)
 
+        # Fuente única de verdad para "Saldo Orden (CxC)" -- antes venía de
+        # un saldo blended (get_reporte_saldos) o un cálculo naive, y para
+        # pagos aún pendientes ni siquiera se mostraba la factura/su saldo
+        # asociados a la orden sugerida. Ahora se reusan los mismos 4
+        # saldos en tiempo real que ya calcula /api/ventas (ver
+        # _saldos_4_columnas_item), tanto para pagos pendientes como
+        # vinculados.
+        try:
+            ventas_data_cobranza = await get_ventas(vendedor=None, cxc_session=None)
+            ventas_by_so: dict[str, dict[str, Any]] = {
+                it["so_id"]: it for it in ventas_data_cobranza["items"]
+            }
+        except Exception as e_ventas:
+            logger.warning("Error obteniendo /api/ventas para /api/cobranza/pagos: %s", e_ventas)
+            ventas_by_so = {}
+
+        def _saldos_orden_para_reparto(so_id: str | None) -> dict[str, Any]:
+            item_ventas = ventas_by_so.get(so_id) if so_id else None
+            if item_ventas is None:
+                return {
+                    "so_saldo_teorico_bs": None,
+                    "so_saldo_teorico_usd": None,
+                    "so_saldo_pendiente": None,
+                    "factura_id_sugerida": None,
+                    "factura_saldo_odoo": None,
+                }
+            saldos = _saldos_4_columnas_item(item_ventas)
+            orden_obj = ordenes_map.get(so_id)
+            return {
+                "so_saldo_teorico_bs": round(saldos["teorico_bs"], 2),
+                "so_saldo_teorico_usd": round(saldos["teorico_usd"], 2),
+                # "so_saldo_pendiente" (nombre legado, ver Reparto en el
+                # modal): saldo Venta Real -- la referencia más cercana al
+                # monto real de la orden en Odoo, igual criterio que ya usa
+                # saldo_pendiente_cxc de /api/ventas para no-facturadas.
+                "so_saldo_pendiente": round(saldos["venta_real"], 2),
+                "factura_id_sugerida": orden_obj.factura_id if orden_obj else None,
+                "factura_saldo_odoo": (
+                    round(saldos["factura_real"], 2) if saldos["factura_real"] is not None else None
+                ),
+            }
+
         # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
         # reconcilió contra una orden distinta a la Vinculación local (ver
         # _resincronizar_vinculaciones_con_odoo, corre en cada sync). Se
@@ -7097,6 +7152,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                         Decimal(str(item["monto_pago_original"])) / override_binance
                     )
 
+            saldos_reparto_pend = _saldos_orden_para_reparto(item.get("so_id"))
             unificados.append(
                 {
                     "pago_id": pid,
@@ -7113,10 +7169,12 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": 0.0,
                     "monto_por_aplicar": monto_pago_restante,
-                    "so_saldo_pendiente": item.get("so_saldo_pendiente"),
-                    "factura_saldo_odoo": None,
+                    "so_saldo_teorico_bs": saldos_reparto_pend["so_saldo_teorico_bs"],
+                    "so_saldo_teorico_usd": saldos_reparto_pend["so_saldo_teorico_usd"],
+                    "so_saldo_pendiente": saldos_reparto_pend["so_saldo_pendiente"],
+                    "factura_saldo_odoo": saldos_reparto_pend["factura_saldo_odoo"],
                     "so_id": item.get("so_id"),
-                    "factura_id": None,
+                    "factura_id": saldos_reparto_pend["factura_id_sugerida"],
                     "facturas": [],
                     "estado": "pendiente",
                     "origen": "Sistema (sugerencia, aún sin confirmar)",
@@ -7176,6 +7234,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                         Decimal(str(monto_original_raw)) / Decimal(str(tasa_binance))
                     )
 
+            saldos_reparto_vinc = _saldos_orden_para_reparto(item.get("so_id"))
             unificados.append(
                 {
                     "pago_id": pid,
@@ -7192,7 +7251,13 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": item["monto_aplicado"],
                     "monto_por_aplicar": item["residual_pago_usd"],
-                    "so_saldo_pendiente": None,
+                    "so_saldo_teorico_bs": saldos_reparto_vinc["so_saldo_teorico_bs"],
+                    "so_saldo_teorico_usd": saldos_reparto_vinc["so_saldo_teorico_usd"],
+                    "so_saldo_pendiente": saldos_reparto_vinc["so_saldo_pendiente"],
+                    # Residual REAL de la factura vinculada (Odoo,
+                    # amount_residual_usd) -- más preciso que el genérico
+                    # de _saldos_orden_para_reparto cuando ya hay factura
+                    # específica ligada a este pago.
                     "factura_saldo_odoo": item["residual_facturas_usd"],
                     "so_id": item.get("so_id") or None,
                     "factura_id": item.get("factura_id"),
@@ -7241,6 +7306,8 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": 0.0,
                     "monto_por_aplicar": float(monto_raw),
+                    "so_saldo_teorico_bs": None,
+                    "so_saldo_teorico_usd": None,
                     "so_saldo_pendiente": None,
                     "factura_saldo_odoo": None,
                     "so_id": None,

@@ -717,34 +717,38 @@
                         </div>
                     </div>
 
-                    <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
-                        <select id="cobranza-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
-                            <option value="*">Todos los Vendedores</option>
-                        </select>
-                        <select id="cobranza-estado-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
-                            <option value="*">Todos los Estados</option>
-                            <option value="pendiente">Pendiente</option>
-                            <option value="vinculado_local">Vinculado (local)</option>
-                            <option value="conciliado_odoo">Conciliado en Odoo</option>
-                        </select>
-                        <select id="cobranza-moneda-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
-                            <option value="*">Todas las Monedas</option>
-                            <option value="USD">USD</option>
-                            <option value="VES">VES</option>
-                        </select>
-                        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:#334155;">
-                            <input type="checkbox" id="cobranza-solo-duplicados"> Solo duplicados
-                        </label>
-                        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:#334155;">
-                            <input type="checkbox" id="cobranza-solo-alertas"> Solo con alerta (vendedor/reasignado)
-                        </label>
-                        <input type="text" id="cobranza-search" placeholder="🔍 Buscar por pago, cliente, N° Odoo u orden..." style="min-width:220px;">
-                        <select id="cobranza-sort" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.85rem; background: white;">
-                            <option value="pago_fecha_asc">Fecha (antiguo primero)</option>
-                            <option value="pago_fecha_desc">Fecha (reciente primero)</option>
-                            <option value="monto_desc">Monto (mayor primero)</option>
-                            <option value="cliente_asc">Cliente (A-Z)</option>
-                        </select>
+                    <div class="filter-panel" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:0.85rem 1rem; margin-bottom: 1rem; display:flex; flex-direction:column; gap:0.65rem;">
+                        <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+                            <select id="cobranza-vendedor-filter" class="filter-select">
+                                <option value="*">🧑‍💼 Todos los Vendedores</option>
+                            </select>
+                            <select id="cobranza-estado-filter" class="filter-select">
+                                <option value="*">📌 Todos los Estados</option>
+                                <option value="pendiente">Pendiente</option>
+                                <option value="vinculado_local">Vinculado (local)</option>
+                                <option value="conciliado_odoo">Conciliado en Odoo</option>
+                            </select>
+                            <select id="cobranza-moneda-filter" class="filter-select">
+                                <option value="*">💱 Todas las Monedas</option>
+                                <option value="USD">USD</option>
+                                <option value="VES">VES</option>
+                            </select>
+                            <select id="cobranza-sort" class="filter-select">
+                                <option value="pago_fecha_desc" selected>🕒 Fecha (reciente primero)</option>
+                                <option value="pago_fecha_asc">Fecha (antiguo primero)</option>
+                                <option value="monto_desc">Monto (mayor primero)</option>
+                                <option value="cliente_asc">Cliente (A-Z)</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; border-top:1px solid #e2e8f0; padding-top:0.6rem;">
+                            <input type="text" id="cobranza-search" placeholder="🔍 Buscar por pago, cliente, N° Odoo u orden..." style="min-width:240px; flex:1;">
+                            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; color:#334155; white-space:nowrap;">
+                                <input type="checkbox" id="cobranza-solo-duplicados"> ⚠️ Solo duplicados
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; color:#334155; white-space:nowrap;">
+                                <input type="checkbox" id="cobranza-solo-alertas"> 🔄 Solo reasignados por Odoo
+                            </label>
+                        </div>
                     </div>
 
                     <div class="table-wrapper large-table">
