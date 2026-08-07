@@ -1060,7 +1060,8 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         max_cantidad=r.max_cantidad,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
-        dias_gracia=r.dias_gracia,
+        ventana_pago_tipo=r.ventana_pago_tipo,
+        ventana_pago_dias=r.ventana_pago_dias,
         porcentaje=r.porcentaje,
         monedas_aplicables=r.monedas_aplicables,
         listas_aplicables=r.listas_aplicables,
@@ -1108,8 +1109,6 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
         porcentaje=r.porcentaje,
-        max_usos_mes=r.max_usos_mes,
-        dias_ventana=r.dias_ventana,
         listas_aplicables=r.listas_aplicables,
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
@@ -1117,7 +1116,8 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
-        dias_gracia=r.dias_gracia,
+        ventana_pago_tipo=r.ventana_pago_tipo,
+        ventana_pago_dias=r.ventana_pago_dias,
     )
 
 

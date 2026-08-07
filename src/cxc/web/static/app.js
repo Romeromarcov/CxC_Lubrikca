@@ -2093,8 +2093,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 porcentaje: parseFloat(rawPct),
                 min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas")?.value || 1),
                 max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
-                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos")?.value || 1),
-                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana")?.value || 30),
                 unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
                 tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
                 vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
@@ -2103,7 +2101,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
                 aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
-                dias_gracia: parseInt(document.getElementById("cfg-rec-dias-gracia")?.value || 3)
+                ventana_pago_tipo: document.getElementById("cfg-rec-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-rec-ventana-dias")?.value || 3)
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
@@ -2136,7 +2135,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
             const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
             const payload = {
-                dias_gracia: parseInt(document.getElementById("cfg-pp-dias-gracia")?.value || 0),
+                ventana_pago_tipo: document.getElementById("cfg-pp-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-pp-ventana-dias")?.value || 3),
                 marca: marcas,
                 categoria: cats,
                 min_cantidad: parseFloat(document.getElementById("cfg-pp-min")?.value || 0),
@@ -2708,38 +2708,39 @@ document.addEventListener("DOMContentLoaded", () => {
     // Populate Brands and Categories from Odoo in discount registration dropdowns
     async function populateBrandsAndCategories() {
         try {
-            // Fetch brands
+            // Prefijos de los 6 formularios de reglas de descuento que usan
+            // checkboxes M2M de marca/categoría (antes harcodeados en el HTML).
+            const prefixes = ["rec", "pp", "vol", "promo", "prod", "dif"];
+
+            const fillM2MBox = (selectorClass, values, valueToLabel) => {
+                const inputs = document.querySelectorAll(selectorClass);
+                if (inputs.length === 0) return;
+                const parent = inputs[0].parentElement;
+                if (!parent) return;
+                const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
+                const elClass = selectorClass.replace(".", "");
+                let html = values.map(v => {
+                    const checked = currentChecked.includes(v) ? "checked" : "";
+                    return `<label><input type="checkbox" class="${elClass}" value="${v}" ${checked}> ${valueToLabel ? valueToLabel(v) : v}</label>`;
+                }).join(" ");
+                const isTodasChecked = currentChecked.includes("*") || currentChecked.length === 0;
+                html += ` <label><input type="checkbox" class="${elClass}" value="*" ${isTodasChecked ? "checked" : ""}> Todas (*)</label>`;
+                parent.innerHTML = html;
+            };
+
+            // Fetch brands (ya vivas desde Odoo — product.brand)
             const bRes = await fetch("/api/odoo/marcas");
             if (bRes.ok) {
                 const brands = await bRes.json();
-                const ppMarca = document.getElementById("cfg-pp-marca");
-                const prodMarca = document.getElementById("cfg-prod-marca");
-                if (ppMarca) ppMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
-                if (prodMarca) prodMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
-                brands.forEach(b => {
-                    const opt = document.createElement("option");
-                    opt.value = b;
-                    opt.textContent = b;
-                    if (ppMarca) ppMarca.appendChild(opt.cloneNode(true));
-                    if (prodMarca) prodMarca.appendChild(opt.cloneNode(true));
-                });
+                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-marca`, brands));
             }
 
-            // Fetch categories
+            // Fetch categories (ahora vivas desde Odoo — product.category,
+            // reducidas con la misma lógica de raíz que usa el motor)
             const cRes = await fetch("/api/odoo/categorias");
             if (cRes.ok) {
                 const cats = await cRes.json();
-                const ppCat = document.getElementById("cfg-pp-categoria");
-                const prodCat = document.getElementById("cfg-prod-cat");
-                if (ppCat) ppCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
-                if (prodCat) prodCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
-                cats.forEach(c => {
-                    const opt = document.createElement("option");
-                    opt.value = c;
-                    opt.textContent = c;
-                    if (ppCat) ppCat.appendChild(opt.cloneNode(true));
-                    if (prodCat) prodCat.appendChild(opt.cloneNode(true));
-                });
+                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-cat`, cats));
             }
 
             // Fetch products for product promo multiselect
@@ -3175,9 +3176,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const listasText = formatListasDisplay(rawListasStd);
 
         let espArr = [];
-        if (r.dias_gracia) espArr.push(`Gracia: ${r.dias_gracia}d`);
-        if (r.max_usos_mes) espArr.push(`Max Usos: ${r.max_usos_mes}/mes`);
-        if (r.dias_ventana) espArr.push(`Ventana: ${r.dias_ventana}d`);
+        const VENTANA_PAGO_LABELS = { entrega: "Entrega", emision: "Emisión", vencimiento: "Vencimiento", no_aplica: "No aplica" };
+        if (r.ventana_pago_tipo && r.ventana_pago_tipo !== "no_aplica") {
+            espArr.push(`Ventana Pago: ${VENTANA_PAGO_LABELS[r.ventana_pago_tipo] || r.ventana_pago_tipo} +${r.ventana_pago_dias || 0}d`);
+        }
         if (r.tipo_evaluacion) espArr.push(`Eval: ${r.tipo_evaluacion} (${r.dias_evaluacion || 0}d)`);
         if (r.descuento_fallback) espArr.push(`Fallback: ${(parseFloat(r.descuento_fallback)*100).toFixed(2)}%`);
         if (r.regalo_tipo) espArr.push(`Modo: ${r.regalo_tipo}`);
@@ -3923,7 +3925,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
         const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
         const search = ((document.getElementById("cobranza-search") || {}).value || "").trim().toLowerCase();
-        const sortBy = (document.getElementById("cobranza-sort") || {}).value || "pago_fecha_asc";
+        const sortBy = (document.getElementById("cobranza-sort") || {}).value || "pago_fecha_desc";
 
         // "Cerrados a favor de la empresa" tienen su propia bandeja (ver
         // sección debajo) -- no se muestran en la tabla principal.
@@ -3932,7 +3934,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (selEstado !== "*") filtered = filtered.filter(i => i.estado === selEstado);
         if (selMoneda !== "*") filtered = filtered.filter(i => i.moneda_pago === selMoneda);
         if (soloDup) filtered = filtered.filter(i => i.posible_duplicado);
-        if (soloAlertas) filtered = filtered.filter(i => i.vendedor_mismatch || i.reasignado_por_odoo);
+        if (soloAlertas) filtered = filtered.filter(i => i.reasignado_por_odoo);
         if (search) {
             filtered = filtered.filter(i => [i.pago_id, i.numero_pago_odoo, i.cliente_nombre, i.so_id]
                 .some(v => v && String(v).toLowerCase().includes(search)));
@@ -3944,7 +3946,7 @@ document.addEventListener("DOMContentLoaded", () => {
             monto_desc: (a, b) => (b.monto_pago_bcv_usd || b.monto_pago_original || 0) - (a.monto_pago_bcv_usd || a.monto_pago_original || 0),
             cliente_asc: (a, b) => (a.cliente_nombre || "").localeCompare(b.cliente_nombre || ""),
         };
-        filtered = [...filtered].sort(sorters[sortBy] || sorters.pago_fecha_asc);
+        filtered = [...filtered].sort(sorters[sortBy] || sorters.pago_fecha_desc);
 
         if (countBadge) countBadge.textContent = `${filtered.length} Pagos`;
 
@@ -3999,8 +4001,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? `<span class="badge blue">${item.so_id}</span>` + (item.factura_id ? `<br><small>${item.factura_id}</small>` : '')
                 : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`;
 
-            const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`
-                + (item.vendedor_mismatch ? `<br><span title="El cliente cambió de vendedor -- la orden quedó con uno distinto al vigente" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ vendedor distinto en la orden</span>` : '');
+            const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`;
 
             const alertas = [];
             if (item.posible_duplicado) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
@@ -4100,26 +4101,37 @@ document.addEventListener("DOMContentLoaded", () => {
         const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
         const base = filas[0];
 
-        const campo = (label, valor) => `<div style="margin-bottom:0.5rem;"><span style="font-size:0.75rem; color:#64748b; display:block;">${label}</span><strong>${valor ?? '-'}</strong></div>`;
+        const campo = (icon, label, valor) => `<div style="margin-bottom:0.5rem;"><span style="font-size:0.75rem; color:#64748b; display:block;">${icon ? icon + ' ' : ''}${label}</span><strong>${valor ?? '-'}</strong></div>`;
+
+        // Tarjeta tasa + equivalente SIEMPRE emparejados (pedido explícito
+        // del usuario) -- una por cada una de las 3 rutas de conversión.
+        const tarjetaTasa = (icon, nombre, color, tasa, equiv) => `
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:0.75rem 1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:#64748b; font-weight:600; margin-bottom:0.35rem;">${icon} ${nombre}</div>
+                <div style="font-size:1.05rem; font-weight:700; color:${color};">${tasa != null ? tasa.toFixed(4) : '-'}</div>
+                <div style="border-top:1px dashed #e2e8f0; margin:0.4rem 0;"></div>
+                <div style="font-size:0.7rem; color:#94a3b8;">Equivalente</div>
+                <div style="font-size:0.95rem; font-weight:600; color:#0f172a;">${fmt(equiv)}</div>
+            </div>`;
 
         let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:0.5rem 1rem; margin-bottom:1rem;">
-            ${campo('Pago ID', base.pago_id)}
-            ${campo('N° Pago Odoo', base.numero_pago_odoo)}
-            ${campo('Fecha', base.pago_fecha)}
-            ${campo('Cliente', base.cliente_nombre)}
-            ${campo('Vendedor', base.vendedor + (base.vendedor_mismatch ? ' ⚠️ (distinto al de la orden)' : ''))}
-            ${campo('Método de Pago', base.metodo_pago)}
-            ${campo('Monto Original', (base.moneda_pago === 'VES' ? 'Bs. ' + Number(base.monto_pago_original).toLocaleString('es-VE', {minimumFractionDigits:2}) : fmt(base.monto_pago_original)))}
-            ${campo('Tasa BCV', base.tasa_bcv ? base.tasa_bcv.toFixed(4) : '-')}
-            ${campo('Tasa Binance', base.tasa_binance ? base.tasa_binance.toFixed(4) : '-')}
-            ${campo('Tasa BCV-EUR', base.tasa_bcv_eur ? base.tasa_bcv_eur.toFixed(4) : '-')}
-            ${campo('Equiv. BCV', fmt(base.monto_pago_bcv_usd))}
-            ${campo('Equiv. Binance', fmt(base.monto_pago_binance_usd))}
-            ${campo('Equiv. EUR', fmt(base.monto_pago_eur))}
-            ${campo('Estado', base.estado)}
-            ${campo('Origen', base.origen)}
-            ${campo('Confirmado Por', base.confirmado_por)}
-            ${campo('Recibido', base.recibido ? `Sí (${base.numero_recibido || ''}, ${base.fecha_recibido || ''}, ${base.recibido_por || ''})` : 'No')}
+            ${campo('🆔', 'Pago ID', base.pago_id)}
+            ${campo('🧾', 'N° Pago Odoo', base.numero_pago_odoo)}
+            ${campo('📅', 'Fecha', base.pago_fecha)}
+            ${campo('👤', 'Cliente', base.cliente_nombre)}
+            ${campo('🧑‍💼', 'Vendedor', base.vendedor)}
+            ${campo('💳', 'Método de Pago', base.metodo_pago)}
+            ${campo('💰', 'Monto Original', (base.moneda_pago === 'VES' ? 'Bs. ' + Number(base.monto_pago_original).toLocaleString('es-VE', {minimumFractionDigits:2}) : fmt(base.monto_pago_original)))}
+            ${campo('📌', 'Estado', base.estado)}
+            ${campo('📥', 'Origen', base.origen)}
+            ${campo('✅', 'Confirmado Por', base.confirmado_por)}
+            ${campo('🧾', 'Recibido', base.recibido ? `Sí (${base.numero_recibido || ''}, ${base.fecha_recibido || ''}, ${base.recibido_por || ''})` : 'No')}
+        </div>`;
+
+        html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:0.75rem; margin-bottom:1rem;">
+            ${tarjetaTasa('🏦', 'Tasa BCV', '#0369a1', base.tasa_bcv, base.monto_pago_bcv_usd)}
+            ${tarjetaTasa('🟡', 'Tasa Binance', '#b45309', base.tasa_binance, base.monto_pago_binance_usd)}
+            ${tarjetaTasa('💶', 'Tasa BCV-EUR', '#7c3aed', base.tasa_bcv_eur, base.monto_pago_eur)}
         </div>`;
 
         if (base.reasignado_por_odoo) {
@@ -4157,10 +4169,12 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>`;
         }
 
-        html += `<h3 style="margin:1rem 0 0.5rem;">Reparto / Órdenes y Facturas</h3>
+        html += `<h3 style="margin:1rem 0 0.5rem;">📋 Reparto / Órdenes y Facturas</h3>
+            <div style="overflow-x:auto;">
             <table class="cxc-table"><thead><tr>
                 <th>Orden</th><th>Factura</th><th>Monto Aplicado</th><th>Por Aplicar</th>
-                <th>Saldo Orden (CxC)</th><th>Saldo Factura (Odoo)</th>
+                <th>Saldo Teórico BS</th><th>Saldo Teórico USD</th>
+                <th>Saldo Venta Real</th><th>Saldo Factura (Odoo)</th>
             </tr></thead><tbody>`;
         filas.forEach(f => {
             html += `<tr>
@@ -4168,11 +4182,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${f.factura_id || '-'}</td>
                 <td>${fmt(f.monto_aplicado)}</td>
                 <td>${fmt(f.monto_por_aplicar)}</td>
+                <td>${fmt(f.so_saldo_teorico_bs)}</td>
+                <td>${fmt(f.so_saldo_teorico_usd)}</td>
                 <td>${fmt(f.so_saldo_pendiente)}</td>
                 <td>${fmt(f.factura_saldo_odoo)}</td>
             </tr>`;
         });
-        html += `</tbody></table>`;
+        html += `</tbody></table></div>`;
 
         body.innerHTML = html;
         const bcvVarianteSelect = body.querySelector(`.select-bcv-variante[data-vinc="${base.vinc_id}"]`);

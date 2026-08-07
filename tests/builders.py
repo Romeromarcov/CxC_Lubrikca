@@ -254,6 +254,7 @@ def descuento_recompra(
     activo: bool = True,
     aplica_a: str = "linea",
     dias_gracia: int = 3,
+    ventana_pago_tipo: str = "vencimiento",
 ) -> DescuentoRecompra:
     return DescuentoRecompra(
         regla_id=regla_id,
@@ -266,7 +267,8 @@ def descuento_recompra(
         vigencia_hasta=vigencia_hasta,
         activo=activo,
         aplica_a=aplica_a,
-        dias_gracia=dias_gracia,
+        ventana_pago_tipo=ventana_pago_tipo,
+        ventana_pago_dias=dias_gracia,
     )
 
 

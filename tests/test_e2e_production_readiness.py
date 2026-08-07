@@ -3531,6 +3531,115 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
         assert item["posible_duplicado"] is False
 
 
+def test_e2e_cobranza_saldo_orden_usa_4_columnas_en_tiempo_real():
+    """Bug real reportado por el usuario: "Saldo Orden (CxC)" en el modal
+
+    de detalle de pago venía de un saldo blended/naive (get_reporte_saldos
+    o un cálculo naive), sin las 4 referencias reales que el resto del
+    sistema ya usa. Ahora /api/cobranza/pagos reusa /api/ventas (misma
+    fuente de verdad) para exponer so_saldo_teorico_bs/_usd por pago,
+    tanto para pagos vinculados como pendientes (ver
+    _saldos_orden_para_reparto).
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import VentasTeorico
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_REPARTO", "state": "sale", "amount_untaxed": 300.0}]
+        if model == "account.move":
+            return [
+                {
+                    "id": 950,
+                    "invoice_origin": "SO_REPARTO",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 258.62,
+                    "amount_total_signed_usd": 300.0,
+                    "amount_total": 300.0,
+                }
+            ]
+        return []
+
+    vinc = Vinculacion(
+        vinc_id="V_REPARTO",
+        pago_id="P_REP",
+        so_id="SO_REPARTO",
+        monto_aplicado=Decimal("150.00"),
+        hora_pago_confirmada=datetime(2026, 7, 1, 10, 0),
+        tasa_bcv_aplicada=Decimal("60.0"),
+        tasa_binance_aplicada=Decimal("63.0"),
+        es_tasa_heredada=False,
+        estado=EstadoVinculacion.CONCILIADO,
+    )
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_REP",
+                "cliente_id": "C_REP",
+                "monto": "150.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-01",
+                "vendedor_email": "v@lubrikca.com",
+                "metodo_pago": "",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [
+                {
+                    "cliente_id": "C_REP",
+                    "nombre": "Cliente Reparto",
+                    "vendedor_email": "v@lubrikca.com",
+                }
+            ]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+    orden = OrdenVenta(
+        so_id="SO_REPARTO",
+        cliente_id="C_REP",
+        vendedor_email="v@lubrikca.com",
+        fecha=date(2026, 7, 1),
+        fecha_entrega=None,
+        monto_total=Decimal("300.00"),
+        lista_precios="8",
+        es_primera_compra=False,
+        facturada=True,
+        factura_id="FAC-REP",
+    )
+    mock_repo.all_ordenes.return_value = [orden]
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_REPARTO", teorico_ves=Decimal("500"), teorico_usd=Decimal("400")),
+    ]
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_auditoria.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+    ):
+        res = client.get("/api/cobranza/pagos")
+        assert res.status_code == 200
+        data = res.json()
+        item = next(i for i in data if i["pago_id"] == "P_REP")
+
+        assert item["so_id"] == "SO_REPARTO"
+        assert item["so_saldo_teorico_bs"] is not None
+        assert item["so_saldo_teorico_usd"] is not None
+        assert item["so_saldo_pendiente"] is not None
+
+
 def test_e2e_51_cobranza_pagos_unificado_cerrado_empresa_y_usd_1a1():
     """Un pago cerrado "a favor de la empresa" (PagosHuerfanosCerrados) debe
 

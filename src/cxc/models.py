@@ -225,7 +225,11 @@ class DescuentoProntoPago:
     max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "USD"
     tipo_beneficio: str = "descuento"
-    dias_gracia: int = 3
+    # "Ventana de pago" (reemplaza "Días de gracia"): desde cuándo se
+    # cuentan los `ventana_pago_dias` de margen -- ver
+    # engine/discounts.py::ventana_pago_vigente.
+    ventana_pago_tipo: str = "vencimiento"
+    ventana_pago_dias: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"
     listas_aplicables: str = "*"  # "4", "5", "*"
@@ -329,8 +333,6 @@ class DescuentoRecompra:
     unidad_medida: str = "CAJAS"
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.03")
-    max_usos_mes: int = 1
-    dias_ventana: int = 30
     listas_aplicables: str = "*"
     vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
@@ -340,10 +342,15 @@ class DescuentoRecompra:
     aplica_a: str = "linea"
     descripcion: str = ""
     # Ventana de recompra: aplica si la orden anterior del cliente está
-    # totalmente pagada y la nueva orden llega dentro de (días de crédito
-    # reales de esa orden anterior + dias_gracia). Mismo patrón que
-    # DescuentoProntoPago.dias_gracia.
-    dias_gracia: int = 3
+    # totalmente pagada y la nueva orden llega dentro de la "Ventana de
+    # pago" configurada (por defecto, "vencimiento" -- días de crédito
+    # reales de esa orden anterior + ventana_pago_dias de margen). Ver
+    # engine/discounts.py::ventana_pago_vigente. Reemplaza "Días de
+    # gracia" (dias_gracia); "Días Ventana Recompra (legado)"
+    # (dias_ventana) y "Máximo Usos / Mes" (max_usos_mes) se eliminan --
+    # ya no aplican con la lógica actual (pedido explícito del usuario).
+    ventana_pago_tipo: str = "vencimiento"
+    ventana_pago_dias: int = 3
 
 
 # --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------

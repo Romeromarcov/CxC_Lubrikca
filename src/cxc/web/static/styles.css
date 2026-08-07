@@ -492,6 +492,30 @@ body {
     width: 280px;
 }
 
+.filter-select {
+    padding: 0.5rem 0.85rem;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    font-size: 0.85rem;
+    font-family: inherit;
+    background: #ffffff;
+    color: hsl(var(--text-primary));
+    cursor: pointer;
+}
+
+.filter-select:hover {
+    border-color: #94a3b8;
+}
+
+.filter-panel input[type="text"] {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0.5rem 0.85rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+
 /* Botones */
 .btn-primary {
     background: linear-gradient(135deg, hsl(var(--accent-cyan)), #2563eb);
