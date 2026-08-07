@@ -2684,7 +2684,13 @@ document.addEventListener("DOMContentLoaded", () => {
             const fillM2MBox = (selectorClass, values, valueToLabel) => {
                 const inputs = document.querySelectorAll(selectorClass);
                 if (inputs.length === 0) return;
-                const parent = inputs[0].parentElement;
+                // inputs[0].parentElement es el <label> de ESE checkbox, no el
+                // div contenedor de todo el grupo -- usar ese parent hacía que
+                // el HTML nuevo quedara anidado dentro del primer <label> viejo
+                // (checkboxes desalineados) y dejaba los demás labels viejos
+                // (ej. "SINOCO", "Todas (*)") sueltos sin reemplazar
+                // (duplicados). closest("div") sube hasta el div contenedor real.
+                const parent = inputs[0].closest("div");
                 if (!parent) return;
                 const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
                 const elClass = selectorClass.replace(".", "");
