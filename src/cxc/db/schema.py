@@ -581,6 +581,20 @@ pagos_huerfanos_cerrados = Table(
     Column("timestamp_cierre", DateTime(timezone=False), nullable=False),
 )
 
+# --- PagosTasaBinanceOverride (corrección manual de la tasa Binance de un
+# pago AÚN PENDIENTE -- sin Vinculación real todavía, así que no hay dónde
+# guardar la corrección salvo aquí por pago_id. Una vez el pago se vincula
+# a una orden, la Vinculación real (tasa_binance_aplicada) toma el control
+# y este registro deja de leerse para ese pago) -------------------------
+pagos_tasa_binance_override = Table(
+    "pagos_tasa_binance_override",
+    metadata,
+    Column("pago_id", String, primary_key=True),
+    Column("tasa_binance", MONEY, nullable=False),
+    Column("editado_por", String, nullable=False, server_default=""),
+    Column("timestamp_edicion", DateTime(timezone=False), nullable=False),
+)
+
 # --- DescuentosSistemaAprobados (descuento aprobado manualmente desde la
 # Bandeja 1 de Facturación -- NUNCA se escribe a Odoo, solo ajusta los
 # saldos internos de CxC en /api/ventas. Un registro activo por orden;

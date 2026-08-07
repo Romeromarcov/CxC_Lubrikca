@@ -361,11 +361,20 @@ class SheetsRepository(Repository):
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         self._g.replace_rows("TasasHistoricasAuditoria", rows)
 
+    def upsert_tasa_historica_auditoria(self, row: dict[str, str]) -> None:
+        self._g.upsert_row("TasasHistoricasAuditoria", "fecha", row)
+
     def all_pagos_huerfanos_cerrados(self) -> list[dict[str, str]]:
         return self._g.read_rows("PagosHuerfanosCerrados")
 
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
         self._g.upsert_row("PagosHuerfanosCerrados", "pago_id", row)
+
+    def all_pagos_tasa_binance_override(self) -> list[dict[str, str]]:
+        return self._g.read_rows("PagosTasaBinanceOverride")
+
+    def upsert_pago_tasa_binance_override(self, row: dict[str, str]) -> None:
+        self._g.upsert_row("PagosTasaBinanceOverride", "pago_id", row)
 
     def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
         return self._g.read_rows("DescuentosSistemaAprobados")

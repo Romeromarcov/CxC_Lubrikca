@@ -902,16 +902,23 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    window.guardarTasaBinance = async function(vincId) {
-        const input = document.querySelector(`.input-tasa-binance[data-vinc="${vincId}"]`);
+    window.guardarTasaBinance = async function(id, esVinculado) {
+        const input = document.querySelector(`.input-tasa-binance[data-vinc="${id}"]`);
         if (!input) return;
         const tasa = parseFloat(input.value);
         if (!tasa || tasa <= 0) {
             alert("Ingresa una tasa Binance válida.");
             return;
         }
+        // Con Vinculación real (pago ya vinculado a una orden): corrige la
+        // Vinculación. Sin ella (pago aún pendiente, "sugerencia sin
+        // confirmar"): guarda la corrección por pago_id -- ver POST
+        // /api/pago/{pago_id}/tasa-binance.
+        const endpoint = esVinculado
+            ? `/api/vinculacion/${id}/tasa-binance`
+            : `/api/pago/${id}/tasa-binance`;
         try {
-            const res = await fetch(`/api/vinculacion/${vincId}/tasa-binance`, {
+            const res = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ tasa_binance: tasa }),
@@ -4126,20 +4133,27 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>`;
         }
 
-        if (base.puede_editar_tasas && base.vinc_id) {
+        if (base.puede_editar_tasas && (base.vinc_id || base.pago_id)) {
+            // Sin vinc_id (pago aún pendiente, "sugerencia sin confirmar"):
+            // se guarda en pagos_tasa_binance_override por pago_id -- ver
+            // POST /api/pago/{pago_id}/tasa-binance. Con vinc_id (pago ya
+            // vinculado a una orden): se corrige la Vinculación real.
+            const targetId = base.vinc_id || base.pago_id;
+            const esVinculado = !!base.vinc_id;
             html += `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
                 <label style="font-weight:700; font-size:0.85rem; display:block; margin-bottom:0.5rem;">Editar Tasas Aplicadas</label>
                 <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
-                    <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${base.vinc_id}" value="${base.tasa_binance ?? ''}" placeholder="Tasa Binance" style="width:120px; padding:4px 6px; font-size:0.8rem;">
-                    <button class="btn btn-sm btn-secondary" onclick="guardarTasaBinance('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Binance</button>
+                    <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${targetId}" data-es-vinculado="${esVinculado}" value="${base.tasa_binance ?? ''}" placeholder="Tasa Binance" style="width:120px; padding:4px 6px; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTasaBinance('${targetId}', ${esVinculado})" style="padding:4px 10px; font-size:0.75rem;">Guardar Binance</button>
                 </div>
+                ${esVinculado ? `
                 <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-                    <select class="select-bcv-variante" data-vinc="${base.vinc_id}" style="padding:4px 6px; font-size:0.8rem;">
+                    <select class="select-bcv-variante" data-vinc="${targetId}" style="padding:4px 6px; font-size:0.8rem;">
                         <option value="USD">BCV USD</option>
                         <option value="EUR">BCV EUR</option>
                     </select>
-                    <button class="btn btn-sm btn-secondary" onclick="guardarTipoTasaBcv('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Variante BCV</button>
-                </div>
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTipoTasaBcv('${targetId}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Variante BCV</button>
+                </div>` : ''}
             </div>`;
         }
 

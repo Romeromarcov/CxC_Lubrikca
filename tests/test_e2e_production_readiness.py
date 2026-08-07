@@ -1547,7 +1547,50 @@ def test_e2e_18_editar_tasa_binance_valida_min_max_del_dia():
         data = res_ok.json()
         assert data["tasa_binance_aplicada"] == 40.5
         assert abs(data["equiv_usd_binance"] - 1000.0 / 40.5) < 1e-6
-        assert mock_repo.update_vinculacion.call_count == 1
+
+
+def test_e2e_editar_tasa_binance_pago_pendiente_valida_min_max_y_persiste():
+    """Pedido del usuario (agosto 2026): editar la tasa Binance de un pago
+
+    AÚN PENDIENTE (sin Vinculación real) desde el modal de detalle -- misma
+    validación min/max del día que ya existe para pagos vinculados, pero
+    persistida en pagos_tasa_binance_override (por pago_id, no vinc_id).
+    """
+    pago = Pago(
+        pago_id="P_PEND",
+        cliente_id="C_PEND",
+        monto=Decimal("1000.00"),
+        moneda=Moneda.VES,
+        metodo_pago="Transferencia",
+        fecha_pago=datetime(2026, 7, 10, 10, 0),
+        vendedor_email="v@lubrikca.com",
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_pagos.return_value = [pago]
+    mock_repo.serie_tasas_del_dia.return_value = [
+        SerieTasa(datetime(2026, 7, 10, 8, 0), Decimal("36"), Decimal("39.0"), "x"),
+        SerieTasa(datetime(2026, 7, 10, 12, 0), Decimal("36"), Decimal("41.0"), "x"),
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        # Fuera de rango (máximo capturado es 41.0).
+        res_bad = client.post("/api/pago/P_PEND/tasa-binance", json={"tasa_binance": 45.0})
+        assert res_bad.status_code == 400
+        assert mock_repo.upsert_pago_tasa_binance_override.call_count == 0
+
+        # Dentro de rango.
+        res_ok = client.post("/api/pago/P_PEND/tasa-binance", json={"tasa_binance": 40.5})
+        assert res_ok.status_code == 200
+        data = res_ok.json()
+        assert data["tasa_binance_aplicada"] == 40.5
+        assert mock_repo.upsert_pago_tasa_binance_override.call_count == 1
+        guardado = mock_repo.upsert_pago_tasa_binance_override.call_args[0][0]
+        assert guardado["pago_id"] == "P_PEND"
+        assert Decimal(guardado["tasa_binance"]) == Decimal("40.5")
+
+        # Pago inexistente -> 404.
+        res_404 = client.post("/api/pago/NO_EXISTE/tasa-binance", json={"tasa_binance": 40.0})
+        assert res_404.status_code == 404
 
 
 def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():

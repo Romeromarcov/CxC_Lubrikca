@@ -251,6 +251,18 @@ class Repository(ABC):
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None: ...
 
     @abstractmethod
+    def all_pagos_tasa_binance_override(self) -> list[dict[str, str]]:
+        """Correcciones manuales de tasa Binance para pagos AÚN PENDIENTES
+
+        (sin Vinculación real todavía). Una vez el pago se vincula a una
+        orden, la Vinculación real toma el control -- este registro
+        simplemente deja de leerse para ese pago_id.
+        """
+
+    @abstractmethod
+    def upsert_pago_tasa_binance_override(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
     def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
         """Descuentos aprobados manualmente desde la Bandeja 1 de
 
@@ -279,6 +291,16 @@ class Repository(ABC):
 
         regenera el archivo diario entero desde Odoo + SerieTasas cada vez
         que corre -- no es un upsert incremental).
+        """
+
+    @abstractmethod
+    def upsert_tasa_historica_auditoria(self, row: dict[str, str]) -> None:
+        """Upsert de UNA fila por ``fecha`` (clave natural) -- a diferencia
+
+        de ``replace_tasas_historicas_auditoria`` (reemplazo completo), esto
+        es incremental: usado por el scraper para grabar el promedio Binance
+        definitivo + diferencial de cierre de día, sin tocar el resto de la
+        tabla.
         """
 
     @abstractmethod
@@ -379,6 +401,7 @@ class InMemoryRepository(Repository):
         self._listas_precios_historicas: list[dict[str, str]] = []
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
+        self._pagos_tasa_binance_override: dict[str, dict[str, str]] = {}
         self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
         self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
 
@@ -665,11 +688,25 @@ class InMemoryRepository(Repository):
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         self._tasas_historicas_auditoria = [dict(r) for r in rows]
 
+    def upsert_tasa_historica_auditoria(self, row: dict[str, str]) -> None:
+        fecha = str(row.get("fecha", ""))[:10]
+        for i, r in enumerate(self._tasas_historicas_auditoria):
+            if str(r.get("fecha", ""))[:10] == fecha:
+                self._tasas_historicas_auditoria[i] = dict(row)
+                return
+        self._tasas_historicas_auditoria.append(dict(row))
+
     def all_pagos_huerfanos_cerrados(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._pagos_huerfanos_cerrados.values()]
 
     def upsert_pago_huerfano_cerrado(self, row: dict[str, str]) -> None:
         self._pagos_huerfanos_cerrados[row["pago_id"]] = dict(row)
+
+    def all_pagos_tasa_binance_override(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._pagos_tasa_binance_override.values()]
+
+    def upsert_pago_tasa_binance_override(self, row: dict[str, str]) -> None:
+        self._pagos_tasa_binance_override[row["pago_id"]] = dict(row)
 
     def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._descuentos_sistema_aprobados.values()]
