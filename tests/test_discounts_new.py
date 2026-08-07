@@ -154,37 +154,44 @@ def test_rates_scraper_run():
 
 
 def test_linea_orden_presentation_classification():
+    """``producto`` es el ID de Odoo (no el nombre) -- la presentación real
+
+    viene de ``presentacion_odoo``, parseada del nombre del producto en
+    OdooClient._productos (contenido entre paréntesis al final, ej.
+    "... (1x6)" -> "1X6"), no de sniffing sobre el ID."""
     from cxc.models import LineaOrden
 
     l1 = LineaOrden(
-        "L1", "SO1", "ALTA CILINDRADA (1x6)", "GLOBAL OIL", "Comercial", Decimal("2"), Decimal("10")
+        "L1", "SO1", "101", "GLOBAL OIL", "Comercial", Decimal("2"), Decimal("10"),
+        presentacion_odoo="1X6",
     )
-    assert l1.presentacion == "CAJA"
+    assert l1.presentacion == "1X6"
     assert l1.categoria_madre == "Comercial"
 
     l2 = LineaOrden(
-        "L2",
-        "SO1",
-        "API SL 20W-50 Paila 18,92 L",
-        "GLOBAL OIL",
-        "Industrial",
-        Decimal("1"),
-        Decimal("50"),
+        "L2", "SO1", "102", "GLOBAL OIL", "Industrial", Decimal("1"), Decimal("50"),
+        presentacion_odoo="PAILA",
     )
     assert l2.presentacion == "PAILA"
     assert l2.categoria_madre == "Industrial"
 
     l3 = LineaOrden(
-        "L3",
-        "SO1",
-        "API SL 20W-50 Tambor 208 L",
-        "GLOBAL OIL",
-        "Industrial",
-        Decimal("1"),
-        Decimal("200"),
+        "L3", "SO1", "103", "GLOBAL OIL", "Industrial", Decimal("1"), Decimal("200"),
+        presentacion_odoo="TAMBOR",
     )
     assert l3.presentacion == "TAMBOR"
     assert l3.categoria_madre == "Industrial"
+
+    # Sin presentacion_odoo (ej. backend Sheets legado) -> guess binario
+    # anterior por categoria, como fallback de compatibilidad.
+    l4 = LineaOrden(
+        "L4", "SO1", "104", "GLOBAL OIL", "Comercial", Decimal("1"), Decimal("10"),
+    )
+    assert l4.presentacion == "CAJA"
+    l5 = LineaOrden(
+        "L5", "SO1", "105", "GLOBAL OIL", "Industrial", Decimal("1"), Decimal("10"),
+    )
+    assert l5.presentacion == "PAILA"
 
 
 def test_effective_dating_match_categoria():

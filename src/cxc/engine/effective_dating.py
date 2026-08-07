@@ -265,7 +265,26 @@ def descuento_volumen_vigente(
     valid_ves: list[str] | None = None,
     valid_usd: list[str] | None = None,
 ) -> DescuentoVolumen | None:
-    """Retorna la regla de descuento por volumen aplicable para la marca/categoría."""
+    """Retorna la regla de descuento por volumen aplicable para la marca/categoría.
+
+    HALLAZGO (auditoría unidad_medida, agosto 2026, no corregido sin
+    confirmar con negocio primero): a diferencia de Contado/Recompra, este
+    matcher solo recibe la categoría RAÍZ (Comercial/Industrial) -- el
+    agrupado de litros/cajas en discounts.py suma por (marca, categoría raíz)
+    sin desglosar por subcategoría/presentación real. Reglas de volumen que
+    usan valores legado "PAILA"/"TAMBOR"/"CAJA" como `categoria` matchean
+    correctamente (rama especial de ``_match_categoria`` los trata como
+    equivalentes a Industrial/Comercial en general), pero una regla nueva
+    creada con una subcategoría real específica (ej. "Elite", vía el
+    selector en cascada de Configuración) NUNCA matcheará ninguna línea,
+    porque el acumulado se hace por categoría raíz, no por subcategoría. Si
+    el negocio necesita reglas de volumen específicas por subcategoría, hay
+    que rediseñar el agrupado en discounts.py (cambiar la clave de
+    ``litros_por_mc``/``cajas_por_mc`` a incluir subcategoría) -- eso
+    cambiaría cómo se acumulan los umbrales para las 3 reglas de volumen
+    SINOCO/PAILA ya activas en producción, así que no se toca sin validar
+    primero que el negocio realmente quiere ese cambio de comportamiento.
+    """
     candidatas = []
     for r in reglas:
         if not _match_marca(r.marca, marca):

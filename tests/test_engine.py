@@ -1429,13 +1429,29 @@ def test_match_lista_con_keywords_dinamicas_listas_ves_y_usd() -> None:
 
 
 def test_resolved_marca_fallback_sinoco_vs_global() -> None:
-    l_sinoco = b.linea(producto="SINOCO SAE 20W-50 (PAILA)", marca="")
-    l_global = b.linea(producto="SUPREMO API CI-4 SAE 15W-40 (PAILA)", marca="")
-    l_explicit = b.linea(producto="SUPREMO API CI-4", marca="MARCA_CUSTOM")
+    """``producto`` es el ID de Odoo (no el nombre) -- SINOCO llega con
+
+    ``marca`` ya poblada directo desde brand_id, nunca por sniffing del
+    nombre. Solo las líneas SIN marca (brand_id vacío en Odoo, típico de
+    algunos GLOBAL OIL) caen al fallback configurable (default GLOBAL OIL)."""
+    l_sinoco = b.linea(producto="123", marca="SINOCO")
+    l_global = b.linea(producto="456", marca="")
+    l_explicit = b.linea(producto="789", marca="MARCA_CUSTOM")
 
     assert l_sinoco.resolved_marca == "SINOCO"
     assert l_global.resolved_marca == "GLOBAL OIL"
     assert l_explicit.resolved_marca == "MARCA_CUSTOM"
+
+
+def test_resolved_marca_fallback_es_configurable() -> None:
+    from cxc.models import set_marca_fallback
+
+    l_sin_marca = b.linea(producto="456", marca="")
+    set_marca_fallback("OTRA MARCA")
+    try:
+        assert l_sin_marca.resolved_marca == "OTRA MARCA"
+    finally:
+        set_marca_fallback("GLOBAL OIL")
 
 
 def test_get_conciliaciones_sugerencias_excludes_cancelled_orders() -> None:

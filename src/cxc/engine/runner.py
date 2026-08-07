@@ -12,7 +12,7 @@ import dataclasses
 import logging
 from datetime import date
 
-from ..models import BandejaFacturacion, MetodoPago, VentasTeorico, Vinculacion
+from ..models import BandejaFacturacion, MetodoPago, VentasTeorico, Vinculacion, set_marca_fallback
 from ..repositories import Repository
 from .discounts import EngineInputs, calcular_factura, calcular_teorico_orden_con_fallback
 from .historical_pricing import cargar_mapa_historico, es_orden_historica
@@ -79,6 +79,15 @@ class EngineRunner:
                 )
         except Exception as e:
             logger.warning("Error al leer cash_window_business_days de _Meta: %s", e)
+
+        # Fallback de marca configurable (no todos los productos traen
+        # brand_id de Odoo) -- ver LineaOrden.resolved_marca.
+        try:
+            marca_fallback = self._repo.get_config("marca_fallback")
+            if marca_fallback:
+                set_marca_fallback(marca_fallback)
+        except Exception as e:
+            logger.warning("Error al leer marca_fallback de _Meta: %s", e)
 
         # Tarea 3 (auditoria reglas por lista): listas de precio configuradas
         # en Configuración -- sin esto, el matching de "LISTAS_VES"/

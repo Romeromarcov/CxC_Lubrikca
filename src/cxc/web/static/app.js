@@ -86,6 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const settingsForm = document.getElementById("settings-form");
     const cfgMetaDays = document.getElementById("cfg-meta-days");
     const cfgMetaRecompra = document.getElementById("cfg-meta-recompra");
+    const cfgMetaMarcaFallback = document.getElementById("cfg-meta-marca-fallback");
 
     const tasaForm = document.getElementById("tasa-form");
     const cfgTasaBcv = document.getElementById("cfg-tasa-bcv");
@@ -2083,7 +2084,7 @@ document.addEventListener("DOMContentLoaded", () => {
         recompraForm.addEventListener("submit", async (e) => {
             e.preventDefault();
             const marcas = getM2MCheckedValues(recompraForm, ".m2m-rec-marca");
-            const cats = getM2MCheckedValues(recompraForm, ".m2m-rec-cat");
+            const cats = getCategoriaCombinada(recompraForm, "rec");
             const listas = getM2MCheckedValues(recompraForm, ".m2m-rec-lista");
             const rawPct = (document.getElementById("cfg-rec-porcentaje")?.value || "0.03").replace(',', '.');
             const payload = {
@@ -2134,7 +2135,7 @@ document.addEventListener("DOMContentLoaded", () => {
         prontoPagoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
             const marcas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-marca");
-            const cats = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-cat");
+            const cats = getCategoriaCombinada(prontoPagoForm, "pp");
             const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
             const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
             const payload = {
@@ -2191,7 +2192,7 @@ document.addEventListener("DOMContentLoaded", () => {
         productoPromoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
             const marcas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-marca");
-            const cats = getM2MCheckedValues(productoPromoForm, ".m2m-prod-cat");
+            const cats = getCategoriaCombinada(productoPromoForm, "prod");
             const listas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-lista");
             const selProds = Array.from(document.getElementById("cfg-prod-select")?.selectedOptions || []).map(o => o.value).join(",");
             const rawPct = (document.getElementById("cfg-prod-porcentaje")?.value || "0.05").replace(',', '.');
@@ -2242,8 +2243,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (diferencialForm) {
         diferencialForm.addEventListener("submit", async (e) => {
             e.preventDefault();
-            const marcas = getM2MCheckedValues(diferencialForm, ".m2m-dif-marca");
-            const cats = getM2MCheckedValues(diferencialForm, ".m2m-dif-cat");
             const listas = getM2MCheckedValues(diferencialForm, ".m2m-dif-lista");
             const rawPct = (document.getElementById("cfg-dif-porcentaje-fijo")?.value || "0.35").replace(',', '.');
             const payload = {
@@ -2251,13 +2250,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
                 tipo_calculo: document.getElementById("cfg-dif-tipo-calculo")?.value || "fijo",
                 porcentaje_fijo: parseFloat(rawPct),
-                marca: marcas,
-                categoria: cats,
+                marca: "*",
+                categoria: "*",
                 monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
                 listas_aplicables: listas,
-                unidad_medida: document.getElementById("cfg-dif-unidad")?.value || "USD",
-                min_cantidad: parseFloat(document.getElementById("cfg-dif-min")?.value || 0),
-                max_cantidad: parseFloat(document.getElementById("cfg-dif-max")?.value || 999999),
+                unidad_medida: "USD",
+                min_cantidad: 0,
+                max_cantidad: 999999,
                 vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
                 activo: true,
@@ -2302,6 +2301,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadTasas,
             loadFeriados,
             populateBrandsAndCategories,
+            loadCategoriaArbolYPresentaciones,
             loadDescuentosMarca,
             loadDescuentosVolumen,
             loadPromociones,
@@ -2329,6 +2329,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const data = await res.json();
                 if (cfgMetaDays) cfgMetaDays.value = data.cash_window_business_days || 3;
                 if (cfgMetaRecompra) cfgMetaRecompra.value = data.descuento_recompra || 0.05;
+                if (cfgMetaMarcaFallback) cfgMetaMarcaFallback.value = data.marca_fallback || "GLOBAL OIL";
             }
         } catch (err) {
             console.error("Error loading settings meta:", err);
@@ -2341,7 +2342,8 @@ document.addEventListener("DOMContentLoaded", () => {
             e.preventDefault();
             const payload = {
                 cash_window_business_days: parseInt(cfgMetaDays.value),
-                descuento_recompra: parseFloat(cfgMetaRecompra.value)
+                descuento_recompra: parseFloat(cfgMetaRecompra.value),
+                marca_fallback: (cfgMetaMarcaFallback?.value || "GLOBAL OIL").trim()
             };
 
             try {
@@ -2673,9 +2675,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Populate Brands and Categories from Odoo in discount registration dropdowns
     async function populateBrandsAndCategories() {
         try {
-            // Prefijos de los 6 formularios de reglas de descuento que usan
-            // checkboxes M2M de marca/categoría (antes harcodeados en el HTML).
-            const prefixes = ["rec", "pp", "vol", "promo", "prod", "dif"];
+            // Prefijos de los 5 formularios de reglas de descuento que usan
+            // checkboxes M2M de marca (antes harcodeados en el HTML).
+            // "dif" (Diferencial Cambiario) no tiene marca/categoría -- se
+            // calcula por abono, no por producto/línea (ver panel-header).
+            const prefixes = ["rec", "pp", "vol", "promo", "prod"];
 
             const fillM2MBox = (selectorClass, values, valueToLabel) => {
                 const inputs = document.querySelectorAll(selectorClass);
@@ -2698,14 +2702,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bRes.ok) {
                 const brands = await bRes.json();
                 prefixes.forEach(p => fillM2MBox(`.m2m-${p}-marca`, brands));
-            }
-
-            // Fetch categories (ahora vivas desde Odoo — product.category,
-            // reducidas con la misma lógica de raíz que usa el motor)
-            const cRes = await fetch("/api/odoo/categorias");
-            if (cRes.ok) {
-                const cats = await cRes.json();
-                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-cat`, cats));
             }
 
             // Fetch products for product promo multiselect
@@ -3118,6 +3114,111 @@ document.addEventListener("DOMContentLoaded", () => {
         return "*";
     }
 
+    // --- Categoría madre -> subcategoría -> presentación (cascada, en vivo desde Odoo) ---
+    window._categoriaArbol = window._categoriaArbol || {};
+    window._presentacionesOdoo = window._presentacionesOdoo || [];
+    const CASCADA_PREFIJOS = ["rec", "pp", "vol", "promo", "prod"];
+
+    function madresChecked(prefix) {
+        return Array.from(document.querySelectorAll(`.m2m-${prefix}-madre:checked`)).map(cb => cb.value);
+    }
+
+    function subsChecked(prefix) {
+        return Array.from(document.querySelectorAll(`.m2m-${prefix}-sub:checked`)).map(cb => cb.value);
+    }
+
+    function refreshSubcategorias(prefix) {
+        const box = document.querySelector(`.m2m-${prefix}-sub-box`);
+        if (!box) return;
+        const madres = madresChecked(prefix);
+        const prevChecked = subsChecked(prefix);
+        if (madres.length === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>';
+            return;
+        }
+        const subs = new Set();
+        madres.forEach(m => (window._categoriaArbol[m] || []).forEach(s => subs.add(s)));
+        if (subs.size === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Sin subcategorías registradas para esta madre.</small>';
+            return;
+        }
+        box.innerHTML = Array.from(subs).sort().map(s => {
+            const checked = prevChecked.includes(s) ? "checked" : "";
+            return `<label><input type="checkbox" class="m2m-${prefix}-sub" value="${s}" ${checked}> ${s}</label>`;
+        }).join(" ");
+        box.querySelectorAll(`.m2m-${prefix}-sub`).forEach(cb => {
+            cb.addEventListener("change", () => refreshPresentaciones(prefix));
+        });
+    }
+
+    function refreshPresentaciones(prefix) {
+        const box = document.querySelector(`.m2m-${prefix}-pres-box`);
+        if (!box) return;
+        const madres = madresChecked(prefix);
+        const subs = subsChecked(prefix);
+        const prevChecked = Array.from(document.querySelectorAll(`.m2m-${prefix}-pres:checked`)).map(cb => cb.value);
+        if (madres.length === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>';
+            return;
+        }
+        const matches = window._presentacionesOdoo.filter(p => {
+            if (!madres.includes(p.madre)) return false;
+            if (subs.length > 0 && !subs.includes(p.subcategoria)) return false;
+            return true;
+        });
+        const valores = new Set(matches.map(p => p.presentacion));
+        if (valores.size === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Sin presentaciones registradas para esta selección.</small>';
+            return;
+        }
+        box.innerHTML = Array.from(valores).sort().map(v => {
+            const checked = prevChecked.includes(v) ? "checked" : "";
+            return `<label><input type="checkbox" class="m2m-${prefix}-pres" value="${v}" ${checked}> ${v}</label>`;
+        }).join(" ");
+    }
+
+    async function loadCategoriaArbolYPresentaciones() {
+        try {
+            const [rArbol, rPres] = await Promise.all([
+                fetch("/api/odoo/categorias-arbol"),
+                fetch("/api/odoo/presentaciones"),
+            ]);
+            if (rArbol.ok) window._categoriaArbol = await rArbol.json();
+            if (rPres.ok) window._presentacionesOdoo = await rPres.json();
+        } catch (err) {
+            console.error("Error cargando árbol de categorías/presentaciones:", err);
+        }
+        CASCADA_PREFIJOS.forEach(prefix => {
+            refreshSubcategorias(prefix);
+            refreshPresentaciones(prefix);
+            document.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => {
+                cb.addEventListener("change", () => {
+                    refreshSubcategorias(prefix);
+                    refreshPresentaciones(prefix);
+                });
+            });
+        });
+    }
+    window.loadCategoriaArbolYPresentaciones = loadCategoriaArbolYPresentaciones;
+
+    // Combina madre + subcategoría + presentación elegidos en el campo
+    // `categoria` (CSV) que ya consume el motor (_match_categoria hace OR
+    // contra categoria/categoria_madre/subcategoria/presentacion). Si se
+    // eligió subcategoría/presentación (más específico), NO se agrega la
+    // madre también -- agregarla ampliaría el match a TODA la madre y
+    // anularía el propósito de elegir algo más específico.
+    function getCategoriaCombinada(form, prefix) {
+        const madres = getM2MCheckedValues(form, `.m2m-${prefix}-madre`);
+        const subs = getM2MCheckedValues(form, `.m2m-${prefix}-sub`);
+        const pres = getM2MCheckedValues(form, `.m2m-${prefix}-pres`);
+        const especificos = [];
+        if (subs && subs !== "*") especificos.push(subs);
+        if (pres && pres !== "*") especificos.push(pres);
+        if (especificos.length > 0) return especificos.join(",");
+        if (madres && madres !== "*") return madres;
+        return "*";
+    }
+
     // --- Helper to Render Standardized 10-Column Rule Row ---
     window._reglasCache = window._reglasCache || {};
 
@@ -3242,9 +3343,46 @@ document.addEventListener("DOMContentLoaded", () => {
         form.reset();
     }
 
+    // Reconstruye la selección madre/subcategoría/presentación a partir del
+    // CSV guardado en `categoria` -- infiere a qué madre pertenece cada
+    // valor específico (subcategoría o presentación) cruzando contra el
+    // árbol/presentaciones ya cargados, para poder marcar los checkboxes en
+    // cascada al editar una regla existente.
+    function prefillCategoriaCascada(form, prefix, categoriaCSV) {
+        const valores = String(categoriaCSV || "*").split(",").map(v => v.trim()).filter(Boolean);
+        form.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => { cb.checked = false; });
+        if (valores.length === 0 || valores.includes("*")) {
+            refreshSubcategorias(prefix);
+            refreshPresentaciones(prefix);
+            return;
+        }
+        const madresDirectas = valores.filter(v => v === "Comercial" || v === "Industrial");
+        const otros = valores.filter(v => !madresDirectas.includes(v));
+        const madresInferidas = new Set(madresDirectas);
+        otros.forEach(v => {
+            Object.entries(window._categoriaArbol || {}).forEach(([madre, subs]) => {
+                if (subs.includes(v)) madresInferidas.add(madre);
+            });
+            (window._presentacionesOdoo || []).forEach(p => {
+                if (p.presentacion === v) madresInferidas.add(p.madre);
+            });
+        });
+        form.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => {
+            cb.checked = madresInferidas.has(cb.value);
+        });
+        refreshSubcategorias(prefix);
+        refreshPresentaciones(prefix);
+        document.querySelectorAll(`.m2m-${prefix}-sub`).forEach(cb => {
+            if (otros.includes(cb.value)) cb.checked = true;
+        });
+        document.querySelectorAll(`.m2m-${prefix}-pres`).forEach(cb => {
+            if (otros.includes(cb.value)) cb.checked = true;
+        });
+    }
+
     function prefillRecompra(r, reglaId) {
         setM2MChecked(recompraForm, ".m2m-rec-marca", r.marca);
-        setM2MChecked(recompraForm, ".m2m-rec-cat", r.categoria);
+        prefillCategoriaCascada(recompraForm, "rec", r.categoria);
         setM2MChecked(recompraForm, ".m2m-rec-lista", r.listas_aplicables);
         setFieldValue("cfg-rec-min-cajas", r.min_cajas ?? 2);
         setFieldValue("cfg-rec-max-cajas", r.max_cajas ?? 4);
@@ -3265,7 +3403,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function prefillProntoPago(r, reglaId) {
         setM2MChecked(prontoPagoForm, ".m2m-pp-marca", r.marca);
-        setM2MChecked(prontoPagoForm, ".m2m-pp-cat", r.categoria);
+        prefillCategoriaCascada(prontoPagoForm, "pp", r.categoria);
         setM2MChecked(prontoPagoForm, ".m2m-pp-lista", r.listas_aplicables);
         setFieldValue("cfg-pp-ventana-tipo", r.ventana_pago_tipo || "entrega");
         setFieldValue("cfg-pp-ventana-dias", r.ventana_pago_dias ?? 3);
@@ -3287,7 +3425,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function prefillVolumen(r, reglaId) {
         setM2MChecked(descuentoVolumenForm, ".m2m-vol-marca", r.marca);
-        setM2MChecked(descuentoVolumenForm, ".m2m-vol-cat", r.categoria);
+        prefillCategoriaCascada(descuentoVolumenForm, "vol", r.categoria);
         setM2MChecked(descuentoVolumenForm, ".m2m-vol-lista", r.listas_aplicables);
         if (cfgDescVolLitros) cfgDescVolLitros.value = r.litros_minimo ?? r.min_cantidad ?? 0;
         setFieldValue("cfg-desc-vol-max", r.max_cantidad ?? 999999);
@@ -3308,7 +3446,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function prefillPromo(r, reglaId) {
         setM2MChecked(promoForm, ".m2m-promo-marca", r.marca);
-        setM2MChecked(promoForm, ".m2m-promo-cat", r.categoria || r.categorias_aplica);
+        prefillCategoriaCascada(promoForm, "promo", r.categoria || r.categorias_aplica);
         setM2MChecked(promoForm, ".m2m-promo-lista", r.listas_aplicables);
         setFieldValue("cfg-promo-tipo-beneficio", r.tipo_beneficio || "producto");
         if (r.productos) {
@@ -3336,7 +3474,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function prefillProducto(r, reglaId) {
         setM2MChecked(productoPromoForm, ".m2m-prod-marca", r.marca);
-        setM2MChecked(productoPromoForm, ".m2m-prod-cat", r.categoria);
+        prefillCategoriaCascada(productoPromoForm, "prod", r.categoria);
         setM2MChecked(productoPromoForm, ".m2m-prod-lista", r.listas_aplicables);
         if (r.productos) {
             const skus = String(r.productos).split(",").map(s => s.trim());
@@ -3361,17 +3499,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function prefillDiferencial(r, reglaId) {
-        setM2MChecked(diferencialForm, ".m2m-dif-marca", r.marca);
-        setM2MChecked(diferencialForm, ".m2m-dif-cat", r.categoria);
         setM2MChecked(diferencialForm, ".m2m-dif-lista", r.listas_aplicables);
         setFieldValue("cfg-dif-nombre", r.nombre || "Diferencial Cambiario");
         setFieldValue("cfg-dif-tipo-diferencial", r.tipo_diferencial || "fijo_35_ves_usd");
         setFieldValue("cfg-dif-tipo-calculo", r.tipo_calculo || "fijo");
         setFieldValue("cfg-dif-porcentaje-fijo", r.porcentaje_fijo ?? 0.35);
         setFieldValue("cfg-dif-monedas", r.monedas_aplicables || "*");
-        setFieldValue("cfg-dif-unidad", r.unidad_medida || "USD");
-        setFieldValue("cfg-dif-min", r.min_cantidad ?? 0);
-        setFieldValue("cfg-dif-max", r.max_cantidad ?? 999999);
         setFieldValue("cfg-dif-desde", r.vigencia_desde || "");
         setFieldValue("cfg-dif-hasta", r.vigencia_hasta || "");
         const rpp = document.getElementById("cfg-dif-requiere-pago-previo");
@@ -3436,7 +3569,7 @@ document.addEventListener("DOMContentLoaded", () => {
         promoForm.addEventListener("submit", async (e) => {
             e.preventDefault();
             const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
-            const cats = getM2MCheckedValues(promoForm, ".m2m-promo-cat");
+            const cats = getCategoriaCombinada(promoForm, "promo");
             const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
             const tipoBenef = cfgPromoTipoBeneficio.value;
             const productosSeleccionados = tipoBenef === "producto"
@@ -3575,7 +3708,7 @@ document.addEventListener("DOMContentLoaded", () => {
         descuentoVolumenForm.addEventListener("submit", async (e) => {
             e.preventDefault();
             const marcas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-marca");
-            const cats = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-cat");
+            const cats = getCategoriaCombinada(descuentoVolumenForm, "vol");
             const listas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-lista");
             const minQty = parseFloat(cfgDescVolLitros.value || 0);
             const payload = {

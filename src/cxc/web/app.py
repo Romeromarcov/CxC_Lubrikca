@@ -37,7 +37,15 @@ from cxc.engine.equivalents import (
 )
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.runner import EngineRunner
-from cxc.models import Cliente, EstadoVinculacion, Moneda, OrdenVenta, TipoTasa, Vinculacion
+from cxc.models import (
+    Cliente,
+    EstadoVinculacion,
+    Moneda,
+    OrdenVenta,
+    TipoTasa,
+    Vinculacion,
+    set_marca_fallback,
+)
 from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
 from cxc.odoo.price import OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
@@ -743,6 +751,7 @@ class DescuentoMarcaRequest(BaseModel):
 class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
+    marca_fallback: str = "GLOBAL OIL"
 
 
 class PricelistMapRequest(BaseModel):
@@ -3048,6 +3057,13 @@ async def get_reporte_saldos(refresh: bool = False):
 
         fast_resolver = FastPriceResolver(all_lines_map, price_resolver_engine)
 
+        try:
+            marca_fallback_cfg = repo.get_config("marca_fallback")
+            if marca_fallback_cfg:
+                set_marca_fallback(marca_fallback_cfg)
+        except Exception:
+            pass
+
         all_desc_mc = repo.descuentos_marca_categoria()
         all_desc_vol = repo.descuentos_volumen()
         all_reg_rec = repo.reglas_recurrencia()
@@ -4178,6 +4194,8 @@ async def get_config_meta():
             meta["cash_window_business_days"] = "3"
         if "descuento_recompra" not in meta:
             meta["descuento_recompra"] = "0.05"
+        if "marca_fallback" not in meta:
+            meta["marca_fallback"] = "GLOBAL OIL"
         return meta
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4191,6 +4209,8 @@ async def post_config_meta(req: MetaRequest):
         repo.set_config("cash_window_business_days", str(req.cash_window_business_days))
         repo.set_config("descuento_recompra", str(req.descuento_recompra))
         repo.set_regla_recurrencia_porcentaje("recompra", Decimal(str(req.descuento_recompra)))
+        repo.set_config("marca_fallback", req.marca_fallback or "GLOBAL OIL")
+        set_marca_fallback(req.marca_fallback)
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
@@ -5548,6 +5568,115 @@ async def get_odoo_categorias():
             if idx >= 0 and idx + 1 < len(parts):
                 nombres.add(parts[idx + 1])
         return sorted(nombres)
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _categoria_raiz_y_subcategoria(display_name: str) -> tuple[str, str]:
+    """(raíz, subcategoría) a partir del path completo de una categ_id de
+
+    Odoo, con la misma lógica de reducción que usa el motor (ver
+    OdooClient._productos)."""
+    parts = [p.strip() for p in (display_name or "").split("/") if p.strip()]
+    if not parts:
+        return "", ""
+    if "Comercial" in parts:
+        raiz = "Comercial"
+    elif "Industrial" in parts:
+        raiz = "Industrial"
+    else:
+        non_all = [p for p in parts if p != "All"]
+        raiz = non_all[0] if non_all else parts[0]
+    idx = parts.index(raiz) if raiz in parts else -1
+    sub = parts[idx + 1] if (idx >= 0 and idx + 1 < len(parts)) else ""
+    return raiz, sub
+
+
+@app.get("/api/odoo/categorias-arbol")
+async def get_odoo_categorias_arbol():
+    """Árbol categoría madre -> subcategorías en vivo desde Odoo (sale_ok),
+
+    para el selector en cascada de los formularios de reglas: primero se
+    elige la madre (Comercial/Industrial), luego solo se ofrecen las
+    subcategorías reales que existen debajo de esa madre.
+    """
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        productos = execute(
+            "product.template",
+            "search_read",
+            [[["sale_ok", "=", True]]],
+            {"fields": ["categ_id"]},
+        )
+        categ_ids = {p["categ_id"][0] for p in productos if p.get("categ_id")}
+        if not categ_ids:
+            return {"Comercial": [], "Industrial": []}
+        categs = execute(
+            "product.category", "read", [sorted(categ_ids)], {"fields": ["id", "display_name"]}
+        )
+        arbol: dict[str, set[str]] = {}
+        for c in categs:
+            raiz, sub = _categoria_raiz_y_subcategoria(c.get("display_name") or "")
+            # Solo las 2 categorías madre reales del negocio -- descarta
+            # ruido de categorías default de Odoo mal asignadas (ej. "All").
+            if raiz not in ("Comercial", "Industrial"):
+                continue
+            arbol.setdefault(raiz, set())
+            if sub:
+                arbol[raiz].add(sub)
+        return {madre: sorted(subs) for madre, subs in sorted(arbol.items())}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/odoo/presentaciones")
+async def get_odoo_presentaciones():
+    """Presentaciones/envases reales en vivo desde Odoo (sale_ok), extraídas
+
+    del NOMBRE del producto (contenido entre paréntesis al final, ej. "...
+    (1x6)" -> "1X6"), etiquetadas con su categoría madre/subcategoría para
+    que el formulario solo ofrezca las presentaciones que realmente existen
+    dentro de la madre/subcategoría elegida (ej. Industrial no debe mostrar
+    "1X6", Comercial no debe mostrar "TAMBOR" salvo excepciones reales).
+    """
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        productos = execute(
+            "product.template",
+            "search_read",
+            [[["sale_ok", "=", True]]],
+            {"fields": ["name", "categ_id"]},
+        )
+        categ_ids = {p["categ_id"][0] for p in productos if p.get("categ_id")}
+        categs = execute(
+            "product.category", "read", [sorted(categ_ids)], {"fields": ["id", "display_name"]}
+        )
+        nombre_categ = {c["id"]: c.get("display_name") or "" for c in categs}
+
+        vistos: set[tuple[str, str, str]] = set()
+        resultado = []
+        for p in productos:
+            c = p.get("categ_id")
+            if not c:
+                continue
+            raiz, sub = _categoria_raiz_y_subcategoria(nombre_categ.get(c[0], ""))
+            if raiz not in ("Comercial", "Industrial"):
+                continue
+            m = re.search(r"\(([^)]*)\)\s*$", str(p.get("name") or "").strip())
+            if not m:
+                continue
+            pres = m.group(1).strip().upper()
+            key = (raiz, sub, pres)
+            if key in vistos:
+                continue
+            vistos.add(key)
+            resultado.append({"madre": raiz, "subcategoria": sub, "presentacion": pres})
+        resultado.sort(key=lambda x: (x["madre"], x["subcategoria"], x["presentacion"]))
+        return resultado
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

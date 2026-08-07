@@ -196,6 +196,7 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
         cantidad_entregada=_dec(rec.get("qty_delivered")),
         descuento=_dec(rec.get("discount")),
         subcategoria=str(rec.get("subcategoria", "") or ""),
+        presentacion_odoo=str(rec.get("presentacion_odoo", "") or ""),
     )
 
 
@@ -462,25 +463,32 @@ class OdooXmlRpcReader(OdooReader):
         productos = self._productos(prod_ids)
         for r in recs:
             pid = _m2o_id(r.get("product_id"))
-            marca, categoria, subcategoria = (
-                productos.get(int(pid), ("", "", "")) if pid else ("", "", "")
+            marca, categoria, subcategoria, presentacion = (
+                productos.get(int(pid), ("", "", "", "")) if pid else ("", "", "", "")
             )
             r["marca"] = marca
             r["categoria"] = categoria
             r["subcategoria"] = subcategoria
+            r["presentacion_odoo"] = presentacion
         return [map_linea(r) for r in recs]
 
-    def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str, str]]:
-        """Mapa producto → (marca, categoría raíz, subcategoría).
+    def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str, str, str]]:
+        """Mapa producto → (marca, categoría raíz, subcategoría, presentación).
 
         categoría raíz = Comercial / Industrial (1er nivel del path de
         ``categ_id``). subcategoría = 2do nivel (ej. "Comercial/Elite" →
-        "Elite"), vacío si el producto no tiene ese nivel -- usada para
-        afinar el match de reglas de descuento por debajo de Comercial/
-        Industrial (ver engine/discounts.py).
+        "Elite"). presentación = contenido entre paréntesis al final del
+        NOMBRE del producto (ej. "ELITE API SP SAE 0W-20 (1x6)" → "1X6";
+        "... (Tambor)" → "TAMBOR") -- es la presentación/envase real que
+        usa el negocio, vacía si el producto no la trae en el nombre (ej.
+        ítems que no son de venta de lubricante: fletes, filtros, etc.).
+        Todas usadas para afinar el match de reglas de descuento por debajo
+        de Comercial/Industrial (ver engine/discounts.py).
         """
-        recs = self._read(self.MODEL_PRODUCT, sorted(prod_ids), ["id", "brand_id", "categ_id"])
-        out: dict[int, tuple[str, str, str]] = {}
+        recs = self._read(
+            self.MODEL_PRODUCT, sorted(prod_ids), ["id", "name", "brand_id", "categ_id"]
+        )
+        out: dict[int, tuple[str, str, str, str]] = {}
         for r in recs:
             marca = _m2o_name(r.get("brand_id"))
             categoria_full = _m2o_name(r.get("categ_id"))
@@ -500,7 +508,11 @@ class OdooXmlRpcReader(OdooReader):
                     idx = parts.index(categoria)
                     if idx + 1 < len(parts):
                         subcategoria = parts[idx + 1]
-            out[int(r["id"])] = (marca, categoria, subcategoria)
+            presentacion = ""
+            m = re.search(r"\(([^)]*)\)\s*$", str(r.get("name") or "").strip())
+            if m:
+                presentacion = m.group(1).strip().upper()
+            out[int(r["id"])] = (marca, categoria, subcategoria, presentacion)
         return out
 
     # --- Pagos ---------------------------------------------------------------

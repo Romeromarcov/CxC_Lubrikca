@@ -105,6 +105,26 @@ class OrdenVenta:
     dias_credito: int = 0
 
 
+# Fallback de marca configurable (Configuración > Ajustes generales, clave
+# "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
+# (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor
+# cuando la línea no trae marca. Mutable a propósito: se actualiza una vez
+# por request desde el config guardado (ver web/app.py y engine/runner.py),
+# sin tener que enhebrar el repo por todo el motor solo para esto.
+_MARCA_FALLBACK_DEFAULT = "GLOBAL OIL"
+
+
+def set_marca_fallback(valor: str) -> None:
+    global _MARCA_FALLBACK_DEFAULT
+    if not isinstance(valor, str) or not valor.strip():
+        return
+    _MARCA_FALLBACK_DEFAULT = valor.strip()
+
+
+def get_marca_fallback() -> str:
+    return _MARCA_FALLBACK_DEFAULT
+
+
 # --- 3.3 LineasOrden (espejo) -----------------------------------------------
 @dataclass
 class LineaOrden:
@@ -122,62 +142,38 @@ class LineaOrden:
     # "Comercial/Elite" -> "Elite"). Vacío si el producto no tiene ese nivel.
     # Ver OdooClient._productos.
     subcategoria: str = ""
+    # Presentación/envase REAL, parseada del NOMBRE del producto en Odoo (el
+    # contenido entre paréntesis al final, ej. "... (1x6)" -> "1X6", "...
+    # (Tambor)" -> "TAMBOR"). Vacío si el producto no la trae en el nombre
+    # (ítems que no son de venta de lubricante). Ver OdooClient._productos.
+    presentacion_odoo: str = ""
 
     @property
     def resolved_marca(self) -> str:
-        """
-        Retorna la marca de la línea. Si el campo marca viene vacío o es '*',
-        busca la palabra 'sinoco' en el nombre/descripción del producto (case-insensitive).
-        Si no se encuentra 'sinoco', asigna 'GLOBAL OIL'.
-        """
+        """Marca de la línea, o el fallback configurable si viene vacía/'*'."""
         m = str(self.marca or "").strip()
         if m and m != "*":
             return m
-        prod_name = str(self.producto or "").strip().lower()
-        if "sinoco" in prod_name:
-            return "SINOCO"
-        return "GLOBAL OIL"
+        return get_marca_fallback()
 
     @property
     def presentacion(self) -> str:
-        """
-        Retorna la presentación clasificada según la descripción/nombre del producto:
-        'CAJA', 'PAILA' o 'TAMBOR'.
-        """
-        if not self.producto:
-            return (
-                "CAJA"
-                if str(self.categoria).upper() == "COMERCIAL"
-                else ("PAILA" if "PAILA" in str(self.categoria).upper() else "CAJA")
-            )
-        nu = str(self.producto).upper()
-        import re
+        """Presentación/envase de la línea -- prioriza el dato REAL traído
 
-        if (
-            "PAILA" in nu
-            or "CARBOYA" in nu
-            or "18,92" in nu
-            or "18.92" in nu
-            or "5 GAL" in nu
-            or "5GAL" in nu
-        ):
-            return "PAILA"
-        if "TAMBOR" in nu or "208 L" in nu or "208L" in nu or "55 GAL" in nu or "55GAL" in nu:
-            return "TAMBOR"
-        if re.search(r"\(?\b\d+X\d+\b\)?", nu) or "CAJA" in nu:
-            return "CAJA"
+        de Odoo (``presentacion_odoo``); si no está disponible (línea sin
+        ese dato, ej. backend Sheets legado), cae al guess binario anterior
+        por categoría (Comercial -> "CAJA", Industrial -> "PAILA")."""
+        if self.presentacion_odoo:
+            return self.presentacion_odoo
         return "CAJA" if str(self.categoria).upper() == "COMERCIAL" else "PAILA"
 
     @property
     def categoria_madre(self) -> str:
-        """
-        Retorna la categoría madre ('Comercial' o 'Industrial') asociada.
-        """
-        p = self.presentacion
-        if p == "CAJA":
-            return "Comercial"
-        elif p in ("PAILA", "TAMBOR"):
-            return "Industrial"
+        """Categoría madre ('Comercial' o 'Industrial') de la línea -- ya es
+
+        el dato real traído de Odoo en ``categoria`` (ver
+        OdooClient._productos), esta propiedad solo lo expone con el nombre
+        que usa el motor de matching."""
         return self.categoria or "Comercial"
 
 
