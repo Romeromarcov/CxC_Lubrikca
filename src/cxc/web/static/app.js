@@ -3129,14 +3129,27 @@ document.addEventListener("DOMContentLoaded", () => {
         return Array.from(document.querySelectorAll(`.m2m-${prefix}-madre:checked`)).map(cb => cb.value);
     }
 
+    // "Todas (*)" en madre no restringe -- se expande a las madres reales
+    // (Comercial/Industrial) solo para decidir qué subcategorías/
+    // presentaciones mostrar, nunca se manda así al backend (eso lo maneja
+    // getCategoriaCombinada, que ya trata "*" como "sin restricción").
+    function madresEfectivas(prefix) {
+        const checked = madresChecked(prefix);
+        if (checked.length === 0) return [];
+        if (checked.includes("*")) return Object.keys(window._categoriaArbol || {});
+        return checked;
+    }
+
     function subsChecked(prefix) {
-        return Array.from(document.querySelectorAll(`.m2m-${prefix}-sub:checked`)).map(cb => cb.value);
+        return Array.from(document.querySelectorAll(`.m2m-${prefix}-sub:checked`))
+            .map(cb => cb.value)
+            .filter(v => v !== "*");
     }
 
     function refreshSubcategorias(prefix) {
         const box = document.querySelector(`.m2m-${prefix}-sub-box`);
         if (!box) return;
-        const madres = madresChecked(prefix);
+        const madres = madresEfectivas(prefix);
         const prevChecked = subsChecked(prefix);
         if (madres.length === 0) {
             box.innerHTML = '<small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>';
@@ -3144,14 +3157,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const subs = new Set();
         madres.forEach(m => (window._categoriaArbol[m] || []).forEach(s => subs.add(s)));
-        if (subs.size === 0) {
-            box.innerHTML = '<small style="color:var(--text-muted)">Sin subcategorías registradas para esta madre.</small>';
-            return;
-        }
-        box.innerHTML = Array.from(subs).sort().map(s => {
+        let html = Array.from(subs).sort().map(s => {
             const checked = prevChecked.includes(s) ? "checked" : "";
             return `<label><input type="checkbox" class="m2m-${prefix}-sub" value="${s}" ${checked}> ${s}</label>`;
         }).join(" ");
+        html += ` <label><input type="checkbox" class="m2m-${prefix}-sub" value="*"> Todas (*)</label>`;
+        box.innerHTML = html;
         box.querySelectorAll(`.m2m-${prefix}-sub`).forEach(cb => {
             cb.addEventListener("change", () => refreshPresentaciones(prefix));
         });
@@ -3160,7 +3171,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function refreshPresentaciones(prefix) {
         const box = document.querySelector(`.m2m-${prefix}-pres-box`);
         if (!box) return;
-        const madres = madresChecked(prefix);
+        const madres = madresEfectivas(prefix);
         const subs = subsChecked(prefix);
         const prevChecked = Array.from(document.querySelectorAll(`.m2m-${prefix}-pres:checked`)).map(cb => cb.value);
         if (madres.length === 0) {
@@ -3173,14 +3184,17 @@ document.addEventListener("DOMContentLoaded", () => {
             return true;
         });
         const valores = new Set(matches.map(p => p.presentacion));
+        let html;
         if (valores.size === 0) {
-            box.innerHTML = '<small style="color:var(--text-muted)">Sin presentaciones registradas para esta selección.</small>';
-            return;
+            html = '<small style="color:var(--text-muted)">Sin presentaciones registradas para esta selección.</small>';
+        } else {
+            html = Array.from(valores).sort().map(v => {
+                const checked = prevChecked.includes(v) ? "checked" : "";
+                return `<label><input type="checkbox" class="m2m-${prefix}-pres" value="${v}" ${checked}> ${v}</label>`;
+            }).join(" ");
         }
-        box.innerHTML = Array.from(valores).sort().map(v => {
-            const checked = prevChecked.includes(v) ? "checked" : "";
-            return `<label><input type="checkbox" class="m2m-${prefix}-pres" value="${v}" ${checked}> ${v}</label>`;
-        }).join(" ");
+        html += ` <label><input type="checkbox" class="m2m-${prefix}-pres" value="*"> Todas (*)</label>`;
+        box.innerHTML = html;
     }
 
     async function loadCategoriaArbolYPresentaciones() {
