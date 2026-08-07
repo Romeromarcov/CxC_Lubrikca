@@ -2708,38 +2708,39 @@ document.addEventListener("DOMContentLoaded", () => {
     // Populate Brands and Categories from Odoo in discount registration dropdowns
     async function populateBrandsAndCategories() {
         try {
-            // Fetch brands
+            // Prefijos de los 6 formularios de reglas de descuento que usan
+            // checkboxes M2M de marca/categoría (antes harcodeados en el HTML).
+            const prefixes = ["rec", "pp", "vol", "promo", "prod", "dif"];
+
+            const fillM2MBox = (selectorClass, values, valueToLabel) => {
+                const inputs = document.querySelectorAll(selectorClass);
+                if (inputs.length === 0) return;
+                const parent = inputs[0].parentElement;
+                if (!parent) return;
+                const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
+                const elClass = selectorClass.replace(".", "");
+                let html = values.map(v => {
+                    const checked = currentChecked.includes(v) ? "checked" : "";
+                    return `<label><input type="checkbox" class="${elClass}" value="${v}" ${checked}> ${valueToLabel ? valueToLabel(v) : v}</label>`;
+                }).join(" ");
+                const isTodasChecked = currentChecked.includes("*") || currentChecked.length === 0;
+                html += ` <label><input type="checkbox" class="${elClass}" value="*" ${isTodasChecked ? "checked" : ""}> Todas (*)</label>`;
+                parent.innerHTML = html;
+            };
+
+            // Fetch brands (ya vivas desde Odoo — product.brand)
             const bRes = await fetch("/api/odoo/marcas");
             if (bRes.ok) {
                 const brands = await bRes.json();
-                const ppMarca = document.getElementById("cfg-pp-marca");
-                const prodMarca = document.getElementById("cfg-prod-marca");
-                if (ppMarca) ppMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
-                if (prodMarca) prodMarca.innerHTML = '<option value="*">Todas las marcas (*)</option>';
-                brands.forEach(b => {
-                    const opt = document.createElement("option");
-                    opt.value = b;
-                    opt.textContent = b;
-                    if (ppMarca) ppMarca.appendChild(opt.cloneNode(true));
-                    if (prodMarca) prodMarca.appendChild(opt.cloneNode(true));
-                });
+                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-marca`, brands));
             }
 
-            // Fetch categories
+            // Fetch categories (ahora vivas desde Odoo — product.category,
+            // reducidas con la misma lógica de raíz que usa el motor)
             const cRes = await fetch("/api/odoo/categorias");
             if (cRes.ok) {
                 const cats = await cRes.json();
-                const ppCat = document.getElementById("cfg-pp-categoria");
-                const prodCat = document.getElementById("cfg-prod-cat");
-                if (ppCat) ppCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
-                if (prodCat) prodCat.innerHTML = '<option value="*">Todas las categorías (*)</option>';
-                cats.forEach(c => {
-                    const opt = document.createElement("option");
-                    opt.value = c;
-                    opt.textContent = c;
-                    if (ppCat) ppCat.appendChild(opt.cloneNode(true));
-                    if (prodCat) prodCat.appendChild(opt.cloneNode(true));
-                });
+                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-cat`, cats));
             }
 
             // Fetch products for product promo multiselect

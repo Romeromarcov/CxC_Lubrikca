@@ -5504,7 +5504,47 @@ async def get_odoo_marcas():
 
 @app.get("/api/odoo/categorias")
 async def get_odoo_categorias():
-    return ["Comercial", "Industrial"]
+    """Categorías "raíz" en vivo desde Odoo, con la MISMA lógica de reducción
+
+    que usa el motor para clasificar cada línea (``OdooClient._productos``:
+    busca "Comercial"/"Industrial" en el path de ``categ_id``, y si no
+    aparece ninguno cae al primer segmento distinto de "All"). Evita
+    categorías harcodeadas que no coincidan con las categorías reales de
+    los productos y rompan el match de las reglas de descuento.
+    """
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        # Solo categorías REALMENTE asignadas a algún producto -- evita ruido
+        # de categorías default de Odoo (Expenses, Saleable, All) que nunca
+        # aparecen en una línea de orden y por tanto nunca deben ofrecerse
+        # como opción de "categoría aplicable" en una regla de descuento.
+        productos = execute(
+            "product.template", "search_read", [[]], {"fields": ["categ_id"]}
+        )
+        categ_ids = {p["categ_id"][0] for p in productos if p.get("categ_id")}
+        if not categ_ids:
+            return ["Comercial", "Industrial"]
+        categs = execute(
+            "product.category", "read", [sorted(categ_ids)], {"fields": ["id", "display_name"]}
+        )
+        raices: set[str] = set()
+        for c in categs:
+            full = c.get("display_name") or ""
+            parts = [p.strip() for p in full.split("/") if p.strip()]
+            if not parts:
+                continue
+            if "Comercial" in parts:
+                raices.add("Comercial")
+            elif "Industrial" in parts:
+                raices.add("Industrial")
+            else:
+                non_all = [p for p in parts if p != "All"]
+                raices.add(non_all[0] if non_all else parts[0])
+        return sorted(raices)
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/config/tasa-referencia")
