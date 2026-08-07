@@ -2093,8 +2093,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 porcentaje: parseFloat(rawPct),
                 min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas")?.value || 1),
                 max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
-                max_usos_mes: parseInt(document.getElementById("cfg-rec-max-usos")?.value || 1),
-                dias_ventana: parseInt(document.getElementById("cfg-rec-ventana")?.value || 30),
                 unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
                 tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
                 vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
@@ -2103,7 +2101,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
                 aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
-                dias_gracia: parseInt(document.getElementById("cfg-rec-dias-gracia")?.value || 3)
+                ventana_pago_tipo: document.getElementById("cfg-rec-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-rec-ventana-dias")?.value || 3)
             };
             try {
                 const res = await fetch("/api/config/descuentos-recompra", {
@@ -2136,7 +2135,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
             const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
             const payload = {
-                dias_gracia: parseInt(document.getElementById("cfg-pp-dias-gracia")?.value || 0),
+                ventana_pago_tipo: document.getElementById("cfg-pp-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-pp-ventana-dias")?.value || 3),
                 marca: marcas,
                 categoria: cats,
                 min_cantidad: parseFloat(document.getElementById("cfg-pp-min")?.value || 0),
@@ -3175,9 +3175,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const listasText = formatListasDisplay(rawListasStd);
 
         let espArr = [];
-        if (r.dias_gracia) espArr.push(`Gracia: ${r.dias_gracia}d`);
-        if (r.max_usos_mes) espArr.push(`Max Usos: ${r.max_usos_mes}/mes`);
-        if (r.dias_ventana) espArr.push(`Ventana: ${r.dias_ventana}d`);
+        const VENTANA_PAGO_LABELS = { entrega: "Entrega", emision: "Emisión", vencimiento: "Vencimiento", no_aplica: "No aplica" };
+        if (r.ventana_pago_tipo && r.ventana_pago_tipo !== "no_aplica") {
+            espArr.push(`Ventana Pago: ${VENTANA_PAGO_LABELS[r.ventana_pago_tipo] || r.ventana_pago_tipo} +${r.ventana_pago_dias || 0}d`);
+        }
         if (r.tipo_evaluacion) espArr.push(`Eval: ${r.tipo_evaluacion} (${r.dias_evaluacion || 0}d)`);
         if (r.descuento_fallback) espArr.push(`Fallback: ${(parseFloat(r.descuento_fallback)*100).toFixed(2)}%`);
         if (r.regalo_tipo) espArr.push(`Modo: ${r.regalo_tipo}`);

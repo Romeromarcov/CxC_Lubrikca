@@ -792,7 +792,8 @@ class ExclusionRequest(BaseModel):
 class ProntoPagoRequest(BaseModel):
     marca: str = "*"
     categoria: str = "*"
-    dias_gracia: int = 3
+    ventana_pago_tipo: str = "vencimiento"
+    ventana_pago_dias: int = 3
     porcentaje: float = 0.05
     min_cantidad: float | None = 0.0
     max_cantidad: float | None = 999999.0
@@ -930,8 +931,6 @@ class RecompraRequest(BaseModel):
     categoria: str = "CAJA"
     listas_aplicables: str = "*"
     porcentaje: float = 0.03
-    max_usos_mes: int = 1
-    dias_ventana: int = 30
     min_cajas: int = 2
     max_cajas: int = 4
     unidad_medida: str | None = "CAJAS"
@@ -942,7 +941,8 @@ class RecompraRequest(BaseModel):
     requiere_pago_previo: bool = False
     aplica_a: str = "linea"
     descripcion: str = ""
-    dias_gracia: int = 3
+    ventana_pago_tipo: str = "vencimiento"
+    ventana_pago_dias: int = 3
 
 
 class ProductoPromoRequest(BaseModel):
@@ -6080,9 +6080,8 @@ async def get_todas_reglas_descuento():
                     "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "campos_especiales": {
-                        "max_usos_mes": r.max_usos_mes,
-                        "dias_ventana": r.dias_ventana,
-                        "dias_gracia": getattr(r, "dias_gracia", 3),
+                        "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
+                        "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
                     },
                     "activo": r.activo,
                     "aplica_a": getattr(r, "aplica_a", "linea"),
@@ -6109,7 +6108,8 @@ async def get_todas_reglas_descuento():
                     "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "campos_especiales": {
-                        "dias_gracia": r.dias_gracia,
+                        "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
+                        "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
                         "monedas_aplicables": r.monedas_aplicables,
                     },
                     "activo": r.activo,
@@ -6268,7 +6268,8 @@ async def get_config_pronto_pago():
                 "regla_id": r.regla_id,
                 "marca": r.marca,
                 "categoria": r.categoria,
-                "dias_gracia": r.dias_gracia,
+                "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
+                "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
                 "porcentaje": float(r.porcentaje),
                 "monedas_aplicables": r.monedas_aplicables,
                 "listas_aplicables": r.listas_aplicables,
@@ -6304,7 +6305,8 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             regla_id=regla_id,
             marca=req.marca,
             categoria=req.categoria,
-            dias_gracia=req.dias_gracia,
+            ventana_pago_tipo=req.ventana_pago_tipo,
+            ventana_pago_dias=req.ventana_pago_dias,
             min_cantidad=min_q,
             max_cantidad=max_q,
             unidad_medida=req.unidad_medida or "CAJAS",
@@ -6427,8 +6429,6 @@ async def get_config_recompra():
                 "marca": getattr(r, "marca", "GLOBAL OIL"),
                 "categoria": getattr(r, "categoria", "CAJA"),
                 "porcentaje": float(r.porcentaje),
-                "max_usos_mes": r.max_usos_mes,
-                "dias_ventana": r.dias_ventana,
                 "min_cajas": getattr(r, "min_cajas", 2),
                 "max_cajas": getattr(r, "max_cajas", 4),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
@@ -6437,7 +6437,8 @@ async def get_config_recompra():
                 "requiere_pago_previo": r.requiere_pago_previo,
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
-                "dias_gracia": getattr(r, "dias_gracia", 3),
+                "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
+                "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
             }
             for r in rules
         ]
@@ -6463,8 +6464,6 @@ async def post_config_recompra(req: RecompraRequest):
             marca=req.marca,
             categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
-            max_usos_mes=req.max_usos_mes,
-            dias_ventana=req.dias_ventana,
             min_cajas=req.min_cajas,
             max_cajas=req.max_cajas,
             vigencia_desde=v_desde,
@@ -6473,7 +6472,8 @@ async def post_config_recompra(req: RecompraRequest):
             requiere_pago_previo=req.requiere_pago_previo,
             descripcion=req.descripcion,
             aplica_a=req.aplica_a,
-            dias_gracia=req.dias_gracia,
+            ventana_pago_tipo=req.ventana_pago_tipo,
+            ventana_pago_dias=req.ventana_pago_dias,
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}

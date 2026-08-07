@@ -16,7 +16,8 @@ def test_descuentos_serde_roundtrip():
         regla_id="PP1",
         marca="Sinoco",
         categoria="Comercial",
-        dias_gracia=5,
+        ventana_pago_tipo="vencimiento",
+        ventana_pago_dias=5,
         porcentaje=Decimal("0.05"),
         monedas_aplicables="USD",
         listas_aplicables="4",
@@ -26,20 +27,20 @@ def test_descuentos_serde_roundtrip():
     pp_row = serde.pronto_pago_to_row(pp)
     pp_back = serde.pronto_pago_from_row(pp_row)
     assert pp_back.regla_id == "PP1"
-    assert pp_back.dias_gracia == 5
+    assert pp_back.ventana_pago_dias == 5
 
     rec = DescuentoRecompra(
         regla_id="REC1",
         porcentaje=Decimal("0.05"),
-        max_usos_mes=3,
-        dias_ventana=30,
+        ventana_pago_tipo="vencimiento",
+        ventana_pago_dias=30,
         vigencia_desde=date(2026, 1, 1),
         activo=True,
     )
     rec_row = serde.recompra_to_row(rec)
     rec_back = serde.recompra_from_row(rec_row)
     assert rec_back.regla_id == "REC1"
-    assert rec_back.max_usos_mes == 3
+    assert rec_back.ventana_pago_dias == 30
 
     prod = DescuentoProducto(
         regla_id="PROD1",

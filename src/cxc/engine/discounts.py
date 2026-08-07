@@ -11,7 +11,7 @@ El motor es una función PURA: recibe dataclasses, devuelve una
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypeVar
 
@@ -171,6 +171,49 @@ def _bcv_completo_monto(
         total += base * rate
     return total
 
+
+
+# "Ventana de pago" (reemplaza "Días de gracia" -- pedido explícito del
+# usuario, agosto 2026): en vez de un único número de días de gracia
+# siempre relativo a un mismo punto fijo, la regla ahora elige DESDE
+# CUÁNDO se cuentan esos días.
+VENTANA_PAGO_TIPOS = ("entrega", "emision", "vencimiento", "no_aplica")
+
+
+def ventana_pago_vigente(
+    tipo: str,
+    dias: int,
+    fecha_evaluacion: date,
+    *,
+    fecha_emision: date,
+    fecha_entrega: date | None,
+    dias_credito: int,
+) -> bool:
+    """True si, a ``fecha_evaluacion``, el descuento sigue dentro de su
+
+    "Ventana de pago" configurada:
+
+    - ``"vencimiento"``: vigente mientras ``fecha_evaluacion`` no supere el
+      vencimiento (emisión/entrega + ``dias_credito``) MÁS ``dias`` de
+      margen -- ej. vencimiento + 3 días.
+    - ``"emision"``: vigente hasta ``dias`` días después de la emisión de
+      la orden, sin importar el vencimiento -- ej. solo 1 día tras emitida.
+    - ``"entrega"``: igual que "emision" pero contado desde la fecha de
+      entrega (si no hay entrega registrada, cae a la emisión).
+    - ``"no_aplica"`` (o vacío/desconocido): sin restricción de esta
+      ventana -- siempre vigente por este criterio.
+    """
+    if not tipo or tipo == "no_aplica" or tipo not in VENTANA_PAGO_TIPOS:
+        return True
+    if tipo == "emision":
+        limite = fecha_emision + timedelta(days=dias)
+    elif tipo == "entrega":
+        base = fecha_entrega or fecha_emision
+        limite = base + timedelta(days=dias)
+    else:  # "vencimiento"
+        base = fecha_entrega or fecha_emision
+        limite = base + timedelta(days=dias_credito) + timedelta(days=dias)
+    return fecha_evaluacion <= limite
 
 
 # Nombres lógicos usados SOLO como fallback cuando EngineInputs no trae
@@ -479,8 +522,6 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                         min_cajas=1,
                         max_cajas=9999,
                         porcentaje=regla.valor,
-                        max_usos_mes=1,
-                        dias_ventana=30,
                         vigencia_desde=regla.vigencia_desde,
                         vigencia_hasta=regla.vigencia_hasta,
                         activo=regla.activo,
@@ -498,7 +539,6 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             # pedido del cliente) no hay recompra posible.
             orden_anterior = inp.orden_anterior_cliente
             pagada_completo = False
-            dias_desde_anterior = 0
             if orden_anterior is not None:
                 for v in inp.orden_anterior_cliente_vincs:
                     congelar_en_vinculacion(v)
@@ -508,7 +548,6 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                     else Decimal("0")
                 )
                 pagada_completo = pagado_anterior >= orden_anterior.monto_total - _EPS
-                dias_desde_anterior = (fecha_orden - orden_anterior.fecha).days
 
             if orden_anterior is not None and pagada_completo:
                 recompra_monto = Decimal("0")
@@ -530,9 +569,13 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                             or _match_categoria(r.categoria, ln.presentacion)
                             or _match_categoria(r.categoria, ln.categoria_madre)
                         )
-                        dias_gracia_r = getattr(r, "dias_gracia", 3)
-                        ventana_ok = dias_desde_anterior <= (
-                            orden_anterior.dias_credito + dias_gracia_r
+                        ventana_ok = ventana_pago_vigente(
+                            getattr(r, "ventana_pago_tipo", "vencimiento"),
+                            getattr(r, "ventana_pago_dias", 3),
+                            fecha_orden,
+                            fecha_emision=orden_anterior.fecha,
+                            fecha_entrega=None,
+                            dias_credito=orden_anterior.dias_credito,
                         )
                         if (
                             marca_ok

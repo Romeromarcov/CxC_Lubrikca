@@ -170,7 +170,8 @@ descuentos_pronto_pago = Table(
     Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="USD"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
-    Column("dias_gracia", Integer, nullable=False, server_default="3"),
+    Column("ventana_pago_tipo", String, nullable=False, server_default="vencimiento"),
+    Column("ventana_pago_dias", Integer, nullable=False, server_default="3"),
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
@@ -262,8 +263,6 @@ descuentos_recompra = Table(
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("porcentaje", PCT, nullable=False, server_default="0.03"),
-    Column("max_usos_mes", Integer, nullable=False, server_default="1"),
-    Column("dias_ventana", Integer, nullable=False, server_default="30"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
@@ -271,7 +270,8 @@ descuentos_recompra = Table(
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
-    Column("dias_gracia", Integer, nullable=False, server_default="3"),
+    Column("ventana_pago_tipo", String, nullable=False, server_default="vencimiento"),
+    Column("ventana_pago_dias", Integer, nullable=False, server_default="3"),
 )
 
 # --- 3.7e DescuentoProducto (config) -----------------------------------------

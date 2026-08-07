@@ -1464,16 +1464,17 @@
 
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label>Máximo Usos / Mes</label>
-                                <input type="number" id="cfg-rec-max-usos" min="1" step="1" value="1" required>
+                                <label title="Desde cuándo se cuentan los días de la ventana">Ventana de Pago</label>
+                                <select id="cfg-rec-ventana-tipo">
+                                    <option value="vencimiento" selected>Desde el vencimiento</option>
+                                    <option value="emision">Desde la emisión de la orden</option>
+                                    <option value="entrega">Desde la entrega</option>
+                                    <option value="no_aplica">No aplica</option>
+                                </select>
                             </div>
                             <div class="form-group" style="flex:1">
-                                <label title="Campo legado, ya no se usa en el cálculo -- la ventana real ahora es días de crédito de la orden anterior + Días de Gracia">Días Ventana Recompra (legado)</label>
-                                <input type="number" id="cfg-rec-ventana" min="1" step="1" value="30" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Aplica si la orden anterior del cliente está totalmente pagada y esta nueva orden llega dentro de (días de crédito reales de la orden anterior + este valor)">Días de Gracia (ventana real)</label>
-                                <input type="number" id="cfg-rec-dias-gracia" min="0" step="1" value="3" required>
+                                <label title="Días de margen contados desde el punto elegido en 'Ventana de Pago' -- ej. 'Desde el vencimiento' + 3 = aplica hasta 3 días después de vencida">Días de margen</label>
+                                <input type="number" id="cfg-rec-ventana-dias" min="0" step="1" value="3" required>
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Fecha de Inicio</label>
@@ -1531,10 +1532,10 @@
                     </div>
                 </section>
 
-                <!-- PANEL 2: Descuento por Pronto Pago (con Días de Gracia) -->
+                <!-- PANEL 2: Descuento por Pronto Pago (con Ventana de Pago) -->
                 <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #10b981;">
                     <div class="panel-header">
-                        <h2>⏱️ Descuento por Pronto Pago (Días de Gracia)</h2>
+                        <h2>⏱️ Descuento por Pronto Pago (Ventana de Pago)</h2>
                         <p>Configura días de gracia, marcas, categorías, listas y porcentaje de pronto pago</p>
                     </div>
 
@@ -1595,8 +1596,17 @@
 
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label>Días de Gracia</label>
-                                <input type="number" id="cfg-pp-dias-gracia" min="0" value="3" required>
+                                <label title="Desde cuándo se cuentan los días de la ventana">Ventana de Pago</label>
+                                <select id="cfg-pp-ventana-tipo">
+                                    <option value="vencimiento" selected>Desde el vencimiento</option>
+                                    <option value="emision">Desde la emisión de la orden</option>
+                                    <option value="entrega">Desde la entrega</option>
+                                    <option value="no_aplica">No aplica</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Días de margen contados desde el punto elegido en 'Ventana de Pago'">Días de margen</label>
+                                <input type="number" id="cfg-pp-ventana-dias" min="0" value="3" required>
                             </div>
                             <div class="form-group" style="flex:1">
                                 <label>Monedas Aplicables</label>
