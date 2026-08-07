@@ -79,14 +79,14 @@ class RatesScraper:
                     diario_rates.append(tb)
                     if 6 <= s.timestamp.hour <= 9:
                         manana_rates.append(tb)
-                    elif 10 <= s.timestamp.hour <= 13:
+                    elif 11 <= s.timestamp.hour <= 14:
                         tarde_rates.append(tb)
 
             if fila.tasa_binance > Decimal("0"):
                 diario_rates.append(fila.tasa_binance)
                 if 6 <= now.hour <= 9:
                     manana_rates.append(fila.tasa_binance)
-                elif 10 <= now.hour <= 13:
+                elif 11 <= now.hour <= 14:
                     tarde_rates.append(fila.tasa_binance)
 
             def avg(lst: list[Decimal]) -> Decimal | None:
@@ -109,7 +109,48 @@ class RatesScraper:
 
         self._repo.append_serie_tasa(fila)
         self._chequear_alerta(fila)
+
+        # Cierre de día (última captura programada, 22:00): el promedio
+        # diario y el diferencial calculados arriba ya son, por
+        # construcción, el promedio de TODAS las capturas del día (6:00 a
+        # 22:00) -- se persisten en TasasHistoricasAuditoria como el
+        # "promedio definitivo" para que get_binance_rate_for_date/
+        # get_rate_for_datetime los usen en cálculos futuros, en vez de
+        # quedar solo en SerieTasas (que un lookup por día exacto no
+        # siempre revisita fila por fila).
+        if now.hour == 22 and fila.tasa_binance_diario:
+            self._finalizar_promedio_diario(now, fila)
+
         return fila
+
+    def _finalizar_promedio_diario(self, now: datetime, fila: SerieTasa) -> None:
+        try:
+            rows_today = [
+                s for s in self._repo.all_serie_tasas() if s.timestamp.date() == now.date()
+            ]
+            capturas_ok = sum(1 for s in rows_today if s.capturada_ok) + (
+                1 if fila.capturada_ok else 0
+            )
+            self._repo.upsert_tasa_historica_auditoria(
+                {
+                    "fecha": now.date().isoformat(),
+                    "tasa_bcv_usd": str(fila.tasa_bcv) if fila.tasa_bcv else "",
+                    "tasa_bcv_euro": str(fila.tasa_bcv_euro) if fila.tasa_bcv_euro else "",
+                    "tasa_binance_promedio_diario": str(fila.tasa_binance_diario),
+                    "diferencial_bcv_binance_pct": (
+                        str(fila.diferencial_bcv_binance_pct)
+                        if fila.diferencial_bcv_binance_pct is not None
+                        else ""
+                    ),
+                    "fuente": "scraper (cierre de día, promedio definitivo)",
+                    "notas": (
+                        f"Promedio Binance definitivo {now.date().isoformat()}: "
+                        f"{capturas_ok} captura(s) reales de 6:00 a 22:00."
+                    ),
+                }
+            )
+        except Exception as e:
+            logger.warning("Error grabando promedio Binance definitivo de cierre de día: %s", e)
 
     def _intentar_captura(self) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
         tasa_binance: Decimal | None = None

@@ -583,6 +583,27 @@ class PostgresRepository(Repository):
                     ],
                 )
 
+    def upsert_tasa_historica_auditoria(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.tasas_historicas_auditoria,
+                [
+                    {
+                        "fecha": date.fromisoformat(str(row["fecha"])[:10]),
+                        "tasa_bcv_usd": row.get("tasa_bcv_usd") or None,
+                        "tasa_bcv_euro": row.get("tasa_bcv_euro") or None,
+                        "tasa_binance_promedio_diario": row.get("tasa_binance_promedio_diario")
+                        or None,
+                        "diferencial_bcv_binance_pct": row.get("diferencial_bcv_binance_pct")
+                        or "",
+                        "fuente": row.get("fuente") or "",
+                        "notas": row.get("notas") or "",
+                    }
+                ],
+                ["fecha"],
+            )
+
     def all_pagos_huerfanos_cerrados(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.pagos_huerfanos_cerrados)).all()
@@ -607,6 +628,35 @@ class PostgresRepository(Repository):
                         "motivo": row.get("motivo") or "",
                         "cerrado_por": row.get("cerrado_por") or "",
                         "timestamp_cierre": datetime.fromisoformat(row["timestamp_cierre"]),
+                    }
+                ],
+                ["pago_id"],
+            )
+
+    def all_pagos_tasa_binance_override(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.pagos_tasa_binance_override)).all()
+        return [
+            {
+                "pago_id": r.pago_id,
+                "tasa_binance": str(r.tasa_binance),
+                "editado_por": r.editado_por or "",
+                "timestamp_edicion": r.timestamp_edicion.isoformat(),
+            }
+            for r in rows
+        ]
+
+    def upsert_pago_tasa_binance_override(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.pagos_tasa_binance_override,
+                [
+                    {
+                        "pago_id": row["pago_id"],
+                        "tasa_binance": row["tasa_binance"],
+                        "editado_por": row.get("editado_por") or "",
+                        "timestamp_edicion": datetime.fromisoformat(row["timestamp_edicion"]),
                     }
                 ],
                 ["pago_id"],

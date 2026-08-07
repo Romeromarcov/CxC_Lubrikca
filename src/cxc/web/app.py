@@ -757,6 +757,7 @@ class VincularMasivoRequest(BaseModel):
 
 class TasaBinanceEditRequest(BaseModel):
     tasa_binance: float
+    editado_por: str = ""
 
 
 class TasaBcvVarianteRequest(BaseModel):
@@ -1410,49 +1411,81 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_SCRAPER_HORA_INICIO = 6  # primera captura del día, 6:00
+_SCRAPER_HORA_FIN = 22  # última captura del día, 22:00 (inclusive)
+
+
+def _now_caracas() -> datetime:
+    from datetime import timedelta
+
+    return (datetime.now(UTC) - timedelta(hours=4)).replace(tzinfo=None)
+
+
+def _segundos_hasta_proxima_hora_en_punto(now: datetime) -> float:
+    """Segundos hasta el próximo filo de hora (ej. 14:07 -> 52.8 min).
+
+    El scraper se despierta cada hora EN PUNTO para evaluar si está dentro
+    de la ventana 6:00-22:00 -- así la primera captura del día cae
+    exactamente a las 6:00 y no en un minuto arbitrario relativo al
+    arranque del proceso.
+    """
+    from datetime import timedelta
+
+    proxima = (now.replace(minute=0, second=0, microsecond=0)) + timedelta(hours=1)
+    return max((proxima - now).total_seconds(), 60.0)
+
+
 async def run_scraper_in_background():
-    # Esperar 30 segundos tras el arranque inicial antes del primer scrape de tasas
-    await asyncio.sleep(30)
+    from cxc.alerts import build_alerter
+    from cxc.scraper.bcv import BcvClient
+    from cxc.scraper.binance import BinanceClient
+    from cxc.scraper.rates_scraper import RatesScraper
+
     while True:
         try:
-            print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
-            from cxc.alerts import build_alerter
-            from cxc.scraper.bcv import BcvClient
-            from cxc.scraper.binance import BinanceClient
-            from cxc.scraper.rates_scraper import RatesScraper
-
-            config = AppConfig.from_env()
-            repo = get_repo()
-            # BcvClient hace scraping directo del sitio del BCV (USD y EUR),
-            # NO depende de que alguien cargue la tasa en Odoo. Bug real
-            # encontrado en auditoría (agosto 2026): OdooBcvClient lee
-            # res.currency.rate, y la fila de EUR (currency_id=125) llevaba
-            # congelada desde 2026-07-07 -- casi un mes sin actualizarse en
-            # Odoo, mientras USD sí se mantenía al día -- todo el sistema
-            # mostraba/calculaba con esa tasa EUR vieja sin ninguna señal de
-            # error. El scraping directo trae ambas tasas frescas cada hora,
-            # igual que ya hacía antes de migrar (temporalmente) a Odoo.
-            scraper = RatesScraper(
-                repo,
-                BinanceClient(config.binance),
-                BcvClient(config.bcv),
-                build_alerter(config.alert),
-                config.scraper_policy,
-            )
-            from datetime import timedelta
-
-            now_utc = datetime.now(UTC)
-            now_caracas = (now_utc - timedelta(hours=4)).replace(tzinfo=None)
-            fila = scraper.run(now_caracas)
-            print(
-                f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
-                f"Binance={fila.tasa_binance}"
-            )
+            now_caracas = _now_caracas()
+            if _SCRAPER_HORA_INICIO <= now_caracas.hour <= _SCRAPER_HORA_FIN:
+                print(
+                    "FastAPI Daemon: Iniciando ciclo de scraping de tasas "
+                    f"(BCV y Binance) -- {now_caracas.isoformat()}..."
+                )
+                config = AppConfig.from_env()
+                repo = get_repo()
+                # BcvClient hace scraping directo del sitio del BCV (USD y
+                # EUR), NO depende de que alguien cargue la tasa en Odoo.
+                # Bug real encontrado en auditoría (agosto 2026):
+                # OdooBcvClient lee res.currency.rate, y la fila de EUR
+                # (currency_id=125) llevaba congelada desde 2026-07-07 --
+                # casi un mes sin actualizarse en Odoo, mientras USD sí se
+                # mantenía al día -- todo el sistema mostraba/calculaba con
+                # esa tasa EUR vieja sin ninguna señal de error. El
+                # scraping directo trae ambas tasas frescas cada hora.
+                scraper = RatesScraper(
+                    repo,
+                    BinanceClient(config.binance),
+                    BcvClient(config.bcv),
+                    build_alerter(config.alert),
+                    config.scraper_policy,
+                )
+                fila = scraper.run(now_caracas)
+                print(
+                    f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
+                    f"Binance={fila.tasa_binance}"
+                )
+            else:
+                print(
+                    "FastAPI Daemon: fuera de la ventana de captura "
+                    f"({_SCRAPER_HORA_INICIO}:00-{_SCRAPER_HORA_FIN}:00) -- "
+                    f"hora actual {now_caracas.strftime('%H:%M')}, esperando."
+                )
         except Exception as e:
             print(f"Error en daemon de scraping de tasas: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-        # Repetir cada 1 hora (3600 segundos)
-        await asyncio.sleep(3600)
+        # Dormir hasta el próximo filo de hora en punto (Caracas) -- ese es
+        # el único punto en el que el scraper vuelve a evaluar/capturar,
+        # sea que la hora recién corrida haya estado dentro o fuera de la
+        # ventana 6:00-22:00.
+        await asyncio.sleep(_segundos_hasta_proxima_hora_en_punto(_now_caracas()))
 
 
 def _aplicar_migraciones_pendientes() -> None:
@@ -5327,6 +5360,64 @@ async def post_editar_tasa_binance(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.post("/api/pago/{pago_id}/tasa-binance")
+async def post_editar_tasa_binance_pago_pendiente(pago_id: str, req: TasaBinanceEditRequest):
+    """Corrige la tasa Binance de un pago AÚN PENDIENTE (sin Vinculación
+
+    real todavía -- el modal de detalle lo muestra como "sugerencia, aún
+    sin confirmar"). Pedido explícito del usuario: misma validación que
+    ``/api/vinculacion/{vinc_id}/tasa-binance`` (no puede superar el
+    máximo ni caer bajo el mínimo capturado ese día en SerieTasas), pero
+    sin un ``vinc_id`` real contra qué escribir -- se guarda en
+    ``pagos_tasa_binance_override`` (por ``pago_id``), y
+    ``get_cobranza_pagos_unificado`` lo aplica al armar la fila de ese
+    pago mientras siga pendiente.
+    """
+    try:
+        repo = get_repo()
+        nueva_tasa = Decimal(str(req.tasa_binance))
+        if nueva_tasa <= Decimal("0"):
+            raise HTTPException(status_code=400, detail="La tasa Binance debe ser positiva.")
+
+        pago = next((p for p in repo.all_pagos() if p.pago_id == pago_id), None)
+        if pago is None:
+            raise HTTPException(status_code=404, detail=f"Pago {pago_id} no encontrado.")
+
+        fecha = pago.fecha_pago.date()
+        dia_rows = repo.serie_tasas_del_dia(fecha)
+        binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
+        if binance_vals:
+            minimo, maximo = min(binance_vals), max(binance_vals)
+            if nueva_tasa < minimo or nueva_tasa > maximo:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"La tasa Binance ({nueva_tasa}) debe estar entre {minimo} y "
+                        f"{maximo} -- rango capturado el {fecha.isoformat()}."
+                    ),
+                )
+
+        repo.upsert_pago_tasa_binance_override(
+            {
+                "pago_id": pago_id,
+                "tasa_binance": str(nueva_tasa),
+                "editado_por": req.editado_por,
+                "timestamp_edicion": datetime.now().isoformat(),
+            }
+        )
+
+        return {
+            "status": "success",
+            "pago_id": pago_id,
+            "tasa_binance_aplicada": float(nueva_tasa),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.post("/api/vinculacion/{vinc_id}/tasa-bcv-tipo")
 async def post_cambiar_tipo_tasa_bcv(
     vinc_id: str, req: TasaBcvVarianteRequest, background_tasks: BackgroundTasks
@@ -6845,6 +6936,12 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
 
         pagos_rows = repo.all_pagos_full()
         pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows}
+        # Correcciones manuales de tasa Binance para pagos AÚN pendientes
+        # (sin Vinculación real) -- ver POST /api/pago/{pago_id}/tasa-binance.
+        binance_override_map = {
+            r["pago_id"]: parse_decimal_safe(r.get("tasa_binance", "0"))
+            for r in repo.all_pagos_tasa_binance_override()
+        }
         clientes = repo.all_clientes()
         clientes_map_obj = {c.cliente_id: c for c in clientes}
         clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
@@ -6985,6 +7082,21 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             extra = comun(pid, item["cliente_id"], item.get("so_id"), item["pago_fecha"])
             if not visible(extra["vendedor"]):
                 continue
+
+            tasa_binance_item = item["tasa_binance"]
+            monto_binance_usd_item = item["monto_pago_binance"]
+            monto_pago_restante = item["saldo_pago"]
+            override_binance = binance_override_map.get(pid)
+            if override_binance and override_binance > Decimal("0"):
+                tasa_binance_item = float(override_binance)
+                moneda_pago_item = str(item["moneda_pago"] or "USD").upper().strip()
+                if moneda_pago_item == "USD":
+                    monto_binance_usd_item = item["monto_pago_original"]
+                else:
+                    monto_binance_usd_item = float(
+                        Decimal(str(item["monto_pago_original"])) / override_binance
+                    )
+
             unificados.append(
                 {
                     "pago_id": pid,
@@ -6995,12 +7107,12 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "monto_pago_original": item["monto_pago_original"],
                     "moneda_pago": item["moneda_pago"],
                     "tasa_bcv": item["tasa_bcv"],
-                    "tasa_binance": item["tasa_binance"],
+                    "tasa_binance": tasa_binance_item,
                     "monto_pago_bcv_usd": item["monto_pago"],
-                    "monto_pago_binance_usd": item["monto_pago_binance"],
+                    "monto_pago_binance_usd": monto_binance_usd_item,
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": 0.0,
-                    "monto_por_aplicar": item["saldo_pago"],
+                    "monto_por_aplicar": monto_pago_restante,
                     "so_saldo_pendiente": item.get("so_saldo_pendiente"),
                     "factura_saldo_odoo": None,
                     "so_id": item.get("so_id"),
@@ -7016,7 +7128,10 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "monto_sugerido": item.get("monto_sugerido"),
                     "puede_vincular": True,
                     "puede_cerrar_huerfano": item.get("so_id") is None,
-                    "puede_editar_tasas": False,
+                    # Sin vinc_id real todavía -- la edición se guarda en
+                    # pagos_tasa_binance_override (ver POST /api/pago/
+                    # {pago_id}/tasa-binance), no en una Vinculación.
+                    "puede_editar_tasas": True,
                     "puede_marcar_recibido": not extra["recibido"],
                     **extra,
                 }

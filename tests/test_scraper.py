@@ -203,3 +203,68 @@ def test_primera_captura_falla_sin_previa_alerta_y_lanza() -> None:
     with pytest.raises(ScraperError):
         scraper.run(datetime(2026, 6, 27, 10, 0))
     assert len(alerter.mensajes) == 1
+
+
+def test_promedio_tarde_usa_ventana_11_a_14() -> None:
+    """Pedido del usuario (agosto 2026): turno de la tarde es 11:00-14:00
+
+    (antes 10:00-13:00) -- una captura a las 10 o 15 NO debe entrar al
+    promedio de la tarde."""
+    from cxc.models import SerieTasa
+
+    repo = InMemoryRepository()
+    alerter = CollectingAlerter()
+    for hora, tasa in [
+        (10, Decimal("50")),
+        (11, Decimal("60")),
+        (14, Decimal("70")),
+        (15, Decimal("80")),
+    ]:
+        repo.append_serie_tasa(
+            SerieTasa(
+                timestamp=datetime(2026, 8, 6, hora, 0),
+                tasa_bcv=Decimal("700"),
+                tasa_binance=tasa,
+                fuente="test",
+                es_heredada=False,
+                capturada_ok=True,
+            )
+        )
+    buy, sell = _load("binance_buy.json"), _load("binance_sell.json")
+    html = (FIXTURES / "bcv_page.html").read_text(encoding="utf-8")
+    scraper = _scraper(
+        repo,
+        alerter,
+        binance_post=lambda u, b, t: buy if b["tradeType"] == "BUY" else sell,
+        bcv_get=lambda u, t: html,
+    )
+    fila = scraper.run(datetime(2026, 8, 6, 16, 0))
+    # Solo 11:00 (60) y 14:00 (70) cuentan -> promedio 65.
+    assert fila.tasa_binance_tarde == Decimal("65")
+
+
+def test_cierre_de_dia_22h_persiste_promedio_definitivo() -> None:
+    """Pedido del usuario: el promedio diario definitivo y el diferencial
+
+    se calculan y graban en TasasHistoricasAuditoria al cierre del día
+    (última captura, 22:00), para usarse en cálculos futuros."""
+    repo = InMemoryRepository()
+    alerter = CollectingAlerter()
+    buy, sell = _load("binance_buy.json"), _load("binance_sell.json")
+    html = (FIXTURES / "bcv_page.html").read_text(encoding="utf-8")
+    scraper = _scraper(
+        repo,
+        alerter,
+        binance_post=lambda u, b, t: buy if b["tradeType"] == "BUY" else sell,
+        bcv_get=lambda u, t: html,
+    )
+    scraper.run(datetime(2026, 8, 6, 6, 0))
+    assert repo.all_tasas_historicas_auditoria() == []  # nada antes de las 22:00
+
+    fila = scraper.run(datetime(2026, 8, 6, 22, 0))
+    hist = repo.all_tasas_historicas_auditoria()
+    assert len(hist) == 1
+    row = hist[0]
+    assert row["fecha"] == "2026-08-06"
+    assert Decimal(row["tasa_binance_promedio_diario"]) == fila.tasa_binance_diario
+    assert "cierre de día" in row["fuente"]
