@@ -55,8 +55,16 @@ def main() -> None:
     rows = repo.all_listas_precios_historicas()
     print(f"Filas en listas_precios_historicas: {len(rows)}")
 
+    # active_test=False: incluir productos ARCHIVADOS -- varios productos de
+    # la ventana histórica (feb-mar 2026) ya fueron descontinuados/
+    # archivados en Odoo para hoy, pero siguen siendo el match correcto
+    # (ej. código 462 -> id 1087, archivado). Sin esto, tanto el pase por
+    # código como el fallback por nombre los pierden en silencio.
     productos = execute(
-        "product.product", "search_read", [[]], {"fields": ["default_code", "name"]}
+        "product.product",
+        "search_read",
+        [[]],
+        {"fields": ["default_code", "name"], "context": {"active_test": False}},
     )
     codigo_a_id: dict[str, int] = {}
     nombre_a_id: dict[str, int] = {}

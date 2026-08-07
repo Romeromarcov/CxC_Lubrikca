@@ -188,9 +188,29 @@ def _bcv_completo_monto(
 _LISTA_USD_FALLBACK = "USD"
 _LISTA_VES_FALLBACK = "BCV"
 
+# Lista USD vigente durante la ventana de la Lista Histórica de Auditoría
+# (Odoo pricelist id 7, "Pago USD Marzo" -- archivada hoy, superada por la
+# 8, pero con reglas de precio fijo reales para ese período). Aclaratoria
+# del usuario (agosto 2026, auditoría S00020): la Lista Histórica de
+# Auditoría SOLO sustituye la lista VES en ese período/esas órdenes -- el
+# teórico USD (y el precio real si la orden termina pagándose por la ruta
+# USD) debe seguir usando la lista USD que correspondía entonces, NO el
+# mismo precio de la lista histórica. Bug real corregido: antes
+# ``_precio_unitario_linea`` devolvía el precio histórico para AMBAS listas
+# (VES y USD) sin distinguir, y ``_lista_usd_activa`` devolvía la lista USD
+# de HOY (id 8) en vez de la vigente para esa fecha.
+_LISTA_USD_HISTORICA = "7"
+
 
 def _lista_usd_activa(inp: EngineInputs) -> str:
-    """Id de pricelist USD vigente, según Configuración (``valid_usd``)."""
+    """Id de pricelist USD vigente, según Configuración (``valid_usd``).
+
+    Para órdenes de la ventana histórica (``orden_es_historica``), la
+    lista USD vigente ENTONCES era la 7 ("Pago USD Marzo"), no la lista
+    USD configurada hoy -- ver ``_LISTA_USD_HISTORICA``.
+    """
+    if inp.orden_es_historica:
+        return _LISTA_USD_HISTORICA
     return inp.valid_usd[0] if inp.valid_usd else _LISTA_USD_FALLBACK
 
 
@@ -229,8 +249,15 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
 def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
     """Precio unitario de la línea -- Lista Histórica de Auditoría si la
 
-    orden cae en esa excepción (Tarea 2), si no la pricelist normal."""
-    if inp.orden_es_historica and inp.historical_price_map:
+    orden cae en esa excepción (Tarea 2) Y la lista solicitada es la VES
+    (la Lista Histórica solo sustituye esa, no la USD -- ver
+    ``_LISTA_USD_HISTORICA``); si no, la pricelist normal (o la 7 para el
+    lado USD de una orden histórica, resuelta por ``_lista_usd_activa``)."""
+    if (
+        inp.orden_es_historica
+        and inp.historical_price_map
+        and str(lista) != _LISTA_USD_HISTORICA
+    ):
         code_key = str(linea.producto).strip()
         if code_key.isdigit():
             code_key = str(int(code_key))
