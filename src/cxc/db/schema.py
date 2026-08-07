@@ -557,6 +557,16 @@ listas_precios_historicas = Table(
     Column("producto_nombre", String, nullable=False, server_default=""),
     Column("precio_usd", MONEY, nullable=False, server_default="0"),
     Column("precio_bcv_euro", MONEY, nullable=False, server_default="0"),
+    # Crosswalk resuelto (código interno de Lubrikca -> product.product.id
+    # de Odoo): ``codigo`` es la numeración propia de la lista histórica
+    # (CSV origen), NO el default_code de Odoo ni el product_id -- y
+    # ``LineaOrden.producto`` (usado en tiempo de ejecución por
+    # ``_precio_unitario_linea``) es el product_id de Odoo. Sin esta
+    # columna el override histórico NUNCA hace match contra una orden real
+    # (bug real encontrado en auditoría, agosto 2026 -- ver
+    # scripts/cruzar_codigos_lista_historica.py). Null = sin match
+    # resuelto todavía.
+    Column("producto_id_odoo", Integer, nullable=True, index=True),
 )
 
 # --- PagosHuerfanosCerrados (marca local -- pago sin orden abierta del

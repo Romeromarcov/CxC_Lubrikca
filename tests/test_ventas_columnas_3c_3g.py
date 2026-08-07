@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from cxc.config import EngineConfig
-from cxc.models import BandejaFacturacion, OrdenVenta, VentasTeorico, Vinculacion
+from cxc.models import BandejaFacturacion, OrdenVenta, SerieTasa, VentasTeorico, Vinculacion
 from cxc.web.app import app
 
 client = TestClient(app)
@@ -1136,3 +1136,99 @@ def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> No
 
     assert item["total_nd_aplicada"] == 375.94
     assert item["total_nc_aplicada"] == 516.89
+
+
+def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_y_eur_para_historica() -> None:
+    """Bug real reportado por el usuario (agosto 2026, cliente Emprendimiento
+
+    Tomas Marcano 5 / orden real S00020): un pago en VES se restaba IGUAL
+    de ambos teoricos (BCV y Binance daban el mismo numero), y para una
+    orden de la ventana historica no se aplicaba la tasa BCV-EUR. Causa
+    raiz: sin Vinculaciones, ``val_bcv``/``val_binance`` (que alimentan
+    ``pagado_teorico_bcv``/``_binance`` y los estatus de pago teoricos)
+    venian de ``pagos_odoo_map`` (mismo numero duplicado, sin ajuste EUR)
+    en vez de ``pagos_bcv_binance_map`` (``_pagos_bcv_binance_por_orden``,
+    ya usado para "Monto Pagado BCV/USD" -- ahora tambien para los
+    teoricos)."""
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_HIST_PAGO", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move":
+            return [
+                {
+                    "id": 950,
+                    "invoice_origin": "SO_HIST_PAGO",
+                    "move_type": "out_invoice",
+                    "amount_untaxed_signed_usd": 28.0,
+                    "amount_total_signed_usd": 32.53,
+                    "amount_total": 16606.59,
+                }
+            ]
+        if model == "account.payment":
+            return [
+                {
+                    "id": 3,
+                    "amount": 16606.59,
+                    "currency_id": [166, "VES"],
+                    "date": "2026-03-09",
+                    "reconciled_invoice_ids": [950],
+                }
+            ]
+        if model in ("sale.order.line", "account.move.line"):
+            return []
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_serie_tasas.return_value = [
+        SerieTasa(
+            timestamp=datetime(2026, 3, 9, 10, 0, 0),
+            tasa_bcv=Decimal("440.9657"),
+            tasa_binance=Decimal("516.8118"),
+            fuente="test",
+            tasa_bcv_euro=Decimal("510.4884"),
+        )
+    ]
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_HIST_PAGO",
+            cliente_id="CLI_HIST_PAGO",
+            vendedor_email="ana@lubrikca.com",
+            fecha=date(2026, 3, 9),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="",  # sin lista -- histórica incondicional
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        )
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = next(it for it in res.json()["items"] if it["so_id"] == "SO_HIST_PAGO")
+
+    # 16606.59 / 510.4884 (tasa BCV-EUR, no la BCV normal) ~= 32.53
+    assert item["pagado_teorico_bcv"] == 32.53
+    # 16606.59 / 516.8118 (tasa Binance normal, el Euro NO la sustituye)
+    assert round(item["pagado_teorico_binance"], 2) == round(16606.59 / 516.8118, 2)
+    # Las dos rutas dan numeros DISTINTOS -- ya no se duplica el mismo valor.
+    assert item["pagado_teorico_bcv"] != item["pagado_teorico_binance"]

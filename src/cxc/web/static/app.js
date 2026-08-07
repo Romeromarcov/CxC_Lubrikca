@@ -149,6 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja1TableBody = document.getElementById("bandeja1-table-body");
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
+    const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
 
     // Elements - Auditoria
     const auditKpiConformes = document.getElementById("audit-kpi-conformes");
@@ -275,6 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadVentas === "function") loadVentas();
             } else if (path === "reporte") {
                 if (typeof loadReporte === "function") loadReporte();
+                if (typeof loadReporteCxcCliente === "function") loadReporteCxcCliente();
             } else if (path === "auditoria") {
                 if (typeof loadAuditoria === "function") loadAuditoria();
                 if (typeof loadAuditoriaVentasAlertas === "function") loadAuditoriaVentasAlertas();
@@ -663,12 +665,121 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.aprobarDescuentoSistema = aprobarDescuentoSistema;
 
+    // Cuentas por Cobrar agrupadas por cliente (estilo "Aged Receivable" de
+    // Odoo) -- fila resumen por cliente, expandible a documentos.
+    async function loadReporteCxcCliente() {
+        const tbody = document.getElementById("reporte-cxc-cliente-table-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td></tr>';
+        try {
+            const res = await fetch("/api/reporte-cxc-cliente");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            const fmt = (v) => v == null ? "-" : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+            const colorFmt = (v) => v == null ? "-" : `<span style="color:${v >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
+            // Monto original / saldo pendiente en la misma celda (pedido
+            // explícito del usuario) -- solo disponible para documentos
+            // "orden" (montos_originales); los pagos huérfanos no tienen
+            // un "original" propio distinto de su saldo.
+            const cellFmt = (original, saldo) => {
+                if (original == null) return colorFmt(saldo);
+                return `${fmt(original)}<br><span style="font-size:0.85em">${colorFmt(saldo)}</span>`;
+            };
+            const clientes = data.clientes || [];
+
+            if (clientes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay saldos pendientes.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = "";
+            clientes.forEach((c, idx) => {
+                const rowId = `cxc-cliente-detalle-${idx}`;
+                const row = document.createElement("tr");
+                row.style.cursor = "pointer";
+                row.innerHTML = `
+                    <td><span id="${rowId}-toggle">▶</span></td>
+                    <td><strong>${c.cliente_nombre || c.cliente_id}</strong></td>
+                    <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                    <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                    <td>${colorFmt(c.saldos.venta_real)}</td>
+                    <td>${colorFmt(c.saldos.factura_real)}</td>
+                `;
+                row.addEventListener("click", () => {
+                    const existing = document.getElementById(rowId);
+                    const toggle = document.getElementById(`${rowId}-toggle`);
+                    if (existing) {
+                        existing.remove();
+                        if (toggle) toggle.textContent = "▶";
+                        return;
+                    }
+                    if (toggle) toggle.textContent = "▼";
+                    const detailRow = document.createElement("tr");
+                    detailRow.id = rowId;
+                    const docsHtml = (c.documentos || []).map(d => {
+                        const orig = d.montos_originales || {};
+                        const ref = d.tipo === 'orden'
+                            ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
+                            : (d.numero_pago_odoo || d.pago_id);
+                        return `
+                        <tr>
+                            <td>${ref}</td>
+                            <td>${d.descripcion || (d.tipo === 'pago_huerfano' ? 'Pago sin aplicar' : '')}</td>
+                            <td>${d.fecha || ''}</td>
+                            <td>${d.dias_vencido || 0}</td>
+                            <td>${cellFmt(orig.teorico_bs, d.saldos.teorico_bs)}</td>
+                            <td>${cellFmt(orig.teorico_usd, d.saldos.teorico_usd)}</td>
+                            <td>${cellFmt(orig.venta_real, d.saldos.venta_real)}</td>
+                            <td>${cellFmt(orig.factura_real, d.saldos.factura_real)}</td>
+                        </tr>
+                        `;
+                    }).join("");
+                    const totalRow = `
+                        <tr style="border-top:2px solid #cbd5e1;font-weight:600">
+                            <td colspan="4">Total (saldo neto)</td>
+                            <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                            <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                            <td>${colorFmt(c.saldos.venta_real)}</td>
+                            <td>${colorFmt(c.saldos.factura_real)}</td>
+                        </tr>
+                    `;
+                    detailRow.innerHTML = `
+                        <td colspan="6" style="background:#f8fafc;padding:0.75rem 1.5rem">
+                            <table class="cxc-table" style="margin:0">
+                                <thead>
+                                    <tr>
+                                        <th>Referencia (Orden / Factura)</th>
+                                        <th>Descripción</th>
+                                        <th>Fecha</th>
+                                        <th>Días Vencido</th>
+                                        <th>Teórico Lista BS ($)</th>
+                                        <th>Teórico Lista USD ($)</th>
+                                        <th>Venta Real ($)</th>
+                                        <th>Factura Neta Real ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}${docsHtml ? totalRow : ''}</tbody>
+                            </table>
+                        </td>
+                    `;
+                    row.after(detailRow);
+                });
+                tbody.appendChild(row);
+            });
+        } catch (err) {
+            console.error("Error loading reporte-cxc-cliente:", err);
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar cuentas por cobrar por cliente.</td></tr>';
+        }
+    }
+    window.loadReporteCxcCliente = loadReporteCxcCliente;
+
     // Fetch and render the 3 Dashboard Approval Trays
     async function loadBandeja() {
         try {
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por facturar...</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
+            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -679,6 +790,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray1 = data.ordenes_por_facturar || (Array.isArray(data) ? data.filter(x => !x.facturada) : []);
                 const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
                 const tray3 = data.iva_pendiente_agentes || [];
+                const tray4 = data.auditoria_precios || [];
 
                 // Render Tray 1
                 if (bandeja1TableBody) {
@@ -756,12 +868,37 @@ document.addEventListener("DOMContentLoaded", () => {
                         });
                     }
                 }
+
+                // Render Tray 4 (Bandeja de Auditoría de Precios)
+                if (bandejaAuditoriaPreciosTableBody) {
+                    if (tray4.length === 0) {
+                        bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes en auditoría de precios.</td></tr>';
+                    } else {
+                        bandejaAuditoriaPreciosTableBody.innerHTML = "";
+                        tray4.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${item.fecha || ''}</td>
+                                <td>${item.lista_aplicada_label || ''}</td>
+                                <td>${item.ves_neta_teorica_iva != null ? fmt(item.ves_neta_teorica_iva) : '-'}</td>
+                                <td>${item.usd_neta_teorica_iva != null ? fmt(item.usd_neta_teorica_iva) : '-'}</td>
+                                <td>${item.venta_neta_real != null ? fmt(item.venta_neta_real) : '-'}</td>
+                                <td><strong style="color:#dc2626">${item.total_facturado_neto != null ? fmt(item.total_facturado_neto) : '-'}</strong></td>
+                                <td>${item.motivo || ''}</td>
+                            `;
+                            bandejaAuditoriaPreciosTableBody.appendChild(row);
+                        });
+                    }
+                }
             }
         } catch (err) {
             console.error("Error loading bandeja:", err);
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar bandeja 1.</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
+            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
         }
     }
 

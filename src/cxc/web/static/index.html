@@ -487,12 +487,74 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (nueva, Sección 5 del Manual) -->
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja de Auditoría de Precios</h2>
+                        <p>Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Estas órdenes permanecen visibles en el Reporte General de Saldos.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-auditoria-precios-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 
         <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
+
+                <!-- Cuentas por Cobrar agrupadas por CLIENTE (estilo "Aged Receivable") -->
+                <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2>Cuentas por Cobrar por Cliente</h2>
+                            <p>Saldo pendiente real por cliente según las 4 referencias del sistema (Teórico Lista BS, Teórico Lista USD, Venta Real y Factura Neta Real -- un solo "saldo neto" mezclaría 4 saldos que pueden ser bien distintos entre sí). Incluye pagos sin aplicar como reducción, aunque no estén cruzados contra una orden específica. Clic en una fila para ver el detalle por documento.</p>
+                        </div>
+                        <div class="filter-actions">
+                            <button type="button" class="btn-secondary" onclick="loadReporteCxcCliente()">🔄 Actualizar</button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th></th>
+                                    <th>Cliente</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reporte-cxc-cliente-table-body">
+                                <tr>
+                                    <td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
 
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">

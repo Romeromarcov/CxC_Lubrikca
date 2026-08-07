@@ -14,7 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from cxc.web.app import get_rate_for_datetime
+from cxc.web.app import get_bcv_euro_rate_for_datetime, get_rate_for_datetime
 
 
 def test_usa_serie_tasas_si_hay_captura_del_mismo_dia() -> None:
@@ -62,3 +62,33 @@ def test_usa_default_hardcodeado_solo_si_ninguna_fuente_tiene_dato() -> None:
         bcv, binance = get_rate_for_datetime(datetime(2025, 1, 1, 12, 0), [])
     assert bcv == Decimal("36.5")
     assert binance == Decimal("38.0")
+
+
+def test_bcv_euro_rechaza_fila_implausible_ratio_bajo() -> None:
+    """Bug real (agosto 2026): OdooBcvClient leia la tasa EUR de Odoo, que
+
+    quedo congelada un mes mientras BCV-USD si se actualizaba a diario --
+    SerieTasas repetia fielmente ese valor viejo. Una fila donde EUR/BCV
+    cae por debajo de ~1.05 (nunca ocurre en datos reales -- EUR siempre
+    supera a BCV-USD por un margen mayor) se rechaza como implausible."""
+    rows = [
+        {
+            "timestamp": "2026-08-06 10:00:00",
+            "tasa_bcv": "755.9001",
+            "tasa_bcv_euro": "770.682890",  # ratio ~1.0195 -- congelada
+        }
+    ]
+    resultado = get_bcv_euro_rate_for_datetime(datetime(2026, 8, 6, 12, 0), rows)
+    assert resultado is None
+
+
+def test_bcv_euro_acepta_fila_con_ratio_plausible() -> None:
+    rows = [
+        {
+            "timestamp": "2026-08-06 10:00:00",
+            "tasa_bcv": "755.9001",
+            "tasa_bcv_euro": "872.83",  # ratio ~1.155 -- plausible
+        }
+    ]
+    resultado = get_bcv_euro_rate_for_datetime(datetime(2026, 8, 6, 12, 0), rows)
+    assert resultado == Decimal("872.83")

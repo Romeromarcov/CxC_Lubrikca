@@ -29,6 +29,7 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
+from cxc.engine.cxc_routing import BandejaDestino, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     valor_pagado_bcv_usd,
@@ -461,39 +462,6 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
             }
         )
     return result
-
-
-def _pagos_por_so_desde_cobranza(execute: Any) -> dict[str, float]:
-    """Pagos por orden en equivalente USD, para ``/api/ventas`` (Fase 9).
-
-    Reusa ``get_live_pagos_conciliados`` -- la MISMA función que ya usa
-    ``/api/cobranza/pagos`` -- en vez de reinventar una conversión USD
-    propia contra Odoo (ver historial: una versión anterior armaba su
-    propia consulta a ``account.payment`` + conversión manual por tasa
-    BCV, duplicando lo que Cobranza ya resuelve mejor via los campos
-    ``amount_total_signed_usd``/``amount_residual_usd`` que Odoo calcula
-    por factura).
-
-    Las facturas vienen repetidas una vez por cada pago que las reconcilia
-    parcialmente -- se dedupean por ``factura_id`` antes de sumar (si no,
-    una factura pagada con 2 abonos parciales se contaría dos veces).
-    """
-    if not execute:
-        return {}
-    facturas_por_id: dict[str, dict[str, Any]] = {}
-    for pago in get_live_pagos_conciliados(execute):
-        for f in pago["facturas"]:
-            if f.get("tipo") == "out_invoice":
-                facturas_por_id[f["factura_id"]] = f
-
-    totales: dict[str, float] = {}
-    for f in facturas_por_id.values():
-        so = f.get("so_id")
-        if not so:
-            continue
-        pagado = max(0.0, f["monto_usd"] - f["residual_usd"])
-        totales[so] = totales.get(so, 0.0) + pagado
-    return totales
 
 
 def _pagos_bcv_binance_por_orden(
@@ -1196,13 +1164,32 @@ def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | 
     """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`.
 
     None si no hay ninguna fila con esa columna capturada (huérfana en la
-    mayoría de los despliegues -- el scraper la captura pero nada la usaba).
+    mayoría de los despliegues -- el scraper la captura pero nada la usaba),
+    o si la fila más cercana falla la guardia de plausibilidad (ver abajo)
+    -- en ese caso quien llama debe caer al fallback de
+    ``TasasHistoricasAuditoria`` (``get_eur_rate_for_date``).
+
+    Guardia de plausibilidad (bug real, agosto 2026): ``OdooBcvClient``
+    (fuente del scraper hasta este fix) lee la tasa EUR de
+    ``res.currency.rate`` en Odoo, que llevaba congelada desde 2026-07-07
+    (casi un mes) mientras BCV-USD sí se actualizaba a diario -- el scraper
+    repetía fielmente ese valor viejo hora tras hora en ``SerieTasas`` sin
+    ninguna señal de error. Empíricamente EUR/BCV-USD nunca baja de ~1.05
+    en los datos reales de esta serie (BCV siempre devalúa más rápido que
+    EUR en términos relativos); una fila cuyo ratio cae por debajo de ese
+    piso es casi con certeza una tasa EUR estancada, no real.
     """
     candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
     closest_row = _closest_serie_row(dt, candidatas)
-    if closest_row:
-        return parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
-    return None
+    if not closest_row:
+        return None
+    tasa_eur = parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
+    tasa_bcv_fila = parse_decimal_safe(closest_row.get("tasa_bcv", "0"))
+    if tasa_bcv_fila > Decimal("0"):
+        ratio = tasa_eur / tasa_bcv_fila
+        if ratio < Decimal("1.05"):
+            return None
+    return tasa_eur
 
 
 def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
@@ -1430,16 +1417,25 @@ async def run_scraper_in_background():
         try:
             print("FastAPI Daemon: Iniciando ciclo de scraping de tasas (BCV y Binance)...")
             from cxc.alerts import build_alerter
-            from cxc.scraper.bcv import OdooBcvClient
+            from cxc.scraper.bcv import BcvClient
             from cxc.scraper.binance import BinanceClient
             from cxc.scraper.rates_scraper import RatesScraper
 
             config = AppConfig.from_env()
             repo = get_repo()
+            # BcvClient hace scraping directo del sitio del BCV (USD y EUR),
+            # NO depende de que alguien cargue la tasa en Odoo. Bug real
+            # encontrado en auditoría (agosto 2026): OdooBcvClient lee
+            # res.currency.rate, y la fila de EUR (currency_id=125) llevaba
+            # congelada desde 2026-07-07 -- casi un mes sin actualizarse en
+            # Odoo, mientras USD sí se mantenía al día -- todo el sistema
+            # mostraba/calculaba con esa tasa EUR vieja sin ninguna señal de
+            # error. El scraping directo trae ambas tasas frescas cada hora,
+            # igual que ya hacía antes de migrar (temporalmente) a Odoo.
             scraper = RatesScraper(
                 repo,
                 BinanceClient(config.binance),
-                OdooBcvClient(config.odoo),
+                BcvClient(config.bcv),
                 build_alerter(config.alert),
                 config.scraper_policy,
             )
@@ -3324,14 +3320,30 @@ async def get_reporte_saldos(refresh: bool = False):
             venta_bruta_teorica_con_iva = venta_bruta_teorica * (1 + float(config.engine.iva_rate))
             diferencia_precio_lista = round(venta_bruta_teorica_con_iva - monto_orig, 2)
 
-            # Tarea 3, umbral de cierre: orden ya facturada cuyo saldo con
-            # descuentos (BCV o USD lista, cualquiera de las dos) es <= $1 ->
-            # se oculta del reporte general y pasa a la tabla de "pendientes
-            # por cerrar (saldo <= $1)". No aplica a ordenes sin facturar
-            # (esas se manejan por la Tarea 3.1 / bandeja de facturacion).
-            if o.facturada and (
-                saldo_con_descuento_bcv <= 1.0 or saldo_con_descuento_lista_usd <= 1.0
-            ):
+            # Árbol de enrutamiento de CxC (Sección 5 del Manual) -- ver
+            # src/cxc/engine/cxc_routing.py, misma fuente de verdad que
+            # /api/ventas y /api/bandeja. Para órdenes YA facturadas,
+            # "pagado vs algún teórico" (BS o USD, tolerancia $1 -- igual
+            # que el umbral de cierre histórico de este reporte) hace que
+            # la orden salga de CxC activa (antes el criterio era idéntico
+            # pero sin pasar por la función compartida). El caso NUEVO:
+            # pagado vs Factura Real en Odoo pero NO vs ningún teórico ->
+            # NO se oculta, permanece visible + se marca para la nueva
+            # Bandeja de Auditoría de Precios (sospecha de precio/lista por
+            # debajo del estándar).
+            clasificacion_cxc = clasificar_estado_cxc(
+                so_id=o.so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=saldo_con_descuento_bcv <= 1.0,
+                teorico_usd_pagado=saldo_con_descuento_lista_usd <= 1.0,
+                factura_real_pagada=bool(o.facturada)
+                and (saldo_factura_odoo if saldo_factura_odoo is not None else 0.0) <= 1.0,
+                nacio_en_lista_usd=(
+                    not is_historical and lista_id_str in [str(x) for x in usd_ids]
+                ),
+            )
+
+            if clasificacion_cxc.sale_de_cxc:
                 saldo_minimo_items.append(
                     {
                         "so_id": o.so_id,
@@ -3343,6 +3355,10 @@ async def get_reporte_saldos(refresh: bool = False):
                         "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
                         "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
                         "saldo_factura_odoo": saldo_factura_odoo,
+                        "bandeja_destino": clasificacion_cxc.bandeja_destino.value
+                        if clasificacion_cxc.bandeja_destino
+                        else None,
+                        "cxc_routing_motivo": clasificacion_cxc.motivo,
                     }
                 )
                 continue
@@ -3551,6 +3567,15 @@ async def get_reporte_saldos(refresh: bool = False):
                     "reconciliacion": {"resultado": conc.resultado.value if conc else "pendiente"}
                     if conc
                     else None,
+                    # Árbol de enrutamiento de CxC -- la orden llegó hasta
+                    # aquí porque clasificacion_cxc.sale_de_cxc es False;
+                    # bandeja_destino solo puede ser None (caso normal) o
+                    # "auditoria_precios" (pagado vs factura real pero no
+                    # vs ningún teórico -- permanece visible + se marca).
+                    "bandeja_destino": clasificacion_cxc.bandeja_destino.value
+                    if clasificacion_cxc.bandeja_destino
+                    else None,
+                    "cxc_routing_motivo": clasificacion_cxc.motivo,
                 }
             )
 
@@ -3587,6 +3612,244 @@ async def get_reporte_saldos(refresh: bool = False):
         _REPORTE_SALDOS_CACHE["data"] = res
         _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
         return res
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+_CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
+
+
+def _dias_vencido_orden(item: dict[str, Any], today: date) -> int:
+    fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
+    try:
+        dt_base = datetime.strptime(str(fecha_base_raw)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        dt_base = today
+    dt_venc = dt_base + timedelta(days=int(item.get("dias_credito") or 0))
+    return max(0, (today - dt_venc).days)
+
+
+@app.get("/api/reporte-cxc-cliente")
+async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)):
+    """Cuentas por Cobrar agrupadas por CLIENTE, estilo "Aged Receivable"
+
+    de Odoo (referencia visual del usuario), pero con las 4 referencias de
+    saldo propias del sistema en vez de un único "saldo neto" (un solo
+    número mezclaría 4 saldos que pueden ser bien distintos entre sí --
+    decisión explícita del usuario tras ver la primera versión con un solo
+    saldo neto + buckets de antigüedad). Fila resumen por cliente con los
+    4 saldos (Teórico Lista BS, Teórico Lista USD, Venta Real, Factura
+    Neta Real), expandible a filas de detalle por documento.
+
+    Fuente única de verdad: ``/api/ventas`` (mismos campos que alimentan
+    las columnas de Ventas y el árbol de enrutamiento -- ver
+    ``cxc_routing.py``), filtrado por ``sale_de_cxc`` para excluir órdenes
+    que ya salieron de CxC activa (Bandeja 1/2). Por cada orden se calcula
+    un saldo pendiente independiente por referencia:
+
+    - ``teorico_bs``  = max(0, ``ves_neta_teorica_iva`` - ``pagado_teorico_bcv``)
+    - ``teorico_usd`` = max(0, ``usd_neta_teorica_iva`` - ``pagado_teorico_binance``)
+    - ``venta_real``  = max(0, ``venta_neta_real`` - desc. sistema - ``monto_pagado_factura_odoo``)
+    - ``factura_real``= max(0, ``total_facturado_neto`` - desc. sistema
+      - ``monto_pagado_factura_odoo``) (``None`` si la orden aún no está
+      facturada -- no hay factura real contra qué comparar).
+
+    Antigüedad (``dias_vencido``) = ``fecha_entrega`` (o ``fecha`` si no
+    hay entrega registrada) + ``dias_credito`` real, mismo criterio que
+    ``/api/reporte-saldos``; se expone por documento pero ya NO se usa
+    para agrupar en buckets a nivel de cliente (reemplazado por las 4
+    columnas de saldo).
+
+    Pagos huérfanos (conciliados en Odoo pero SIN orden específica
+    asociada -- misma lista que ya calcula
+    ``/api/conciliaciones/sugerencias``, dedup por ``pago_id`` tomando el
+    saldo MÁXIMO entre sus filas de sugerencia FIFO, el residual real sin
+    aplicar) se muestran como documento NEGATIVO por cliente. Bug real
+    corregido (agosto 2026): antes se restaba el MISMO valor (la ruta BCV)
+    de las 4 columnas por igual, como si el pago fuera USD directo. Ahora
+    cada columna resta SU PROPIA ruta: ``teorico_bs``/``teorico_usd``
+    restan ``saldo_pago``/``saldo_pago_binance`` (ya calculados por
+    separado en ``get_conciliaciones_sugerencias``, con el ajuste BCV-EUR
+    para clientes con órdenes históricas); ``venta_real``/``factura_real``
+    restan la ruta que corresponde a la lista de nacimiento de la orden a
+    la que el FIFO sugirió aplicar el pago (BCV por defecto si no hay
+    orden sugerida -- ``so_id is None``).
+
+    Limitación conocida (MVP, documentada para no aparentar más de lo que
+    hace): Notas de Crédito y Notas de Débito NO se muestran como
+    documentos separados -- ya están netas dentro de
+    ``total_facturado_neto``/``venta_neta_real`` de su orden (más
+    conservador que duplicarlas como filas aparte, que sumaría el mismo
+    efecto dos veces).
+    """
+    try:
+        repo = get_repo()
+        ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+
+        ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
+        sugerencias = await get_conciliaciones_sugerencias(cxc_session=cxc_session)
+        ventas_items_by_so = {it["so_id"]: it for it in ventas_data["items"]}
+
+        # Dedup por pago_id: el saldo MÁXIMO visto en las filas de
+        # sugerencia de ese pago es su residual sin aplicar (las filas
+        # subsecuentes del mismo pago muestran el saldo YA descontado de
+        # sugerencias anteriores -- ver bucle FIFO en
+        # get_conciliaciones_sugerencias). Se toma la fila COMPLETA (no
+        # solo ``saldo_pago``) para no mezclar valores de distintas filas.
+        pago_saldo_max: dict[str, float] = {}
+        pago_info: dict[str, dict[str, Any]] = {}
+        for s in sugerencias:
+            pid = s.get("pago_id")
+            if not pid:
+                continue
+            saldo = float(s.get("saldo_pago") or 0.0)
+            if saldo > pago_saldo_max.get(pid, 0.0):
+                pago_saldo_max[pid] = saldo
+                pago_info[pid] = s
+
+        today = date.today()
+        clientes: dict[str, dict[str, Any]] = {}
+
+        def _cliente_row(cliente_id: str, cliente_nombre: str) -> dict[str, Any]:
+            return clientes.setdefault(
+                cliente_id,
+                {
+                    "cliente_id": cliente_id,
+                    "cliente_nombre": cliente_nombre,
+                    "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, 0.0),
+                    "documentos": [],
+                },
+            )
+
+        for item in ventas_data["items"]:
+            if item.get("sale_de_cxc"):
+                continue
+
+            desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
+            pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
+            pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
+            pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
+
+            saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
+            saldo_teorico_usd = max(
+                0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance
+            )
+            saldo_venta_real = max(
+                0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema - pagado_ref
+            )
+            facturada = bool(item.get("facturada"))
+            saldo_factura_real = (
+                max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema - pagado_ref)
+                if facturada
+                else None
+            )
+
+            saldos_orden = {
+                "teorico_bs": saldo_teorico_bs,
+                "teorico_usd": saldo_teorico_usd,
+                "venta_real": saldo_venta_real,
+                "factura_real": saldo_factura_real,
+            }
+            # Monto original (bruto de referencia, antes de restar lo
+            # pagado) por columna -- pedido explícito del usuario, para no
+            # mostrar solo el saldo sin poder ver contra qué se comparó.
+            montos_originales_orden = {
+                "teorico_bs": round(float(item.get("ves_neta_teorica_iva") or 0.0), 2),
+                "teorico_usd": round(float(item.get("usd_neta_teorica_iva") or 0.0), 2),
+                "venta_real": round(
+                    max(0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema), 2
+                ),
+                "factura_real": (
+                    round(
+                        max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema), 2
+                    )
+                    if facturada
+                    else None
+                ),
+            }
+            if all((v or 0.0) <= 0.05 for v in saldos_orden.values() if v is not None):
+                continue
+
+            o = ordenes_map.get(item["so_id"])
+            cliente_id = str(o.cliente_id) if o else item["so_id"]
+            c = _cliente_row(cliente_id, item["cliente_nombre"])
+            dias_vencido = _dias_vencido_orden(item, today)
+
+            for k, v in saldos_orden.items():
+                if v is not None:
+                    c["saldos"][k] += v
+
+            factura_id = (o.factura_id if o else None) or None
+            c["documentos"].append(
+                {
+                    "tipo": "orden",
+                    "so_id": item["so_id"],
+                    "factura_id": factura_id if facturada else None,
+                    "fecha": item.get("fecha"),
+                    "facturada": facturada,
+                    "dias_vencido": dias_vencido,
+                    "montos_originales": montos_originales_orden,
+                    "saldos": {
+                        k: (round(v, 2) if v is not None else None) for k, v in saldos_orden.items()
+                    },
+                    "descripcion": (
+                        f"Orden {item['so_id']}"
+                        + (f" / Factura {factura_id}" if facturada and factura_id else "")
+                        + (" (facturada)" if facturada else " (sin facturar)")
+                    ),
+                    "bandeja_destino": item.get("bandeja_destino"),
+                }
+            )
+
+        for pid, saldo in pago_saldo_max.items():
+            if saldo <= 0.05:
+                continue
+            info = pago_info[pid]
+            cliente_id = str(info.get("cliente_id") or "")
+            c = _cliente_row(cliente_id, info.get("cliente_nombre") or f"Cliente {cliente_id}")
+
+            saldo_bcv_ref = float(info.get("saldo_pago") or 0.0)
+            saldo_binance_ref = float(info.get("saldo_pago_binance") or 0.0)
+            so_sugerido = info.get("so_id")
+            item_sugerido = ventas_items_by_so.get(so_sugerido) if so_sugerido else None
+            usa_ref_binance = bool(item_sugerido and item_sugerido.get("nacio_en_lista_usd"))
+            saldo_real_ref = saldo_binance_ref if usa_ref_binance else saldo_bcv_ref
+
+            saldos_pago = {
+                "teorico_bs": -saldo_bcv_ref,
+                "teorico_usd": -saldo_binance_ref,
+                "venta_real": -saldo_real_ref,
+                "factura_real": -saldo_real_ref,
+            }
+            for k, v in saldos_pago.items():
+                c["saldos"][k] += v
+            c["documentos"].append(
+                {
+                    "tipo": "pago_huerfano",
+                    "pago_id": pid,
+                    "numero_pago_odoo": info.get("numero_pago_odoo"),
+                    "fecha": info.get("pago_fecha"),
+                    "dias_vencido": 0,
+                    "saldos": {k: round(v, 2) for k, v in saldos_pago.items()},
+                    "descripcion": f"Pago sin aplicar ({info.get('moneda_pago') or 'USD'})",
+                }
+            )
+
+        for c in clientes.values():
+            for k in _CXC_CLIENTE_SALDOS:
+                c["saldos"][k] = round(c["saldos"][k], 2)
+            c["documentos"].sort(key=lambda d: str(d.get("fecha") or ""))
+
+        clientes_list = sorted(
+            clientes.values(), key=lambda c: -max(c["saldos"].values(), default=0.0)
+        )
+
+        totales: dict[str, Any] = {}
+        for k in _CXC_CLIENTE_SALDOS:
+            totales[k] = round(sum(c["saldos"][k] for c in clientes_list), 2)
+
+        return {"clientes": clientes_list, "totales": totales}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -4333,6 +4596,22 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + v.monto_aplicado
             linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
 
+        # Bug real (reportado por el usuario, cliente Emprendimiento Tomas
+        # Marcano 5): un pago huérfano (aún sin reconciliar en Odoo, así
+        # que ``tax_today`` no refleja ningún contexto de orden -- es solo
+        # la tasa BCV oficial genérica del día) de un cliente cuyas órdenes
+        # abiertas son de la ventana histórica debe convertirse a tasa
+        # BCV-EUR, no BCV-USD normal. Se resuelve por CLIENTE (no hay
+        # orden específica aún -- un pago huérfano por definición no está
+        # cruzado contra ninguna) usando el mismo criterio que ya usa
+        # ``_pagos_bcv_binance_por_orden``.
+        _historical_enabled_sug = is_historical_pricelist_enabled(repo)
+        clientes_con_orden_historica: set[str] = {
+            str(o.cliente_id)
+            for o in ordenes
+            if es_orden_historica(o.fecha, o.lista_precios, _historical_enabled_sug)
+        }
+
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
@@ -4367,6 +4646,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
             odoo_info = odoo_pago_info.get(pid)
             numero_pago_odoo = odoo_info.get("name") if odoo_info else None
             monto_orig_usd_odoo: Decimal | None = None
+            cliente_id_pago = str(p.get("cliente_id", "")).strip()
             if moneda == "VES" and odoo_info:
                 tax_today = parse_decimal_safe(str(odoo_info.get("tax_today") or "0"))
                 if tax_today > Decimal("0"):
@@ -4374,6 +4654,20 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
+            if moneda == "VES" and cliente_id_pago in clientes_con_orden_historica:
+                # Pago aún sin reconciliar -- tax_today (si vino) es solo la
+                # tasa BCV genérica del día, sin contexto de orden histórica.
+                # Se sustituye por BCV-EUR (SerieTasas primero, luego
+                # TasasHistoricasAuditoria), invalidando también el
+                # amount_ref de Odoo (calculado con la tasa BCV normal).
+                tasa_eur_huerfano = get_bcv_euro_rate_for_datetime(fecha_dt, tasas_rows)
+                if not tasa_eur_huerfano or tasa_eur_huerfano <= Decimal("0"):
+                    tasa_eur_huerfano = get_eur_rate_for_date(
+                        fecha_dt.date(), tasas_historicas_rows
+                    )
+                if tasa_eur_huerfano and tasa_eur_huerfano > Decimal("0"):
+                    bcv_rate = tasa_eur_huerfano
+                    monto_orig_usd_odoo = None
             binance_del_dia = get_binance_rate_for_date(fecha_dt.date(), tasas_historicas_rows)
             # Guardia de plausibilidad: Binance y BCV son ambas tasas VES/USD del
             # mismo día, con una brecha de mercado normalmente < 100%. Si el dato
@@ -4639,36 +4933,44 @@ async def post_cerrar_pago_huerfano(
 
 @app.get("/api/bandeja")
 async def get_bandeja_facturacion():
+    """Bandeja 1/2 de Facturación + Bandeja de Auditoría de Precios.
+
+    Fuente única de verdad para pagado-vs-teóricos/facturada: reusa
+    ``/api/ventas`` (mismos cálculos, incluye el árbol de enrutamiento de
+    CxC -- ver ``cxc_routing.clasificar_estado_cxc`` y la Sección 5 del
+    Manual del Proceso Administrativo). Antes esta bandeja recalculaba su
+    propio criterio (un único ``saldo_motor`` blend BCV+Binance contra
+    ``BandejaFacturacion.total_motor``); ahora entra a Bandeja 1/2 según
+    ``item["bandeja_destino"]`` calculado allá, que compara por separado
+    el Teórico Lista BS (BCV) y el Teórico Lista USD (Binance).
+
+    - **Bandeja 1** (``facturacion_1``): pagado vs algún teórico, orden
+      SIN factura todavía -- lista para facturar en Odoo.
+    - **Bandeja 2** (``facturacion_2``): igual pero orden YA facturada --
+      pendiente ajustes (diferencial cambiario o pronto pago).
+    - **Bandeja de Auditoría de Precios** (``auditoria_precios``, NUEVA):
+      pagado vs la Factura Neta Real en Odoo pero NO vs ningún teórico --
+      sospecha de facturación con precio/lista por debajo del estándar
+      autorizado. La orden permanece en CxC activa (no sale de ninguna
+      bandeja anterior), esta es visibilidad adicional.
+
+    Retención de IVA (clientes agentes de retención): en Bandeja 1 (orden
+    SIN facturar todavía), un cliente agente de retención no paga en
+    efectivo la porción de IVA que retiene (entrega comprobante en su
+    lugar) -- se aplica una tolerancia sobre el teórico correspondiente
+    antes de exigir "pagada" (ver ``_tolerancia_retencion`` abajo). Esta
+    tolerancia NO aplica a Bandeja 2 ni a Auditoría de Precios (ya
+    facturadas -- la retención post-factura la maneja Bandeja 3,
+    ``iva_pendiente_agentes``, sin cambios en este endpoint).
+    """
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
+        ordenes_map = {o.so_id: o for o in ordenes}
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
         clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
         vincs = repo.all_vinculaciones()
-
-        # Batch query live Odoo state
-        so_odoo_states = {}
-        entrega_valida_set: set[str] = set()
-        try:
-            config = AppConfig.from_env()
-            execute = _connect(config.odoo)
-            if execute:
-                so_names = [o.so_id for o in ordenes]
-                if so_names:
-                    so_recs = execute(
-                        "sale.order",
-                        "search_read",
-                        [[["name", "in", so_names]]],
-                        {"fields": ["name", "state"]},
-                    )
-                    for s in so_recs:
-                        sname = str(s.get("name", "")).strip()
-                        if sname:
-                            so_odoo_states[sname] = str(s.get("state", "")).strip().lower()
-                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
-        except Exception as e_odoo:
-            logger.warning("Error consultando Odoo en get_bandeja: %s", e_odoo)
 
         pagos_by_so = {}
         for v in vincs:
@@ -4687,20 +4989,32 @@ async def get_bandeja_facturacion():
             if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
         }
 
+        ventas_data = await get_ventas(vendedor=None, cxc_session=None)
+        ventas_items = {it["so_id"]: it for it in ventas_data["items"]}
+
+        def _tolerancia_retencion(
+            target: float, pagado: float, wh_rate: float
+        ) -> bool:
+            """True si lo pagado cubre el teórico salvo la porción de IVA
+            retenida (agentes de retención no pagan esa porción en efectivo)."""
+            if target <= 0.05:
+                return True
+            subtotal = target / 1.16
+            iva_retenido = (target - subtotal) * (wh_rate / 100.0)
+            return pagado >= target - iva_retenido - 0.05
+
         ordenes_por_facturar = []
         notas_credito_pendientes = []
         iva_pendiente_agentes = []
+        auditoria_precios = []
 
-        for o in ordenes:
-            if orden_excluida(
-                o,
-                live_state=so_odoo_states.get(o.so_id),
-                entrega_valida=o.so_id in entrega_valida_set,
-            ):
+        for so_id, item in ventas_items.items():
+            o = ordenes_map.get(so_id)
+            if o is None:
                 continue
 
             c_info = clientes_map.get(str(o.cliente_id))
-            c_name = (c_info.nombre if c_info else "") or f"Cliente {o.cliente_id}"
+            c_name = item["cliente_nombre"]
             wh_agent = bool(c_info.wh_iva_agent) if c_info else False
             wh_rate = float(c_info.wh_iva_rate) if c_info else 75.0
 
@@ -4714,25 +5028,54 @@ async def get_bandeja_facturacion():
                 (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
             )
 
-            # Bandeja 1: ordenes SIN factura listas para facturar.
-            # - Cliente NO agente de retencion: debe estar pagada al 100%
-            #   segun el motor (reglas estandar).
-            # - Cliente SI agente de retencion de IVA: le basta con haber
-            #   pagado el Subtotal (monto sin IVA); lo que falta es
-            #   exactamente la porcion de IVA que retiene (no paga esa
-            #   porcion en efectivo, entrega comprobante de retencion mas
-            #   adelante -- ver Bandeja 3, que aplica una vez facturada).
-            # IVA Venezuela = 16%; se estima el subtotal despejando el total
-            # que calculo el motor (tot_motor, ya con descuentos aplicados).
-            subtotal_neto_motor = tot_motor / 1.16
-            iva_estimado_motor = tot_motor - subtotal_neto_motor
-            saldo_motor = tot_motor - abono
-            if wh_agent:
-                listo_para_facturar = saldo_motor <= iva_estimado_motor + 0.05
-            else:
-                listo_para_facturar = saldo_motor <= 0.05
+            teorico_bs_pagado = item["estatus_pago_teorico_ves"] == "pagada"
+            teorico_usd_pagado = item["estatus_pago_teorico_usd"] == "pagada"
+            factura_real_pagada = item["estatus_pago_real_factura"] == "pagada"
 
-            if not o.facturada and listo_para_facturar:
+            # Tolerancia de retención de IVA -- solo relevante mientras la
+            # orden no está facturada (gate de Bandeja 1); una vez
+            # facturada, la retención la maneja Bandeja 3 por separado.
+            if wh_agent and not o.facturada:
+                if not teorico_bs_pagado:
+                    teorico_bs_pagado = _tolerancia_retencion(
+                        item.get("ves_neta_teorica_iva") or 0.0,
+                        item.get("pagado_teorico_bcv", 0.0),
+                        wh_rate,
+                    )
+                if not teorico_usd_pagado:
+                    teorico_usd_pagado = _tolerancia_retencion(
+                        item.get("usd_neta_teorica_iva") or 0.0,
+                        item.get("pagado_teorico_binance", 0.0),
+                        wh_rate,
+                    )
+
+            clasificacion = clasificar_estado_cxc(
+                so_id=so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=teorico_bs_pagado,
+                teorico_usd_pagado=teorico_usd_pagado,
+                factura_real_pagada=factura_real_pagada,
+                nacio_en_lista_usd=bool(item.get("nacio_en_lista_usd")),
+            )
+
+            if clasificacion.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS:
+                auditoria_precios.append(
+                    {
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "fecha": o.fecha.isoformat()
+                        if hasattr(o.fecha, "isoformat")
+                        else str(o.fecha),
+                        "ves_neta_teorica_iva": item.get("ves_neta_teorica_iva"),
+                        "usd_neta_teorica_iva": item.get("usd_neta_teorica_iva"),
+                        "venta_neta_real": item.get("venta_neta_real"),
+                        "total_facturado_neto": item.get("total_facturado_neto"),
+                        "lista_aplicada_label": item.get("lista_aplicada_label"),
+                        "motivo": clasificacion.motivo,
+                    }
+                )
+
+            if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_1:
                 ordenes_por_facturar.append(
                     {
                         "so_id": o.so_id,
@@ -4743,10 +5086,12 @@ async def get_bandeja_facturacion():
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
                         "monto_pagado": abono,
-                        "subtotal_neto": round(subtotal_neto_motor, 2),
-                        "iva_estimado": round(iva_estimado_motor, 2),
+                        "subtotal_neto": round(tot_motor / 1.16, 2) if tot_motor else 0.0,
+                        "iva_estimado": (
+                            round(tot_motor - tot_motor / 1.16, 2) if tot_motor else 0.0
+                        ),
                         "total_motor": tot_motor,
-                        "saldo_pendiente": round(saldo_motor, 2),
+                        "saldo_pendiente": round(max(0.0, tot_motor - abono), 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         "precio_base": monto_orig,
@@ -4760,6 +5105,7 @@ async def get_bandeja_facturacion():
                             if o.so_id in descuento_sistema_map
                             else None
                         ),
+                        "cxc_routing_motivo": clasificacion.motivo,
                     }
                 )
             elif o.facturada:
@@ -4768,17 +5114,21 @@ async def get_bandeja_facturacion():
                 # factura pero con saldo pendiente (> $0.05) caigan aqui por
                 # error -- NC pendiente y retencion de IVA solo aplican a
                 # ordenes ya facturadas en Odoo.
-                nc_calc = float(b.ncs_calculadas) if b else 0.0
-                if nc_calc > 0.01:
-                    # El concepto real (obsequio de producto vs. % de
-                    # descuento de primera compra) vive en el detalle que ya
-                    # calculó el motor -- se usa en vez de un texto generico.
+                if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_2:
+                    # Bandeja 2 (nuevo criterio, Sección 5 del Manual): pagado
+                    # vs algún teórico Y ya facturada -- pendiente ajustes
+                    # (diferencial cambiario o pronto pago). Antes se usaba
+                    # "tiene NC calculada por el motor > 0.01" como criterio
+                    # de entrada, un concepto distinto (ver docstring del
+                    # endpoint); si el motor sí calculó una NC pendiente, se
+                    # sigue mostrando aquí como dato adicional (nc_monto).
+                    nc_calc = float(b.ncs_calculadas) if b else 0.0
                     detalles_b = b.descuentos_detalle if b else []
                     detalle_nc = next((d for d in detalles_b if d.origen == "primera_compra"), None)
                     concepto = (
                         detalle_nc.descripcion
                         if detalle_nc
-                        else "Obsequio / Descuento de primera compra no aplicado en factura"
+                        else "Pendiente ajuste (diferencial cambiario o pronto pago)"
                     )
                     notas_credito_pendientes.append(
                         {
@@ -4791,6 +5141,7 @@ async def get_bandeja_facturacion():
                             if monto_orig > 0
                             else 0.0,
                             "concepto": concepto,
+                            "cxc_routing_motivo": clasificacion.motivo,
                         }
                     )
 
@@ -4834,6 +5185,7 @@ async def get_bandeja_facturacion():
             "ordenes_por_facturar": ordenes_por_facturar,
             "notas_credito_pendientes": notas_credito_pendientes,
             "iva_pendiente_agentes": iva_pendiente_agentes,
+            "auditoria_precios": auditoria_precios,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4992,6 +5344,10 @@ async def post_cambiar_tipo_tasa_bcv(
 
         if variante == "EUR":
             tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            if tasa_bcv_nueva is None:
+                tasa_bcv_nueva = get_eur_rate_for_date(
+                    vinc.hora_pago_confirmada.date(), repo.all_tasas_historicas_auditoria()
+                )
             if tasa_bcv_nueva is None:
                 raise HTTPException(
                     status_code=400,
@@ -6494,6 +6850,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
         tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
+        tasas_rows_eur = _all_serie_tasas_rows(repo)
 
         # Trazabilidad: pagos re-vinculados automáticamente porque Odoo los
         # reconcilió contra una orden distinta a la Vinculación local (ver
@@ -6567,7 +6924,19 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     fecha_dt = datetime.strptime(str(fecha_pago)[:10], "%Y-%m-%d").date()
             except ValueError:
                 fecha_dt = None
-            tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows) if fecha_dt else None
+            # Bug real (screenshot del usuario, agosto 2026): pagos con fecha
+            # posterior al último día sembrado en TasasHistoricasAuditoria
+            # (2026-07-30) salían con "EUR: -" porque get_eur_rate_for_date
+            # busca SOLO el día exacto en esa tabla, sin fallback -- mismo
+            # patrón que ya usa _pagos_bcv_binance_por_orden (línea ~574):
+            # primero SerieTasas (scraper, más reciente), luego el histórico.
+            tasa_eur = None
+            if fecha_dt:
+                tasa_eur = get_bcv_euro_rate_for_datetime(
+                    datetime.combine(fecha_dt, datetime.min.time()), tasas_rows_eur
+                )
+                if not tasa_eur or tasa_eur <= Decimal("0"):
+                    tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows)
 
             reasignado = reasignados_por_pago.get(pid)
 
@@ -7931,22 +8300,6 @@ async def get_ventas(
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
 
-        # Fase 9: pagos por orden -- Vinculaciones (fuente teórica, hoy
-        # vacía en producción real) tiene precedencia si existe para una
-        # orden; si no, se reusa ``get_live_pagos_conciliados`` (la MISMA
-        # función que ya usa ``/api/cobranza/pagos`` para calcular los
-        # equivalentes USD) en vez de reinventar una conversión propia
-        # contra Odoo -- evita duplicar esa lógica. Antes de esto, TODAS
-        # las órdenes salían "sin pagar" en Ventas porque solo se miraba
-        # Vinculaciones.
-        pagos_odoo_map: dict[str, dict[str, Any]] = {}
-        if execute:
-            for so_pagado, monto_usd in _pagos_por_so_desde_cobranza(execute).items():
-                pagos_odoo_map[so_pagado] = {
-                    "abono_bcv": monto_usd,
-                    "abono_binance": monto_usd,
-                }
-
         def _pct(monto: float, base: float) -> float | None:
             return round(monto / base, 4) if base > 0.005 else None
 
@@ -8136,17 +8489,24 @@ async def get_ventas(
             # USD); "Teórico VES" siempre BCV, "Teórico USD" siempre Binance.
             # Fase 9: Vinculaciones (fuente teórica) tiene precedencia si la
             # orden tiene alguna registrada; si no (caso real hoy: esa
-            # tabla está vacía), se usa lo calculado vía
-            # _pagos_por_so_desde_cobranza (reusa get_live_pagos_
-            # conciliados, la misma función de /api/cobranza/pagos).
+            # tabla está vacía casi siempre), se usa ``pagos_bcv_binance_map``
+            # (``_pagos_bcv_binance_por_orden``, la MISMA fuente que ya
+            # alimenta "Monto Pagado BCV"/"USD" en esta tabla) -- ANTES se
+            # usaba ``pagos_odoo_map`` (fallback de ``_pagos_por_so_desde_
+            # cobranza``), que daba el MISMO número duplicado para BCV y
+            # Binance y NUNCA aplicaba el ajuste de tasa BCV-EUR para
+            # órdenes de la ventana histórica (bug real reportado por el
+            # usuario: un pago en VES se restaba igual de ambos teóricos, y
+            # para una orden histórica se restaba a tasa BCV normal en vez
+            # de EUR).
             vincs_orden = vincs_por_so.get(o.so_id, [])
             if vincs_orden:
                 val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
                 val_binance = float(valor_pagado_binance_usd(vincs_orden))
             else:
-                p_odoo_orden = pagos_odoo_map.get(o.so_id)
-                val_bcv = float(p_odoo_orden["abono_bcv"]) if p_odoo_orden else 0.0
-                val_binance = float(p_odoo_orden["abono_binance"]) if p_odoo_orden else 0.0
+                p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
+                val_bcv = float(p_bcv_binance.get("monto_pagado_bcv", 0.0))
+                val_binance = float(p_bcv_binance.get("monto_pagado_usd_binance", 0.0))
             es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
@@ -8198,6 +8558,19 @@ async def get_ventas(
             if alerta:
                 total_alertas += 1
 
+            # Árbol de enrutamiento de CxC (Sección 5 del Manual): decide si
+            # la orden sale de CxC activa y a qué bandeja se enruta, en
+            # base a los mismos 3 estatus de pago ya calculados arriba
+            # (colapsados a booleano: True solo si el estado es "pagada").
+            clasificacion_cxc = clasificar_estado_cxc(
+                so_id=o.so_id,
+                facturada=bool(o.facturada),
+                teorico_bs_pagado=estatus_pago_teorico_ves == "pagada",
+                teorico_usd_pagado=estatus_pago_teorico_usd == "pagada",
+                factura_real_pagada=estatus_pago_real_factura == "pagada",
+                nacio_en_lista_usd=es_lista_usd_nacimiento,
+            )
+
             items.append(
                 {
                     "so_id": o.so_id,
@@ -8226,6 +8599,15 @@ async def get_ventas(
                     # nacimiento de la orden), expuesto ahora como columna
                     # propia junto a los totales de factura.
                     "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # Montos crudos usados para comparar contra cada
+                    # teórico (val_bcv/val_binance -- distintos de
+                    # monto_pagado_bcv/_usd, que solo existen una vez
+                    # facturada la orden porque se leen de pagos
+                    # reconciliados contra la FACTURA en Odoo). Expuestos
+                    # para que /api/bandeja pueda aplicar la tolerancia de
+                    # retención de IVA sin recalcular la conversión.
+                    "pagado_teorico_bcv": round(val_bcv, 2),
+                    "pagado_teorico_binance": round(val_binance, 2),
                     # Monto pagado con SU PROPIA tasa por ruta (BCV vs
                     # Binance del día del pago) -- distinto del "abono_bcv"/
                     # "abono_binance" que usa estatus_pago_real_orden/_
@@ -8245,6 +8627,11 @@ async def get_ventas(
                     # endpoint). Id crudo + "#id - Nombre" para mostrar.
                     "lista_nacimiento": o.lista_precios,
                     "lista_nacimiento_label": _lista_label_hist(o.lista_precios, es_historica_o),
+                    # Árbol de enrutamiento: True solo si nació en lista USD
+                    # y NO es histórica (ver clasificar_estado_cxc -- una
+                    # orden USD exige el Teórico USD específicamente pagado,
+                    # no le basta el Teórico BS).
+                    "nacio_en_lista_usd": es_lista_usd_nacimiento,
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
                     "lista_aplicada_label": _lista_label_hist(
                         b.lista_aplicada if b else o.lista_precios, es_historica_o
@@ -8334,6 +8721,17 @@ async def get_ventas(
                     "estatus_pago_real_factura": estatus_pago_real_factura,
                     "estatus_pago_teorico_ves": estatus_pago_teorico_ves,
                     "estatus_pago_teorico_usd": estatus_pago_teorico_usd,
+                    # Árbol de enrutamiento de CxC (Sección 5 del Manual):
+                    # ver src/cxc/engine/cxc_routing.py -- fuente única de
+                    # verdad para Bandeja 1/2, Reporte de Saldos y la nueva
+                    # Bandeja de Auditoría de Precios.
+                    "sale_de_cxc": clasificacion_cxc.sale_de_cxc,
+                    "bandeja_destino": (
+                        clasificacion_cxc.bandeja_destino.value
+                        if clasificacion_cxc.bandeja_destino
+                        else None
+                    ),
+                    "cxc_routing_motivo": clasificacion_cxc.motivo,
                 }
             )
 

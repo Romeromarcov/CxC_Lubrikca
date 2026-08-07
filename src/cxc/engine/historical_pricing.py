@@ -40,16 +40,27 @@ def es_orden_historica(fecha: date | None, lista_id_str: str, enabled: bool = Tr
 def cargar_mapa_historico(rows: Sequence[Mapping[str, str]]) -> dict[str, dict[str, object]]:
     """Convierte las filas crudas de ``listas_precios_historicas`` en un mapa
 
-    ``codigo -> {"nombre", "usd", "eur"}`` -- mismo shape que usan los
-    endpoints de reporte de ``web/app.py``.
+    ``producto_id_odoo -> {"nombre", "usd", "eur"}``.
+
+    Bug real encontrado en auditoría (agosto 2026, ver
+    ``scripts/cruzar_codigos_lista_historica.py``): ``LineaOrden.producto``
+    (la clave que ``_precio_unitario_linea`` usa en tiempo de ejecución)
+    es el ``product_id`` de Odoo, NO el "código" de la columna A del CSV
+    origen de esta lista (numeración interna de Lubrikca, sin relación con
+    Odoo). Antes el mapa se indexaba por ese "código" crudo -- el
+    override histórico nunca hacía match contra una orden real. Ahora se
+    indexa por ``producto_id_odoo`` (columna resuelta por el script de
+    cruce, código<->default_code<->product_id), la misma clave que
+    ``linea.producto``. Filas sin ``producto_id_odoo`` resuelto se
+    excluyen (no hay forma de que hagan match jamás).
     """
     mapa: dict[str, dict[str, object]] = {}
     for r in rows:
-        code = str(r.get("codigo", "")).strip()
-        if not code:
+        pid_odoo = str(r.get("producto_id_odoo", "") or "").strip()
+        if not pid_odoo or not pid_odoo.isdigit():
             continue
         try:
-            mapa[code] = {
+            mapa[pid_odoo] = {
                 "nombre": r.get("producto_nombre", ""),
                 "usd": Decimal(str(r.get("precio_usd", "0") or "0")),
                 "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),

@@ -352,6 +352,9 @@ class SheetsRepository(Repository):
     def all_listas_precios_historicas(self) -> list[dict[str, str]]:
         return self._g.read_rows("ListasPreciosHistoricas")
 
+    def replace_listas_precios_historicas(self, rows: list[dict[str, str]]) -> None:
+        self._g.replace_rows("ListasPreciosHistoricas", rows)
+
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         return self._g.read_rows("TasasHistoricasAuditoria")
 

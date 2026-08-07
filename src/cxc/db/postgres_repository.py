@@ -529,9 +529,30 @@ class PostgresRepository(Repository):
                 "producto_nombre": r.producto_nombre,
                 "precio_usd": str(r.precio_usd),
                 "precio_bcv_euro": str(r.precio_bcv_euro),
+                "producto_id_odoo": str(r.producto_id_odoo) if r.producto_id_odoo else "",
             }
             for r in rows
         ]
+
+    def replace_listas_precios_historicas(self, rows: list[dict[str, str]]) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(delete(t.listas_precios_historicas))
+            if rows:
+                conn.execute(
+                    insert(t.listas_precios_historicas),
+                    [
+                        {
+                            "codigo": r.get("codigo") or "",
+                            "producto_nombre": r.get("producto_nombre") or "",
+                            "precio_usd": r.get("precio_usd") or "0",
+                            "precio_bcv_euro": r.get("precio_bcv_euro") or "0",
+                            "producto_id_odoo": int(r["producto_id_odoo"])
+                            if r.get("producto_id_odoo")
+                            else None,
+                        }
+                        for r in rows
+                    ],
+                )
 
     def all_tasas_historicas_auditoria(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
