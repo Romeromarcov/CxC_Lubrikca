@@ -5932,6 +5932,11 @@ async def get_config_promociones():
                 "regla_id": p.regla_id,
                 "tipo_beneficio": p.tipo_beneficio,
                 "productos": p.productos,
+                "marca": getattr(p, "marca", "*"),
+                "categoria": getattr(p, "categorias_aplica", "Comercial"),
+                "listas_aplicables": getattr(p, "listas_aplicables", "*"),
+                "max_cantidad": float(getattr(p, "max_cantidad", 999999)),
+                "unidad_medida": getattr(p, "unidad_medida", "CAJAS"),
                 "valor": str(p.valor),
                 "compra_minima": str(p.compra_minima),
                 "descuento_fallback": str(getattr(p, "descuento_fallback", "0")),
@@ -6005,6 +6010,44 @@ async def post_config_promociones(req: PromocionRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.put("/api/config/promociones/{regla_id}")
+async def put_config_promociones(regla_id: str, req: PromocionRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import PromocionPrimeraCompra
+
+        existentes = repo.promociones_primera_compra()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde)
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        promo = PromocionPrimeraCompra(
+            regla_id=regla_id,
+            tipo_beneficio=req.tipo_beneficio,
+            productos=req.productos,
+            valor=Decimal(str(req.valor)),
+            compra_minima=Decimal(str(req.compra_minima)),
+            regalo_tipo=req.regalo_tipo,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            descuento_fallback=Decimal(str(req.descuento_fallback)),
+            categorias_aplica=req.categorias_aplica,
+            solo_primera_compra=req.solo_primera_compra,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+        )
+        repo.append_promocion_primera_compra(promo)
+        return {"status": "success", "message": "Promoción actualizada correctamente."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/config/exclusiones")
 async def get_config_exclusiones():
     try:
@@ -6035,68 +6078,14 @@ async def post_config_exclusiones(req: ExclusionRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.get("/api/config/descuentos-volumen")
-async def get_config_descuentos_volumen():
-    try:
-        repo = get_repo()
-        rules = repo.descuentos_volumen()
-        return [
-            {
-                "regla_id": r.regla_id,
-                "marca": r.marca,
-                "categoria": r.categoria,
-                "litros_minimo": float(r.litros_minimo),
-                "porcentaje": float(r.porcentaje),
-                "tipo_evaluacion": getattr(r, "tipo_evaluacion", "orden"),
-                "dias_evaluacion": getattr(r, "dias_evaluacion", 30),
-                "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
-                "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
-                "listas_aplicables": r.listas_aplicables,
-                "activo": r.activo,
-                "requiere_pago_previo": r.requiere_pago_previo,
-                "aplica_a": getattr(r, "aplica_a", "linea"),
-                "descripcion": getattr(r, "descripcion", ""),
-            }
-            for r in rules
-        ]
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@app.post("/api/config/descuentos-volumen")
-async def post_config_descuentos_volumen(req: DescuentoVolumenRequest):
-    try:
-        repo = get_repo()
-        import uuid
-
-        from cxc.models import DescuentoVolumen
-
-        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
-        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
-
-        regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
-        rule = DescuentoVolumen(
-            regla_id=regla_id,
-            marca=req.marca,
-            categoria=req.categoria,
-            litros_minimo=Decimal(str(req.litros_minimo)),
-            porcentaje=Decimal(str(req.porcentaje)),
-            tipo_evaluacion=req.tipo_evaluacion,
-            dias_evaluacion=req.dias_evaluacion,
-            vigencia_desde=v_desde,
-            vigencia_hasta=v_hasta,
-            listas_aplicables=req.listas_aplicables,
-            activo=True,
-            requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
-            aplica_a=req.aplica_a,
-        )
-        repo.append_descuento_volumen(rule)
-        return {"status": "success", "message": "Regla de descuento por volumen registrada."}
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    # NOTA: existía una ruta GET/POST /api/config/descuentos-volumen duplicada
+    # aquí (mismo path, modelo DescuentoVolumenRequest más viejo/incompleto --
+    # le faltaban min_cantidad/max_cantidad/unidad_medida). FastAPI/Starlette
+    # resuelve rutas duplicadas por ORDEN DE REGISTRO (la primera gana, no la
+    # última) -- esta era la que realmente corría en producción, y por eso
+    # esos 3 campos del formulario de Volumen se guardaban pero se
+    # descartaban en silencio. Eliminada; queda una sola definición más
+    # abajo (junto a Recompra) con el modelo completo `VolumenRequest`.
 
 
 # --- Unified Discount Rules Endpoint ---
@@ -6316,6 +6305,10 @@ async def get_config_pronto_pago():
                 "categoria": r.categoria,
                 "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
                 "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
                 "monedas_aplicables": r.monedas_aplicables,
                 "listas_aplicables": r.listas_aplicables,
@@ -6369,6 +6362,49 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         )
         repo.append_descuento_pronto_pago(rule)
         return {"status": "success", "message": "Regla de descuento por pronto pago registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.put("/api/config/descuentos-pronto-pago/{regla_id}")
+async def put_config_pronto_pago(regla_id: str, req: ProntoPagoRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoProntoPago
+
+        existentes = repo.descuentos_marca_categoria()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        min_q = Decimal(str(req.min_cantidad or 0))
+        max_q = Decimal(str(req.max_cantidad or 999999))
+        rule = DescuentoProntoPago(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            ventana_pago_tipo=req.ventana_pago_tipo,
+            ventana_pago_dias=req.ventana_pago_dias,
+            min_cantidad=min_q,
+            max_cantidad=max_q,
+            unidad_medida=req.unidad_medida or "CAJAS",
+            tipo_beneficio=req.tipo_beneficio or "descuento",
+            porcentaje=Decimal(str(req.porcentaje)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+        )
+        repo.append_descuento_pronto_pago(rule)
+        return {"status": "success", "message": "Regla de pronto pago actualizada."}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -6463,6 +6499,51 @@ async def post_config_volumen(req: VolumenRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.put("/api/config/descuentos-volumen/{regla_id}")
+async def put_config_volumen(regla_id: str, req: VolumenRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoVolumen
+
+        existentes = repo.descuentos_volumen()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        min_q = (
+            Decimal(str(req.min_cantidad))
+            if req.min_cantidad is not None
+            else Decimal(str(req.litros_minimo))
+        )
+        rule = DescuentoVolumen(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            litros_minimo=Decimal(str(req.litros_minimo)),
+            min_cantidad=min_q,
+            max_cantidad=Decimal(str(req.max_cantidad)),
+            unidad_medida=req.unidad_medida,
+            porcentaje=Decimal(str(req.porcentaje)),
+            tipo_evaluacion=req.tipo_evaluacion,
+            dias_evaluacion=req.dias_evaluacion,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+        )
+        repo.append_descuento_volumen(rule)
+        return {"status": "success", "message": "Regla de volumen actualizada."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 # --- Recompra Endpoints ---
 @app.get("/api/config/descuentos-recompra")
 async def get_config_recompra():
@@ -6477,6 +6558,9 @@ async def get_config_recompra():
                 "porcentaje": float(r.porcentaje),
                 "min_cajas": getattr(r, "min_cajas", 2),
                 "max_cajas": getattr(r, "max_cajas", 4),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
+                "listas_aplicables": getattr(r, "listas_aplicables", "*"),
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
@@ -6512,6 +6596,7 @@ async def post_config_recompra(req: RecompraRequest):
             porcentaje=Decimal(str(req.porcentaje)),
             min_cajas=req.min_cajas,
             max_cajas=req.max_cajas,
+            listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
             activo=req.activo,
@@ -6523,6 +6608,44 @@ async def post_config_recompra(req: RecompraRequest):
         )
         repo.append_descuento_recompra(rule)
         return {"status": "success", "message": "Regla de descuento por recompra registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.put("/api/config/descuentos-recompra/{regla_id}")
+async def put_config_recompra(regla_id: str, req: RecompraRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoRecompra
+
+        existentes = repo.descuentos_recompra()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        rule = DescuentoRecompra(
+            regla_id=regla_id,
+            marca=req.marca,
+            categoria=req.categoria,
+            porcentaje=Decimal(str(req.porcentaje)),
+            min_cajas=req.min_cajas,
+            max_cajas=req.max_cajas,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+            ventana_pago_tipo=req.ventana_pago_tipo,
+            ventana_pago_dias=req.ventana_pago_dias,
+        )
+        repo.append_descuento_recompra(rule)
+        return {"status": "success", "message": "Regla de recompra actualizada."}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -6540,6 +6663,10 @@ async def get_config_producto():
                 "productos": r.productos,
                 "marca": r.marca,
                 "categoria": r.categoria,
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
+                "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
                 "monedas_aplicables": r.monedas_aplicables,
                 "listas_aplicables": r.listas_aplicables,
@@ -6591,6 +6718,42 @@ async def post_config_producto(req: ProductoPromoRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.put("/api/config/descuentos-producto/{regla_id}")
+async def put_config_producto(regla_id: str, req: ProductoPromoRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoProducto
+
+        existentes = repo.descuentos_producto()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        rule = DescuentoProducto(
+            regla_id=regla_id,
+            productos=req.productos,
+            marca=req.marca,
+            categoria=req.categoria,
+            porcentaje=Decimal(str(req.porcentaje)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+        )
+        repo.append_descuento_producto(rule)
+        return {"status": "success", "message": "Regla de producto actualizada."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 # --- Diferencial Cambiario Endpoints ---
 @app.get("/api/config/descuentos-diferencial-cambiario")
 async def get_config_diferencial():
@@ -6604,6 +6767,11 @@ async def get_config_diferencial():
                 "tipo_diferencial": r.tipo_diferencial,
                 "tipo_calculo": r.tipo_calculo,
                 "porcentaje_fijo": float(r.porcentaje_fijo),
+                "marca": getattr(r, "marca", "*"),
+                "categoria": getattr(r, "categoria", "*"),
+                "unidad_medida": getattr(r, "unidad_medida", "USD"),
+                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
+                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
                 "monedas_aplicables": r.monedas_aplicables,
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
@@ -6649,6 +6817,42 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
         )
         repo.append_descuento_diferencial_cambiario(rule)
         return {"status": "success", "message": "Regla de diferencial cambiario registrada."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.put("/api/config/descuentos-diferencial-cambiario/{regla_id}")
+async def put_config_diferencial(regla_id: str, req: DiferencialCambiarioRequest):
+    try:
+        repo = get_repo()
+        from cxc.models import DescuentoDiferencialCambiario
+
+        existentes = repo.descuentos_diferencial_cambiario()
+        if not any(r.regla_id == regla_id for r in existentes):
+            raise HTTPException(status_code=404, detail=f"Regla {regla_id} no existe.")
+
+        v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
+        v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
+        rule = DescuentoDiferencialCambiario(
+            regla_id=regla_id,
+            nombre=req.nombre,
+            tipo_diferencial=req.tipo_diferencial,
+            tipo_calculo=req.tipo_calculo,
+            porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
+            monedas_aplicables=req.monedas_aplicables,
+            listas_aplicables=req.listas_aplicables,
+            vigencia_desde=v_desde,
+            vigencia_hasta=v_hasta,
+            activo=req.activo,
+            requiere_pago_previo=req.requiere_pago_previo,
+            descripcion=req.descripcion,
+            aplica_a=req.aplica_a,
+        )
+        repo.append_descuento_diferencial_cambiario(rule)
+        return {"status": "success", "message": "Regla de diferencial cambiario actualizada."}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -2104,15 +2104,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 ventana_pago_tipo: document.getElementById("cfg-rec-ventana-tipo")?.value || "vencimiento",
                 ventana_pago_dias: parseInt(document.getElementById("cfg-rec-ventana-dias")?.value || 3)
             };
+            const editId = recompraForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-recompra/${editId}` : "/api/config/descuentos-recompra";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/descuentos-recompra", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Regla de recompra registrada correctamente.");
-                    recompraForm.reset();
+                    alert(editId ? "✅ Regla de recompra actualizada correctamente." : "✅ Regla de recompra registrada correctamente.");
+                    clearEditMode(recompraForm);
                     loadRecompra();
                     if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
@@ -2153,15 +2156,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-pp-descripcion")?.value || ""
             };
+            const editId = prontoPagoForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-pronto-pago/${editId}` : "/api/config/descuentos-pronto-pago";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/descuentos-pronto-pago", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Regla de pronto pago registrada correctamente.");
-                    prontoPagoForm.reset();
+                    alert(editId ? "✅ Regla de pronto pago actualizada correctamente." : "✅ Regla de pronto pago registrada correctamente.");
+                    clearEditMode(prontoPagoForm);
                     loadProntoPago();
                     if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
@@ -2175,57 +2181,10 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    if (promoForm) {
-        promoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
-            const cats = getM2MCheckedValues(promoForm, ".m2m-promo-cat");
-            const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
-            const selProds = Array.from(document.getElementById("cfg-promo-productos")?.selectedOptions || []).map(o => o.value).join(",");
-            const rawFallback = (document.getElementById("cfg-promo-fallback")?.value || "0.02").replace(',', '.');
-            const rawValor = (document.getElementById("cfg-promo-valor")?.value || "0").replace(',', '.');
-            const payload = {
-                marca: marcas,
-                categoria: cats,
-                listas_aplicables: listas,
-                tipo_beneficio: document.getElementById("cfg-promo-tipo-beneficio")?.value || "producto",
-                productos: selProds || "*",
-                compra_minima: parseFloat(document.getElementById("cfg-promo-compra-minima")?.value || 0),
-                max_cantidad: parseFloat(document.getElementById("cfg-promo-max")?.value || 999999),
-                unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
-                regalo_tipo: document.getElementById("cfg-promo-regalo-tipo")?.value || "solo_uno",
-                descuento_fallback: parseFloat(rawFallback),
-                valor: parseFloat(rawValor),
-                categorias_aplica: cats,
-                solo_primera_compra: (document.getElementById("cfg-promo-solo-primera")?.value === "true"),
-                vigencia_desde: document.getElementById("cfg-promo-desde")?.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-promo-hasta")?.value || null,
-                activo: true,
-                requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
-            };
-            try {
-                const res = await fetch("/api/config/promociones", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert("✅ Regla de obsequio / promoción registrada correctamente.");
-                    promoForm.reset();
-                    loadPromociones();
-                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando promoción primera compra:", err);
-                alert("❌ Error de red al registrar promoción.");
-            }
-        });
-    }
+    // NOTA: existía un segundo listener duplicado de promoForm.submit aquí
+    // (mismos campos, mismo endpoint) -- cada submit creaba DOS reglas de
+    // promoción. Eliminado; el listener real (más completo, con contador de
+    // productos) está más abajo junto a loadExclusiones.
 
     const productoPromoForm = document.getElementById("producto-promo-form");
     if (productoPromoForm) {
@@ -2254,15 +2213,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-prod-descripcion")?.value || ""
             };
+            const editId = productoPromoForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-producto/${editId}` : "/api/config/descuentos-producto";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/descuentos-producto", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Regla de promoción por producto registrada.");
-                    productoPromoForm.reset();
+                    alert(editId ? "✅ Regla de promoción por producto actualizada." : "✅ Regla de promoción por producto registrada.");
+                    clearEditMode(productoPromoForm);
                     loadProductoPromo();
                     if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
@@ -2303,15 +2265,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-dif-descripcion")?.value || ""
             };
+            const editId = diferencialForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-diferencial-cambiario/${editId}` : "/api/config/descuentos-diferencial-cambiario";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/descuentos-diferencial-cambiario", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Regla de diferencial cambiario registrada.");
-                    diferencialForm.reset();
+                    alert(editId ? "✅ Regla de diferencial cambiario actualizada." : "✅ Regla de diferencial cambiario registrada.");
+                    clearEditMode(diferencialForm);
                     loadDiferencial();
                     if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
                 } else {
@@ -3154,7 +3119,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- Helper to Render Standardized 10-Column Rule Row ---
+    window._reglasCache = window._reglasCache || {};
+
     function renderStandardRuleRow(r, tabla) {
+        window._reglasCache[`${tabla}::${r.regla_id}`] = r;
         const row = document.createElement("tr");
         
         let beneficioText = "";
@@ -3198,6 +3166,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     </label>
                     <span style="font-size:0.7rem; font-weight:600; display:block; text-align:center; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
                 </div>
+                <button type="button" class="btn btn-sm" onclick="window.editarRegla('${tabla}', '${r.regla_id}')" style="background:#e0f2fe; color:#0369a1; border:1px solid #7dd3fc; padding:4px 8px; border-radius:6px; font-size:0.8rem; cursor:pointer;" title="Editar esta regla">✏️</button>
                 <button type="button" class="btn btn-sm" onclick="window.eliminarRegla('${tabla}', '${r.regla_id}')" style="background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; padding:4px 8px; border-radius:6px; font-size:0.8rem; cursor:pointer;" title="Eliminar regla permanentemente">🗑️</button>
             </div>
         `;
@@ -3228,6 +3197,213 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
         return row;
     }
+
+    // --- Edición de reglas existentes (antes solo se podían crear/eliminar/desactivar) ---
+    function setM2MChecked(form, selectorClass, valueStr) {
+        const raw = (valueStr === undefined || valueStr === null || String(valueStr).trim() === "")
+            ? "*" : String(valueStr).trim();
+        const values = raw.split(",").map(v => v.trim());
+        form.querySelectorAll(selectorClass).forEach(cb => {
+            cb.checked = values.includes(cb.value);
+        });
+    }
+
+    function setFieldValue(id, value) {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = value;
+    }
+
+    function setEditMode(form, reglaId) {
+        form.dataset.editRegla = reglaId;
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn) {
+            if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+            btn.textContent = `💾 Actualizar Regla ${reglaId}`;
+        }
+        let cancelBtn = form.querySelector(".btn-cancelar-edicion");
+        if (!cancelBtn && btn) {
+            cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn btn-sm btn-cancelar-edicion";
+            cancelBtn.style.cssText = "margin-left:8px; background:#f3f4f6; color:#374151; border:1px solid #d1d5db; padding:8px 14px; border-radius:6px; cursor:pointer;";
+            cancelBtn.textContent = "✖ Cancelar edición";
+            cancelBtn.onclick = () => clearEditMode(form);
+            btn.after(cancelBtn);
+        }
+        if (cancelBtn) cancelBtn.style.display = "inline-block";
+    }
+
+    function clearEditMode(form) {
+        delete form.dataset.editRegla;
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+        const cancelBtn = form.querySelector(".btn-cancelar-edicion");
+        if (cancelBtn) cancelBtn.style.display = "none";
+        form.reset();
+    }
+
+    function prefillRecompra(r, reglaId) {
+        setM2MChecked(recompraForm, ".m2m-rec-marca", r.marca);
+        setM2MChecked(recompraForm, ".m2m-rec-cat", r.categoria);
+        setM2MChecked(recompraForm, ".m2m-rec-lista", r.listas_aplicables);
+        setFieldValue("cfg-rec-min-cajas", r.min_cajas ?? 2);
+        setFieldValue("cfg-rec-max-cajas", r.max_cajas ?? 4);
+        setFieldValue("cfg-rec-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-rec-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-rec-porcentaje", r.porcentaje ?? 0.03);
+        setFieldValue("cfg-rec-ventana-tipo", r.ventana_pago_tipo || "vencimiento");
+        setFieldValue("cfg-rec-ventana-dias", r.ventana_pago_dias ?? 3);
+        setFieldValue("cfg-rec-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-rec-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-rec-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-rec-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-rec-descripcion", r.descripcion || "");
+        setEditMode(recompraForm, reglaId);
+        recompraForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillProntoPago(r, reglaId) {
+        setM2MChecked(prontoPagoForm, ".m2m-pp-marca", r.marca);
+        setM2MChecked(prontoPagoForm, ".m2m-pp-cat", r.categoria);
+        setM2MChecked(prontoPagoForm, ".m2m-pp-lista", r.listas_aplicables);
+        setFieldValue("cfg-pp-ventana-tipo", r.ventana_pago_tipo || "entrega");
+        setFieldValue("cfg-pp-ventana-dias", r.ventana_pago_dias ?? 3);
+        setFieldValue("cfg-pp-min", r.min_cantidad ?? 0);
+        setFieldValue("cfg-pp-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-pp-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-pp-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-pp-porcentaje", r.porcentaje ?? 0.05);
+        setFieldValue("cfg-pp-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-pp-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-pp-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-pp-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-pp-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-pp-descripcion", r.descripcion || "");
+        setEditMode(prontoPagoForm, reglaId);
+        prontoPagoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillVolumen(r, reglaId) {
+        setM2MChecked(descuentoVolumenForm, ".m2m-vol-marca", r.marca);
+        setM2MChecked(descuentoVolumenForm, ".m2m-vol-cat", r.categoria);
+        setM2MChecked(descuentoVolumenForm, ".m2m-vol-lista", r.listas_aplicables);
+        if (cfgDescVolLitros) cfgDescVolLitros.value = r.litros_minimo ?? r.min_cantidad ?? 0;
+        setFieldValue("cfg-desc-vol-max", r.max_cantidad ?? 999999);
+        if (cfgDescVolPorcentaje) cfgDescVolPorcentaje.value = r.porcentaje ?? 0.05;
+        setFieldValue("cfg-desc-vol-tipo-eval", r.tipo_evaluacion || "orden");
+        setFieldValue("cfg-desc-vol-dias-eval", r.dias_evaluacion ?? 30);
+        setFieldValue("cfg-desc-vol-unidad", r.unidad_medida || "UNIDADES");
+        setFieldValue("cfg-desc-vol-tipo-benef", r.tipo_beneficio || "descuento");
+        if (cfgDescVolDesde) cfgDescVolDesde.value = r.vigencia_desde || "";
+        if (cfgDescVolHasta) cfgDescVolHasta.value = r.vigencia_hasta || "";
+        const rpp = document.getElementById("cfg-desc-vol-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-desc-vol-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-desc-vol-descripcion", r.descripcion || "");
+        setEditMode(descuentoVolumenForm, reglaId);
+        descuentoVolumenForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillPromo(r, reglaId) {
+        setM2MChecked(promoForm, ".m2m-promo-marca", r.marca);
+        setM2MChecked(promoForm, ".m2m-promo-cat", r.categoria || r.categorias_aplica);
+        setM2MChecked(promoForm, ".m2m-promo-lista", r.listas_aplicables);
+        setFieldValue("cfg-promo-tipo-beneficio", r.tipo_beneficio || "producto");
+        if (r.productos) {
+            const skus = String(r.productos).split(",").map(s => s.trim());
+            Array.from(document.getElementById("cfg-promo-productos")?.options || []).forEach(o => {
+                o.selected = skus.includes(o.value);
+            });
+        }
+        setFieldValue("cfg-promo-compra-minima", r.compra_minima ?? 0);
+        setFieldValue("cfg-promo-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-promo-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-promo-regalo-tipo", r.regalo_tipo || "solo_uno");
+        setFieldValue("cfg-promo-fallback", r.descuento_fallback ?? 0.02);
+        setFieldValue("cfg-promo-valor", r.valor ?? 0);
+        setFieldValue("cfg-promo-solo-primera", r.solo_primera_compra ? "true" : "false");
+        setFieldValue("cfg-promo-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-promo-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-promo-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-promo-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-promo-descripcion", r.descripcion || "");
+        setEditMode(promoForm, reglaId);
+        promoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillProducto(r, reglaId) {
+        setM2MChecked(productoPromoForm, ".m2m-prod-marca", r.marca);
+        setM2MChecked(productoPromoForm, ".m2m-prod-cat", r.categoria);
+        setM2MChecked(productoPromoForm, ".m2m-prod-lista", r.listas_aplicables);
+        if (r.productos) {
+            const skus = String(r.productos).split(",").map(s => s.trim());
+            Array.from(document.getElementById("cfg-prod-select")?.options || []).forEach(o => {
+                o.selected = skus.includes(o.value);
+            });
+        }
+        setFieldValue("cfg-prod-min", r.min_cantidad ?? 0);
+        setFieldValue("cfg-prod-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-prod-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-prod-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-prod-porcentaje", r.porcentaje ?? 0.05);
+        setFieldValue("cfg-prod-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-prod-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-prod-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-prod-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-prod-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-prod-descripcion", r.descripcion || "");
+        setEditMode(productoPromoForm, reglaId);
+        productoPromoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillDiferencial(r, reglaId) {
+        setM2MChecked(diferencialForm, ".m2m-dif-marca", r.marca);
+        setM2MChecked(diferencialForm, ".m2m-dif-cat", r.categoria);
+        setM2MChecked(diferencialForm, ".m2m-dif-lista", r.listas_aplicables);
+        setFieldValue("cfg-dif-nombre", r.nombre || "Diferencial Cambiario");
+        setFieldValue("cfg-dif-tipo-diferencial", r.tipo_diferencial || "fijo_35_ves_usd");
+        setFieldValue("cfg-dif-tipo-calculo", r.tipo_calculo || "fijo");
+        setFieldValue("cfg-dif-porcentaje-fijo", r.porcentaje_fijo ?? 0.35);
+        setFieldValue("cfg-dif-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-dif-unidad", r.unidad_medida || "USD");
+        setFieldValue("cfg-dif-min", r.min_cantidad ?? 0);
+        setFieldValue("cfg-dif-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-dif-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-dif-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-dif-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-dif-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-dif-descripcion", r.descripcion || "");
+        setEditMode(diferencialForm, reglaId);
+        diferencialForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    window.editarRegla = function (tabla, reglaId) {
+        const r = window._reglasCache[`${tabla}::${reglaId}`];
+        if (!r) {
+            alert("No se encontró la regla en caché -- recarga Configuración e intenta de nuevo.");
+            return;
+        }
+        const prefillers = {
+            "DescuentosRecompra": prefillRecompra,
+            "DescuentosProntoPago": prefillProntoPago,
+            "DescuentosMarcaCategoria": prefillProntoPago,
+            "DescuentosVolumen": prefillVolumen,
+            "PromocionPrimeraCompra": prefillPromo,
+            "DescuentosProducto": prefillProducto,
+            "DescuentosDiferencialCambiario": prefillDiferencial,
+        };
+        const fn = prefillers[tabla];
+        if (!fn) {
+            alert(`Edición no soportada todavía para: ${tabla}`);
+            return;
+        }
+        fn(r, reglaId);
+    };
 
     // Load Promociones Primera Compra
     const TIPO_LABELS = {
@@ -3284,15 +3460,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
             };
+            const editId = promoForm.dataset.editRegla;
+            const url = editId ? `/api/config/promociones/${editId}` : "/api/config/promociones";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/promociones", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Promoción registrada exitosamente.");
-                    promoForm.reset();
+                    alert(editId ? "✅ Promoción actualizada exitosamente." : "✅ Promoción registrada exitosamente.");
+                    clearEditMode(promoForm);
                     if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = "0";
                     loadPromociones();
                     loadReglasConsolidadas();
@@ -3417,15 +3596,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea",
                 descripcion: document.getElementById("cfg-desc-vol-descripcion")?.value || ""
             };
+            const editId = descuentoVolumenForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-volumen/${editId}` : "/api/config/descuentos-volumen";
+            const method = editId ? "PUT" : "POST";
             try {
-                const res = await fetch("/api/config/descuentos-volumen", {
-                    method: "POST",
+                const res = await fetch(url, {
+                    method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    alert("✅ Regla de volumen registrada exitosamente.");
-                    descuentoVolumenForm.reset();
+                    alert(editId ? "✅ Regla de volumen actualizada exitosamente." : "✅ Regla de volumen registrada exitosamente.");
+                    clearEditMode(descuentoVolumenForm);
                     loadDescuentosVolumen();
                     loadReglasConsolidadas();
                 } else {
