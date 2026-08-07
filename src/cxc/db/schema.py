@@ -104,6 +104,14 @@ lineas_orden = Table(
     Column("precio_unitario", MONEY, nullable=False),
     Column("cantidad_entregada", MONEY, nullable=False, server_default="0"),
     Column("descuento", MONEY, nullable=False, server_default="0"),
+    # Subcategoría real (2do nivel de categ_id, ej. "Comercial/Elite" ->
+    # "Elite") y presentación/envase real (parseada del nombre del producto
+    # en Odoo, ej. "... (1x6)" -> "1X6") -- ver OdooClient._productos.
+    # Agregadas despues del sync inicial de lineas_orden (agosto 2026);
+    # sin backfill, lineas viejas quedan con estas columnas vacias hasta
+    # el proximo sync o hasta correr el script de backfill.
+    Column("subcategoria", String, nullable=False, server_default=""),
+    Column("presentacion_odoo", String, nullable=False, server_default=""),
 )
 
 # --- 3.4 Pagos (espejo, sync-owned + columnas humanas de cobranza) ----------

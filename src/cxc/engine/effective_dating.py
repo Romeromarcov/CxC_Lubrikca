@@ -58,13 +58,18 @@ def _match_categoria(
     tc = (target_cat or "").strip().upper()
     pres = (presentacion or "").strip().upper()
     subcat = (subcategoria or "").strip().upper()
+    # Nota: los checks de substring de abajo requieren que `tc` (o `subcat`)
+    # sea no-vacío -- "" es substring de cualquier string en Python, así que
+    # sin este guard una línea sin ese dato (ej. sin subcategoría) matcheaba
+    # CUALQUIER regla no-"*" por accidente (bug real encontrado en agosto
+    # 2026 al agregar matching por subcategoría/presentación a Volumen).
     if (
         "*" in rcs
-        or tc in rcs
-        or pres in rcs
-        or subcat in rcs
-        or any(rc in tc for rc in rcs)
-        or any(tc in rc for rc in rcs)
+        or (tc and tc in rcs)
+        or (pres and pres in rcs)
+        or (subcat and subcat in rcs)
+        or (tc and any(rc in tc for rc in rcs))
+        or (tc and any(tc in rc for rc in rcs))
         or (subcat and any(rc in subcat or subcat in rc for rc in rcs))
     ):
         return True

@@ -72,6 +72,8 @@ def linea(
     cantidad: str = "1",
     precio: str = "100",
     descuento: str = "0",
+    subcategoria: str = "",
+    presentacion_odoo: str = "",
 ) -> LineaOrden:
     return LineaOrden(
         linea_id=linea_id,
@@ -82,6 +84,8 @@ def linea(
         cantidad=Decimal(cantidad),
         precio_unitario=Decimal(precio),
         descuento=Decimal(descuento),
+        subcategoria=subcategoria,
+        presentacion_odoo=presentacion_odoo,
     )
 
 

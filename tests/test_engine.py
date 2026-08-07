@@ -1942,3 +1942,137 @@ def test_promocion_recurrente_sin_promos_no_inventa_2pct_industrial() -> None:
     )
     res = calcular_factura(inp)
     assert res.ncs_calculadas == Decimal("0.00")
+
+
+def test_descuento_volumen_por_subcategoria_especifica() -> None:
+    """Hallazgo real (auditoria agosto 2026): antes el agrupado de Volumen
+
+    era por (marca, categoria RAIZ) unicamente -- una regla scoped a una
+    subcategoria especifica (ej. "Elite") nunca podia matchear ninguna
+    linea, porque el total que se comparaba contra el umbral era el de
+    TODA la categoria raiz, no el de la subcategoria. Ahora cada regla
+    suma solo sus propias lineas coincidentes."""
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden(primera=False)
+    linea_elite = b.linea(
+        producto="P1", marca="Global Oil", categoria="Comercial",
+        subcategoria="Elite", cantidad="5", precio="100",
+    )
+    linea_clasico = b.linea(
+        "L2", producto="P2", marca="Global Oil", categoria="Comercial",
+        subcategoria="Clasico", cantidad="5", precio="100",
+    )
+    regla_elite = DescuentoVolumen(
+        regla_id="VOL_ELITE",
+        marca="Global Oil",
+        categoria="Elite",
+        min_cantidad=Decimal("5"),
+        max_cantidad=Decimal("999999"),
+        unidad_medida="CAJAS",
+        porcentaje=Decimal("0.10"),
+        activo=True,
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_elite, linea_clasico],
+        abonos=[],
+        descuentos_volumen=[regla_elite],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100", "P2@USD": "100", "P2@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    # Solo la linea Elite (5 * 100 = 500) recibe el 10% -- la Clasico no
+    # matchea la regla scoped a Elite. 500 * 0.10 = 50.
+    assert res.total_descuentos == Decimal("50.00")
+
+
+def test_descuento_volumen_regla_especifica_no_duplica_con_regla_amplia() -> None:
+    """Una regla amplia ("Comercial") y una scoped ("Elite") pueden
+
+    coexistir vigentes -- la mas especifica se queda con sus lineas
+    primero, la amplia solo cobra sobre lo que queda libre (sin
+    doble-conteo de las mismas unidades)."""
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden(primera=False)
+    linea_elite = b.linea(
+        producto="P1", marca="Global Oil", categoria="Comercial",
+        subcategoria="Elite", cantidad="5", precio="100",
+    )
+    linea_clasico = b.linea(
+        "L2", producto="P2", marca="Global Oil", categoria="Comercial",
+        subcategoria="Clasico", cantidad="5", precio="100",
+    )
+    regla_amplia = DescuentoVolumen(
+        regla_id="VOL_COMERCIAL",
+        marca="Global Oil",
+        categoria="Comercial",
+        min_cantidad=Decimal("5"),
+        max_cantidad=Decimal("999999"),
+        unidad_medida="CAJAS",
+        porcentaje=Decimal("0.05"),
+        activo=True,
+    )
+    regla_elite = DescuentoVolumen(
+        regla_id="VOL_ELITE",
+        marca="Global Oil",
+        categoria="Elite",
+        min_cantidad=Decimal("5"),
+        max_cantidad=Decimal("999999"),
+        unidad_medida="CAJAS",
+        porcentaje=Decimal("0.10"),
+        activo=True,
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_elite, linea_clasico],
+        abonos=[],
+        descuentos_volumen=[regla_amplia, regla_elite],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100", "P2@USD": "100", "P2@BCV": "100"}),
+    )
+    res = calcular_factura(inp)
+    # Elite (500) al 10% = 50; Clasico (500, libre, no reclamado por
+    # Elite) al 5% = 25. Total = 75, no 100 (que seria doble-conteo de
+    # Elite bajo ambas reglas).
+    assert res.total_descuentos == Decimal("75.00")
+
+
+def test_descuento_volumen_por_presentacion() -> None:
+    """Regla scoped por presentacion (ej. "GARRAFA") en vez de subcategoria.
+
+    Nota: "TAMBOR"/"PAILA"/"CAJA" tienen alias legacy en _match_categoria
+    que los tratan como sinonimos de la categoria raiz Industrial/Comercial
+    completa (no solo esa presentacion puntual) -- se usa "GARRAFA" aqui
+    para probar el matching real por presentacion sin chocar con esos
+    alias preexistentes."""
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden(primera=False)
+    linea_garrafa = b.linea(
+        producto="P1", marca="Sinoco", categoria="Industrial",
+        presentacion_odoo="GARRAFA", cantidad="3", precio="200",
+    )
+    linea_bidon = b.linea(
+        "L2", producto="P2", marca="Sinoco", categoria="Industrial",
+        presentacion_odoo="BIDON", cantidad="3", precio="200",
+    )
+    regla_garrafa = DescuentoVolumen(
+        regla_id="VOL_GARRAFA",
+        marca="Sinoco",
+        categoria="GARRAFA",
+        min_cantidad=Decimal("2"),
+        max_cantidad=Decimal("999999"),
+        unidad_medida="CAJAS",
+        porcentaje=Decimal("0.07"),
+        activo=True,
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_garrafa, linea_bidon],
+        abonos=[],
+        descuentos_volumen=[regla_garrafa],
+        resolver=_resolver(**{"P1@USD": "200", "P1@BCV": "200", "P2@USD": "200", "P2@BCV": "200"}),
+    )
+    res = calcular_factura(inp)
+    # Solo la linea GARRAFA (3 * 200 = 600) al 7% = 42.
+    assert res.total_descuentos == Decimal("42.00")

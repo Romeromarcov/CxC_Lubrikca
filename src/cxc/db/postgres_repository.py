@@ -949,6 +949,8 @@ def _linea_to_row(ln: LineaOrden) -> dict[str, Any]:
         "precio_unitario": ln.precio_unitario,
         "cantidad_entregada": ln.cantidad_entregada,
         "descuento": ln.descuento,
+        "subcategoria": ln.subcategoria,
+        "presentacion_odoo": ln.presentacion_odoo,
     }
 
 
@@ -963,6 +965,8 @@ def _row_to_linea(r: Any) -> LineaOrden:
         precio_unitario=r.precio_unitario,
         cantidad_entregada=r.cantidad_entregada,
         descuento=r.descuento,
+        subcategoria=getattr(r, "subcategoria", "") or "",
+        presentacion_odoo=getattr(r, "presentacion_odoo", "") or "",
     )
 
 

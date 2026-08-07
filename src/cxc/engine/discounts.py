@@ -46,7 +46,6 @@ from .effective_dating import (
     _vigente,
     descuento_producto_vigente,
     descuento_vigente,
-    descuento_volumen_vigente,
     regla_recurrencia_vigente,
     tasa_bcv_completo_vigente,
 )
@@ -750,85 +749,178 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         for regla_subtotal in reglas_contado_subtotal.values():
             contado_proy += precio_base * regla_subtotal.porcentaje
 
-    # (d) Descuento por Volumen (Litros o Unidades/Cajas)
-    litros_por_mc: dict[tuple[str, str], Decimal] = {}
-    cajas_por_mc: dict[tuple[str, str], Decimal] = {}
-    subtotal_por_mc: dict[tuple[str, str], Decimal] = {}
-    for ln in inp.lineas:
-        try:
-            vol_unit = inp.price_resolver.volumen(ln.producto)
-        except Exception:
-            vol_unit = Decimal("0.0")
-        qty = _cantidad_efectiva(inp, ln)
-        k = (ln.resolved_marca, ln.categoria)
-        litros_por_mc[k] = litros_por_mc.get(k, Decimal("0")) + (qty * vol_unit)
-        cajas_por_mc[k] = cajas_por_mc.get(k, Decimal("0")) + qty
-        subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
-
-    # Volumen "acumulado": historial de OTRAS órdenes del mismo cliente,
-    # agrupado igual que las líneas de esta orden (marca, categoría raíz),
-    # como (fecha_orden, litros, cajas) por orden histórica -- cada regla
-    # "acumulado" filtra esto por su propio dias_evaluacion dentro de
-    # descuento_volumen_vigente. Reglas "orden" (default) lo ignoran.
-    historial_por_mc: dict[tuple[str, str], list[tuple[date, Decimal, Decimal]]] = {}
-    for orden_hist, lineas_hist in inp.historial_cliente_lineas:
-        litros_hist_mc: dict[tuple[str, str], Decimal] = {}
-        cajas_hist_mc: dict[tuple[str, str], Decimal] = {}
-        for lh in lineas_hist:
-            try:
-                vol_unit_h = inp.price_resolver.volumen(lh.producto)
-            except Exception:
-                vol_unit_h = Decimal("0.0")
-            k_h = (lh.resolved_marca, lh.categoria)
-            litros_hist_mc[k_h] = litros_hist_mc.get(k_h, Decimal("0")) + (lh.cantidad * vol_unit_h)
-            cajas_hist_mc[k_h] = cajas_hist_mc.get(k_h, Decimal("0")) + lh.cantidad
-        for k_h in set(litros_hist_mc) | set(cajas_hist_mc):
-            lit_h = litros_hist_mc.get(k_h, Decimal("0"))
-            caj_h = cajas_hist_mc.get(k_h, Decimal("0"))
-            historial_por_mc.setdefault(k_h, []).append((orden_hist.fecha, lit_h, caj_h))
-
+    # (d) Descuento por Volumen (Litros o Unidades/Cajas) -- evaluado POR
+    # REGLA, no agrupando primero por (marca, categoría raíz). Hallazgo de
+    # auditoría (agosto 2026): el agrupado anterior por categoría raíz
+    # significaba que una regla scoped a una subcategoría o presentación
+    # específica (ej. "Elite", "1X6") NUNCA podía matchear ninguna línea,
+    # porque el total de litros/cajas se calculaba antes de saber qué
+    # regla se iba a evaluar. Ahora cada regla suma SOLO las líneas que
+    # realmente le hacen match (marca + categoría/subcategoría/
+    # presentación/categoría_madre, mismo criterio que Contado/Recompra).
     volumen_desc = Decimal("0.0")
     detalle_volumen: DescuentoAplicado | None = None
     detalles_vol = []
-    # Reglas en modo "subtotal" se deduplican por regla_id (una sola reglas
-    # puede matchear varios grupos marca/categoria vía comodines "*"; el %
-    # solo debe aplicarse UNA vez sobre precio_base, no una vez por grupo).
-    reglas_vol_subtotal: dict[str, tuple[Any, str]] = {}
 
-    for (marca, categoria), total_litros in litros_por_mc.items():
-        total_cajas = cajas_por_mc.get((marca, categoria), Decimal("0"))
-        regla_vol = descuento_volumen_vigente(
-            descuentos_volumen_ok,
-            marca=marca,
-            categoria=categoria,
-            litros=total_litros,
-            cantidad_unidades=total_cajas,
-            fecha=fecha_orden,
-            lista_precios=lista,
-            valid_ves=inp.valid_ves or None,
-            valid_usd=inp.valid_usd or None,
-            historial_litros_cajas=historial_por_mc.get((marca, categoria)),
+    def _match_marca_vol(regla_marca: str, marca_linea: str) -> bool:
+        if not regla_marca or regla_marca == "*":
+            return True
+        if not marca_linea:
+            return False
+        return (
+            regla_marca.upper() in marca_linea.upper()
+            or marca_linea.upper() in regla_marca.upper()
         )
-        if regla_vol is not None and regla_vol.porcentaje > 0:
-            unidad_tag = "L" if str(regla_vol.unidad_medida).upper() == "LITROS" else " Unid"
-            min_tag = (
-                regla_vol.litros_minimo
-                if str(regla_vol.unidad_medida).upper() == "LITROS"
-                else regla_vol.min_cantidad
-            )
-            tag = f"{marca}/{categoria} (>{min_tag}{unidad_tag}): {regla_vol.porcentaje * 100}%"
-            if getattr(regla_vol, "aplica_a", "linea") == "subtotal":
-                existente = reglas_vol_subtotal.get(regla_vol.regla_id)
-                if existente is None or regla_vol.porcentaje > existente[0].porcentaje:
-                    reglas_vol_subtotal[regla_vol.regla_id] = (regla_vol, tag)
-            else:
-                subt = subtotal_por_mc[(marca, categoria)]
-                volumen_desc += subt * regla_vol.porcentaje
-                detalles_vol.append(tag)
+
+    def _match_categoria_vol(regla_categoria: str, ln: LineaOrden) -> bool:
+        return (
+            _match_categoria(regla_categoria, ln.categoria)
+            or _match_categoria(regla_categoria, ln.presentacion)
+            or _match_categoria(regla_categoria, ln.categoria_madre)
+            or _match_categoria(regla_categoria, getattr(ln, "subcategoria", ""))
+        )
+
+    def _especificidad_vol(r: DescuentoVolumen) -> int:
+        score = 0
+        if r.marca != "*":
+            score += 2
+        if r.categoria != "*":
+            score += 1
+            # Bonus: una regla apuntando a una subcategoría/presentación
+            # real (no solo la raíz Comercial/Industrial) es MÁS
+            # específica -- gana sobre una regla que solo apunta a la raíz.
+            if r.categoria.strip().upper() not in ("COMERCIAL", "INDUSTRIAL"):
+                score += 1
+        return score
+
+    # Historial "acumulado" -- líneas crudas (sin agrupar) de otras
+    # órdenes del cliente, cada una con la fecha de SU orden; cada regla
+    # filtra por su propio marca/categoría (mismo criterio de arriba) y
+    # por su propio dias_evaluacion más abajo.
+    historial_lineas_crudas: list[tuple[date, LineaOrden]] = [
+        (orden_hist.fecha, lh)
+        for orden_hist, lineas_hist in inp.historial_cliente_lineas
+        for lh in lineas_hist
+    ]
+
+    reglas_vol_vigentes = [
+        r
+        for r in descuentos_volumen_ok
+        if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
+        and _match_lista(
+            getattr(r, "listas_aplicables", "*"),
+            lista,
+            inp.valid_ves or None,
+            inp.valid_usd or None,
+        )
+    ]
+
+    candidatas_vol: list[dict[str, Any]] = []
+    for r in reglas_vol_vigentes:
+        matching_lines = [
+            ln
+            for ln in inp.lineas
+            if _match_marca_vol(r.marca, ln.resolved_marca)
+            and _match_categoria_vol(r.categoria, ln)
+        ]
+        if not matching_lines:
+            continue
+
+        total_litros = Decimal("0")
+        total_cajas = Decimal("0")
+        for ln in matching_lines:
+            try:
+                vol_unit = inp.price_resolver.volumen(ln.producto)
+            except Exception:
+                vol_unit = Decimal("0.0")
+            qty = _cantidad_efectiva(inp, ln)
+            total_litros += qty * vol_unit
+            total_cajas += qty
+
+        es_acumulado = str(getattr(r, "tipo_evaluacion", "orden") or "orden").lower() == "acumulado"
+        litros_eval = total_litros
+        cajas_eval = total_cajas
+        if es_acumulado and historial_lineas_crudas:
+            dias = int(getattr(r, "dias_evaluacion", 0) or 0)
+            for fecha_h, lh in historial_lineas_crudas:
+                if not (
+                    _match_marca_vol(r.marca, lh.resolved_marca)
+                    and _match_categoria_vol(r.categoria, lh)
+                ):
+                    continue
+                if dias > 0 and (fecha_orden - fecha_h).days > dias:
+                    continue
+                try:
+                    vol_unit_h = inp.price_resolver.volumen(lh.producto)
+                except Exception:
+                    vol_unit_h = Decimal("0.0")
+                litros_eval += lh.cantidad * vol_unit_h
+                cajas_eval += lh.cantidad
+
+        unidad = str(r.unidad_medida or "").upper()
+        is_liters_rule = (unidad == "LITROS") or (
+            r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
+        )
+        if is_liters_rule:
+            if litros_eval < r.litros_minimo:
+                continue
+        else:
+            val_eval = cajas_eval if cajas_eval > 0 else litros_eval
+            thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
+            if val_eval < thresh:
+                continue
+            if r.max_cantidad and r.max_cantidad < 999999 and val_eval > r.max_cantidad:
+                continue
+
+        if r.porcentaje <= 0:
+            continue
+
+        unidad_tag = "L" if unidad == "LITROS" else " Unid"
+        min_tag = r.litros_minimo if unidad == "LITROS" else r.min_cantidad
+        tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
+        candidatas_vol.append(
+            {
+                "regla": r,
+                "lineas": matching_lines,
+                "especificidad": _especificidad_vol(r),
+                "tag": tag,
+            }
+        )
+
+    # Reglas "subtotal": una sola vez por regla_id (puede matchear varias
+    # líneas vía comodines "*"), aplicada sobre precio_base COMPLETO.
+    reglas_vol_subtotal: dict[str, tuple[Any, str]] = {}
+    candidatas_linea = []
+    for c in candidatas_vol:
+        r = c["regla"]
+        if getattr(r, "aplica_a", "linea") == "subtotal":
+            existente = reglas_vol_subtotal.get(r.regla_id)
+            if existente is None or r.porcentaje > existente[0].porcentaje:
+                reglas_vol_subtotal[r.regla_id] = (r, c["tag"])
+        else:
+            candidatas_linea.append(c)
 
     for regla_subtotal, tag in reglas_vol_subtotal.values():
         volumen_desc += precio_base * regla_subtotal.porcentaje
         detalles_vol.append(tag)
+
+    # Reglas "línea": la MÁS ESPECÍFICA gana las líneas que le hacen match;
+    # una regla más general (ej. toda "Industrial") solo cobra sobre las
+    # líneas que ninguna regla más específica ya reclamó -- evita
+    # doble-conteo cuando una regla amplia y una scoped a subcategoría/
+    # presentación matchean simultáneamente las mismas unidades.
+    candidatas_linea.sort(key=lambda c: (c["especificidad"], c["regla"].porcentaje), reverse=True)
+    lineas_reclamadas: set[str] = set()
+    for c in candidatas_linea:
+        lineas_libres = [ln for ln in c["lineas"] if ln.linea_id not in lineas_reclamadas]
+        if not lineas_libres:
+            continue
+        subt_libre = sum((_precio_linea(inp, ln, lista) for ln in lineas_libres), Decimal("0"))
+        if subt_libre <= 0:
+            continue
+        volumen_desc += subt_libre * c["regla"].porcentaje
+        detalles_vol.append(c["tag"])
+        lineas_reclamadas.update(ln.linea_id for ln in lineas_libres)
 
     if volumen_desc > 0:
         detalle_volumen = DescuentoAplicado(
