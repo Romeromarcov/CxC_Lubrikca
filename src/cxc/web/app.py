@@ -3020,6 +3020,16 @@ async def get_reporte_saldos(refresh: bool = False):
             if ln.so_id:
                 all_lines_map.setdefault(ln.so_id, []).append(ln)
 
+        # Volumen "acumulado": lineas de OTRAS ordenes del mismo cliente
+        # (ver engine/discounts.py) -- reutiliza all_lines_map/ordenes_map ya
+        # cargados en este loop, sin queries adicionales.
+        historial_por_cliente: dict[str, list] = {}
+        for so_id_h, lineas_h in all_lines_map.items():
+            orden_h = ordenes_map.get(so_id_h)
+            if orden_h is None:
+                continue
+            historial_por_cliente.setdefault(orden_h.cliente_id, []).append((orden_h, lineas_h))
+
         class FastPriceResolver(PriceResolver):
             def __init__(self, lines_map, fallback_resolver=None):
                 self._prices = {}
@@ -3073,6 +3083,7 @@ async def get_reporte_saldos(refresh: bool = False):
         all_exclusiones = repo.exclusiones()
         all_desc_recompra = repo.descuentos_recompra()
         all_desc_diferencial = repo.descuentos_diferencial_cambiario()
+        all_desc_producto = repo.descuentos_producto()
 
         # Import audit logic
         from cxc.engine.discount_audit import (
@@ -3287,8 +3298,14 @@ async def get_reporte_saldos(refresh: bool = False):
                         exclusiones=all_exclusiones,
                         descuentos_recompra=all_desc_recompra,
                         descuentos_diferencial=all_desc_diferencial,
+                        descuentos_producto=all_desc_producto,
                         valid_usd=[str(x) for x in usd_ids],
                         valid_ves=[str(x) for x in ves_ids],
+                        historial_cliente_lineas=[
+                            (oh, lh)
+                            for oh, lh in historial_por_cliente.get(o.cliente_id, [])
+                            if oh.so_id != o.so_id
+                        ],
                     )
                     b = calcular_factura(inputs)
                 except Exception as e_calc:

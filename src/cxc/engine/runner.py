@@ -12,7 +12,15 @@ import dataclasses
 import logging
 from datetime import date
 
-from ..models import BandejaFacturacion, MetodoPago, VentasTeorico, Vinculacion, set_marca_fallback
+from ..models import (
+    BandejaFacturacion,
+    LineaOrden,
+    MetodoPago,
+    OrdenVenta,
+    VentasTeorico,
+    Vinculacion,
+    set_marca_fallback,
+)
 from ..repositories import Repository
 from .discounts import EngineInputs, calcular_factura, calcular_teorico_orden_con_fallback
 from .historical_pricing import cargar_mapa_historico, es_orden_historica
@@ -153,6 +161,19 @@ class EngineRunner:
             else []
         )
 
+        # Volumen "acumulado" (ver LineaOrden/discounts.py): líneas de las
+        # DEMÁS órdenes del mismo cliente, para sumar litros/cajas dentro de
+        # la ventana de cada regla "acumulado". Acotado al cliente (no un
+        # full-scan de líneas) -- reutiliza `todas_ordenes` ya cargado.
+        historial_cliente_lineas: list[tuple[OrdenVenta, list[LineaOrden]]] = []
+        try:
+            for o in todas_ordenes:
+                if o.cliente_id != orden.cliente_id or o.so_id == orden.so_id:
+                    continue
+                historial_cliente_lineas.append((o, self._repo.lineas_de_orden(o.so_id)))
+        except Exception as e:
+            logger.warning("Error al leer historial de volumen del cliente: %s", e)
+
         inputs = EngineInputs(
             orden=orden,
             lineas=lineas,
@@ -177,6 +198,7 @@ class EngineRunner:
             historical_price_map=historical_price_map,
             orden_anterior_cliente=orden_anterior_cliente,
             orden_anterior_cliente_vincs=orden_anterior_cliente_vincs,
+            historial_cliente_lineas=historial_cliente_lineas,
         )
         return inputs
 

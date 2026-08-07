@@ -264,6 +264,7 @@ def descuento_volumen_vigente(
     lista_precios: str = "*",
     valid_ves: list[str] | None = None,
     valid_usd: list[str] | None = None,
+    historial_litros_cajas: list[tuple[date, Decimal, Decimal]] | None = None,
 ) -> DescuentoVolumen | None:
     """Retorna la regla de descuento por volumen aplicable para la marca/categoría.
 
@@ -284,6 +285,14 @@ def descuento_volumen_vigente(
     cambiaría cómo se acumulan los umbrales para las 3 reglas de volumen
     SINOCO/PAILA ya activas en producción, así que no se toca sin validar
     primero que el negocio realmente quiere ese cambio de comportamiento.
+
+    ``historial_litros_cajas``: lista de (fecha_orden, litros, cajas) de
+    OTRAS órdenes del mismo cliente para ese mismo grupo marca/categoría --
+    usada SOLO por reglas con ``tipo_evaluacion == "acumulado"`` para sumar
+    al total de esta orden dentro de la ventana de ``dias_evaluacion`` de
+    CADA regla (``dias_evaluacion <= 0`` = histórico total, sin límite).
+    Reglas "orden" (default) ignoran esto y siguen evaluando solo esta
+    orden, exactamente como antes de este cableo (cero regresión).
     """
     candidatas = []
     for r in reglas:
@@ -296,15 +305,29 @@ def descuento_volumen_vigente(
         if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
             continue
 
+        litros_eval = litros
+        cantidad_eval = cantidad_unidades
+        es_acumulado = str(getattr(r, "tipo_evaluacion", "orden") or "orden").lower() == "acumulado"
+        if es_acumulado and historial_litros_cajas:
+            dias = int(getattr(r, "dias_evaluacion", 0) or 0)
+            litros_acum = litros
+            cajas_acum = cantidad_unidades
+            for fecha_h, litros_h, cajas_h in historial_litros_cajas:
+                if dias <= 0 or (fecha - fecha_h).days <= dias:
+                    litros_acum += litros_h
+                    cajas_acum += cajas_h
+            litros_eval = litros_acum
+            cantidad_eval = cajas_acum
+
         unidad = str(r.unidad_medida or "").upper()
         is_liters_rule = (unidad == "LITROS") or (
             r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
         )
         if is_liters_rule:
-            if litros < r.litros_minimo:
+            if litros_eval < r.litros_minimo:
                 continue
         else:
-            val_eval = cantidad_unidades if cantidad_unidades > 0 else litros
+            val_eval = cantidad_eval if cantidad_eval > 0 else litros_eval
             thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
             if val_eval < thresh:
                 continue

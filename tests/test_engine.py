@@ -53,6 +53,7 @@ def _inputs(
     orden_anterior=None,
     orden_anterior_vincs=(),
     descuentos_producto=(),
+    historial_cliente_lineas=(),
 ) -> EngineInputs:
     cfg = engine_config or CFG
     return EngineInputs(
@@ -75,6 +76,7 @@ def _inputs(
         orden_anterior_cliente=orden_anterior,
         orden_anterior_cliente_vincs=list(orden_anterior_vincs),
         descuentos_producto=list(descuentos_producto),
+        historial_cliente_lineas=list(historial_cliente_lineas),
     )
 
 
@@ -1707,3 +1709,135 @@ def test_descuento_por_producto_no_matchea_otro_sku() -> None:
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "producto" not in origenes
+
+
+def test_descuento_por_volumen_acumulado_suma_historial_del_cliente() -> None:
+    """tipo_evaluacion="acumulado" antes NO se leia en absoluto (hallazgo de
+
+    auditoria, agosto 2026) -- este test confirma que quedo cableado: el
+    umbral se evalua sumando litros de OTRAS ordenes del mismo cliente
+    dentro de dias_evaluacion, no solo esta orden."""
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden("SO_NUEVA", cliente_id="C1", fecha=date(2026, 6, 20), primera=False)
+    linea = b.linea(producto="P1", marca="Global Oil", categoria="Comercial", cantidad="10")
+    resolver = _resolver(**{"P1@USD": "100", "P1@BCV": "100"})
+    resolver.set_volumen("P1", Decimal("100.0"))  # 10 * 100L = 1000L esta orden
+
+    orden_hist = b.orden("SO_VIEJA", cliente_id="C1", fecha=date(2026, 6, 1))
+    linea_hist = b.linea(
+        "L_HIST", so_id="SO_VIEJA", producto="P1", marca="Global Oil", categoria="Comercial",
+        cantidad="20",
+    )  # 20 * 100L = 2000L historicos, dentro de 30 dias
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_ACUM",
+        marca="Global Oil",
+        categoria="Comercial",
+        litros_minimo=Decimal("2500"),
+        unidad_medida="LITROS",
+        porcentaje=Decimal("0.05"),
+        tipo_evaluacion="acumulado",
+        dias_evaluacion=30,
+        activo=True,
+    )
+
+    # Sin historial: 1000L < 2500L -- no deberia matchear.
+    inp_sin_historial = _inputs(
+        orden=orden, lineas=[linea], abonos=[], descuentos_volumen=[regla_vol], resolver=resolver,
+    )
+    res_sin = calcular_factura(inp_sin_historial)
+    assert res_sin.total_descuentos == Decimal("0.00")
+
+    # Con historial: 1000L + 2000L = 3000L >= 2500L -- si deberia matchear.
+    inp_con_historial = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+        historial_cliente_lineas=[(orden_hist, [linea_hist])],
+    )
+    res_con = calcular_factura(inp_con_historial)
+    # Base: 10 * 100 = 1000 USD; 5% de descuento = 50 USD.
+    assert res_con.total_descuentos == Decimal("50.00")
+
+
+def test_descuento_por_volumen_acumulado_respeta_ventana_dias_evaluacion() -> None:
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden("SO_NUEVA", cliente_id="C1", fecha=date(2026, 6, 20), primera=False)
+    linea = b.linea(producto="P1", marca="Global Oil", categoria="Comercial", cantidad="10")
+    resolver = _resolver(**{"P1@USD": "100", "P1@BCV": "100"})
+    resolver.set_volumen("P1", Decimal("100.0"))  # 1000L esta orden
+
+    # Orden historica de hace 60 dias -- fuera de la ventana de 30 dias.
+    orden_hist_vieja = b.orden("SO_MUY_VIEJA", cliente_id="C1", fecha=date(2026, 4, 21))
+    linea_hist_vieja = b.linea(
+        "L_HIST2", so_id="SO_MUY_VIEJA", producto="P1", marca="Global Oil", categoria="Comercial",
+        cantidad="20",
+    )
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_ACUM2",
+        marca="Global Oil",
+        categoria="Comercial",
+        litros_minimo=Decimal("2500"),
+        unidad_medida="LITROS",
+        porcentaje=Decimal("0.05"),
+        tipo_evaluacion="acumulado",
+        dias_evaluacion=30,
+        activo=True,
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+        historial_cliente_lineas=[(orden_hist_vieja, [linea_hist_vieja])],
+    )
+    res = calcular_factura(inp)
+    # 1000L + historial fuera de ventana (ignorado) = 1000L < 2500L.
+    assert res.total_descuentos == Decimal("0.00")
+
+
+def test_descuento_por_volumen_orden_ignora_historial() -> None:
+    """Reglas tipo_evaluacion="orden" (default) NO deben verse afectadas por
+
+    historial_cliente_lineas -- cero regresion para las reglas ya activas
+    en produccion que nunca usaron acumulado."""
+    from cxc.models import DescuentoVolumen
+
+    orden = b.orden("SO_NUEVA", cliente_id="C1", fecha=date(2026, 6, 20), primera=False)
+    linea = b.linea(producto="P1", marca="Global Oil", categoria="Comercial", cantidad="10")
+    resolver = _resolver(**{"P1@USD": "100", "P1@BCV": "100"})
+    resolver.set_volumen("P1", Decimal("100.0"))  # 1000L esta orden
+
+    orden_hist = b.orden("SO_VIEJA", cliente_id="C1", fecha=date(2026, 6, 1))
+    linea_hist = b.linea(
+        "L_HIST3", so_id="SO_VIEJA", producto="P1", marca="Global Oil", categoria="Comercial",
+        cantidad="50",
+    )  # 5000L historicos -- si se sumaran, dispararia la regla
+
+    regla_vol = DescuentoVolumen(
+        regla_id="VOL_ORDEN",
+        marca="Global Oil",
+        categoria="Comercial",
+        litros_minimo=Decimal("2500"),
+        unidad_medida="LITROS",
+        porcentaje=Decimal("0.05"),
+        tipo_evaluacion="orden",
+        activo=True,
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos_volumen=[regla_vol],
+        resolver=resolver,
+        historial_cliente_lineas=[(orden_hist, [linea_hist])],
+    )
+    res = calcular_factura(inp)
+    # Solo esta orden (1000L) cuenta -- el historial se ignora para "orden".
+    assert res.total_descuentos == Decimal("0.00")

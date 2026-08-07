@@ -83,6 +83,14 @@ class EngineInputs:
     descuentos_recompra: list[DescuentoRecompra] = field(default_factory=list)
     descuentos_diferencial: list[DescuentoDiferencialCambiario] = field(default_factory=list)
     descuentos_producto: list[DescuentoProducto] = field(default_factory=list)
+    # Volumen "acumulado" (DescuentoVolumen.tipo_evaluacion == "acumulado"):
+    # otras órdenes del MISMO cliente (con sus líneas) para sumar litros/
+    # cajas dentro de la ventana de la regla (dias_evaluacion), además de
+    # esta orden. Vacío = el umbral se evalúa solo con esta orden (lo que
+    # ya hacía el motor antes de este cableo).
+    historial_cliente_lineas: list[tuple[OrdenVenta, list[LineaOrden]]] = field(
+        default_factory=list
+    )
     # Tarea 3 (auditoria reglas por lista): listas de precio (ids de Odoo)
     # configuradas en Configuración como VES/USD -- vacías = el matching de
     # "LISTAS_VES"/"LISTAS_USD" en listas_aplicables cae al default
@@ -704,6 +712,28 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
         cajas_por_mc[k] = cajas_por_mc.get(k, Decimal("0")) + qty
         subtotal_por_mc[k] = subtotal_por_mc.get(k, Decimal("0")) + _precio_linea(inp, ln, lista)
 
+    # Volumen "acumulado": historial de OTRAS órdenes del mismo cliente,
+    # agrupado igual que las líneas de esta orden (marca, categoría raíz),
+    # como (fecha_orden, litros, cajas) por orden histórica -- cada regla
+    # "acumulado" filtra esto por su propio dias_evaluacion dentro de
+    # descuento_volumen_vigente. Reglas "orden" (default) lo ignoran.
+    historial_por_mc: dict[tuple[str, str], list[tuple[date, Decimal, Decimal]]] = {}
+    for orden_hist, lineas_hist in inp.historial_cliente_lineas:
+        litros_hist_mc: dict[tuple[str, str], Decimal] = {}
+        cajas_hist_mc: dict[tuple[str, str], Decimal] = {}
+        for lh in lineas_hist:
+            try:
+                vol_unit_h = inp.price_resolver.volumen(lh.producto)
+            except Exception:
+                vol_unit_h = Decimal("0.0")
+            k_h = (lh.resolved_marca, lh.categoria)
+            litros_hist_mc[k_h] = litros_hist_mc.get(k_h, Decimal("0")) + (lh.cantidad * vol_unit_h)
+            cajas_hist_mc[k_h] = cajas_hist_mc.get(k_h, Decimal("0")) + lh.cantidad
+        for k_h in set(litros_hist_mc) | set(cajas_hist_mc):
+            lit_h = litros_hist_mc.get(k_h, Decimal("0"))
+            caj_h = cajas_hist_mc.get(k_h, Decimal("0"))
+            historial_por_mc.setdefault(k_h, []).append((orden_hist.fecha, lit_h, caj_h))
+
     volumen_desc = Decimal("0.0")
     detalle_volumen: DescuentoAplicado | None = None
     detalles_vol = []
@@ -724,6 +754,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
             lista_precios=lista,
             valid_ves=inp.valid_ves or None,
             valid_usd=inp.valid_usd or None,
+            historial_litros_cajas=historial_por_mc.get((marca, categoria)),
         )
         if regla_vol is not None and regla_vol.porcentaje > 0:
             unidad_tag = "L" if str(regla_vol.unidad_medida).upper() == "LITROS" else " Unid"
