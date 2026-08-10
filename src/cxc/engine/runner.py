@@ -58,19 +58,42 @@ class EngineRunner:
             abonos.append((v, metodo))
         return abonos
 
-    def build_inputs(self, so_id: str, fecha_calculo: date) -> EngineInputs | None:
+    def build_inputs(
+        self,
+        so_id: str,
+        fecha_calculo: date,
+        *,
+        lineas_index: dict[str, list[LineaOrden]] | None = None,
+    ) -> EngineInputs | None:
         """Arma ``EngineInputs`` para una orden, SIN correr ``calcular_factura``.
 
         Extraído de ``_calcular`` para que llamadores que solo necesitan los
         inputs (ej. ``/api/ventas/{so_id}/detalle`` -- Fase 5, desglose por
         línea vía ``discounts.lineas_con_precio``) no dupliquen esta lógica
         de cableo repo -> EngineInputs.
+
+        ``lineas_index`` (opcional, ``{so_id: [LineaOrden]}`` ya cargado en
+        memoria por el llamador): evita volver a golpear la DB por cada
+        orden -- ``run_all()`` lo arma UNA vez (``self._repo.all_lineas()``)
+        y lo pasa aquí. Bug real de rendimiento (agosto 2026): sin esto, el
+        historial "acumulado" de Volumen (ver más abajo) hacía una query
+        ``lineas_de_orden`` POR CADA orden anterior del mismo cliente, POR
+        CADA orden que ``run_all()`` procesaba -- para un cliente con N
+        órdenes eso es O(N²) queries en vez de O(N), y con cientos de
+        órdenes reales en producción el recálculo pasó de minutos a
+        20-35+ minutos por ciclo, monopolizando el único worker/pool de
+        conexiones y causando 502 "upstream error" en requests normales
+        como ``/reporte`` mientras el ciclo corría.
         """
         orden = self._repo.get_orden(so_id)
         if orden is None:
             logger.warning("Orden %s inexistente", so_id)
             return None
-        lineas = self._repo.lineas_de_orden(so_id)
+        lineas = (
+            lineas_index.get(so_id, [])
+            if lineas_index is not None
+            else self._repo.lineas_de_orden(so_id)
+        )
         vincs = self._repo.vinculaciones_de_orden(so_id)
         abonos = self._abonos(vincs)
 
@@ -170,7 +193,12 @@ class EngineRunner:
             for o in todas_ordenes:
                 if o.cliente_id != orden.cliente_id or o.so_id == orden.so_id:
                     continue
-                historial_cliente_lineas.append((o, self._repo.lineas_de_orden(o.so_id)))
+                o_lineas = (
+                    lineas_index.get(o.so_id, [])
+                    if lineas_index is not None
+                    else self._repo.lineas_de_orden(o.so_id)
+                )
+                historial_cliente_lineas.append((o, o_lineas))
         except Exception as e:
             logger.warning("Error al leer historial de volumen del cliente: %s", e)
 
@@ -203,10 +231,14 @@ class EngineRunner:
         return inputs
 
     def _calcular(
-        self, so_id: str, fecha_calculo: date
+        self,
+        so_id: str,
+        fecha_calculo: date,
+        *,
+        lineas_index: dict[str, list[LineaOrden]] | None = None,
     ) -> tuple[BandejaFacturacion, list[Vinculacion]] | None:
         """Calcula la bandeja de una orden SIN persistir (para batchear en run_all)."""
-        inputs = self.build_inputs(so_id, fecha_calculo)
+        inputs = self.build_inputs(so_id, fecha_calculo, lineas_index=lineas_index)
         if inputs is None:
             return None
         bandeja = calcular_factura(inputs)
@@ -235,13 +267,21 @@ class EngineRunner:
         resultados: list[BandejaFacturacion] = []
         todas_vincs: list[Vinculacion] = []
         ordenes = self._repo.all_ordenes()
+        # Prefetch UNA sola vez -- ver docstring de build_inputs (bug de
+        # rendimiento real, agosto 2026): sin esto, el historial "acumulado"
+        # de Volumen hace una query lineas_de_orden por cada orden anterior
+        # del cliente, POR CADA orden de este loop (O(N²)).
+        lineas_index: dict[str, list[LineaOrden]] = {}
+        for ln in self._repo.all_lineas():
+            if ln.so_id:
+                lineas_index.setdefault(ln.so_id, []).append(ln)
         for o in ordenes:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
             if o.facturada:
                 continue
-            resultado = self._calcular(o.so_id, fecha_calculo)
+            resultado = self._calcular(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if resultado is None:
                 continue
             bandeja, vincs_actualizadas = resultado
