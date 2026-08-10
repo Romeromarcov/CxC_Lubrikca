@@ -1580,6 +1580,9 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
         def all_ordenes(self):
             return self._ordenes
 
+        def all_lineas(self):
+            return []
+
         def upsert_bandejas(self, filas):
             pass
 
@@ -1592,7 +1595,7 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
     # Override _calcular (llamado internamente por run_all) para contar
     # llamadas sin ejercitar el cálculo completo del motor.
     called = []
-    runner._calcular = lambda so_id, dt: (called.append(so_id), None)[1]
+    runner._calcular = lambda so_id, dt, **kw: (called.append(so_id), None)[1]
 
     runner.run_all(date.today())
     assert "SO_ACTIVE" in called
