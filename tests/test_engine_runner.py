@@ -85,19 +85,20 @@ def test_runner_calcula_y_persiste_bandeja() -> None:
     assert len(resultados) == 1
     bandeja = repo.get_bandeja("SO1")
     assert bandeja is not None
-    assert bandeja.total_descuentos == Decimal("6.00")
-    assert bandeja.total_motor == Decimal("94.00")
-    assert bandeja.candidata_a_cierre is True
     # SO1 no tiene orden anterior en este repo (_seed() solo siembra un
     # pedido) -- Recompra NO puede evaluarse (ver
     # test_runner_recompra_aplica_con_orden_anterior_pagada para el caso con
-    # orden anterior). El 6% de aquí sale de contado (3%) + bcv_completo
-    # (3%, coincide en monto con lo que antes daba recompra) -- hallazgo de
-    # esta fase: antes de fijar esta aserción, este test "pasaba" aunque
-    # Recompra ya no disparaba, porque el monto total coincidía por
-    # casualidad con otro mecanismo.
+    # orden anterior). Antes (agosto 2026) este total incluía $3 extra de
+    # "bcv_completo" que se auto-aplicaba SOLO por el spread entre las
+    # tasas default del builder de vinculación (36/40), sin ninguna regla
+    # de Diferencial Cambiario configurada aquí -- ese mecanismo se retiró
+    # (ver bloque "(c) Diferencial Cambiario" en discounts.py); solo queda
+    # el 3% de contado.
+    assert bandeja.total_descuentos == Decimal("3.00")
+    assert bandeja.total_motor == Decimal("97.00")
+    assert bandeja.candidata_a_cierre is False
     origenes = {d.origen for d in bandeja.descuentos_detalle}
-    assert origenes == {"contado", "bcv_completo"}
+    assert origenes == {"contado"}
 
     # Los equivalentes quedaron congelados en la vinculación.
     vinc = repo.vinculaciones_de_orden("SO1")[0]

@@ -117,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const promoForm = document.getElementById("promo-form");
     const cfgPromoTipoBeneficio = document.getElementById("cfg-promo-tipo-beneficio");
     const cfgPromoProductos = document.getElementById("cfg-promo-productos");
+    const cfgPromoProductosBuscar = document.getElementById("cfg-promo-productos-buscar");
     const cfgPromoProductosCount = document.getElementById("promo-productos-count");
     const cfgPromoRegaloTipo = document.getElementById("cfg-promo-regalo-tipo");
     const cfgPromoValor = document.getElementById("cfg-promo-valor");
@@ -3104,6 +3105,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cfgPromoProductos) {
         cfgPromoProductos.addEventListener("change", () => {
             if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
+        });
+    }
+
+    // Buscador de productos en la promoción de obsequio -- filtra las
+    // <option> ya cargadas por nombre/referencia sin volver a pedirlas.
+    if (cfgPromoProductosBuscar && cfgPromoProductos) {
+        cfgPromoProductosBuscar.addEventListener("input", () => {
+            const q = cfgPromoProductosBuscar.value.trim().toLowerCase();
+            Array.from(cfgPromoProductos.options).forEach(opt => {
+                opt.hidden = q.length > 0 && !opt.textContent.toLowerCase().includes(q);
+            });
         });
     }
 
