@@ -7107,7 +7107,17 @@ def calcular_candidatos_cierre_diferencial(
         if teorico_ves <= 0:
             continue
         pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
-        pct_pagado = pagado_bcv / teorico_ves
+        # CAP a 100% -- "pagado_teorico_bcv" hereda una limitación conocida y
+        # documentada de _pagos_bcv_binance_por_orden: si UN pago reconcilia
+        # facturas de VARIAS órdenes, se suma el monto COMPLETO a cada una
+        # (no prorrateado). Sin este cap, un cliente con muchas órdenes y un
+        # pago grande puede mostrar %pagado de 300-800%+ en cada una de
+        # ellas. El cap evita números absurdos en el reporte, pero NO
+        # resuelve el falso-positivo de fondo (una orden puede aparecer como
+        # "100% pagada" por un pago que en realidad correspondía a otra
+        # orden del mismo cliente) -- por diseño, esto es solo un reporte de
+        # CANDIDATOS: gerencia debe verificar en Odoo antes de aprobar.
+        pct_pagado = min(1.0, pagado_bcv / teorico_ves)
         if pct_pagado >= pct_pagado_minimo:
             candidatos.append(
                 {

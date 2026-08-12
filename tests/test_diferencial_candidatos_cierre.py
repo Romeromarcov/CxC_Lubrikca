@@ -122,6 +122,28 @@ def test_sin_diferencial_de_hoy_umbral_es_el_maximo_completo() -> None:
     assert len(res["candidatos"]) == 1
 
 
+def test_pagado_bcv_no_prorrateado_se_topa_al_100pct() -> None:
+    """pagado_teorico_bcv hereda una limitación conocida: si un pago
+
+    reconcilia facturas de VARIAS órdenes, se suma completo a cada una (no
+    prorrateado) -- sin el cap, esto produciría %pagado absurdos como
+    300-800%. El cap evita el numero sin sentido en el reporte."""
+    reglas = [_regla_max(), _regla_candidatos()]
+    tasas = [{"timestamp": "2026-08-12T10:00:00", "diferencial_bcv_binance_pct": "12.0"}]
+    items = [
+        {
+            "so_id": "S00005",
+            "cliente_nombre": "Cliente Cinco",
+            "nacio_en_lista_usd": False,
+            "ves_neta_teorica_iva": 1000.0,
+            "pagado_teorico_bcv": 5000.0,  # pago compartido con otras ordenes del cliente
+        }
+    ]
+    res = calcular_candidatos_cierre_diferencial(reglas, tasas, items, HOY)
+    assert len(res["candidatos"]) == 1
+    assert res["candidatos"][0]["pct_pagado"] == 100.0
+
+
 def test_regla_max_vencida_reporte_deshabilitado() -> None:
     regla_vencida = DescuentoDiferencialCambiario(
         regla_id="DIF_35_VES",
