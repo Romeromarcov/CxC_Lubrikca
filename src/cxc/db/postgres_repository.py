@@ -88,14 +88,15 @@ _DIFERENCIAL_DEFAULTS = [
         listas_aplicables="LISTAS_VES",
     ),
     DescuentoDiferencialCambiario(
-        regla_id="DIF_BRECHA_CIERRE",
-        nombre="Brecha BCV vs Binance Cierre",
-        tipo_diferencial="diferencial_bcv_binance",
+        regla_id="DIF_CANDIDATOS_CIERRE",
+        nombre="Candidatos a Cierre de Factura (reporte)",
+        tipo_diferencial="candidato_cierre_factura",
         tipo_calculo="variable",
         porcentaje_fijo=Decimal("0"),
         unidad_medida="USD",
         monedas_aplicables="*",
         listas_aplicables="LISTAS_VES",
+        activo=False,
     ),
 ]
 

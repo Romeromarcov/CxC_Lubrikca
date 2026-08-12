@@ -184,7 +184,11 @@ def test_descuentos_diferencial_cambiario_defaults_y_append() -> None:
     # Sin filas persistidas, cae a los 3 defaults hardcodeados.
     defaults = repo.descuentos_diferencial_cambiario()
     assert len(defaults) == 3
-    assert {d.regla_id for d in defaults} == {"DIF_35_VES", "DIF_EQUIPARAR", "DIF_BRECHA_CIERRE"}
+    assert {d.regla_id for d in defaults} == {
+        "DIF_35_VES",
+        "DIF_EQUIPARAR",
+        "DIF_CANDIDATOS_CIERRE",
+    }
 
     repo.append_descuento_diferencial_cambiario(
         DescuentoDiferencialCambiario(

@@ -975,7 +975,7 @@ class ProductoPromoRequest(BaseModel):
 
 class DiferencialCambiarioRequest(BaseModel):
     nombre: str
-    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     tipo_calculo: str  # 'fijo' | 'variable'
     porcentaje_fijo: float = 0.35
     marca: str = "*"
@@ -7033,6 +7033,136 @@ async def put_config_diferencial(regla_id: str, req: DiferencialCambiarioRequest
         return {"status": "success", "message": "Regla de diferencial cambiario actualizada."}
     except HTTPException:
         raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _vigente_diferencial_local(r: Any, today: date) -> bool:
+    desde_ok = r.vigencia_desde is None or r.vigencia_desde <= today
+    hasta_ok = r.vigencia_hasta is None or r.vigencia_hasta >= today
+    return bool(r.activo) and desde_ok and hasta_ok
+
+
+def calcular_candidatos_cierre_diferencial(
+    reglas_dif: list[Any],
+    tasas_rows: list[dict[str, Any]],
+    ventas_items: list[dict[str, Any]],
+    today: date,
+) -> dict[str, Any]:
+    """Regla 3 de Diferencial Cambiario (candidatos a cierre de factura),
+
+    pura -- sin tocar el repo/Odoo directamente, para poder testearla sin
+    mockear todo el pipeline de ``get_ventas``. Ver docstring del endpoint
+    ``GET /api/diferencial/candidatos-cierre`` para la explicación completa
+    de la fórmula.
+    """
+    regla_max = next(
+        (
+            r
+            for r in reglas_dif
+            if r.tipo_diferencial == "fijo_35_ves_usd" and _vigente_diferencial_local(r, today)
+        ),
+        None,
+    )
+    regla_candidatos = next(
+        (
+            r
+            for r in reglas_dif
+            if r.tipo_diferencial == "candidato_cierre_factura"
+            and _vigente_diferencial_local(r, today)
+        ),
+        None,
+    )
+    if regla_max is None or regla_candidatos is None:
+        return {
+            "habilitado": False,
+            "motivo": (
+                "Falta configurar una regla 'fijo_35_ves_usd' y una "
+                "'candidato_cierre_factura', ambas vigentes y activas."
+            ),
+            "diferencial_maximo_pct": None,
+            "diferencial_hoy_pct": None,
+            "umbral_pct_pagado": None,
+            "candidatos": [],
+        }
+
+    diferencial_maximo = float(regla_max.porcentaje_fijo)
+
+    diferencial_hoy = 0.0
+    if tasas_rows:
+        ultima = max(tasas_rows, key=lambda r: r.get("timestamp") or "")
+        pct_raw = ultima.get("diferencial_bcv_binance_pct")
+        if pct_raw not in (None, ""):
+            diferencial_hoy = float(pct_raw) / 100.0
+
+    umbral = max(0.0, diferencial_maximo - diferencial_hoy)
+    pct_pagado_minimo = max(0.0, 1.0 - umbral)
+
+    candidatos: list[dict[str, Any]] = []
+    for item in ventas_items:
+        if item.get("nacio_en_lista_usd"):
+            continue
+        teorico_ves = float(item.get("ves_neta_teorica_iva") or 0.0)
+        if teorico_ves <= 0:
+            continue
+        pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
+        pct_pagado = pagado_bcv / teorico_ves
+        if pct_pagado >= pct_pagado_minimo:
+            candidatos.append(
+                {
+                    "so_id": item.get("so_id"),
+                    "cliente_nombre": item.get("cliente_nombre"),
+                    "teorico_ves": round(teorico_ves, 2),
+                    "pagado_bcv": round(pagado_bcv, 2),
+                    "pct_pagado": round(pct_pagado * 100, 2),
+                    "monto_candidato_maximo": round(teorico_ves * umbral, 2),
+                }
+            )
+    candidatos.sort(key=lambda c: -c["pct_pagado"])
+
+    return {
+        "habilitado": True,
+        "diferencial_maximo_pct": round(diferencial_maximo * 100, 2),
+        "diferencial_hoy_pct": round(diferencial_hoy * 100, 2),
+        "umbral_pct_pagado": round(pct_pagado_minimo * 100, 2),
+        "candidatos": candidatos,
+    }
+
+
+@app.get("/api/diferencial/candidatos-cierre")
+async def get_diferencial_candidatos_cierre(cxc_session: str | None = Cookie(default=None)):
+    """Regla 3 de Diferencial Cambiario (candidatos a cierre de factura).
+
+    A diferencia de las reglas 1 (fijo) y 2 (equiparar) -- ver bloque "(c)
+    Diferencial Cambiario" en ``engine/discounts.py`` -- esta NO es un
+    descuento automático del motor: es un reporte de candidatos para que
+    gerencia decida manualmente cuánto otorgar, vía ``POST /api/
+    facturacion/aprobar-descuento-sistema`` (ya existente, ajusta saldos
+    internos de CxC sin tocar Odoo).
+
+    Fórmula (explicada por el usuario, agosto 2026): ``diferencial_hoy`` =
+    el spread de mercado BCV-vs-Binance del día (``serie_tasas.
+    diferencial_bcv_binance_pct``, ya calculado automáticamente por el
+    scraper de tasas -- no hay que registrarlo a mano). ``umbral`` =
+    ``diferencial_máximo`` (fila vigente ``fijo_35_ves_usd``) menos
+    ``diferencial_hoy``. Toda orden nacida en lista VES con
+    ``% pagado del teórico VES >= 100% - umbral`` es candidata.
+
+    Requiere DOS filas de configuración vigentes y activas para no
+    devolver vacío: la de ``fijo_35_ves_usd`` (fuente del diferencial
+    máximo) y una de ``candidato_cierre_factura`` (interruptor on/off de
+    este reporte específico) -- ambas se configuran en Configuración >
+    Diferencial Cambiario, igual que las otras reglas.
+    """
+    try:
+        repo = get_repo()
+        reglas_dif = repo.descuentos_diferencial_cambiario()
+        tasas_rows = _all_serie_tasas_rows(repo)
+        ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
+        return calcular_candidatos_cierre_diferencial(
+            reglas_dif, tasas_rows, ventas_data["items"], date.today()
+        )
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

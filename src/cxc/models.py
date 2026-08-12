@@ -407,7 +407,7 @@ class DescuentoDiferencialCambiario:
     regla_id: str
     nombre: str
     tipo_diferencial: str = (
-        "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+        "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     )
     tipo_calculo: str = "fijo"  # 'fijo' | 'variable'
     porcentaje_fijo: Decimal = Decimal("0.35")
