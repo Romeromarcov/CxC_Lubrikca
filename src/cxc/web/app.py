@@ -1499,7 +1499,12 @@ async def run_scraper_in_background():
                     build_alerter(config.alert),
                     config.scraper_policy,
                 )
-                fila = scraper.run(now_caracas)
+                # scraper.run() hace 2-3 llamadas HTTP síncronas (Binance +
+                # BCV) que pueden tardar varios segundos -- sin to_thread
+                # bloquean el event loop entero (mismo patrón de bug que
+                # Fase 1, ver recalculate_all_orders), tumbando /reporte y
+                # cualquier otro endpoint mientras el scraper espera red.
+                fila = await asyncio.to_thread(scraper.run, now_caracas)
                 print(
                     f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
                     f"Binance={fila.tasa_binance}"
