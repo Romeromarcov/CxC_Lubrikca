@@ -263,6 +263,12 @@ class PostgresRepository(Repository):
         with self._engine.begin() as conn:
             _upsert(conn, t.lineas_orden, [_linea_to_row(ln) for ln in filas], ["linea_id"])
 
+    def delete_lineas(self, linea_ids: list[str]) -> None:
+        if not linea_ids:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(t.lineas_orden.delete().where(t.lineas_orden.c.linea_id.in_(linea_ids)))
+
     def upsert_pagos(self, filas: list[Pago]) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.pagos, [_pago_to_row(p) for p in filas], ["pago_id"])

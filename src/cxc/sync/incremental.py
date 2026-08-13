@@ -24,6 +24,7 @@ class SyncResult:
     ordenes: int
     lineas: int
     pagos: int
+    lineas_borradas: int
     desde: datetime | None
     hasta: datetime
 
@@ -57,6 +58,8 @@ class IncrementalSync:
         self._repo.upsert_lineas(lineas)
         self._repo.upsert_pagos(pagos)
 
+        lineas_borradas = self.reconciliar_lineas_borradas(ordenes, lineas)
+
         self._repo.set_last_sync(now)
 
         result = SyncResult(
@@ -64,8 +67,39 @@ class IncrementalSync:
             ordenes=len(ordenes),
             lineas=len(lineas),
             pagos=len(pagos),
+            lineas_borradas=lineas_borradas,
             desde=since,
             hasta=now,
         )
-        logger.info("Sync delta: %s filas refrescadas", result.total)
+        logger.info(
+            "Sync delta: %s filas refrescadas, %s líneas huérfanas borradas",
+            result.total,
+            lineas_borradas,
+        )
         return result
+
+    def reconciliar_lineas_borradas(self, ordenes: list, lineas: list) -> int:
+        """Borra del espejo local líneas que Odoo confirma que ya no existen.
+
+        ``changed_lineas`` (delta por ``write_date``) nunca puede detectar
+        una eliminación -- un registro borrado no deja rastro de
+        ``write_date``. Se reconcilian las órdenes tocadas en este ciclo
+        (por cambio propio o por cambio en alguna de sus líneas, que en
+        Odoo recomputa ``amount_total`` de la orden y bumpea su
+        ``write_date``) contra el set de líneas VIGENTES que Odoo reporta
+        ahora mismo para ellas; cualquier línea local que ya no esté en ese
+        set se borra (hallazgo real orden S00792, agosto 2026: producto
+        sacado de la orden seguía apareciendo en el teórico para siempre).
+        """
+        so_ids = {o.so_id for o in ordenes} | {ln.so_id for ln in lineas if ln.so_id}
+        if not so_ids:
+            return 0
+        vigentes_por_orden = self._reader.lineas_vigentes_por_orden(sorted(so_ids))
+        a_borrar: list[str] = []
+        for so_id, vigentes in vigentes_por_orden.items():
+            for ln in self._repo.lineas_de_orden(so_id):
+                if ln.linea_id not in vigentes:
+                    a_borrar.append(ln.linea_id)
+        if a_borrar:
+            self._repo.delete_lineas(a_borrar)
+        return len(a_borrar)

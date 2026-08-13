@@ -115,6 +115,17 @@ class Repository(ABC):
     def upsert_lineas(self, filas: list[LineaOrden]) -> None: ...
 
     @abstractmethod
+    def delete_lineas(self, linea_ids: list[str]) -> None:
+        """Borra líneas del espejo local por ``linea_id`` (agosto 2026: una
+
+        línea eliminada en Odoo nunca aparece en ``changed_lineas`` -- no hay
+        ``write_date`` de un registro que ya no existe -- así que el sync
+        necesita poder borrar explícitamente lo que Odoo confirma que ya no
+        existe. Ver ``sync.incremental.IncrementalSync`` y hallazgo real
+        orden S00792."""
+        ...
+
+    @abstractmethod
     def upsert_pagos(self, filas: list[Pago]) -> None: ...
 
     # --- Lecturas para el motor ---------------------------------------------
@@ -464,6 +475,10 @@ class InMemoryRepository(Repository):
     def upsert_lineas(self, filas: list[LineaOrden]) -> None:
         for ln in filas:
             self._lineas[ln.linea_id] = ln
+
+    def delete_lineas(self, linea_ids: list[str]) -> None:
+        for lid in linea_ids:
+            self._lineas.pop(lid, None)
 
     def upsert_pagos(self, filas: list[Pago]) -> None:
         for p in filas:

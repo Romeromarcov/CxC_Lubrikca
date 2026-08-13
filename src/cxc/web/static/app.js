@@ -2315,13 +2315,21 @@ document.addEventListener("DOMContentLoaded", () => {
             loadClientesAuditoria,
             loadSettingsMeta
         ];
-        for (const fn of loaders) {
-            try {
-                if (typeof fn === "function") await fn();
-            } catch (err) {
-                console.error(`Error ejecutando ${fn.name || 'loader'}:`, err);
+        // Cada loader pega a un endpoint independiente y pinta su propia
+        // sección del DOM -- no comparten estado entre sí, así que corrían
+        // en serie sin necesidad (Fase 5 del audit de rendimiento, agosto
+        // 2026): 19 round-trips uno detrás del otro podían tardar varios
+        // segundos en abrir Configuración. Promise.allSettled preserva el
+        // aislamiento de errores por loader (uno que falla no frena a los
+        // demás) que ya tenía el try/catch secuencial.
+        const resultados = await Promise.allSettled(
+            loaders.filter((fn) => typeof fn === "function").map((fn) => fn())
+        );
+        resultados.forEach((r, i) => {
+            if (r.status === "rejected") {
+                console.error(`Error ejecutando ${loaders[i].name || 'loader'}:`, r.reason);
             }
-        }
+        });
     }
 
     // Load general Settings meta variables

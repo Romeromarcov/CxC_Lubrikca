@@ -244,6 +244,9 @@ class OdooReader(ABC):
     @abstractmethod
     def changed_pagos(self, since: datetime | None) -> list[Pago]: ...
 
+    @abstractmethod
+    def lineas_vigentes_por_orden(self, so_ids: list[str]) -> dict[str, set[str]]: ...
+
 
 class OdooXmlRpcReader(OdooReader):
     MODEL_PARTNER = "res.partner"
@@ -471,6 +474,32 @@ class OdooXmlRpcReader(OdooReader):
             r["subcategoria"] = subcategoria
             r["presentacion_odoo"] = presentacion
         return [map_linea(r) for r in recs]
+
+    def lineas_vigentes_por_orden(self, so_ids: list[str]) -> dict[str, set[str]]:
+        """Ids de línea ACTUALMENTE activas en Odoo para cada SO dada.
+
+        A diferencia de ``changed_lineas`` (delta por ``write_date``), esta
+        consulta no tiene filtro de fecha -- una línea BORRADA en Odoo nunca
+        aparece en un delta (no hay ``write_date`` de un registro que ya no
+        existe), así que el espejo local nunca se enteraba de la eliminación
+        y la línea quedaba fantasma para siempre (hallazgo real orden
+        S00792, agosto 2026: producto sacado de la orden seguía apareciendo
+        en el teórico). El caller usa el resultado para borrar del espejo
+        local cualquier línea que ya no esté en este set.
+        """
+        if not so_ids:
+            return {}
+        recs = self._search_read(
+            self.MODEL_LINEA,
+            [["order_id.name", "in", so_ids], ["display_type", "=", False]],
+            ["id", "order_id"],
+        )
+        vigentes: dict[str, set[str]] = {so_id: set() for so_id in so_ids}
+        for r in recs:
+            so_name = _m2o_name(r.get("order_id"))
+            if so_name:
+                vigentes.setdefault(so_name, set()).add(str(r["id"]))
+        return vigentes
 
     def _productos(self, prod_ids: set[int]) -> dict[int, tuple[str, str, str, str]]:
         """Mapa producto → (marca, categoría raíz, subcategoría, presentación).
