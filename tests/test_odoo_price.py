@@ -1,6 +1,24 @@
 from decimal import Decimal
 
+import pytest
+
+import cxc.odoo.price as price_module
 from cxc.odoo.price import OdooPriceResolver
+
+
+@pytest.fixture(autouse=True)
+def _limpiar_cache_compartido():
+    # El caché de precios ahora es COMPARTIDO a nivel de módulo (Fase 2,
+    # agosto 2026 -- para que sobreviva entre instancias reales de
+    # OdooPriceResolver en producción). Varios tests de este archivo
+    # reusan el mismo (producto, lista) con precios distintos esperados
+    # -- sin limpiar el caché entre tests, el primero que corra
+    # contaminaría a los demás.
+    price_module._SHARED_PRICE_CACHE.clear()
+    price_module._SHARED_VOLUMEN_CACHE.clear()
+    yield
+    price_module._SHARED_PRICE_CACHE.clear()
+    price_module._SHARED_VOLUMEN_CACHE.clear()
 
 
 def test_odoo_price_resolver_usa_regla_fija_cuando_existe():
@@ -77,3 +95,76 @@ def test_odoo_price_resolver_fue_fallback_true_si_uso_precio_de_ficha():
 def test_odoo_price_resolver_fue_fallback_default_false_sin_consultar_antes():
     resolver = OdooPriceResolver(lambda *a, **k: [], {"USD": 4})
     assert resolver.fue_fallback("999", "4") is False
+
+
+def test_odoo_price_resolver_cache_compartido_sobrevive_entre_instancias():
+    """Fase 2 (agosto 2026): el caché de precios es compartido a nivel de
+
+    módulo -- una instancia NUEVA de OdooPriceResolver (una por ciclo de
+    recálculo en producción) no debe volver a consultar Odoo para un
+    producto/lista ya resuelto por una instancia anterior."""
+    calls = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        calls.append(model)
+        if model == "product.pricelist.item":
+            return [{"fixed_price": "500.00", "date_start": False, "date_end": False}]
+        return []
+
+    resolver1 = OdooPriceResolver(fake_execute, {"USD": 4})
+    assert resolver1.precio("777", "4") == Decimal("500.00")
+    assert len(calls) == 1
+
+    # Instancia nueva (simula el siguiente ciclo de recálculo) -- NO debe
+    # volver a consultar Odoo, debe leer del caché compartido.
+    resolver2 = OdooPriceResolver(fake_execute, {"USD": 4})
+    assert resolver2.precio("777", "4") == Decimal("500.00")
+    assert len(calls) == 1  # sigue en 1 -- no hubo una segunda consulta
+
+
+def test_odoo_price_resolver_fallback_no_se_cachea_compartido():
+    """Un precio resuelto por fallback (sin regla fija en ninguna lista) NO
+
+    se cachea compartido -- si alguien completa la pricelist en Odoo
+    después, el próximo ciclo debe re-consultar y detectarlo, no seguir
+    devolviendo el $0/fallback viejo hasta que expire el TTL de horas."""
+    calls = []
+
+    def fake_execute_sin_regla(model, method, args, kwargs=None):
+        calls.append(model)
+        if model == "product.product":
+            return [{"list_price_usd": 10.0}]
+        return []
+
+    resolver1 = OdooPriceResolver(fake_execute_sin_regla, {"USD": 4})
+    assert resolver1.precio("888", "4") == Decimal("10.0")
+    assert resolver1.fue_fallback("888", "4") is True
+
+    # Ahora Odoo SÍ tiene una regla fija (alguien la completó) -- una
+    # instancia nueva debe verla, no quedar pegada al fallback viejo.
+    def fake_execute_con_regla(model, method, args, kwargs=None):
+        if model == "product.pricelist.item":
+            return [{"fixed_price": "999.00", "date_start": False, "date_end": False}]
+        return []
+
+    resolver2 = OdooPriceResolver(fake_execute_con_regla, {"USD": 4})
+    assert resolver2.precio("888", "4") == Decimal("999.00")
+    assert resolver2.fue_fallback("888", "4") is False
+
+
+def test_odoo_price_resolver_volumen_cache_compartido_sobrevive_entre_instancias():
+    calls = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        calls.append(model)
+        if model == "product.template":
+            return [{"product_volume": "20.5"}]
+        return []
+
+    resolver1 = OdooPriceResolver(fake_execute, {"USD": 4})
+    assert resolver1.volumen("555") == Decimal("20.5")
+    assert len(calls) == 1
+
+    resolver2 = OdooPriceResolver(fake_execute, {"USD": 4})
+    assert resolver2.volumen("555") == Decimal("20.5")
+    assert len(calls) == 1

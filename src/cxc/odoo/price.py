@@ -8,6 +8,7 @@ documenta en SETUP.md (es específico del entorno, como las credenciales).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
@@ -17,6 +18,18 @@ from ..decimal_utils import to_decimal
 from ..engine.price_resolver import PriceResolver
 
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
+
+# Caché COMPARTIDA a nivel de módulo (agosto 2026, Fase 2 del plan de
+# rendimiento del usuario -- hallazgo real: el caché anterior era un dict
+# por INSTANCIA, y ``recalculate_all_orders`` crea una instancia nueva de
+# ``OdooPriceResolver`` en CADA ciclo (~cada 5 min) -- el caché moría con
+# la instancia, así que cada ciclo repetía la consulta de precio a Odoo
+# para CADA producto x lista, aunque las reglas de pricelist casi nunca
+# cambian. TTL largo (horas, no minutos) porque no hay ninguna razón de
+# negocio para que un precio fijo de pricelist cambie más seguido que eso.
+_SHARED_PRICE_CACHE: dict[tuple[str, ...], tuple[Decimal, float]] = {}
+_SHARED_VOLUMEN_CACHE: dict[str, tuple[Decimal, float]] = {}
+_SHARED_CACHE_TTL_SECONDS = 6 * 3600.0
 
 
 class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
@@ -109,6 +122,12 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         clave = (producto, lista, fecha.isoformat() if fecha else "sin_fecha")
         if clave in self._cache:
             return self._cache[clave]
+        cached_compartido = _SHARED_PRICE_CACHE.get(clave)
+        if cached_compartido is not None:
+            precio_cached, ts = cached_compartido
+            if time.time() - ts < _SHARED_CACHE_TTL_SECONDS:
+                self._cache[clave] = precio_cached
+                return precio_cached
 
         pricelist_id: int | None
         if lista.isdigit():
@@ -160,6 +179,13 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                     precio = Decimal("0.0")
 
         self._cache[clave] = precio
+        # No cachear compartido un resultado de fallback ($0 por producto sin
+        # regla de precio en ninguna lista candidata): ese "no hay regla" es
+        # justo la señal que se re-verifica cuando alguien completa la
+        # pricelist en Odoo (ver ``usa_fallback_ves``/``_usd`` en Ventas) --
+        # cachearlo por horas ocultaría esa corrección hasta que expire.
+        if not es_fallback:
+            _SHARED_PRICE_CACHE[clave] = (precio, time.time())
         self._fallback_flags[(producto, lista)] = es_fallback
         return precio
 
@@ -170,6 +196,12 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         clave = (producto, "volumen")
         if clave in self._cache:
             return self._cache[clave]
+        cached_compartido = _SHARED_VOLUMEN_CACHE.get(producto)
+        if cached_compartido is not None:
+            vol_cached, ts = cached_compartido
+            if time.time() - ts < _SHARED_CACHE_TTL_SECONDS:
+                self._cache[clave] = vol_cached
+                return vol_cached
 
         vol = Decimal("0.0")
         try:
@@ -183,4 +215,5 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             vol = Decimal("0.0")
 
         self._cache[clave] = vol
+        _SHARED_VOLUMEN_CACHE[producto] = (vol, time.time())
         return vol

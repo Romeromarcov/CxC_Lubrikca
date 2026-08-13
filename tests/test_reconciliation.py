@@ -49,6 +49,9 @@ class _FakeFacturas:
     def neto_facturado(self, so_id: str) -> NetoFacturado:
         return self._datos[so_id]
 
+    def neto_facturado_batch(self, so_ids: list[str]) -> dict[str, NetoFacturado]:
+        return {so_id: self._datos[so_id] for so_id in so_ids if so_id in self._datos}
+
 
 def test_reconciler_recorre_bandeja_y_persiste() -> None:
     repo = InMemoryRepository()
@@ -111,3 +114,51 @@ def test_odoo_facturas_reader_sin_factura() -> None:
     neto = reader.neto_facturado("SOX")
     assert neto.facturada is False
     assert neto.monto_facturado == Decimal("0")
+
+
+def test_odoo_facturas_reader_batch_una_sola_consulta_para_varias_ordenes() -> None:
+    """Fase 2 (agosto 2026): neto_facturado_batch reemplaza el N+1 de
+
+    Reconciler.run() -- UNA sola consulta con invoice_origin in [...],
+    agrupada por so_id en Python."""
+    calls = []
+
+    def fake_execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
+        calls.append(args[0])
+        return [
+            {
+                "id": 1,
+                "invoice_origin": "S00001",
+                "amount_total_signed_usd": "100.00",
+                "move_type": "out_invoice",
+            },
+            {
+                "id": 2,
+                "invoice_origin": "S00002",
+                "amount_total_signed_usd": "200.00",
+                "move_type": "out_invoice",
+            },
+            {
+                "id": 3,
+                "invoice_origin": "S00002",
+                "amount_total_signed_usd": "-10.00",
+                "move_type": "out_refund",
+            },
+        ]
+
+    reader = OdooFacturasReader(fake_execute)
+    result = reader.neto_facturado_batch(["S00001", "S00002", "S00003"])
+
+    assert len(calls) == 1  # UNA sola llamada a Odoo, no una por orden
+    assert result["S00001"] == NetoFacturado(Decimal("100.00"), Decimal("0"), True)
+    assert result["S00002"] == NetoFacturado(Decimal("200.00"), Decimal("10.00"), True)
+    # Orden sin ninguna factura -- neto 0, facturada False.
+    assert result["S00003"] == NetoFacturado(Decimal("0"), Decimal("0"), False)
+
+
+def test_odoo_facturas_reader_batch_vacio_no_llama_odoo() -> None:
+    def fake_execute(*a, **k):
+        raise AssertionError("no debería llamar a Odoo con lista vacía")
+
+    reader = OdooFacturasReader(fake_execute)
+    assert reader.neto_facturado_batch([]) == {}
