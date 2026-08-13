@@ -252,3 +252,38 @@ def test_run_teoricos_pendientes_recalcula_si_estaba_marcado_fallback() -> None:
 
     # Ahora que quedó sin fallback, una tercera corrida NO lo vuelve a tocar.
     assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0
+
+
+def test_run_teoricos_pendientes_recalcula_si_cambiaron_las_lineas() -> None:
+    """Hallazgo real (agosto 2026, orden S00792): si la orden se edita en
+
+    Odoo DESPUÉS de calcular su teórico (cantidad/producto distinto), el
+    teórico debe re-verificarse aunque no haya fallback de precio -- antes
+    quedaba pegado a las líneas viejas para siempre."""
+    repo = _seed()
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 1
+    primero = repo.get_ventas_teorico("SO1")
+    assert primero is not None
+    assert primero.teorico_usd == Decimal("100.00")  # 1 x 100
+    assert primero.lineas_fingerprint != ""
+
+    # Sin cambios en las líneas -- no se recalcula (mismo caso que el test
+    # de arriba, confirma que el fingerprint no dispara falsos positivos).
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0
+
+    # Odoo edita la orden: la cantidad de la línea cambia de 1 a 5.
+    linea = repo.lineas_de_orden("SO1")[0]
+    linea.cantidad = Decimal("5")
+    repo.upsert_lineas([linea])
+
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 1  # se re-verificó
+    segundo = repo.get_ventas_teorico("SO1")
+    assert segundo is not None
+    assert segundo.teorico_usd == Decimal("500.00")  # 5 x 100, ya no 1 x 100
+    assert segundo.lineas_fingerprint != primero.lineas_fingerprint
+
+    # Ya con la huella actualizada, una tercera corrida no lo vuelve a tocar.
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0

@@ -156,9 +156,20 @@ class PostgresRepository(Repository):
             conn.execute(insert(t.serie_tasas).values(**_serie_to_row(fila)))
 
     def trailing_failed_captures(self) -> int:
+        """Cuenta capturas fallidas consecutivas desde la más reciente.
+
+        Fase 4 (agosto 2026, plan de rendimiento del usuario): antes traía
+        la tabla ENTERA (``serie_tasas`` crece indefinidamente, una fila
+        por ciclo de scraping) solo para contar desde el principio -- ahora
+        limita a las últimas 100 filas. Ninguna racha real de fallos
+        consecutivos se acerca a ese número (el scraper alerta mucho antes
+        -- ver ``_chequear_alerta``); si alguna vez lo hiciera, el conteo
+        queda truncado a 100 en vez de reflejar la racha completa, un
+        trade-off aceptable frente a escanear toda la tabla en cada ciclo.
+        """
         with self._engine.connect() as conn:
             rows = conn.execute(
-                select(t.serie_tasas).order_by(t.serie_tasas.c.timestamp.desc())
+                select(t.serie_tasas).order_by(t.serie_tasas.c.timestamp.desc()).limit(100)
             ).all()
         count = 0
         for row in rows:
@@ -1363,6 +1374,7 @@ def _row_to_ventas_teorico(r: Any) -> VentasTeorico:
         usa_fallback_ves=r.usa_fallback_ves,
         usa_fallback_usd=r.usa_fallback_usd,
         calculado_en=r.calculado_en,
+        lineas_fingerprint=getattr(r, "lineas_fingerprint", "") or "",
     )
 
 
