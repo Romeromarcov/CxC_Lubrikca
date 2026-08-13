@@ -142,6 +142,10 @@ class SheetsRepository(Repository):
     def upsert_lineas(self, filas: list[LineaOrden]) -> None:
         self._g.upsert_rows(g.T_LINEAS, "linea_id", [serde.linea_to_row(ln) for ln in filas])
 
+    def delete_lineas(self, linea_ids: list[str]) -> None:
+        for lid in linea_ids:
+            self._g.delete_row(g.T_LINEAS, "linea_id", lid)
+
     def upsert_pagos(self, filas: list[Pago]) -> None:
         self._g.upsert_rows(g.T_PAGOS, "pago_id", [serde.pago_to_row(p) for p in filas])
 

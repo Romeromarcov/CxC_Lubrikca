@@ -45,6 +45,13 @@ class FakeOdooReader(OdooReader):
     def changed_pagos(self, since: datetime | None) -> list:
         return self._pick("pagos", since)
 
+    def lineas_vigentes_por_orden(self, so_ids: list[str]) -> dict[str, set[str]]:
+        vigentes: dict[str, set[str]] = {so_id: set() for so_id in so_ids}
+        for ln in self.full["lineas"] + self.delta["lineas"]:
+            if ln.so_id in vigentes:
+                vigentes[ln.so_id].add(ln.linea_id)
+        return vigentes
+
 
 def test_full_load_luego_delta() -> None:
     repo = InMemoryRepository()
@@ -62,6 +69,45 @@ def test_full_load_luego_delta() -> None:
     assert r2.total == 1  # solo la orden cambiada
     # El upsert refrescó la orden con el nuevo monto.
     assert repo.get_orden("SO1").monto_total == Decimal("2000")
+
+
+def test_sync_borra_lineas_que_ya_no_existen_en_odoo() -> None:
+    """Hallazgo real orden S00792 (agosto 2026): un producto sacado de la
+
+    orden en Odoo nunca aparecía en ``changed_lineas`` (delta por
+    write_date, sin rastro de lo borrado) y quedaba fantasma para siempre
+    en el espejo local. El sync ahora reconcilia contra el set vigente que
+    reporta Odoo para las órdenes tocadas en el ciclo."""
+    repo = InMemoryRepository()
+    reader = FakeOdooReader()
+    # Primera corrida: trae L1 (única línea de SO1).
+    IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 10, 0))
+    assert len(repo.lineas_de_orden("SO1")) == 1
+    assert repo.lineas_de_orden("SO1")[0].linea_id == "L1"
+
+    # Odoo: la orden cambió (ej. se le quitó la línea L1) y ya no reporta
+    # ninguna línea vigente para SO1.
+    reader.delta["ordenes"] = [b.orden("SO1", monto_total="500")]
+    reader.full["lineas"] = []  # lineas_vigentes_por_orden ya no ve L1
+
+    r2 = IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 11, 0))
+    assert r2.lineas_borradas == 1
+    assert repo.lineas_de_orden("SO1") == []
+
+
+def test_sync_no_borra_lineas_de_ordenes_no_tocadas() -> None:
+    repo = InMemoryRepository()
+    reader = FakeOdooReader()
+    reader.full["ordenes"] = [b.orden("SO1"), b.orden("SO2")]
+    reader.full["lineas"] = [b.linea("L1", so_id="SO1"), b.linea("L2", so_id="SO2")]
+    IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 10, 0))
+    assert len(repo.lineas_de_orden("SO2")) == 1
+
+    # Delta solo toca SO1 -- SO2 no debe reconciliarse ni perder su línea.
+    reader.delta["ordenes"] = [b.orden("SO1", monto_total="2000")]
+    r2 = IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 11, 0))
+    assert r2.lineas_borradas == 0
+    assert len(repo.lineas_de_orden("SO2")) == 1
 
 
 def test_sync_nunca_toca_vinculaciones_ni_serietasas() -> None:

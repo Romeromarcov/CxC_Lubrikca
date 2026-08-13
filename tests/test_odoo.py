@@ -389,6 +389,35 @@ def test_changed_lineas_resuelve_marca_y_categoria_raiz() -> None:
     assert ln.cantidad_entregada == Decimal("18")  # neto de devoluciones
 
 
+def test_lineas_vigentes_por_orden_agrupa_por_so_name() -> None:
+    """Hallazgo real orden S00792 (agosto 2026): ``changed_lineas`` no puede
+
+    detectar una línea BORRADA en Odoo (sin ``write_date`` de un registro
+    inexistente). Este método sí -- devuelve el set de ids VIGENTES ahora
+    mismo para reconciliar el espejo local."""
+    fake = FakeExecute(
+        {
+            "lineas": [
+                {"id": 1463, "order_id": [553, "S00553"]},
+                {"id": 1464, "order_id": [553, "S00553"]},
+                {"id": 1500, "order_id": [700, "S00700"]},
+            ],
+        }
+    )
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    vigentes = reader.lineas_vigentes_por_orden(["S00553", "S00700", "S00999"])
+    assert vigentes["S00553"] == {"1463", "1464"}
+    assert vigentes["S00700"] == {"1500"}
+    assert vigentes["S00999"] == set()  # sin líneas vigentes en Odoo -> vacío
+
+
+def test_lineas_vigentes_por_orden_vacio_sin_llamar_odoo() -> None:
+    fake = FakeExecute({})
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    assert reader.lineas_vigentes_por_orden([]) == {}
+    assert fake.calls == []
+
+
 def test_changed_pagos_resuelve_vendedor_y_journal() -> None:
     fake = FakeExecute(
         {

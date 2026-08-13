@@ -1380,8 +1380,11 @@ async def api_sync_manual(lookback_days: int = 7):
             repo.upsert_ordenes(ordenes)
             repo.upsert_lineas(lineas)
             repo.upsert_pagos(pagos)
+            lineas_borradas = IncrementalSync(repo, reader).reconciliar_lineas_borradas(
+                ordenes, lineas
+            )
             repo.set_last_sync(datetime.now())
-            total = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
+            total = len(clientes) + len(ordenes) + len(lineas) + len(pagos) + lineas_borradas
         else:
             sync = IncrementalSync(repo, reader)
             res = sync.run(datetime.now())
