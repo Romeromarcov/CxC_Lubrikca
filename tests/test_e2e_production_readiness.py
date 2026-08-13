@@ -1,7 +1,7 @@
 import contextlib
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2720,8 +2720,8 @@ def test_e2e_34_sugerencias_excluye_orden_con_saldo_real_cero():
         patch("cxc.web.app.AppConfig.from_env"),
         patch("cxc.web.app._connect", return_value=None),
         patch(
-            "cxc.web.app.get_reporte_saldos",
-            new=AsyncMock(return_value={"items": [], "saldo_minimo_pendientes": []}),
+            "cxc.web.app._get_reporte_saldos_sync",
+            return_value={"items": [], "saldo_minimo_pendientes": []},
         ),
     ):
         res = client.get("/api/conciliaciones/sugerencias")
@@ -2784,13 +2784,11 @@ def test_e2e_35_sugerencias_usa_saldo_real_no_calculo_naive():
         patch("cxc.web.app.AppConfig.from_env"),
         patch("cxc.web.app._connect", return_value=None),
         patch(
-            "cxc.web.app.get_reporte_saldos",
-            new=AsyncMock(
-                return_value={
-                    "items": [{"so_id": "SO2", "saldo_con_descuento_bcv": 50.0}],
-                    "saldo_minimo_pendientes": [],
-                }
-            ),
+            "cxc.web.app._get_reporte_saldos_sync",
+            return_value={
+                "items": [{"so_id": "SO2", "saldo_con_descuento_bcv": 50.0}],
+                "saldo_minimo_pendientes": [],
+            },
         ),
     ):
         res = client.get("/api/conciliaciones/sugerencias")
@@ -2855,8 +2853,8 @@ def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
         patch("cxc.web.app.AppConfig.from_env"),
         patch("cxc.web.app._connect", return_value=None),
         patch(
-            "cxc.web.app.get_reporte_saldos",
-            new=AsyncMock(side_effect=Exception("Odoo no disponible")),
+            "cxc.web.app._get_reporte_saldos_sync",
+            side_effect=Exception("Odoo no disponible"),
         ),
     ):
         res = client.get("/api/conciliaciones/sugerencias")

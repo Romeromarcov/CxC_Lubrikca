@@ -2480,8 +2480,16 @@ def _pagos_odoo_por_orden(
     return pagos
 
 
-@app.get("/api/reporte-saldos")
-async def get_reporte_saldos(refresh: bool = False):
+def _get_reporte_saldos_sync(refresh: bool = False):
+    """Cuerpo síncrono de ``get_reporte_saldos`` (Fase 1 restante, agosto
+
+    2026) -- 100% trabajo síncrono (Odoo XML-RPC + DB), corrido en un hilo
+    aparte vía ``asyncio.to_thread`` desde el wrapper público ``async def
+    get_reporte_saldos``. Antes corría inline en el event loop: la función
+    más pesada de todo el sistema (~1000 líneas, decenas de llamadas a
+    Odoo) bloqueaba CUALQUIER otro request (incluido ``/reporte``) durante
+    todo su tiempo de cómputo.
+    """
     global _reporte_saldos_computing
     import time
 
@@ -3089,7 +3097,7 @@ async def get_reporte_saldos(refresh: bool = False):
         # orden -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
         clientes_con_huerfanos: set[str] = set()
         try:
-            sugerencias_huerfanas = await get_conciliaciones_sugerencias(cxc_session=None)
+            sugerencias_huerfanas = _get_conciliaciones_sugerencias_sync(cxc_session=None)
             _pago_saldo_max_h: dict[str, float] = {}
             _pago_cliente_h: dict[str, str] = {}
             for s in sugerencias_huerfanas:
@@ -3762,6 +3770,11 @@ async def get_reporte_saldos(refresh: bool = False):
         raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
         _reporte_saldos_computing = False
+
+
+@app.get("/api/reporte-saldos")
+async def get_reporte_saldos(refresh: bool = False):
+    return await asyncio.to_thread(_get_reporte_saldos_sync, refresh)
 
 
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
@@ -4538,7 +4551,7 @@ _SALDOS_REALES_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _SALDOS_REALES_CACHE_TTL = 60.0
 
 
-async def _get_saldos_reales_por_so() -> dict[str, float] | None:
+def _get_saldos_reales_por_so_sync() -> dict[str, float] | None:
     """``so_id`` -> saldo real pendiente, EXACTAMENTE el mismo cálculo que
 
     ``/api/reporte-saldos`` (Vinculaciones + pago directo de Odoo como
@@ -4578,7 +4591,7 @@ async def _get_saldos_reales_por_so() -> dict[str, float] | None:
         return cached  # type: ignore[no-any-return]
 
     try:
-        reporte = await get_reporte_saldos()
+        reporte = _get_reporte_saldos_sync(refresh=False)
     except Exception as e_reporte:
         logger.warning(
             "No se pudo calcular saldos reales (get_reporte_saldos) para sugerencias: %s",
@@ -4647,11 +4660,11 @@ def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
     }
 
 
-@app.get("/api/conciliaciones/sugerencias")
-async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
-    """Pagos pendientes por asociar, con orden sugerida (FIFO).
+def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
+    """Cuerpo síncrono de ``get_conciliaciones_sugerencias`` (Fase 1
 
-    Ya no es la fuente principal de la UI -- absorbida por
+    restante, agosto 2026) -- ver docstring de ``_get_reporte_saldos_sync``,
+    mismo patrón. Ya no es la fuente principal de la UI -- absorbida por
     ``GET /api/cobranza/pagos`` (``get_cobranza_pagos_unificado``), que
     llama esta función directamente. Se conserva como ruta pública además
     de función interna reusable: sigue siendo un endpoint válido y
@@ -4887,7 +4900,7 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
                     }
                 )
 
-        saldos_reales = await _get_saldos_reales_por_so()
+        saldos_reales = _get_saldos_reales_por_so_sync()
 
         open_orders_by_client = {}
         for o in ordenes:
@@ -5055,6 +5068,11 @@ async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(defaul
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/conciliaciones/sugerencias")
+async def get_conciliaciones_sugerencias(cxc_session: str | None = Cookie(default=None)):
+    return await asyncio.to_thread(_get_conciliaciones_sugerencias_sync, cxc_session)
 
 
 class CerrarPagoHuerfanoRequest(BaseModel):
@@ -7576,8 +7594,30 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
 
-        sugerencias = await get_conciliaciones_sugerencias(cxc_session)
-        historial = await get_pagos_historial()
+        # Las 3 fuentes pesadas (sugerencias/historial/ventas, cada una ya
+        # threaded vía asyncio.to_thread) son independientes entre sí --
+        # antes se esperaban una tras otra en serie (hallazgo Fase 4/5,
+        # agosto 2026); correrlas concurrentemente recorta el tiempo total
+        # de este endpoint a ~el máximo de las 3, no la suma.
+        async def _fetch_ventas_cobranza() -> dict[str, Any] | None:
+            try:
+                return await get_ventas(vendedor=None, cxc_session=None)
+            except Exception as e_ventas:
+                logger.warning(
+                    "Error obteniendo /api/ventas para /api/cobranza/pagos: %s", e_ventas
+                )
+                return None
+
+        sugerencias, historial, ventas_data_cobranza = await asyncio.gather(
+            get_conciliaciones_sugerencias(cxc_session),
+            get_pagos_historial(),
+            _fetch_ventas_cobranza(),
+        )
+        ventas_by_so: dict[str, dict[str, Any]] = (
+            {it["so_id"]: it for it in ventas_data_cobranza["items"]}
+            if ventas_data_cobranza is not None
+            else {}
+        )
         cerrados_detalle = leer_pagos_huerfanos_cerrados(repo)
 
         pagos_rows = repo.all_pagos_full()
@@ -7601,16 +7641,8 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         # asociados a la orden sugerida. Ahora se reusan los mismos 4
         # saldos en tiempo real que ya calcula /api/ventas (ver
         # _saldos_4_columnas_item), tanto para pagos pendientes como
-        # vinculados.
-        try:
-            ventas_data_cobranza = await get_ventas(vendedor=None, cxc_session=None)
-            ventas_by_so: dict[str, dict[str, Any]] = {
-                it["so_id"]: it for it in ventas_data_cobranza["items"]
-            }
-        except Exception as e_ventas:
-            logger.warning("Error obteniendo /api/ventas para /api/cobranza/pagos: %s", e_ventas)
-            ventas_by_so = {}
-
+        # vinculados. (``ventas_by_so`` ya se calculó arriba, en paralelo
+        # con sugerencias/historial.)
         def _saldos_orden_para_reparto(so_id: str | None) -> dict[str, Any]:
             item_ventas = ventas_by_so.get(so_id) if so_id else None
             if item_ventas is None:
