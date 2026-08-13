@@ -2228,6 +2228,16 @@ def recalculate_all_orders():
 
 _REPORTE_SALDOS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _REPORTE_CACHE_TTL = 0.0
+# Guarda de reentrancia -- bug real encontrado agosto 2026: get_reporte_
+# saldos llama (para el huérfano-check de Diferencial Cambiario, regla 2)
+# a get_conciliaciones_sugerencias -> _get_saldos_reales_por_so -> get_
+# reporte_saldos de nuevo. Con _REPORTE_CACHE_TTL=0 (deliberado, para que
+# el reporte principal siempre muestre datos frescos) esa llamada anidada
+# SIEMPRE ve el cache frío -- nunca alcanza a escribir su propio resultado
+# antes de que la copia interna dispare la misma cadena otra vez, causando
+# recursión sin límite (RecursionError tras cientos de rondas completas de
+# queries a Odoo, o un cuelgue de varios minutos antes de llegar ahí).
+_reporte_saldos_computing = False
 
 
 @app.get("/api/auditoria-descuentos")
@@ -2464,17 +2474,28 @@ def _pagos_odoo_por_orden(
 
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
+    global _reporte_saldos_computing
+    import time
+
+    now_ts = time.time()
+    if (
+        not refresh
+        and _REPORTE_SALDOS_CACHE["data"] is not None
+        and now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL
+    ):
+        return _REPORTE_SALDOS_CACHE["data"]
+    if _reporte_saldos_computing:
+        # Llamada anidada (ver comentario en la declaración del flag) --
+        # devuelve el cache aunque esté frío/vacío en vez de recalcular
+        # recursivamente.
+        return _REPORTE_SALDOS_CACHE["data"] or {
+            "items": [],
+            "saldo_minimo_pendientes": [],
+            "kpis": {},
+            "vendedores": [],
+        }
+    _reporte_saldos_computing = True
     try:
-        import time
-
-        now_ts = time.time()
-        if (
-            not refresh
-            and _REPORTE_SALDOS_CACHE["data"] is not None
-            and now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL
-        ):
-            return _REPORTE_SALDOS_CACHE["data"]
-
         repo = get_repo()
         ordenes = repo.all_ordenes()
         vincs = repo.all_vinculaciones()
@@ -3731,6 +3752,8 @@ async def get_reporte_saldos(refresh: bool = False):
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        _reporte_saldos_computing = False
 
 
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
@@ -7331,6 +7354,14 @@ async def get_tasas_promedios():
 
 @app.get("/api/pagos-historial")
 async def get_pagos_historial():
+    """Wrapper async -- ver ``_get_pagos_historial_sync``. Corre el trabajo
+
+    síncrono pesado (Odoo/DB) en un thread aparte para no bloquear el
+    event loop (mismo hallazgo que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(_get_pagos_historial_sync)
+
+
+def _get_pagos_historial_sync():
     """Pagos vinculados localmente + conciliados directo en Odoo.
 
     Ya no es la fuente principal de la UI -- absorbida por
@@ -8715,6 +8746,25 @@ def _leer_notas_credito_odoo(
 async def get_ventas(
     vendedor: str | None = None,
     cxc_session: str | None = Cookie(default=None),
+):
+    """Wrapper async -- ver ``_get_ventas_sync`` para la lógica real.
+
+    Corre el trabajo síncrono pesado (Odoo/DB) en un thread aparte
+    (``asyncio.to_thread``) para no bloquear el único event loop de uvicorn
+    mientras corre. Hallazgo real (agosto 2026): sin esto, este endpoint
+    (llamado también internamente por ``get_reporte_cxc_cliente``,
+    ``get_cobranza_pagos_unificado`` y el reporte de candidatos a cierre de
+    Diferencial Cambiario) podía bloquear ``/reporte`` y el resto del sitio
+    por varios minutos cuando su llamada coincidía con el ciclo de
+    recálculo en background -- exactamente el patrón que ``recalculate_
+    all_orders`` ya evita con este mismo mecanismo.
+    """
+    return await asyncio.to_thread(_get_ventas_sync, vendedor, cxc_session)
+
+
+def _get_ventas_sync(
+    vendedor: str | None = None,
+    cxc_session: str | None = None,
 ):
     """Reporte "Ventas": comparación teórica VES/USD vs real, por orden.
 
