@@ -7276,6 +7276,13 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
 # --- Rate Averages Endpoint ---
 @app.get("/api/config/tasas-promedios")
 async def get_tasas_promedios():
+    """Wrapper async -- ver ``_get_tasas_promedios_sync`` (mismo hallazgo
+
+    que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(_get_tasas_promedios_sync)
+
+
+def _get_tasas_promedios_sync():
     try:
         repo = get_repo()
         rows = _all_serie_tasas_rows(repo)
@@ -10300,6 +10307,19 @@ def _periodo_bounds(hoy: date) -> dict[str, str]:
 
 @app.get("/api/reporte/diario")
 async def get_reporte_diario(
+    vendedor: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+):
+    """Wrapper async -- ver ``_get_reporte_diario_sync`` (mismo hallazgo
+
+    que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(
+        _get_reporte_diario_sync, vendedor, fecha_desde, fecha_hasta
+    )
+
+
+def _get_reporte_diario_sync(
     vendedor: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
