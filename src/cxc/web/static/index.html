@@ -2258,9 +2258,9 @@
                             (BCV vs Binance) comparado contra el diferencial máximo configurado arriba. Gerencia decide manualmente
                             cuánto otorgar por orden. Requiere una fila "Candidatos a Cierre de Factura" vigente y activa arriba
                             para habilitarse.
-                            <strong>⚠️ Verificar en Odoo antes de aprobar:</strong> si un pago del cliente reconcilia facturas de
-                            varias órdenes, el % pagado se cuenta completo en cada una (no prorrateado) -- una orden puede aparecer
-                            como candidata por un pago que en realidad correspondía a otra orden del mismo cliente.
+                            El % pagado se prorratea correctamente cuando un pago reconcilia facturas de varias órdenes del mismo
+                            cliente (proporcional a lo facturado de cada una) -- aun así, gerencia debe verificar en Odoo antes
+                            de aprobar cualquier descuento real.
                         </p>
                         <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin-bottom:10px;"></div>
                         <table class="cxc-table mini">

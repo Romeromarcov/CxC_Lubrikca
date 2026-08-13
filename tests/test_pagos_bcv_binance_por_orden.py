@@ -123,3 +123,67 @@ def test_pago_ves_en_ventana_historica_usa_tasa_euro_para_bcv() -> None:
     assert round(result["SO_EUR"]["monto_pagado_bcv"], 2) == 32.53
     # Binance NO usa la tasa euro -- usa la tasa binance normal del dia.
     assert round(result["SO_EUR"]["monto_pagado_usd_binance"], 2) == round(16606.59 / 516.8118, 2)
+
+
+def test_pago_reconcilia_varias_ordenes_se_prorratea_por_facturado() -> None:
+    """Hallazgo real (agosto 2026, reporte de candidatos a cierre de
+
+    Diferencial Cambiario): un pago que reconcilia facturas de VARIAS
+    ordenes ya NO se cuenta completo en cada una -- se reparte proporcional
+    al monto facturado (con impuestos) de cada orden."""
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return [
+                {
+                    "id": 4,
+                    "amount": 1000.0,
+                    "currency_id": [1, "USD"],
+                    "date": "2026-06-01",
+                    "reconciled_invoice_ids": [910, 911],
+                }
+            ]
+        return []
+
+    result = _pagos_bcv_binance_por_orden(
+        _fake_execute,
+        invoice_ids_all=[910, 911],
+        inv_id_to_so={910: "SO_A", 911: "SO_B"},
+        es_historica_map={},
+        tasas_rows=[],
+        hist_rows=[],
+        # SO_A facturo 600, SO_B facturo 400 -- 60/40.
+        facturado_con_imp_por_so={"SO_A": 600.0, "SO_B": 400.0},
+    )
+    assert result["SO_A"]["monto_pagado_bcv"] == 600.0
+    assert result["SO_B"]["monto_pagado_bcv"] == 400.0
+    # Suma total = el monto real del pago, no el doble.
+    assert result["SO_A"]["monto_pagado_bcv"] + result["SO_B"]["monto_pagado_bcv"] == 1000.0
+
+
+def test_pago_reconcilia_varias_ordenes_sin_pesos_reparte_equitativo() -> None:
+    # Sin facturado_con_imp_por_so (o todo en 0) -- reparte equitativo como
+    # ultimo recurso, en vez de duplicar el monto completo en cada orden.
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return [
+                {
+                    "id": 5,
+                    "amount": 1000.0,
+                    "currency_id": [1, "USD"],
+                    "date": "2026-06-01",
+                    "reconciled_invoice_ids": [920, 921],
+                }
+            ]
+        return []
+
+    result = _pagos_bcv_binance_por_orden(
+        _fake_execute,
+        invoice_ids_all=[920, 921],
+        inv_id_to_so={920: "SO_C", 921: "SO_D"},
+        es_historica_map={},
+        tasas_rows=[],
+        hist_rows=[],
+    )
+    assert result["SO_C"]["monto_pagado_bcv"] == 500.0
+    assert result["SO_D"]["monto_pagado_bcv"] == 500.0

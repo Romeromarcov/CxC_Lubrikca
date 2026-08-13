@@ -479,6 +479,7 @@ def _pagos_bcv_binance_por_orden(
     es_historica_map: dict[str, bool],
     tasas_rows: list[dict],
     hist_rows: list[dict],
+    facturado_con_imp_por_so: dict[str, float] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Monto pagado por orden convertido a USD con la tasa BCV y con la tasa
 
@@ -495,10 +496,21 @@ def _pagos_bcv_binance_por_orden(
     sigue usando la tasa Binance normal, el Euro solo sustituye la
     referencia BCV.
 
-    Igual que el resto de estas funciones: si un pago reconcilia facturas
-    de varias órdenes, se suma el monto COMPLETO a cada una (no
-    prorrateado) -- mismo criterio ya usado en ``get_live_pagos_
-    conciliados``/``_pagos_odoo_por_orden``.
+    Prorrateo (agosto 2026, pedido explícito del usuario -- hallazgo real
+    al construir el reporte de candidatos a cierre de Diferencial
+    Cambiario: sin esto, órdenes de clientes con varios pedidos y un pago
+    grande mostraban 300-800%+ "pagado"): si un pago reconcilia facturas de
+    VARIAS órdenes, el monto se reparte entre ellas proporcional al monto
+    facturado (con impuestos) de cada una (``facturado_con_imp_por_so``,
+    ya calculado por el llamador -- no hace falta una consulta nueva a
+    Odoo). Odoo no expone el monto exacto reconciliado por factura a nivel
+    de ``account.payment`` (eso vive en ``account.partial.reconcile``, más
+    costoso de consultar); esto es una aproximación razonable y sin config
+    nueva. Si ninguna de las órdenes tiene monto facturado (peso 0), se
+    reparte equitativo como último recurso. Con una sola orden en ``sos``
+    el resultado es idéntico a antes (100% a esa orden). NOTA: esto NO
+    cambia ``get_live_pagos_conciliados``/``_pagos_odoo_por_orden`` --
+    esas dos siguen sin prorratear, por diseño, documentado ahí.
     """
     result: dict[str, dict[str, float]] = {}
     if not execute or not invoice_ids_all:
@@ -554,12 +566,20 @@ def _pagos_bcv_binance_por_orden(
             monto_bcv = amt / tasa_bcv if tasa_bcv > Decimal("0") else Decimal("0")
             monto_binance = amt / tasa_binance if tasa_binance > Decimal("0") else Decimal("0")
 
+        pesos_por_so = facturado_con_imp_por_so or {}
+        pesos = {so: max(0.0, pesos_por_so.get(so, 0.0)) for so in sos}
+        total_peso = sum(pesos.values())
+        if total_peso <= 0.0:
+            pesos = dict.fromkeys(sos, 1.0)
+            total_peso = float(len(sos))
+
         for so in sos:
+            frac = pesos[so] / total_peso
             entry = result.setdefault(
                 so, {"monto_pagado_bcv": 0.0, "monto_pagado_usd_binance": 0.0}
             )
-            entry["monto_pagado_bcv"] += float(monto_bcv)
-            entry["monto_pagado_usd_binance"] += float(monto_binance)
+            entry["monto_pagado_bcv"] += float(monto_bcv) * frac
+            entry["monto_pagado_usd_binance"] += float(monto_binance) * frac
 
     return result
 
@@ -7107,16 +7127,13 @@ def calcular_candidatos_cierre_diferencial(
         if teorico_ves <= 0:
             continue
         pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
-        # CAP a 100% -- "pagado_teorico_bcv" hereda una limitación conocida y
-        # documentada de _pagos_bcv_binance_por_orden: si UN pago reconcilia
-        # facturas de VARIAS órdenes, se suma el monto COMPLETO a cada una
-        # (no prorrateado). Sin este cap, un cliente con muchas órdenes y un
-        # pago grande puede mostrar %pagado de 300-800%+ en cada una de
-        # ellas. El cap evita números absurdos en el reporte, pero NO
-        # resuelve el falso-positivo de fondo (una orden puede aparecer como
-        # "100% pagada" por un pago que en realidad correspondía a otra
-        # orden del mismo cliente) -- por diseño, esto es solo un reporte de
-        # CANDIDATOS: gerencia debe verificar en Odoo antes de aprobar.
+        # CAP a 100% -- red de seguridad. "pagado_teorico_bcv" ahora
+        # prorratea correctamente cuando un pago reconcilia facturas de
+        # varias órdenes (ver _pagos_bcv_binance_por_orden), pero redondeos
+        # o pagos que exceden ligeramente el teórico igual podrían dar un
+        # poco más de 100% -- el cap evita mostrar eso en el reporte. Por
+        # diseño, esto sigue siendo solo un reporte de CANDIDATOS: gerencia
+        # verifica en Odoo antes de aprobar cualquier descuento real.
         pct_pagado = min(1.0, pagado_bcv / teorico_ves)
         if pct_pagado >= pct_pagado_minimo:
             candidatos.append(
@@ -9048,6 +9065,7 @@ async def get_ventas(
                     es_historica_map,
                     tasas_rows_pago,
                     hist_rows_pago,
+                    facturado_con_imp_por_so=facturado_con_imp_map,
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
