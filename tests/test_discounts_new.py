@@ -134,6 +134,9 @@ def test_rates_scraper_run():
         def all_serie_tasas(self):
             return list(self.saved)
 
+        def serie_tasas_del_dia(self, fecha):
+            return [f for f in self.saved if f.timestamp.date() == fecha]
+
     from cxc.alerts import LoggingAlerter
     from cxc.config import ScraperPolicy
     from cxc.scraper.rates_scraper import RatesScraper

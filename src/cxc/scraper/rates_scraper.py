@@ -65,9 +65,7 @@ class RatesScraper:
 
         # Compute morning, afternoon, and daily averages for the current day
         try:
-            rows_today = [
-                s for s in self._repo.all_serie_tasas() if s.timestamp.date() == now.date()
-            ]
+            rows_today = self._repo.serie_tasas_del_dia(now.date())
 
             manana_rates = []
             tarde_rates = []
@@ -125,9 +123,7 @@ class RatesScraper:
 
     def _finalizar_promedio_diario(self, now: datetime, fila: SerieTasa) -> None:
         try:
-            rows_today = [
-                s for s in self._repo.all_serie_tasas() if s.timestamp.date() == now.date()
-            ]
+            rows_today = self._repo.serie_tasas_del_dia(now.date())
             capturas_ok = sum(1 for s in rows_today if s.capturada_ok) + (
                 1 if fila.capturada_ok else 0
             )
