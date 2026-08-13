@@ -479,6 +479,7 @@ def _pagos_bcv_binance_por_orden(
     es_historica_map: dict[str, bool],
     tasas_rows: list[dict],
     hist_rows: list[dict],
+    facturado_con_imp_por_so: dict[str, float] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Monto pagado por orden convertido a USD con la tasa BCV y con la tasa
 
@@ -495,10 +496,21 @@ def _pagos_bcv_binance_por_orden(
     sigue usando la tasa Binance normal, el Euro solo sustituye la
     referencia BCV.
 
-    Igual que el resto de estas funciones: si un pago reconcilia facturas
-    de varias órdenes, se suma el monto COMPLETO a cada una (no
-    prorrateado) -- mismo criterio ya usado en ``get_live_pagos_
-    conciliados``/``_pagos_odoo_por_orden``.
+    Prorrateo (agosto 2026, pedido explícito del usuario -- hallazgo real
+    al construir el reporte de candidatos a cierre de Diferencial
+    Cambiario: sin esto, órdenes de clientes con varios pedidos y un pago
+    grande mostraban 300-800%+ "pagado"): si un pago reconcilia facturas de
+    VARIAS órdenes, el monto se reparte entre ellas proporcional al monto
+    facturado (con impuestos) de cada una (``facturado_con_imp_por_so``,
+    ya calculado por el llamador -- no hace falta una consulta nueva a
+    Odoo). Odoo no expone el monto exacto reconciliado por factura a nivel
+    de ``account.payment`` (eso vive en ``account.partial.reconcile``, más
+    costoso de consultar); esto es una aproximación razonable y sin config
+    nueva. Si ninguna de las órdenes tiene monto facturado (peso 0), se
+    reparte equitativo como último recurso. Con una sola orden en ``sos``
+    el resultado es idéntico a antes (100% a esa orden). NOTA: esto NO
+    cambia ``get_live_pagos_conciliados``/``_pagos_odoo_por_orden`` --
+    esas dos siguen sin prorratear, por diseño, documentado ahí.
     """
     result: dict[str, dict[str, float]] = {}
     if not execute or not invoice_ids_all:
@@ -554,12 +566,20 @@ def _pagos_bcv_binance_por_orden(
             monto_bcv = amt / tasa_bcv if tasa_bcv > Decimal("0") else Decimal("0")
             monto_binance = amt / tasa_binance if tasa_binance > Decimal("0") else Decimal("0")
 
+        pesos_por_so = facturado_con_imp_por_so or {}
+        pesos = {so: max(0.0, pesos_por_so.get(so, 0.0)) for so in sos}
+        total_peso = sum(pesos.values())
+        if total_peso <= 0.0:
+            pesos = dict.fromkeys(sos, 1.0)
+            total_peso = float(len(sos))
+
         for so in sos:
+            frac = pesos[so] / total_peso
             entry = result.setdefault(
                 so, {"monto_pagado_bcv": 0.0, "monto_pagado_usd_binance": 0.0}
             )
-            entry["monto_pagado_bcv"] += float(monto_bcv)
-            entry["monto_pagado_usd_binance"] += float(monto_binance)
+            entry["monto_pagado_bcv"] += float(monto_bcv) * frac
+            entry["monto_pagado_usd_binance"] += float(monto_binance) * frac
 
     return result
 
@@ -975,7 +995,7 @@ class ProductoPromoRequest(BaseModel):
 
 class DiferencialCambiarioRequest(BaseModel):
     nombre: str
-    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'diferencial_bcv_binance'
+    tipo_diferencial: str  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     tipo_calculo: str  # 'fijo' | 'variable'
     porcentaje_fijo: float = 0.35
     marca: str = "*"
@@ -2208,6 +2228,16 @@ def recalculate_all_orders():
 
 _REPORTE_SALDOS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _REPORTE_CACHE_TTL = 0.0
+# Guarda de reentrancia -- bug real encontrado agosto 2026: get_reporte_
+# saldos llama (para el huérfano-check de Diferencial Cambiario, regla 2)
+# a get_conciliaciones_sugerencias -> _get_saldos_reales_por_so -> get_
+# reporte_saldos de nuevo. Con _REPORTE_CACHE_TTL=0 (deliberado, para que
+# el reporte principal siempre muestre datos frescos) esa llamada anidada
+# SIEMPRE ve el cache frío -- nunca alcanza a escribir su propio resultado
+# antes de que la copia interna dispare la misma cadena otra vez, causando
+# recursión sin límite (RecursionError tras cientos de rondas completas de
+# queries a Odoo, o un cuelgue de varios minutos antes de llegar ahí).
+_reporte_saldos_computing = False
 
 
 @app.get("/api/auditoria-descuentos")
@@ -2444,17 +2474,28 @@ def _pagos_odoo_por_orden(
 
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
+    global _reporte_saldos_computing
+    import time
+
+    now_ts = time.time()
+    if (
+        not refresh
+        and _REPORTE_SALDOS_CACHE["data"] is not None
+        and now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL
+    ):
+        return _REPORTE_SALDOS_CACHE["data"]
+    if _reporte_saldos_computing:
+        # Llamada anidada (ver comentario en la declaración del flag) --
+        # devuelve el cache aunque esté frío/vacío en vez de recalcular
+        # recursivamente.
+        return _REPORTE_SALDOS_CACHE["data"] or {
+            "items": [],
+            "saldo_minimo_pendientes": [],
+            "kpis": {},
+            "vendedores": [],
+        }
+    _reporte_saldos_computing = True
     try:
-        import time
-
-        now_ts = time.time()
-        if (
-            not refresh
-            and _REPORTE_SALDOS_CACHE["data"] is not None
-            and now_ts - float(_REPORTE_SALDOS_CACHE["timestamp"]) < _REPORTE_CACHE_TTL
-        ):
-            return _REPORTE_SALDOS_CACHE["data"]
-
         repo = get_repo()
         ordenes = repo.all_ordenes()
         vincs = repo.all_vinculaciones()
@@ -3711,6 +3752,8 @@ async def get_reporte_saldos(refresh: bool = False):
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        _reporte_saldos_computing = False
 
 
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
@@ -7038,6 +7081,143 @@ async def put_config_diferencial(regla_id: str, req: DiferencialCambiarioRequest
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _vigente_diferencial_local(r: Any, today: date) -> bool:
+    desde_ok = r.vigencia_desde is None or r.vigencia_desde <= today
+    hasta_ok = r.vigencia_hasta is None or r.vigencia_hasta >= today
+    return bool(r.activo) and desde_ok and hasta_ok
+
+
+def calcular_candidatos_cierre_diferencial(
+    reglas_dif: list[Any],
+    tasas_rows: list[dict[str, Any]],
+    ventas_items: list[dict[str, Any]],
+    today: date,
+) -> dict[str, Any]:
+    """Regla 3 de Diferencial Cambiario (candidatos a cierre de factura),
+
+    pura -- sin tocar el repo/Odoo directamente, para poder testearla sin
+    mockear todo el pipeline de ``get_ventas``. Ver docstring del endpoint
+    ``GET /api/diferencial/candidatos-cierre`` para la explicación completa
+    de la fórmula.
+    """
+    regla_max = next(
+        (
+            r
+            for r in reglas_dif
+            if r.tipo_diferencial == "fijo_35_ves_usd" and _vigente_diferencial_local(r, today)
+        ),
+        None,
+    )
+    regla_candidatos = next(
+        (
+            r
+            for r in reglas_dif
+            if r.tipo_diferencial == "candidato_cierre_factura"
+            and _vigente_diferencial_local(r, today)
+        ),
+        None,
+    )
+    if regla_max is None or regla_candidatos is None:
+        return {
+            "habilitado": False,
+            "motivo": (
+                "Falta configurar una regla 'fijo_35_ves_usd' y una "
+                "'candidato_cierre_factura', ambas vigentes y activas."
+            ),
+            "diferencial_maximo_pct": None,
+            "diferencial_hoy_pct": None,
+            "umbral_pct_pagado": None,
+            "candidatos": [],
+        }
+
+    diferencial_maximo = float(regla_max.porcentaje_fijo)
+
+    diferencial_hoy = 0.0
+    if tasas_rows:
+        ultima = max(tasas_rows, key=lambda r: r.get("timestamp") or "")
+        pct_raw = ultima.get("diferencial_bcv_binance_pct")
+        if pct_raw not in (None, ""):
+            diferencial_hoy = float(pct_raw) / 100.0
+
+    umbral = max(0.0, diferencial_maximo - diferencial_hoy)
+    pct_pagado_minimo = max(0.0, 1.0 - umbral)
+
+    candidatos: list[dict[str, Any]] = []
+    for item in ventas_items:
+        if item.get("nacio_en_lista_usd"):
+            continue
+        teorico_ves = float(item.get("ves_neta_teorica_iva") or 0.0)
+        if teorico_ves <= 0:
+            continue
+        pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
+        # CAP a 100% -- red de seguridad. "pagado_teorico_bcv" ahora
+        # prorratea correctamente cuando un pago reconcilia facturas de
+        # varias órdenes (ver _pagos_bcv_binance_por_orden), pero redondeos
+        # o pagos que exceden ligeramente el teórico igual podrían dar un
+        # poco más de 100% -- el cap evita mostrar eso en el reporte. Por
+        # diseño, esto sigue siendo solo un reporte de CANDIDATOS: gerencia
+        # verifica en Odoo antes de aprobar cualquier descuento real.
+        pct_pagado = min(1.0, pagado_bcv / teorico_ves)
+        if pct_pagado >= pct_pagado_minimo:
+            candidatos.append(
+                {
+                    "so_id": item.get("so_id"),
+                    "cliente_nombre": item.get("cliente_nombre"),
+                    "teorico_ves": round(teorico_ves, 2),
+                    "pagado_bcv": round(pagado_bcv, 2),
+                    "pct_pagado": round(pct_pagado * 100, 2),
+                    "monto_candidato_maximo": round(teorico_ves * umbral, 2),
+                }
+            )
+    candidatos.sort(key=lambda c: -c["pct_pagado"])
+
+    return {
+        "habilitado": True,
+        "diferencial_maximo_pct": round(diferencial_maximo * 100, 2),
+        "diferencial_hoy_pct": round(diferencial_hoy * 100, 2),
+        "umbral_pct_pagado": round(pct_pagado_minimo * 100, 2),
+        "candidatos": candidatos,
+    }
+
+
+@app.get("/api/diferencial/candidatos-cierre")
+async def get_diferencial_candidatos_cierre(cxc_session: str | None = Cookie(default=None)):
+    """Regla 3 de Diferencial Cambiario (candidatos a cierre de factura).
+
+    A diferencia de las reglas 1 (fijo) y 2 (equiparar) -- ver bloque "(c)
+    Diferencial Cambiario" en ``engine/discounts.py`` -- esta NO es un
+    descuento automático del motor: es un reporte de candidatos para que
+    gerencia decida manualmente cuánto otorgar, vía ``POST /api/
+    facturacion/aprobar-descuento-sistema`` (ya existente, ajusta saldos
+    internos de CxC sin tocar Odoo).
+
+    Fórmula (explicada por el usuario, agosto 2026): ``diferencial_hoy`` =
+    el spread de mercado BCV-vs-Binance del día (``serie_tasas.
+    diferencial_bcv_binance_pct``, ya calculado automáticamente por el
+    scraper de tasas -- no hay que registrarlo a mano). ``umbral`` =
+    ``diferencial_máximo`` (fila vigente ``fijo_35_ves_usd``) menos
+    ``diferencial_hoy``. Toda orden nacida en lista VES con
+    ``% pagado del teórico VES >= 100% - umbral`` es candidata.
+
+    Requiere DOS filas de configuración vigentes y activas para no
+    devolver vacío: la de ``fijo_35_ves_usd`` (fuente del diferencial
+    máximo) y una de ``candidato_cierre_factura`` (interruptor on/off de
+    este reporte específico) -- ambas se configuran en Configuración >
+    Diferencial Cambiario, igual que las otras reglas.
+    """
+    try:
+        repo = get_repo()
+        reglas_dif = repo.descuentos_diferencial_cambiario()
+        tasas_rows = _all_serie_tasas_rows(repo)
+        ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
+        return calcular_candidatos_cierre_diferencial(
+            reglas_dif, tasas_rows, ventas_data["items"], date.today()
+        )
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 # --- Toggle Rule Active Endpoint ---
 _REGLA_TABLAS_CONOCIDAS = [
     "DescuentosProntoPago",
@@ -7096,6 +7276,13 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
 # --- Rate Averages Endpoint ---
 @app.get("/api/config/tasas-promedios")
 async def get_tasas_promedios():
+    """Wrapper async -- ver ``_get_tasas_promedios_sync`` (mismo hallazgo
+
+    que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(_get_tasas_promedios_sync)
+
+
+def _get_tasas_promedios_sync():
     try:
         repo = get_repo()
         rows = _all_serie_tasas_rows(repo)
@@ -7174,6 +7361,14 @@ async def get_tasas_promedios():
 
 @app.get("/api/pagos-historial")
 async def get_pagos_historial():
+    """Wrapper async -- ver ``_get_pagos_historial_sync``. Corre el trabajo
+
+    síncrono pesado (Odoo/DB) en un thread aparte para no bloquear el
+    event loop (mismo hallazgo que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(_get_pagos_historial_sync)
+
+
+def _get_pagos_historial_sync():
     """Pagos vinculados localmente + conciliados directo en Odoo.
 
     Ya no es la fuente principal de la UI -- absorbida por
@@ -8559,6 +8754,25 @@ async def get_ventas(
     vendedor: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
+    """Wrapper async -- ver ``_get_ventas_sync`` para la lógica real.
+
+    Corre el trabajo síncrono pesado (Odoo/DB) en un thread aparte
+    (``asyncio.to_thread``) para no bloquear el único event loop de uvicorn
+    mientras corre. Hallazgo real (agosto 2026): sin esto, este endpoint
+    (llamado también internamente por ``get_reporte_cxc_cliente``,
+    ``get_cobranza_pagos_unificado`` y el reporte de candidatos a cierre de
+    Diferencial Cambiario) podía bloquear ``/reporte`` y el resto del sitio
+    por varios minutos cuando su llamada coincidía con el ciclo de
+    recálculo en background -- exactamente el patrón que ``recalculate_
+    all_orders`` ya evita con este mismo mecanismo.
+    """
+    return await asyncio.to_thread(_get_ventas_sync, vendedor, cxc_session)
+
+
+def _get_ventas_sync(
+    vendedor: str | None = None,
+    cxc_session: str | None = None,
+):
     """Reporte "Ventas": comparación teórica VES/USD vs real, por orden.
 
     Tarea 2 (rediseño de columnas, ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md):
@@ -8908,6 +9122,7 @@ async def get_ventas(
                     es_historica_map,
                     tasas_rows_pago,
                     hist_rows_pago,
+                    facturado_con_imp_por_so=facturado_con_imp_map,
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -10092,6 +10307,19 @@ def _periodo_bounds(hoy: date) -> dict[str, str]:
 
 @app.get("/api/reporte/diario")
 async def get_reporte_diario(
+    vendedor: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+):
+    """Wrapper async -- ver ``_get_reporte_diario_sync`` (mismo hallazgo
+
+    que ``get_ventas``, ver su docstring)."""
+    return await asyncio.to_thread(
+        _get_reporte_diario_sync, vendedor, fecha_desde, fecha_hasta
+    )
+
+
+def _get_reporte_diario_sync(
     vendedor: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,

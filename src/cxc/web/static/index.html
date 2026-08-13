@@ -2173,7 +2173,7 @@
                                 <select id="cfg-dif-tipo-diferencial" required>
                                     <option value="fijo_35_ves_usd">35% Fijo (Factura Lista VES pagada en USD)</option>
                                     <option value="equiparar_binance">Equiparar Tasa Binance N/C (Pagos acumulados VES a Binance vs Lista USD)</option>
-                                    <option value="diferencial_bcv_binance">Diferencial BCV vs. Binance Cierre (100% pagado en orden)</option>
+                                    <option value="candidato_cierre_factura">Candidatos a Cierre de Factura (reporte, activa/desactiva)</option>
                                 </select>
                             </div>
                         </div>
@@ -2247,6 +2247,36 @@
                             </thead>
                             <tbody id="diferencial-table-body">
                                 <tr><td colspan="10" class="table-empty">Cargando reglas de diferencial...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="mini-table-wrapper" style="margin-top:24px; border-top:2px dashed #cbd5e1; padding-top:16px;">
+                        <h3>🎯 Regla 3 — Candidatos a Cierre de Factura</h3>
+                        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:10px;">
+                            NO es un descuento automático -- lista órdenes candidatas según el diferencial de mercado del día
+                            (BCV vs Binance) comparado contra el diferencial máximo configurado arriba. Gerencia decide manualmente
+                            cuánto otorgar por orden. Requiere una fila "Candidatos a Cierre de Factura" vigente y activa arriba
+                            para habilitarse.
+                            El % pagado se prorratea correctamente cuando un pago reconcilia facturas de varias órdenes del mismo
+                            cliente (proporcional a lo facturado de cada una) -- aun así, gerencia debe verificar en Odoo antes
+                            de aprobar cualquier descuento real.
+                        </p>
+                        <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin-bottom:10px;"></div>
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>SO</th>
+                                    <th>Cliente</th>
+                                    <th>Teórico VES</th>
+                                    <th>Pagado (eq. BCV)</th>
+                                    <th>% Pagado</th>
+                                    <th>Monto Candidato Máximo</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="dif-candidatos-table-body">
+                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2636,6 +2666,6 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260807_3"></script>
+    <script src="/static/app.js?v=20260812_1"></script>
 </body>
 </html>
