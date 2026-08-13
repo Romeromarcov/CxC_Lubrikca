@@ -9,6 +9,7 @@ los equivalentes congelados de cada abono (una sola vez).
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 from datetime import date
 
@@ -27,6 +28,21 @@ from .historical_pricing import cargar_mapa_historico, es_orden_historica
 from .price_resolver import PriceResolver
 
 logger = logging.getLogger("cxc.engine")
+
+
+def fingerprint_lineas(lineas: list[LineaOrden]) -> str:
+    """Huella determinista de las líneas de una orden (agosto 2026, hallazgo
+
+    real orden S00792: el teórico quedó mostrando una línea de producto que
+    ya no existía y cantidades viejas porque nada disparaba un recálculo
+    cuando la orden en sí cambiaba en Odoo, solo cuando faltaba precio en
+    una lista -- ver ``VentasTeorico.lineas_fingerprint``). Cambia si Odoo
+    edita cantidades, precios o el set de productos de la orden."""
+    partes = sorted(
+        f"{ln.linea_id}|{ln.producto}|{ln.cantidad}|{ln.precio_unitario}|{ln.descuento}"
+        for ln in lineas
+    )
+    return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
 
 
 class EngineRunner:
@@ -295,9 +311,13 @@ class EngineRunner:
     def run_teoricos_pendientes(self, fecha_calculo: date, limite: int | None = None) -> int:
         """Calcula ``ventas_teoricos`` (Fase 10) para órdenes que AÚN no lo
 
-        tienen, o que sí lo tienen pero quedaron marcadas
+        tienen, que sí lo tienen pero quedaron marcadas
         ``usa_fallback_ves``/``_usd`` (su precio no estaba en la lista
-        específica -- se re-verifica por si esa lista ya se completó).
+        específica -- se re-verifica por si esa lista ya se completó), o
+        cuyas líneas cambiaron desde el último cálculo (``lineas_
+        fingerprint`` ya no coincide -- alguien editó cantidades/productos
+        de la orden en Odoo DESPUÉS de calcular su teórico; ver hallazgo
+        real orden S00792 y docstring de ``VentasTeorico``).
 
         A diferencia de ``run_all``, procesa órdenes SIN importar si ya
         están facturadas -- el teórico es precisamente el punto de
@@ -311,6 +331,13 @@ class EngineRunner:
         procesa todas las pendientes.
         """
         existentes = {v.so_id: v for v in self._repo.all_ventas_teoricos()}
+        # Prefetch UNA sola vez (mismo patrón que run_all, ver su
+        # docstring) -- necesitamos las líneas de CADA orden para calcular
+        # su huella, incluso las que terminan sin recalcularse.
+        lineas_index: dict[str, list[LineaOrden]] = {}
+        for ln in self._repo.all_lineas():
+            if ln.so_id:
+                lineas_index.setdefault(ln.so_id, []).append(ln)
         procesadas = 0
         for o in self._repo.all_ordenes():
             if limite is not None and procesadas >= limite:
@@ -319,12 +346,16 @@ class EngineRunner:
             if st in ("cancel", "cancelled", "draft"):
                 continue
             existente = existentes.get(o.so_id)
-            if existente is not None and not (
-                existente.usa_fallback_ves or existente.usa_fallback_usd
+            fingerprint_actual = fingerprint_lineas(lineas_index.get(o.so_id, []))
+            if (
+                existente is not None
+                and not (existente.usa_fallback_ves or existente.usa_fallback_usd)
+                and existente.lineas_fingerprint == fingerprint_actual
+                and existente.lineas_fingerprint != ""
             ):
-                continue  # ya calculado y sin fallback -- el teórico es fijo, no se toca
+                continue  # ya calculado, sin fallback, y las líneas no cambiaron
 
-            inputs = self.build_inputs(o.so_id, fecha_calculo)
+            inputs = self.build_inputs(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if inputs is None:
                 continue
             resultado = calcular_teorico_orden_con_fallback(inputs)
@@ -339,6 +370,7 @@ class EngineRunner:
                     lista_usd_id=resultado["lista_usd_id"],
                     usa_fallback_ves=resultado["usa_fallback_ves"],
                     usa_fallback_usd=resultado["usa_fallback_usd"],
+                    lineas_fingerprint=fingerprint_actual,
                 )
             )
             procesadas += 1

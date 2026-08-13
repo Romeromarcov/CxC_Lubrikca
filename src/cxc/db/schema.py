@@ -435,6 +435,11 @@ ventas_teoricos = Table(
     Column("usa_fallback_ves", Boolean, nullable=False, server_default="false"),
     Column("usa_fallback_usd", Boolean, nullable=False, server_default="false"),
     Column("calculado_en", DateTime(timezone=False), nullable=False),
+    # Huella de las líneas de la orden al momento del cálculo -- si ya no
+    # coincide con las líneas actuales (orden editada en Odoo después),
+    # dispara un recálculo aunque no haya fallback de precio (agosto 2026,
+    # ver docstring de VentasTeorico). "" en filas viejas = desactualizada.
+    Column("lineas_fingerprint", String, nullable=False, server_default=""),
 )
 
 # Hija normalizada de BandejaFacturacion.descuentos_detalle (antes un blob

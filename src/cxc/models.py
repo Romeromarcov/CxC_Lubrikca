@@ -526,7 +526,13 @@ class VentasTeorico:
     vez por orden y no cambia salvo que ``usa_fallback_ves``/``_usd`` sea
     True (algún producto no tenía precio fijo en esa lista específica y se
     resolvió por fallback -- señal de que hay que re-verificar cuando esa
-    lista se complete).
+    lista se complete) O que ``lineas_fingerprint`` ya no coincida con las
+    líneas actuales de la orden (alguien editó cantidades/productos en Odoo
+    DESPUÉS de que se calculó el teórico -- hallazgo real, agosto 2026:
+    orden S00792, el teórico quedó mostrando una línea de producto que ya
+    no existía en la orden real, y cantidades viejas, porque nada disparaba
+    un recalculo cuando la orden en sí cambiaba, solo cuando faltaba precio
+    en una lista).
     """
 
     so_id: str
@@ -539,6 +545,11 @@ class VentasTeorico:
     usa_fallback_ves: bool = False
     usa_fallback_usd: bool = False
     calculado_en: datetime = field(default_factory=datetime.now)
+    # Huella de las líneas de la orden al momento del cálculo (ver
+    # ``engine.runner.fingerprint_lineas``) -- "" en filas viejas
+    # (calculadas antes de este campo), que se tratan como desactualizadas
+    # y se recalculan en el próximo ciclo para poblarla.
+    lineas_fingerprint: str = ""
 
 
 @dataclass

@@ -1363,6 +1363,7 @@ def _row_to_ventas_teorico(r: Any) -> VentasTeorico:
         usa_fallback_ves=r.usa_fallback_ves,
         usa_fallback_usd=r.usa_fallback_usd,
         calculado_en=r.calculado_en,
+        lineas_fingerprint=getattr(r, "lineas_fingerprint", "") or "",
     )
 
 

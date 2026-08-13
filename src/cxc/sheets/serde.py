@@ -745,6 +745,7 @@ def ventas_teorico_to_row(v: VentasTeorico) -> Row:
         "usa_fallback_ves": s_bool(v.usa_fallback_ves),
         "usa_fallback_usd": s_bool(v.usa_fallback_usd),
         "calculado_en": s_dt(v.calculado_en),
+        "lineas_fingerprint": v.lineas_fingerprint,
     }
 
 
@@ -760,6 +761,7 @@ def ventas_teorico_from_row(r: Mapping[str, str]) -> VentasTeorico:
         usa_fallback_ves=p_bool(r.get("usa_fallback_ves", "FALSE")),
         usa_fallback_usd=p_bool(r.get("usa_fallback_usd", "FALSE")),
         calculado_en=p_dt(r["calculado_en"]) if r.get("calculado_en") else datetime.now(),
+        lineas_fingerprint=r.get("lineas_fingerprint", ""),
     )
 
 
