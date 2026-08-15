@@ -188,10 +188,6 @@ def test_promociones_primera_compra_append_y_lectura(repo: Repository) -> None:
     assert promos[0].regla_id == "PROMO_TEST"
 
 
-def test_descuento_bcv_completo_lectura_vacia(repo: Repository) -> None:
-    assert repo.descuento_bcv_completo() == []
-
-
 def test_reglas_recurrencia_crear_y_actualizar_porcentaje(repo: Repository) -> None:
     assert repo.reglas_recurrencia() == []
     repo.set_regla_recurrencia_porcentaje(Condicion.RECOMPRA.value, Decimal("0.03"))

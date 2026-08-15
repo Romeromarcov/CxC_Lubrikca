@@ -103,7 +103,6 @@ def test_teorico_ves_usa_lista_historica_pero_usd_usa_lista_7():
         descuentos=[],
         descuentos_volumen=[],
         reglas_recurrencia=[],
-        descuento_bcv_diario=[],
         promociones_primera_compra=[],
         feriados_tabla=[],
         price_resolver=resolver,

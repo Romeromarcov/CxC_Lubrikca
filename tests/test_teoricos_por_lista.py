@@ -40,7 +40,6 @@ def _inputs(*, orden, lineas, abonos, resolver) -> EngineInputs:
         descuentos=[],
         descuentos_volumen=[],
         reglas_recurrencia=[],
-        descuento_bcv_diario=[],
         promociones_primera_compra=[],
         feriados_tabla=[],
         price_resolver=resolver,

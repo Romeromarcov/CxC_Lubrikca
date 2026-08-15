@@ -23,7 +23,6 @@ from .models import (
     Cliente,
     Conciliacion,
     Condicion,
-    DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoProducto,
@@ -327,9 +326,6 @@ class Repository(ABC):
         """
 
     @abstractmethod
-    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]: ...
-
-    @abstractmethod
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]: ...
 
     @abstractmethod
@@ -395,7 +391,6 @@ class InMemoryRepository(Repository):
         self._descuentos: list[DescuentoMarcaCategoria] = []
         self._descuentos_volumen: list[DescuentoVolumen] = []
         self._reglas: list[ReglaRecurrencia] = []
-        self._bcv_diario: list[DescuentoBCVCompleto] = []
         self._promos: list[PromocionPrimeraCompra] = []
         self._feriados: list[Feriado] = []
         self._exclusiones: list[ExclusionRegla] = []
@@ -637,12 +632,6 @@ class InMemoryRepository(Repository):
                 vigencia_desde=date.today(),
             )
         )
-
-    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
-        return list(self._bcv_diario)
-
-    def add_descuento_bcv_completo(self, regla: DescuentoBCVCompleto) -> None:
-        self._bcv_diario.append(regla)
 
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
         return list(self._promos)

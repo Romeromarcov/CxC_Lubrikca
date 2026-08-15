@@ -8,7 +8,6 @@ from decimal import Decimal
 from cxc.models import (
     Cliente,
     Condicion,
-    DescuentoBCVCompleto,
     DescuentoMarcaCategoria,
     DescuentoProducto,
     DescuentoRecompra,
@@ -222,20 +221,6 @@ def descuento_producto(
         vigencia_desde=desde,
         vigencia_hasta=hasta,
         aplica_a=aplica_a,
-    )
-
-
-def regla_bcv_completo(
-    porcentaje: str = "0.15",
-    desde: date = date(2026, 1, 1),
-    hasta: date | None = None,
-    requiere_pago_previo: bool = True,
-) -> DescuentoBCVCompleto:
-    return DescuentoBCVCompleto(
-        vigencia_desde=desde,
-        porcentaje=Decimal(porcentaje),
-        vigencia_hasta=hasta,
-        requiere_pago_previo=requiere_pago_previo,
     )
 
 

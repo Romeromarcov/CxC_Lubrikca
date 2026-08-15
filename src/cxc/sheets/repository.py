@@ -18,7 +18,6 @@ from ..models import (
     Cliente,
     Conciliacion,
     Condicion,
-    DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoProducto,
@@ -327,9 +326,6 @@ class SheetsRepository(Repository):
             vigencia_desde=date.today(),
         )
         self._g.append_row(g.T_REGLAS, serde.regla_to_row(nueva))
-
-    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
-        return [serde.bcv_completo_from_row(r) for r in self._g.read_rows(g.T_BCV_COMPLETO)]
 
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
         return [serde.promocion_from_row(r) for r in self._g.read_rows(g.T_PROMO_PRIMERA)]

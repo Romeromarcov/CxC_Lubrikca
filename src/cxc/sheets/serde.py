@@ -19,7 +19,6 @@ from ..models import (
     Conciliacion,
     Condicion,
     DescuentoAplicado,
-    DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoProducto,
     DescuentoProntoPago,
@@ -445,27 +444,6 @@ def diferencial_from_row(r: Mapping[str, str]) -> DescuentoDiferencialCambiario:
         monedas_aplicables=r.get("monedas_aplicables", default_monedas),
         listas_aplicables=r.get("listas_aplicables", "5"),
         vigencia_desde=p_date(r.get("vigencia_desde", "2026-01-01")),
-        vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
-        activo=p_bool(r.get("activo", "TRUE")),
-        requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "TRUE")),
-    )
-
-
-# --- DescuentoBCVCompleto ----------------------------------------------------
-def bcv_completo_to_row(d: DescuentoBCVCompleto) -> Row:
-    return {
-        "vigencia_desde": d.vigencia_desde.isoformat(),
-        "porcentaje": str(d.porcentaje),
-        "vigencia_hasta": s_optdate(d.vigencia_hasta),
-        "activo": s_bool(d.activo),
-        "requiere_pago_previo": s_bool(d.requiere_pago_previo),
-    }
-
-
-def bcv_completo_from_row(r: Mapping[str, str]) -> DescuentoBCVCompleto:
-    return DescuentoBCVCompleto(
-        vigencia_desde=p_date(r["vigencia_desde"]),
-        porcentaje=p_dec(r.get("porcentaje", "0")),
         vigencia_hasta=p_optdate(r.get("vigencia_hasta", "")),
         activo=p_bool(r.get("activo", "TRUE")),
         requiere_pago_previo=p_bool(r.get("requiere_pago_previo", "TRUE")),

@@ -29,7 +29,6 @@ from ..models import (
     Conciliacion,
     Condicion,
     DescuentoAplicado,
-    DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoProducto,
@@ -454,11 +453,6 @@ class PostgresRepository(Repository):
                         activo=True,
                     )
                 )
-
-    def descuento_bcv_completo(self) -> list[DescuentoBCVCompleto]:
-        with self._engine.connect() as conn:
-            rows = conn.execute(select(t.descuento_bcv_completo)).all()
-        return [_row_to_bcv_completo(r) for r in rows]
 
     def promociones_primera_compra(self) -> list[PromocionPrimeraCompra]:
         with self._engine.connect() as conn:
@@ -1221,18 +1215,6 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         tipo_beneficio=TipoBeneficio(r.tipo_beneficio),
         valor=r.valor,
         vigencia_desde=r.vigencia_desde,
-        vigencia_hasta=r.vigencia_hasta,
-        activo=r.activo,
-        requiere_pago_previo=r.requiere_pago_previo,
-        aplica_a=r.aplica_a,
-        descripcion=r.descripcion,
-    )
-
-
-def _row_to_bcv_completo(r: Any) -> DescuentoBCVCompleto:
-    return DescuentoBCVCompleto(
-        vigencia_desde=r.vigencia_desde,
-        porcentaje=r.porcentaje,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,

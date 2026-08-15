@@ -9,21 +9,32 @@ confirmar con negocio.
 
 ## Decisiones de negocio a confirmar (impactan dinero)
 
-### 1. Fórmula del descuento BCV-completo (sección 4.3c) — ✅ DECIDIDA
-La gerencia **fija un porcentaje diario** y se lo comunica a los vendedores; el
-motor lo aplica **topado al diferencial real**, por abono:
-```
-diferencial_i = (tasa_binance_i − tasa_bcv_i) / tasa_binance_i
-tasa_i        = max(0, min(porcentaje_gerencia(fecha_abono_i), diferencial_i))
-descuento     = Σ_i  equiv_usd_bcv_i × tasa_i
-```
-- El porcentaje diario vive en la tabla **`DescuentoBCVCompleto`** (effective
-  dating). Si no hay porcentaje vigente para la fecha del abono → **no se otorga**
-  (conservador). Nunca excede el diferencial real.
-- Implementado en `_bcv_completo_monto` (`src/cxc/engine/discounts.py`) +
-  `tasa_bcv_completo_vigente` (effective_dating).
-- **Operativo:** la gerencia agrega/edita una fila en `DescuentoBCVCompleto` cada
-  vez que cambia la tasa del día.
+### 1. Fórmula del descuento Diferencial Cambiario (sección 4.3c) — ✅ DECIDIDA (rediseñada agosto 2026)
+El mecanismo legado "BCV-completo" (tasa diaria fija por gerencia, tabla
+`DescuentoBCVCompleto`) fue **retirado por completo** (código y tabla
+eliminados, commit `a415446` en adelante) y reemplazado por dos reglas
+configurables en `DescuentoDiferencialCambiario` (`tipo_diferencial`),
+implementadas en el bloque "(c) Diferencial Cambiario" de
+`src/cxc/engine/discounts.py` (función `_calcular_componentes`). Solo aplican
+a órdenes nacidas en lista VES, con abonos vinculados:
+
+- **Fija (`fijo_35_ves_usd`):** si el cliente pagó el 100% del teórico USD
+  exclusivamente en abonos 100% USD → descuento fijo de `porcentaje_fijo`
+  (35% por defecto) sobre el precio base en VES.
+- **Equiparar (`equiparar_binance`):** si pagó (mezcla o 100% Binance) el 100%
+  del teórico USD, pero valorado a tasa BCV el pago queda corto frente al
+  precio VES → nota de crédito que cierra esa brecha, topada al mismo
+  `porcentaje_fijo`. Requiere que el cliente no tenga pagos huérfanos abiertos
+  en Odoo.
+- Se aplica el **mayor** de los dos montos si ambas reglas califican.
+- Existe además una tercera regla (`candidato_cierre_factura`) que **no** es
+  un descuento automático del motor: habilita el reporte de "candidatos a
+  cierre de factura" (`GET /api/diferencial/candidatos-cierre`,
+  `calcular_candidatos_cierre_diferencial` en `src/cxc/web/app.py`), que
+  gerencia usa para aprobar manualmente descuentos vía
+  `POST /api/facturacion/aprobar-descuento-sistema`.
+- Si no hay fila vigente y activa de `fijo_35_ves_usd` → no se otorga ningún
+  descuento por diferencial cambiario (conservador, igual que antes).
 
 ### 2. Sesgo de la tasa Binance (sección 5.1)
 `(5 compra + 5 venta)/10` es un punto medio. El doc lo marca como **decisión de

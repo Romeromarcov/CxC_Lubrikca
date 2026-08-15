@@ -216,20 +216,6 @@ descuentos_volumen = Table(
     Column("descripcion", Text, nullable=False, server_default=""),
 )
 
-# --- 3.7b DescuentoBCVCompleto (config, effective dating, sin id) -----------
-descuento_bcv_completo = Table(
-    "descuento_bcv_completo",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("vigencia_desde", Date, nullable=False, unique=True),
-    Column("porcentaje", PCT, nullable=False),
-    Column("vigencia_hasta", Date, nullable=True),
-    Column("activo", Boolean, nullable=False, server_default="true"),
-    Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
-    Column("aplica_a", String, nullable=False, server_default="linea"),
-    Column("descripcion", Text, nullable=False, server_default=""),
-)
-
 # --- 3.7c PromocionPrimeraCompra (config) ------------------------------------
 promocion_primera_compra = Table(
     "promocion_primera_compra",

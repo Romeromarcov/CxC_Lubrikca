@@ -39,7 +39,6 @@ def _inputs(
     abonos,
     descuentos=(),
     descuentos_volumen=(),
-    bcv_diario=(),
     resolver,
     fecha_calculo=date(2026, 6, 8),
 ) -> EngineInputs:
@@ -50,7 +49,6 @@ def _inputs(
         descuentos=list(descuentos),
         descuentos_volumen=list(descuentos_volumen),
         reglas_recurrencia=[],
-        descuento_bcv_diario=list(bcv_diario),
         promociones_primera_compra=[],
         feriados_tabla=[],
         price_resolver=resolver,

@@ -458,13 +458,6 @@ TABLE_SPECS: dict[str, TableMigrator] = {
         "DescuentosDiferencialCambiario",
         serde.diferencial_from_row,
     ),
-    "descuento_bcv_completo": _migrate_config_table(
-        "descuento_bcv_completo",
-        t.descuento_bcv_completo,
-        ["vigencia_desde"],
-        g.T_BCV_COMPLETO,
-        serde.bcv_completo_from_row,
-    ),
     "promocion_primera_compra": _migrate_config_table(
         "promocion_primera_compra",
         t.promocion_primera_compra,

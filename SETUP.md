@@ -56,7 +56,6 @@ Crear estas pestañas:
 | `MetodosPago` | Administración | `metodo_id, nombre, moneda, tipo_tasa, es_contado` |
 | `SerieTasas` | scraper (append) | `timestamp, tasa_bcv, tasa_binance, fuente, es_heredada, capturada_ok` |
 | `DescuentosMarcaCategoria` | Administración | `regla_id, marca, categoria, tipo_descuento, porcentaje, vigencia_desde, vigencia_hasta, activo` |
-| `DescuentoBCVCompleto` | Gerencia (diario) | `vigencia_desde, porcentaje, vigencia_hasta, activo` |
 | `PromocionPrimeraCompra` | Administración | `producto, vigencia_desde, vigencia_hasta, activo` |
 | `ReglasRecurrencia` | Administración | `condicion, tipo_beneficio, valor, vigencia_desde, vigencia_hasta, activo` |
 | `Feriados` | Administración | `fecha, descripcion, tipo` |

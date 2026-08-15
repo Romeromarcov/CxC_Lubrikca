@@ -1,0 +1,30 @@
+# Postgres local para desarrollo/tests -- misma imagen y credenciales que
+# usa el job de CI (ver .github/workflows/ci.yml) para que
+# tests/test_repository_contract.py y `alembic upgrade head` se comporten
+# igual en local que en CI.
+#
+# Uso:
+#   docker compose up -d
+#   $env:DATABASE_URL = "postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci"
+#   alembic upgrade head
+#   pytest
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cxc
+      POSTGRES_PASSWORD: cxc_ci_pw
+      POSTGRES_DB: cxc_ci
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cxc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - cxc_pg_data:/var/lib/postgresql/data
+
+volumes:
+  cxc_pg_data:

@@ -21,7 +21,6 @@ from ..models import (
     BandejaFacturacion,
     Condicion,
     DescuentoAplicado,
-    DescuentoBCVCompleto,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
     DescuentoProducto,
@@ -71,7 +70,6 @@ class EngineInputs:
     descuentos: list[DescuentoMarcaCategoria]
     descuentos_volumen: list[DescuentoVolumen]
     reglas_recurrencia: list[ReglaRecurrencia]
-    descuento_bcv_diario: list[DescuentoBCVCompleto]
     promociones_primera_compra: list[PromocionPrimeraCompra]
     feriados_tabla: list[Feriado]
     price_resolver: PriceResolver
@@ -133,12 +131,12 @@ class _Componentes:
     precio_base: Decimal
     pct_recompra: Decimal
     contado_proy: Decimal
-    bcv_completo: Decimal
+    diferencial_cambiario: Decimal
     volumen: Decimal
     nc: Decimal
     detalle_recompra: DescuentoAplicado | None = None
     detalle_contado: DescuentoAplicado | None = None
-    detalle_bcv: DescuentoAplicado | None = None
+    detalle_diferencial: DescuentoAplicado | None = None
     detalle_volumen: DescuentoAplicado | None = None
     detalle_nc: DescuentoAplicado | None = None
     flags: dict[str, bool] = field(default_factory=dict)
@@ -514,9 +512,7 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     # línea hoy (primera compra ya opera sobre "todas las líneas"/"solo
     # Industrial" según otra lógica; diferencial cambiario se calcula por
     # abono, no por línea). Es una limitación real de estos 2 tipos de
-    # descuento, no un olvido. ``inp.descuento_bcv_diario`` (BCV-completo,
-    # legacy confirmado por el usuario agosto 2026) ya NO se lee -- ver
-    # comentario en el bloque (c) más abajo.
+    # descuento, no un olvido.
 
     # (a) Recurrencia — vigente a la fecha de la orden (sección 4.3a)
     pct_recompra = Decimal("0")
@@ -1002,8 +998,8 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     # NO es un descuento automático del motor -- es un reporte de
     # candidatos aparte (ver endpoint de candidatos de cierre) que gerencia
     # aprueba manualmente vía "Aprobar Descuento de Sistema".
-    bcv_completo = Decimal("0")
-    detalle_bcv: DescuentoAplicado | None = None
+    diferencial_cambiario = Decimal("0")
+    detalle_diferencial: DescuentoAplicado | None = None
 
     listas_ves_validas = set(inp.valid_ves) if inp.valid_ves else {_lista_ves_activa(inp)}
     es_lista_ves_nativa = str(inp.orden.lista_precios) in listas_ves_validas
@@ -1058,29 +1054,30 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
                     gap = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
                     monto_equiparar = min(gap, precio_base * diferencial_maximo)
 
-            bcv_completo = max(monto_fijo, monto_equiparar)
-            if bcv_completo > 0:
+            diferencial_cambiario = max(monto_fijo, monto_equiparar)
+            if diferencial_cambiario > 0:
                 if monto_fijo >= monto_equiparar:
                     pct_str = f"{diferencial_maximo * 100:.1f}%"
                     desc_str = f"Diferencial Cambiario fijo ({pct_str}, pago 100% USD)"
                 else:
-                    desc_str = f"Diferencial Cambiario - Equiparación (${q2(bcv_completo)})"
-                detalle_bcv = DescuentoAplicado(
+                    monto_str = q2(diferencial_cambiario)
+                    desc_str = f"Diferencial Cambiario - Equiparación (${monto_str})"
+                detalle_diferencial = DescuentoAplicado(
                     origen="bcv_completo",
                     descripcion=desc_str,
-                    monto=q2(bcv_completo),
+                    monto=q2(diferencial_cambiario),
                 )
 
     return _Componentes(
         precio_base=precio_base,
         pct_recompra=pct_recompra,
         contado_proy=contado_proy,
-        bcv_completo=bcv_completo,
+        diferencial_cambiario=diferencial_cambiario,
         volumen=volumen_desc,
         nc=nc,
         detalle_recompra=detalle_recompra,
         detalle_volumen=detalle_volumen,
-        detalle_bcv=detalle_bcv,
+        detalle_diferencial=detalle_diferencial,
         detalle_nc=detalle_nc,
         regla_contado_dominante=regla_contado_dominante,
         producto=producto_desc,
@@ -1143,7 +1140,7 @@ def _teoricos_por_lista(
             precio_base=Decimal("0"),
             pct_recompra=Decimal("0"),
             contado_proy=Decimal("0"),
-            bcv_completo=Decimal("0"),
+            diferencial_cambiario=Decimal("0"),
             volumen=Decimal("0"),
             nc=Decimal("0"),
         )
@@ -1154,7 +1151,7 @@ def _teoricos_por_lista(
             precio_base=Decimal("0"),
             pct_recompra=Decimal("0"),
             contado_proy=Decimal("0"),
-            bcv_completo=Decimal("0"),
+            diferencial_cambiario=Decimal("0"),
             volumen=Decimal("0"),
             nc=Decimal("0"),
         )
@@ -1273,7 +1270,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "recurrencia": comp.pct_recompra,
         "contado": comp.contado_proy,
         "volumen": comp.volumen,
-        "bcv_completo": comp.bcv_completo,
+        "bcv_completo": comp.diferencial_cambiario,
         "producto": comp.producto,
     }
     for exc in inp.exclusiones:
@@ -1318,7 +1315,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         "recurrencia": comp.pct_recompra,
         "contado": contado_aplicado_base,
         "volumen": comp.volumen,
-        "bcv_completo": comp.bcv_completo,
+        "bcv_completo": comp.diferencial_cambiario,
         "producto": comp.producto,
     }
     for exc in inp.exclusiones:
@@ -1336,7 +1333,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     final_recompra = valores["recurrencia"]
     final_contado = valores["contado"]
     final_volumen = valores["volumen"]
-    final_bcv = valores["bcv_completo"]
+    final_diferencial = valores["bcv_completo"]
     final_producto = valores["producto"]
 
     # Apilamiento aditivo final (sección 4.1).
@@ -1356,15 +1353,15 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
                 monto=q2(final_contado),
             )
         )
-    if final_bcv > 0:
-        if comp.detalle_bcv is not None:
-            detalle.append(comp.detalle_bcv)
+    if final_diferencial > 0:
+        if comp.detalle_diferencial is not None:
+            detalle.append(comp.detalle_diferencial)
         else:
             detalle.append(
                 DescuentoAplicado(
                     origen="bcv_completo",
-                    descripcion="BCV-completo (diferencial por abono)",
-                    monto=q2(final_bcv),
+                    descripcion="Diferencial Cambiario (por abono)",
+                    monto=q2(final_diferencial),
                 )
             )
     if final_volumen > 0 and comp.detalle_volumen is not None:
@@ -1382,13 +1379,15 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     # regla subtotal pesa sobre precio_base completo en vez de un subgrupo.
     # No se agrega un límite nuevo sin instrucción explícita porque
     # cambiaría montos ya validados en producción.
-    total_descuentos = final_recompra + final_contado + final_bcv + final_volumen + final_producto
+    total_descuentos = (
+        final_recompra + final_contado + final_diferencial + final_volumen + final_producto
+    )
     neto = comp.precio_base - total_descuentos - final_nc
     candidata = bool(vincs) and valor_pagado >= neto - _EPS
 
     requiere_revision = (
         any(v.es_tasa_heredada for v in vincs)
-        or comp.bcv_completo > 0
+        or comp.diferencial_cambiario > 0
         or contado_denied
         or comp.flags["promo_sin_precio"]
         or inp.orden.tiene_devolucion  # devoluciones se revisan a mano

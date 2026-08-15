@@ -211,10 +211,6 @@ def test_promociones_primera_compra_append_y_lectura() -> None:
     assert promos[0].regla_id == "PROMO_TEST"
 
 
-def test_descuento_bcv_completo_lectura_vacia() -> None:
-    assert _repo().descuento_bcv_completo() == []
-
-
 def test_reglas_recurrencia_crear_y_actualizar_porcentaje() -> None:
     repo = _repo()
     assert repo.reglas_recurrencia() == []

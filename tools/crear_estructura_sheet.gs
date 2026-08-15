@@ -37,8 +37,6 @@ function crearEstructuraCxC() {
       'es_heredada', 'capturada_ok'],
     'DescuentosMarcaCategoria': ['regla_id', 'marca', 'categoria', 'tipo_descuento',
       'porcentaje', 'vigencia_desde', 'vigencia_hasta', 'activo'],
-    'DescuentoBCVCompleto': ['vigencia_desde', 'porcentaje', 'vigencia_hasta',
-      'activo'],
     'PromocionPrimeraCompra': ['producto', 'vigencia_desde', 'vigencia_hasta',
       'activo'],
     'ReglasRecurrencia': ['condicion', 'tipo_beneficio', 'valor', 'vigencia_desde',
@@ -102,13 +100,6 @@ function sembrarConfig(ss) {
     ['D1', 'Global Oil', 'Comercial', 'contado', '0.08', '2026-01-01', '', 'TRUE'],
     ['D2', 'Global Oil', 'Industrial', 'contado', '0.06', '2026-01-01', '', 'TRUE'],
     ['D3', 'Sinoco', '*', 'contado', '0.03', '2026-01-01', '', 'TRUE']
-  ]);
-
-  // Descuento BCV-completo: la GERENCIA fija el % cada dia. El motor aplica
-  // min(%, diferencial real BCV vs Binance). Actualiza/agrega una fila por
-  // periodo de vigencia (deja vigencia_hasta vacio mientras rija).
-  sembrarSiVacia(ss, 'DescuentoBCVCompleto', [
-    ['2026-01-01', '0.10', '', 'TRUE']
   ]);
 
   // Recurrencia: solo recompra (porcentaje configurable). La primera compra

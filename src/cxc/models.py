@@ -277,21 +277,6 @@ class DescuentoVolumen:
     descripcion: str = ""
 
 
-# --- 3.7b DescuentoBCVCompleto (configurable, effective dating) --------------
-@dataclass
-class DescuentoBCVCompleto:
-    vigencia_desde: date
-    porcentaje: Decimal
-    vigencia_hasta: date | None = None
-    activo: bool = True
-    # Diferencial cambiario: se calcula por abono, requiere pago previo.
-    requiere_pago_previo: bool = True
-    # No cambia el cálculo (BCV-completo no es por línea) -- se guarda por
-    # consistencia de esquema con el resto de tablas de reglas.
-    aplica_a: str = "linea"
-    descripcion: str = ""
-
-
 # --- 3.7c PromocionPrimeraCompra (configurable, effective dating) -----------
 @dataclass
 class PromocionPrimeraCompra:
