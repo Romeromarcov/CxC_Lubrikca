@@ -1191,13 +1191,26 @@ def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
 
 
 def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
-    """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`.
+    """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`, MISMO DÍA.
 
-    None si no hay ninguna fila con esa columna capturada (huérfana en la
-    mayoría de los despliegues -- el scraper la captura pero nada la usaba),
-    o si la fila más cercana falla la guardia de plausibilidad (ver abajo)
-    -- en ese caso quien llama debe caer al fallback de
-    ``TasasHistoricasAuditoria`` (``get_eur_rate_for_date``).
+    None si no hay ninguna fila con esa columna capturada ESE día (huérfana
+    en la mayoría de los despliegues -- el scraper la captura pero nada la
+    usaba; o simplemente ``dt`` cae fuera de la ventana que cubre el
+    scraper en vivo, ver guardia de fecha abajo), o si la fila más cercana
+    falla la guardia de plausibilidad (ver abajo) -- en ese caso quien
+    llama debe caer al fallback de ``TasasHistoricasAuditoria``
+    (``get_eur_rate_for_date``).
+
+    Guardia de fecha (bug real, agosto 2026, encontrado auditando una N/C de
+    marzo): sin este chequeo, para cualquier ``dt`` anterior a que el
+    scraper empezara a capturar EUR (2026-07-31), "la fila más cercana"
+    terminaba siendo la primera fila disponible del scraper -- semanas o
+    MESES después de ``dt`` -- y esa fila ganaba silenciosamente sobre el
+    fallback correcto de ``TasasHistoricasAuditoria`` (que sí busca por día
+    exacto) porque esta función solo devolvía ``None`` si no había NINGUNA
+    fila con la columna capturada en TODO el historial, nunca por estar
+    lejos en el tiempo. Mismo criterio que ``get_rate_for_datetime`` (línea
+    ~1147): la fila más cercana solo cuenta si es del mismo día que ``dt``.
 
     Guardia de plausibilidad (bug real, agosto 2026): ``OdooBcvClient``
     (fuente del scraper hasta este fix) lee la tasa EUR de
@@ -1212,6 +1225,8 @@ def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | 
     candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
     closest_row = _closest_serie_row(dt, candidatas)
     if not closest_row:
+        return None
+    if str(closest_row.get("timestamp", ""))[:10] != dt.date().isoformat():
         return None
     tasa_eur = parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
     tasa_bcv_fila = parse_decimal_safe(closest_row.get("tasa_bcv", "0"))

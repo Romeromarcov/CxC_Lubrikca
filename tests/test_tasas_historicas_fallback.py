@@ -92,3 +92,24 @@ def test_bcv_euro_acepta_fila_con_ratio_plausible() -> None:
     ]
     resultado = get_bcv_euro_rate_for_datetime(datetime(2026, 8, 6, 12, 0), rows)
     assert resultado == Decimal("872.83")
+
+
+def test_bcv_euro_rechaza_fila_de_otro_dia_aunque_ratio_sea_plausible() -> None:
+    """Bug real (agosto 2026, auditoria de N/C de marzo): sin guardia de
+
+    fecha, para un ``dt`` de marzo (antes de que el scraper empezara a
+    capturar EUR el 2026-07-31) "la fila mas cercana" terminaba siendo la
+    primera fila de SerieTasas disponible -- semanas/meses despues -- y
+    esa fila ganaba silenciosamente sobre el fallback correcto de
+    TasasHistoricasAuditoria porque pasaba el filtro de ratio (1.14,
+    plausible en si misma, solo que de la fecha equivocada). Debe devolver
+    None para que el llamador caiga a get_eur_rate_for_date."""
+    rows = [
+        {
+            "timestamp": "2026-07-31 10:52:05",
+            "tasa_bcv": "674.9305",
+            "tasa_bcv_euro": "770.682890",  # ratio ~1.1419 -- plausible en si misma
+        }
+    ]
+    resultado = get_bcv_euro_rate_for_datetime(datetime(2026, 3, 3, 12, 0), rows)
+    assert resultado is None
