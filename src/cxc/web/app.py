@@ -4676,6 +4676,51 @@ def _facturacion_por_so_desde_espejo(
     }
 
 
+def _entregas_desde_espejo(
+    repo, so_names: set[str] | list[str]
+) -> tuple[set[str], dict[str, str]]:
+    """Fase 2 (plan de consolidación de fuentes, agosto 2026) -- réplica,
+
+    leyendo del espejo ``Entrega`` (``repo.all_entregas()``), de
+    ``get_live_entregas_info``: retorna ``(delivered, fecha_entrega_map)``
+    con la MISMA semántica exacta (ver docstring de esa función) --
+    ``delivered`` excluye órdenes con alguna devolución aunque también
+    tengan un despacho válido; ``fecha_entrega_map`` se puebla para TODA
+    orden con un despacho saliente terminado, con o sin devolución
+    posterior, usando la fecha más reciente si hay varios.
+
+    NO ESTÁ CONECTADA a ningún endpoint todavía -- mismo motivo que
+    ``_facturacion_por_so_desde_espejo``: el espejo de Entregas no ha sido
+    validado contra un Postgres real ni poblado por una corrida real del
+    sync. El espejo (a diferencia de la consulta en vivo, que filtra
+    ``state == "done"`` en Odoo) puede contener pickings en cualquier
+    estado -- ``changed_entregas`` no filtra por estado a propósito (ver
+    su docstring), así que ese filtro se aplica aquí en vez de en el
+    sync.
+    """
+    so_set = {str(s) for s in so_names}
+    entregas = repo.all_entregas()
+
+    delivered_by_so: set[str] = set()
+    returned_by_so: set[str] = set()
+    fecha_entrega_map: dict[str, str] = {}
+
+    for e in entregas:
+        if not e.so_id or e.so_id not in so_set or e.estado != "done":
+            continue
+        if e.es_devolucion:
+            returned_by_so.add(e.so_id)
+        elif e.tipo == "outgoing":
+            delivered_by_so.add(e.so_id)
+            if e.fecha:
+                fecha_str = e.fecha.isoformat()
+                if e.so_id not in fecha_entrega_map or fecha_str > fecha_entrega_map[e.so_id]:
+                    fecha_entrega_map[e.so_id] = fecha_str
+
+    delivered = delivered_by_so - returned_by_so
+    return delivered, fecha_entrega_map
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
