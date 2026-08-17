@@ -4591,6 +4591,91 @@ def _build_hist_map(repo) -> dict[str, dict[str, Any]]:
     return hist_map
 
 
+def _facturacion_por_so_desde_espejo(
+    repo, so_names: set[str] | list[str]
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Fase 2 (plan de consolidación de fuentes, agosto 2026) -- réplica de
+
+    la agregación por-SO de facturado/NC/ND que ``_get_ventas_sync`` arma
+    hoy con 3 llamadas en vivo a Odoo (consulta principal ``account.move``
+    por ``invoice_origin`` + ``_leer_notas_debito_odoo`` por
+    ``debit_origin_id`` + ``_leer_notas_credito_odoo`` por
+    ``reversed_entry_id``), pero leyendo del espejo ``Factura``
+    (``repo.all_facturas()``) en vez de Odoo.
+
+    NO ESTÁ CONECTADA TODAVÍA a ``_get_ventas_sync`` ni a ningún endpoint
+    -- el espejo de Facturas aún no fue validado contra un Postgres real
+    (Fase 0 pendiente de correr `alembic upgrade head` contra la instancia
+    real) ni poblado por una corrida real del sync incremental. Conectar
+    esto antes de esa validación arriesgaría mostrar montos de facturación
+    en blanco o incorrectos en una página financiera real. Se deja lista y
+    con tests de paridad para que, una vez validado el espejo con datos
+    reales, conectarla sea un cambio pequeño y de bajo riesgo en vez de
+    escribir esta lógica bajo presión en ese momento.
+
+    Una N/D o N/C sin ``so_id`` propio (Odoo no siempre puebla
+    ``invoice_origin`` en esos documentos -- ver docstrings de
+    ``_leer_notas_debito_odoo``/``_leer_notas_credito_odoo``) se resuelve
+    siguiendo la cadena ``factura_origen_id`` hasta encontrar una factura
+    con ``so_id`` propio, replicando lo que hacían esas dos consultas en
+    vivo vía ``inv_id_to_so``.
+
+    Retorna, por SO: ``facturado_con_imp``/``facturado_antes_imp`` (solo
+    facturas ``out_invoice`` que NO son N/D), ``nc_con_imp`` (N/C,
+    ``move_type == "out_refund"``) y ``nd_con_imp`` (N/D,
+    ``es_nota_debito``). NO incluye descuentos de línea de factura
+    (``_leer_descuentos_lineas_odoo``) -- ese dato no tiene espejo todavía
+    (requeriría mirrorear ``account.move.line``, fuera del alcance de esta
+    fase).
+    """
+    so_set = {str(s) for s in so_names}
+    facturas = repo.all_facturas()
+    by_id = {f.factura_id: f for f in facturas}
+
+    def _resolver_so(f) -> str | None:
+        if f.so_id:
+            return f.so_id
+        origen_id = f.factura_origen_id
+        vistos: set[str] = set()
+        while origen_id and origen_id not in vistos:
+            vistos.add(origen_id)
+            padre = by_id.get(origen_id)
+            if padre is None:
+                return None
+            if padre.so_id:
+                return padre.so_id
+            origen_id = padre.factura_origen_id
+        return None
+
+    facturado_con_imp: dict[str, float] = {}
+    facturado_antes_imp: dict[str, float] = {}
+    nc_con_imp: dict[str, float] = {}
+    nd_con_imp: dict[str, float] = {}
+
+    for f in facturas:
+        if f.estado != "posted":
+            continue
+        so = _resolver_so(f)
+        if not so or so not in so_set:
+            continue
+        con_imp = abs(float(f.monto_total_signed_usd))
+        antes_imp = abs(float(f.monto_sin_impuestos_signed_usd))
+        if f.move_type == "out_refund":
+            nc_con_imp[so] = nc_con_imp.get(so, 0.0) + con_imp
+        elif f.es_nota_debito:
+            nd_con_imp[so] = nd_con_imp.get(so, 0.0) + con_imp
+        else:
+            facturado_con_imp[so] = facturado_con_imp.get(so, 0.0) + con_imp
+            facturado_antes_imp[so] = facturado_antes_imp.get(so, 0.0) + antes_imp
+
+    return {
+        "facturado_con_imp": facturado_con_imp,
+        "facturado_antes_imp": facturado_antes_imp,
+        "nc_con_imp": nc_con_imp,
+        "nd_con_imp": nd_con_imp,
+    }
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
