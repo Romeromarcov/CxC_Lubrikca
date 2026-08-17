@@ -3854,14 +3854,26 @@ def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
-def _dias_vencido_orden(item: dict[str, Any], today: date) -> int:
+def _fecha_y_dias_vencido(item: dict[str, Any], today: date) -> tuple[date | None, int]:
+    """Fecha de vencimiento y días vencido de una orden (item de Ventas).
+
+    Fuente única de la antigüedad de una orden -- se calcula UNA vez dentro
+    de ``_get_ventas_sync`` (columna "Días Vencido" de la página Ventas,
+    pedido explícito del usuario, agosto 2026) y todo lo demás lee el
+    resultado (``item["dias_vencido"]``/``item["fecha_vencimiento"]``) en
+    vez de recalcularlo -- antes ``/api/reporte-cxc-cliente`` tenía su
+    propia copia de esta misma fórmula.
+
+    Base: ``fecha_entrega`` (entrega efectiva) o ``fecha`` (de la orden) si
+    aún no hay entrega registrada, + ``dias_credito`` reales otorgados.
+    """
     fecha_base_raw = item.get("fecha_entrega") or item.get("fecha")
     try:
         dt_base = datetime.strptime(str(fecha_base_raw)[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         dt_base = today
     dt_venc = dt_base + timedelta(days=int(item.get("dias_credito") or 0))
-    return max(0, (today - dt_venc).days)
+    return dt_venc, max(0, (today - dt_venc).days)
 
 
 @app.get("/api/reporte-cxc-cliente")
@@ -3942,7 +3954,6 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 pago_saldo_max[pid] = saldo
                 pago_info[pid] = s
 
-        today = date.today()
         clientes: dict[str, dict[str, Any]] = {}
 
         def _cliente_row(cliente_id: str, cliente_nombre: str) -> dict[str, Any]:
@@ -3988,7 +3999,9 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             o = ordenes_map.get(item["so_id"])
             cliente_id = str(o.cliente_id) if o else item["so_id"]
             c = _cliente_row(cliente_id, item["cliente_nombre"])
-            dias_vencido = _dias_vencido_orden(item, today)
+            # Fuente única: Ventas ya calculó esto (ver _fecha_y_dias_vencido
+            # dentro de _get_ventas_sync) -- se lee en vez de recalcular.
+            dias_vencido = int(item.get("dias_vencido") or 0)
 
             if item.get("vendedor"):
                 c["vendedores"].add(item["vendedor"])
@@ -9000,6 +9013,7 @@ def _get_ventas_sync(
         config = AppConfig.from_env()
         iva_rate = float(config.engine.iva_rate)
         igtf_rate = float(config.engine.igtf_rate) if config.engine.igtf_activo else 0.0
+        today_ventas = date.today()
 
         ordenes = repo.all_ordenes()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
@@ -9701,6 +9715,16 @@ def _get_ventas_sync(
                     "cxc_routing_motivo": clasificacion_cxc.motivo,
                 }
             )
+            # Antigüedad ("Días Vencido" en la UI de Ventas): fuente única
+            # ahora -- misma fórmula que ya usaba /api/reporte-cxc-cliente
+            # (_dias_vencido_orden), calculada UNA vez aquí en vez de que
+            # cada consumidor la recalcule por su cuenta (pedido explícito
+            # del usuario, agosto 2026). fecha_entrega/dias_credito ya están
+            # en el item recién agregado.
+            item_actual = items[-1]
+            dt_venc, dias_venc = _fecha_y_dias_vencido(item_actual, today_ventas)
+            item_actual["fecha_vencimiento"] = dt_venc.isoformat() if dt_venc else None
+            item_actual["dias_vencido"] = dias_venc
 
         items.sort(key=lambda it: str(it["so_id"]), reverse=True)
 

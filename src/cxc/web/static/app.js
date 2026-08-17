@@ -1327,10 +1327,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="44" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="44" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1384,7 +1384,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="44" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1414,7 +1414,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="44" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1463,6 +1463,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
                 <td><small title="${item.lista_aplicada ?? ''}">${item.lista_aplicada_label ?? '—'}</small></td>
                 <td style="text-align:right">${item.dias_credito ?? 0}</td>
+                <td style="text-align:right" title="Vence: ${item.fecha_vencimiento ?? '—'}">${
+                    (item.dias_vencido || 0) > 0
+                        ? `<strong style="color:#dc2626">${item.dias_vencido} d</strong>`
+                        : '<span style="color:#059669">Vigente</span>'
+                }</td>
                 <td>${naVal(item.ves_bruta_teorica)}</td>
                 <td>${naVal(item.ves_bruta_teorica_iva)}</td>
                 <td>${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>

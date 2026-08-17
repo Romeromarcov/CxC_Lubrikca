@@ -939,6 +939,7 @@
                                     <th title="Lista de precios con la que nació la orden">Lista Nacimiento</th>
                                     <th title="Lista que terminó aplicando el motor (puede ganar la del método de pago sobre la de nacimiento -- hoy siempre igual a Nacimiento porque el sistema aún no tiene pagos vinculados; el mecanismo de reselección ya está probado y listo para cuando existan)">Lista Aplicada</th>
                                     <th title="Días de crédito reales otorgados por Odoo (payment_term de la orden)">Días Crédito</th>
+                                    <th title="Fecha de vencimiento (Fecha Entrega + Días Crédito) y días vencido -- fuente única para las demás páginas (Reporte de Saldos, CxC por Cliente), calculado aquí una sola vez">Días Vencido</th>
                                     <th title="Precio de lista VES vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta VES</th>
                                     <th title="Teórica Bruta VES + IVA">Teórica Bruta VES + Imp.</th>
                                     <th title="Descuento que calcula el motor específicamente para la lista VES (reglas con listas_aplicables propias -- puede diferir del de la lista USD) -- monto y %">Desc. Teórico VES</th>
@@ -979,7 +980,7 @@
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="44" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="45" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
