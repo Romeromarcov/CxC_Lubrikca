@@ -181,6 +181,15 @@ def get_live_so_states(so_names: list[str]) -> dict[str, str]:
         return result
 
 
+# Caché por-orden de entregas (agosto 2026, mismo patrón y misma
+# justificación que _SO_STATE_CACHE -- ver su comentario): cada valor es
+# (es_entrega_valida, fecha_entrega o None, timestamp). TTL corto (45s),
+# suficiente para absorber varias páginas cargando casi al mismo tiempo sin
+# arriesgar datos de entrega desactualizados.
+_ENTREGA_CACHE: dict[str, tuple[bool, str | None, float]] = {}
+_ENTREGA_CACHE_TTL = 45.0
+
+
 def get_live_entregas_info(
     so_names: list[str], execute: Any = None
 ) -> tuple[set[str], dict[str, str]]:
@@ -188,27 +197,47 @@ def get_live_entregas_info(
 
     stock.picking para ambas cosas. ``fecha_entrega_map`` es la fecha
     (YYYY-MM-DD) de la entrega ALM/OUT más reciente por orden, mismo
-    criterio que ya usa el reporte de CxC (``get_reporte_saldos``). Acepta
-    un `execute` ya conectado para reusar la conexión del llamador; si no
-    se provee, abre una propia. Best-effort: ante cualquier error devuelve
-    vacío.
+    criterio que ya usa el reporte de CxC (``get_reporte_saldos``); se
+    llena para TODA orden con una entrega saliente, sin importar si
+    terminó devuelta (a diferencia del set ``delivered_not_returned``, que
+    sí excluye devueltas). Acepta un `execute` ya conectado para reusar la
+    conexión del llamador; si no se provee, abre una propia. Best-effort:
+    ante cualquier error devuelve lo que ya se pudo resolver desde caché
+    (nunca menos que antes de intentar).
     """
     if not so_names:
         return set(), {}
+    now_ts = time.time()
+    delivered: set[str] = set()
+    fecha_entrega_map: dict[str, str] = {}
+    faltantes: list[str] = []
+    for name in so_names:
+        cached = _ENTREGA_CACHE.get(name)
+        if cached is not None and now_ts - cached[2] < _ENTREGA_CACHE_TTL:
+            es_valida, fecha, _ts = cached
+            if es_valida:
+                delivered.add(name)
+            if fecha:
+                fecha_entrega_map[name] = fecha
+        else:
+            faltantes.append(name)
+    if not faltantes:
+        return delivered, fecha_entrega_map
+
     if execute is None:
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
         except Exception as e:
             logger.warning("Error conectando a Odoo en get_live_entregas_info: %s", e)
-            return set(), {}
+            return delivered, fecha_entrega_map
     if not execute:
-        return set(), {}
+        return delivered, fecha_entrega_map
     try:
         so_records = execute(
             "sale.order",
             "search_read",
-            [[["name", "in", so_names]]],
+            [[["name", "in", faltantes]]],
             {"fields": ["name", "picking_ids"]},
         )
         picking_to_so: dict[int, str] = {}
@@ -218,34 +247,53 @@ def get_live_entregas_info(
             if sname and isinstance(p_ids, list | tuple):
                 for pid in p_ids:
                     picking_to_so[pid] = sname
+
+        # Faltantes sin ningún picking (nunca despachadas): se cachean como
+        # "sin entrega" para no volver a pedirlas en cada llamada dentro del
+        # TTL -- mismo resultado final que la versión sin caché (quedaban
+        # fuera de `delivered` y de `fecha_entrega_map`).
+        con_picking = set(picking_to_so.values())
+        for name in faltantes:
+            if name not in con_picking:
+                _ENTREGA_CACHE[name] = (False, None, now_ts)
         if not picking_to_so:
-            return set(), {}
+            return delivered, fecha_entrega_map
+
         pickings = execute(
             "stock.picking",
             "search_read",
             [[["id", "in", list(picking_to_so.keys())], ["state", "=", "done"]]],
             {"fields": ["id", "picking_type_code", "return_id", "date_done"]},
         )
-        delivered: set[str] = set()
-        returned: set[str] = set()
-        fecha_entrega_map: dict[str, str] = {}
+        delivered_faltantes: set[str] = set()
+        returned_faltantes: set[str] = set()
+        fecha_faltantes: dict[str, str] = {}
         for p in pickings:
             so_name = picking_to_so.get(p["id"])
             if not so_name:
                 continue
             if bool(p.get("return_id")) or str(p.get("picking_type_code")) == "incoming":
-                returned.add(so_name)
+                returned_faltantes.add(so_name)
             elif str(p.get("picking_type_code")) == "outgoing":
-                delivered.add(so_name)
+                delivered_faltantes.add(so_name)
                 dt_done = p.get("date_done")
                 if dt_done:
                     dt_str = str(dt_done).split(" ")[0]
-                    if so_name not in fecha_entrega_map or dt_str > fecha_entrega_map[so_name]:
-                        fecha_entrega_map[so_name] = dt_str
-        return delivered - returned, fecha_entrega_map
+                    if so_name not in fecha_faltantes or dt_str > fecha_faltantes[so_name]:
+                        fecha_faltantes[so_name] = dt_str
+
+        for name in con_picking:
+            es_valida = name in delivered_faltantes and name not in returned_faltantes
+            fecha = fecha_faltantes.get(name)
+            _ENTREGA_CACHE[name] = (es_valida, fecha, now_ts)
+            if es_valida:
+                delivered.add(name)
+            if fecha:
+                fecha_entrega_map[name] = fecha
+        return delivered, fecha_entrega_map
     except Exception as e:
         logger.warning("Error consultando entregas en get_live_entregas_info: %s", e)
-        return set(), {}
+        return delivered, fecha_entrega_map
 
 
 def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) -> set[str]:

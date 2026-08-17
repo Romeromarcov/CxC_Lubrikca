@@ -66,3 +66,16 @@ def _reset_so_state_cache():
     _app_module._SO_STATE_CACHE.clear()
     yield
     _app_module._SO_STATE_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_entrega_cache():
+    """Mismo patrón para ``_ENTREGA_CACHE`` (agosto 2026, caché por-orden
+
+    de get_live_entregas_info).
+    """
+    from cxc.web import app as _app_module
+
+    _app_module._ENTREGA_CACHE.clear()
+    yield
+    _app_module._ENTREGA_CACHE.clear()
