@@ -3927,6 +3927,8 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     "cliente_nombre": cliente_nombre,
                     "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, 0.0),
                     "documentos": [],
+                    "vendedores": set(),
+                    "dias_vencido_max": 0,
                 },
             )
 
@@ -3961,6 +3963,10 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             cliente_id = str(o.cliente_id) if o else item["so_id"]
             c = _cliente_row(cliente_id, item["cliente_nombre"])
             dias_vencido = _dias_vencido_orden(item, today)
+
+            if item.get("vendedor"):
+                c["vendedores"].add(item["vendedor"])
+            c["dias_vencido_max"] = max(c["dias_vencido_max"], dias_vencido)
 
             for k, v in saldos_orden.items():
                 if v is not None:
@@ -4026,6 +4032,14 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             for k in _CXC_CLIENTE_SALDOS:
                 c["saldos"][k] = round(c["saldos"][k], 2)
             c["documentos"].sort(key=lambda d: str(d.get("fecha") or ""))
+            # Vendedor(es) y antigüedad máxima -- usados por la grilla de
+            # priorización de cobro y los filtros de la tabla por cliente
+            # (Reporte de Saldos). "saldo_priorizacion" es el mismo valor
+            # (máximo de las 4 columnas) que ya determina el orden por
+            # defecto de clientes_list, expuesto explícitamente para no
+            # duplicar el criterio en el frontend.
+            c["vendedor"] = ", ".join(sorted(c.pop("vendedores"))) or "Sin Vendedor"
+            c["saldo_priorizacion"] = round(max(c["saldos"].values(), default=0.0), 2)
 
         clientes_list = sorted(
             clientes.values(), key=lambda c: -max(c["saldos"].values(), default=0.0)
@@ -5376,11 +5390,28 @@ async def get_bandeja_facturacion():
                             }
                         )
 
+        # Bandeja "Pendientes por Cerrar": reusa el mismo cálculo de
+        # /api/reporte-saldos (saldo_minimo_pendientes, misma fuente única
+        # de verdad -- ver clasificar_estado_cxc) en vez de recalcularlo
+        # aquí; evita una quinta implementación paralela del criterio
+        # "ya pagada, falta cerrar en Odoo" que podría divergir con el
+        # tiempo (mismo problema que ya se corrigió en get_auditoria).
+        # Best-effort: si el cálculo pesado de reporte-saldos falla (Odoo
+        # caído, etc.), las otras 4 bandejas de este endpoint no deben
+        # romperse por eso -- se muestra esta lista vacía en su lugar.
+        try:
+            reporte_data = await asyncio.to_thread(_get_reporte_saldos_sync, False)
+            pendientes_por_cerrar = reporte_data.get("saldo_minimo_pendientes", [])
+        except Exception as e_pc:
+            logger.warning("No se pudo cargar 'Pendientes por Cerrar' en /api/bandeja: %s", e_pc)
+            pendientes_por_cerrar = []
+
         return {
             "ordenes_por_facturar": ordenes_por_facturar,
             "notas_credito_pendientes": notas_credito_pendientes,
             "iva_pendiente_agentes": iva_pendiente_agentes,
             "auditoria_precios": auditoria_precios,
+            "pendientes_por_cerrar": pendientes_por_cerrar,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -8178,12 +8209,16 @@ async def get_auditoria():
                     rates_map[ts] = float(tbcv)
         last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
-        # Load payments map by SO for net debt comparison
+        # Load payments map by SO for net debt comparison.
+        # Suma TODAS las vinculaciones (sin filtrar por estado), igual que
+        # get_resumen/get_bandeja_facturacion/_get_ventas_sync -- filtrar
+        # por CONCILIADO aqui generaba falsos positivos en
+        # discrepancias_facturas_odoo para vinculaciones aun no marcadas
+        # conciliadas (estado transitorio normal de un pago recien vinculado).
         vincs = repo.all_vinculaciones()
         pagos_by_so = {}
         for v in vincs:
-            if v.estado == EstadoVinculacion.CONCILIADO:
-                pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(v.monto_aplicado)
+            pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(v.monto_aplicado)
 
         # Estado EN VIVO de cada orden -- el espejo local (estado_orden) puede
         # quedar desactualizado si una orden se cancela en Odoo y el sync

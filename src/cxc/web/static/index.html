@@ -448,7 +448,7 @@
                                     <th>Monto N/C ($)</th>
                                     <th>% N/C</th>
                                     <th>Concepto N/C</th>
-                                    <th>Acción</th>
+                                    <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody id="bandeja2-table-body">
@@ -460,13 +460,41 @@
                     </div>
                 </section>
 
-                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA -->
-                <section class="tray-panel card">
+                <!-- BANDEJA "PENDIENTES POR CERRAR" (movida desde Reporte de Saldos) -->
+                <section class="tray-panel card" style="border-left: 5px solid #94a3b8;">
                     <div class="panel-header">
-                        <h2>Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención)</h2>
-                        <p>Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA.</p>
+                        <h2>🧾 Pendientes por Cerrar (Saldo ≤ $1)</h2>
+                        <p>Órdenes ya pagadas (saldo residual ≤ $1 contra Teórico BCV o Lista USD), sin factura o con factura casi saldada en Odoo -- listas para cierre administrativo.</p>
                     </div>
                     <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Saldo Desc. BCV ($)</th>
+                                    <th>Saldo Desc. Lista USD ($)</th>
+                                    <th>Saldo Factura Odoo ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-pendientes-cerrar-table-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA (colapsable, consulta poco frecuente) -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención) <span id="bandeja3-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
@@ -486,15 +514,15 @@
                             </tbody>
                         </table>
                     </div>
-                </section>
+                </details>
 
-                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (nueva, Sección 5 del Manual) -->
-                <section class="tray-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja de Auditoría de Precios</h2>
-                        <p>Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Estas órdenes permanecen visibles en el Reporte General de Saldos.</p>
-                    </div>
-                    <div class="table-wrapper">
+                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (colapsable, consulta poco frecuente) -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">Bandeja de Auditoría de Precios <span id="bandeja-auditoria-precios-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
@@ -516,13 +544,26 @@
                             </tbody>
                         </table>
                     </div>
-                </section>
+                </details>
             </div>
         </div>
 
-        <!-- PESTAÑA 2: REPORTE GENERAL DE SALDOS -->
+        <!-- PESTAÑA 2: REPORTE DE SALDOS -->
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
+
+                <!-- Grilla de priorización de cobro por cliente -->
+                <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2>Priorización de Cobro por Cliente</h2>
+                            <p>Tarjetas ordenadas por monto pendiente, de mayor a menor. El color es un ranking relativo entre los clientes con deuda (combina antigüedad y monto) -- no un límite fijo en dólares, así que se recalcula solo según la cartera actual. 🔴 Crítico (25% más urgente) · 🟠 Alto · 🟡 Medio · 🟢 Bajo (25% menos urgente). Clic en una tarjeta para filtrar la tabla de abajo por ese cliente.</p>
+                        </div>
+                    </div>
+                    <div id="reporte-prioridad-grid" class="prioridad-grid">
+                        <div class="table-empty">Cargando priorización de cobro...</div>
+                    </div>
+                </section>
 
                 <!-- Cuentas por Cobrar agrupadas por CLIENTE (estilo "Aged Receivable") -->
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
@@ -535,12 +576,42 @@
                             <button type="button" class="btn-secondary" onclick="loadReporteCxcCliente()">🔄 Actualizar</button>
                         </div>
                     </div>
+
+                    <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
+                        <select id="reporte-cliente-antiguedad-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white; font-weight: 500;">
+                            <option value="*">Todas las Antigüedades</option>
+                            <option value="vencido_total">Total Vencidas (Todas las Vencidas)</option>
+                            <option value="vigentes">Vigentes (Sin Vencer)</option>
+                            <option value="1_30">Vencidas 1 - 30 Días</option>
+                            <option value="31_60">Vencidas 31 - 60 Días</option>
+                            <option value="61_90">Vencidas 61 - 90 Días</option>
+                            <option value="mas_90">Vencidas +90 Días (Mora Alta)</option>
+                        </select>
+
+                        <select id="reporte-cliente-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
+                            <option value="*">Todos los Vendedores</option>
+                        </select>
+
+                        <select id="reporte-cliente-sort" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
+                            <option value="saldo_desc">Ordenar: Mayor Saldo</option>
+                            <option value="saldo_asc">Ordenar: Menor Saldo</option>
+                            <option value="antiguedad_desc">Ordenar: Mayor Antigüedad</option>
+                            <option value="antiguedad_asc">Ordenar: Menor Antigüedad</option>
+                            <option value="cliente_asc">Ordenar: Cliente (A-Z)</option>
+                            <option value="vendedor_asc">Ordenar: Vendedor (A-Z)</option>
+                        </select>
+
+                        <input type="text" id="reporte-cliente-search" placeholder="🔍 Buscar por cliente o vendedor...">
+                    </div>
+
                     <div class="table-wrapper">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
                                     <th></th>
                                     <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Días Vencido (máx)</th>
                                     <th>Teórico Lista BS ($)</th>
                                     <th>Teórico Lista USD ($)</th>
                                     <th>Venta Real ($)</th>
@@ -549,149 +620,13 @@
                             </thead>
                             <tbody id="reporte-cxc-cliente-table-body">
                                 <tr>
-                                    <td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td>
+                                    <td colspan="8" class="table-empty">Cargando cuentas por cobrar por cliente...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
 
-                <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
-                    <div class="panel-header-row">
-                        <div>
-                            <h2 id="reporte-table-title">Reporte General y Consolidado de Cuentas por Cobrar</h2>
-                            <p>Desglose por cliente, vendedor, días de crédito, facturación y saldos deudores teóricos</p>
-                        </div>
-                        <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-                            <select id="reporte-antiguedad-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white; font-weight: 500;">
-                                <option value="*">Todas las Antigüedades</option>
-                                <option value="vencido_total">Total Vencidas (Todas las Vencidas)</option>
-                                <option value="vigentes">Vigentes (Sin Vencer)</option>
-                                <option value="1_30">Vencidas 1 - 30 Días</option>
-                                <option value="31_60">Vencidas 31 - 60 Días</option>
-                                <option value="61_90">Vencidas 61 - 90 Días</option>
-                                <option value="mas_90">Vencidas +90 Días (Mora Alta)</option>
-                            </select>
-
-                            <select id="reporte-vendedor-filter" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
-                                <option value="*">Todos los Vendedores</option>
-                            </select>
-
-                            <input type="text" id="reporte-search" placeholder="🔍 Buscar por cliente o SO...">
-                        </div>
-                    </div>
-
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Fecha Delivery</th>
-                                    <th>Términos</th>
-                                    <th>Vencimiento</th>
-                                    <th>Días Vencido</th>
-                                    <th>Último Abono</th>
-                                    <th>Monto Odoo ($)</th>
-                                    <th>Lista Origen</th>
-                                    <th>Total Proy USD ($)</th>
-                                    <th>Abonos BCV ($)</th>
-                                    <th>Abonos Binance ($)</th>
-                                    <th>Saldo Deudor BCV ($)</th>
-                                    <th>Saldo Deudor Lista USD ($)</th>
-                                    <th>Saldo Factura Odoo ($)</th>
-                                    <th title="Descuentos en líneas de la Orden de Venta en Odoo (sale.order.line.discount)">Desc. Orden Odoo 🔍</th>
-                                    <th title="Descuentos en líneas de Factura en Odoo (account.move.line.discount)">Desc. Factura Odoo 🧾</th>
-                                    <th title="Notas de Crédito emitidas en Odoo asociadas a esta orden">Notas de Crédito (NC) 📋</th>
-                                    <th>Total Descuentos ($)</th>
-                                    <th>Saldo Desc. BCV ($)</th>
-                                    <th>Saldo Desc. Lista USD ($)</th>
-                                    <th>Estado Odoo</th>
-                                    <th>Cierre</th>
-                                </tr>
-                            </thead>
-                            <tbody id="reporte-table-body">
-                                <tr>
-                                    <td colspan="24" class="table-empty">Cargando reporte de saldos...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- TABLA SEGUIMIENTO PRIORITARIO MORA CRÍTICA (+60 Y +90 DÍAS) -->
-                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #ef4444;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>🚨</span> Seguimiento Prioritario: Mora Crítica (+60 y +90 Días)
-                        </h2>
-                        <p style="color: #7f1d1d;">Detalle exclusivo de órdenes con retraso de cobro severo para acción inmediata de cobranza y gerencia</p>
-                    </div>
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Fecha Delivery</th>
-                                    <th>Términos</th>
-                                    <th>Vencimiento</th>
-                                    <th>Días Vencido</th>
-                                    <th>Último Abono</th>
-                                    <th>Monto Odoo ($)</th>
-                                    <th>Lista Origen</th>
-                                    <th>Total Proy USD ($)</th>
-                                    <th>Abonos BCV ($)</th>
-                                    <th>Abonos Binance ($)</th>
-                                    <th>Saldo Deudor BCV ($)</th>
-                                    <th>Saldo Deudor Lista USD ($)</th>
-                                    <th>Total Descuentos ($)</th>
-                                    <th>Saldo Desc. BCV ($)</th>
-                                    <th>Saldo Desc. Lista USD ($)</th>
-                                    <th>Estado Odoo</th>
-                                    <th>Cierre</th>
-                                </tr>
-                            </thead>
-                            <tbody id="reporte-critica-table-body">
-                                <tr>
-                                    <td colspan="20" class="table-empty">No hay cuentas por cobrar en mora crítica (+60 días).</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- TABLA ORDENES/FACTURAS PENDIENTES POR CERRAR (SALDO <= $1) -->
-                <section class="reporte-panel card" style="margin-top: 2rem; border-left: 5px solid #94a3b8;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #475569; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>🧾</span> Pendientes por Cerrar (Saldo ≤ $1)
-                        </h2>
-                        <p style="color: #64748b;">Facturas con saldo residual menor o igual a $1 (BCV o Lista USD) — fuera del reporte general, listas para cierre administrativo</p>
-                    </div>
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Saldo Desc. BCV ($)</th>
-                                    <th>Saldo Desc. Lista USD ($)</th>
-                                    <th>Saldo Factura Odoo ($)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="reporte-saldo-minimo-table-body">
-                                <tr>
-                                    <td colspan="7" class="table-empty">No hay facturas con saldo ≤ $1 pendientes por cerrar.</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
             </div>
         </div>
 
@@ -1057,205 +992,231 @@
                     </div>
                 </section>
 
-                <!-- ÓRDENES CON ALERTA DE VENTAS (facturado neto < venta neta teórica + impuestos) -->
-                <section class="auditoria-panel card" id="auditoria-ventas-alertas-panel" style="border-left: 5px solid #dc2626;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>⚠️</span> Órdenes con Alerta: Facturado por Debajo de lo Debido
-                        </h2>
-                        <p style="color: #7f1d1d;">Órdenes YA facturadas cuyo total facturado neto quedó por debajo de la venta neta teórica + impuestos que calcula el motor -- posible faltante de facturación o descuento indebido. Ver también la página Ventas para el histórico completo.</p>
-                    </div>
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Fecha</th>
-                                    <th>Venta Neta Teórica + Imp.</th>
-                                    <th>Facturado Neto</th>
-                                    <th>Faltante</th>
-                                </tr>
-                            </thead>
-                            <tbody id="auditoria-ventas-alertas-body">
-                                <tr><td colspan="7" class="table-empty">Cargando órdenes con alerta...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                <!-- Sub-navegación de Auditoría: agrupa las 7 tablas (que antes
+                     vivían todas en un solo scroll largo) en 4 categorías por
+                     tipo de auditoría -- ninguna tabla se eliminó, solo se
+                     reorganizó para reducir el scroll. -->
+                <div class="subtab-nav" role="tablist">
+                    <button type="button" class="subtab-btn active" data-subtab="discrepancias" onclick="switchAuditoriaSubtab('discrepancias')">
+                        Discrepancias <span class="subtab-badge" id="auditoria-subtab-badge-discrepancias">0</span>
+                    </button>
+                    <button type="button" class="subtab-btn" data-subtab="descuentos" onclick="switchAuditoriaSubtab('descuentos')">
+                        Descuentos y NCs <span class="subtab-badge" id="auditoria-subtab-badge-descuentos">0</span>
+                    </button>
+                    <button type="button" class="subtab-btn" data-subtab="alertas-venta" onclick="switchAuditoriaSubtab('alertas-venta')">
+                        Alertas de Venta <span class="subtab-badge" id="auditoria-subtab-badge-alertas">0</span>
+                    </button>
+                    <button type="button" class="subtab-btn" data-subtab="historico" onclick="switchAuditoriaSubtab('historico')">
+                        Histórico Conforme <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
+                    </button>
+                </div>
 
-                <!-- BANDEJA AUDITORÍA DE DESCUENTOS Y NCs -->
-                <section class="auditoria-panel card" id="auditoria-descuentos-panel" style="border-left: 5px solid #f59e0b;">
-                    <div class="panel-header" style="margin-bottom: 1rem;">
-                        <h2 style="color: #b45309; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>⚠️</span> Bandeja de Auditoría: Discrepancias en Descuentos y Notas de Crédito
-                        </h2>
-                        <p style="color: #92400e;">Órdenes donde los descuentos u NCs registrados en Odoo difieren de lo calculatedo por el motor. El sistema marca — el humano revisa.</p>
-                    </div>
-                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center;">
-                        <select id="audit-tipo-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                            <option value="">Todos los tipos</option>
-                            <option value="descuento_orden">Desc. Orden</option>
-                            <option value="descuento_factura">Desc. Factura</option>
-                            <option value="nota_credito">Nota de Crédito</option>
-                        </select>
-                        <select id="audit-estado-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                            <option value="">Todos los estados</option>
-                            <option value="pendiente">Pendiente</option>
-                            <option value="revisado">Revisado</option>
-                            <option value="aprobado">Aprobado</option>
-                        </select>
-                        <button id="audit-refresh-btn" style="padding:0.4rem 1rem; border-radius:6px; background:#f59e0b; color:#fff; border:none; cursor:pointer; font-size:0.85rem; font-weight:600;">🔄 Actualizar</button>
-                        <span id="audit-count-badge" style="padding:0.3rem 0.75rem; border-radius:999px; background:#fef3c7; color:#b45309; font-size:0.78rem; font-weight:700; display:none;"></span>
-                    </div>
-                    <div class="table-wrapper" style="overflow-x:auto;">
-                        <table class="data-table" style="font-size:0.8rem;">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Tipo Discrepancia</th>
-                                    <th>Motor Calcula ($)</th>
-                                    <th>Odoo Registra ($)</th>
-                                    <th>Diferencia ($)</th>
-                                    <th>Detalle Odoo</th>
-                                    <th>Detalle Motor</th>
-                                    <th>Estado</th>
-                                    <th>Fecha Registro</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="auditoria-descuentos-body">
-                                <tr><td colspan="10" class="table-empty">Cargando bandeja de auditoría...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                <!-- SUB-PESTAÑA: DISCREPANCIAS (Sección 2 + 2B) -->
+                <div class="subtab-panel active" data-subtab-panel="discrepancias" style="display:flex; flex-direction:column; gap:1.5rem;">
+                    <section class="auditoria-panel card">
+                        <div class="panel-header">
+                            <h2>Discrepancias y Anomalías Pendientes (Requieren Revisión)</h2>
+                            <p>Precios inferiores a lista oficial, descuentos manuales sin regla e inconsistencias orden vs factura</p>
+                        </div>
 
-                <!-- SECCIÓN 2: Discrepancias y Anomalías Pendientes -->
-                <section class="auditoria-panel card">
-                    <div class="panel-header">
-                        <h2>Discrepancias y Anomalías Pendientes (Requieren Revisión)</h2>
-                        <p>Precios inferiores a lista oficial, descuentos manuales sin regla e inconsistencias orden vs factura</p>
-                    </div>
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Cliente</th>
+                                        <th>Vendedor</th>
+                                        <th>Tipo de Anomalía</th>
+                                        <th>Detalle</th>
+                                        <th>Esperado ($)</th>
+                                        <th>Actual ($)</th>
+                                        <th>Discrepancia ($)</th>
+                                        <th>% Discrepancia</th>
+                                        <th>Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="discrepancias-table-body">
+                                    <tr>
+                                        <td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
 
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Tipo de Anomalía</th>
-                                    <th>Detalle</th>
-                                    <th>Esperado ($)</th>
-                                    <th>Actual ($)</th>
-                                    <th>Discrepancia ($)</th>
-                                    <th>% Discrepancia</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="discrepancias-table-body">
-                                <tr>
-                                    <td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Discrepancias de Saldo Deudor: Motor CxC vs. Facturas Odoo</h2>
+                            <p>Órdenes facturadas donde el saldo deudor según el motor CxC difiere del saldo residual mostrado en Odoo para la factura</p>
+                        </div>
 
-                <!-- SECCIÓN 2B: Discrepancias Saldo CxC vs Residual Factura Odoo -->
-                <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                    <div class="panel-header">
-                        <h2>Discrepancias de Saldo Deudor: Motor CxC vs. Facturas Odoo</h2>
-                        <p>Órdenes facturadas donde el saldo deudor según el motor CxC difiere del saldo residual mostrado en Odoo para la factura</p>
-                    </div>
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Cliente</th>
+                                        <th>Vendedor</th>
+                                        <th>Fecha Orden</th>
+                                        <th>Saldo CxC ($)</th>
+                                        <th>Saldo Residual Factura Odoo ($)</th>
+                                        <th>Diferencia ($)</th>
+                                        <th>Causa Probable / Diagnóstico</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="discrepancias-facturas-table-body">
+                                    <tr>
+                                        <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
 
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Fecha Orden</th>
-                                    <th>Saldo CxC ($)</th>
-                                    <th>Saldo Residual Factura Odoo ($)</th>
-                                    <th>Diferencia ($)</th>
-                                    <th>Causa Probable / Diagnóstico</th>
-                                </tr>
-                            </thead>
-                            <tbody id="discrepancias-facturas-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->
+                <div class="subtab-panel" data-subtab-panel="descuentos" style="display:none;">
+                    <section class="auditoria-panel card" id="auditoria-descuentos-panel" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header" style="margin-bottom: 1rem;">
+                            <h2 style="color: #b45309; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>⚠️</span> Bandeja de Auditoría: Discrepancias en Descuentos y Notas de Crédito
+                            </h2>
+                            <p style="color: #92400e;">Órdenes donde los descuentos u NCs registrados en Odoo difieren de lo calculado por el motor. El sistema marca — el humano revisa.</p>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center;">
+                            <select id="audit-tipo-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
+                                <option value="">Todos los tipos</option>
+                                <option value="descuento_orden">Desc. Orden</option>
+                                <option value="descuento_factura">Desc. Factura</option>
+                                <option value="nota_credito">Nota de Crédito</option>
+                            </select>
+                            <select id="audit-estado-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
+                                <option value="">Todos los estados</option>
+                                <option value="pendiente">Pendiente</option>
+                                <option value="revisado">Revisado</option>
+                                <option value="aprobado">Aprobado</option>
+                            </select>
+                            <button id="audit-refresh-btn" style="padding:0.4rem 1rem; border-radius:6px; background:#f59e0b; color:#fff; border:none; cursor:pointer; font-size:0.85rem; font-weight:600;">🔄 Actualizar</button>
+                            <span id="audit-count-badge" style="padding:0.3rem 0.75rem; border-radius:999px; background:#fef3c7; color:#b45309; font-size:0.78rem; font-weight:700; display:none;"></span>
+                        </div>
+                        <div class="table-wrapper" style="overflow-x:auto;">
+                            <table class="data-table" style="font-size:0.8rem;">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Tipo Discrepancia</th>
+                                        <th>Motor Calcula ($)</th>
+                                        <th>Odoo Registra ($)</th>
+                                        <th>Diferencia ($)</th>
+                                        <th>Detalle Odoo</th>
+                                        <th>Detalle Motor</th>
+                                        <th>Estado</th>
+                                        <th>Fecha Registro</th>
+                                        <th>Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="auditoria-descuentos-body">
+                                    <tr><td colspan="10" class="table-empty">Cargando bandeja de auditoría...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
 
-                <!-- SECCIÓN 3: Anomalías Aceptadas y Revisadas -->
-                <section class="auditoria-panel card">
-                    <div class="panel-header">
-                        <h2>Anomalías Aceptadas y Revisadas (Historial Aprobado)</h2>
-                        <p>Registro de discrepancias ya auditadas y aceptadas por dirección/ventas que no serán modificadas en Odoo</p>
-                    </div>
+                <!-- SUB-PESTAÑA: ALERTAS DE VENTA -->
+                <div class="subtab-panel" data-subtab-panel="alertas-venta" style="display:none;">
+                    <section class="auditoria-panel card" id="auditoria-ventas-alertas-panel" style="border-left: 5px solid #dc2626;">
+                        <div class="panel-header" style="margin-bottom: 1rem;">
+                            <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>⚠️</span> Órdenes con Alerta: Facturado por Debajo de lo Debido
+                            </h2>
+                            <p style="color: #7f1d1d;">Órdenes YA facturadas cuyo total facturado neto quedó por debajo de la venta neta teórica + impuestos que calcula el motor -- posible faltante de facturación o descuento indebido. Ver también la página Ventas para el histórico completo.</p>
+                        </div>
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Cliente</th>
+                                        <th>Vendedor</th>
+                                        <th>Fecha</th>
+                                        <th>Venta Neta Teórica + Imp.</th>
+                                        <th>Facturado Neto</th>
+                                        <th>Faltante</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="auditoria-ventas-alertas-body">
+                                    <tr><td colspan="7" class="table-empty">Cargando órdenes con alerta...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
 
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>ID Anomalía</th>
-                                    <th>Orden (SO)</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Cliente</th>
-                                    <th>Tipo de Anomalía</th>
-                                    <th>Discrepancia ($)</th>
-                                    <th>Motivo de Aceptación</th>
-                                    <th>Aprobado Por</th>
-                                    <th>Fecha Revisión</th>
-                                </tr>
-                            </thead>
-                            <tbody id="anomalias-aceptadas-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                <!-- SUB-PESTAÑA: HISTÓRICO CONFORME (aceptadas + conformes) -->
+                <div class="subtab-panel" data-subtab-panel="historico" style="display:none; flex-direction:column; gap:1.5rem;">
+                    <section class="auditoria-panel card">
+                        <div class="panel-header">
+                            <h2>Anomalías Aceptadas y Revisadas (Historial Aprobado)</h2>
+                            <p>Registro de discrepancias ya auditadas y aceptadas por dirección/ventas que no serán modificadas en Odoo</p>
+                        </div>
 
-                <!-- SECCIÓN 1: Operaciones Conformes (100% Correctas) -->
-                <section class="auditoria-panel card">
-                    <div class="panel-header">
-                        <h2>Operaciones Conformes y Conciliadas (100% Correctas)</h2>
-                        <p>Órdenes y facturas procesadas en estricta conformidad con las listas de precios y reglas del motor</p>
-                    </div>
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID Anomalía</th>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Cliente</th>
+                                        <th>Tipo de Anomalía</th>
+                                        <th>Discrepancia ($)</th>
+                                        <th>Motivo de Aceptación</th>
+                                        <th>Aprobado Por</th>
+                                        <th>Fecha Revisión</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="anomalias-aceptadas-table-body">
+                                    <tr>
+                                        <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
 
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Monto Original ($)</th>
-                                    <th>Dctos Aplicados ($)</th>
-                                    <th>Monto Neto Conciliado ($)</th>
-                                    <th>Estado Auditoría</th>
-                                </tr>
-                            </thead>
-                            <tbody id="conformes-table-body">
-                                <tr>
-                                    <td colspan="8" class="table-empty">Cargando operaciones conformes...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                    <section class="auditoria-panel card">
+                        <div class="panel-header">
+                            <h2>Operaciones Conformes y Conciliadas (100% Correctas)</h2>
+                            <p>Órdenes y facturas procesadas en estricta conformidad con las listas de precios y reglas del motor</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Cliente</th>
+                                        <th>Fecha</th>
+                                        <th>Monto Original ($)</th>
+                                        <th>Dctos Aplicados ($)</th>
+                                        <th>Monto Neto Conciliado ($)</th>
+                                        <th>Estado Auditoría</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="conformes-table-body">
+                                    <tr>
+                                        <td colspan="8" class="table-empty">Cargando operaciones conformes...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="conformes-pager" class="table-pager"></div>
+                    </section>
+                </div>
             </div>
         </div>
 

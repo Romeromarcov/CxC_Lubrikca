@@ -78,10 +78,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const lblEqBcv = document.getElementById("lbl-eq-bcv");
     const lblEqBinance = document.getElementById("lbl-eq-binance");
 
-    // Elements - Reporte
-    const reporteTableBody = document.getElementById("reporte-table-body");
-    const reporteSearch = document.getElementById("reporte-search");
-
     // Elements - Config
     const settingsForm = document.getElementById("settings-form");
     const cfgMetaDays = document.getElementById("cfg-meta-days");
@@ -152,15 +148,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
     const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
-
-    // Elements - Auditoria
-    const auditKpiConformes = document.getElementById("audit-kpi-conformes");
-    const auditKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
-    const auditKpiAceptadas = document.getElementById("audit-kpi-aceptadas");
-    const auditKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
-    const discrepanciasTableBody = document.getElementById("discrepancias-table-body");
-    const anomaliasAceptadasTableBody = document.getElementById("anomalias-aceptadas-table-body");
-    const conformesTableBody = document.getElementById("conformes-table-body");
+    const bandejaPendientesCerrarTableBody = document.getElementById("bandeja-pendientes-cerrar-table-body");
 
     // User Session & Multi-Page Initialization
     let currentUserSession = null;
@@ -668,109 +656,267 @@ document.addEventListener("DOMContentLoaded", () => {
     window.aprobarDescuentoSistema = aprobarDescuentoSistema;
 
     // Cuentas por Cobrar agrupadas por cliente (estilo "Aged Receivable" de
-    // Odoo) -- fila resumen por cliente, expandible a documentos.
+    // Odoo) -- fila resumen por cliente, expandible a documentos. Incluye la
+    // grilla de priorización de cobro por color (antigüedad x monto) y los
+    // filtros/orden/buscador de la tabla, agosto 2026.
+    let fullClientesCxc = [];
+
+    // Clasifica por RANKING relativo entre los clientes con saldo pendiente
+    // (no por límites de monto fijos, que quedan obsoletos apenas cambia el
+    // tamaño de la cartera) -- el 25% con la combinación más urgente de
+    // antigüedad + monto es "Crítico", el siguiente 25% "Alto", etc. Un
+    // cliente puede pasar de Crítico a Alto simplemente porque apareció
+    // otro cliente peor, no porque su propia deuda cambió.
+    function _clasificarPorRanking(conSaldo) {
+        const n = conSaldo.length;
+        const porAntiguedad = [...conSaldo].sort((a, b) => (b.dias_vencido_max || 0) - (a.dias_vencido_max || 0));
+        const porMonto = [...conSaldo].sort((a, b) => (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0));
+        const rankAntiguedad = new Map();
+        porAntiguedad.forEach((c, i) => rankAntiguedad.set(c.cliente_id, i));
+        const rankMonto = new Map();
+        porMonto.forEach((c, i) => rankMonto.set(c.cliente_id, i));
+
+        const clasePorCliente = new Map();
+        conSaldo.forEach(c => {
+            // Promedio de percentiles (0 = más urgente, 1 = menos urgente)
+            const pctAnt = n > 1 ? rankAntiguedad.get(c.cliente_id) / (n - 1) : 0;
+            const pctMonto = n > 1 ? rankMonto.get(c.cliente_id) / (n - 1) : 0;
+            const urgencia = (pctAnt + pctMonto) / 2;
+
+            let clase, label;
+            if (urgencia < 0.25) { clase = "prioridad-critico"; label = "🔴 Crítico"; }
+            else if (urgencia < 0.50) { clase = "prioridad-alto"; label = "🟠 Alto"; }
+            else if (urgencia < 0.75) { clase = "prioridad-medio"; label = "🟡 Medio"; }
+            else { clase = "prioridad-bajo"; label = "🟢 Bajo"; }
+            clasePorCliente.set(c.cliente_id, { clase, label });
+        });
+        return clasePorCliente;
+    }
+
+    function renderPrioridadGrid(clientes) {
+        const grid = document.getElementById("reporte-prioridad-grid");
+        if (!grid) return;
+        const conSaldo = clientes.filter(c => (c.saldo_priorizacion || 0) > 0.05);
+        if (conSaldo.length === 0) {
+            grid.innerHTML = '<div class="table-empty">No hay clientes con saldo pendiente.</div>';
+            return;
+        }
+        const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
+        // Orden de las tarjetas: SIEMPRE por monto pendiente, mayor a menor
+        // (pedido explícito del usuario) -- el color es relativo (ranking),
+        // pero el orden visual es directo por tamaño de deuda.
+        const ordenados = [...conSaldo].sort((a, b) => (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0));
+        const clasePorCliente = _clasificarPorRanking(conSaldo);
+        grid.innerHTML = "";
+        ordenados.forEach(c => {
+            const { clase, label } = clasePorCliente.get(c.cliente_id);
+            const card = document.createElement("div");
+            card.className = `prioridad-card ${clase}`;
+            card.innerHTML = `
+                <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
+                <div class="prioridad-monto">${fmt(c.saldo_priorizacion)}</div>
+                <div class="prioridad-meta">${label} · ${c.dias_vencido_max || 0} días vencido · ${c.vendedor || 'Sin Vendedor'}</div>
+            `;
+            card.addEventListener("click", () => {
+                document.querySelectorAll(".prioridad-card.selected").forEach(el => el.classList.remove("selected"));
+                const searchEl = document.getElementById("reporte-cliente-search");
+                if (searchEl) {
+                    const already = searchEl.value === (c.cliente_nombre || "");
+                    searchEl.value = already ? "" : (c.cliente_nombre || "");
+                    if (!already) card.classList.add("selected");
+                    applyReporteClienteFilters();
+                }
+                document.getElementById("reporte-cxc-cliente-table-body")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+            grid.appendChild(card);
+        });
+    }
+
+    function renderReporteClienteTable(clientes) {
+        const tbody = document.getElementById("reporte-cxc-cliente-table-body");
+        if (!tbody) return;
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+        const colorFmt = (v) => v == null ? "-" : `<span style="color:${v >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
+        // Monto original / saldo pendiente en la misma celda (pedido
+        // explícito del usuario) -- solo disponible para documentos
+        // "orden" (montos_originales); los pagos huérfanos no tienen
+        // un "original" propio distinto de su saldo.
+        const cellFmt = (original, saldo) => {
+            if (original == null) return colorFmt(saldo);
+            return `${fmt(original)}<br><span style="font-size:0.85em">${colorFmt(saldo)}</span>`;
+        };
+
+        if (clientes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay saldos pendientes que coincidan con los filtros.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = "";
+        clientes.forEach((c, idx) => {
+            const rowId = `cxc-cliente-detalle-${idx}`;
+            const row = document.createElement("tr");
+            row.style.cursor = "pointer";
+            row.innerHTML = `
+                <td><span id="${rowId}-toggle">▶</span></td>
+                <td><strong>${c.cliente_nombre || c.cliente_id}</strong></td>
+                <td><small>${c.vendedor || 'Sin Vendedor'}</small></td>
+                <td>${c.dias_vencido_max || 0}</td>
+                <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                <td>${colorFmt(c.saldos.venta_real)}</td>
+                <td>${colorFmt(c.saldos.factura_real)}</td>
+            `;
+            row.addEventListener("click", () => {
+                const existing = document.getElementById(rowId);
+                const toggle = document.getElementById(`${rowId}-toggle`);
+                if (existing) {
+                    existing.remove();
+                    if (toggle) toggle.textContent = "▶";
+                    return;
+                }
+                if (toggle) toggle.textContent = "▼";
+                const detailRow = document.createElement("tr");
+                detailRow.id = rowId;
+                const docsHtml = (c.documentos || []).map(d => {
+                    const orig = d.montos_originales || {};
+                    const ref = d.tipo === 'orden'
+                        ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
+                        : (d.numero_pago_odoo || d.pago_id);
+                    return `
+                    <tr>
+                        <td>${ref}</td>
+                        <td>${d.descripcion || (d.tipo === 'pago_huerfano' ? 'Pago sin aplicar' : '')}</td>
+                        <td>${d.fecha || ''}</td>
+                        <td>${d.dias_vencido || 0}</td>
+                        <td>${cellFmt(orig.teorico_bs, d.saldos.teorico_bs)}</td>
+                        <td>${cellFmt(orig.teorico_usd, d.saldos.teorico_usd)}</td>
+                        <td>${cellFmt(orig.venta_real, d.saldos.venta_real)}</td>
+                        <td>${cellFmt(orig.factura_real, d.saldos.factura_real)}</td>
+                    </tr>
+                    `;
+                }).join("");
+                const totalRow = `
+                    <tr style="border-top:2px solid #cbd5e1;font-weight:600">
+                        <td colspan="4">Total (saldo neto)</td>
+                        <td>${colorFmt(c.saldos.teorico_bs)}</td>
+                        <td>${colorFmt(c.saldos.teorico_usd)}</td>
+                        <td>${colorFmt(c.saldos.venta_real)}</td>
+                        <td>${colorFmt(c.saldos.factura_real)}</td>
+                    </tr>
+                `;
+                detailRow.innerHTML = `
+                    <td colspan="8" style="background:#f8fafc;padding:0.75rem 1.5rem">
+                        <table class="cxc-table" style="margin:0">
+                            <thead>
+                                <tr>
+                                    <th>Referencia (Orden / Factura)</th>
+                                    <th>Descripción</th>
+                                    <th>Fecha</th>
+                                    <th>Días Vencido</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}${docsHtml ? totalRow : ''}</tbody>
+                        </table>
+                    </td>
+                `;
+                row.after(detailRow);
+            });
+            tbody.appendChild(row);
+        });
+    }
+
+    function applyReporteClienteFilters() {
+        const antiguedadVal = document.getElementById("reporte-cliente-antiguedad-filter")?.value || "*";
+        const vendedorVal = document.getElementById("reporte-cliente-vendedor-filter")?.value || "*";
+        const sortVal = document.getElementById("reporte-cliente-sort")?.value || "saldo_desc";
+        const searchVal = (document.getElementById("reporte-cliente-search")?.value || "").toLowerCase().trim();
+
+        let filtered = fullClientesCxc.filter(c => {
+            const dv = c.dias_vencido_max || 0;
+            const matchVendedor = (vendedorVal === "*") || (c.vendedor === vendedorVal);
+
+            let matchAntiguedad = true;
+            if (antiguedadVal === "vencido_total") matchAntiguedad = (dv > 0);
+            else if (antiguedadVal === "vigentes") matchAntiguedad = (dv <= 0);
+            else if (antiguedadVal === "1_30") matchAntiguedad = (dv >= 1 && dv <= 30);
+            else if (antiguedadVal === "31_60") matchAntiguedad = (dv >= 31 && dv <= 60);
+            else if (antiguedadVal === "61_90") matchAntiguedad = (dv >= 61 && dv <= 90);
+            else if (antiguedadVal === "mas_90") matchAntiguedad = (dv > 90);
+
+            const matchSearch = !searchVal ||
+                (c.cliente_nombre && c.cliente_nombre.toLowerCase().includes(searchVal)) ||
+                (c.vendedor && c.vendedor.toLowerCase().includes(searchVal));
+
+            return matchVendedor && matchAntiguedad && matchSearch;
+        });
+
+        filtered.sort((a, b) => {
+            switch (sortVal) {
+                case "saldo_asc": return (a.saldo_priorizacion || 0) - (b.saldo_priorizacion || 0);
+                case "antiguedad_desc": return (b.dias_vencido_max || 0) - (a.dias_vencido_max || 0);
+                case "antiguedad_asc": return (a.dias_vencido_max || 0) - (b.dias_vencido_max || 0);
+                case "cliente_asc": return (a.cliente_nombre || "").localeCompare(b.cliente_nombre || "");
+                case "vendedor_asc": return (a.vendedor || "").localeCompare(b.vendedor || "");
+                case "saldo_desc":
+                default: return (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0);
+            }
+        });
+
+        renderReporteClienteTable(filtered);
+    }
+    window.applyReporteClienteFilters = applyReporteClienteFilters;
+
     async function loadReporteCxcCliente() {
         const tbody = document.getElementById("reporte-cxc-cliente-table-body");
         if (!tbody) return;
-        tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando cuentas por cobrar por cliente...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando cuentas por cobrar por cliente...</td></tr>';
         try {
             const res = await fetch("/api/reporte-cxc-cliente");
             if (!res.ok) throw new Error("HTTP " + res.status);
             const data = await res.json();
-            const fmt = (v) => v == null ? "-" : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-            const colorFmt = (v) => v == null ? "-" : `<span style="color:${v >= 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
-            // Monto original / saldo pendiente en la misma celda (pedido
-            // explícito del usuario) -- solo disponible para documentos
-            // "orden" (montos_originales); los pagos huérfanos no tienen
-            // un "original" propio distinto de su saldo.
-            const cellFmt = (original, saldo) => {
-                if (original == null) return colorFmt(saldo);
-                return `${fmt(original)}<br><span style="font-size:0.85em">${colorFmt(saldo)}</span>`;
-            };
-            const clientes = data.clientes || [];
+            fullClientesCxc = data.clientes || [];
 
-            if (clientes.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay saldos pendientes.</td></tr>';
-                return;
+            renderPrioridadGrid(fullClientesCxc);
+
+            const vendedorSelect = document.getElementById("reporte-cliente-vendedor-filter");
+            if (vendedorSelect) {
+                const currentVal = vendedorSelect.value || "*";
+                const vendedores = [...new Set(fullClientesCxc.map(c => c.vendedor).filter(Boolean))].sort();
+                vendedorSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vendedorSelect.appendChild(opt);
+                });
+                vendedorSelect.value = currentVal;
+                if (!vendedorSelect.dataset.listenerAttached) {
+                    vendedorSelect.addEventListener("change", applyReporteClienteFilters);
+                    vendedorSelect.dataset.listenerAttached = "true";
+                }
             }
 
-            tbody.innerHTML = "";
-            clientes.forEach((c, idx) => {
-                const rowId = `cxc-cliente-detalle-${idx}`;
-                const row = document.createElement("tr");
-                row.style.cursor = "pointer";
-                row.innerHTML = `
-                    <td><span id="${rowId}-toggle">▶</span></td>
-                    <td><strong>${c.cliente_nombre || c.cliente_id}</strong></td>
-                    <td>${colorFmt(c.saldos.teorico_bs)}</td>
-                    <td>${colorFmt(c.saldos.teorico_usd)}</td>
-                    <td>${colorFmt(c.saldos.venta_real)}</td>
-                    <td>${colorFmt(c.saldos.factura_real)}</td>
-                `;
-                row.addEventListener("click", () => {
-                    const existing = document.getElementById(rowId);
-                    const toggle = document.getElementById(`${rowId}-toggle`);
-                    if (existing) {
-                        existing.remove();
-                        if (toggle) toggle.textContent = "▶";
-                        return;
-                    }
-                    if (toggle) toggle.textContent = "▼";
-                    const detailRow = document.createElement("tr");
-                    detailRow.id = rowId;
-                    const docsHtml = (c.documentos || []).map(d => {
-                        const orig = d.montos_originales || {};
-                        const ref = d.tipo === 'orden'
-                            ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
-                            : (d.numero_pago_odoo || d.pago_id);
-                        return `
-                        <tr>
-                            <td>${ref}</td>
-                            <td>${d.descripcion || (d.tipo === 'pago_huerfano' ? 'Pago sin aplicar' : '')}</td>
-                            <td>${d.fecha || ''}</td>
-                            <td>${d.dias_vencido || 0}</td>
-                            <td>${cellFmt(orig.teorico_bs, d.saldos.teorico_bs)}</td>
-                            <td>${cellFmt(orig.teorico_usd, d.saldos.teorico_usd)}</td>
-                            <td>${cellFmt(orig.venta_real, d.saldos.venta_real)}</td>
-                            <td>${cellFmt(orig.factura_real, d.saldos.factura_real)}</td>
-                        </tr>
-                        `;
-                    }).join("");
-                    const totalRow = `
-                        <tr style="border-top:2px solid #cbd5e1;font-weight:600">
-                            <td colspan="4">Total (saldo neto)</td>
-                            <td>${colorFmt(c.saldos.teorico_bs)}</td>
-                            <td>${colorFmt(c.saldos.teorico_usd)}</td>
-                            <td>${colorFmt(c.saldos.venta_real)}</td>
-                            <td>${colorFmt(c.saldos.factura_real)}</td>
-                        </tr>
-                    `;
-                    detailRow.innerHTML = `
-                        <td colspan="6" style="background:#f8fafc;padding:0.75rem 1.5rem">
-                            <table class="cxc-table" style="margin:0">
-                                <thead>
-                                    <tr>
-                                        <th>Referencia (Orden / Factura)</th>
-                                        <th>Descripción</th>
-                                        <th>Fecha</th>
-                                        <th>Días Vencido</th>
-                                        <th>Teórico Lista BS ($)</th>
-                                        <th>Teórico Lista USD ($)</th>
-                                        <th>Venta Real ($)</th>
-                                        <th>Factura Neta Real ($)</th>
-                                    </tr>
-                                </thead>
-                                <tbody>${docsHtml || '<tr><td colspan="8" class="table-empty">Sin documentos.</td></tr>'}${docsHtml ? totalRow : ''}</tbody>
-                            </table>
-                        </td>
-                    `;
-                    row.after(detailRow);
-                });
-                tbody.appendChild(row);
+            ["reporte-cliente-antiguedad-filter", "reporte-cliente-sort"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !el.dataset.listenerAttached) {
+                    el.addEventListener("change", applyReporteClienteFilters);
+                    el.dataset.listenerAttached = "true";
+                }
             });
+            const searchEl = document.getElementById("reporte-cliente-search");
+            if (searchEl && !searchEl.dataset.listenerAttached) {
+                searchEl.addEventListener("input", applyReporteClienteFilters);
+                searchEl.dataset.listenerAttached = "true";
+            }
+
+            applyReporteClienteFilters();
         } catch (err) {
             console.error("Error loading reporte-cxc-cliente:", err);
-            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar cuentas por cobrar por cliente.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar cuentas por cobrar por cliente.</td></tr>';
         }
     }
     window.loadReporteCxcCliente = loadReporteCxcCliente;
@@ -782,6 +928,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
+            if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -793,6 +940,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
                 const tray3 = data.iva_pendiente_agentes || [];
                 const tray4 = data.auditoria_precios || [];
+                const tray5 = data.pendientes_por_cerrar || [];
 
                 // Render Tray 1
                 if (bandeja1TableBody) {
@@ -842,7 +990,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong style="color:#dc2626">${fmt(item.nc_monto || item.total_descuentos || 0)}</strong></td>
                                 <td><strong style="color:#dc2626">${(item.nc_porcentaje || 0).toFixed(1)}%</strong></td>
                                 <td>${item.concepto || 'Obsequio / Descuento'}</td>
-                                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#dc2626" onclick="alert('Emitir N/C para ${item.so_id}')">Aprobar N/C</button></td>
+                                <td><span class="state-badge abiertas" title="La emisión de N/C se hace directamente en Odoo; esta bandeja es de seguimiento, no de acción">Pendiente en Odoo</span></td>
                             `;
                             bandeja2TableBody.appendChild(row);
                         });
@@ -894,6 +1042,34 @@ document.addEventListener("DOMContentLoaded", () => {
                         });
                     }
                 }
+
+                // Render Tray 5 (Pendientes por Cerrar -- movida desde Reporte de Saldos)
+                if (bandejaPendientesCerrarTableBody) {
+                    if (tray5.length === 0) {
+                        bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay órdenes/facturas pendientes por cerrar.</td></tr>';
+                    } else {
+                        bandejaPendientesCerrarTableBody.innerHTML = "";
+                        tray5.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${item.vendedor || 'Sin Vendedor'}</td>
+                                <td>${item.factura_id || 'N/A'}</td>
+                                <td>${fmt(item.saldo_con_descuento_bcv || 0)}</td>
+                                <td>${fmt(item.saldo_con_descuento_lista_usd || 0)}</td>
+                                <td>${item.saldo_factura_odoo != null ? fmt(item.saldo_factura_odoo) : '-'}</td>
+                            `;
+                            bandejaPendientesCerrarTableBody.appendChild(row);
+                        });
+                    }
+                }
+
+                // Badges de conteo en las bandejas colapsables (3 y auditoría de precios)
+                const badge3 = document.getElementById("bandeja3-count-badge");
+                if (badge3) badge3.textContent = String(tray3.length);
+                const badgeAudPrecios = document.getElementById("bandeja-auditoria-precios-count-badge");
+                if (badgeAudPrecios) badgeAudPrecios.textContent = String(tray4.length);
             }
         } catch (err) {
             console.error("Error loading bandeja:", err);
@@ -901,6 +1077,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
+            if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar pendientes por cerrar.</td></tr>';
         }
     }
 
@@ -958,162 +1135,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    // Load Auditoría Panel Data
-    async function loadAuditoria() {
-        if (!discrepanciasTableBody || !conformesTableBody) return;
-        try {
-            discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
-            if (anomaliasAceptadasTableBody) anomaliasAceptadasTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando anomalías aceptadas...</td></tr>';
-            conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando operaciones conformes...</td></tr>';
-
-            const res = await fetch("/api/auditoria");
-            if (res.ok) {
-                const data = await res.json();
-                const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-
-                // KPIs
-                const summary = data.resumen_auditoria;
-                if (auditKpiConformes) auditKpiConformes.textContent = summary.total_conformes;
-                if (auditKpiDiscrepancias) auditKpiDiscrepancias.textContent = summary.total_discrepancias;
-                if (auditKpiAceptadas) auditKpiAceptadas.textContent = summary.total_aceptadas || 0;
-                // Load auditoría de descuentos y NCs table
-                if (typeof loadAuditoriaDescuentos === "function") loadAuditoriaDescuentos();
-
-                // Render Discrepancias Pendientes
-                if (data.discrepancias.length === 0) {
-                    discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias pendientes. Todas las anomalías están revisadas o conformes.</td></tr>';
-                } else {
-                    discrepanciasTableBody.innerHTML = "";
-                    data.discrepancias.forEach(item => {
-                        const row = document.createElement("tr");
-                        let tipoBadge = '<span class="state-badge abiertas" style="background:#fef3c7;color:#b45309">Discrepancia</span>';
-                        if (item.tipo.includes("Precio")) {
-                            tipoBadge = '<span class="state-badge" style="background:#fee2e2;color:#b91c1c;font-weight:700">Precio < Lista</span>';
-                        } else if (item.tipo.includes("Descuento")) {
-                            tipoBadge = '<span class="state-badge" style="background:#ffedd5;color:#c2410c">Desc. No Explicado</span>';
-                        } else {
-                            tipoBadge = '<span class="state-badge" style="background:#fef2f2;color:#dc2626">Orden vs Factura</span>';
-                        }
-
-                        const actionBtn = document.createElement("button");
-                        actionBtn.className = "btn-primary";
-                        actionBtn.style.cssText = "padding:4px 8px;font-size:0.75rem;background:#2563eb;";
-                        actionBtn.textContent = "Aceptar Anomalía";
-                        actionBtn.onclick = () => aceptarAnomalia(item);
-
-                        row.innerHTML = `
-                            <td><strong>${item.so_id}</strong></td>
-                            <td><span class="state-badge">${item.factura_id}</span></td>
-                            <td>${item.cliente_nombre}</td>
-                            <td>${item.vendedor}</td>
-                            <td>${tipoBadge}</td>
-                            <td style="font-size:0.78rem; color:#475569">${item.detalle}</td>
-                            <td>${fmt(item.esperado)}</td>
-                            <td>${fmt(item.actual)}</td>
-                            <td><strong style="color:#dc2626">${fmt(item.diferencia_monto)}</strong></td>
-                            <td><strong style="color:#dc2626">${item.diferencia_porcentaje.toFixed(1)}%</strong></td>
-                            <td></td>
-                        `;
-                        row.children[10].appendChild(actionBtn);
-                        discrepanciasTableBody.appendChild(row);
-                    });
-                }
-
-                // Render Anomalías Aceptadas
-                if (anomaliasAceptadasTableBody) {
-                    const aceptadas = data.anomalias_aceptadas || [];
-                    if (aceptadas.length === 0) {
-                        anomaliasAceptadasTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td></tr>';
-                    } else {
-                        anomaliasAceptadasTableBody.innerHTML = "";
-                        aceptadas.forEach(item => {
-                            const row = document.createElement("tr");
-                            row.innerHTML = `
-                                <td><small><strong>${item.anomalia_id}</strong></small></td>
-                                <td><strong>${item.so_id}</strong></td>
-                                <td><span class="state-badge">${item.factura_id}</span></td>
-                                <td>${item.cliente_nombre}</td>
-                                <td><span class="state-badge cierre">${item.tipo}</span></td>
-                                <td><strong style="color:#2563eb">${fmt(item.diferencia_monto)}</strong></td>
-                                <td>${item.motivo_aceptacion || 'Revisado y Aceptado'}</td>
-                                <td>${item.aprobado_por || 'Dirección'}</td>
-                                <td><small>${item.timestamp_aprobacion ? item.timestamp_aprobacion.substring(0, 10) : ''}</small></td>
-                            `;
-                            anomaliasAceptadasTableBody.appendChild(row);
-                        });
-                    }
-                }
-
-                // Render Operaciones Conformes
-                if (data.operaciones_conformes.length === 0) {
-                    conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes registradas aún.</td></tr>';
-                } else {
-                    conformesTableBody.innerHTML = "";
-                    data.operaciones_conformes.forEach(item => {
-                        const row = document.createElement("tr");
-                        row.innerHTML = `
-                            <td><strong>${item.so_id}</strong></td>
-                            <td><span class="state-badge">${item.factura_id}</span></td>
-                            <td>${item.cliente_nombre}</td>
-                            <td>${item.fecha}</td>
-                            <td>${fmt(item.monto_original)}</td>
-                            <td>${fmt(item.descuentos_aplicados)}</td>
-                            <td><strong style="color:#059669">${fmt(item.monto_neto_conciliado)}</strong></td>
-                            <td><span class="state-badge cierre" style="background:#dcfce7;color:#15803d">Conforme 100%</span></td>
-                        `;
-                        conformesTableBody.appendChild(row);
-                    });
-                }
-            }
-        } catch (err) {
-            console.error("Error loading auditoria:", err);
-            if (discrepanciasTableBody) discrepanciasTableBody.innerHTML = '<tr><td colspan="11" class="table-empty">Error de red al cargar auditoría.</td></tr>';
-            if (conformesTableBody) conformesTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar auditoría.</td></tr>';
-        }
-    }
-
-    async function aceptarAnomalia(item) {
-        const motivo = prompt(`Ingresa el motivo de aceptación/aprobación de la anomalía en ${item.so_id}:`, "Revisado por Dirección - Negociación cerrada con cliente");
-        if (!motivo) return;
-
-        try {
-            const res = await fetch("/api/auditoria/aceptar-anomalia", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    anomalia_id: item.anomalia_id,
-                    so_id: item.so_id,
-                    factura_id: item.factura_id,
-                    tipo_anomalia: item.tipo,
-                    motivo_aceptacion: motivo,
-                    aprobado_por: "Dirección / Auditor Web"
-                })
-            });
-
-            if (res.ok) {
-                alert("✅ Anomalía aceptada y movida al historial de revisiones.");
-                loadAuditoria();
-            } else {
-                const err = await res.json();
-                alert(`❌ Error al aceptar anomalía: ${err.detail || 'Error en servidor'}`);
-            }
-        } catch (err) {
-            alert("❌ Error de red al registrar aceptación.");
-            console.error(err);
-        }
-    }
-
     // --- Tab 2: Accounts Receivable Report ---
-    let fullReporteItems = [];
-
+    // Reporte de Saldos, agosto 2026: se eliminaron las tablas "Reporte
+    // General" (por orden) y "Mora Crítica" -- reemplazadas por la tabla
+    // por cliente (ver loadReporteCxcCliente) + la grilla de priorización
+    // por color. loadReporte() ahora solo alimenta las tarjetas KPI del
+    // Dashboard (que siguen viniendo de /api/reporte-saldos).
     async function loadReporte() {
         try {
-            reporteTableBody.innerHTML = '<tr><td colspan="18" class="table-empty">Cargando reporte general de cuentas por cobrar...</td></tr>';
             const res = await fetch("/api/reporte-saldos?refresh=true&t=" + Date.now(), { cache: "no-store" });
             if (res.ok) {
                 const data = await res.json();
                 const kpis = data.kpis || {};
-                fullReporteItems = data.items || (Array.isArray(data) ? data : []);
                 const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
                 // Helper to update 4 sub-balances in a KPI card
@@ -1138,17 +1171,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 setKpiSubBalances("kpi-61-90", kpis.vencidas_61_90);
                 setKpiSubBalances("kpi-mas-90", kpis.vencidas_mas_90);
 
-                // Attach Click Handlers to Interactive KPI Cards
-                // (las tarjetas viven en el Dashboard; la tabla filtrable vive
-                // en Reporte, así que un clic navega hacia allá si hace falta)
+                // Attach Click Handlers to Interactive KPI Cards -- las
+                // tarjetas viven en el Dashboard; un clic navega al Reporte
+                // de Saldos y filtra la tabla por cliente por esa antigüedad.
                 document.querySelectorAll(".interactive-kpi").forEach(card => {
                     if (!card.dataset.listenerAttached) {
                         card.addEventListener("click", () => {
                             const targetVal = card.dataset.antiguedad;
-                            const selectEl = document.getElementById("reporte-antiguedad-filter");
+                            const selectEl = document.getElementById("reporte-cliente-antiguedad-filter");
                             if (selectEl) {
                                 selectEl.value = (selectEl.value === targetVal) ? "*" : targetVal;
-                                applyReporteFilters();
+                                if (typeof applyReporteClienteFilters === "function") applyReporteClienteFilters();
                             }
                             const currentPath = window.location.pathname.toLowerCase()
                                 .replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -1160,386 +1193,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         card.dataset.listenerAttached = "true";
                     }
                 });
-
-                // Populate Vendedor Filter Dropdown
-                const vendedorSelect = document.getElementById("reporte-vendedor-filter");
-                if (vendedorSelect && data.vendedores) {
-                    const currentVal = vendedorSelect.value || "*";
-                    vendedorSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
-                    data.vendedores.forEach(v => {
-                        const opt = document.createElement("option");
-                        opt.value = v;
-                        opt.textContent = v;
-                        vendedorSelect.appendChild(opt);
-                    });
-                    vendedorSelect.value = currentVal;
-
-                    if (!vendedorSelect.dataset.listenerAttached) {
-                        vendedorSelect.addEventListener("change", applyReporteFilters);
-                        vendedorSelect.dataset.listenerAttached = "true";
-                    }
-                }
-
-                const antiguedadSelect = document.getElementById("reporte-antiguedad-filter");
-                if (antiguedadSelect && !antiguedadSelect.dataset.listenerAttached) {
-                    antiguedadSelect.addEventListener("change", applyReporteFilters);
-                    antiguedadSelect.dataset.listenerAttached = "true";
-                }
-
-                const searchInput = document.getElementById("reporte-search");
-                if (searchInput && !searchInput.dataset.listenerAttached) {
-                    searchInput.addEventListener("input", applyReporteFilters);
-                    searchInput.dataset.listenerAttached = "true";
-                }
-
-                applyReporteFilters();
-                renderCriticaTable(fullReporteItems);
-                renderSaldoMinimoTable(data.saldo_minimo_pendientes || []);
             }
         } catch (err) {
-            reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">Error de red al cargar el reporte.</td></tr>';
-            console.error(err);
+            console.error("Error cargando KPIs de reporte de saldos:", err);
         }
-    }
-
-    function renderSaldoMinimoTable(items) {
-        const tbody = document.getElementById("reporte-saldo-minimo-table-body");
-        if (!tbody) return;
-
-        if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay facturas con saldo ≤ $1 pendientes por cerrar.</td></tr>';
-            return;
-        }
-
-        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-        const esc = (v) => (v === null || v === undefined ? '' : String(v).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
-        tbody.innerHTML = items.map(item => `
-            <tr>
-                <td><strong>${esc(item.so_id)}</strong></td>
-                <td>${esc(item.cliente_nombre)}</td>
-                <td>${esc(item.vendedor)}</td>
-                <td>${esc(item.factura_id)}</td>
-                <td>${fmt(item.saldo_con_descuento_bcv)}</td>
-                <td>${fmt(item.saldo_con_descuento_lista_usd)}</td>
-                <td>${item.saldo_factura_odoo !== null && item.saldo_factura_odoo !== undefined ? fmt(item.saldo_factura_odoo) : '-'}</td>
-            </tr>
-        `).join('');
-    }
-
-    function applyReporteFilters() {
-        const vendedorVal = document.getElementById("reporte-vendedor-filter")?.value || "*";
-        const antiguedadVal = document.getElementById("reporte-antiguedad-filter")?.value || "*";
-        const searchInputEl = document.getElementById("reporte-search");
-        const searchVal = searchInputEl ? searchInputEl.value.toLowerCase().trim() : "";
-
-        // Highlight Active KPI Card
-        document.querySelectorAll(".interactive-kpi").forEach(card => {
-            if (card.dataset.antiguedad === antiguedadVal) {
-                card.style.transform = "scale(1.03)";
-                card.style.boxShadow = "0 6px 16px rgba(0,0,0,0.12)";
-                card.style.borderColor = "#2563eb";
-            } else {
-                card.style.transform = "none";
-                card.style.boxShadow = "none";
-                card.style.borderColor = "";
-            }
-        });
-
-        let filtered = fullReporteItems.filter(item => {
-            const dv = item.dias_vencido || 0;
-            const matchVendedor = (vendedorVal === "*") || (item.vendedor === vendedorVal);
-            
-            let matchAntiguedad = true;
-            if (antiguedadVal === "vencido_total") matchAntiguedad = (dv > 0);
-            else if (antiguedadVal === "vigentes") matchAntiguedad = (dv <= 0);
-            else if (antiguedadVal === "1_30") matchAntiguedad = (dv >= 1 && dv <= 30);
-            else if (antiguedadVal === "31_60") matchAntiguedad = (dv >= 31 && dv <= 60);
-            else if (antiguedadVal === "61_90") matchAntiguedad = (dv >= 61 && dv <= 90);
-            else if (antiguedadVal === "mas_90") matchAntiguedad = (dv > 90);
-
-            const matchSearch = !searchVal || 
-                (item.so_id && item.so_id.toLowerCase().includes(searchVal)) ||
-                (item.cliente_nombre && item.cliente_nombre.toLowerCase().includes(searchVal)) ||
-                (item.vendedor && item.vendedor.toLowerCase().includes(searchVal));
-
-            return matchVendedor && matchAntiguedad && matchSearch;
-        });
-
-        renderReporteTable(filtered);
-    }
-
-    function renderCriticaTable(items) {
-        const tbody = document.getElementById("reporte-critica-table-body");
-        if (!tbody) return;
-
-        // Filter items with mora critical (+60 days overdue) and active debt
-        const criticaItems = items.filter(item => {
-            const dv = item.dias_vencido || 0;
-            const debtUSD = item.saldo_con_descuento_lista_usd || item.saldo_deudor_lista_usd || 0;
-            return dv >= 61 && debtUSD > 0.05;
-        });
-
-        if (criticaItems.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="20" class="table-empty" style="color:#059669">✅ Excelente: No hay cuentas por cobrar en mora crítica (+60 días).</td></tr>';
-            return;
-        }
-
-        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-
-        tbody.innerHTML = "";
-        criticaItems.forEach(item => {
-            const row = document.createElement("tr");
-            const dv = item.dias_vencido || 0;
-            const agingBadge = dv > 90 ?
-                `<span class="state-badge" style="background:#f3e8ff;color:#6b21a8;font-weight:bold">+${dv} d (Más de 90d)</span>` :
-                `<span class="state-badge" style="background:#ffe4e6;color:#be123c;font-weight:bold">+${dv} d (61-90d)</span>`;
-
-            let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
-            if (item.facturada) {
-                odooHtml = '<span class="state-badge facturada">Facturado en Odoo</span>';
-            }
-
-            let closeHtml = '<span class="state-badge">Abierta</span>';
-            if (item.candidata_a_cierre) {
-                closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
-            }
-
-            const baseTotal = item.monto_total || 0;
-            const totalDesc = item.total_descuentos_monto || 0;
-            const pctTotal = baseTotal > 0 ? (totalDesc / baseTotal * 100) : 0;
-            let descuentosHtml = '<span style="color:#94a3b8">$0.00 (0%)</span>';
-
-            if (totalDesc > 0) {
-                let itemsList = '';
-                if (item.descuentos_desglose && item.descuentos_desglose.length > 0) {
-                    itemsList = item.descuentos_desglose.map(d => {
-                        const itemPct = baseTotal > 0 ? (d.monto / baseTotal * 100) : (d.porcentaje || 0);
-                        const label = d.descripcion || d.origen;
-                        return `<div>• ${label}: <strong>${fmt(d.monto)}</strong> (${itemPct.toFixed(1)}%)</div>`;
-                    }).join("");
-                } else {
-                    itemsList = `<div>• Descuentos: <strong>${fmt(totalDesc)}</strong> (${pctTotal.toFixed(1)}%)</div>`;
-                }
-
-                descuentosHtml = `
-                    <div>
-                        <strong style="color: #059669">${fmt(totalDesc)} (${pctTotal.toFixed(1)}%)</strong>
-                        <div style="font-size:0.72rem; color:#475569; margin-top:2px; line-height:1.3">
-                            ${itemsList}
-                        </div>
-                    </div>
-                `;
-            }
-
-            // Venta bruta teórica (precio de lista correcto, sin descuentos)
-            // vs monto real de la orden -- si difieren, es venta perdida (o
-            // ganada) por un precio de línea distinto al de lista, separado
-            // de los descuentos válidos que ya se muestran arriba.
-            const difPrecio = item.diferencia_precio_lista || 0;
-            if (Math.abs(difPrecio) > 0.05) {
-                const perdida = difPrecio > 0;
-                descuentosHtml += `
-                    <div style="font-size:0.72rem; margin-top:4px; color:${perdida ? '#b91c1c' : '#0369a1'};" title="Venta bruta teórica (precio de lista, sin descuentos): ${fmt(item.venta_bruta_teorica)}">
-                        ${perdida ? '⚠️ Vendido bajo lista' : 'Vendido sobre lista'}: <strong>${fmt(Math.abs(difPrecio))}</strong>
-                    </div>
-                `;
-            }
-
-            const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
-            const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
-
-            row.innerHTML = `
-                <td><strong>${item.so_id}</strong></td>
-                <td>${item.cliente_nombre}</td>
-                <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
-                <td><small>${item.fecha_entrega ? `<span style="color:#0369a1; font-weight:600;" title="Fecha de Entrega Efectiva (ALM/OUT)">🚚 ${item.fecha_entrega}</span>` : `<span style="color:#64748b">${item.fecha || 'Sin entrega'}</span>`}</small></td>
-                <td><small>${item.terminos_pago || 'Contado'}</small></td>
-                <td><small>${item.fecha_vencimiento || '-'}</small></td>
-                <td>${agingBadge}</td>
-                <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
-                <td><strong style="color: #475569;">${fmt(item.monto_total)}</strong></td>
-                <td><small><span class="state-badge" style="background:#f1f5f9;color:#334155;font-weight:600;">${item.lista_precios || item.lista_origen || 'Sin Lista (Odoo)'}</span></small></td>
-                <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
-                <td>${fmt(item.abono_usd_bcv || item.monto_pagado)}</td>
-                <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
-                <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
-                <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
-                <td>${descuentosHtml}</td>
-                <td><strong style="color: ${saldoDescBCV > 0 ? '#b91c1c' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
-                <td><strong style="color: ${saldoDescUSD > 0 ? '#b91c1c' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
-                <td>${odooHtml}</td>
-                <td>${closeHtml}</td>
-            `;
-            tbody.appendChild(row);
-        });
-    }
-
-    function renderReporteTable(data) {
-        const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : []);
-        if (!list || list.length === 0) {
-            reporteTableBody.innerHTML = '<tr><td colspan="24" class="table-empty">No hay registros de cobranza que coincidan con los filtros seleccionados.</td></tr>';
-            return;
-        }
-
-        reporteTableBody.innerHTML = "";
-        list.forEach(item => {
-            const row = document.createElement("tr");
-            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-
-            // Aging badge
-            const dv = item.dias_vencido || 0;
-            let agingBadge = '<span class="state-badge cierre" style="background:#dcfce7;color:#15803d">Vigente (0 d)</span>';
-            if (dv >= 1 && dv <= 30) {
-                agingBadge = `<span class="state-badge" style="background:#fef3c7;color:#b45309">+${dv} d</span>`;
-            } else if (dv >= 31 && dv <= 60) {
-                agingBadge = `<span class="state-badge" style="background:#ffedd5;color:#c2410c">+${dv} d</span>`;
-            } else if (dv >= 61 && dv <= 90) {
-                agingBadge = `<span class="state-badge" style="background:#ffe4e6;color:#be123c">+${dv} d</span>`;
-            } else if (dv > 90) {
-                agingBadge = `<span class="state-badge" style="background:#f3e8ff;color:#6b21a8;font-weight:bold">+${dv} d</span>`;
-            }
-
-            // Format Odoo State
-            let odooHtml = '<span class="state-badge abierta">Por Facturar</span>';
-            if (item.facturada) {
-                odooHtml = '<span class="state-badge facturada">Facturado en Odoo</span>';
-            }
-
-            // Format Close State
-            let closeHtml = '<span class="state-badge">Abierta</span>';
-            if (item.candidata_a_cierre) {
-                closeHtml = '<span class="state-badge cierre">Listo para Cierre</span>';
-            }
-
-            // Format Descuentos Aplicados Breakdown (motor)
-            const baseTotal = item.monto_total || 0;
-            const totalDesc = item.total_descuentos_monto || 0;
-            const pctTotal = baseTotal > 0 ? (totalDesc / baseTotal * 100) : 0;
-            let descuentosHtml = '<span style="color:#94a3b8">$0.00 (0%)</span>';
-
-            if (totalDesc > 0) {
-                let itemsList = '';
-                if (item.descuentos_desglose && item.descuentos_desglose.length > 0) {
-                    itemsList = item.descuentos_desglose.map(d => {
-                        const itemPct = baseTotal > 0 ? (d.monto / baseTotal * 100) : (d.porcentaje || 0);
-                        const label = d.descripcion || d.origen;
-                        return `<div>• ${label}: <strong>${fmt(d.monto)}</strong> (${itemPct.toFixed(1)}%)</div>`;
-                    }).join("");
-                } else {
-                    itemsList = `<div>• Descuentos: <strong>${fmt(totalDesc)}</strong> (${pctTotal.toFixed(1)}%)</div>`;
-                }
-
-                descuentosHtml = `
-                    <div>
-                        <strong style="color: #059669">${fmt(totalDesc)} (${pctTotal.toFixed(1)}%)</strong>
-                        <div style="font-size:0.72rem; color:#475569; margin-top:2px; line-height:1.3">
-                            ${itemsList}
-                        </div>
-                    </div>
-                `;
-            }
-
-            // Venta bruta teórica (precio de lista correcto, sin descuentos)
-            // vs monto real de la orden -- si difieren, es venta perdida (o
-            // ganada) por un precio de línea distinto al de lista, separado
-            // de los descuentos válidos que ya se muestran arriba.
-            const difPrecio = item.diferencia_precio_lista || 0;
-            if (Math.abs(difPrecio) > 0.05) {
-                const perdida = difPrecio > 0;
-                descuentosHtml += `
-                    <div style="font-size:0.72rem; margin-top:4px; color:${perdida ? '#b91c1c' : '#0369a1'};" title="Venta bruta teórica (precio de lista, sin descuentos): ${fmt(item.venta_bruta_teorica)}">
-                        ${perdida ? '⚠️ Vendido bajo lista' : 'Vendido sobre lista'}: <strong>${fmt(Math.abs(difPrecio))}</strong>
-                    </div>
-                `;
-            }
-
-            const saldoDescBCV = item.saldo_con_descuento_bcv !== undefined ? item.saldo_con_descuento_bcv : (item.saldo_deudor_con_descuentos || 0);
-            const saldoDescUSD = item.saldo_con_descuento_lista_usd !== undefined ? item.saldo_con_descuento_lista_usd : 0;
-
-            let cellFacturaOdoo = '<span style="color:#94a3b8; font-size:0.75rem;">Sin Factura</span>';
-            if (item.factura_odoo_nombre && item.factura_odoo_nombre !== "Sin Factura") {
-                const saldoInv = item.saldo_factura_odoo !== null ? fmt(item.saldo_factura_odoo) : "$0.00";
-                cellFacturaOdoo = `<div style="font-size:0.78rem;"><span style="color:#0369a1; font-weight:600;">${item.factura_odoo_nombre}</span><br><strong style="color:${item.saldo_factura_odoo > 0.05 ? '#0f172a' : '#059669'};">${saldoInv}</strong></div>`;
-            }
-
-            // ── Nueva columna 1: Descuentos en líneas de ORDEN Odoo ─────────────
-            const dOO = item.descuentos_odoo_orden || {};
-            let cellDescOrden = '<span style="color:#94a3b8;font-size:0.75rem;">Sin desc.</span>';
-            if (dOO.monto_usd > 0.005) {
-                const auditStatus = item.auditoria_descuentos?.estado_orden || 'ok';
-                const auditColor = auditStatus === 'ok' ? '#059669' : (auditStatus === 'discrepancia' ? '#dc2626' : '#d97706');
-                const auditIcon = auditStatus === 'ok' ? '✅' : (auditStatus === 'discrepancia' ? '❌' : '⚠️');
-                cellDescOrden = `<div style="font-size:0.78rem;">
-                    <strong style="color:#0369a1;">${fmt(dOO.monto_usd)}</strong>
-                    <span style="color:${auditColor}; margin-left:4px;">${auditIcon}</span>
-                    ${dOO.pct_sobre_total > 0 ? `<br><span style="color:#64748b;">${dOO.pct_sobre_total.toFixed(1)}% s/total</span>` : ''}
-                    ${dOO.detalle ? `<br><span style="color:#94a3b8;font-size:0.7rem;" title="${dOO.detalle}">${dOO.detalle.substring(0,40)}${dOO.detalle.length > 40 ? '…' : ''}</span>` : ''}
-                </div>`;
-            }
-
-            // ── Nueva columna 2: Descuentos en líneas de FACTURA Odoo ───────────
-            const dFO = item.descuentos_odoo_factura || {};
-            let cellDescFactura = '<span style="color:#94a3b8;font-size:0.75rem;">Sin desc.</span>';
-            if (dFO.monto_usd > 0.005) {
-                const auditStatus = item.auditoria_descuentos?.estado_factura || 'ok';
-                const auditColor = auditStatus === 'ok' ? '#059669' : (auditStatus === 'discrepancia' ? '#dc2626' : '#d97706');
-                const auditIcon = auditStatus === 'ok' ? '✅' : (auditStatus === 'discrepancia' ? '❌' : '⚠️');
-                cellDescFactura = `<div style="font-size:0.78rem;">
-                    <strong style="color:#7c3aed;">${fmt(dFO.monto_usd)}</strong>
-                    <span style="color:${auditColor}; margin-left:4px;">${auditIcon}</span>
-                    ${dFO.detalle ? `<br><span style="color:#94a3b8;font-size:0.7rem;" title="${dFO.detalle}">${dFO.detalle.substring(0,40)}${dFO.detalle.length > 40 ? '…' : ''}</span>` : ''}
-                </div>`;
-            }
-
-            // ── Nueva columna 3: Notas de Crédito (NC) Odoo ─────────────────────
-            const ncO = item.ncs_odoo || {};
-            let cellNCs = '<span style="color:#94a3b8;font-size:0.75rem;">Sin NCs</span>';
-            if (ncO.monto_usd > 0.005) {
-                const ncEstado = ncO.auditoria_estado || 'ok';
-                const ncColor = ncEstado === 'ok' ? '#059669' : (ncEstado === 'discrepancia' ? '#dc2626' : '#d97706');
-                const ncIcon = ncEstado === 'ok' ? '✅' : (ncEstado === 'discrepancia' ? '❌' : '⚠️');
-                const ncNombres = (ncO.nombres || []).join(', ') || 'NC';
-                cellNCs = `<div style="font-size:0.78rem;">
-                    <strong style="color:#dc2626;">${fmt(ncO.monto_usd)}</strong>
-                    <span style="color:${ncColor}; margin-left:4px;">${ncIcon}</span>
-                    <br><span style="color:#64748b;font-size:0.7rem;" title="${ncNombres}">${ncNombres.substring(0,35)}${ncNombres.length > 35 ? '…' : ''}</span>
-                </div>`;
-            }
-
-            // Audit warning on SO cell
-            const hasAuditWarn = item.auditoria_descuentos?.tiene_discrepancia;
-            const soCell = hasAuditWarn
-                ? `<strong>${item.so_id}</strong> <span style="color:#f59e0b;" title="Discrepancia en auditoría">⚠️</span>`
-                : `<strong>${item.so_id}</strong>`;
-
-            row.innerHTML = `
-                <td>${soCell}</td>
-                <td>${item.cliente_nombre}</td>
-                <td><small><strong>${item.vendedor || 'Sin Vendedor'}</strong></small></td>
-                <td><small>${item.fecha_entrega ? `<span style="color:#0369a1; font-weight:600;" title="Fecha de Entrega Efectiva (ALM/OUT)">🚚 ${item.fecha_entrega}</span>` : `<span style="color:#64748b">${item.fecha || 'Sin entrega'}</span>`}</small></td>
-                <td><small>${item.terminos_pago || 'Contado'}</small></td>
-                <td><small>${item.fecha_vencimiento || '-'}</small></td>
-                <td>${agingBadge}</td>
-                <td><small>${item.fecha_ultimo_abono || '<span style="color:#94a3b8">Sin abonos</span>'}</small></td>
-                <td><strong style="color: #475569;">${fmt(item.monto_total)}</strong></td>
-                <td><small><span class="state-badge" style="background:#f1f5f9;color:#334155;font-weight:600;">${item.lista_precios || item.lista_origen || 'Sin Lista (Odoo)'}</span></small></td>
-                <td><strong style="color: #2563eb;">${fmt(item.monto_total_proyectado_usd)}</strong></td>
-                <td>${fmt(item.abono_usd_bcv || item.monto_pagado)}</td>
-                <td><strong style="color: #0891b2;">${fmt(item.abono_usd_binance)}</strong></td>
-                <td><strong style="color: ${item.saldo_deudor_bcv > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_bcv)}</strong></td>
-                <td><strong style="color: ${item.saldo_deudor_lista_usd > 0 ? '#d97706' : '#059669'}">${fmt(item.saldo_deudor_lista_usd)}</strong></td>
-                <td>${cellFacturaOdoo}</td>
-                <td>${cellDescOrden}</td>
-                <td>${cellDescFactura}</td>
-                <td>${cellNCs}</td>
-                <td>${descuentosHtml}</td>
-                <td><strong style="color: ${saldoDescBCV > 0.05 ? '#2563eb' : '#059669'}">${fmt(saldoDescBCV)}</strong></td>
-                <td><strong style="color: ${saldoDescUSD > 0.05 ? '#7e22ce' : '#059669'}">${fmt(saldoDescUSD)}</strong></td>
-                <td>${odooHtml}</td>
-                <td>${closeHtml}</td>
-            `;
-            reporteTableBody.appendChild(row);
-        });
     }
 
     // ── Página Ventas: teórico (bruta/neta, con y sin impuestos) vs real ──
@@ -1992,6 +1649,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     badge.style.display = "none";
                 }
             }
+            const subtabBadge = document.getElementById("auditoria-subtab-badge-descuentos");
+            if (subtabBadge) subtabBadge.textContent = String(items.length);
 
             if (items.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669;">✅ Sin discrepancias detectadas</td></tr>';
@@ -2070,14 +1729,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("change", loadAuditoriaDescuentos);
     });
-
-    // Filter report table in real-time
-    const reporteSearchEl = document.getElementById("reporte-search");
-    if (reporteSearchEl) {
-        reporteSearchEl.addEventListener("keyup", () => {
-            applyReporteFilters();
-        });
-    }
 
     // Form submit handlers for new discount panels
     const recompraForm = document.getElementById("recompra-form");
@@ -4635,6 +4286,64 @@ document.addEventListener("DOMContentLoaded", () => {
     loadTasasPromedios();
     
     // --- Load Auditoría Data & Invoice Residual Discrepancies ---
+    // Paginación real de "Operaciones Conformes" (antes se cortaba a las
+    // primeras 100 filas sin forma de ver el resto) -- 50 filas por página.
+    let conformesFullList = [];
+    let conformesPage = 1;
+    const CONFORMES_PAGE_SIZE = 50;
+
+    function renderConformesPage() {
+        const bodyConformes = document.getElementById("conformes-table-body");
+        const pagerEl = document.getElementById("conformes-pager");
+        if (!bodyConformes) return;
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
+
+        if (conformesFullList.length === 0) {
+            bodyConformes.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes cargadas.</td></tr>';
+            if (pagerEl) pagerEl.innerHTML = "";
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(conformesFullList.length / CONFORMES_PAGE_SIZE));
+        conformesPage = Math.min(Math.max(1, conformesPage), totalPages);
+        const start = (conformesPage - 1) * CONFORMES_PAGE_SIZE;
+        const pageItems = conformesFullList.slice(start, start + CONFORMES_PAGE_SIZE);
+
+        bodyConformes.innerHTML = pageItems.map(c => `
+            <tr>
+                <td><strong>${escapeHtml(c.so_id)}</strong></td>
+                <td>${escapeHtml(c.factura_id)}</td>
+                <td>${escapeHtml(c.cliente_nombre)}</td>
+                <td><small>${c.fecha ? c.fecha.substring(0, 10) : ''}</small></td>
+                <td>${fmt(c.monto_original)}</td>
+                <td>${fmt(c.descuentos_aplicados)}</td>
+                <td><strong style="color:#059669;">${fmt(c.monto_neto_conciliado)}</strong></td>
+                <td><span class="state-badge cierre" style="background:#dcfce7; color:#15803d; font-weight:600;">${escapeHtml(c.estado)}</span></td>
+            </tr>
+        `).join('');
+
+        if (pagerEl) {
+            pagerEl.innerHTML = `
+                <button type="button" class="btn-secondary" id="conformes-prev-btn" ${conformesPage <= 1 ? 'disabled' : ''}>← Anterior</button>
+                <span>Página ${conformesPage} de ${totalPages} (${conformesFullList.length} operaciones conformes)</span>
+                <button type="button" class="btn-secondary" id="conformes-next-btn" ${conformesPage >= totalPages ? 'disabled' : ''}>Siguiente →</button>
+            `;
+            const prevBtn = document.getElementById("conformes-prev-btn");
+            const nextBtn = document.getElementById("conformes-next-btn");
+            if (prevBtn) prevBtn.addEventListener("click", () => { conformesPage -= 1; renderConformesPage(); });
+            if (nextBtn) nextBtn.addEventListener("click", () => { conformesPage += 1; renderConformesPage(); });
+        }
+    }
+
     async function loadAuditoria() {
         const bodyDisc = document.getElementById("discrepancias-table-body");
         const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
@@ -4673,6 +4382,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (elKpiConformes) elKpiConformes.textContent = conformes.length;
                 if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length;
                 if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
+
+                const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
+                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length);
+                const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
+                if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length + conformes.length);
 
                 const montoTotDisc = discrepancias.reduce((acc, x) => acc + (x.diferencia_monto || 0), 0) + discFacturas.reduce((acc, x) => acc + (x.diferencia || 0), 0);
                 if (elKpiMontoDiscrepancia) elKpiMontoDiscrepancia.textContent = fmt(montoTotDisc);
@@ -4744,24 +4458,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
-                // Render Operaciones Conformes
+                // Render Operaciones Conformes (paginado, ver renderConformesPage)
                 if (bodyConformes) {
-                    if (conformes.length === 0) {
-                        bodyConformes.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes cargadas.</td></tr>';
-                    } else {
-                        bodyConformes.innerHTML = conformes.slice(0, 100).map(c => `
-                            <tr>
-                                <td><strong>${escapeHtml(c.so_id)}</strong></td>
-                                <td>${escapeHtml(c.factura_id)}</td>
-                                <td>${escapeHtml(c.cliente_nombre)}</td>
-                                <td><small>${c.fecha ? c.fecha.substring(0, 10) : ''}</small></td>
-                                <td>${fmt(c.monto_original)}</td>
-                                <td>${fmt(c.descuentos_aplicados)}</td>
-                                <td><strong style="color:#059669;">${fmt(c.monto_neto_conciliado)}</strong></td>
-                                <td><span class="state-badge cierre" style="background:#dcfce7; color:#15803d; font-weight:600;">${escapeHtml(c.estado)}</span></td>
-                            </tr>
-                        `).join('');
-                    }
+                    conformesFullList = conformes;
+                    conformesPage = 1;
+                    renderConformesPage();
                 }
             }
         } catch (err) {
@@ -4793,6 +4494,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             const alertas = (data.items || []).filter(it => it.alerta);
             if (kpiEl) kpiEl.textContent = String(alertas.length);
+            const badgeAlertas = document.getElementById("auditoria-subtab-badge-alertas");
+            if (badgeAlertas) badgeAlertas.textContent = String(alertas.length);
             if (!tbody) return;
             if (alertas.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ No hay órdenes facturadas por debajo de lo debido.</td></tr>';
@@ -4815,6 +4518,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadAuditoriaVentasAlertas = loadAuditoriaVentasAlertas;
+
+    // Sub-navegación de la página Auditoría (Discrepancias / Descuentos y
+    // NCs / Alertas de Venta / Histórico Conforme) -- agrupa lo que antes
+    // eran 7 tablas en un solo scroll largo, sin eliminar ninguna.
+    window.switchAuditoriaSubtab = function(name) {
+        document.querySelectorAll(".subtab-btn[data-subtab]").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.subtab === name);
+        });
+        document.querySelectorAll(".subtab-panel[data-subtab-panel]").forEach(panel => {
+            panel.style.display = (panel.dataset.subtabPanel === name) ? "flex" : "none";
+        });
+    };
 
     window.aceptarAnomalia = async function(anomaliaId, soId, tipo) {
         const just = prompt(`Justificación para aceptar la anomalía (${soId} - ${tipo}):`, "Aceptado por gerencia");

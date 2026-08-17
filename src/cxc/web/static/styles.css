@@ -794,3 +794,121 @@ body {
     50% { opacity: 0.7; }
     100% { opacity: 1; }
 }
+
+/* Grilla de priorización de cobro por cliente (Reporte de Saldos) */
+.prioridad-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.85rem;
+}
+
+.prioridad-card {
+    border-radius: 12px;
+    padding: 0.9rem 1rem;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.prioridad-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1);
+}
+
+.prioridad-card.selected {
+    border-color: #1e293b;
+    box-shadow: 0 0 0 2px #1e293b inset;
+}
+
+.prioridad-card .prioridad-cliente {
+    font-weight: 700;
+    font-size: 0.92rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prioridad-card .prioridad-monto {
+    font-size: 1.15rem;
+    font-weight: 800;
+}
+
+.prioridad-card .prioridad-meta {
+    font-size: 0.75rem;
+    opacity: 0.85;
+}
+
+.prioridad-critico { background: #fee2e2; color: #7f1d1d; }
+.prioridad-alto { background: #ffedd5; color: #9a3412; }
+.prioridad-medio { background: #fef9c3; color: #854d0e; }
+.prioridad-bajo { background: #dcfce7; color: #166534; }
+
+/* Sub-navegación por pestañas dentro de una página (ej. Auditoría) */
+.subtab-nav {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0.5rem;
+}
+
+.subtab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 1rem;
+    border: none;
+    background: transparent;
+    color: #64748b;
+    font-weight: 600;
+    font-size: 0.88rem;
+    cursor: pointer;
+    border-radius: 8px 8px 0 0;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.subtab-btn:hover {
+    background: #f1f5f9;
+    color: #1e293b;
+}
+
+.subtab-btn.active {
+    background: #eff6ff;
+    color: #1d4ed8;
+    box-shadow: inset 0 -2px 0 #1d4ed8;
+}
+
+.subtab-badge {
+    display: inline-block;
+    min-width: 1.4rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.subtab-btn.active .subtab-badge {
+    background: #1d4ed8;
+    color: #fff;
+}
+
+.subtab-panel {
+    animation: fadeIn 0.2s ease;
+}
+
+/* Paginador simple (ej. tabla de Operaciones Conformes en Auditoría) */
+.table-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: #475569;
+}
