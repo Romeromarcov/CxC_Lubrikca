@@ -39,3 +39,17 @@ def _reset_ventas_cache():
     _app_module._VENTAS_CACHE["data"] = None
     _app_module._VENTAS_CACHE["timestamp"] = 0.0
     _app_module._ventas_computing = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_pricelist_items_cache():
+    """Mismo patrón que ``_reset_ventas_cache`` para
+
+    ``_PRICELIST_ITEMS_CACHE`` (agosto 2026, caché compartida de
+    ``product.pricelist.item`` entre Reporte de Saldos y Auditoría).
+    """
+    from cxc.web import app as _app_module
+
+    _app_module._PRICELIST_ITEMS_CACHE.clear()
+    yield
+    _app_module._PRICELIST_ITEMS_CACHE.clear()

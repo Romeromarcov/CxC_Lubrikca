@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+import time
 import traceback
 from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
@@ -2288,6 +2289,40 @@ _VENTAS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _VENTAS_CACHE_TTL = 60.0
 _ventas_computing = False
 
+# Caché de product.pricelist.item (reglas "fixed") -- Reporte de Saldos y
+# Auditoría consultan la MISMA tabla de Odoo con el MISMO filtro
+# (compute_price=fixed) y los mismos 5 campos, cada uno con su propio
+# conjunto de pricelist_ids (Auditoría pide usd_ids+ves_ids combinados,
+# Reporte de Saldos solo usd_ids -- alcances distintos, así que la clave de
+# caché es el conjunto EXACTO de ids pedido, nunca se mezcla data de un
+# alcance con otro). Las reglas de precio son configuración administrativa
+# que cambia con poca frecuencia -- TTL de 5 minutos es seguro.
+_PRICELIST_ITEMS_CACHE: dict[tuple[int, ...], dict[str, Any]] = {}
+_PRICELIST_ITEMS_CACHE_TTL = 300.0
+
+
+def _get_pricelist_items_fixed(execute: Any, pricelist_ids: list[int]) -> list[dict[str, Any]]:
+    """``product.pricelist.item`` con ``compute_price=fixed`` para
+
+    ``pricelist_ids``, cacheado por 5 minutos y keyed por el conjunto EXACTO
+    de ids solicitado -- ver comentario de ``_PRICELIST_ITEMS_CACHE``.
+    """
+    if not execute or not pricelist_ids:
+        return []
+    key = tuple(sorted({int(x) for x in pricelist_ids}))
+    now_ts = time.time()
+    cached = _PRICELIST_ITEMS_CACHE.get(key)
+    if cached is not None and now_ts - float(cached["timestamp"]) < _PRICELIST_ITEMS_CACHE_TTL:
+        return cached["data"]
+    data = execute(
+        "product.pricelist.item",
+        "search_read",
+        [[["pricelist_id", "in", list(key)], ["compute_price", "=", "fixed"]]],
+        {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price", "date_start", "date_end"]},
+    )
+    _PRICELIST_ITEMS_CACHE[key] = {"data": data, "timestamp": now_ts}
+    return data
+
 
 @app.get("/api/auditoria-descuentos")
 async def get_auditoria_descuentos(
@@ -2724,24 +2759,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # Load UI configured pricelist IDs (USD & VES) from _Meta
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
-        rules_usd = (
-            execute(
-                "product.pricelist.item",
-                "search_read",
-                [[["pricelist_id", "in", usd_ids], ["compute_price", "=", "fixed"]]],
-                {
-                    "fields": [
-                        "pricelist_id",
-                        "product_tmpl_id",
-                        "fixed_price",
-                        "date_start",
-                        "date_end",
-                    ]
-                },
-            )
-            if execute
-            else []
-        )
+        rules_usd = _get_pricelist_items_fixed(execute, usd_ids)
 
         all_lines = _all_lineas_rows(repo)
         lines_by_so = {}
@@ -8146,25 +8164,7 @@ async def get_auditoria():
         execute = _connect(config.odoo)
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
         all_candidate_ids = list(set(usd_ids + ves_ids))
-
-        rules_all = (
-            execute(
-                "product.pricelist.item",
-                "search_read",
-                [[["pricelist_id", "in", all_candidate_ids], ["compute_price", "=", "fixed"]]],
-                {
-                    "fields": [
-                        "pricelist_id",
-                        "product_tmpl_id",
-                        "fixed_price",
-                        "date_start",
-                        "date_end",
-                    ]
-                },
-            )
-            if execute
-            else []
-        )
+        rules_all = _get_pricelist_items_fixed(execute, all_candidate_ids)
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
