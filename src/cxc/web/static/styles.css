@@ -795,22 +795,54 @@ body {
     100% { opacity: 1; }
 }
 
-/* Grilla de priorización de cobro por cliente (Reporte de Saldos) */
+/* Grilla de priorización de cobro por cliente (Reporte de Saldos) --
+   flex-wrap (no grid de columnas fijas) porque cada tarjeta tiene un
+   tamaño propio, proporcional al monto de la deuda. */
 .prioridad-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 0.7rem;
+}
+
+.prioridad-group {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+}
+
+.prioridad-group-header {
+    width: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.3rem 0.1rem;
+    border-bottom: 2px solid #e2e8f0;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #334155;
+}
+
+.prioridad-group-header .prioridad-group-count {
+    font-weight: 500;
+    font-size: 0.78rem;
+    color: #64748b;
 }
 
 .prioridad-card {
     border-radius: 12px;
-    padding: 0.9rem 1rem;
+    padding: 0.75rem 0.85rem;
     border: 1px solid transparent;
     cursor: pointer;
     transition: transform 0.12s ease, box-shadow 0.12s ease;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    justify-content: center;
+    gap: 0.3rem;
+    overflow: hidden;
+    box-sizing: border-box;
 }
 
 .prioridad-card:hover {
@@ -834,11 +866,14 @@ body {
 .prioridad-card .prioridad-monto {
     font-size: 1.15rem;
     font-weight: 800;
+    white-space: nowrap;
 }
 
 .prioridad-card .prioridad-meta {
     font-size: 0.75rem;
     opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .prioridad-critico { background: #fee2e2; color: #7f1d1d; }

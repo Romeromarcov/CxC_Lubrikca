@@ -683,52 +683,166 @@ document.addEventListener("DOMContentLoaded", () => {
             const pctMonto = n > 1 ? rankMonto.get(c.cliente_id) / (n - 1) : 0;
             const urgencia = (pctAnt + pctMonto) / 2;
 
-            let clase, label;
-            if (urgencia < 0.25) { clase = "prioridad-critico"; label = "🔴 Crítico"; }
-            else if (urgencia < 0.50) { clase = "prioridad-alto"; label = "🟠 Alto"; }
-            else if (urgencia < 0.75) { clase = "prioridad-medio"; label = "🟡 Medio"; }
-            else { clase = "prioridad-bajo"; label = "🟢 Bajo"; }
-            clasePorCliente.set(c.cliente_id, { clase, label });
+            // "orden": posición del grupo de color (0 = más urgente/arriba),
+            // usada para ordenar las tarjetas por color antes que por monto.
+            let clase, label, orden;
+            if (urgencia < 0.25) { clase = "prioridad-critico"; label = "🔴 Crítico"; orden = 0; }
+            else if (urgencia < 0.50) { clase = "prioridad-alto"; label = "🟠 Alto"; orden = 1; }
+            else if (urgencia < 0.75) { clase = "prioridad-medio"; label = "🟡 Medio"; orden = 2; }
+            else { clase = "prioridad-bajo"; label = "🟢 Bajo"; orden = 3; }
+            clasePorCliente.set(c.cliente_id, { clase, label, orden });
         });
         return clasePorCliente;
     }
 
+    // Tamaño de la tarjeta proporcional al monto (área ~ monto, vía raíz
+    // cuadrada -- si fuera lineal, un cliente con 10x más deuda tendría un
+    // cuadro 10x más ancho Y 10x más alto, dominando toda la grilla).
+    const PRIORIDAD_CARD_MIN_PX = 130;
+    const PRIORIDAD_CARD_MAX_PX = 260;
+
+    function _tamanoCardPrioridad(monto, maxMonto) {
+        if (!maxMonto || maxMonto <= 0) return PRIORIDAD_CARD_MIN_PX;
+        const ratio = Math.sqrt(Math.max(0, monto) / maxMonto);
+        return Math.round(PRIORIDAD_CARD_MIN_PX + ratio * (PRIORIDAD_CARD_MAX_PX - PRIORIDAD_CARD_MIN_PX));
+    }
+
+    function _ordenarPorColorYMonto(lista, clasePorCliente) {
+        return [...lista].sort((a, b) => {
+            const ordenA = clasePorCliente.get(a.cliente_id)?.orden ?? 9;
+            const ordenB = clasePorCliente.get(b.cliente_id)?.orden ?? 9;
+            if (ordenA !== ordenB) return ordenA - ordenB;
+            return (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0);
+        });
+    }
+
+    function _crearCardPrioridad(c, clasePorCliente, maxMonto, fmt) {
+        const { clase, label } = clasePorCliente.get(c.cliente_id) || { clase: "prioridad-bajo", label: "" };
+        const px = _tamanoCardPrioridad(c.saldo_priorizacion || 0, maxMonto);
+        const card = document.createElement("div");
+        card.className = `prioridad-card ${clase}`;
+        card.style.width = `${px}px`;
+        card.style.height = `${Math.round(px * 0.72)}px`;
+        // Tipografía también escala un poco con el tamaño, para que las
+        // tarjetas chicas no queden con texto más grande que la propia tarjeta.
+        const scale = (0.8 + 0.4 * (px - PRIORIDAD_CARD_MIN_PX) / (PRIORIDAD_CARD_MAX_PX - PRIORIDAD_CARD_MIN_PX)).toFixed(2);
+        card.style.fontSize = `${scale}rem`;
+        card.innerHTML = `
+            <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
+            <div class="prioridad-monto">${fmt(c.saldo_priorizacion)}</div>
+            <div class="prioridad-meta">${label} · ${c.dias_vencido_max || 0} días vencido · ${c.vendedor || 'Sin Vendedor'}</div>
+        `;
+        card.addEventListener("click", () => {
+            document.querySelectorAll(".prioridad-card.selected").forEach(el => el.classList.remove("selected"));
+            const searchEl = document.getElementById("reporte-cliente-search");
+            if (searchEl) {
+                const already = searchEl.value === (c.cliente_nombre || "");
+                searchEl.value = already ? "" : (c.cliente_nombre || "");
+                if (!already) card.classList.add("selected");
+                applyReporteClienteFilters();
+            }
+            document.getElementById("reporte-cxc-cliente-table-body")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+        return card;
+    }
+
+    let fullPrioridadClientes = [];
+
     function renderPrioridadGrid(clientes) {
+        fullPrioridadClientes = clientes;
         const grid = document.getElementById("reporte-prioridad-grid");
         if (!grid) return;
-        const conSaldo = clientes.filter(c => (c.saldo_priorizacion || 0) > 0.05);
+
+        const antiguedadVal = document.getElementById("reporte-prioridad-antiguedad-filter")?.value || "*";
+        const vendedorVal = document.getElementById("reporte-prioridad-vendedor-filter")?.value || "*";
+        const agruparVal = document.getElementById("reporte-prioridad-agrupar")?.value || "ninguno";
+
+        // Poblar dropdown de vendedores (una sola vez por carga de datos)
+        const vendedorSelect = document.getElementById("reporte-prioridad-vendedor-filter");
+        if (vendedorSelect && !vendedorSelect.dataset.populated) {
+            const vendedores = [...new Set(clientes.map(c => c.vendedor).filter(Boolean))].sort();
+            vendedores.forEach(v => {
+                const opt = document.createElement("option");
+                opt.value = v;
+                opt.textContent = v;
+                vendedorSelect.appendChild(opt);
+            });
+            vendedorSelect.dataset.populated = "true";
+        }
+
+        let conSaldo = clientes.filter(c => (c.saldo_priorizacion || 0) > 0.05);
+
+        if (vendedorVal !== "*") {
+            conSaldo = conSaldo.filter(c => c.vendedor === vendedorVal);
+        }
+        if (antiguedadVal !== "*") {
+            conSaldo = conSaldo.filter(c => {
+                const dv = c.dias_vencido_max || 0;
+                if (antiguedadVal === "vencido_total") return dv > 0;
+                if (antiguedadVal === "vigentes") return dv <= 0;
+                if (antiguedadVal === "1_30") return dv >= 1 && dv <= 30;
+                if (antiguedadVal === "31_60") return dv >= 31 && dv <= 60;
+                if (antiguedadVal === "61_90") return dv >= 61 && dv <= 90;
+                if (antiguedadVal === "mas_90") return dv > 90;
+                return true;
+            });
+        }
+
         if (conSaldo.length === 0) {
-            grid.innerHTML = '<div class="table-empty">No hay clientes con saldo pendiente.</div>';
+            grid.innerHTML = '<div class="table-empty">No hay clientes con saldo pendiente que coincidan con los filtros.</div>';
             return;
         }
+
         const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
-        // Orden de las tarjetas: SIEMPRE por monto pendiente, mayor a menor
-        // (pedido explícito del usuario) -- el color es relativo (ranking),
-        // pero el orden visual es directo por tamaño de deuda.
-        const ordenados = [...conSaldo].sort((a, b) => (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0));
         const clasePorCliente = _clasificarPorRanking(conSaldo);
+        const maxMonto = Math.max(...conSaldo.map(c => c.saldo_priorizacion || 0));
         grid.innerHTML = "";
-        ordenados.forEach(c => {
-            const { clase, label } = clasePorCliente.get(c.cliente_id);
-            const card = document.createElement("div");
-            card.className = `prioridad-card ${clase}`;
-            card.innerHTML = `
-                <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
-                <div class="prioridad-monto">${fmt(c.saldo_priorizacion)}</div>
-                <div class="prioridad-meta">${label} · ${c.dias_vencido_max || 0} días vencido · ${c.vendedor || 'Sin Vendedor'}</div>
-            `;
-            card.addEventListener("click", () => {
-                document.querySelectorAll(".prioridad-card.selected").forEach(el => el.classList.remove("selected"));
-                const searchEl = document.getElementById("reporte-cliente-search");
-                if (searchEl) {
-                    const already = searchEl.value === (c.cliente_nombre || "");
-                    searchEl.value = already ? "" : (c.cliente_nombre || "");
-                    if (!already) card.classList.add("selected");
-                    applyReporteClienteFilters();
-                }
-                document.getElementById("reporte-cxc-cliente-table-body")?.scrollIntoView({ behavior: "smooth", block: "center" });
-            });
-            grid.appendChild(card);
+
+        if (agruparVal === "ninguno") {
+            // Prioritarios arriba: ordenado por color (grupo de urgencia)
+            // primero, y dentro de cada color por monto de mayor a menor.
+            const ordenados = _ordenarPorColorYMonto(conSaldo, clasePorCliente);
+            ordenados.forEach(c => grid.appendChild(_crearCardPrioridad(c, clasePorCliente, maxMonto, fmt)));
+            return;
+        }
+
+        // Agrupado por Vendedor o por Antigüedad: un bloque por grupo, cada
+        // uno ordenado igual (color, luego monto) puertas adentro.
+        const grupos = new Map();
+        const grupoKey = (c) => {
+            if (agruparVal === "vendedor") return c.vendedor || "Sin Vendedor";
+            const dv = c.dias_vencido_max || 0;
+            if (dv <= 0) return "Vigentes";
+            if (dv <= 30) return "Vencidas 1-30 días";
+            if (dv <= 60) return "Vencidas 31-60 días";
+            if (dv <= 90) return "Vencidas 61-90 días";
+            return "Vencidas +90 días";
+        };
+        conSaldo.forEach(c => {
+            const key = grupoKey(c);
+            if (!grupos.has(key)) grupos.set(key, []);
+            grupos.get(key).push(c);
+        });
+        // Orden de los grupos: por la suma de saldo del grupo, mayor a menor.
+        const gruposOrdenados = [...grupos.entries()].sort(
+            (a, b) => b[1].reduce((s, c) => s + (c.saldo_priorizacion || 0), 0)
+                - a[1].reduce((s, c) => s + (c.saldo_priorizacion || 0), 0)
+        );
+        gruposOrdenados.forEach(([key, items]) => {
+            const groupDiv = document.createElement("div");
+            groupDiv.className = "prioridad-group";
+            const totalGrupo = items.reduce((s, c) => s + (c.saldo_priorizacion || 0), 0);
+            const header = document.createElement("div");
+            header.className = "prioridad-group-header";
+            header.innerHTML = `<span>${key}</span><span class="prioridad-group-count">${items.length} cliente${items.length !== 1 ? 's' : ''} · ${fmt(totalGrupo)}</span>`;
+            groupDiv.appendChild(header);
+            const cardsWrap = document.createElement("div");
+            cardsWrap.className = "prioridad-grid";
+            cardsWrap.style.marginBottom = "0";
+            const ordenados = _ordenarPorColorYMonto(items, clasePorCliente);
+            ordenados.forEach(c => cardsWrap.appendChild(_crearCardPrioridad(c, clasePorCliente, maxMonto, fmt)));
+            groupDiv.appendChild(cardsWrap);
+            grid.appendChild(groupDiv);
         });
     }
 
@@ -880,6 +994,13 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             fullClientesCxc = data.clientes || [];
 
+            ["reporte-prioridad-antiguedad-filter", "reporte-prioridad-vendedor-filter", "reporte-prioridad-agrupar"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !el.dataset.listenerAttached) {
+                    el.addEventListener("change", () => renderPrioridadGrid(fullPrioridadClientes));
+                    el.dataset.listenerAttached = "true";
+                }
+            });
             renderPrioridadGrid(fullClientesCxc);
 
             const vendedorSelect = document.getElementById("reporte-cliente-vendedor-filter");
