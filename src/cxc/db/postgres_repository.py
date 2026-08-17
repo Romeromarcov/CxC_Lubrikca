@@ -38,6 +38,7 @@ from ..models import (
     EstadoBandeja,
     EstadoVinculacion,
     ExclusionRegla,
+    Factura,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -271,6 +272,15 @@ class PostgresRepository(Repository):
     def upsert_pagos(self, filas: list[Pago]) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.pagos, [_pago_to_row(p) for p in filas], ["pago_id"])
+
+    def upsert_facturas(self, filas: list[Factura]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.facturas, [_factura_to_row(f) for f in filas], ["factura_id"])
+
+    def all_facturas(self) -> list[Factura]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.facturas)).all()
+        return [_row_to_factura(r) for r in rows]
 
     # --- Lecturas para el motor -----------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -947,6 +957,38 @@ def _row_to_orden(r: Any) -> OrdenVenta:
         entregada_completa=r.entregada_completa,
         tiene_devolucion=r.tiene_devolucion,
         dias_credito=getattr(r, "dias_credito", 0) or 0,
+    )
+
+
+def _factura_to_row(f: Factura) -> dict[str, Any]:
+    return {
+        "factura_id": f.factura_id,
+        "numero": f.numero,
+        "so_id": f.so_id,
+        "move_type": f.move_type,
+        "es_nota_debito": f.es_nota_debito,
+        "fecha": f.fecha,
+        "moneda": f.moneda,
+        "monto_total": f.monto_total,
+        "monto_sin_impuestos": f.monto_sin_impuestos,
+        "estado": f.estado,
+        "factura_origen_id": f.factura_origen_id,
+    }
+
+
+def _row_to_factura(r: Any) -> Factura:
+    return Factura(
+        factura_id=r.factura_id,
+        numero=r.numero,
+        so_id=r.so_id,
+        move_type=r.move_type,
+        es_nota_debito=r.es_nota_debito,
+        fecha=r.fecha,
+        moneda=r.moneda,
+        monto_total=r.monto_total,
+        monto_sin_impuestos=r.monto_sin_impuestos,
+        estado=r.estado,
+        factura_origen_id=r.factura_origen_id,
     )
 
 

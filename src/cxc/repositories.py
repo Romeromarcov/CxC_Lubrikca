@@ -29,6 +29,7 @@ from .models import (
     DescuentoRecompra,
     DescuentoVolumen,
     ExclusionRegla,
+    Factura,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -126,6 +127,21 @@ class Repository(ABC):
 
     @abstractmethod
     def upsert_pagos(self, filas: list[Pago]) -> None: ...
+
+    # Facturas (Fase 0 del plan de consolidación de fuentes, agosto 2026):
+    # espejo INMUTABLE de account.move (facturas/NC/ND) -- NO amount_residual
+    # (eso sigue siendo dominio de Cobranza, en vivo). Métodos concretos (no
+    # @abstractmethod) con default que avisa "no implementado" en vez de
+    # forzar a todo backend a soportarlo -- hoy solo PostgresRepository lo
+    # implementa; Sheets se está retirando como backend, no vale la pena
+    # construirle esta tabla nueva.
+    def upsert_facturas(self, filas: list[Factura]) -> None:
+        raise NotImplementedError(
+            "upsert_facturas solo está implementado en PostgresRepository."
+        )
+
+    def all_facturas(self) -> list[Factura]:
+        raise NotImplementedError("all_facturas solo está implementado en PostgresRepository.")
 
     # --- Lecturas para el motor ---------------------------------------------
     @abstractmethod
@@ -386,6 +402,7 @@ class InMemoryRepository(Repository):
         self._ordenes: dict[str, OrdenVenta] = {}
         self._lineas: dict[str, LineaOrden] = {}
         self._pagos: dict[str, Pago] = {}
+        self._facturas: dict[str, Factura] = {}
         self._metodos: dict[str, MetodoPago] = {}
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
@@ -478,6 +495,13 @@ class InMemoryRepository(Repository):
     def upsert_pagos(self, filas: list[Pago]) -> None:
         for p in filas:
             self._pagos[p.pago_id] = p
+
+    def upsert_facturas(self, filas: list[Factura]) -> None:
+        for f in filas:
+            self._facturas[f.factura_id] = f
+
+    def all_facturas(self) -> list[Factura]:
+        return list(self._facturas.values())
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:

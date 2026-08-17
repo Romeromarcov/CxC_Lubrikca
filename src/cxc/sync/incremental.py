@@ -27,10 +27,11 @@ class SyncResult:
     lineas_borradas: int
     desde: datetime | None
     hasta: datetime
+    facturas: int = 0
 
     @property
     def total(self) -> int:
-        return self.clientes + self.ordenes + self.lineas + self.pagos
+        return self.clientes + self.ordenes + self.lineas + self.pagos + self.facturas
 
 
 class IncrementalSync:
@@ -51,12 +52,26 @@ class IncrementalSync:
         ordenes = self._reader.changed_ordenes(since)
         lineas = self._reader.changed_lineas(since)
         pagos = self._reader.changed_pagos(since)
+        facturas = self._reader.changed_facturas(since)
 
         # SOLO tablas-espejo. Estas operaciones no tocan Vinculaciones/SerieTasas.
         self._repo.upsert_clientes(clientes)
         self._repo.upsert_ordenes(ordenes)
         self._repo.upsert_lineas(lineas)
         self._repo.upsert_pagos(pagos)
+
+        facturas_sincronizadas = 0
+        if facturas:
+            try:
+                self._repo.upsert_facturas(facturas)
+                facturas_sincronizadas = len(facturas)
+            except NotImplementedError:
+                # Backend sin soporte (Sheets, en retiro) -- no debe tumbar
+                # el resto del sync, que sí es crítico.
+                logger.warning(
+                    "El backend activo no soporta upsert_facturas -- se omite "
+                    "el espejo de facturas para esta corrida."
+                )
 
         lineas_borradas = self.reconciliar_lineas_borradas(ordenes, lineas)
 
@@ -70,6 +85,7 @@ class IncrementalSync:
             lineas_borradas=lineas_borradas,
             desde=since,
             hasta=now,
+            facturas=facturas_sincronizadas,
         )
         logger.info(
             "Sync delta: %s filas refrescadas, %s líneas huérfanas borradas",

@@ -91,6 +91,30 @@ ordenes_venta = Table(
     Column("dias_credito", Integer, nullable=False, server_default="0"),
 )
 
+# --- 3.2b Facturas (espejo, sync-owned -- Fase 0 del plan de consolidación
+# de fuentes, agosto 2026). Contenido INMUTABLE de account.move (facturas,
+# NC y ND de cliente): NO incluye amount_residual (varía con cada pago
+# aplicado -- eso sigue siendo dominio de Cobranza, consultado en vivo).
+# so_id SIN ForeignKey a propósito: el sync de facturas puede correr antes
+# de que la orden de origen esté sincronizada, o el invoice_origin puede no
+# calzar exactamente con ninguna SO conocida -- un FK duro tumbaría el
+# upsert en esos casos. -----------------------------------------------------
+facturas = Table(
+    "facturas",
+    metadata,
+    Column("factura_id", String, primary_key=True),
+    Column("numero", String, nullable=False, server_default=""),
+    Column("so_id", String, nullable=True, index=True),
+    Column("move_type", String, nullable=False, server_default="out_invoice"),
+    Column("es_nota_debito", Boolean, nullable=False, server_default="false"),
+    Column("fecha", Date, nullable=False),
+    Column("moneda", String, nullable=False, server_default="USD"),
+    Column("monto_total", MONEY, nullable=False),
+    Column("monto_sin_impuestos", MONEY, nullable=False),
+    Column("estado", String, nullable=False, server_default="posted"),
+    Column("factura_origen_id", String, nullable=True),
+)
+
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
 lineas_orden = Table(
     "lineas_orden",

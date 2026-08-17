@@ -28,7 +28,7 @@ from typing import Any
 
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
-from ..models import Cliente, LineaOrden, Moneda, OrdenVenta, Pago
+from ..models import Cliente, Factura, LineaOrden, Moneda, OrdenVenta, Pago
 
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
@@ -184,6 +184,40 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
     )
 
 
+def map_factura_espejo(rec: dict[str, Any]) -> Factura:
+    move_type = str(rec.get("move_type", "") or "out_invoice")
+    debit_origin_id = _m2o_id(rec.get("debit_origin_id"))
+    reversed_entry_id = _m2o_id(rec.get("reversed_entry_id"))
+    # Odoo no distingue una Nota de Débito con un move_type propio: es un
+    # out_invoice normal con debit_origin_id apuntando a la factura que
+    # origina el débito (ver docstring de _get_ventas_sync, Tarea 3f/3g).
+    es_nota_debito = move_type == "out_invoice" and bool(debit_origin_id)
+    factura_origen_id = debit_origin_id or reversed_entry_id or None
+    currency = rec.get("currency_id")
+    moneda = (
+        currency[1] if isinstance(currency, list | tuple) and len(currency) > 1 else "USD"
+    )
+    fecha_raw = rec.get("invoice_date") or rec.get("date")
+    # fecha NOT NULL en el espejo -- invoice_date/date casi siempre vienen
+    # seteados (Odoo los defaultea a hoy), pero un draft recién creado
+    # podría no tenerlos todavía; hoy como fallback conservador en vez de
+    # violar la restricción NOT NULL de la tabla.
+    fecha = _to_date(fecha_raw) or date.today()
+    return Factura(
+        factura_id=str(rec["id"]),
+        numero=str(rec.get("name", "") or ""),
+        so_id=str(rec["invoice_origin"]) if rec.get("invoice_origin") else None,
+        move_type=move_type,
+        es_nota_debito=es_nota_debito,
+        fecha=fecha,
+        moneda=str(moneda),
+        monto_total=_dec(rec.get("amount_total")),
+        monto_sin_impuestos=_dec(rec.get("amount_untaxed")),
+        estado=str(rec.get("state", "") or "draft"),
+        factura_origen_id=factura_origen_id or None,
+    )
+
+
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
@@ -218,6 +252,11 @@ def map_factura(rec: dict[str, Any]) -> tuple[str, Decimal, Decimal]:
 
     Usa ``amount_total_signed_usd`` (equivalente USD a la tasa registrada en la
     factura — la compañía factura en VES). ``out_refund`` (NC) suma a NCs.
+
+    NO confundir con ``map_factura_espejo`` (más abajo): esta función es un
+    helper de reconciliación puntual (usado por ``OdooFacturasReader``),
+    aquella mapea el espejo inmutable completo de ``account.move`` para el
+    sync incremental (``Factura`` de ``cxc.models``).
     """
     so_id = str(rec.get("invoice_origin", "") or "")
     usd = abs(_dec(rec.get("amount_total_signed_usd")))
@@ -246,6 +285,13 @@ class OdooReader(ABC):
 
     @abstractmethod
     def lineas_vigentes_por_orden(self, so_ids: list[str]) -> dict[str, set[str]]: ...
+
+    # Facturas (Fase 0 del plan de consolidación de fuentes, agosto 2026):
+    # NO @abstractmethod -- default "sin cambios" en vez de forzar a cada
+    # fake/implementación de test a soportarlo. Solo OdooXmlRpcReader lo
+    # sobrescribe con la lectura real.
+    def changed_facturas(self, since: datetime | None) -> list[Factura]:
+        return []
 
 
 class OdooXmlRpcReader(OdooReader):
@@ -445,6 +491,39 @@ class OdooXmlRpcReader(OdooReader):
             ["id", "invoice_origin"],
         )
         return {str(r["invoice_origin"]): str(r["id"]) for r in recs if r.get("invoice_origin")}
+
+    # --- Facturas (espejo inmutable, Fase 0 del plan de consolidación de
+    # fuentes) -----------------------------------------------------------------
+    def changed_facturas(self, since: datetime | None) -> list[Factura]:
+        """Facturas/NC/ND de cliente (``account.move``, ``move_type`` de
+
+        salida) cambiadas desde ``since``. Solo contenido inmutable --
+        ``amount_residual`` NUNCA se lee aquí a propósito (varía con cada
+        pago aplicado; eso sigue siendo dominio de Cobranza, en vivo). Se
+        incluyen ``draft`` para que el espejo refleje una factura tan pronto
+        se crea, no solo cuando se publica -- ``estado`` queda expuesto para
+        que el consumidor decida si la usa o no.
+        """
+        recs = self._search_read(
+            self.MODEL_MOVE,
+            self._delta(since)
+            + [["move_type", "in", ["out_invoice", "out_refund"]]],
+            [
+                "id",
+                "name",
+                "invoice_origin",
+                "move_type",
+                "invoice_date",
+                "date",
+                "currency_id",
+                "amount_total",
+                "amount_untaxed",
+                "state",
+                "reversed_entry_id",
+                "debit_origin_id",
+            ],
+        )
+        return [map_factura_espejo(r) for r in recs]
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:

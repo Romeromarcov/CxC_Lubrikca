@@ -105,6 +105,35 @@ class OrdenVenta:
     dias_credito: int = 0
 
 
+# --- 3.2b Facturas (espejo, agosto 2026 -- Fase 0 del plan de consolidación
+# de fuentes) --------------------------------------------------------------
+@dataclass
+class Factura:
+    """Espejo de ``account.move`` (facturas, notas de crédito y notas de
+
+    débito de cliente) -- contenido INMUTABLE una vez publicada ("posted"):
+    líneas, montos, fecha, moneda no cambian tras ese punto (a diferencia
+    de ``amount_residual``, que varía con cada pago aplicado -- ESO se
+    sigue consultando en vivo, es dominio de Cobranza, nunca de este
+    espejo). Sincronizada por el mismo sync incremental que ya mirrorea
+    Clientes/Órdenes/Líneas/Pagos (``changed_facturas``/``upsert_facturas``).
+    """
+
+    factura_id: str  # id de Odoo (account.move), como string
+    numero: str  # name, ej. "INV/2026/00123"
+    so_id: str | None  # invoice_origin -- name de la SO que la originó
+    move_type: str  # "out_invoice" | "out_refund" (Odoo no distingue ND con un move_type propio)
+    es_nota_debito: bool  # out_invoice CON debit_origin_id -- Odoo la modela como una factura más
+    fecha: date
+    moneda: str
+    monto_total: Decimal
+    monto_sin_impuestos: Decimal
+    estado: str  # draft | posted | cancel
+    # Para NC/ND: factura original a la que se asocia (reversed_entry_id /
+    # debit_origin_id). None para una factura normal (out_invoice sin ND).
+    factura_origen_id: str | None = None
+
+
 # Fallback de marca configurable (Configuración > Ajustes generales, clave
 # "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
 # (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor

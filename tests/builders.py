@@ -12,6 +12,7 @@ from cxc.models import (
     DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
+    Factura,
     Feriado,
     LineaOrden,
     MetodoPago,
@@ -302,3 +303,32 @@ def regla_primera_compra(valor: str = "50", desde: date = date(2026, 1, 1)) -> R
 
 def feriado(fecha: date, descripcion: str = "Feriado") -> Feriado:
     return Feriado(fecha=fecha, descripcion=descripcion, tipo=TipoFeriado.NACIONAL)
+
+
+def factura(
+    factura_id: str = "F1",
+    *,
+    numero: str = "INV/2026/0001",
+    so_id: str | None = "SO1",
+    move_type: str = "out_invoice",
+    es_nota_debito: bool = False,
+    fecha: date = date(2026, 6, 5),
+    moneda: str = "USD",
+    monto_total: str = "1160",
+    monto_sin_impuestos: str = "1000",
+    estado: str = "posted",
+    factura_origen_id: str | None = None,
+) -> Factura:
+    return Factura(
+        factura_id=factura_id,
+        numero=numero,
+        so_id=so_id,
+        move_type=move_type,
+        es_nota_debito=es_nota_debito,
+        fecha=fecha,
+        moneda=moneda,
+        monto_total=Decimal(monto_total),
+        monto_sin_impuestos=Decimal(monto_sin_impuestos),
+        estado=estado,
+        factura_origen_id=factura_origen_id,
+    )
