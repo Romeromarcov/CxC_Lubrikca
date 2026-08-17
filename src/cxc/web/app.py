@@ -322,6 +322,18 @@ def _parse_payment_term_days(t_name: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+# Caché por-partner (agosto 2026, mismo patrón que _SO_STATE_CACHE/
+# _ENTREGA_CACHE): get_live_pagos_confirmados y get_live_pagos_conciliados
+# -- ambas invocadas típicamente en la MISMA carga de la página de Cobranza
+# -- llaman resolve_vendedores_por_partner con conjuntos de partner_ids que
+# suelen solaparse mucho (los mismos clientes aparecen en pagos confirmados
+# y conciliados). TTL más largo que el de estado/entregas (5 min) porque la
+# asignación vendedor-cliente es configuración administrativa, no un
+# estado de negocio que deba verse en vivo.
+_VENDEDOR_POR_PARTNER_CACHE: dict[int, tuple[str, float]] = {}
+_VENDEDOR_POR_PARTNER_CACHE_TTL = 300.0
+
+
 def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[int, str]:
     """Email del vendedor (res.users.login) asignado a cada partner (res.partner.user_id).
 
@@ -330,9 +342,20 @@ def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[
     """
     if not partner_ids:
         return {}
+    now_ts = time.time()
+    result: dict[int, str] = {}
+    faltantes: list[int] = []
+    for pid in partner_ids:
+        cached = _VENDEDOR_POR_PARTNER_CACHE.get(pid)
+        if cached is not None and now_ts - cached[1] < _VENDEDOR_POR_PARTNER_CACHE_TTL:
+            result[pid] = cached[0]
+        else:
+            faltantes.append(pid)
+    if not faltantes:
+        return result
     try:
         partners = execute(
-            "res.partner", "read", [list(partner_ids)], {"fields": ["id", "user_id"]}
+            "res.partner", "read", [faltantes], {"fields": ["id", "user_id"]}
         )
         uids = {
             int(p["user_id"][0])
@@ -343,15 +366,24 @@ def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[
         if uids:
             users = execute("res.users", "read", [list(uids)], {"fields": ["id", "login"]})
             logins = {int(u["id"]): str(u.get("login") or "") for u in users}
-        out: dict[int, str] = {}
+        partners_con_dato = {int(p["id"]) for p in partners}
         for p in partners:
             u = p.get("user_id")
             uid = u[0] if isinstance(u, list | tuple) and u else None
-            out[int(p["id"])] = logins.get(int(uid), "") if uid else ""
-        return out
+            login = logins.get(int(uid), "") if uid else ""
+            pid = int(p["id"])
+            result[pid] = login
+            _VENDEDOR_POR_PARTNER_CACHE[pid] = (login, now_ts)
+        # Partners pedidos pero que Odoo no devolvió (id inexistente/archivado
+        # sin acceso): cachear "" para no volver a pedirlos en cada llamada.
+        for pid in faltantes:
+            if pid not in partners_con_dato:
+                result[pid] = ""
+                _VENDEDOR_POR_PARTNER_CACHE[pid] = ("", now_ts)
+        return result
     except Exception as e:
         logger.warning("Error resolviendo vendedores por partner: %s", e)
-        return {}
+        return result
 
 
 def get_live_pagos_confirmados(execute: Any) -> list[dict[str, Any]]:

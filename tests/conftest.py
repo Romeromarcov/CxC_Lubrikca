@@ -79,3 +79,16 @@ def _reset_entrega_cache():
     _app_module._ENTREGA_CACHE.clear()
     yield
     _app_module._ENTREGA_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_vendedor_por_partner_cache():
+    """Mismo patrón para ``_VENDEDOR_POR_PARTNER_CACHE`` (agosto 2026,
+
+    caché por-partner de resolve_vendedores_por_partner).
+    """
+    from cxc.web import app as _app_module
+
+    _app_module._VENDEDOR_POR_PARTNER_CACHE.clear()
+    yield
+    _app_module._VENDEDOR_POR_PARTNER_CACHE.clear()
