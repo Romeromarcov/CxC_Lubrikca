@@ -1346,6 +1346,8 @@ async def run_sync_in_background():
                 total_first = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+                _VENTAS_CACHE["data"] = None
+                _VENTAS_CACHE["timestamp"] = 0.0
                 print(f"FastAPI Daemon: Primera corrida completada. {total_first} filas.")
                 if total_first > 0:
                     # En un hilo aparte: Reconciler hace una llamada XML-RPC a
@@ -1362,6 +1364,8 @@ async def run_sync_in_background():
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+                    _VENTAS_CACHE["data"] = None
+                    _VENTAS_CACHE["timestamp"] = 0.0
                     # Sincronización bidireccional: si Odoo reportó cambios
                     # (ej. un pago editado en monto/fecha/cliente), se
                     # recalculan motor y reconciliación para reflejarlo sin
@@ -1407,6 +1411,8 @@ async def api_sync_manual(lookback_days: int = 7):
 
         _REPORTE_SALDOS_CACHE["data"] = None
         _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+        _VENTAS_CACHE["data"] = None
+        _VENTAS_CACHE["timestamp"] = 0.0
 
         return {
             "status": "ok",
@@ -1945,13 +1951,23 @@ async def api_admin_recalcular_todo(
 async def get_resumen():
     try:
         repo = get_repo()
-        # 1. Total por cobrar (Orders not invoiced)
+        # 1. Total por cobrar (Orders not invoiced), NETO de lo ya pagado --
+        # antes sumaba el monto_total bruto de la orden sin restar
+        # Vinculaciones aplicadas, a diferencia de la función casi idéntica
+        # /api/ordenes-pendientes/{cliente_id} (mismo archivo) que sí resta
+        # correctamente. No se ve hoy en el Dashboard (las tarjetas
+        # kpi-cobrables/kpi-sin-asignar/kpi-alertas ya no existen en el
+        # HTML), pero se corrige para que quede correcto si se reconecta.
         ordenes = repo.all_ordenes()
         so_names_r = [o.so_id for o in ordenes]
         so_states_map = get_live_so_states(so_names_r)
         entrega_valida_set = get_live_delivered_not_returned(so_names_r)
+        vincs = repo.all_vinculaciones()
+        linked_by_so: dict[str, Decimal] = {}
+        for v in vincs:
+            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
         total_por_cobrar = sum(
-            o.monto_total
+            max(Decimal("0"), o.monto_total - linked_by_so.get(o.so_id, Decimal("0")))
             for o in ordenes
             if not o.facturada
             and not orden_excluida(
@@ -1963,7 +1979,6 @@ async def get_resumen():
 
         # 2. Pagos sin asignar (saldo real -- no todo-o-nada -- en USD y VES)
         pagos = _all_pagos_rows(repo)
-        vincs = repo.all_vinculaciones()
         linked_amounts: dict[str, Decimal] = {}
         for v in vincs:
             prev = linked_amounts.get(v.pago_id, Decimal("0"))
@@ -2261,6 +2276,17 @@ _REPORTE_CACHE_TTL = 0.0
 # recursión sin límite (RecursionError tras cientos de rondas completas de
 # queries a Odoo, o un cuelgue de varios minutos antes de llegar ahí).
 _reporte_saldos_computing = False
+
+# Caché corta de /api/ventas (solo vendedor=None) -- ver docstring de
+# _get_ventas_sync. TTL corto (no cero como reporte-saldos): Ventas no
+# participa hoy en la cadena de recursión reporte_saldos ->
+# conciliaciones_sugerencias -> reporte_saldos, así que un TTL >0 aquí es
+# seguro; se invalida explícitamente en los mismos puntos donde ya se
+# invalida _REPORTE_SALDOS_CACHE (sync incremental) para no arrastrar datos
+# viejos más allá de un ciclo de sync.
+_VENTAS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
+_VENTAS_CACHE_TTL = 60.0
+_ventas_computing = False
 
 
 @app.get("/api/auditoria-descuentos")
@@ -8939,7 +8965,33 @@ def _get_ventas_sync(
     - ``estatus_pago_teorico_usd``: SIEMPRE Binance vs. ``usd_neta_teorica_iva``.
     Estados: ``"pagada"``/``"parcial"``/``"sin_pago"``, tolerancia 0.05
     (mismo epsilon que ya usa "alerta").
+
+    Caché corta (``_VENTAS_CACHE``, TTL ``_VENTAS_CACHE_TTL``, sólo para la
+    corrida sin filtro de vendedor -- ``vendedor is None``, que es como
+    siempre la llaman los consumidores internos: Bandeja, Reporte CxC por
+    Cliente, Cobranza): esta función ya es la fuente única para esas 3
+    páginas (no llaman a Odoo por su cuenta); a medida que Reporte de
+    Saldos/Auditoría/Reporte Diario se migren para consumirla también
+    (plan de fases, agosto 2026), sin caché cada carga de página
+    multiplicaría las llamadas a Odoo en vez de reducirlas -- por eso esta
+    caché es prerrequisito de esa consolidación, no solo una optimización
+    suelta. Guarda de reentrada igual a la de ``_get_reporte_saldos_sync``
+    (mismo bug real ya encontrado ahí: una llamada anidada durante el
+    cálculo debe ver el caché "frío" en vez de disparar la cadena de nuevo).
     """
+    global _ventas_computing
+    if vendedor is None:
+        import time
+
+        now_ts = time.time()
+        if (
+            _VENTAS_CACHE["data"] is not None
+            and now_ts - float(_VENTAS_CACHE["timestamp"]) < _VENTAS_CACHE_TTL
+        ):
+            return _VENTAS_CACHE["data"]
+        if _ventas_computing:
+            return _VENTAS_CACHE["data"] or {"items": [], "kpis": {}}
+        _ventas_computing = True
     try:
         from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
 
@@ -9652,7 +9704,7 @@ def _get_ventas_sync(
 
         items.sort(key=lambda it: str(it["so_id"]), reverse=True)
 
-        return {
+        res = {
             "items": items,
             "kpis": {
                 "total_ordenes": len(items),
@@ -9686,9 +9738,16 @@ def _get_ventas_sync(
                 ),
             },
         }
+        if vendedor is None:
+            _VENTAS_CACHE["data"] = res
+            _VENTAS_CACHE["timestamp"] = time.time()
+        return res
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        if vendedor is None:
+            _ventas_computing = False
 
 
 @app.get("/api/ventas/{so_id}/detalle")
@@ -10591,7 +10650,6 @@ def _get_reporte_diario_sync(
                 cobranza_por_dia[fecha_key] = {
                     "fecha": fecha_key,
                     "total_eq_bcv": Decimal("0"),
-                    "total_eq_binance": Decimal("0"),
                     "por_moneda": {},
                     "por_metodo": {},
                     "ves_monto": Decimal("0"),
@@ -10599,7 +10657,6 @@ def _get_reporte_diario_sync(
                 }
             dia = cobranza_por_dia[fecha_key]
             dia["total_eq_bcv"] += eq_usd
-            dia["total_eq_binance"] += eq_usd
             dia["por_moneda"][moneda] = dia["por_moneda"].get(moneda, Decimal("0")) + monto
             dia["por_metodo"][metodo] = dia["por_metodo"].get(metodo, Decimal("0")) + eq_usd
             if moneda != "USD":
@@ -10681,7 +10738,6 @@ def _get_reporte_diario_sync(
             {
                 "fecha": k,
                 "total_eq_bcv": float(v["total_eq_bcv"]),
-                "total_eq_binance": float(v["total_eq_binance"]),
                 "por_moneda": {m: float(val) for m, val in v["por_moneda"].items()},
                 "por_metodo": {m: float(val) for m, val in v["por_metodo"].items()},
                 "ves_monto": float(v["ves_monto"]),
@@ -10702,7 +10758,6 @@ def _get_reporte_diario_sync(
 
         def _merge_cobranza(en_rango: list[dict]) -> dict:
             total_bcv = sum((v["total_eq_bcv"] for v in en_rango), Decimal("0"))
-            total_binance = sum((v["total_eq_binance"] for v in en_rango), Decimal("0"))
             ves_monto = sum((v["ves_monto"] for v in en_rango), Decimal("0"))
             ves_eq_usd = sum((v["ves_eq_usd"] for v in en_rango), Decimal("0"))
             por_metodo: dict[str, Decimal] = {}
@@ -10711,7 +10766,6 @@ def _get_reporte_diario_sync(
                     por_metodo[metodo] = por_metodo.get(metodo, Decimal("0")) + monto_m
             return {
                 "total_eq_bcv": float(total_bcv),
-                "total_eq_binance": float(total_binance),
                 "ves_monto": float(ves_monto),
                 "ves_eq_usd": float(ves_eq_usd),
                 "por_metodo": {m: float(val) for m, val in por_metodo.items()},

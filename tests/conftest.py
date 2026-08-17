@@ -17,3 +17,25 @@ def _reset_marca_fallback():
     set_marca_fallback("GLOBAL OIL")
     yield
     set_marca_fallback("GLOBAL OIL")
+
+
+@pytest.fixture(autouse=True)
+def _reset_ventas_cache():
+    """Evita fugas de estado entre tests -- ``_VENTAS_CACHE`` (agosto 2026,
+
+    caché corta de ``/api/ventas`` para la consolidación de fuentes) es un
+    dict a nivel de módulo en ``cxc.web.app``; sin este reset, un test que
+    corre primero con ``vendedor=None`` deja su resultado cacheado y el
+    siguiente test (con su propio repo mockeado y datos distintos) recibe
+    esa copia vieja en vez de recalcular -- mismo patrón de fuga que
+    ``_reset_marca_fallback`` ya evita para otro global.
+    """
+    from cxc.web import app as _app_module
+
+    _app_module._VENTAS_CACHE["data"] = None
+    _app_module._VENTAS_CACHE["timestamp"] = 0.0
+    _app_module._ventas_computing = False
+    yield
+    _app_module._VENTAS_CACHE["data"] = None
+    _app_module._VENTAS_CACHE["timestamp"] = 0.0
+    _app_module._ventas_computing = False
