@@ -8201,25 +8201,17 @@ async def get_tasas_historicas():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.get("/api/reglas-descuento")
-async def get_reglas_descuento():
-    try:
-        repo = get_repo()
-        return {
-            "primera_compra": [
-                serde.promocion_to_row(r) for r in repo.promociones_primera_compra()
-            ],
-            "recompra": [serde.recompra_to_row(r) for r in repo.descuentos_recompra()],
-            "pronto_pago": [serde.pronto_pago_to_row(r) for r in repo.descuentos_marca_categoria()],
-            "volumen": [serde.desc_volumen_to_row(r) for r in repo.descuentos_volumen()],
-            "producto": [serde.producto_to_row(r) for r in repo.descuentos_producto()],
-            "diferencial_cambiario": [
-                serde.diferencial_to_row(r) for r in repo.descuentos_diferencial_cambiario()
-            ],
-        }
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    # NOTA (agosto 2026, plan de consolidación de fuentes): existía una
+    # segunda ruta GET /api/reglas-descuento aquí (función
+    # get_reglas_descuento, shape dict por categoría) -- mismo patrón ya
+    # documentado y corregido antes con /api/config/descuentos-volumen.
+    # FastAPI/Starlette resuelve rutas duplicadas por ORDEN DE REGISTRO (la
+    # primera gana, la de arriba -- get_todas_reglas_descuento, shape lista
+    # plana), así que esta segunda definición era 100% inalcanzable: nunca
+    # se ejecutó, no la llama nada más en el código ni en tests. El
+    # frontend (loadReglasConsolidadas en app.js) ya espera la lista plana
+    # de la primera, así que no hay comportamiento real que preservar.
+    # Eliminada.
 
 
 @app.get("/api/auditoria")
