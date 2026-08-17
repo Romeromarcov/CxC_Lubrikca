@@ -228,9 +228,9 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
 def _parse_payment_term_days(t_name: str) -> int:
     """Días de crédito otorgados según el nombre del payment term de Odoo.
 
-    Mismo criterio que ``parse_term_days`` (closure de ``get_reporte_saldos``,
-    duplicado aquí a nivel de módulo para reusar en ``get_ventas`` sin
-    acoplar ambos endpoints)."""
+    Fuente única (agosto 2026) -- usada por ``get_ventas`` y
+    ``_get_reporte_saldos_sync``; antes esta última tenía su propia copia
+    idéntica como closure local (``parse_term_days``)."""
     if not t_name:
         return 0
     t_low = t_name.lower().strip()
@@ -2753,19 +2753,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
 
-        def parse_term_days(t_name: str) -> int:
-            if not t_name:
-                return 0
-            t_low = t_name.lower().strip()
-            if "immediate" in t_low or "contado" in t_low:
-                return 0
-            import re
-
-            m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
-            if m:
-                return int(m.group(1))
-            return 0
-
         # Read discount rules for theoretical evaluation when order is not in BandejaFacturacion
         repo.descuentos_marca_categoria()
 
@@ -3632,24 +3619,28 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 "descuento_adicional": float(audit_orden.descuento_adicional_a_aplicar),
             }
 
-            # Dates & aging calculation
+            # Dates & aging calculation -- misma fórmula que Ventas
+            # (_fecha_y_dias_vencido, fuente única de la antigüedad, agosto
+            # 2026); aquí se sigue resolviendo fecha_delivery en vivo
+            # (picking_delivery_map también decide "entrega_valida" más
+            # abajo, no solo la antigüedad -- no se puede sustituir sin
+            # duplicar esa segunda llamada a Odoo).
             fecha_delivery = picking_delivery_map.get(o.so_id)
             if not fecha_delivery:
                 fecha_delivery = o.fecha.isoformat()
 
             term_name = odoo_info.get("payment_term_name") or "Contado"
-            dias_credito = parse_term_days(term_name)
+            dias_credito = _parse_payment_term_days(term_name)
 
-            try:
-                dt_del = datetime.strptime(fecha_delivery[:10], "%Y-%m-%d").date()
-            except Exception:
-                dt_del = o.fecha
-            dt_venc = dt_del + timedelta(days=dias_credito)
-            fecha_vencimiento = dt_venc.isoformat()
-
-            dias_vencido = 0
-            if today_date > dt_venc:
-                dias_vencido = (today_date - dt_venc).days
+            dt_venc, dias_vencido = _fecha_y_dias_vencido(
+                {
+                    "fecha_entrega": fecha_delivery,
+                    "fecha": o.fecha.isoformat(),
+                    "dias_credito": dias_credito,
+                },
+                today_date,
+            )
+            fecha_vencimiento = dt_venc.isoformat() if dt_venc else o.fecha.isoformat()
 
             # Accumulate Aging KPIs with 4 distinct sub-balances per bucket
             s_inv = saldo_factura_odoo if saldo_factura_odoo is not None else 0.0
