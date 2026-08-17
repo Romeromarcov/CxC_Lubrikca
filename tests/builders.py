@@ -20,6 +20,7 @@ from cxc.models import (
     Moneda,
     OrdenVenta,
     Pago,
+    Producto,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoBeneficio,
@@ -353,4 +354,23 @@ def entrega(
         estado=estado,
         es_devolucion=es_devolucion,
         entrega_origen_id=entrega_origen_id,
+    )
+
+
+def producto(
+    producto_id: str = "P1",
+    *,
+    codigo: str = "SKU-1",
+    nombre: str = "Producto 1",
+    marca: str = "Sinoco",
+    volumen: str = "1.0",
+    peso: str = "1.0",
+) -> Producto:
+    return Producto(
+        producto_id=producto_id,
+        codigo=codigo,
+        nombre=nombre,
+        marca=marca,
+        volumen=Decimal(volumen),
+        peso=Decimal(peso),
     )

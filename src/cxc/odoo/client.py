@@ -28,7 +28,7 @@ from typing import Any
 
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
-from ..models import Cliente, Entrega, Factura, LineaOrden, Moneda, OrdenVenta, Pago
+from ..models import Cliente, Entrega, Factura, LineaOrden, Moneda, OrdenVenta, Pago, Producto
 
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
@@ -233,6 +233,21 @@ def map_entrega_espejo(rec: dict[str, Any]) -> Entrega:
     )
 
 
+def map_producto_espejo(rec: dict[str, Any]) -> Producto:
+    volumen = _dec(rec.get("volume"))
+    peso = _dec(rec.get("weight"))
+    marca_info = rec.get("brand_id")
+    marca = marca_info[1] if isinstance(marca_info, list | tuple) and len(marca_info) > 1 else ""
+    return Producto(
+        producto_id=str(rec["id"]),
+        codigo=str(rec.get("default_code", "") or ""),
+        nombre=str(rec.get("name", "") or ""),
+        marca=str(marca),
+        volumen=volumen,
+        peso=peso,
+    )
+
+
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
@@ -311,6 +326,10 @@ class OdooReader(ABC):
     # Entregas (Fase 0 del plan de consolidación de fuentes, agosto 2026):
     # mismo criterio que changed_facturas -- default "sin cambios".
     def changed_entregas(self, since: datetime | None) -> list[Entrega]:
+        return []
+
+    # Catálogo (Fase 0, agosto 2026): mismo criterio, default "sin cambios".
+    def changed_catalogo(self, since: datetime | None) -> list[Producto]:
         return []
 
 
@@ -568,6 +587,21 @@ class OdooXmlRpcReader(OdooReader):
             ],
         )
         return [map_entrega_espejo(r) for r in recs]
+
+    # --- Catálogo (espejo, Fase 0 del plan de consolidación de fuentes) -------
+    def changed_catalogo(self, since: datetime | None) -> list[Producto]:
+        """Productos (``product.product``) cambiados desde ``since`` --
+
+        volumen/peso/marca, referencia de baja frecuencia de cambio usada
+        hoy para litros y otras columnas que varias páginas piden en vivo
+        por separado (Ventas, Reporte Diario).
+        """
+        recs = self._search_read(
+            self.MODEL_PRODUCT,
+            self._delta(since),
+            ["id", "default_code", "name", "volume", "weight", "brand_id"],
+        )
+        return [map_producto_espejo(r) for r in recs]
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:

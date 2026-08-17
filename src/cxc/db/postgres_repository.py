@@ -46,6 +46,7 @@ from ..models import (
     Moneda,
     OrdenVenta,
     Pago,
+    Producto,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     ResultadoConciliacion,
@@ -291,6 +292,15 @@ class PostgresRepository(Repository):
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.entregas)).all()
         return [_row_to_entrega(r) for r in rows]
+
+    def upsert_catalogo(self, filas: list[Producto]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.catalogo, [_catalogo_to_row(p) for p in filas], ["producto_id"])
+
+    def all_catalogo(self) -> list[Producto]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.catalogo)).all()
+        return [_row_to_catalogo(r) for r in rows]
 
     # --- Lecturas para el motor -----------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -1023,6 +1033,28 @@ def _row_to_entrega(r: Any) -> Entrega:
         estado=r.estado,
         es_devolucion=r.es_devolucion,
         entrega_origen_id=r.entrega_origen_id,
+    )
+
+
+def _catalogo_to_row(p: Producto) -> dict[str, Any]:
+    return {
+        "producto_id": p.producto_id,
+        "codigo": p.codigo,
+        "nombre": p.nombre,
+        "marca": p.marca,
+        "volumen": p.volumen,
+        "peso": p.peso,
+    }
+
+
+def _row_to_catalogo(r: Any) -> Producto:
+    return Producto(
+        producto_id=r.producto_id,
+        codigo=r.codigo,
+        nombre=r.nombre,
+        marca=r.marca,
+        volumen=r.volumen,
+        peso=r.peso,
     )
 
 

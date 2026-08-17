@@ -36,6 +36,7 @@ from .models import (
     MetodoPago,
     OrdenVenta,
     Pago,
+    Producto,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
     SerieTasa,
@@ -151,6 +152,14 @@ class Repository(ABC):
 
     def all_entregas(self) -> list[Entrega]:
         raise NotImplementedError("all_entregas solo está implementado en PostgresRepository.")
+
+    def upsert_catalogo(self, filas: list[Producto]) -> None:
+        raise NotImplementedError(
+            "upsert_catalogo solo está implementado en PostgresRepository."
+        )
+
+    def all_catalogo(self) -> list[Producto]:
+        raise NotImplementedError("all_catalogo solo está implementado en PostgresRepository.")
 
     # --- Lecturas para el motor ---------------------------------------------
     @abstractmethod
@@ -413,6 +422,7 @@ class InMemoryRepository(Repository):
         self._pagos: dict[str, Pago] = {}
         self._facturas: dict[str, Factura] = {}
         self._entregas: dict[str, Entrega] = {}
+        self._catalogo: dict[str, Producto] = {}
         self._metodos: dict[str, MetodoPago] = {}
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
@@ -519,6 +529,13 @@ class InMemoryRepository(Repository):
 
     def all_entregas(self) -> list[Entrega]:
         return list(self._entregas.values())
+
+    def upsert_catalogo(self, filas: list[Producto]) -> None:
+        for p in filas:
+            self._catalogo[p.producto_id] = p
+
+    def all_catalogo(self) -> list[Producto]:
+        return list(self._catalogo.values())
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:

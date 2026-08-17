@@ -158,6 +158,26 @@ class Entrega:
     entrega_origen_id: str | None = None
 
 
+# --- 3.2d Catálogo (espejo, sync-owned -- Fase 0 del plan de consolidación
+# de fuentes, agosto 2026) ----------------------------------------------------
+@dataclass
+class Producto:
+    """Espejo de ``product.product`` -- datos de referencia (volumen, peso,
+
+    marca) usados hoy para el cálculo de litros y otras columnas que se
+    piden en vivo repetidamente en varias páginas (Ventas, Reporte Diario).
+    Cambia con poca frecuencia; se sincroniza igual que el resto por
+    ``write_date`` delta, sin necesidad de trato especial.
+    """
+
+    producto_id: str
+    codigo: str
+    nombre: str
+    marca: str
+    volumen: Decimal
+    peso: Decimal
+
+
 # Fallback de marca configurable (Configuración > Ajustes generales, clave
 # "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
 # (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor

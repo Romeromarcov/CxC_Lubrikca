@@ -130,6 +130,20 @@ entregas = Table(
     Column("entrega_origen_id", String, nullable=True),
 )
 
+# --- 3.2d Catálogo (espejo, sync-owned -- Fase 0 del plan de consolidación
+# de fuentes, agosto 2026). Referencia de product.product (volumen/peso/
+# marca) -- cambia con poca frecuencia, sync delta normal. -------------------
+catalogo = Table(
+    "catalogo",
+    metadata,
+    Column("producto_id", String, primary_key=True),
+    Column("codigo", String, nullable=False, server_default=""),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("marca", String, nullable=False, server_default=""),
+    Column("volumen", MONEY, nullable=False, server_default="0"),
+    Column("peso", MONEY, nullable=False, server_default="0"),
+)
+
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
 lineas_orden = Table(
     "lineas_orden",
