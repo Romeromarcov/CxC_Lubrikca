@@ -3152,17 +3152,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                         pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
-        hist_rows = repo.all_listas_precios_historicas()
-        hist_map = {}
-        for r in hist_rows:
-            code = str(r.get("codigo", "")).strip()
-            if code:
-                with contextlib.suppress(Exception):
-                    hist_map[code] = {
-                        "nombre": r.get("producto_nombre", ""),
-                        "usd": Decimal(str(r.get("precio_usd", "0") or "0")),
-                        "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
-                    }
+        hist_map = _build_hist_map(repo)
 
         historical_enabled = is_historical_pricelist_enabled(repo)
         reporte = []
@@ -4544,6 +4534,29 @@ def is_historical_pricelist_enabled(repo) -> bool:
         return val is None or val.strip().lower() not in ("false", "0", "no")
     except Exception:
         return True
+
+
+def _build_hist_map(repo) -> dict[str, dict[str, Any]]:
+    """Mapa código de producto -> {nombre, usd, eur} desde
+
+    ``ListasPreciosHistoricas`` (Lista Histórica de Auditoría). Fuente
+    única (agosto 2026) -- antes ``get_auditoria`` tenía su propia copia
+    idéntica de este bucle, con el propio código documentando la
+    duplicación como un bug preexistente (Tarea 6: variables que solo
+    existían como locales de ``_get_reporte_saldos_sync``, nunca
+    replicadas correctamente hasta que alguien las copió a mano)."""
+    hist_rows = repo.all_listas_precios_historicas()
+    hist_map: dict[str, dict[str, Any]] = {}
+    for r in hist_rows:
+        code = str(r.get("codigo", "")).strip()
+        if code:
+            with contextlib.suppress(Exception):
+                hist_map[code] = {
+                    "nombre": r.get("producto_nombre", ""),
+                    "usd": Decimal(str(r.get("precio_usd", "0") or "0")),
+                    "eur": Decimal(str(r.get("precio_bcv_euro", "0") or "0")),
+                }
+    return hist_map
 
 
 def orden_en_periodo_historico(repo, orden) -> bool:
@@ -8216,20 +8229,10 @@ async def get_auditoria():
         # Bug preexistente (Tarea 6): esta funcion usaba `cutoff_historical` y
         # `hist_map` sin definirlas nunca en su propio scope (solo existian
         # como variables locales de get_reporte_saldos) -- /api/auditoria
-        # siempre tiraba NameError y devolvia 500. Se replican aqui con la
-        # misma logica.
+        # siempre tiraba NameError y devolvia 500. Fuente única ahora (agosto
+        # 2026): _build_hist_map, ya no una copia local del mismo bucle.
         historical_enabled = is_historical_pricelist_enabled(repo)
-        hist_rows = repo.all_listas_precios_historicas()
-        hist_map: dict[str, dict[str, Any]] = {}
-        for _hr in hist_rows:
-            _code = str(_hr.get("codigo", "")).strip()
-            if _code:
-                with contextlib.suppress(Exception):
-                    hist_map[_code] = {
-                        "nombre": _hr.get("producto_nombre", ""),
-                        "usd": Decimal(str(_hr.get("precio_usd", "0") or "0")),
-                        "eur": Decimal(str(_hr.get("precio_bcv_euro", "0") or "0")),
-                    }
+        hist_map = _build_hist_map(repo)
 
         ordenes = repo.all_ordenes()
         lines_rows = _all_lineas_rows(repo)
