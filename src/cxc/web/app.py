@@ -118,6 +118,20 @@ def orden_excluida(o: Any, live_state: str | None = None, entrega_valida: bool =
     return not (st in ("cancel", "cancelled") and entrega_valida)
 
 
+# Caché por-orden de estado en vivo (agosto 2026, plan de reducción de
+# llamadas a Odoo) -- get_resumen, get_auditoria y el reporte diario piden
+# el estado en vivo de conjuntos de órdenes que se SOLAPAN (muchas órdenes
+# aparecen en más de una página) pero rara vez coinciden como lista
+# completa, así que cachear por el nombre de SO individual (no por el
+# conjunto completo pedido) es lo que realmente aprovecha el solapamiento.
+# TTL deliberadamente corto (45s, MUY por debajo de la ventana de 48h que
+# causó el bug real de la orden cancelada de $161,679.06 que motivó este
+# chequeo en vivo) -- reduce llamadas duplicadas cuando varias páginas
+# cargan casi al mismo tiempo, sin resucitar el riesgo de estado stale.
+_SO_STATE_CACHE: dict[str, tuple[str, float]] = {}
+_SO_STATE_CACHE_TTL = 45.0
+
+
 def get_live_so_states(so_names: list[str]) -> dict[str, str]:
     """Estado EN VIVO de cada sale.order en Odoo, para usar con orden_excluida.
 
@@ -126,26 +140,45 @@ def get_live_so_states(so_names: list[str]) -> dict[str, str]:
     (ventana delta de 48h vencida, downtime del servidor, etc.) -- verificado
     en vivo: una orden cancelada de $161,679.06 seguía contando como venta
     confirmada porque el espejo nunca se refrescó. Best-effort: si Odoo no
-    responde, se devuelve vacío y el llamador cae al estado local.
+    responde para las órdenes sin caché fresca, esas quedan fuera del dict
+    devuelto (el llamador, ``orden_excluida``, cae a su estado local SOLO
+    para esas -- no para el resto, a diferencia de un fallo total antes).
     """
     if not so_names:
         return {}
+    now_ts = time.time()
+    result: dict[str, str] = {}
+    faltantes: list[str] = []
+    for name in so_names:
+        cached = _SO_STATE_CACHE.get(name)
+        if cached is not None and now_ts - cached[1] < _SO_STATE_CACHE_TTL:
+            result[name] = cached[0]
+        else:
+            faltantes.append(name)
+    if not faltantes:
+        return result
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         if not execute:
-            return {}
+            return result
         so_recs = execute(
-            "sale.order", "search_read", [[["name", "in", so_names]]], {"fields": ["name", "state"]}
+            "sale.order",
+            "search_read",
+            [[["name", "in", faltantes]]],
+            {"fields": ["name", "state"]},
         )
-        return {
-            str(s["name"]).strip(): str(s.get("state", "")).strip().lower()
-            for s in so_recs
-            if str(s.get("name", "")).strip()
-        }
+        for s in so_recs:
+            name = str(s.get("name", "")).strip()
+            if not name:
+                continue
+            state = str(s.get("state", "")).strip().lower()
+            result[name] = state
+            _SO_STATE_CACHE[name] = (state, now_ts)
+        return result
     except Exception as e:
         logger.warning("Error consultando estado en vivo de órdenes en Odoo: %s", e)
-        return {}
+        return result
 
 
 def get_live_entregas_info(

@@ -53,3 +53,16 @@ def _reset_pricelist_items_cache():
     _app_module._PRICELIST_ITEMS_CACHE.clear()
     yield
     _app_module._PRICELIST_ITEMS_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_so_state_cache():
+    """Mismo patrón para ``_SO_STATE_CACHE`` (agosto 2026, caché por-orden
+
+    de estado en vivo entre Dashboard/Auditoría/Reporte Diario).
+    """
+    from cxc.web import app as _app_module
+
+    _app_module._SO_STATE_CACHE.clear()
+    yield
+    _app_module._SO_STATE_CACHE.clear()
