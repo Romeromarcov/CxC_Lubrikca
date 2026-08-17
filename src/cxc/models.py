@@ -134,6 +134,30 @@ class Factura:
     factura_origen_id: str | None = None
 
 
+# --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación
+# de fuentes, agosto 2026) ----------------------------------------------------
+@dataclass
+class Entrega:
+    """Espejo de ``stock.picking`` (despachos salientes y devoluciones) --
+
+    contenido INMUTABLE una vez "done": líneas/cantidades/fecha no cambian
+    tras ese punto. Sincronizada con ``write_date`` PROPIO del picking (no
+    del ``sale.order`` padre) -- una devolución procesada días después de
+    la entrega original NO necesariamente actualiza el ``write_date`` de la
+    orden, así que depender solo del sync de Órdenes puede perderla; este
+    espejo la captura directamente por su propio delta.
+    """
+
+    entrega_id: str  # id de Odoo (stock.picking), como string
+    so_id: str | None  # sale_id -- name de la SO asociada
+    tipo: str  # picking_type_code: outgoing | incoming | internal
+    fecha: date | None  # date_done -- None si aún no se completó
+    estado: str  # state de Odoo: draft/waiting/confirmed/assigned/done/cancel
+    es_devolucion: bool  # return_id set (picking de vuelta) o picking_type_code == incoming
+    # Para una devolución: id del despacho saliente original que revierte.
+    entrega_origen_id: str | None = None
+
+
 # Fallback de marca configurable (Configuración > Ajustes generales, clave
 # "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
 # (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor

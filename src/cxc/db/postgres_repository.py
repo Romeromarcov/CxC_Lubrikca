@@ -35,6 +35,7 @@ from ..models import (
     DescuentoProntoPago,
     DescuentoRecompra,
     DescuentoVolumen,
+    Entrega,
     EstadoBandeja,
     EstadoVinculacion,
     ExclusionRegla,
@@ -281,6 +282,15 @@ class PostgresRepository(Repository):
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.facturas)).all()
         return [_row_to_factura(r) for r in rows]
+
+    def upsert_entregas(self, filas: list[Entrega]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(conn, t.entregas, [_entrega_to_row(e) for e in filas], ["entrega_id"])
+
+    def all_entregas(self) -> list[Entrega]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.entregas)).all()
+        return [_row_to_entrega(r) for r in rows]
 
     # --- Lecturas para el motor -----------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -989,6 +999,30 @@ def _row_to_factura(r: Any) -> Factura:
         monto_sin_impuestos=r.monto_sin_impuestos,
         estado=r.estado,
         factura_origen_id=r.factura_origen_id,
+    )
+
+
+def _entrega_to_row(e: Entrega) -> dict[str, Any]:
+    return {
+        "entrega_id": e.entrega_id,
+        "so_id": e.so_id,
+        "tipo": e.tipo,
+        "fecha": e.fecha,
+        "estado": e.estado,
+        "es_devolucion": e.es_devolucion,
+        "entrega_origen_id": e.entrega_origen_id,
+    }
+
+
+def _row_to_entrega(r: Any) -> Entrega:
+    return Entrega(
+        entrega_id=r.entrega_id,
+        so_id=r.so_id,
+        tipo=r.tipo,
+        fecha=r.fecha,
+        estado=r.estado,
+        es_devolucion=r.es_devolucion,
+        entrega_origen_id=r.entrega_origen_id,
     )
 
 

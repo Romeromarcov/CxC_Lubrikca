@@ -12,6 +12,7 @@ from cxc.models import (
     DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
+    Entrega,
     Factura,
     Feriado,
     LineaOrden,
@@ -331,4 +332,25 @@ def factura(
         monto_sin_impuestos=Decimal(monto_sin_impuestos),
         estado=estado,
         factura_origen_id=factura_origen_id,
+    )
+
+
+def entrega(
+    entrega_id: str = "E1",
+    *,
+    so_id: str | None = "SO1",
+    tipo: str = "outgoing",
+    fecha: date | None = date(2026, 6, 5),
+    estado: str = "done",
+    es_devolucion: bool = False,
+    entrega_origen_id: str | None = None,
+) -> Entrega:
+    return Entrega(
+        entrega_id=entrega_id,
+        so_id=so_id,
+        tipo=tipo,
+        fecha=fecha,
+        estado=estado,
+        es_devolucion=es_devolucion,
+        entrega_origen_id=entrega_origen_id,
     )

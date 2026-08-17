@@ -28,6 +28,7 @@ from .models import (
     DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
+    Entrega,
     ExclusionRegla,
     Factura,
     Feriado,
@@ -142,6 +143,14 @@ class Repository(ABC):
 
     def all_facturas(self) -> list[Factura]:
         raise NotImplementedError("all_facturas solo está implementado en PostgresRepository.")
+
+    def upsert_entregas(self, filas: list[Entrega]) -> None:
+        raise NotImplementedError(
+            "upsert_entregas solo está implementado en PostgresRepository."
+        )
+
+    def all_entregas(self) -> list[Entrega]:
+        raise NotImplementedError("all_entregas solo está implementado en PostgresRepository.")
 
     # --- Lecturas para el motor ---------------------------------------------
     @abstractmethod
@@ -403,6 +412,7 @@ class InMemoryRepository(Repository):
         self._lineas: dict[str, LineaOrden] = {}
         self._pagos: dict[str, Pago] = {}
         self._facturas: dict[str, Factura] = {}
+        self._entregas: dict[str, Entrega] = {}
         self._metodos: dict[str, MetodoPago] = {}
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
@@ -502,6 +512,13 @@ class InMemoryRepository(Repository):
 
     def all_facturas(self) -> list[Factura]:
         return list(self._facturas.values())
+
+    def upsert_entregas(self, filas: list[Entrega]) -> None:
+        for e in filas:
+            self._entregas[e.entrega_id] = e
+
+    def all_entregas(self) -> list[Entrega]:
+        return list(self._entregas.values())
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:

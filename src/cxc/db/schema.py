@@ -115,6 +115,21 @@ facturas = Table(
     Column("factura_origen_id", String, nullable=True),
 )
 
+# --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación
+# de fuentes, agosto 2026). Contenido INMUTABLE de stock.picking una vez
+# "done". so_id SIN ForeignKey, mismo criterio que facturas.so_id. ----------
+entregas = Table(
+    "entregas",
+    metadata,
+    Column("entrega_id", String, primary_key=True),
+    Column("so_id", String, nullable=True, index=True),
+    Column("tipo", String, nullable=False, server_default="outgoing"),
+    Column("fecha", Date, nullable=True),
+    Column("estado", String, nullable=False, server_default="draft"),
+    Column("es_devolucion", Boolean, nullable=False, server_default="false"),
+    Column("entrega_origen_id", String, nullable=True),
+)
+
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
 lineas_orden = Table(
     "lineas_orden",

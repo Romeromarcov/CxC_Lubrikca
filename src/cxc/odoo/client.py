@@ -28,7 +28,7 @@ from typing import Any
 
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
-from ..models import Cliente, Factura, LineaOrden, Moneda, OrdenVenta, Pago
+from ..models import Cliente, Entrega, Factura, LineaOrden, Moneda, OrdenVenta, Pago
 
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
@@ -218,6 +218,21 @@ def map_factura_espejo(rec: dict[str, Any]) -> Factura:
     )
 
 
+def map_entrega_espejo(rec: dict[str, Any]) -> Entrega:
+    tipo = str(rec.get("picking_type_code", "") or "outgoing")
+    return_id = _m2o_id(rec.get("return_id"))
+    es_devolucion = bool(return_id) or tipo == "incoming"
+    return Entrega(
+        entrega_id=str(rec["id"]),
+        so_id=str(_m2o_name(rec.get("sale_id"))) or None,
+        tipo=tipo,
+        fecha=_to_date(rec.get("date_done")),
+        estado=str(rec.get("state", "") or "draft"),
+        es_devolucion=es_devolucion,
+        entrega_origen_id=return_id or None,
+    )
+
+
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
@@ -291,6 +306,11 @@ class OdooReader(ABC):
     # fake/implementación de test a soportarlo. Solo OdooXmlRpcReader lo
     # sobrescribe con la lectura real.
     def changed_facturas(self, since: datetime | None) -> list[Factura]:
+        return []
+
+    # Entregas (Fase 0 del plan de consolidación de fuentes, agosto 2026):
+    # mismo criterio que changed_facturas -- default "sin cambios".
+    def changed_entregas(self, since: datetime | None) -> list[Entrega]:
         return []
 
 
@@ -524,6 +544,30 @@ class OdooXmlRpcReader(OdooReader):
             ],
         )
         return [map_factura_espejo(r) for r in recs]
+
+    # --- Entregas (espejo inmutable, Fase 0 del plan de consolidación de
+    # fuentes) -----------------------------------------------------------------
+    def changed_entregas(self, since: datetime | None) -> list[Entrega]:
+        """Despachos/devoluciones (``stock.picking``) cambiados desde
+
+        ``since``, por ``write_date`` PROPIO del picking (ver docstring de
+        ``Entrega``) -- captura devoluciones procesadas después de la
+        entrega original aunque la SO padre no se haya vuelto a tocar.
+        """
+        recs = self._search_read(
+            self.MODEL_PICKING,
+            self._delta(since)
+            + [["picking_type_code", "in", ["outgoing", "incoming"]]],
+            [
+                "id",
+                "sale_id",
+                "picking_type_code",
+                "date_done",
+                "state",
+                "return_id",
+            ],
+        )
+        return [map_entrega_espejo(r) for r in recs]
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:
