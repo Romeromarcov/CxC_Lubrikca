@@ -188,10 +188,11 @@ def map_factura_espejo(rec: dict[str, Any]) -> Factura:
     move_type = str(rec.get("move_type", "") or "out_invoice")
     debit_origin_id = _m2o_id(rec.get("debit_origin_id"))
     reversed_entry_id = _m2o_id(rec.get("reversed_entry_id"))
-    # Odoo no distingue una Nota de Débito con un move_type propio: es un
-    # out_invoice normal con debit_origin_id apuntando a la factura que
-    # origina el débito (ver docstring de _get_ventas_sync, Tarea 3f/3g).
-    es_nota_debito = move_type == "out_invoice" and bool(debit_origin_id)
+    # Verificado en vivo (ver _leer_notas_debito_odoo en cxc.web.app): las
+    # notas de débito reales en Odoo 18 traen move_type == "out_debit"
+    # (journal dedicado), NUNCA "out_invoice" -- debit_origin_id sigue
+    # apuntando a la factura original en ambos casos.
+    es_nota_debito = move_type == "out_debit"
     factura_origen_id = debit_origin_id or reversed_entry_id or None
     currency = rec.get("currency_id")
     moneda = (
@@ -215,6 +216,8 @@ def map_factura_espejo(rec: dict[str, Any]) -> Factura:
         monto_sin_impuestos=_dec(rec.get("amount_untaxed")),
         estado=str(rec.get("state", "") or "draft"),
         factura_origen_id=factura_origen_id or None,
+        monto_total_signed_usd=_dec(rec.get("amount_total_signed_usd")),
+        monto_sin_impuestos_signed_usd=_dec(rec.get("amount_untaxed_signed_usd")),
     )
 
 
@@ -546,7 +549,10 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_MOVE,
             self._delta(since)
-            + [["move_type", "in", ["out_invoice", "out_refund"]]],
+            # "out_debit" incluido -- ver map_factura_espejo: las notas de
+            # débito reales de Odoo 18 usan ese move_type, no "out_invoice"
+            # (bug real detectado y corregido en agosto 2026).
+            + [["move_type", "in", ["out_invoice", "out_refund", "out_debit"]]],
             [
                 "id",
                 "name",
@@ -557,6 +563,8 @@ class OdooXmlRpcReader(OdooReader):
                 "currency_id",
                 "amount_total",
                 "amount_untaxed",
+                "amount_total_signed_usd",
+                "amount_untaxed_signed_usd",
                 "state",
                 "reversed_entry_id",
                 "debit_origin_id",

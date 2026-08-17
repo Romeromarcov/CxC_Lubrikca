@@ -113,6 +113,8 @@ facturas = Table(
     Column("monto_sin_impuestos", MONEY, nullable=False),
     Column("estado", String, nullable=False, server_default="posted"),
     Column("factura_origen_id", String, nullable=True),
+    Column("monto_total_signed_usd", MONEY, nullable=False, server_default="0"),
+    Column("monto_sin_impuestos_signed_usd", MONEY, nullable=False, server_default="0"),
 )
 
 # --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación

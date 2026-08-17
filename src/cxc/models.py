@@ -122,8 +122,13 @@ class Factura:
     factura_id: str  # id de Odoo (account.move), como string
     numero: str  # name, ej. "INV/2026/00123"
     so_id: str | None  # invoice_origin -- name de la SO que la originó
-    move_type: str  # "out_invoice" | "out_refund" (Odoo no distingue ND con un move_type propio)
-    es_nota_debito: bool  # out_invoice CON debit_origin_id -- Odoo la modela como una factura más
+    move_type: str  # "out_invoice" | "out_refund" | "out_debit"
+    # Verificado en vivo (agosto 2026, orden S00357 y otras del mismo
+    # cliente): las notas de débito reales en Odoo 18 traen
+    # move_type == "out_debit" (journal dedicado), NUNCA "out_invoice" --
+    # ver _leer_notas_debito_odoo en cxc.web.app para el bug real que
+    # motivó esta corrección.
+    es_nota_debito: bool
     fecha: date
     moneda: str
     monto_total: Decimal
@@ -132,6 +137,12 @@ class Factura:
     # Para NC/ND: factura original a la que se asocia (reversed_entry_id /
     # debit_origin_id). None para una factura normal (out_invoice sin ND).
     factura_origen_id: str | None = None
+    # Equivalente USD a la tasa registrada en la factura (la compañía
+    # factura en VES) -- mismo campo que usa _get_ventas_sync/map_factura
+    # para el ratio de conversión seguro entre monedas. 0 si Odoo no lo
+    # trae (factura muy antigua, moneda ya USD, etc.).
+    monto_total_signed_usd: Decimal = Decimal("0")
+    monto_sin_impuestos_signed_usd: Decimal = Decimal("0")
 
 
 # --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación

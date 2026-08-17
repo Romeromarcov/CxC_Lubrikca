@@ -320,6 +320,8 @@ def factura(
     monto_sin_impuestos: str = "1000",
     estado: str = "posted",
     factura_origen_id: str | None = None,
+    monto_total_signed_usd: str = "0",
+    monto_sin_impuestos_signed_usd: str = "0",
 ) -> Factura:
     return Factura(
         factura_id=factura_id,
@@ -333,6 +335,8 @@ def factura(
         monto_sin_impuestos=Decimal(monto_sin_impuestos),
         estado=estado,
         factura_origen_id=factura_origen_id,
+        monto_total_signed_usd=Decimal(monto_total_signed_usd),
+        monto_sin_impuestos_signed_usd=Decimal(monto_sin_impuestos_signed_usd),
     )
 
 

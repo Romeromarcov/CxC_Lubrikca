@@ -36,6 +36,8 @@ def test_map_factura_espejo_normal():
         "state": "posted",
         "reversed_entry_id": False,
         "debit_origin_id": False,
+        "amount_total_signed_usd": 1160.0,
+        "amount_untaxed_signed_usd": 1000.0,
     }
     f = map_factura_espejo(rec)
     assert f.factura_id == "501"
@@ -49,6 +51,8 @@ def test_map_factura_espejo_normal():
     assert f.monto_sin_impuestos == Decimal("1000.0")
     assert f.estado == "posted"
     assert f.factura_origen_id is None
+    assert f.monto_total_signed_usd == Decimal("1160.0")
+    assert f.monto_sin_impuestos_signed_usd == Decimal("1000.0")
 
 
 def test_map_factura_espejo_nota_credito_referencia_factura_origen():
@@ -72,14 +76,44 @@ def test_map_factura_espejo_nota_credito_referencia_factura_origen():
     assert f.factura_origen_id == "501"
 
 
-def test_map_factura_espejo_nota_debito_es_out_invoice_con_debit_origin():
-    """Odoo no distingue una ND con un move_type propio -- es un out_invoice
+def test_map_factura_espejo_nota_debito_es_move_type_out_debito():
+    """Verificado en vivo (agosto 2026, orden S00357 y otras del mismo
 
-    normal con debit_origin_id apuntando a la factura que la origina (ver
-    Tarea 3f/3g de _get_ventas_sync)."""
+    cliente): las notas de débito reales en Odoo 18 traen
+    move_type == "out_debit" (journal dedicado), NUNCA "out_invoice" --
+    debit_origin_id sigue apuntando a la factura original (ver
+    _leer_notas_debito_odoo en cxc.web.app para el bug real que motivó
+    esta corrección)."""
     rec = {
         "id": 503,
         "name": "INV/2026/0055",
+        "invoice_origin": "SO0042",
+        "move_type": "out_debit",
+        "invoice_date": "2026-06-20",
+        "date": "2026-06-20",
+        "currency_id": [1, "USD"],
+        "amount_total": 50.0,
+        "amount_untaxed": 43.1,
+        "state": "posted",
+        "reversed_entry_id": False,
+        "debit_origin_id": [501, "INV/2026/0042"],
+    }
+    f = map_factura_espejo(rec)
+    assert f.move_type == "out_debit"
+    assert f.es_nota_debito is True
+    assert f.factura_origen_id == "501"
+
+
+def test_map_factura_espejo_out_invoice_con_debit_origin_no_es_nota_debito():
+    """Guardia de regresión: antes de la corrección, este caso (out_invoice
+
+    con debit_origin_id) se clasificaba erróneamente como nota de débito.
+    Verificado en vivo que las ND reales usan move_type="out_debit", así
+    que un out_invoice normal nunca debe marcarse como ND aunque traiga
+    debit_origin_id poblado por alguna otra razón."""
+    rec = {
+        "id": 505,
+        "name": "INV/2026/0060",
         "invoice_origin": "SO0042",
         "move_type": "out_invoice",
         "invoice_date": "2026-06-20",
@@ -92,9 +126,7 @@ def test_map_factura_espejo_nota_debito_es_out_invoice_con_debit_origin():
         "debit_origin_id": [501, "INV/2026/0042"],
     }
     f = map_factura_espejo(rec)
-    assert f.move_type == "out_invoice"
-    assert f.es_nota_debito is True
-    assert f.factura_origen_id == "501"
+    assert f.es_nota_debito is False
 
 
 def test_map_factura_espejo_sin_fecha_cae_a_hoy_no_rompe():
@@ -141,6 +173,8 @@ def test_changed_facturas_filtra_por_move_type_salida():
                     "state": "posted",
                     "reversed_entry_id": False,
                     "debit_origin_id": False,
+                    "amount_total_signed_usd": 100.0,
+                    "amount_untaxed_signed_usd": 86.21,
                 }
             ]
         return []
@@ -150,10 +184,14 @@ def test_changed_facturas_filtra_por_move_type_salida():
     result = reader.changed_facturas(since=None)
     assert len(result) == 1
     assert result[0].factura_id == "1"
-    # El dominio debe filtrar move_type in [out_invoice, out_refund] -- nunca
-    # facturas de proveedor (in_invoice/in_refund).
+    # El dominio debe filtrar move_type in [out_invoice, out_refund,
+    # out_debit] -- nunca facturas de proveedor (in_invoice/in_refund).
+    # out_debit incluido porque las ND reales de Odoo 18 usan ese
+    # move_type, no "out_invoice" (ver map_factura_espejo).
     move_type_clauses = [c for c in captured_domain["domain"] if c[0] == "move_type"]
-    assert move_type_clauses == [["move_type", "in", ["out_invoice", "out_refund"]]]
+    assert move_type_clauses == [
+        ["move_type", "in", ["out_invoice", "out_refund", "out_debit"]]
+    ]
 
 
 # --- Repository: InMemoryRepository round-trip ------------------------------
