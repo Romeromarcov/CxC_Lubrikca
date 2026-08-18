@@ -4757,6 +4757,65 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
         return {}
 
 
+def _descuentos_lineas_desde_espejo(
+    repo,
+    so_names: set[str] | list[str],
+    invoice_ids: list[int],
+    inv_id_to_so: dict[int, str],
+    inv_usd_ratio_map: dict[int, float] | None = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Fase 4/5 (plan de consolidación de fuentes, agosto 2026) -- réplica,
+
+    leyendo del espejo (``LineaOrden``/``LineaFactura``), de
+    ``_leer_descuentos_lineas_odoo`` (lectura de descuentos ya
+    materializados en Odoo, NUNCA calcula ninguno). Misma detección de 2
+    patrones que la consulta en vivo: (a) ``discount`` % > 0 en la línea,
+    o (b) una línea de producto "Descuento" con ``subtotal`` negativo
+    (detectada aquí por el nombre de la LÍNEA conteniendo "descuento" --
+    la consulta en vivo original filtraba por ``product_id.name``, el
+    nombre del producto vinculado, no el de la línea; ambos suelen
+    coincidir salvo que alguien edite la descripción de la línea a mano,
+    ver parity check antes de conectar esto a un endpoint).
+
+    NO ESTÁ CONECTADA a ningún endpoint todavía.
+    """
+    so_set = {str(s) for s in so_names}
+    desc_orden: dict[str, float] = {}
+    for ln in repo.all_lineas():
+        if ln.so_id not in so_set:
+            continue
+        disc_pct = float(ln.descuento)
+        if disc_pct > 0:
+            monto = float(ln.cantidad) * float(ln.precio_unitario) * (disc_pct / 100.0)
+        elif "descuento" in ln.nombre.lower() and float(ln.subtotal) < 0:
+            monto = abs(float(ln.subtotal))
+        else:
+            continue
+        desc_orden[ln.so_id] = desc_orden.get(ln.so_id, 0.0) + monto
+
+    invoice_ids_set = set(invoice_ids)
+    desc_factura: dict[str, float] = {}
+    for lf in repo.all_lineas_factura():
+        if not lf.factura_id.isdigit():
+            continue
+        fid = int(lf.factura_id)
+        if fid not in invoice_ids_set:
+            continue
+        so_name = inv_id_to_so.get(fid, "")
+        if not so_name:
+            continue
+        disc_pct = float(lf.descuento)
+        if disc_pct > 0:
+            monto = float(lf.cantidad) * float(lf.precio_unitario) * (disc_pct / 100.0)
+        elif "descuento" in lf.nombre.lower() and float(lf.subtotal) < 0:
+            monto = abs(float(lf.subtotal))
+        else:
+            continue
+        ratio = (inv_usd_ratio_map or {}).get(fid, 1.0)
+        desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
+    return desc_orden, desc_factura
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
