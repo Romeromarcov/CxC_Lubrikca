@@ -31,6 +31,7 @@ from ..decimal_utils import to_decimal
 from ..models import (
     Cliente,
     Entrega,
+    EntregaLinea,
     Factura,
     LineaFactura,
     LineaOrden,
@@ -281,6 +282,18 @@ def map_linea_factura(rec: dict[str, Any]) -> LineaFactura:
     )
 
 
+def map_entrega_linea(rec: dict[str, Any]) -> EntregaLinea:
+    picking_raw = rec.get("picking_id")
+    entrega_id = (
+        str(picking_raw[0]) if isinstance(picking_raw, list | tuple) else str(picking_raw or "")
+    )
+    return EntregaLinea(
+        linea_id=str(rec["id"]),
+        entrega_id=entrega_id,
+        producto_id=_m2o_id(rec.get("product_id")),
+    )
+
+
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
@@ -372,6 +385,11 @@ class OdooReader(ABC):
     def changed_lineas_factura(self, since: datetime | None) -> list[LineaFactura]:
         return []
 
+    # Líneas de Entrega (Fase 5, agosto 2026): mismo criterio, default
+    # "sin cambios".
+    def changed_entregas_lineas(self, since: datetime | None) -> list[EntregaLinea]:
+        return []
+
 
 class OdooXmlRpcReader(OdooReader):
     MODEL_PARTNER = "res.partner"
@@ -383,6 +401,7 @@ class OdooXmlRpcReader(OdooReader):
     MODEL_PRODUCT = "product.product"
     MODEL_MOVE = "account.move"
     MODEL_MOVE_LINE = "account.move.line"
+    MODEL_STOCK_MOVE_LINE = "stock.move.line"
 
     def __init__(self, config: OdooConfig, execute: ExecuteFn | None = None) -> None:
         self._config = config
@@ -679,6 +698,23 @@ class OdooXmlRpcReader(OdooReader):
             ],
         )
         return [map_linea_factura(r) for r in recs]
+
+    # --- LineasEntrega (espejo, Fase 5 del plan de consolidación de
+    # fuentes) -- usado por Auditoría (Check 5) para detectar si se
+    # despachó un producto distinto o adicional al pedido. Filtrado a
+    # picking_type "outgoing" -- verificado en vivo (agosto 2026): sin
+    # este filtro, stock.move.line trae 6124 filas (traslados internos,
+    # compras, manufactura); solo 1729 son despachos salientes, lo único
+    # que este check necesita. Sin filtro de estado del picking padre --
+    # el consumidor filtra por picking "done" contra el espejo Entrega,
+    # mismo criterio que changed_entregas. ---------------------------------
+    def changed_entregas_lineas(self, since: datetime | None) -> list[EntregaLinea]:
+        recs = self._search_read(
+            self.MODEL_STOCK_MOVE_LINE,
+            self._delta(since) + [["picking_id.picking_type_id.code", "=", "outgoing"]],
+            ["id", "picking_id", "product_id"],
+        )
+        return [map_entrega_linea(r) for r in recs]
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:

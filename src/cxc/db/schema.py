@@ -163,6 +163,18 @@ lineas_factura = Table(
     Column("producto_id", String, nullable=False, server_default=""),
 )
 
+# --- 3.2f LineasEntrega (espejo, sync-owned -- Fase 5 del plan de
+# consolidación de fuentes, agosto 2026). Contenido INMUTABLE una vez que
+# el picking padre queda "done". entrega_id SIN ForeignKey, mismo criterio
+# que facturas.so_id. --------------------------------------------------------
+lineas_entrega = Table(
+    "lineas_entrega",
+    metadata,
+    Column("linea_id", String, primary_key=True),
+    Column("entrega_id", String, nullable=False, index=True),
+    Column("producto_id", String, nullable=False, server_default=""),
+)
+
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
 lineas_orden = Table(
     "lineas_orden",

@@ -31,12 +31,14 @@ class SyncResult:
     entregas: int = 0
     catalogo: int = 0
     lineas_factura: int = 0
+    entregas_lineas: int = 0
 
     @property
     def total(self) -> int:
         return (
             self.clientes + self.ordenes + self.lineas + self.pagos
             + self.facturas + self.entregas + self.catalogo + self.lineas_factura
+            + self.entregas_lineas
         )
 
 
@@ -83,6 +85,7 @@ class IncrementalSync:
         entregas = self._reader.changed_entregas(since)
         catalogo = self._reader.changed_catalogo(since)
         lineas_factura = self._reader.changed_lineas_factura(since)
+        entregas_lineas = self._reader.changed_entregas_lineas(since)
 
         # SOLO tablas-espejo. Estas operaciones no tocan Vinculaciones/SerieTasas.
         self._repo.upsert_clientes(clientes)
@@ -102,6 +105,9 @@ class IncrementalSync:
         lineas_factura_sincronizadas = self._sync_opcional(
             "líneas de factura", lineas_factura, self._repo.upsert_lineas_factura
         )
+        entregas_lineas_sincronizadas = self._sync_opcional(
+            "líneas de entrega", entregas_lineas, self._repo.upsert_entregas_lineas
+        )
 
         lineas_borradas = self.reconciliar_lineas_borradas(ordenes, lineas)
 
@@ -119,6 +125,7 @@ class IncrementalSync:
             entregas=entregas_sincronizadas,
             catalogo=catalogo_sincronizado,
             lineas_factura=lineas_factura_sincronizadas,
+            entregas_lineas=entregas_lineas_sincronizadas,
         )
         logger.info(
             "Sync delta: %s filas refrescadas, %s líneas huérfanas borradas",

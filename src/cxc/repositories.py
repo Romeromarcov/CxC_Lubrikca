@@ -29,6 +29,7 @@ from .models import (
     DescuentoRecompra,
     DescuentoVolumen,
     Entrega,
+    EntregaLinea,
     ExclusionRegla,
     Factura,
     Feriado,
@@ -170,6 +171,16 @@ class Repository(ABC):
     def all_lineas_factura(self) -> list[LineaFactura]:
         raise NotImplementedError(
             "all_lineas_factura solo está implementado en PostgresRepository."
+        )
+
+    def upsert_entregas_lineas(self, filas: list[EntregaLinea]) -> None:
+        raise NotImplementedError(
+            "upsert_entregas_lineas solo está implementado en PostgresRepository."
+        )
+
+    def all_entregas_lineas(self) -> list[EntregaLinea]:
+        raise NotImplementedError(
+            "all_entregas_lineas solo está implementado en PostgresRepository."
         )
 
     # --- Lecturas para el motor ---------------------------------------------
@@ -435,6 +446,7 @@ class InMemoryRepository(Repository):
         self._entregas: dict[str, Entrega] = {}
         self._catalogo: dict[str, Producto] = {}
         self._lineas_factura: dict[str, LineaFactura] = {}
+        self._entregas_lineas: dict[str, EntregaLinea] = {}
         self._metodos: dict[str, MetodoPago] = {}
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
@@ -555,6 +567,13 @@ class InMemoryRepository(Repository):
 
     def all_lineas_factura(self) -> list[LineaFactura]:
         return list(self._lineas_factura.values())
+
+    def upsert_entregas_lineas(self, filas: list[EntregaLinea]) -> None:
+        for ln in filas:
+            self._entregas_lineas[ln.linea_id] = ln
+
+    def all_entregas_lineas(self) -> list[EntregaLinea]:
+        return list(self._entregas_lineas.values())
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:

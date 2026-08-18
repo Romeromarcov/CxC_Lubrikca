@@ -36,6 +36,7 @@ from ..models import (
     DescuentoRecompra,
     DescuentoVolumen,
     Entrega,
+    EntregaLinea,
     EstadoBandeja,
     EstadoVinculacion,
     ExclusionRegla,
@@ -328,6 +329,20 @@ class PostgresRepository(Repository):
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.lineas_factura)).all()
         return [_row_to_linea_factura(r) for r in rows]
+
+    def upsert_entregas_lineas(self, filas: list[EntregaLinea]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.lineas_entrega,
+                [_entrega_linea_to_row(ln) for ln in filas],
+                ["linea_id"],
+            )
+
+    def all_entregas_lineas(self) -> list[EntregaLinea]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.lineas_entrega)).all()
+        return [_row_to_entrega_linea(r) for r in rows]
 
     # --- Lecturas para el motor -----------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -1112,6 +1127,22 @@ def _row_to_linea_factura(r: Any) -> LineaFactura:
         descuento=r.descuento,
         subtotal=r.subtotal,
         producto_id=getattr(r, "producto_id", "") or "",
+    )
+
+
+def _entrega_linea_to_row(ln: EntregaLinea) -> dict[str, Any]:
+    return {
+        "linea_id": ln.linea_id,
+        "entrega_id": ln.entrega_id,
+        "producto_id": ln.producto_id,
+    }
+
+
+def _row_to_entrega_linea(r: Any) -> EntregaLinea:
+    return EntregaLinea(
+        linea_id=r.linea_id,
+        entrega_id=r.entrega_id,
+        producto_id=r.producto_id,
     )
 
 

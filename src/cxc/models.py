@@ -221,6 +221,24 @@ class LineaFactura:
     producto_id: str = ""
 
 
+# --- 3.2f Líneas de Entrega (espejo, agosto 2026 -- Fase 5 del plan de
+# consolidación de fuentes) --------------------------------------------------
+@dataclass
+class EntregaLinea:
+    """Espejo de ``stock.move.line`` (líneas de producto de despachos) --
+
+    contenido INMUTABLE una vez que el picking padre queda "done", igual
+    criterio que ``Entrega``. Usado por Auditoría para detectar si se
+    despachó un producto distinto o adicional al pedido (Check 5) --
+    solo necesita existencia (qué producto salió en qué picking), no
+    cantidades ni montos.
+    """
+
+    linea_id: str  # id de Odoo (stock.move.line), como string
+    entrega_id: str  # picking_id -- calza Entrega.entrega_id
+    producto_id: str  # product_id
+
+
 # Fallback de marca configurable (Configuración > Ajustes generales, clave
 # "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
 # (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor
