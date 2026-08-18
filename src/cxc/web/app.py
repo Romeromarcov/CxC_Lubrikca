@@ -4757,6 +4757,43 @@ def _descuentos_lineas_desde_espejo(
     return desc_orden, desc_factura
 
 
+def _productos_despachados_desde_espejo(
+    repo, so_names: set[str] | list[str]
+) -> dict[str, set[int]]:
+    """Fase 5 (plan de consolidación de fuentes, agosto 2026) -- réplica,
+
+    leyendo del espejo (``Entrega``/``EntregaLinea``), del bloque en vivo
+    de ``get_auditoria`` (Check 5: "productos realmente despachados") que
+    arma ``delivered_products_by_so`` consultando ``sale.order`` +
+    ``stock.picking`` + ``stock.move.line`` en vivo -- usado para detectar
+    si se despachó un producto distinto o adicional al pedido.
+
+    Mismo criterio EXACTO que la consulta en vivo: solo pickings
+    ``state == "done"`` y ``picking_type_code == "outgoing"`` -- sin
+    excluir devoluciones explícitamente (la consulta en vivo tampoco lo
+    hace; un picking outgoing con ``return_id`` seteado, si existiera,
+    igual contaría aquí).
+
+    NO ESTÁ CONECTADA a ningún endpoint todavía.
+    """
+    so_set = {str(s) for s in so_names}
+    entrega_to_so: dict[str, str] = {
+        e.entrega_id: e.so_id
+        for e in repo.all_entregas()
+        if e.so_id in so_set and e.estado == "done" and e.tipo == "outgoing"
+    }
+    if not entrega_to_so:
+        return {}
+
+    result: dict[str, set[int]] = {}
+    for ln in repo.all_entregas_lineas():
+        so_name = entrega_to_so.get(ln.entrega_id)
+        if not so_name or not ln.producto_id.isdigit():
+            continue
+        result.setdefault(so_name, set()).add(int(ln.producto_id))
+    return result
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
