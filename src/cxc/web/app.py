@@ -4603,15 +4603,13 @@ def _facturacion_por_so_desde_espejo(
     ``reversed_entry_id``), pero leyendo del espejo ``Factura``
     (``repo.all_facturas()``) en vez de Odoo.
 
-    NO ESTÁ CONECTADA TODAVÍA a ``_get_ventas_sync`` ni a ningún endpoint
-    -- el espejo de Facturas aún no fue validado contra un Postgres real
-    (Fase 0 pendiente de correr `alembic upgrade head` contra la instancia
-    real) ni poblado por una corrida real del sync incremental. Conectar
-    esto antes de esa validación arriesgaría mostrar montos de facturación
-    en blanco o incorrectos en una página financiera real. Se deja lista y
-    con tests de paridad para que, una vez validado el espejo con datos
-    reales, conectarla sea un cambio pequeño y de bajo riesgo en vez de
-    escribir esta lógica bajo presión en ese momento.
+    Conectada a ``_get_ventas_sync`` (agosto 2026) tras validar con un
+    parity check completo contra datos reales (819 órdenes sincronizadas,
+    0 diffs). Se deja documentado el motivo original de por qué se
+    construyó dormida primero: escribir y validar esta lógica ANTES de
+    tener Postgres real disponible habría sido arriesgado para una
+    página financiera -- con datos reales ya se pudo confirmar paridad
+    exacta antes de conectarla.
 
     Una N/D o N/C sin ``so_id`` propio (Odoo no siempre puebla
     ``invoice_origin`` en esos documentos -- ver docstrings de
@@ -4626,7 +4624,16 @@ def _facturacion_por_so_desde_espejo(
     ``es_nota_debito``). NO incluye descuentos de línea de factura
     (``_leer_descuentos_lineas_odoo``) -- ese dato no tiene espejo todavía
     (requeriría mirrorear ``account.move.line``, fuera del alcance de esta
-    fase).
+    fase); esa función y ``_pagos_bcv_binance_por_orden`` (payment
+    reconciliation, dominio de Cobranza) se quedan en vivo, pero ambas
+    necesitan ``invoice_ids_all``/``inv_id_to_so``/``inv_usd_ratio_map``
+    como input -- también incluidos aquí, replicando el alcance EXACTO
+    (más angosto) de la consulta principal en vivo: solo facturas
+    ``out_invoice``/``out_refund`` posted con ``so_id`` PROPIO (sin
+    resolver vía cadena) -- las N/D nunca entraban ahí en vivo tampoco
+    (``_leer_notas_debito_odoo`` es una consulta aparte que nunca
+    alimentaba ``invoice_ids_all``), y una N/C resuelta vía
+    ``reversed_entry_id`` (sin ``invoice_origin`` propio) tampoco.
     """
     so_set = {str(s) for s in so_names}
     facturas = repo.all_facturas()
@@ -4651,6 +4658,9 @@ def _facturacion_por_so_desde_espejo(
     facturado_antes_imp: dict[str, float] = {}
     nc_con_imp: dict[str, float] = {}
     nd_con_imp: dict[str, float] = {}
+    invoice_ids_all: list[int] = []
+    inv_id_to_so: dict[int, str] = {}
+    inv_usd_ratio_map: dict[int, float] = {}
 
     for f in facturas:
         if f.estado != "posted":
@@ -4668,11 +4678,25 @@ def _facturacion_por_so_desde_espejo(
             facturado_con_imp[so] = facturado_con_imp.get(so, 0.0) + con_imp
             facturado_antes_imp[so] = facturado_antes_imp.get(so, 0.0) + antes_imp
 
+        if f.so_id and f.move_type in ("out_invoice", "out_refund") and f.factura_id.isdigit():
+            fid = int(f.factura_id)
+            invoice_ids_all.append(fid)
+            inv_id_to_so[fid] = f.so_id
+            amount_total_raw = float(f.monto_total)
+            inv_usd_ratio_map[fid] = (
+                abs(float(f.monto_total_signed_usd)) / amount_total_raw
+                if amount_total_raw > 0.005
+                else 1.0
+            )
+
     return {
         "facturado_con_imp": facturado_con_imp,
         "facturado_antes_imp": facturado_antes_imp,
         "nc_con_imp": nc_con_imp,
         "nd_con_imp": nd_con_imp,
+        "invoice_ids_all": invoice_ids_all,
+        "inv_id_to_so": inv_id_to_so,
+        "inv_usd_ratio_map": inv_usd_ratio_map,
     }
 
 
@@ -9403,7 +9427,6 @@ def _get_ventas_sync(
         nd_con_imp_map: dict[str, float] = {}
         desc_orden_odoo_map: dict[str, float] = {}
         desc_factura_odoo_map: dict[str, float] = {}
-        invoice_ids_out_invoice: list[int] = []
         invoice_ids_all: list[int] = []
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
@@ -9426,6 +9449,23 @@ def _get_ventas_sync(
             entrega_valida_set, fecha_entrega_map = _entregas_desde_espejo(repo, so_names)
             litros_por_so = _litros_por_so_desde_espejo(repo, lineas_por_so)
 
+            # Fase 2: facturación (facturado/NC/ND + invoice_ids_all/
+            # inv_id_to_so/inv_usd_ratio_map) también se lee del espejo --
+            # validado con datos reales (parity check: 0 diffs en las 819
+            # órdenes reales, incluyendo invoice_ids_all/inv_id_to_so/
+            # inv_usd_ratio_map). Esto reemplaza la consulta principal a
+            # account.move Y las llamadas a _leer_notas_debito_odoo/
+            # _leer_notas_credito_odoo -- su única función (calcular
+            # nc_con_imp/nd_con_imp) ya la da el espejo directamente.
+            fact_espejo = _facturacion_por_so_desde_espejo(repo, so_names)
+            facturado_con_imp_map = fact_espejo["facturado_con_imp"]
+            facturado_antes_imp_map = fact_espejo["facturado_antes_imp"]
+            nc_con_imp_map = fact_espejo["nc_con_imp"]
+            nd_con_imp_map = fact_espejo["nd_con_imp"]
+            invoice_ids_all = fact_espejo["invoice_ids_all"]
+            inv_id_to_so = fact_espejo["inv_id_to_so"]
+            inv_usd_ratio_map = fact_espejo["inv_usd_ratio_map"]
+
         if execute and so_names:
             try:
                 so_recs = execute(
@@ -9445,79 +9485,14 @@ def _get_ventas_sync(
                         )
                         dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
-                invoices = execute(
-                    "account.move",
-                    "search_read",
-                    [
-                        [
-                            ["invoice_origin", "in", so_names],
-                            ["state", "=", "posted"],
-                            ["move_type", "in", ["out_invoice", "out_refund"]],
-                        ]
-                    ],
-                    {
-                        "fields": [
-                            "id",
-                            "invoice_origin",
-                            "move_type",
-                            "amount_untaxed_signed_usd",
-                            "amount_total_signed_usd",
-                            "amount_total",
-                        ]
-                    },
-                )
-                inv_usd_ratio_map: dict[int, float] = {}
-                nc_ids_ya_contados: set[int] = set()
-                for inv in invoices:
-                    so = str(inv.get("invoice_origin", "")).strip()
-                    if not so:
-                        continue
-                    inv_id = int(inv.get("id") or 0)
-                    if inv_id:
-                        invoice_ids_all.append(inv_id)
-                        inv_id_to_so[inv_id] = so
-                        # Bug real (S00010 y similares): account.move.line
-                        # viene en la moneda de la FACTURA (a veces VES),
-                        # NUNCA se puede usar tal cual como si fuera USD --
-                        # mismo ratio (amount_total_signed_usd/amount_total)
-                        # que ya usa get_ventas_detalle para las líneas de
-                        # Real Factura, aplicado aquí también a los
-                        # descuentos leídos de esas líneas.
-                        amount_total_raw = float(inv.get("amount_total") or 0.0)
-                        inv_usd_ratio_map[inv_id] = (
-                            abs(float(inv.get("amount_total_signed_usd") or 0.0))
-                            / amount_total_raw
-                            if amount_total_raw > 0.005
-                            else 1.0
-                        )
-                    con_imp = abs(float(inv.get("amount_total_signed_usd") or 0.0))
-                    antes_imp = abs(float(inv.get("amount_untaxed_signed_usd") or 0.0))
-                    if str(inv.get("move_type")) == "out_refund":
-                        nc_con_imp_map[so] = nc_con_imp_map.get(so, 0.0) + con_imp
-                        if inv_id:
-                            nc_ids_ya_contados.add(inv_id)
-                    else:
-                        facturado_con_imp_map[so] = facturado_con_imp_map.get(so, 0.0) + con_imp
-                        facturado_antes_imp_map[so] = (
-                            facturado_antes_imp_map.get(so, 0.0) + antes_imp
-                        )
-                        if inv_id:
-                            invoice_ids_out_invoice.append(inv_id)
-
-                # Tarea 3c: descuentos ya materializados en Odoo (lectura, no cálculo).
+                # Descuentos ya materializados en Odoo a nivel de línea de
+                # factura (Tarea 3c) -- sin espejo todavía (requeriría
+                # mirrorear account.move.line), se queda en vivo,
+                # alimentada por invoice_ids_all/inv_id_to_so/
+                # inv_usd_ratio_map ya calculados arriba desde el espejo.
                 desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
                     execute, so_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map
                 )
-                # Tarea 3f: N/D atadas a las facturas out_invoice de estas órdenes.
-                nd_con_imp_map = _leer_notas_debito_odoo(
-                    execute, invoice_ids_out_invoice, inv_id_to_so
-                )
-                # N/C atadas vía reversed_entry_id (bug real S00357 y
-                # similares -- ver docstring de _leer_notas_credito_odoo).
-                for so_nc, monto_nc in _leer_notas_credito_odoo(
-                    execute, invoice_ids_out_invoice, inv_id_to_so, nc_ids_ya_contados
-                ).items():
-                    nc_con_imp_map[so_nc] = nc_con_imp_map.get(so_nc, 0.0) + monto_nc
                 # Monto pagado BCV/USD (Binance) -- columnas nuevas, cada
                 # ruta con SU PROPIA tasa del día del pago (no duplicadas
                 # como en _pagos_odoo_por_orden/_pagos_por_so_desde_cobranza).

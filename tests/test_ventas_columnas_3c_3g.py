@@ -20,6 +20,7 @@ from cxc.config import EngineConfig
 from cxc.models import (
     BandejaFacturacion,
     Entrega,
+    Factura,
     OrdenVenta,
     Producto,
     SerieTasa,
@@ -159,14 +160,116 @@ def _fake_execute(model, method, args, kwargs=None):
     return []
 
 
+def _facturas_estandar() -> list[Factura]:
+    """Espejo Factura equivalente al fixture account.move de _fake_execute
+
+    -- Fase 2: facturado/NC/ND ahora se leen del espejo, no de Odoo en
+    vivo (ver _facturacion_por_so_desde_espejo)."""
+    return [
+        Factura(
+            factura_id="900",
+            numero="FAC/900",
+            so_id="SO_OK",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("95.00"),
+            monto_sin_impuestos=Decimal("95.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("95.00"),
+            monto_sin_impuestos_signed_usd=Decimal("95.00"),
+        ),
+        Factura(
+            factura_id="902",
+            numero="FAC/902",
+            so_id="SO_PENDIENTE",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("97.00"),
+            monto_sin_impuestos=Decimal("97.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("97.00"),
+            monto_sin_impuestos_signed_usd=Decimal("97.00"),
+        ),
+        Factura(
+            factura_id="903",
+            numero="FAC/903",
+            so_id="SO_NC",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("200.00"),
+            monto_sin_impuestos=Decimal("200.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("200.00"),
+            monto_sin_impuestos_signed_usd=Decimal("200.00"),
+        ),
+        Factura(
+            factura_id="904",
+            numero="RFAC/904",
+            so_id="SO_NC",
+            move_type="out_refund",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("30.00"),
+            monto_sin_impuestos=Decimal("30.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("30.00"),
+            monto_sin_impuestos_signed_usd=Decimal("30.00"),
+        ),
+        Factura(
+            factura_id="901",
+            numero="FAC/901",
+            so_id="SO_ND",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("90.00"),
+            monto_sin_impuestos=Decimal("90.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("90.00"),
+            monto_sin_impuestos_signed_usd=Decimal("90.00"),
+        ),
+        # N/D: SO_ND, atada a la factura 901 vía debit_origin_id
+        # (factura_origen_id) -- Odoo no la marca con invoice_origin.
+        Factura(
+            factura_id="905",
+            numero="ND/905",
+            so_id=None,
+            move_type="out_debit",
+            es_nota_debito=True,
+            fecha=date(2026, 7, 2),
+            moneda="USD",
+            monto_total=Decimal("20.00"),
+            monto_sin_impuestos=Decimal("20.00"),
+            estado="posted",
+            factura_origen_id="901",
+            monto_total_signed_usd=Decimal("20.00"),
+            monto_sin_impuestos_signed_usd=Decimal("20.00"),
+        ),
+    ]
+
+
 def _run_get_ventas(
     descuentos_sistema: list[dict] | None = None,
     vinculaciones: list | None = None,
+    facturas: list[Factura] | None = None,
 ):
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
     mock_repo.all_descuentos_sistema_aprobados.return_value = descuentos_sistema or []
     mock_repo.all_vinculaciones.return_value = vinculaciones or []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    mock_repo.all_facturas.return_value = (
+        facturas if facturas is not None else _facturas_estandar()
+    )
     mock_repo.all_ordenes.return_value = [
         _orden("SO_OK", lista="4", monto_total="95.00"),
         _orden("SO_PENDIENTE", lista="4", monto_total="97.00"),
@@ -540,6 +643,26 @@ def test_estatus_pago_usa_pagos_odoo_directos_sin_vinculaciones() -> None:
     mock_repo._g.read_rows.return_value = []
     mock_repo.all_descuentos_sistema_aprobados.return_value = []
     mock_repo.all_vinculaciones.return_value = []  # sin Vinculaciones (caso real)
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: facturado/invoice_ids_all/inv_id_to_so ahora vienen del
+    # espejo Factura, no de account.move en vivo.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="950",
+            numero="FAC/950",
+            so_id="SO_PAGADA_ODOO",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 5),
+            moneda="USD",
+            monto_total=Decimal("100.00"),
+            monto_sin_impuestos=Decimal("90.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("100.00"),
+            monto_sin_impuestos_signed_usd=Decimal("90.00"),
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_PAGADA_ODOO",
@@ -966,6 +1089,26 @@ def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura(
     mock_repo.all_lineas.return_value = []
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: invoice_ids_all/inv_id_to_so/inv_usd_ratio_map ahora vienen
+    # del espejo Factura, no de account.move en vivo.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="1359",
+            numero="FAC/1359",
+            so_id="SO_VES_FACT",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="VES",
+            monto_total=Decimal("47455.08"),
+            monto_sin_impuestos=Decimal("40000.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("99.99"),
+            monto_sin_impuestos_signed_usd=Decimal("90.00"),
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_VES_FACT",
@@ -1088,44 +1231,10 @@ def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> No
     quedaban invisibles en /api/ventas."""
 
     def _fake_execute_nd_nc_reales(model, method, args, kwargs=None):
-        domain = args[0] if args else []
         if model == "sale.order":
             return [{"name": "SO_ND_NC", "state": "sale", "amount_untaxed": 3000.0}]
-        if model == "sale.order.line":
+        if model in ("sale.order.line", "account.move.line"):
             return []
-        if model == "account.move":
-            is_debit_query = any(
-                isinstance(c, list | tuple) and c and c[0] == "debit_origin_id" for c in domain
-            )
-            is_credit_query = any(
-                isinstance(c, list | tuple) and c and c[0] == "reversed_entry_id"
-                for c in domain
-            )
-            if is_debit_query:
-                # Caso real: move_type="out_debit", debit_origin_id SÍ
-                # apunta a la factura original.
-                return [{"debit_origin_id": [900, "00000052"], "amount_total_signed_usd": 375.94}]
-            if is_credit_query:
-                # Caso real: reversed_entry_id apunta a la factura original,
-                # invoice_origin queda vacío (no se consulta acá).
-                return [
-                    {
-                        "id": 6283,
-                        "reversed_entry_id": [900, "00000052"],
-                        "amount_total_signed_usd": -516.89,
-                    }
-                ]
-            # Consulta principal de facturas (invoice_origin in so_names).
-            return [
-                {
-                    "id": 900,
-                    "invoice_origin": "SO_ND_NC",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 3000.0,
-                    "amount_total_signed_usd": 3082.0,
-                    "amount_total": 3082.0,
-                }
-            ]
         return []
 
     mock_repo = MagicMock()
@@ -1136,6 +1245,61 @@ def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> No
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
     mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: facturado/NC/ND ahora vienen del espejo Factura -- el propio
+    # espejo ya resuelve ND/NC sin invoice_origin propio vía la cadena
+    # factura_origen_id (ver _facturacion_por_so_desde_espejo), replicando
+    # lo que hacían las 2 consultas en vivo removidas de este fixture.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="900",
+            numero="00000052",
+            so_id="SO_ND_NC",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 5, 14),
+            moneda="USD",
+            monto_total=Decimal("3082.00"),
+            monto_sin_impuestos=Decimal("3000.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("3082.00"),
+            monto_sin_impuestos_signed_usd=Decimal("3000.00"),
+        ),
+        # N/D real: move_type="out_debit", sin so_id propio -- se resuelve
+        # vía factura_origen_id -> factura 900.
+        Factura(
+            factura_id="901",
+            numero="ND/901",
+            so_id=None,
+            move_type="out_debit",
+            es_nota_debito=True,
+            fecha=date(2026, 5, 15),
+            moneda="USD",
+            monto_total=Decimal("375.94"),
+            monto_sin_impuestos=Decimal("375.94"),
+            estado="posted",
+            factura_origen_id="900",
+            monto_total_signed_usd=Decimal("375.94"),
+            monto_sin_impuestos_signed_usd=Decimal("375.94"),
+        ),
+        # N/C real: invoice_origin vacío, enlazada vía reversed_entry_id.
+        Factura(
+            factura_id="6283",
+            numero="RFAC/6283",
+            so_id=None,
+            move_type="out_refund",
+            es_nota_debito=False,
+            fecha=date(2026, 5, 15),
+            moneda="USD",
+            monto_total=Decimal("516.89"),
+            monto_sin_impuestos=Decimal("516.89"),
+            estado="posted",
+            factura_origen_id="900",
+            monto_total_signed_usd=Decimal("-516.89"),
+            monto_sin_impuestos_signed_usd=Decimal("-516.89"),
+        ),
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_ND_NC",
@@ -1186,17 +1350,6 @@ def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_y_eur_para_historica(
     def _fake_execute(model, method, args, kwargs=None):
         if model == "sale.order":
             return [{"name": "SO_HIST_PAGO", "state": "sale", "amount_untaxed": 100.0}]
-        if model == "account.move":
-            return [
-                {
-                    "id": 950,
-                    "invoice_origin": "SO_HIST_PAGO",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 28.0,
-                    "amount_total_signed_usd": 32.53,
-                    "amount_total": 16606.59,
-                }
-            ]
         if model == "account.payment":
             return [
                 {
@@ -1218,6 +1371,27 @@ def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_y_eur_para_historica(
     mock_repo.all_lineas.return_value = []
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: invoice_ids_all/inv_id_to_so ahora vienen del espejo
+    # Factura -- _pagos_bcv_binance_por_orden (payment reconciliation,
+    # dominio de Cobranza) se queda en vivo, pero necesita esos ids.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="950",
+            numero="FAC/950",
+            so_id="SO_HIST_PAGO",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 3, 9),
+            moneda="VES",
+            monto_total=Decimal("16606.59"),
+            monto_sin_impuestos=Decimal("14000.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("32.53"),
+            monto_sin_impuestos_signed_usd=Decimal("28.00"),
+        )
+    ]
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_serie_tasas.return_value = [
         SerieTasa(

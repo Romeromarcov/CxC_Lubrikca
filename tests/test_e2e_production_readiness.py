@@ -14,6 +14,7 @@ from cxc.models import (
     DescuentoMarcaCategoria,
     DescuentoVolumen,
     EstadoVinculacion,
+    Factura,
     LineaOrden,
     Moneda,
     OrdenVenta,
@@ -991,17 +992,6 @@ def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     def _fake_execute(model, method, args, kwargs=None):
         if model == "sale.order":
             return [{"name": "SO_AUD", "state": "sale", "amount_untaxed": 300.0}]
-        if model == "account.move":
-            return [
-                {
-                    "id": 9001,
-                    "invoice_origin": "SO_AUD",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 258.62,
-                    "amount_total_signed_usd": 300.0,
-                    "amount_total": 300.0,
-                }
-            ]
         return []
 
     mock_repo = MagicMock()
@@ -1013,6 +1003,26 @@ def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     mock_repo.all_descuentos_sistema_aprobados.return_value = []
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: facturado/NC/ND ahora vienen del espejo Factura, no de
+    # account.move en vivo.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="9001",
+            numero="FAC/9001",
+            so_id="SO_AUD",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("300.00"),
+            monto_sin_impuestos=Decimal("258.62"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("300.00"),
+            monto_sin_impuestos_signed_usd=Decimal("258.62"),
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_AUD",
@@ -1956,6 +1966,44 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
             total_motor=Decimal("130.00"),
         ),
     ]
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: facturado/NC/ND ahora vienen del espejo Factura, no de
+    # account.move en vivo.
+    mock_repo.all_facturas.return_value = [
+        # SO_V1: facturado al monto lleno, sin descuento -- coincide
+        # exactamente con la bruta teórica + IVA. No es una alerta.
+        Factura(
+            factura_id="1",
+            numero="FAC/1",
+            so_id="SO_V1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
+        # SO_V2: facturado muy por debajo -- ni siquiera cubre la venta
+        # neta teórica + IVA ($208.80). Debe alertar.
+        Factura(
+            factura_id="2",
+            numero="FAC/2",
+            so_id="SO_V2",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 2),
+            moneda="USD",
+            monto_total=Decimal("162.40"),
+            monto_sin_impuestos=Decimal("140.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("162.40"),
+            monto_sin_impuestos_signed_usd=Decimal("140.00"),
+        ),
+    ]
 
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
@@ -1969,25 +2017,6 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
                 {"name": "SO_V1", "state": "sale", "amount_untaxed": 100.0},
                 {"name": "SO_V2", "state": "sale", "amount_untaxed": 200.0},
                 {"name": "SO_V3", "state": "sale", "amount_untaxed": 140.0},
-            ]
-        if model == "account.move":
-            return [
-                # SO_V1: facturado al monto lleno, sin descuento -- coincide
-                # exactamente con la bruta teórica + IVA. No es una alerta.
-                {
-                    "invoice_origin": "SO_V1",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 100.0,
-                    "amount_total_signed_usd": 116.0,
-                },
-                # SO_V2: facturado muy por debajo -- ni siquiera cubre la
-                # venta neta teórica + IVA ($208.80). Debe alertar.
-                {
-                    "invoice_origin": "SO_V2",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 140.0,
-                    "amount_total_signed_usd": 162.40,
-                },
             ]
         return []
 
