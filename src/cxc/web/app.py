@@ -2716,10 +2716,11 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         except Exception as e_conn:
             logger.warning("No se pudo conectar a Odoo en get_reporte_saldos: %s", e_conn)
 
-        # Query Odoo SOs for seller (user_id), payment terms & picking_ids
+        # Query Odoo SOs for seller (user_id), payment terms & estado en vivo
+        # (genuinamente mutable -- se queda en vivo, ver docstring del plan
+        # de consolidación de fuentes).
         so_ids_names = [o.so_id for o in ordenes]
         so_odoo_data = {}
-        all_picking_ids = set()
         if execute and so_ids_names:
             try:
                 so_records = execute(
@@ -2735,7 +2736,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                             "state",
                             "delivery_status",
                             "invoice_status",
-                            "picking_ids",
                         ]
                     },
                 )
@@ -2761,82 +2761,31 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                         "delivery_status": s.get("delivery_status"),
                         "invoice_status": s.get("invoice_status"),
                     }
-                    p_ids = s.get("picking_ids")
-                    if p_ids and isinstance(p_ids, list | tuple):
-                        all_picking_ids.update(p_ids)
             except Exception as e_so:
                 logger.warning("Error consultando sale.order en Odoo: %s", e_so)
 
-        # Query Odoo Pickings bound to active SOs or picking_ids (no full scan)
-        picking_delivery_map = {}
-        picking_return_set = set()
-        if execute and so_ids_names:
-            try:
-                domain_pickings = [["state", "=", "done"]]
-                if all_picking_ids:
-                    domain_pickings.append(["id", "in", list(all_picking_ids)])
-                else:
-                    domain_pickings.append(["origin", "in", so_ids_names])
-
-                pickings = execute(
-                    "stock.picking",
-                    "search_read",
-                    [domain_pickings],
-                    {
-                        "fields": [
-                            "id",
-                            "origin",
-                            "sale_id",
-                            "date_done",
-                            "scheduled_date",
-                            "picking_type_code",
-                            "return_id",
-                        ]
-                    },
-                )
-                p_by_id = {p["id"]: p for p in pickings}
-                for p in pickings:
-                    so_name = None
-                    s_info = p.get("sale_id")
-                    if isinstance(s_info, list | tuple) and len(s_info) > 1:
-                        so_name = s_info[1]
-                    elif p.get("origin"):
-                        for name in so_ids_names:
-                            if name and name in str(p["origin"]):
-                                so_name = name
-                                break
-                    if not so_name and p.get("return_id"):
-                        ret_parent_id = (
-                            p["return_id"][0] if isinstance(p["return_id"], list | tuple) else None
-                        )
-                        if ret_parent_id and ret_parent_id in p_by_id:
-                            parent_p = p_by_id[ret_parent_id]
-                            ps_info = parent_p.get("sale_id")
-                            if isinstance(ps_info, list | tuple) and len(ps_info) > 1:
-                                so_name = ps_info[1]
-
-                    p_code = str(p.get("picking_type_code") or "")
-                    is_return = (
-                        bool(p.get("return_id"))
-                        or (p_code == "incoming")
-                        or ("Devolución" in str(p.get("origin") or ""))
-                        or ("Return" in str(p.get("origin") or ""))
-                    )
-
-                    if so_name:
-                        if is_return:
-                            picking_return_set.add(so_name)
-                        elif p_code == "outgoing":
-                            dt_done = p.get("date_done") or p.get("scheduled_date")
-                            if dt_done:
-                                dt_str = str(dt_done).split(" ")[0]
-                                if (
-                                    so_name not in picking_delivery_map
-                                    or dt_str > picking_delivery_map[so_name]
-                                ):
-                                    picking_delivery_map[so_name] = dt_str
-            except Exception as e_pic:
-                logger.warning("Error consultando stock.picking en Odoo: %s", e_pic)
+        # Fase 4 (plan de consolidación de fuentes, agosto 2026): entregas
+        # ahora se leen del espejo en vez de Odoo en vivo -- validado con
+        # un parity check contra las 819 órdenes reales sincronizadas.
+        # picking_delivery_map/picking_return_set (removidos) tenían el
+        # MISMO bug real que ya se encontró y corrigió en
+        # get_live_entregas_info (Ventas, Fase 2): un picking interno
+        # (transferencia de bodega) con return_id apuntando a otro picking
+        # interno se marcaba como devolución de cliente sin serlo -- 5
+        # órdenes reales (S00076/S00091/S00098/S00224/S00329) salían con
+        # "entrega_valida=False" incorrectamente. changed_entregas ya
+        # filtra picking_type_code en el sync, así que el espejo no tiene
+        # ese bug. Los otros 2 fallbacks del código en vivo (resolución de
+        # so_name vía substring de "origin", y vía cadena de return_id) sí
+        # se necesitaron para 4 pickings reales sin sale_id -- no
+        # replicados en cxc.odoo.client.map_entrega_espejo todavía; si
+        # aparecen en una corrida futura, esas 4 órdenes puntuales
+        # perderían su fecha de entrega (no su facturación/pago) hasta que
+        # se agregue esa resolución al sync.
+        picking_delivery_map: dict[str, str] = {}
+        entrega_valida_set: set[str] = set()
+        if so_ids_names:
+            entrega_valida_set, picking_delivery_map = _entregas_desde_espejo(repo, so_ids_names)
 
         # Compute payments per SO from manual Vinculaciones (Google Sheets)
         pagos_by_so = {}
@@ -3348,7 +3297,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         new_audit_rows: list[dict] = []
         for o in ordenes:
             live_state = so_odoo_data.get(o.so_id, {}).get("state")
-            entrega_valida = o.so_id in picking_delivery_map and o.so_id not in picking_return_set
+            entrega_valida = o.so_id in entrega_valida_set
             if orden_excluida(o, live_state=live_state, entrega_valida=entrega_valida):
                 continue
 
@@ -3742,10 +3691,9 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
             # Dates & aging calculation -- misma fórmula que Ventas
             # (_fecha_y_dias_vencido, fuente única de la antigüedad, agosto
-            # 2026); aquí se sigue resolviendo fecha_delivery en vivo
-            # (picking_delivery_map también decide "entrega_valida" más
-            # abajo, no solo la antigüedad -- no se puede sustituir sin
-            # duplicar esa segunda llamada a Odoo).
+            # 2026). picking_delivery_map (Fase 4: ahora viene del espejo,
+            # ver _entregas_desde_espejo más arriba) también decide
+            # "entrega_valida" más abajo, no solo la antigüedad.
             fecha_delivery = picking_delivery_map.get(o.so_id)
             if not fecha_delivery:
                 fecha_delivery = o.fecha.isoformat()
