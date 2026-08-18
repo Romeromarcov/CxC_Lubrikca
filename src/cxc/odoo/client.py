@@ -269,6 +269,8 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
         descuento=_dec(rec.get("discount")),
         subcategoria=str(rec.get("subcategoria", "") or ""),
         presentacion_odoo=str(rec.get("presentacion_odoo", "") or ""),
+        nombre=str(rec.get("name", "") or ""),
+        subtotal=_dec(rec.get("price_subtotal")),
     )
 
 
@@ -639,6 +641,8 @@ class OdooXmlRpcReader(OdooReader):
                 "price_unit",
                 "qty_delivered",
                 "discount",
+                "name",
+                "price_subtotal",
             ],
         )
         prod_ids = _ids_of(recs, "product_id")

@@ -1075,6 +1075,8 @@ def _linea_to_row(ln: LineaOrden) -> dict[str, Any]:
         "descuento": ln.descuento,
         "subcategoria": ln.subcategoria,
         "presentacion_odoo": ln.presentacion_odoo,
+        "nombre": ln.nombre,
+        "subtotal": ln.subtotal,
     }
 
 
@@ -1091,6 +1093,8 @@ def _row_to_linea(r: Any) -> LineaOrden:
         descuento=r.descuento,
         subcategoria=getattr(r, "subcategoria", "") or "",
         presentacion_odoo=getattr(r, "presentacion_odoo", "") or "",
+        nombre=getattr(r, "nombre", "") or "",
+        subtotal=getattr(r, "subtotal", None) or Decimal("0"),
     )
 
 

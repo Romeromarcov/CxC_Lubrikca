@@ -167,6 +167,10 @@ lineas_orden = Table(
     # el proximo sync o hasta correr el script de backfill.
     Column("subcategoria", String, nullable=False, server_default=""),
     Column("presentacion_odoo", String, nullable=False, server_default=""),
+    # nombre/subtotal (agosto 2026, Fase 4/5) -- ver docstring de
+    # LineaOrden en cxc.models.
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("subtotal", MONEY, nullable=False, server_default="0"),
 )
 
 # --- 3.4 Pagos (espejo, sync-owned + columnas humanas de cobranza) ----------

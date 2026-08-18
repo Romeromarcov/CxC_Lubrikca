@@ -231,6 +231,15 @@ class LineaOrden:
     # (Tambor)" -> "TAMBOR"). Vacío si el producto no la trae en el nombre
     # (ítems que no son de venta de lubricante). Ver OdooClient._productos.
     presentacion_odoo: str = ""
+    # Nombre/descripción de la línea en Odoo y su subtotal con descuento ya
+    # aplicado -- agregados agosto 2026 para el espejo de descuentos de
+    # línea (Fase 4/5 del plan de consolidación de fuentes): ambos ya se
+    # pedían en vivo por separado (sale.order.line.name/price_subtotal) en
+    # _leer_descuentos_lineas_odoo para detectar el patrón de línea de
+    # producto "Descuento" con price_subtotal negativo, que "descuento"
+    # (el % de línea) solo no captura.
+    nombre: str = ""
+    subtotal: Decimal = Decimal("0")
 
     @property
     def resolved_marca(self) -> str:
