@@ -2896,130 +2896,34 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             if estados and all(ps in ("paid", "in_payment") for ps in estados):
                 so_pagada_en_odoo.add(so_name)
 
-        # ── Descuentos en líneas de FACTURAS (account.move.line.discount) ──────
-        # Captura dos formas de descuento: (a) el campo `discount` (%) de la línea,
-        # y (b) una línea aparte del producto "Descuento" con `price_subtotal` negativo
-        # (patrón usado en Lubrikca en vez de/además del campo discount).
-        inv_line_discounts_by_so: dict[str, float] = {}
-        inv_line_discount_detail_by_so: dict[str, str] = {}
-        if execute and invoice_ids_all:
-            try:
-                inv_lines = execute(
-                    "account.move.line",
-                    "search_read",
-                    [
-                        [
-                            ["move_id", "in", invoice_ids_all],
-                            ["display_type", "in", ["product", False]],
-                            "|",
-                            ["discount", ">", 0],
-                            "&",
-                            ["product_id.name", "ilike", "descuento"],
-                            ["price_subtotal", "<", 0],
-                        ]
-                    ],
-                    {
-                        "fields": [
-                            "move_id",
-                            "name",
-                            "quantity",
-                            "price_unit",
-                            "discount",
-                            "price_subtotal",
-                            "currency_id",
-                        ]
-                    },
-                )
-                for il in inv_lines:
-                    move_raw = il.get("move_id")
-                    move_id = (
-                        move_raw[0] if isinstance(move_raw, list | tuple) else int(move_raw or 0)
-                    )
-                    so_name = inv_id_to_so.get(move_id, "")
-                    if not so_name:
-                        continue
-                    disc_pct_field = float(il.get("discount") or 0)
-                    if disc_pct_field > 0:
-                        qty = float(il.get("quantity") or 0)
-                        price = float(il.get("price_unit") or 0)
-                        disc_monto = qty * price * (disc_pct_field / 100.0)
-                        new_frag = f"{str(il.get('name') or 'línea')[:40]}: {disc_pct_field:.1f}%"
-                    else:
-                        # Línea aparte de producto "Descuento" (price_subtotal negativo).
-                        disc_monto = abs(float(il.get("price_subtotal") or 0))
-                        new_frag = f"{str(il.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
-                    inv_line_discounts_by_so[so_name] = (
-                        inv_line_discounts_by_so.get(so_name, 0.0) + disc_monto
-                    )
-                    detail_existing = inv_line_discount_detail_by_so.get(so_name, "")
-                    inv_line_discount_detail_by_so[so_name] = (
-                        (detail_existing + "; " + new_frag).lstrip("; ")
-                        if detail_existing
-                        else new_frag
-                    )
-            except Exception as e_il:
-                logger.warning("Error al consultar account.move.line discounts: %s", e_il)
-
-        # ── Descuentos en líneas de la ORDEN (sale.order.line.discount) ─────────
-        # Misma lógica de dos formas de descuento que en facturas (ver arriba).
-        sol_discounts_by_so: dict[str, float] = {}
-        sol_discount_detail_by_so: dict[str, str] = {}
-        if execute and so_ids_names:
-            try:
-                sol_lines = execute(
-                    "sale.order.line",
-                    "search_read",
-                    [
-                        [
-                            ["order_id.name", "in", so_ids_names],
-                            "|",
-                            ["discount", ">", 0],
-                            "&",
-                            ["product_id.name", "ilike", "descuento"],
-                            ["price_subtotal", "<", 0],
-                        ]
-                    ],
-                    {
-                        "fields": [
-                            "order_id",
-                            "name",
-                            "product_uom_qty",
-                            "price_unit",
-                            "discount",
-                            "price_subtotal",
-                        ]
-                    },
-                )
-                for sol in sol_lines:
-                    order_raw = sol.get("order_id")
-                    so_name = (
-                        order_raw[1]
-                        if isinstance(order_raw, list | tuple) and len(order_raw) > 1
-                        else str(order_raw or "")
-                    )
-                    if not so_name:
-                        continue
-                    disc_pct_field = float(sol.get("discount") or 0)
-                    if disc_pct_field > 0:
-                        qty = float(sol.get("product_uom_qty") or 0)
-                        price = float(sol.get("price_unit") or 0)
-                        disc_monto = qty * price * (disc_pct_field / 100.0)
-                        new_frag = f"{str(sol.get('name') or 'línea')[:40]}: {disc_pct_field:.1f}%"
-                    else:
-                        # Línea aparte de producto "Descuento" (price_subtotal negativo).
-                        disc_monto = abs(float(sol.get("price_subtotal") or 0))
-                        new_frag = f"{str(sol.get('name') or 'Descuento')[:40]}: ${disc_monto:.2f}"
-                    sol_discounts_by_so[so_name] = (
-                        sol_discounts_by_so.get(so_name, 0.0) + disc_monto
-                    )
-                    detail_existing = sol_discount_detail_by_so.get(so_name, "")
-                    sol_discount_detail_by_so[so_name] = (
-                        (detail_existing + "; " + new_frag).lstrip("; ")
-                        if detail_existing
-                        else new_frag
-                    )
-            except Exception as e_sol:
-                logger.warning("Error al consultar sale.order.line discounts: %s", e_sol)
+        # Fase 4 (plan de consolidación de fuentes, agosto 2026): descuentos
+        # de línea (orden + factura) ahora se leen del espejo -- validado
+        # con un parity check completo contra las 819 órdenes reales (0
+        # diffs en montos Y en los strings de detalle legible).
+        #
+        # Bug real encontrado en el camino: el bloque en vivo que esto
+        # reemplaza NUNCA aplicaba inv_usd_ratio_map a los descuentos de
+        # línea de FACTURA -- a diferencia de la función equivalente ya
+        # usada por Ventas (_leer_descuentos_lineas_odoo), que sí lo hace
+        # desde la corrección del bug S00010 documentada ahí. Como el
+        # campo de salida se llama literalmente "odoo_factura_usd" y
+        # alimenta un % de auditoría, mostrar el monto crudo en VES sin
+        # convertir es un bug, no una decisión de diseño -- confirmado en
+        # vivo: 580 de 582 líneas de descuento de factura reales están en
+        # VES, así que este bug afectaba a la inmensa mayoría de los
+        # casos, no un edge case. _descuentos_lineas_desde_espejo aplica
+        # el ratio igual que Ventas, así que conectar el espejo también
+        # corrige esto.
+        # inv_usd_ratio_map: mismo cálculo (amount_total_signed_usd/
+        # amount_total por factura) que ya usa _facturacion_por_so_desde_espejo
+        # -- se reutiliza esa función solo por este dict (lectura del espejo
+        # local, no otra llamada a Odoo).
+        inv_usd_ratio_map = _facturacion_por_so_desde_espejo(repo, so_ids)["inv_usd_ratio_map"]
+        sol_discounts_by_so, inv_line_discounts_by_so, sol_discount_detail_by_so, (
+            inv_line_discount_detail_by_so
+        ) = _descuentos_lineas_desde_espejo(
+            repo, so_ids_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map, con_detalle=True
+        )
 
         # ─── ABONOS DESDE ODOO (account.payment reconciliado, fallback a
         # amount_residual de factura) -- ver _pagos_odoo_por_orden. ────────
