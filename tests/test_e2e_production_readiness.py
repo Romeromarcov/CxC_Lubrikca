@@ -13,6 +13,7 @@ from cxc.models import (
     DescuentoAplicado,
     DescuentoMarcaCategoria,
     DescuentoVolumen,
+    Entrega,
     EstadoVinculacion,
     Factura,
     LineaOrden,
@@ -79,6 +80,11 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
     repo.all_pagos_huerfanos_cerrados.side_effect = lambda: repo._g.read_rows(
         "PagosHuerfanosCerrados"
     )
+    # Fase 2/4/6 (plan de consolidación de fuentes, agosto 2026): entregas
+    # ahora se leen del espejo (repo.all_entregas()), no de Odoo en vivo --
+    # default vacío, los tests que necesiten una entrega real la sobrescriben.
+    repo.all_entregas.return_value = []
+    repo.all_catalogo.return_value = []
 
     def _marcar_recibido(pago_ids, numero_recibido, fecha_recibido, recibido_por):
         target = set(pago_ids)
@@ -1845,6 +1851,19 @@ def test_e2e_23_regla_global_excepcion_cancelada_con_entrega_no_devuelta():
     mock_repo._g.read_rows.return_value = []
     mock_repo.all_vinculaciones.return_value = []
     mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 4/6: entrega_valida ahora viene del espejo Entrega, no de
+    # stock.picking en vivo -- ver _entregas_desde_espejo.
+    mock_repo.all_entregas.return_value = [
+        Entrega(
+            entrega_id="501",
+            so_id="SO_CANCEL_ENTREGADA",
+            tipo="outgoing",
+            fecha=date(2026, 7, 1),
+            estado="done",
+            es_devolucion=False,
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_CANCEL_ENTREGADA",
@@ -1876,8 +1895,6 @@ def test_e2e_23_regla_global_excepcion_cancelada_con_entrega_no_devuelta():
                 {"name": "SO_CANCEL_ENTREGADA", "state": "cancel", "picking_ids": [501]},
                 {"name": "SO_CANCEL_SIN_ENTREGA", "state": "cancel", "picking_ids": []},
             ]
-        if model == "stock.picking":
-            return [{"id": 501, "picking_type_code": "outgoing", "return_id": False}]
         return []
 
     with (
@@ -2336,6 +2353,19 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
         if sheet == "LineasOrden"
         else []
     )
+    # Fase 4/6: entrega_valida ahora viene del espejo Entrega -- SO_FALLBACK
+    # (cancelada en Odoo) necesita su despacho saliente "done" ahí para
+    # seguir contando como la excepción de negocio "cancelada+entregada".
+    mock_repo.all_entregas.return_value = [
+        Entrega(
+            entrega_id="501",
+            so_id="SO_FALLBACK",
+            tipo="outgoing",
+            fecha=date(2026, 7, 18),
+            estado="done",
+            es_devolucion=False,
+        )
+    ]
 
     def fake_execute(model, method, args, kwargs=None):
         if model == "product.product":
@@ -2345,8 +2375,6 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
                 {"name": "SO_SR1", "state": "sale", "picking_ids": []},
                 {"name": "SO_FALLBACK", "state": "cancel", "picking_ids": [501]},
             ]
-        if model == "stock.picking":
-            return [{"id": 501, "picking_type_code": "outgoing", "return_id": False}]
         if model == "sale.report":
             # SO_SR1 SÍ aparece en sale.report -- SO_FALLBACK (cancelada) no.
             return [{"name": "SO_SR1", "product_volume": 123.45}]

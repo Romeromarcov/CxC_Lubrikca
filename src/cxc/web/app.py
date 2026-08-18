@@ -2075,7 +2075,9 @@ async def get_resumen():
         ordenes = repo.all_ordenes()
         so_names_r = [o.so_id for o in ordenes]
         so_states_map = get_live_so_states(so_names_r)
-        entrega_valida_set = get_live_delivered_not_returned(so_names_r)
+        # Fase 4/6 (plan de consolidación de fuentes, agosto 2026): entregas
+        # desde el espejo, no Odoo en vivo -- ver _entregas_desde_espejo.
+        entrega_valida_set, _ = _entregas_desde_espejo(repo, so_names_r)
         vincs = repo.all_vinculaciones()
         linked_by_so: dict[str, Decimal] = {}
         for v in vincs:
@@ -8506,6 +8508,10 @@ async def get_auditoria():
         # para el mismo fix.
         so_states_map: dict[str, str] = {}
         entrega_valida_set: set[str] = set()
+        # Fase 4/6: entregas desde el espejo -- no depende de `execute`, más
+        # resiliente que antes (funciona aunque Odoo esté caído).
+        if so_ids:
+            entrega_valida_set, _ = _entregas_desde_espejo(repo, so_ids)
         if execute and so_ids:
             try:
                 so_recs_live = execute(
@@ -8518,7 +8524,6 @@ async def get_auditoria():
                     sname = str(s.get("name", "")).strip()
                     if sname:
                         so_states_map[sname] = str(s.get("state", "")).strip().lower()
-                entrega_valida_set = get_live_delivered_not_returned(so_ids, execute=execute)
             except Exception as e:
                 logger.warning("Error consultando estado en vivo en get_auditoria: %s", e)
 
@@ -10691,7 +10696,12 @@ def _get_reporte_diario_sync(
         prod_litros_map = {}
         journal_name_map: dict[int, str] = {}
         so_states_map: dict[str, str] = {}
-        entrega_valida_set: set[str] = set()
+        # Fase 4/6: entregas desde el espejo -- no depende de `execute`, más
+        # resiliente que antes (funciona aunque Odoo esté caído).
+        so_names_all = [o.so_id for o in ordenes]
+        entrega_valida_set: set[str] = (
+            _entregas_desde_espejo(repo, so_names_all)[0] if so_names_all else set()
+        )
         execute = None
         try:
             config = AppConfig.from_env()
@@ -10719,19 +10729,17 @@ def _get_reporte_diario_sync(
                 # vencida, downtime, etc.). Verificado en vivo: S00162
                 # ($161,679.06) aparecía como "sale" en el espejo pero está
                 # "cancel" en Odoo, inflando "Ventas del Año" en ese monto.
-                so_names = [o.so_id for o in ordenes]
-                if so_names:
+                if so_names_all:
                     so_recs = execute(
                         "sale.order",
                         "search_read",
-                        [[["name", "in", so_names]]],
+                        [[["name", "in", so_names_all]]],
                         {"fields": ["name", "state"]},
                     )
                     for s in so_recs:
                         sname = str(s.get("name", "")).strip()
                         if sname:
                             so_states_map[sname] = str(s.get("state", "")).strip().lower()
-                    entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
         except Exception as e_p:
             logger.warning("Error leyendo catálogos de Odoo (litros/métodos de pago): %s", e_p)
 
