@@ -124,18 +124,30 @@ def _upsert(conn: Any, table: Any, rows: list[dict[str, Any]], pk_cols: list[str
 
     ``rows`` -- un escritor que no conoce una columna (p.ej. el sync de
     Pagos no conoce ``recibido``) simplemente nunca la toca.
+
+    En lotes de a lo sumo 5000 filas: Postgres limita una sentencia a
+    65535 parámetros totales -- un solo INSERT multi-fila sin cotas
+    revienta ("number of parameters must be between 0 and 65535") apenas
+    una tabla crece lo suficiente (hallazgo real, agosto 2026: el primer
+    sync de lineas_factura, con muchas más filas por documento que
+    facturas/entregas, lo disparó de inmediato). 5000 filas es un margen
+    amplio incluso para las tablas con más columnas de este esquema.
     """
     if not rows:
         return
-    stmt = pg_insert(table).values(rows)
-    update_cols = {
-        col: stmt.excluded[col] for col in rows[0] if col not in pk_cols
-    }
-    if update_cols:
-        stmt = stmt.on_conflict_do_update(index_elements=pk_cols, set_=update_cols)
-    else:
-        stmt = stmt.on_conflict_do_nothing(index_elements=pk_cols)
-    conn.execute(stmt)
+    update_col_names = [col for col in rows[0] if col not in pk_cols]
+    batch_size = 5000
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i : i + batch_size]
+        stmt = pg_insert(table).values(batch)
+        if update_col_names:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=pk_cols,
+                set_={col: stmt.excluded[col] for col in update_col_names},
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing(index_elements=pk_cols)
+        conn.execute(stmt)
 
 
 class PostgresRepository(Repository):

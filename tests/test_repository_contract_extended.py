@@ -557,3 +557,32 @@ def test_invalidate_cache_no_falla(repo: Repository) -> None:
     # verifica que no lance.
     repo.invalidate_cache()
     repo.invalidate_cache("Pagos")
+
+
+def test_upsert_lote_grande_no_revienta_limite_de_parametros_postgres(
+    repo: Repository,
+) -> None:
+    """Hallazgo real (agosto 2026, primer sync de lineas_factura -- muchas
+
+    más filas por documento que facturas/entregas): un solo INSERT
+    multi-fila sin cotas revienta el límite de 65535 parámetros de
+    Postgres apenas una tabla crece lo suficiente. ``_upsert`` (helper
+    compartido por TODOS los upsert_*) ahora trocea en lotes de 5000 --
+    este test sube 8000 filas (más de un lote) para confirmar que no
+    truena y que las 8000 quedan escritas."""
+    from cxc.models import LineaFactura
+
+    filas = [
+        LineaFactura(
+            linea_id=f"LF{i}",
+            factura_id="900",
+            nombre=f"Producto {i}",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("10"),
+            descuento=Decimal("0"),
+            subtotal=Decimal("10"),
+        )
+        for i in range(8000)
+    ]
+    repo.upsert_lineas_factura(filas)
+    assert len(repo.all_lineas_factura()) == 8000
