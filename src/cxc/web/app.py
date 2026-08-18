@@ -8576,54 +8576,15 @@ async def get_auditoria():
             except Exception as e:
                 logger.warning("Error consultando estado en vivo en get_auditoria: %s", e)
 
-        # Productos realmente despachados (stock.move.line de las entregas
-        # ALM/OUT en estado "done") por orden -- para el Check 5 más abajo:
-        # detectar si se entregó un producto distinto o adicional al pedido.
-        delivered_products_by_so: dict[str, set[int]] = {}
-        if execute and so_ids:
-            try:
-                so_pick_recs = execute(
-                    "sale.order",
-                    "search_read",
-                    [[["name", "in", so_ids]]],
-                    {"fields": ["name", "picking_ids"]},
-                )
-                picking_to_so: dict[int, str] = {}
-                for s in so_pick_recs:
-                    sname = str(s.get("name", "")).strip()
-                    for pid in s.get("picking_ids") or []:
-                        picking_to_so[pid] = sname
-                if picking_to_so:
-                    done_out_pickings = execute(
-                        "stock.picking",
-                        "search_read",
-                        [
-                            [
-                                ["id", "in", list(picking_to_so.keys())],
-                                ["state", "=", "done"],
-                                ["picking_type_code", "=", "outgoing"],
-                            ]
-                        ],
-                        {"fields": ["id"]},
-                    )
-                    done_ids = [p["id"] for p in done_out_pickings]
-                    if done_ids:
-                        move_lines = execute(
-                            "stock.move.line",
-                            "search_read",
-                            [[["picking_id", "in", done_ids]]],
-                            {"fields": ["picking_id", "product_id"]},
-                        )
-                        for ml in move_lines:
-                            pid_info = ml.get("picking_id")
-                            p_id = pid_info[0] if isinstance(pid_info, list | tuple) else None
-                            so_name = picking_to_so.get(p_id) if p_id else None
-                            prod_info = ml.get("product_id")
-                            prod_id = prod_info[0] if isinstance(prod_info, list | tuple) else None
-                            if so_name and prod_id:
-                                delivered_products_by_so.setdefault(so_name, set()).add(prod_id)
-            except Exception as e_ml:
-                logger.warning("Error consultando productos entregados en get_auditoria: %s", e_ml)
+        # Fase 5 (plan de consolidación de fuentes, agosto 2026): productos
+        # realmente despachados (para el Check 5 más abajo: detectar si se
+        # entregó un producto distinto o adicional al pedido) ahora se leen
+        # del espejo (Entrega/EntregaLinea) -- validado con un parity check
+        # completo contra las 819 órdenes reales sincronizadas (0 diffs).
+        # No depende de `execute` -- funciona aunque Odoo esté caído.
+        delivered_products_by_so: dict[str, set[int]] = _productos_despachados_desde_espejo(
+            repo, so_ids
+        )
 
         operaciones_conformes = []
         raw_discrepancias = []
