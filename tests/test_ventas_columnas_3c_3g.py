@@ -21,6 +21,8 @@ from cxc.models import (
     BandejaFacturacion,
     Entrega,
     Factura,
+    LineaFactura,
+    LineaOrden,
     OrdenVenta,
     Producto,
     SerieTasa,
@@ -256,10 +258,67 @@ def _facturas_estandar() -> list[Factura]:
     ]
 
 
+def _lineas_orden_estandar() -> list[LineaOrden]:
+    """Espejo LineaOrden equivalente al fixture sale.order.line de
+
+    _fake_execute -- Fase 4: descuentos de línea de orden ahora se leen
+    del espejo (ver _descuentos_lineas_desde_espejo)."""
+    return [
+        LineaOrden(
+            linea_id="1",
+            so_id="SO_OK",
+            producto="1",
+            marca="Sinoco",
+            categoria="*",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            descuento=Decimal("5.0"),
+        ),
+        LineaOrden(
+            linea_id="2",
+            so_id="SO_PENDIENTE",
+            producto="1",
+            marca="Sinoco",
+            categoria="*",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            descuento=Decimal("3.0"),
+        ),
+    ]
+
+
+def _lineas_factura_estandar() -> list[LineaFactura]:
+    """Espejo LineaFactura equivalente al fixture account.move.line de
+
+    _fake_execute -- Fase 4/5."""
+    return [
+        LineaFactura(
+            linea_id="1",
+            factura_id="900",
+            nombre="",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            descuento=Decimal("5.0"),
+            subtotal=Decimal("95"),
+        ),
+        LineaFactura(
+            linea_id="2",
+            factura_id="902",
+            nombre="",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            descuento=Decimal("3.0"),
+            subtotal=Decimal("97"),
+        ),
+    ]
+
+
 def _run_get_ventas(
     descuentos_sistema: list[dict] | None = None,
     vinculaciones: list | None = None,
     facturas: list[Factura] | None = None,
+    lineas: list[LineaOrden] | None = None,
+    lineas_factura: list[LineaFactura] | None = None,
 ):
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
@@ -269,6 +328,12 @@ def _run_get_ventas(
     mock_repo.all_catalogo.return_value = []
     mock_repo.all_facturas.return_value = (
         facturas if facturas is not None else _facturas_estandar()
+    )
+    mock_repo.all_lineas.return_value = (
+        lineas if lineas is not None else _lineas_orden_estandar()
+    )
+    mock_repo.all_lineas_factura.return_value = (
+        lineas_factura if lineas_factura is not None else _lineas_factura_estandar()
     )
     mock_repo.all_ordenes.return_value = [
         _orden("SO_OK", lista="4", monto_total="95.00"),
@@ -1053,33 +1118,6 @@ def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura(
     def _fake_execute_ves(model, method, args, kwargs=None):
         if model == "sale.order":
             return [{"name": "SO_VES_FACT", "state": "sale", "amount_untaxed": 100.0}]
-        if model == "account.move":
-            # amount_total=47455.08 VES, amount_total_signed_usd=99.99 ->
-            # ratio ~= 0.0021075...
-            return [
-                {
-                    "id": 1359,
-                    "invoice_origin": "SO_VES_FACT",
-                    "move_type": "out_invoice",
-                    "amount_untaxed_signed_usd": 90.0,
-                    "amount_total_signed_usd": 99.99,
-                    "amount_total": 47455.08,
-                }
-            ]
-        if model == "sale.order.line":
-            return []
-        if model == "account.move.line":
-            return [
-                {
-                    "move_id": 1359,
-                    "quantity": 1.0,
-                    "price_unit": 27708.028582,
-                    "discount": 0.0,
-                    # Línea de descuento explícita (price_subtotal negativo).
-                    "product_id": [1, "Descuento"],
-                    "price_subtotal": -5000.0,
-                }
-            ]
         return []
 
     mock_repo = MagicMock()
@@ -1091,6 +1129,21 @@ def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura(
     mock_repo.all_bandeja.return_value = []
     mock_repo.all_entregas.return_value = []
     mock_repo.all_catalogo.return_value = []
+    # Fase 4/5: descuento_aplicado_factura ahora viene del espejo
+    # LineaFactura -- línea "Descuento" separada (price_subtotal negativo),
+    # ratio USD lo calcula _facturacion_por_so_desde_espejo desde
+    # monto_total_signed_usd/monto_total de la factura (arriba).
+    mock_repo.all_lineas_factura.return_value = [
+        LineaFactura(
+            linea_id="1",
+            factura_id="1359",
+            nombre="Descuento",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("27708.028582"),
+            descuento=Decimal("0"),
+            subtotal=Decimal("-5000.0"),
+        )
+    ]
     # Fase 2: invoice_ids_all/inv_id_to_so/inv_usd_ratio_map ahora vienen
     # del espejo Factura, no de account.move en vivo.
     mock_repo.all_facturas.return_value = [

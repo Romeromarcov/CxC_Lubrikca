@@ -9465,32 +9465,19 @@ def _get_ventas_sync(
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
 
-        # Fase 2 (plan de consolidación de fuentes, agosto 2026): entregas
-        # y litros ahora se leen del espejo (Postgres) en vez de Odoo en
-        # vivo -- validado con datos reales (parity check contra las 819
-        # órdenes sincronizadas hoy: 0 diffs en litros; 1 diff en entregas
-        # que resultó ser un bug real de la consulta en vivo, ver
-        # docstring de ``_entregas_desde_espejo``). A diferencia del
-        # bloque siguiente, NO dependen de ``execute`` -- se calculan
-        # aunque Odoo esté caído, más resiliente que antes. Facturación se
-        # queda en vivo por ahora: sus outputs (invoice_ids_all/
-        # inv_id_to_so/inv_usd_ratio_map) alimentan
-        # _leer_descuentos_lineas_odoo y _pagos_bcv_binance_por_orden, que
-        # siguen consultando Odoo en vivo -- migrar solo la agregación sin
-        # migrar también esos dos consumidores dejaría la forma de esos
-        # dos dicts sin validar.
+        # Fase 2/4/5 (plan de consolidación de fuentes, agosto 2026):
+        # entregas, litros, facturación (facturado/NC/ND) y descuentos de
+        # línea ahora se leen del espejo (Postgres) en vez de Odoo en vivo
+        # -- todos validados con datos reales (parity check contra las
+        # 819 órdenes sincronizadas). NO dependen de ``execute`` -- se
+        # calculan aunque Odoo esté caído, más resiliente que antes. Solo
+        # ``_pagos_bcv_binance_por_orden`` (payment reconciliation,
+        # dominio de Cobranza) se queda en vivo, alimentada por
+        # invoice_ids_all/inv_id_to_so ya resueltos aquí.
         if so_names:
             entrega_valida_set, fecha_entrega_map = _entregas_desde_espejo(repo, so_names)
             litros_por_so = _litros_por_so_desde_espejo(repo, lineas_por_so)
 
-            # Fase 2: facturación (facturado/NC/ND + invoice_ids_all/
-            # inv_id_to_so/inv_usd_ratio_map) también se lee del espejo --
-            # validado con datos reales (parity check: 0 diffs en las 819
-            # órdenes reales, incluyendo invoice_ids_all/inv_id_to_so/
-            # inv_usd_ratio_map). Esto reemplaza la consulta principal a
-            # account.move Y las llamadas a _leer_notas_debito_odoo/
-            # _leer_notas_credito_odoo -- su única función (calcular
-            # nc_con_imp/nd_con_imp) ya la da el espejo directamente.
             fact_espejo = _facturacion_por_so_desde_espejo(repo, so_names)
             facturado_con_imp_map = fact_espejo["facturado_con_imp"]
             facturado_antes_imp_map = fact_espejo["facturado_antes_imp"]
@@ -9499,6 +9486,10 @@ def _get_ventas_sync(
             invoice_ids_all = fact_espejo["invoice_ids_all"]
             inv_id_to_so = fact_espejo["inv_id_to_so"]
             inv_usd_ratio_map = fact_espejo["inv_usd_ratio_map"]
+
+            desc_orden_odoo_map, desc_factura_odoo_map = _descuentos_lineas_desde_espejo(
+                repo, so_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map
+            )
 
         if execute and so_names:
             try:
@@ -9519,14 +9510,6 @@ def _get_ventas_sync(
                         )
                         dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
 
-                # Descuentos ya materializados en Odoo a nivel de línea de
-                # factura (Tarea 3c) -- sin espejo todavía (requeriría
-                # mirrorear account.move.line), se queda en vivo,
-                # alimentada por invoice_ids_all/inv_id_to_so/
-                # inv_usd_ratio_map ya calculados arriba desde el espejo.
-                desc_orden_odoo_map, desc_factura_odoo_map = _leer_descuentos_lineas_odoo(
-                    execute, so_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map
-                )
                 # Monto pagado BCV/USD (Binance) -- columnas nuevas, cada
                 # ruta con SU PROPIA tasa del día del pago (no duplicadas
                 # como en _pagos_odoo_por_orden/_pagos_por_so_desde_cobranza).
