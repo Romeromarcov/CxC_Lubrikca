@@ -4721,6 +4721,45 @@ def _entregas_desde_espejo(
     return delivered, fecha_entrega_map
 
 
+def _litros_por_so_desde_espejo(
+    repo, lineas_por_so: dict[str, list[Any]]
+) -> dict[str, float]:
+    """Fase 2 (plan de consolidación de fuentes, agosto 2026) -- réplica,
+
+    leyendo del espejo ``Producto`` (``repo.all_catalogo()``), del cálculo
+    de litros por SO que ``_get_ventas_sync`` arma hoy con una consulta en
+    vivo a ``product.template.product_volume`` usando ids de
+    ``sale.order.line.product_id`` (``product.product``, NO
+    ``product.template``).
+
+    Verificado en vivo contra Odoo (agosto 2026, muestra de 3 productos
+    reales de este catálogo): ``product.product.volume`` ==
+    ``product.template.product_volume`` en todos los casos probados, y
+    ``product.product.id`` coincidió con ``product.template.id`` para
+    esos mismos productos -- este catálogo no usa variantes, así que la
+    consulta en vivo "funciona" hoy por esa coincidencia, no por una
+    garantía real de Odoo. El espejo (``Producto.volumen``, sourced de
+    ``product.product.volume`` vía ``changed_catalogo``) es un
+    reemplazo válido y más correcto -- consulta el modelo correcto
+    directamente, sin depender de esa coincidencia de ids.
+
+    NO ESTÁ CONECTADA a ningún endpoint todavía -- mismo motivo que
+    ``_facturacion_por_so_desde_espejo``/``_entregas_desde_espejo``: el
+    espejo de Catálogo no ha sido poblado por una corrida real del sync
+    incremental contra Postgres.
+    """
+    catalogo = repo.all_catalogo()
+    volumen_por_producto = {p.producto_id: float(p.volumen) for p in catalogo}
+
+    litros_por_so: dict[str, float] = {}
+    for so_id, lineas in lineas_por_so.items():
+        litros_por_so[so_id] = sum(
+            float(ln.cantidad) * volumen_por_producto.get(str(ln.producto), 0.0)
+            for ln in lineas
+        )
+    return litros_por_so
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
