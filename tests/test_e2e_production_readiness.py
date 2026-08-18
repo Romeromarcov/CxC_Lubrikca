@@ -20,6 +20,7 @@ from cxc.models import (
     Moneda,
     OrdenVenta,
     Pago,
+    Producto,
     SerieTasa,
     Vinculacion,
 )
@@ -1689,10 +1690,20 @@ def test_e2e_20_reporte_diario_litros_usa_claves_correctas_de_lineasorden():
         if sheet == "LineasOrden"
         else []
     )
+    # Fase 6: litros ahora vienen del espejo Catálogo (repo.all_catalogo()),
+    # no de una consulta en vivo a product.product.
+    mock_repo.all_catalogo.return_value = [
+        Producto(
+            producto_id="555",
+            codigo="P555",
+            nombre="Aceite",
+            marca="",
+            volumen=Decimal("20.0"),
+            peso=Decimal("0"),
+        )
+    ]
 
     def fake_execute(model, method, args, kwargs=None):
-        if model == "product.product":
-            return [{"id": 555, "default_code": "P555", "name": "Aceite", "volume": "20.0"}]
         if model == "sale.order":
             return [{"name": "SO_LIT", "state": "sale"}]
         return []
@@ -2366,10 +2377,20 @@ def test_e2e_28_reporte_diario_litros_usa_sale_report_de_odoo():
             es_devolucion=False,
         )
     ]
+    # Fase 6: litros ahora vienen del espejo Catálogo, no de product.product
+    # en vivo.
+    mock_repo.all_catalogo.return_value = [
+        Producto(
+            producto_id="77",
+            codigo="P77",
+            nombre="Producto Fallback",
+            marca="",
+            volumen=Decimal("2.0"),
+            peso=Decimal("0"),
+        )
+    ]
 
     def fake_execute(model, method, args, kwargs=None):
-        if model == "product.product":
-            return [{"id": 77, "name": "Producto Fallback", "volume": "2.0", "weight": "0"}]
         if model == "sale.order":
             return [
                 {"name": "SO_SR1", "state": "sale", "picking_ids": []},

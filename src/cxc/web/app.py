@@ -6388,12 +6388,17 @@ async def get_odoo_clientes_auditoria():
                         "product.product",
                         "search_read",
                         [[["id", "in", product_ids]]],
-                        {"fields": ["id", "volume", "weight", "brand_id"]},
+                        {"fields": ["id", "product_volume", "weight", "brand_id"]},
                     )
                     for p in prods:
                         b_info = p.get("brand_id")
                         b_name = b_info[1] if isinstance(b_info, list) else ""
-                        vol = parse_decimal_safe(p.get("volume") or "0")
+                        # "product_volume" (litros reales), NO "volume" (campo
+                        # genérico de logística de Odoo) -- verificado en vivo
+                        # (agosto 2026, producto 1034: volume=6.0 vs
+                        # product_volume=5.67, campos genuinamente distintos,
+                        # ver map_producto_espejo en cxc.odoo.client).
+                        vol = parse_decimal_safe(p.get("product_volume") or "0")
                         if vol == Decimal("0"):
                             vol = parse_decimal_safe(p.get("weight") or "1.0")
                         product_map[p["id"]] = {"brand": b_name, "volume": vol}
@@ -10702,24 +10707,24 @@ def _get_reporte_diario_sync(
         entrega_valida_set: set[str] = (
             _entregas_desde_espejo(repo, so_names_all)[0] if so_names_all else set()
         )
+        # Fase 6 (plan de consolidación de fuentes, agosto 2026): litros
+        # ahora vienen del espejo Catálogo, no de una consulta en vivo a
+        # product.product SIN filtro de dominio (traía TODOS los
+        # productos). También corrige el mismo bug real ya encontrado en
+        # el sync (product_volume, no volume genérico -- ver
+        # map_producto_espejo).
+        for p in repo.all_catalogo():
+            if p.producto_id.isdigit():
+                vol = p.volumen
+                if vol == Decimal("0"):
+                    vol = p.peso if p.peso != Decimal("0") else Decimal("1.0")
+                prod_litros_map[int(p.producto_id)] = vol
+
         execute = None
         try:
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                prods = execute(
-                    "product.product",
-                    "search_read",
-                    [],
-                    {"fields": ["id", "default_code", "name", "volume", "weight"]},
-                )
-                for p in prods:
-                    pid = p.get("id")
-                    vol = parse_decimal_safe(p.get("volume") or "0")
-                    if vol == Decimal("0"):
-                        vol = parse_decimal_safe(p.get("weight") or "1.0")
-                    prod_litros_map[pid] = vol
-
                 journals = execute("account.journal", "search_read", [], {"fields": ["id", "name"]})
                 journal_name_map = {int(j["id"]): str(j.get("name") or "") for j in journals}
 
