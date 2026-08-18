@@ -1098,6 +1098,7 @@ def _linea_factura_to_row(ln: LineaFactura) -> dict[str, Any]:
         "precio_unitario": ln.precio_unitario,
         "descuento": ln.descuento,
         "subtotal": ln.subtotal,
+        "producto_id": ln.producto_id,
     }
 
 
@@ -1110,6 +1111,7 @@ def _row_to_linea_factura(r: Any) -> LineaFactura:
         precio_unitario=r.precio_unitario,
         descuento=r.descuento,
         subtotal=r.subtotal,
+        producto_id=getattr(r, "producto_id", "") or "",
     )
 
 

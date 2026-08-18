@@ -64,6 +64,32 @@ def test_linea_negativa_sin_nombre_descuento_se_ignora():
     assert desc_orden == {}
 
 
+def test_linea_descuento_detectada_via_nombre_del_producto_no_de_la_linea():
+    """Hallazgo real (orden S00003): Odoo auto-genera el nombre de la
+
+    línea de descuento como "Discount 20.00%" (inglés), pero el PRODUCTO
+    vinculado se llama "Descuento" -- la consulta en vivo original
+    filtraba por product_id.name, nunca por el nombre de la línea."""
+    repo = InMemoryRepository()
+    repo.upsert_catalogo([b.producto("P_DESC", nombre="Descuento ")])
+    repo.upsert_lineas(
+        [
+            b.linea(
+                "L1",
+                so_id="SO1",
+                producto="P_DESC",
+                cantidad="1",
+                precio="0",
+                descuento="0",
+                nombre="Discount 20.00%",
+                subtotal="-10.34",
+            )
+        ]
+    )
+    desc_orden, _ = _descuentos_lineas_desde_espejo(repo, {"SO1"}, [], {})
+    assert desc_orden == {"SO1": 10.34}
+
+
 def test_linea_sin_descuento_ni_subtotal_negativo_se_ignora():
     repo = InMemoryRepository()
     repo.upsert_lineas([b.linea("L1", so_id="SO1", cantidad="1", precio="100", descuento="0")])
@@ -101,6 +127,27 @@ def test_linea_descuento_separada_en_factura():
                 "LF1",
                 factura_id="900",
                 nombre="Descuento",
+                cantidad="1",
+                precio_unitario="0",
+                descuento="0",
+                subtotal="-30",
+            )
+        ]
+    )
+    _, desc_factura = _descuentos_lineas_desde_espejo(repo, set(), [900], {900: "SO1"})
+    assert desc_factura == {"SO1": 30.0}
+
+
+def test_linea_descuento_de_factura_detectada_via_nombre_del_producto():
+    repo = InMemoryRepository()
+    repo.upsert_catalogo([b.producto("P_DESC", nombre="Descuento ")])
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura(
+                "LF1",
+                factura_id="900",
+                producto_id="P_DESC",
+                nombre="Discount 20.00%",
                 cantidad="1",
                 precio_unitario="0",
                 descuento="0",

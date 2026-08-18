@@ -29,6 +29,7 @@ def test_map_linea_factura_normal():
         "price_unit": 100.0,
         "discount": 5.0,
         "price_subtotal": 190.0,
+        "product_id": [1082, "Aceite Sinoco 20W50 (1x6)"],
     }
     ln = map_linea_factura(rec)
     assert ln.linea_id == "5001"
@@ -37,6 +38,7 @@ def test_map_linea_factura_normal():
     assert ln.cantidad == Decimal("2.0")
     assert ln.precio_unitario == Decimal("100.0")
     assert ln.descuento == Decimal("5.0")
+    assert ln.producto_id == "1082"
     assert ln.subtotal == Decimal("190.0")
 
 

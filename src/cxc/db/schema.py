@@ -160,6 +160,7 @@ lineas_factura = Table(
     Column("precio_unitario", MONEY, nullable=False, server_default="0"),
     Column("descuento", MONEY, nullable=False, server_default="0"),
     Column("subtotal", MONEY, nullable=False, server_default="0"),
+    Column("producto_id", String, nullable=False, server_default=""),
 )
 
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------

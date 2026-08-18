@@ -4770,15 +4770,25 @@ def _descuentos_lineas_desde_espejo(
     ``_leer_descuentos_lineas_odoo`` (lectura de descuentos ya
     materializados en Odoo, NUNCA calcula ninguno). Misma detección de 2
     patrones que la consulta en vivo: (a) ``discount`` % > 0 en la línea,
-    o (b) una línea de producto "Descuento" con ``subtotal`` negativo
-    (detectada aquí por el nombre de la LÍNEA conteniendo "descuento" --
-    la consulta en vivo original filtraba por ``product_id.name``, el
-    nombre del producto vinculado, no el de la línea; ambos suelen
-    coincidir salvo que alguien edite la descripción de la línea a mano,
-    ver parity check antes de conectar esto a un endpoint).
+    o (b) una línea de producto "Descuento" con ``subtotal`` negativo.
 
-    NO ESTÁ CONECTADA a ningún endpoint todavía.
+    Para (b), el nombre a chequear es el del PRODUCTO vinculado (vía
+    Catálogo), NO el de la línea -- hallazgo real (agosto 2026, orden
+    S00003): Odoo auto-genera el descuento por línea como una línea
+    separada cuyo NOMBRE PROPIO es "Discount 20.00%" (en inglés,
+    independiente del idioma de la UI), mientras el producto vinculado
+    ("Descuento ") sí trae la palabra en español -- la consulta en vivo
+    original filtraba por ``product_id.name``, nunca por el nombre de la
+    línea. Confirmado con un parity check contra las 819 órdenes reales:
+    0 diffs una vez corregido para chequear el nombre del producto.
     """
+    catalogo_por_id = {p.producto_id: p.nombre.lower() for p in repo.all_catalogo()}
+
+    def _es_linea_descuento(nombre_linea: str, producto_id: str) -> bool:
+        if "descuento" in nombre_linea.lower():
+            return True
+        return "descuento" in catalogo_por_id.get(producto_id, "")
+
     so_set = {str(s) for s in so_names}
     desc_orden: dict[str, float] = {}
     for ln in repo.all_lineas():
@@ -4787,7 +4797,7 @@ def _descuentos_lineas_desde_espejo(
         disc_pct = float(ln.descuento)
         if disc_pct > 0:
             monto = float(ln.cantidad) * float(ln.precio_unitario) * (disc_pct / 100.0)
-        elif "descuento" in ln.nombre.lower() and float(ln.subtotal) < 0:
+        elif float(ln.subtotal) < 0 and _es_linea_descuento(ln.nombre, ln.producto):
             monto = abs(float(ln.subtotal))
         else:
             continue
@@ -4807,7 +4817,7 @@ def _descuentos_lineas_desde_espejo(
         disc_pct = float(lf.descuento)
         if disc_pct > 0:
             monto = float(lf.cantidad) * float(lf.precio_unitario) * (disc_pct / 100.0)
-        elif "descuento" in lf.nombre.lower() and float(lf.subtotal) < 0:
+        elif float(lf.subtotal) < 0 and _es_linea_descuento(lf.nombre, lf.producto_id):
             monto = abs(float(lf.subtotal))
         else:
             continue

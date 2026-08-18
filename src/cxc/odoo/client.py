@@ -277,6 +277,7 @@ def map_linea_factura(rec: dict[str, Any]) -> LineaFactura:
         precio_unitario=_dec(rec.get("price_unit")),
         descuento=_dec(rec.get("discount")),
         subtotal=_dec(rec.get("price_subtotal")),
+        producto_id=_m2o_id(rec.get("product_id")),
     )
 
 
@@ -666,7 +667,16 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_MOVE_LINE,
             self._delta(since) + [["display_type", "in", ["product", False]]],
-            ["id", "move_id", "name", "quantity", "price_unit", "discount", "price_subtotal"],
+            [
+                "id",
+                "move_id",
+                "name",
+                "quantity",
+                "price_unit",
+                "discount",
+                "price_subtotal",
+                "product_id",
+            ],
         )
         return [map_linea_factura(r) for r in recs]
 

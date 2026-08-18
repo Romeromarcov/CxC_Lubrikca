@@ -211,6 +211,14 @@ class LineaFactura:
     precio_unitario: Decimal
     descuento: Decimal  # % de línea (campo discount de Odoo)
     subtotal: Decimal  # price_subtotal -- negativo en líneas "Descuento" aparte
+    # id del producto vinculado (calza Producto.producto_id en Catálogo) --
+    # verificado en vivo (agosto 2026): el patrón de línea "Descuento"
+    # separada NO siempre trae la palabra "descuento" en el NOMBRE de la
+    # línea (Odoo la auto-genera como "Discount 20.00%", en inglés) -- hay
+    # que resolver el nombre del PRODUCTO vinculado (vía Catálogo), no el
+    # de la línea, igual que hace la consulta en vivo original
+    # (``product_id.name ilike 'descuento'``).
+    producto_id: str = ""
 
 
 # Fallback de marca configurable (Configuración > Ajustes generales, clave

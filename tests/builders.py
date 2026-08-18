@@ -394,6 +394,7 @@ def linea_factura(
     precio_unitario: str = "100",
     descuento: str = "0",
     subtotal: str = "100",
+    producto_id: str = "",
 ) -> LineaFactura:
     return LineaFactura(
         linea_id=linea_id,
@@ -403,4 +404,5 @@ def linea_factura(
         precio_unitario=Decimal(precio_unitario),
         descuento=Decimal(descuento),
         subtotal=Decimal(subtotal),
+        producto_id=producto_id,
     )
