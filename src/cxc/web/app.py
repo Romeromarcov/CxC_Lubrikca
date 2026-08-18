@@ -4734,6 +4734,100 @@ def _litros_por_so_desde_espejo(
     return litros_por_so
 
 
+def _facturas_dicts_desde_espejo(repo, so_names: set[str] | list[str]) -> list[dict]:
+    """Fase 4 (plan de consolidación de fuentes, agosto 2026) -- réplica,
+
+    leyendo del espejo ``Factura``, de la consulta en vivo a
+    ``account.move`` que ``_get_reporte_saldos_sync``/``get_auditoria``
+    arman hoy para poblar ``invoices_by_so``/``ncs_by_so``. A diferencia
+    de ``_facturacion_por_so_desde_espejo`` (que agrega a totales por
+    SO), esto devuelve un dict POR FACTURA -- ambos consumidores
+    (``_pagos_odoo_por_orden`` en su fallback sin ``account.payment``
+    reconciliado, y el cálculo de ``saldo_factura_odoo`` en Reporte de
+    Saldos/Auditoría) necesitan el detalle por factura (``amount_total``,
+    ``amount_residual``, ``currency_id``, ``invoice_date``), no un
+    agregado.
+
+    ``amount_residual``/``payment_state`` son los ÚNICOS 2 campos
+    genuinamente mutables de ``account.move`` (cambian con cada pago
+    reconciliado) -- el espejo NUNCA los captura a propósito (ver
+    docstring de ``Factura`` en ``cxc.models``). Quedan en blanco aquí
+    (``amount_residual=None``, ``payment_state=""``); el llamador debe
+    sobreescribirlos con ``_estado_pago_facturas_desde_odoo`` (consulta
+    EN VIVO acotada solo a los ids ya resueltos por el espejo, no un
+    re-scan completo) antes de usarlos.
+
+    NO ESTÁ CONECTADA a ningún endpoint todavía -- mismo motivo que las
+    demás piezas dormidas de Fase 2/4: falta validar con un parity check
+    contra datos reales antes de sustituir la consulta en vivo.
+    """
+    so_set = {str(s) for s in so_names}
+    facturas = repo.all_facturas()
+    by_id = {f.factura_id: f for f in facturas}
+
+    def _resolver_so(f) -> str | None:
+        if f.so_id:
+            return f.so_id
+        origen_id = f.factura_origen_id
+        vistos: set[str] = set()
+        while origen_id and origen_id not in vistos:
+            vistos.add(origen_id)
+            padre = by_id.get(origen_id)
+            if padre is None:
+                return None
+            if padre.so_id:
+                return padre.so_id
+            origen_id = padre.factura_origen_id
+        return None
+
+    result: list[dict] = []
+    for f in facturas:
+        if f.estado != "posted" or f.move_type not in ("out_invoice", "out_refund"):
+            continue
+        so = _resolver_so(f)
+        if not so or so not in so_set:
+            continue
+        result.append(
+            {
+                "id": int(f.factura_id) if f.factura_id.isdigit() else None,
+                "name": f.numero,
+                "invoice_origin": so,
+                "amount_total": float(f.monto_total),
+                "amount_residual": None,
+                "currency_id": [0, f.moneda],
+                "invoice_date": f.fecha.isoformat(),
+                "move_type": f.move_type,
+                "payment_state": "",
+            }
+        )
+    return result
+
+
+def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> dict[int, dict]:
+    """``payment_state``/``amount_residual`` EN VIVO para un conjunto de
+
+    ids ya resueltos por ``_facturas_dicts_desde_espejo`` -- los únicos 2
+    campos genuinamente mutables de ``account.move`` que el espejo nunca
+    captura. Consulta acotada por id (no un re-scan de
+    ``invoice_origin in so_names``), igual de barata que la que ya usa
+    ``_pagos_bcv_binance_por_orden``/``_leer_descuentos_lineas_odoo``
+    para el mismo conjunto de ids.
+    """
+    if not execute or not invoice_ids:
+        return {}
+    try:
+        recs = execute(
+            "account.move",
+            "read",
+            [invoice_ids],
+            {"fields": ["id", "payment_state", "amount_residual"]},
+        )
+        return {int(r["id"]): r for r in recs}
+    except Exception as e:
+        logger.warning("Error consultando estado de pago en vivo: %s", e)
+        return {}
+
+
 def orden_en_periodo_historico(repo, orden) -> bool:
     """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
     (Tarea 2) y el toggle correspondiente está activo."""
