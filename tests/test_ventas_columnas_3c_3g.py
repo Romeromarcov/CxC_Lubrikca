@@ -17,7 +17,15 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from cxc.config import EngineConfig
-from cxc.models import BandejaFacturacion, OrdenVenta, SerieTasa, VentasTeorico, Vinculacion
+from cxc.models import (
+    BandejaFacturacion,
+    Entrega,
+    OrdenVenta,
+    Producto,
+    SerieTasa,
+    VentasTeorico,
+    Vinculacion,
+)
 from cxc.web.app import app
 
 client = TestClient(app)
@@ -634,6 +642,22 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
     ]
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: entregas/devoluciones ahora se leen del espejo Entrega (repo),
+    # no de get_live_entregas_info -- ver _entregas_desde_espejo.
+    # SO_CANCELADA_SIN_DEV tiene un picking de salida "done" sin devolución
+    # -- es la excepción de negocio que la deja pasar el filtro de
+    # orden_excluida.
+    mock_repo.all_entregas.return_value = [
+        Entrega(
+            entrega_id="900",
+            so_id="SO_CANCELADA_SIN_DEV",
+            tipo="outgoing",
+            fecha=None,
+            estado="done",
+            es_devolucion=False,
+        )
+    ]
     mock_repo.all_lineas.return_value = [
         LineaOrden(
             linea_id="L_MAS",
@@ -667,10 +691,6 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
         patch("cxc.web.app.get_repo", return_value=mock_repo),
         patch("cxc.web.app._connect", return_value=_fake_execute_revisar),
         patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
-        patch(
-            "cxc.web.app.get_live_entregas_info",
-            return_value=({"SO_CANCELADA_SIN_DEV"}, {}),
-        ),
     ):
         res = client.get("/api/ventas")
         assert res.status_code == 200
@@ -794,8 +814,6 @@ def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
                     "payment_term_id": [2, "25 días"],
                 },
             ]
-        if model == "product.template" and method == "read":
-            return [{"id": 500, "product_volume": 60.0}]
         if model in ("sale.order.line", "account.move", "account.move.line"):
             return []
         return []
@@ -806,6 +824,19 @@ def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
     mock_repo.all_vinculaciones.return_value = []
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
+    mock_repo.all_entregas.return_value = []
+    # Fase 2: litros ahora se leen del espejo Producto (repo), no de
+    # product.template en vivo -- ver _litros_por_so_desde_espejo.
+    mock_repo.all_catalogo.return_value = [
+        Producto(
+            producto_id="500",
+            codigo="P500",
+            nombre="Producto 500",
+            marca="",
+            volumen=Decimal("60.0"),
+            peso=Decimal("0"),
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_EXCEDE",
@@ -979,24 +1010,12 @@ def test_dias_credito_y_fecha_entrega_en_ventas() -> None:
 
     def _fake_execute_credito_entrega(model, method, args, kwargs=None):
         if model == "sale.order" and method == "search_read":
-            fields = (kwargs or {}).get("fields", [])
-            if "picking_ids" in fields and "payment_term_id" not in fields:
-                return [{"name": "SO_CREDITO_ENTREGA", "picking_ids": [900]}]
             return [
                 {
                     "name": "SO_CREDITO_ENTREGA",
                     "state": "sale",
                     "amount_untaxed": 100.0,
                     "payment_term_id": [7, "45 días"],
-                }
-            ]
-        if model == "stock.picking":
-            return [
-                {
-                    "id": 900,
-                    "picking_type_code": "outgoing",
-                    "return_id": False,
-                    "date_done": "2026-07-10 14:00:00",
                 }
             ]
         if model in ("sale.order.line", "account.move", "account.move.line"):
@@ -1011,6 +1030,19 @@ def test_dias_credito_y_fecha_entrega_en_ventas() -> None:
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_bandeja.return_value = []
     mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    # Fase 2: fecha_entrega ahora se lee del espejo Entrega (repo), no de
+    # stock.picking en vivo -- ver _entregas_desde_espejo.
+    mock_repo.all_entregas.return_value = [
+        Entrega(
+            entrega_id="900",
+            so_id="SO_CREDITO_ENTREGA",
+            tipo="outgoing",
+            fecha=date(2026, 7, 10),
+            estado="done",
+            es_devolucion=False,
+        )
+    ]
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_CREDITO_ENTREGA",

@@ -9408,6 +9408,24 @@ def _get_ventas_sync(
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
 
+        # Fase 2 (plan de consolidación de fuentes, agosto 2026): entregas
+        # y litros ahora se leen del espejo (Postgres) en vez de Odoo en
+        # vivo -- validado con datos reales (parity check contra las 819
+        # órdenes sincronizadas hoy: 0 diffs en litros; 1 diff en entregas
+        # que resultó ser un bug real de la consulta en vivo, ver
+        # docstring de ``_entregas_desde_espejo``). A diferencia del
+        # bloque siguiente, NO dependen de ``execute`` -- se calculan
+        # aunque Odoo esté caído, más resiliente que antes. Facturación se
+        # queda en vivo por ahora: sus outputs (invoice_ids_all/
+        # inv_id_to_so/inv_usd_ratio_map) alimentan
+        # _leer_descuentos_lineas_odoo y _pagos_bcv_binance_por_orden, que
+        # siguen consultando Odoo en vivo -- migrar solo la agregación sin
+        # migrar también esos dos consumidores dejaría la forma de esos
+        # dos dicts sin validar.
+        if so_names:
+            entrega_valida_set, fecha_entrega_map = _entregas_desde_espejo(repo, so_names)
+            litros_por_so = _litros_por_so_desde_espejo(repo, lineas_por_so)
+
         if execute and so_names:
             try:
                 so_recs = execute(
@@ -9426,38 +9444,6 @@ def _get_ventas_sync(
                             term[1] if isinstance(term, list | tuple) and len(term) > 1 else ""
                         )
                         dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
-
-                entrega_valida_set, fecha_entrega_map = get_live_entregas_info(
-                    so_names, execute=execute
-                )
-
-                # Alerta "Revisar" (días de crédito por volumen): litros de
-                # cada orden, para comparar el volumen contra los rangos de
-                # ``reglas_dias_credito_volumen`` -- una sola consulta bulk a
-                # product.template (mismo campo product_volume que usa el
-                # motor para Descuento por Volumen), no una por producto.
-                producto_ids = {
-                    int(ln.producto)
-                    for lns in lineas_por_so.values()
-                    for ln in lns
-                    if str(ln.producto).strip().isdigit()
-                }
-                vol_por_producto: dict[str, float] = {}
-                if producto_ids:
-                    prods_vol = execute(
-                        "product.template",
-                        "read",
-                        [list(producto_ids)],
-                        {"fields": ["id", "product_volume"]},
-                    )
-                    vol_por_producto = {
-                        str(p["id"]): float(p.get("product_volume") or 0.0) for p in prods_vol
-                    }
-                for so_id_lit, lns in lineas_por_so.items():
-                    litros_por_so[so_id_lit] = sum(
-                        float(ln.cantidad) * vol_por_producto.get(str(ln.producto), 0.0)
-                        for ln in lns
-                    )
 
                 invoices = execute(
                     "account.move",
