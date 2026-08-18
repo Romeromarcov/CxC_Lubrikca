@@ -233,3 +233,85 @@ def test_multiples_lineas_de_la_misma_orden_se_suman():
     )
     desc_orden, _ = _descuentos_lineas_desde_espejo(repo, {"SO1"}, [], {})
     assert desc_orden == {"SO1": 10.0 + 20.0}
+
+
+# --- con_detalle=True (usado por Reporte de Saldos) -------------------------
+
+
+def test_con_detalle_false_por_defecto_devuelve_solo_2_dicts():
+    repo = InMemoryRepository()
+    result = _descuentos_lineas_desde_espejo(repo, {"SO1"}, [], {})
+    assert len(result) == 2
+
+
+def test_con_detalle_true_devuelve_4_dicts_con_fragmento_de_porcentaje():
+    repo = InMemoryRepository()
+    repo.upsert_lineas(
+        [b.linea("L1", so_id="SO1", nombre="Aceite X", cantidad="1", precio="100", descuento="10")]
+    )
+    desc_orden, desc_factura, detalle_orden, detalle_factura = _descuentos_lineas_desde_espejo(
+        repo, {"SO1"}, [], {}, con_detalle=True
+    )
+    assert desc_orden == {"SO1": 10.0}
+    assert detalle_orden == {"SO1": "Aceite X: 10.0%"}
+    assert detalle_factura == {}
+
+
+def test_con_detalle_true_fragmento_de_linea_descuento_separada():
+    repo = InMemoryRepository()
+    repo.upsert_lineas(
+        [
+            b.linea(
+                "L1",
+                so_id="SO1",
+                nombre="Descuento",
+                cantidad="1",
+                precio="0",
+                descuento="0",
+                subtotal="-15.5",
+            )
+        ]
+    )
+    _, _, detalle_orden, _ = _descuentos_lineas_desde_espejo(
+        repo, {"SO1"}, [], {}, con_detalle=True
+    )
+    assert detalle_orden == {"SO1": "Descuento: $15.50"}
+
+
+def test_con_detalle_true_concatena_multiples_fragmentos_con_punto_y_coma():
+    repo = InMemoryRepository()
+    repo.upsert_lineas(
+        [
+            b.linea(
+                "L1", so_id="SO1", nombre="Aceite A", cantidad="1", precio="100", descuento="5"
+            ),
+            b.linea(
+                "L2", so_id="SO1", nombre="Aceite B", cantidad="1", precio="200", descuento="10"
+            ),
+        ]
+    )
+    _, _, detalle_orden, _ = _descuentos_lineas_desde_espejo(
+        repo, {"SO1"}, [], {}, con_detalle=True
+    )
+    assert detalle_orden == {"SO1": "Aceite A: 5.0%; Aceite B: 10.0%"}
+
+
+def test_con_detalle_true_en_lineas_de_factura():
+    repo = InMemoryRepository()
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura(
+                "LF1",
+                factura_id="900",
+                nombre="Aceite Y",
+                cantidad="1",
+                precio_unitario="100",
+                descuento="5",
+            )
+        ]
+    )
+    _, desc_factura, _, detalle_factura = _descuentos_lineas_desde_espejo(
+        repo, set(), [900], {900: "SO1"}, con_detalle=True
+    )
+    assert desc_factura == {"SO1": 5.0}
+    assert detalle_factura == {"SO1": "Aceite Y: 5.0%"}

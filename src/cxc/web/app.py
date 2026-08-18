@@ -4757,13 +4757,21 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
         return {}
 
 
+def _agregar_fragmento_detalle(detalle: dict[str, str], key: str, frag: str) -> None:
+    existente = detalle.get(key, "")
+    detalle[key] = (existente + "; " + frag).lstrip("; ") if existente else frag
+
+
 def _descuentos_lineas_desde_espejo(
     repo,
     so_names: set[str] | list[str],
     invoice_ids: list[int],
     inv_id_to_so: dict[int, str],
     inv_usd_ratio_map: dict[int, float] | None = None,
-) -> tuple[dict[str, float], dict[str, float]]:
+    con_detalle: bool = False,
+) -> tuple[dict[str, float], dict[str, float]] | tuple[
+    dict[str, float], dict[str, float], dict[str, str], dict[str, str]
+]:
     """Fase 4/5 (plan de consolidación de fuentes, agosto 2026) -- réplica,
 
     leyendo del espejo (``LineaOrden``/``LineaFactura``), de
@@ -4781,6 +4789,12 @@ def _descuentos_lineas_desde_espejo(
     original filtraba por ``product_id.name``, nunca por el nombre de la
     línea. Confirmado con un parity check contra las 819 órdenes reales:
     0 diffs una vez corregido para chequear el nombre del producto.
+
+    ``con_detalle=True`` (usado por Reporte de Saldos): además de los
+    montos agregados, devuelve un string legible por SO con el detalle
+    de cada línea (``"nombre: XX.X%"`` o ``"nombre: $XX.XX"``, unidas
+    por "; "), replicando exactamente el formato que esa página arma hoy
+    en vivo -- Ventas solo usa los montos, no este detalle.
     """
     catalogo_por_id = {p.producto_id: p.nombre.lower() for p in repo.all_catalogo()}
 
@@ -4791,20 +4805,26 @@ def _descuentos_lineas_desde_espejo(
 
     so_set = {str(s) for s in so_names}
     desc_orden: dict[str, float] = {}
+    desc_orden_detalle: dict[str, str] = {}
     for ln in repo.all_lineas():
         if ln.so_id not in so_set:
             continue
         disc_pct = float(ln.descuento)
         if disc_pct > 0:
             monto = float(ln.cantidad) * float(ln.precio_unitario) * (disc_pct / 100.0)
+            frag = f"{(ln.nombre or 'línea')[:40]}: {disc_pct:.1f}%"
         elif float(ln.subtotal) < 0 and _es_linea_descuento(ln.nombre, ln.producto):
             monto = abs(float(ln.subtotal))
+            frag = f"{(ln.nombre or 'Descuento')[:40]}: ${monto:.2f}"
         else:
             continue
         desc_orden[ln.so_id] = desc_orden.get(ln.so_id, 0.0) + monto
+        if con_detalle:
+            _agregar_fragmento_detalle(desc_orden_detalle, ln.so_id, frag)
 
     invoice_ids_set = set(invoice_ids)
     desc_factura: dict[str, float] = {}
+    desc_factura_detalle: dict[str, str] = {}
     for lf in repo.all_lineas_factura():
         if not lf.factura_id.isdigit():
             continue
@@ -4817,12 +4837,19 @@ def _descuentos_lineas_desde_espejo(
         disc_pct = float(lf.descuento)
         if disc_pct > 0:
             monto = float(lf.cantidad) * float(lf.precio_unitario) * (disc_pct / 100.0)
+            frag = f"{(lf.nombre or 'línea')[:40]}: {disc_pct:.1f}%"
         elif float(lf.subtotal) < 0 and _es_linea_descuento(lf.nombre, lf.producto_id):
             monto = abs(float(lf.subtotal))
+            frag = f"{(lf.nombre or 'Descuento')[:40]}: ${monto:.2f}"
         else:
             continue
         ratio = (inv_usd_ratio_map or {}).get(fid, 1.0)
         desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
+        if con_detalle:
+            _agregar_fragmento_detalle(desc_factura_detalle, so_name, frag)
+
+    if con_detalle:
+        return desc_orden, desc_factura, desc_orden_detalle, desc_factura_detalle
     return desc_orden, desc_factura
 
 
