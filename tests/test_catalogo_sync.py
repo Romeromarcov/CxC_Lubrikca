@@ -27,7 +27,7 @@ def test_map_producto_normal_con_marca():
         "id": 801,
         "default_code": "SKU-800",
         "name": "Aceite Sinoco 20W50 (1x6)",
-        "volume": 6.0,
+        "product_volume": 6.0,
         "weight": 5.4,
         "brand_id": [3, "Sinoco"],
     }
@@ -45,7 +45,7 @@ def test_map_producto_sin_marca_ni_volumen_no_rompe():
         "id": 802,
         "default_code": False,
         "name": "Producto genérico",
-        "volume": False,
+        "product_volume": False,
         "weight": False,
         "brand_id": False,
     }
@@ -54,6 +54,26 @@ def test_map_producto_sin_marca_ni_volumen_no_rompe():
     assert p.codigo == ""
     assert p.volumen == Decimal("0")
     assert p.peso == Decimal("0")
+
+
+def test_map_producto_usa_product_volume_no_volume_generico():
+    """Verificado en vivo (agosto 2026, producto real 1034): volume=6.0
+
+    vs product_volume=5.67 -- campos genuinamente distintos en Odoo
+    (volume es logística/empaque, product_volume es el litraje real que
+    usa _get_ventas_sync/el motor de descuentos). Un rec con ambos
+    presentes debe leer product_volume, ignorando volume."""
+    rec = {
+        "id": 803,
+        "default_code": "SKU-803",
+        "name": "Producto con ambos campos",
+        "volume": 6.0,
+        "product_volume": 5.67,
+        "weight": 1.0,
+        "brand_id": False,
+    }
+    p = map_producto_espejo(rec)
+    assert p.volumen == Decimal("5.67")
 
 
 # --- OdooXmlRpcReader.changed_catalogo --------------------------------------
@@ -67,7 +87,7 @@ def test_changed_catalogo_lee_campos_esperados():
                     "id": 1,
                     "default_code": "SKU-1",
                     "name": "P1",
-                    "volume": 1.0,
+                    "product_volume": 1.0,
                     "weight": 1.0,
                     "brand_id": [1, "Global Oil"],
                 }
@@ -80,6 +100,30 @@ def test_changed_catalogo_lee_campos_esperados():
     assert len(result) == 1
     assert result[0].producto_id == "1"
     assert result[0].marca == "Global Oil"
+    assert result[0].volumen == Decimal("1.0")
+
+
+def test_changed_catalogo_incluye_productos_archivados():
+    """Verificado en vivo (agosto 2026): search_read excluye productos
+
+    archivados (active=False) por defecto, a diferencia del `read` por id
+    explícito que usa la consulta en vivo de litros -- sin el filtro
+    ["active", "in", [True, False]] en el dominio, un producto
+    descontinuado referenciado en una orden histórica desaparece
+    silenciosamente del espejo."""
+    captured_domain = {}
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            captured_domain["domain"] = args[0]
+            return []
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    reader.changed_catalogo(since=None)
+    active_clauses = [c for c in captured_domain["domain"] if c[0] == "active"]
+    assert active_clauses == [["active", "in", [True, False]]]
 
 
 # --- Repository: InMemoryRepository round-trip ------------------------------

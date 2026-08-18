@@ -237,7 +237,12 @@ def map_entrega_espejo(rec: dict[str, Any]) -> Entrega:
 
 
 def map_producto_espejo(rec: dict[str, Any]) -> Producto:
-    volumen = _dec(rec.get("volume"))
+    # "product_volume" (custom, litros de producto), NO "volume" (genérico
+    # de logística/empaque de Odoo) -- verificado en vivo (agosto 2026,
+    # producto 1034: volume=6.0 vs product_volume=5.67, campos genuinamente
+    # distintos) que _get_ventas_sync/motor de descuentos usan
+    # product_volume, no volume, para el cálculo de litros.
+    volumen = _dec(rec.get("product_volume"))
     peso = _dec(rec.get("weight"))
     marca_info = rec.get("brand_id")
     marca = marca_info[1] if isinstance(marca_info, list | tuple) and len(marca_info) > 1 else ""
@@ -602,12 +607,21 @@ class OdooXmlRpcReader(OdooReader):
 
         volumen/peso/marca, referencia de baja frecuencia de cambio usada
         hoy para litros y otras columnas que varias páginas piden en vivo
-        por separado (Ventas, Reporte Diario).
+        por separado (Ventas, Reporte Diario). ``product_volume`` (NO
+        ``volume``, ver ``map_producto_espejo``) es el campo real que usa
+        ese cálculo.
+
+        ``["active", "in", [True, False]]`` -- verificado en vivo (agosto
+        2026): ``search_read`` excluye productos archivados por defecto,
+        a diferencia del ``read`` por id explícito que usa la consulta en
+        vivo de litros (``_get_ventas_sync``) -- sin este filtro, un
+        producto descontinuado referenciado en una orden histórica
+        desaparece silenciosamente del espejo y su litraje queda en 0.
         """
         recs = self._search_read(
             self.MODEL_PRODUCT,
-            self._delta(since),
-            ["id", "default_code", "name", "volume", "weight", "brand_id"],
+            self._delta(since) + [["active", "in", [True, False]]],
+            ["id", "default_code", "name", "product_volume", "weight", "brand_id"],
         )
         return [map_producto_espejo(r) for r in recs]
 
