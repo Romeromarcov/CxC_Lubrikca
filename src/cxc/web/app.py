@@ -8454,58 +8454,42 @@ async def get_auditoria():
             if so:
                 lines_by_so.setdefault(so, []).append(r)
 
-        # Fetch posted invoices from Odoo in batch for audit comparison
+        # Fase 4/5 (plan de consolidación de fuentes, agosto 2026): montos e
+        # identidad de facturas/NC ahora vienen del espejo Factura -- mismo
+        # helper ya validado para /api/reporte-saldos (parity check, 0
+        # diffs). A diferencia de la consulta en vivo original (que solo
+        # matcheaba NC vía invoice_origin directo, sin intentar
+        # reversed_entry_id), el espejo SÍ resuelve NC sin invoice_origin
+        # propio vía la cadena factura_origen_id -- corrige el mismo gap
+        # ya encontrado y arreglado en Reporte de Saldos, también aquí.
+        # Solo amount_residual/payment_state (mutables) se piden en vivo,
+        # acotados a los ids ya resueltos.
         so_ids = [o.so_id for o in ordenes]
-        invoices_by_so = {}
+        invoices_by_so: dict[str, list[dict]] = {}
         so_pagada_en_odoo: set[str] = set()
-        try:
-            invoices = (
-                execute(
-                    "account.move",
-                    "search_read",
-                    [
-                        [
-                            ["invoice_origin", "in", so_ids],
-                            ["state", "=", "posted"],
-                            ["move_type", "in", ["out_invoice", "out_refund"]],
-                        ]
-                    ],
-                    {
-                        "fields": [
-                            "id",
-                            "name",
-                            "invoice_origin",
-                            "amount_total",
-                            "amount_residual",
-                            "currency_id",
-                            "invoice_date",
-                            "move_type",
-                            "payment_state",
-                        ]
-                    },
-                )
-                if execute
-                else []
-            )
-            for inv in invoices:
-                so = str(inv.get("invoice_origin", "")).strip()
-                if so:
-                    invoices_by_so.setdefault(so, []).append(inv)
 
-            # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment
-            # (misma regla que /api/reporte-saldos, Tarea 2).
-            estados_por_so: dict[str, list[str]] = {}
-            for inv in invoices:
-                if str(inv.get("move_type")) != "out_invoice":
-                    continue
-                so = str(inv.get("invoice_origin", "")).strip()
-                if so:
-                    estados_por_so.setdefault(so, []).append(str(inv.get("payment_state", "")))
-            for so, estados in estados_por_so.items():
-                if estados and all(ps in ("paid", "in_payment") for ps in estados):
-                    so_pagada_en_odoo.add(so)
-        except Exception as e:
-            logger.warning("Error al consultar facturas Odoo en get_auditoria: %s", e)
+        facturas_dicts = _facturas_dicts_desde_espejo(repo, so_ids)
+        ids_para_estado_pago = [d["id"] for d in facturas_dicts if d["id"] is not None]
+        estado_pago_map = (
+            _estado_pago_facturas_desde_odoo(execute, ids_para_estado_pago) if execute else {}
+        )
+        estados_por_so: dict[str, list[str]] = {}
+        for d in facturas_dicts:
+            fid = d["id"]
+            overlay = estado_pago_map.get(fid, {})
+            merged = dict(d)
+            merged["amount_residual"] = overlay.get("amount_residual", 0.0)
+            merged["payment_state"] = overlay.get("payment_state", "")
+            so = merged["invoice_origin"]
+            invoices_by_so.setdefault(so, []).append(merged)
+            if merged["move_type"] == "out_invoice":
+                estados_por_so.setdefault(so, []).append(str(merged["payment_state"]))
+
+        # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment
+        # (misma regla que /api/reporte-saldos, Tarea 2).
+        for so, estados in estados_por_so.items():
+            if estados and all(ps in ("paid", "in_payment") for ps in estados):
+                so_pagada_en_odoo.add(so)
 
         # Read rates series to convert VES invoice residual to USD
         tasas_rows = _all_serie_tasas_rows(repo)
