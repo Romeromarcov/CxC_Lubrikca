@@ -15,6 +15,7 @@ from cxc.models import (
     Entrega,
     Factura,
     Feriado,
+    LineaFactura,
     LineaOrden,
     MetodoPago,
     Moneda,
@@ -381,4 +382,25 @@ def producto(
         marca=marca,
         volumen=Decimal(volumen),
         peso=Decimal(peso),
+    )
+
+
+def linea_factura(
+    linea_id: str = "LF1",
+    *,
+    factura_id: str = "1",
+    nombre: str = "Producto 1",
+    cantidad: str = "1",
+    precio_unitario: str = "100",
+    descuento: str = "0",
+    subtotal: str = "100",
+) -> LineaFactura:
+    return LineaFactura(
+        linea_id=linea_id,
+        factura_id=factura_id,
+        nombre=nombre,
+        cantidad=Decimal(cantidad),
+        precio_unitario=Decimal(precio_unitario),
+        descuento=Decimal(descuento),
+        subtotal=Decimal(subtotal),
     )

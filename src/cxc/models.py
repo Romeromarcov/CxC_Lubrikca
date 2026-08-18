@@ -189,6 +189,30 @@ class Producto:
     peso: Decimal
 
 
+# --- 3.2e Líneas de Factura (espejo, agosto 2026 -- Fase 4/5 del plan de
+# consolidación de fuentes) --------------------------------------------------
+@dataclass
+class LineaFactura:
+    """Espejo de ``account.move.line`` (líneas de producto de facturas/NC
+
+    de cliente) -- contenido INMUTABLE una vez publicada la factura, igual
+    criterio que ``Factura``. Cubre la mitad "factura" de la lógica de
+    descuentos de línea que ``_leer_descuentos_lineas_odoo`` arma hoy en
+    vivo (la mitad "orden" ya la cubre ``LineaOrden.nombre``/``subtotal``,
+    agregados en el mismo esfuerzo). Solo líneas de producto
+    (``display_type in [product, False]``) -- no líneas de sección/nota,
+    que no tienen descuento ni monto.
+    """
+
+    linea_id: str  # id de Odoo (account.move.line), como string
+    factura_id: str  # move_id -- calza Factura.factura_id
+    nombre: str
+    cantidad: Decimal
+    precio_unitario: Decimal
+    descuento: Decimal  # % de línea (campo discount de Odoo)
+    subtotal: Decimal  # price_subtotal -- negativo en líneas "Descuento" aparte
+
+
 # Fallback de marca configurable (Configuración > Ajustes generales, clave
 # "marca_fallback"): no todos los productos tienen brand_id asignado en Odoo
 # (los SINOCO sí, muchos GLOBAL OIL no) -- ``resolved_marca`` usa este valor

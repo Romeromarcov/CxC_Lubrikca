@@ -41,6 +41,7 @@ from ..models import (
     ExclusionRegla,
     Factura,
     Feriado,
+    LineaFactura,
     LineaOrden,
     MetodoPago,
     Moneda,
@@ -301,6 +302,20 @@ class PostgresRepository(Repository):
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.catalogo)).all()
         return [_row_to_catalogo(r) for r in rows]
+
+    def upsert_lineas_factura(self, filas: list[LineaFactura]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.lineas_factura,
+                [_linea_factura_to_row(ln) for ln in filas],
+                ["linea_id"],
+            )
+
+    def all_lineas_factura(self) -> list[LineaFactura]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.lineas_factura)).all()
+        return [_row_to_linea_factura(r) for r in rows]
 
     # --- Lecturas para el motor -----------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:
@@ -1059,6 +1074,30 @@ def _row_to_catalogo(r: Any) -> Producto:
         marca=r.marca,
         volumen=r.volumen,
         peso=r.peso,
+    )
+
+
+def _linea_factura_to_row(ln: LineaFactura) -> dict[str, Any]:
+    return {
+        "linea_id": ln.linea_id,
+        "factura_id": ln.factura_id,
+        "nombre": ln.nombre,
+        "cantidad": ln.cantidad,
+        "precio_unitario": ln.precio_unitario,
+        "descuento": ln.descuento,
+        "subtotal": ln.subtotal,
+    }
+
+
+def _row_to_linea_factura(r: Any) -> LineaFactura:
+    return LineaFactura(
+        linea_id=r.linea_id,
+        factura_id=r.factura_id,
+        nombre=r.nombre,
+        cantidad=r.cantidad,
+        precio_unitario=r.precio_unitario,
+        descuento=r.descuento,
+        subtotal=r.subtotal,
     )
 
 

@@ -146,6 +146,22 @@ catalogo = Table(
     Column("peso", MONEY, nullable=False, server_default="0"),
 )
 
+# --- 3.2e LineasFactura (espejo, sync-owned -- Fase 4/5 del plan de
+# consolidación de fuentes, agosto 2026). Contenido INMUTABLE una vez
+# publicada la factura. factura_id SIN ForeignKey, mismo criterio que
+# facturas.so_id (sync no garantiza orden). --------------------------------
+lineas_factura = Table(
+    "lineas_factura",
+    metadata,
+    Column("linea_id", String, primary_key=True),
+    Column("factura_id", String, nullable=False, index=True),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("cantidad", MONEY, nullable=False, server_default="0"),
+    Column("precio_unitario", MONEY, nullable=False, server_default="0"),
+    Column("descuento", MONEY, nullable=False, server_default="0"),
+    Column("subtotal", MONEY, nullable=False, server_default="0"),
+)
+
 # --- 3.3 LineasOrden (espejo, sync-owned) ------------------------------------
 lineas_orden = Table(
     "lineas_orden",

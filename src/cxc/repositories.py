@@ -32,6 +32,7 @@ from .models import (
     ExclusionRegla,
     Factura,
     Feriado,
+    LineaFactura,
     LineaOrden,
     MetodoPago,
     OrdenVenta,
@@ -160,6 +161,16 @@ class Repository(ABC):
 
     def all_catalogo(self) -> list[Producto]:
         raise NotImplementedError("all_catalogo solo está implementado en PostgresRepository.")
+
+    def upsert_lineas_factura(self, filas: list[LineaFactura]) -> None:
+        raise NotImplementedError(
+            "upsert_lineas_factura solo está implementado en PostgresRepository."
+        )
+
+    def all_lineas_factura(self) -> list[LineaFactura]:
+        raise NotImplementedError(
+            "all_lineas_factura solo está implementado en PostgresRepository."
+        )
 
     # --- Lecturas para el motor ---------------------------------------------
     @abstractmethod
@@ -423,6 +434,7 @@ class InMemoryRepository(Repository):
         self._facturas: dict[str, Factura] = {}
         self._entregas: dict[str, Entrega] = {}
         self._catalogo: dict[str, Producto] = {}
+        self._lineas_factura: dict[str, LineaFactura] = {}
         self._metodos: dict[str, MetodoPago] = {}
         self._vinculaciones: dict[str, Vinculacion] = {}
         self._descuentos: list[DescuentoMarcaCategoria] = []
@@ -536,6 +548,13 @@ class InMemoryRepository(Repository):
 
     def all_catalogo(self) -> list[Producto]:
         return list(self._catalogo.values())
+
+    def upsert_lineas_factura(self, filas: list[LineaFactura]) -> None:
+        for ln in filas:
+            self._lineas_factura[ln.linea_id] = ln
+
+    def all_lineas_factura(self) -> list[LineaFactura]:
+        return list(self._lineas_factura.values())
 
     # --- Lecturas ------------------------------------------------------------
     def get_cliente(self, cliente_id: str) -> Cliente | None:

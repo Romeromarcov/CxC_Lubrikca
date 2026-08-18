@@ -28,7 +28,17 @@ from typing import Any
 
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
-from ..models import Cliente, Entrega, Factura, LineaOrden, Moneda, OrdenVenta, Pago, Producto
+from ..models import (
+    Cliente,
+    Entrega,
+    Factura,
+    LineaFactura,
+    LineaOrden,
+    Moneda,
+    OrdenVenta,
+    Pago,
+    Producto,
+)
 
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
@@ -256,6 +266,20 @@ def map_producto_espejo(rec: dict[str, Any]) -> Producto:
     )
 
 
+def map_linea_factura(rec: dict[str, Any]) -> LineaFactura:
+    move_raw = rec.get("move_id")
+    factura_id = str(move_raw[0]) if isinstance(move_raw, list | tuple) else str(move_raw or "")
+    return LineaFactura(
+        linea_id=str(rec["id"]),
+        factura_id=factura_id,
+        nombre=str(rec.get("name", "") or ""),
+        cantidad=_dec(rec.get("quantity")),
+        precio_unitario=_dec(rec.get("price_unit")),
+        descuento=_dec(rec.get("discount")),
+        subtotal=_dec(rec.get("price_subtotal")),
+    )
+
+
 def map_linea(rec: dict[str, Any]) -> LineaOrden:
     return LineaOrden(
         linea_id=str(rec["id"]),
@@ -342,6 +366,11 @@ class OdooReader(ABC):
     def changed_catalogo(self, since: datetime | None) -> list[Producto]:
         return []
 
+    # Líneas de Factura (Fase 4/5, agosto 2026): mismo criterio, default
+    # "sin cambios".
+    def changed_lineas_factura(self, since: datetime | None) -> list[LineaFactura]:
+        return []
+
 
 class OdooXmlRpcReader(OdooReader):
     MODEL_PARTNER = "res.partner"
@@ -352,6 +381,7 @@ class OdooXmlRpcReader(OdooReader):
     MODEL_PICKING = "stock.picking"
     MODEL_PRODUCT = "product.product"
     MODEL_MOVE = "account.move"
+    MODEL_MOVE_LINE = "account.move.line"
 
     def __init__(self, config: OdooConfig, execute: ExecuteFn | None = None) -> None:
         self._config = config
@@ -626,6 +656,19 @@ class OdooXmlRpcReader(OdooReader):
             ["id", "default_code", "name", "product_volume", "weight", "brand_id"],
         )
         return [map_producto_espejo(r) for r in recs]
+
+    # --- LineasFactura (espejo, Fase 4/5 del plan de consolidación de
+    # fuentes) -- mitad "factura" de la lógica de descuentos de línea que
+    # _leer_descuentos_lineas_odoo arma hoy en vivo. Solo líneas de
+    # producto (display_type in [product, False]) -- secciones/notas no
+    # tienen descuento ni monto. -------------------------------------------
+    def changed_lineas_factura(self, since: datetime | None) -> list[LineaFactura]:
+        recs = self._search_read(
+            self.MODEL_MOVE_LINE,
+            self._delta(since) + [["display_type", "in", ["product", False]]],
+            ["id", "move_id", "name", "quantity", "price_unit", "discount", "price_subtotal"],
+        )
+        return [map_linea_factura(r) for r in recs]
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:
