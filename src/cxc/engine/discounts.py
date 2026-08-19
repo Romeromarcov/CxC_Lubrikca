@@ -157,6 +157,20 @@ def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_R
 
     Reglas sin el atributo (compatibilidad hacia atrás) se tratan como
     ``False`` -- no requieren pago previo.
+
+    IMPORTANTE (distinción aclarada por el usuario, agosto 2026): esto es
+    "pago previo de la orden ACTUAL" (Pronto Pago/Contado, Diferencial
+    Cambiario) -- solo aplica si ESTA orden/factura ya tiene un abono.
+    Recompra usa un concepto DISTINTO, no cubierto por este flag ni por
+    ``ignorar_pago_previo``: exige que la orden ANTERIOR del cliente esté
+    pagada por completo (ver ``orden_anterior_cliente``/``pagada_completo``
+    en ``_calcular_componentes``), sin importar el estado de pago de la
+    orden actual. Ambos casos comparten el mismo patrón de VISIBILIDAD
+    teórica: una vez elegible, el descuento se proyecta mientras su propia
+    ventana de pago (``ventana_pago_vigente``/``limite_ventana_pago``) siga
+    vigente, y deja de proyectarse si venció -- Contado replica esto para
+    el caso teórico sin abonos (ver bloque "Teórico sin abonos todavía" en
+    ``_calcular_componentes``).
     """
     if tiene_pago:
         return reglas
@@ -493,13 +507,27 @@ def _evaluar_promociones_producto(
     return nc, detalle_nc
 
 
-def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Componentes:
+def _calcular_componentes(
+    inp: EngineInputs, lista: str, pura_bcv: bool, ignorar_pago_previo: bool = False
+) -> _Componentes:
     fecha_orden = inp.orden.fecha
     precio_base = sum((_precio_linea(inp, ln, lista) for ln in inp.lineas), Decimal("0"))
 
     # Tarea 1: reglas con requiere_pago_previo=True quedan excluidas si la
-    # orden/factura no tiene ningún abono vinculado todavía.
-    tiene_pago = bool(inp.abonos)
+    # orden/factura no tiene ningún abono vinculado todavía -- EXCEPTO en el
+    # cálculo teórico (``ignorar_pago_previo=True``, ver ``_teoricos_por_lista``
+    # y ``conceptos_descuento_teorico``): el teórico debe mostrar TODO
+    # descuento que aplicaría, para que el usuario vea en las columnas
+    # teóricas/pendiente lo que se "mantiene" a la espera de pago, tal como
+    # se describió el flujo aprobado (agosto 2026) -- solo lo que
+    # efectivamente materializa en Bandeja/factura real (``calcular_factura``,
+    # ``ignorar_pago_previo=False`` por defecto) sigue exigiendo pago previo
+    # real. Diferencial Cambiario es la única excepción estructural: su
+    # monto se calcula a partir de la moneda/tasa de los abonos reales (más
+    # abajo, ``if inp.abonos and pura_bcv...``), así que sin abonos su
+    # aporte teórico sigue siendo $0 sin importar esta bandera -- no hay
+    # forma de proyectarlo sin saber cómo pagará el cliente.
+    tiene_pago = True if ignorar_pago_previo else bool(inp.abonos)
     descuentos_ok = _filtrar_por_pago_previo(inp.descuentos, tiene_pago)
     descuentos_volumen_ok = _filtrar_por_pago_previo(inp.descuentos_volumen, tiene_pago)
     descuentos_recompra_ok = _filtrar_por_pago_previo(inp.descuentos_recompra, tiene_pago)
@@ -676,7 +704,9 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
     # El método NO determina el contado: lo determina pagar el neto total dentro
     # del plazo (ventana de días hábiles desde la entrega completa). Solo se
     # requiere que haya abonos y un ancla de entrega.
-    contado_evaluable = bool(inp.abonos) and inp.orden.fecha_entrega is not None
+    contado_evaluable = (
+        bool(inp.abonos) or ignorar_pago_previo
+    ) and inp.orden.fecha_entrega is not None
     contado_proy = Decimal("0")
     regla_contado_dominante: DescuentoMarcaCategoria | None = None
     if contado_evaluable:
@@ -721,6 +751,35 @@ def _calcular_componentes(inp: EngineInputs, lista: str, pura_bcv: bool) -> _Com
 
         for regla_subtotal in reglas_contado_subtotal.values():
             contado_proy += precio_base * regla_subtotal.porcentaje
+
+        # Teórico sin abonos todavía (``ignorar_pago_previo=True``): Contado
+        # solo se proyecta MIENTRAS la ventana de pago siga vigente -- igual
+        # que Recompra, no debe mostrarse como pendiente si la ventana ya
+        # venció (aclarado por el usuario, agosto 2026: "debería ser visible
+        # mientras esté en la ventana de pago, igual que los demás que
+        # tengan ventana de pago"). Con abonos reales, ``calcular_factura``
+        # ya hace este mismo chequeo (``within_window``/``window_expired``)
+        # para decidir contado_confirmado/contado_denied -- esto solo cubre
+        # el caso teórico, ANTES de que exista ningún abono.
+        if ignorar_pago_previo and not inp.abonos and inp.orden.fecha_entrega is not None:
+            fin_ventana_teorico: date | None = None
+            if regla_contado_dominante is not None:
+                fin_ventana_teorico = limite_ventana_pago(
+                    getattr(regla_contado_dominante, "ventana_pago_tipo", "entrega"),
+                    getattr(regla_contado_dominante, "ventana_pago_dias", 3),
+                    fecha_emision=inp.orden.fecha,
+                    fecha_entrega=inp.orden.fecha_entrega,
+                    dias_credito=inp.orden.dias_credito,
+                )
+            if fin_ventana_teorico is None:
+                fin_ventana_teorico = fin_ventana_contado(
+                    inp.orden.fecha_entrega,
+                    inp.engine_config.cash_window_business_days,
+                    inp.feriados_tabla,
+                )
+            if inp.fecha_calculo > fin_ventana_teorico:
+                contado_proy = Decimal("0")
+                regla_contado_dominante = None
 
     # (d) Descuento por Volumen (Litros o Unidades/Cajas) -- evaluado POR
     # REGLA, no agrupando primero por (marca, categoría raíz). Hallazgo de
@@ -1102,7 +1161,7 @@ def conceptos_descuento_teorico(
     ver nota en ``_teoricos_por_lista``).
     """
     try:
-        comp = _calcular_componentes(inp, lista, pura_bcv)
+        comp = _calcular_componentes(inp, lista, pura_bcv, ignorar_pago_previo=True)
     except KeyError:
         return []
     conceptos: list[dict[str, Any]] = []
@@ -1132,7 +1191,9 @@ def _teoricos_por_lista(
     ``(teorico_ves, teorico_usd, equivalente_usd, descuentos_ves, descuentos_usd)``.
     """
     try:
-        comp_ves = _calcular_componentes(inp, lista_ves_name, pura_bcv=True)
+        comp_ves = _calcular_componentes(
+            inp, lista_ves_name, pura_bcv=True, ignorar_pago_previo=True
+        )
     except KeyError:
         # Lista VES sin precio para algún producto en el resolver (ej. en
         # tests con catálogos parciales) -- no se puede derivar el teórico.
@@ -1145,7 +1206,9 @@ def _teoricos_por_lista(
             nc=Decimal("0"),
         )
     try:
-        comp_usd = _calcular_componentes(inp, lista_usd_name, pura_bcv=False)
+        comp_usd = _calcular_componentes(
+            inp, lista_usd_name, pura_bcv=False, ignorar_pago_previo=True
+        )
     except KeyError:
         comp_usd = _Componentes(
             precio_base=Decimal("0"),

@@ -12,7 +12,12 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from cxc.config import EngineConfig
-from cxc.engine.discounts import EngineInputs, _filtrar_por_pago_previo, calcular_factura
+from cxc.engine.discounts import (
+    EngineInputs,
+    _filtrar_por_pago_previo,
+    calcular_factura,
+    calcular_teorico_orden_con_fallback,
+)
 from cxc.engine.price_resolver import DictPriceResolver
 from cxc.models import Moneda, TipoTasa
 
@@ -41,6 +46,8 @@ def _inputs(
     descuentos_volumen=(),
     resolver,
     fecha_calculo=date(2026, 6, 8),
+    valid_usd=(),
+    valid_ves=(),
 ) -> EngineInputs:
     return EngineInputs(
         orden=orden,
@@ -55,6 +62,8 @@ def _inputs(
         engine_config=CFG,
         fecha_calculo=fecha_calculo,
         all_ordenes=[],
+        valid_usd=list(valid_usd),
+        valid_ves=list(valid_ves),
     )
 
 
@@ -168,3 +177,63 @@ def test_volumen_con_flag_true_no_aplica_sin_abonos() -> None:
     res = calcular_factura(inp)
     assert res.total_descuentos == Decimal("0")
     assert res.total_motor == Decimal("20000.00")
+
+
+# --- Puntos 5-6 (agosto 2026): el TEÓRICO debe mostrar descuentos con
+# requiere_pago_previo=True aunque la orden no tenga abonos todavía -- solo
+# lo "aplicable ahora" (factura real, arriba) exige el pago. -------------
+
+
+def test_teorico_muestra_contado_con_pago_previo_aunque_no_haya_abonos() -> None:
+    """A diferencia de `calcular_factura` (arriba, $0 sin abonos), el
+
+    teórico debe mostrar los $3 de Contado -- es lo que "se mantiene en
+    memoria temporal" esperando la ventana de pago, y debe verse en las
+    columnas teóricas/pendiente incluso antes de que exista un abono."""
+    orden = b.orden(primera=False)
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],  # sin pagos vinculados todavía
+        descuentos=[
+            b.descuento(
+                marca="Sinoco", categoria="*", porcentaje="0.03", requiere_pago_previo=True
+            )
+        ],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+        valid_usd=["USD"],
+        valid_ves=["BCV"],
+    )
+    factura = calcular_factura(inp)
+    assert factura.total_descuentos == Decimal("0")  # no materializado sin pago
+
+    teorico = calcular_teorico_orden_con_fallback(inp)
+    assert teorico["descuentos_teorico_usd"] == Decimal("3.00")
+    assert teorico["descuentos_teorico_ves"] == Decimal("3.00")
+
+
+def test_teorico_no_muestra_contado_si_la_ventana_ya_vencio_sin_abonos() -> None:
+    """Igual que Recompra: una vez vencida la ventana de pago (3 días
+
+    hábiles desde la entrega en `CFG`), Contado deja de proyectarse en el
+    teórico -- ya no podría confirmarse aunque llegara un abono ahora."""
+    orden = b.orden(primera=False, fecha_entrega=date(2026, 6, 5))
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[],
+        descuentos=[
+            b.descuento(
+                marca="Sinoco", categoria="*", porcentaje="0.03", requiere_pago_previo=True
+            )
+        ],
+        resolver=_resolver(**{"P1@USD": "100", "P1@BCV": "100"}),
+        valid_usd=["USD"],
+        valid_ves=["BCV"],
+        fecha_calculo=date(2026, 6, 20),  # muy fuera de la ventana de 3 días hábiles
+    )
+    teorico = calcular_teorico_orden_con_fallback(inp)
+    assert teorico["descuentos_teorico_usd"] == Decimal("0.00")
+    assert teorico["descuentos_teorico_ves"] == Decimal("0.00")

@@ -1431,6 +1431,23 @@ def resolve_vendedor_validado(
     return vendedor, mismatch
 
 
+def _correr_auditoria_sobre_descuento_diaria(repo) -> None:
+    """Envoltorio del daemon (ver ``run_sync_in_background``) para
+
+    ``_detectar_sobre_descuentos_batch`` -- sin esto, un sobre-descuento
+    recién expuesto por el vencimiento de una ventana de pago (Contado/
+    Recompra, ver docstring de esa función) solo se detectaría si alguien
+    abre Reporte de Saldos. Nunca debe tumbar el ciclo del daemon si falla.
+    """
+    try:
+        filas = _detectar_sobre_descuentos_batch(repo)
+        if filas and hasattr(repo, "append_auditoria_rows"):
+            repo.append_auditoria_rows(filas)
+            print(f"FastAPI Daemon: {len(filas)} sobre-descuento(s) nuevo(s) en Auditoría.")
+    except Exception as e_aud:
+        print(f"Error detectando sobre-descuentos (daemon): {e_aud}", file=sys.stderr)
+
+
 async def run_sync_in_background():
     """Daemon de sincronización incremental Odoo → Sheets.
 
@@ -1439,6 +1456,7 @@ async def run_sync_in_background():
     Iteraciones siguientes: usa el cursor incremental normal (delta 48h solapado).
     """
     _first_run = True
+    _last_daily_recalc_date: date | None = None
     while True:
         try:
             config = AppConfig.from_env()
@@ -1470,6 +1488,8 @@ async def run_sync_in_background():
                     # entero (incluido el health check de Railway), causando
                     # 502 "Application failed to respond" en el servidor.
                     await asyncio.to_thread(recalculate_all_orders)
+                await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
+                _last_daily_recalc_date = date.today()
                 _first_run = False
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
@@ -1486,6 +1506,23 @@ async def run_sync_in_background():
                     # esperar a que un humano vincule algo manualmente. En
                     # hilo aparte por la misma razón que arriba.
                     await asyncio.to_thread(recalculate_all_orders)
+                    await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
+                    _last_daily_recalc_date = date.today()
+                elif _last_daily_recalc_date != date.today():
+                    # Recálculo diario independiente del sync: aunque Odoo no
+                    # reporte cambios, descuentos como Recompra dependen de
+                    # ventana_pago_vigente(...) evaluada contra date.today()
+                    # -- una orden que nadie tocó puede cruzar el borde de su
+                    # ventana de un día para otro sin que IncrementalSync ni
+                    # una Vinculación manual lo disparen. Se fuerza al menos
+                    # una corrida por día calendario para que ese borde no
+                    # pase inadvertido.
+                    print(
+                        "FastAPI Daemon: Recálculo diario (ventanas de pago) sin cambios de sync."
+                    )
+                    await asyncio.to_thread(recalculate_all_orders)
+                    await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
+                    _last_daily_recalc_date = date.today()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
@@ -9635,6 +9672,37 @@ def _get_ventas_sync(
                 max(0.0, pendiente_tras_nc - descuento_aplicado_sistema), 2
             )
 
+            # Puntos 5-6 (agosto 2026, aprobado por el usuario): nueva columna
+            # en la sección de totales de la orden real -- el subtotal REAL
+            # de la orden (``venta_bruta_real``, lo que Odoo tiene hoy en la
+            # línea), CON IMPUESTOS, con el descuento TEÓRICO total del
+            # motor ya restado (``motor_total_descuentos``, el mismo que
+            # exige la validación orden/factura), sin importar si ese
+            # descuento ya se materializó en Odoo/N.C./sistema o sigue
+            # pendiente. Responde "¿cuánto debería costar esta orden con
+            # impuestos si se aplicaran todos los descuentos que el motor
+            # calcula?", a diferencia de `venta_neta_real` (lo que Odoo YA
+            # tiene aplicado hoy).
+            #
+            # Tarea 2 (bloqueo por sobre-descuento): si Odoo YA tiene
+            # aplicado más descuento del que el motor calcula (orden o
+            # factura, ver `_detectar_sobre_descuento_vigente`), restar
+            # el teórico aquí encima sería engañoso -- la orden está
+            # esperando revisión en Auditoría, no un descuento adicional.
+            # En ese caso el subtotal se muestra SIN el descuento teórico
+            # (solo + impuestos), igual que `venta_neta_real`.
+            bloqueado_por_sobre_descuento = (
+                audit_orden.enviar_a_bandeja and audit_orden.diferencia_usd < 0
+            ) or (audit_factura.enviar_a_bandeja and audit_factura.diferencia_usd < 0)
+            orden_real_subtotal_teoricos_base = (
+                venta_bruta_real
+                if bloqueado_por_sobre_descuento
+                else max(0.0, venta_bruta_real - float(motor_total_descuentos))
+            )
+            orden_real_subtotal_teoricos = round(
+                orden_real_subtotal_teoricos_base * (1 + iva_rate + igtf_rate), 2
+            )
+
             precio_base_calculado = float(b.precio_base_calculado) if b else 0.0
 
             # Fase 4: estatus de pago -- BCV/Binance según a qué lista
@@ -9854,10 +9922,22 @@ def _get_ventas_sync(
                     "descuento_validacion_orden": audit_orden.estado.value,
                     "descuento_validacion_factura": audit_factura.estado.value,
                     # Tarea 3d: descuento que el motor exige y aún no está en Odoo.
+                    # Puntos 5-6: se muestra en la sección de totales de la
+                    # orden real (junto a venta_bruta_real/venta_neta_real en
+                    # la UI), no solo al final de la tabla.
                     "descuento_pendiente_aplicar": descuento_pendiente_aplicar,
                     "descuento_pendiente_aplicar_pct": _pct(
                         descuento_pendiente_aplicar, precio_base_calculado
                     ),
+                    # Puntos 5-6: venta_bruta_real + impuestos menos TODO lo
+                    # que el motor exige de descuento (ver cálculo arriba) --
+                    # "cuánto debería costar esta orden si se aplicaran todos
+                    # los descuentos teóricos", vive junto a las demás
+                    # columnas de totales de la orden real. No resta el
+                    # teórico si la orden está bloqueada por sobre-descuento
+                    # (ver flag hermano).
+                    "orden_real_subtotal_teoricos": orden_real_subtotal_teoricos,
+                    "orden_real_subtotal_teoricos_bloqueado": bloqueado_por_sobre_descuento,
                     # Fase 3: descuento aprobado manualmente desde la Bandeja 1
                     # de Facturación (nunca se escribe a Odoo, solo ajusta el
                     # saldo interno de CxC).
@@ -10521,6 +10601,159 @@ class AprobarDescuentoSistemaRequest(BaseModel):
     activo: bool = True
 
 
+def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
+    """Agosto 2026 -- versión batch (TODAS las órdenes) de
+
+    ``_detectar_sobre_descuento_vigente``, para el daemon diario (ver
+    ``run_sync_in_background``): arma filas de auditoría persistidas
+    (mismo shape que ``_get_reporte_saldos_sync``) SOLO para sobre-
+    descuentos nuevos, sin llamar a Odoo.
+
+    Por qué existe aparte del chequeo reactivo de
+    ``post_aprobar_descuento_sistema``: Contado y Recompra se calculan
+    PROVISIONALMENTE mientras su ventana de pago sigue vigente (ver
+    ``contado_incluido``/``recompras_activas`` en ``engine/discounts.py``)
+    -- eso infla ``Bandeja.total_descuentos`` de forma optimista, lo que
+    puede TAPAR un sobre-descuento real: si Odoo ya tiene más descuento
+    aplicado del que correspondería, pero el motor todavía cuenta
+    provisionalmente a Contado/Recompra como si fueran a confirmarse,
+    ``motor_total_descuentos`` puede igualar o superar a Odoo sin que se
+    detecte nada. Recién cuando la ventana vence (Contado pasa a
+    "denegado", Recompra dejaría de calificar) el total del motor baja a
+    su valor CONFIRMADO y el sobre-descuento queda expuesto -- pero para
+    entonces nadie está mirando esa orden en particular. El recálculo
+    diario (Tarea 1, ``recalculate_all_orders``) ya actualiza
+    ``Bandeja.total_descuentos`` a diario reflejando ese vencimiento; esta
+    función corre justo después, sobre TODAS las órdenes, para que un
+    sobre-descuento recién expuesto por un vencimiento de ventana quede
+    visible en Auditoría de Descuentos sin depender de que alguien abra
+    Reporte de Saldos.
+    """
+    from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
+
+    so_ids = [o.so_id for o in repo.all_ordenes()]
+    if not so_ids:
+        return []
+    bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
+    espejo_fact = _facturacion_por_so_desde_espejo(repo, so_ids)
+    desc_orden_map, desc_factura_map = _descuentos_lineas_desde_espejo(
+        repo,
+        so_ids,
+        espejo_fact["invoice_ids_all"],
+        espejo_fact["inv_id_to_so"],
+        espejo_fact["inv_usd_ratio_map"],
+    )
+
+    try:
+        existing_audit_rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+    except Exception:
+        existing_audit_rows = []
+    _today_str = date.today().isoformat()
+    existing_keys: set[tuple[str, str]] = {
+        (r.get("so_id", ""), r.get("tipo_auditoria", ""))
+        for r in existing_audit_rows
+        if str(r.get("timestamp_audit", ""))[:10] == _today_str
+    }
+
+    _ahora_iso = datetime.now().isoformat()
+    filas: list[dict] = []
+    for so_id in so_ids:
+        bandeja = bandeja_map.get(so_id)
+        motor_total_descuentos = (
+            Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
+        )
+        audit_orden = auditar_descuento_orden(
+            so_id=so_id,
+            motor_total_descuentos=motor_total_descuentos,
+            odoo_descuento_aplicado=Decimal(str(desc_orden_map.get(so_id, 0.0))),
+        )
+        audit_factura = auditar_descuento_factura(
+            so_id=so_id,
+            motor_total_descuentos=motor_total_descuentos,
+            odoo_descuento_factura=Decimal(str(desc_factura_map.get(so_id, 0.0))),
+        )
+        for ar in (audit_orden, audit_factura):
+            if not (ar.enviar_a_bandeja and ar.diferencia_usd < 0):
+                continue
+            key = (so_id, ar.tipo.value)
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            filas.append(
+                {
+                    "audit_id": f"{so_id}_{ar.tipo.value}_{_today_str}",
+                    "so_id": so_id,
+                    "tipo_auditoria": ar.tipo.value,
+                    "motor_calcula_usd": round(float(ar.motor_calcula_usd), 4),
+                    "odoo_registrado_usd": round(float(ar.odoo_registrado_usd), 4),
+                    "diferencia_usd": round(float(ar.diferencia_usd), 4),
+                    "detalle_odoo": ar.detalle_odoo,
+                    "detalle_motor": ar.detalle_motor,
+                    "estado": "pendiente",
+                    "revisado_por": "",
+                    "timestamp_audit": _ahora_iso,
+                }
+            )
+    return filas
+
+
+def _detectar_sobre_descuento_vigente(repo, so_id: str):
+    """Recalcula EN VIVO, leyendo solo del espejo (sin llamar a Odoo), si
+
+    esta orden ya tiene MÁS descuento aplicado en Odoo (orden o factura)
+    que lo que el motor calcula que le corresponde -- "sobre-descuento".
+
+    Guardia de Tarea 2 (agosto 2026, aprobada por el usuario): un
+    sobre-descuento NO bloquea nada más del sistema (Facturación,
+    Cobranza, etc. siguen su curso normal), pero SÍ debe bloquear que se
+    apruebe otro descuento de sistema adicional sobre esa misma orden
+    mientras nadie haya revisado por qué se aplicó ese exceso -- hasta
+    que se revise en Auditoría de Descuentos (``estado`` distinto de
+    "pendiente" vía ``PATCH /api/auditoria-descuentos/{audit_id}``).
+
+    Se recalcula en vivo (no se lee ``repo.all_auditoria()``) porque esa
+    tabla solo se repuebla cuando alguien carga Reporte de Saldos o corre
+    el daemon diario (``_detectar_sobre_descuentos_batch``) -- una orden
+    recién sobre-descontada en Odoo podría no tener fila ahí todavía.
+    Devuelve el primer ``ResultadoAuditoria`` en estado de sobre-descuento
+    (orden o factura), o ``None`` si no aplica.
+    """
+    from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
+
+    orden = repo.get_orden(so_id)
+    if orden is None:
+        return None
+    bandeja = repo.get_bandeja(so_id)
+    motor_total_descuentos = Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
+
+    espejo_fact = _facturacion_por_so_desde_espejo(repo, {so_id})
+    desc_orden_map, desc_factura_map = _descuentos_lineas_desde_espejo(
+        repo,
+        {so_id},
+        espejo_fact["invoice_ids_all"],
+        espejo_fact["inv_id_to_so"],
+        espejo_fact["inv_usd_ratio_map"],
+    )
+
+    audit_orden = auditar_descuento_orden(
+        so_id=so_id,
+        motor_total_descuentos=motor_total_descuentos,
+        odoo_descuento_aplicado=Decimal(str(desc_orden_map.get(so_id, 0.0))),
+    )
+    if audit_orden.enviar_a_bandeja and audit_orden.diferencia_usd < 0:
+        return audit_orden
+
+    audit_factura = auditar_descuento_factura(
+        so_id=so_id,
+        motor_total_descuentos=motor_total_descuentos,
+        odoo_descuento_factura=Decimal(str(desc_factura_map.get(so_id, 0.0))),
+    )
+    if audit_factura.enviar_a_bandeja and audit_factura.diferencia_usd < 0:
+        return audit_factura
+
+    return None
+
+
 @app.post("/api/facturacion/aprobar-descuento-sistema")
 async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
     """Aprueba (o revoca, con ``activo=false``) un descuento manual interno
@@ -10528,9 +10761,30 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
     para una orden. NUNCA se escribe a Odoo -- solo ajusta los saldos
     internos de CxC que expone ``/api/ventas`` (``descuento_aplicado_sistema``
     y ``saldo_pendiente_cxc``).
+
+    Tarea 2 (agosto 2026): si la orden ya está en estado de sobre-descuento
+    (Odoo tiene aplicado más descuento del que el motor calcula), se
+    bloquea aprobar un descuento ADICIONAL -- hay que revisar primero en
+    Auditoría de Descuentos por qué se aplicó ese exceso. La revocación
+    (``activo=false``) siempre se permite: no agrega descuento, solo
+    retira uno ya aprobado internamente.
     """
     try:
         repo = get_repo()
+        if req.activo:
+            sobre_descuento = _detectar_sobre_descuento_vigente(repo, req.so_id)
+            if sobre_descuento is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"La orden {req.so_id} ya tiene más descuento aplicado en "
+                        f"Odoo (${float(sobre_descuento.odoo_registrado_usd):.2f}) que lo "
+                        f"que el motor calcula "
+                        f"(${float(sobre_descuento.motor_calcula_usd):.2f}). "
+                        "No se puede aprobar otro descuento de sistema hasta revisar "
+                        "el caso en Auditoría de Descuentos."
+                    ),
+                )
         row = {
             "so_id": req.so_id,
             "monto": str(req.monto),
@@ -10546,6 +10800,8 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
             if req.activo
             else "Descuento de sistema revocado.",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -604,6 +604,77 @@ class PostgresRepository(Repository):
                 ["anomalia_id"],
             )
 
+    def all_auditoria(self) -> list[dict[str, Any]]:
+        """Fase de consolidación (agosto 2026) -- hallazgo real: la tabla
+
+        ``bandeja_auditoria`` existe en el esquema desde el inicio, pero
+        estos 3 métodos nunca se implementaron aquí (solo en
+        ``SheetsRepository``) -- en Postgres, ``GET /api/auditoria-
+        descuentos`` y la persistencia de sobre-descuentos silenciosamente
+        no hacían nada (guardas ``hasattr(repo, ...)`` en ``web/app.py``).
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.bandeja_auditoria)).all()
+        return [
+            {
+                "audit_id": r.audit_id,
+                "so_id": r.so_id,
+                "tipo_auditoria": r.tipo_auditoria,
+                "motor_calcula_usd": str(r.motor_calcula_usd)
+                if r.motor_calcula_usd is not None
+                else "",
+                "odoo_registrado_usd": str(r.odoo_registrado_usd)
+                if r.odoo_registrado_usd is not None
+                else "",
+                "diferencia_usd": str(r.diferencia_usd) if r.diferencia_usd is not None else "",
+                "detalle_odoo": r.detalle_odoo,
+                "detalle_motor": r.detalle_motor,
+                "estado": r.estado,
+                "revisado_por": r.revisado_por or "",
+                "timestamp_audit": r.timestamp_audit.isoformat() if r.timestamp_audit else "",
+            }
+            for r in rows
+        ]
+
+    def append_auditoria_rows(self, filas: list[dict[str, Any]]) -> None:
+        if not filas:
+            return
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.bandeja_auditoria,
+                [
+                    {
+                        "audit_id": f["audit_id"],
+                        "so_id": f.get("so_id", ""),
+                        "tipo_auditoria": f.get("tipo_auditoria", ""),
+                        "motor_calcula_usd": f.get("motor_calcula_usd"),
+                        "odoo_registrado_usd": f.get("odoo_registrado_usd"),
+                        "diferencia_usd": f.get("diferencia_usd"),
+                        "detalle_odoo": f.get("detalle_odoo", ""),
+                        "detalle_motor": f.get("detalle_motor", ""),
+                        "estado": f.get("estado") or "pendiente",
+                        "revisado_por": f.get("revisado_por", ""),
+                        "timestamp_audit": (
+                            datetime.fromisoformat(f["timestamp_audit"])
+                            if isinstance(f.get("timestamp_audit"), str)
+                            and f.get("timestamp_audit")
+                            else datetime.now()
+                        ),
+                    }
+                    for f in filas
+                ],
+                ["audit_id"],
+            )
+
+    def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(t.bandeja_auditoria)
+                .where(t.bandeja_auditoria.c.audit_id == audit_id)
+                .values(estado=estado, revisado_por=revisado_por)
+            )
+
     def all_listas_precios_historicas(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.listas_precios_historicas)).all()

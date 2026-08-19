@@ -301,6 +301,22 @@ class Repository(ABC):
     @abstractmethod
     def append_anomalia_aceptada(self, row: dict[str, str]) -> None: ...
 
+    # --- Bandeja de Auditoría de Descuentos (motor vs. Odoo -- pendientes y
+    # sobre-descuentos, ver engine/discount_audit.py) -- promovidos a
+    # abstractos en agosto 2026: existían como duck-typing informal (solo en
+    # SheetsRepository, chequeados con hasattr en web/app.py) y Postgres
+    # nunca los implementó pese a que la tabla ``bandeja_auditoria`` sí
+    # existe desde el esquema inicial -- en Postgres, la persistencia de
+    # auditoría era un no-op silencioso. -------------------------------------
+    @abstractmethod
+    def all_auditoria(self) -> list[dict[str, Any]]: ...
+
+    @abstractmethod
+    def append_auditoria_rows(self, filas: list[dict[str, Any]]) -> None: ...
+
+    @abstractmethod
+    def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None: ...
+
     @abstractmethod
     def all_listas_precios_historicas(self) -> list[dict[str, str]]: ...
 
@@ -465,6 +481,7 @@ class InMemoryRepository(Repository):
         self._usuarios: dict[str, dict[str, str]] = {}
         self._pagos_human: dict[str, dict[str, str]] = {}
         self._anomalias_aceptadas: list[dict[str, str]] = []
+        self._auditoria: list[dict[str, Any]] = []
         self._listas_precios_historicas: list[dict[str, str]] = []
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
@@ -775,6 +792,25 @@ class InMemoryRepository(Repository):
 
     def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
         self._anomalias_aceptadas.append(dict(row))
+
+    def all_auditoria(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._auditoria]
+
+    def append_auditoria_rows(self, filas: list[dict[str, Any]]) -> None:
+        by_id = {r.get("audit_id"): i for i, r in enumerate(self._auditoria)}
+        for f in filas:
+            i = by_id.get(f.get("audit_id"))
+            if i is not None:
+                self._auditoria[i] = dict(f)
+            else:
+                self._auditoria.append(dict(f))
+
+    def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None:
+        for r in self._auditoria:
+            if r.get("audit_id") == audit_id:
+                r["estado"] = estado
+                r["revisado_por"] = revisado_por
+                return
 
     def all_listas_precios_historicas(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._listas_precios_historicas]

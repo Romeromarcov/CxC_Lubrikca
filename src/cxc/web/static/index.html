@@ -957,6 +957,8 @@
                                     <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
                                     <th title="Descuento que Odoo ya tiene aplicado en la orden (líneas) -- monto y %">Desc. Aplicado (Orden)</th>
                                     <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
+                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo/N.C./sistema -- se resta dinámicamente al aplicar cualquiera de esos 3 mecanismos, monto y %">Desc. Pendiente</th>
+                                    <th title="Venta Bruta Real + impuestos, menos el descuento TEÓRICO total del motor (aplicado o no) -- cuánto debería costar esta orden si se aplicaran todos los descuentos que calcula el motor. Si la orden está bloqueada por sobre-descuento (Odoo ya aplicó más de lo que el motor calcula), se muestra sin restar el teórico -- primero hay que revisar el caso en Auditoría de Descuentos">Orden Real (Subtotal+Imp.) c/ Desc. Teóricos</th>
                                     <th title="Equivalente pagado (BCV si nació en VES/Lista Histórica, Binance si USD) vs. Venta Neta Real menos Desc. Sistema">Estatus Pago (Real Orden)</th>
                                     <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
                                     <th title="Descuento que Odoo ya tiene aplicado en la factura -- monto y %">Desc. Aplicado (Factura)</th>
@@ -968,7 +970,6 @@
                                     <th title="Equivalente pagado (BCV/Binance según lista de nacimiento) vs. Facturado Neto menos Desc. Sistema -- 'sin_factura' si aún no hay factura">Estatus Pago (Real Factura)</th>
                                     <th title="¿El descuento de la orden en Odoo coincide con lo que dictamina el motor?">Validación Orden</th>
                                     <th title="¿El descuento de la factura en Odoo coincide con lo que dictamina el motor?">Validación Factura</th>
-                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo/N.C./sistema -- se resta dinámicamente al aplicar cualquiera de esos 3 mecanismos, monto y %">Desc. Pendiente</th>
                                     <th title="Descuento aprobado manualmente desde la Bandeja 1 de Facturación (nunca se escribe a Odoo, solo ajusta el saldo interno de CxC) -- monto y %">Desc. Sistema</th>
                                     <th title="Facturado Neto (u orden neta real si no facturada) menos Desc. Sistema -- target real de CxC para efectos internos">Saldo Pendiente CxC</th>
                                     <th title="Venta teórica (según la lista aplicada) + IVA − Facturado Neto">Diferencia</th>
@@ -980,7 +981,7 @@
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="45" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="46" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>

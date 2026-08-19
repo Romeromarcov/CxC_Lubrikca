@@ -1,7 +1,15 @@
-"""Auditoría de descuentos y notas de crédito — lógica pura (sin I/O).
+"""Auditoría de DESCUENTOS y notas de crédito — lógica pura (sin I/O).
 
 Compara lo que el motor calcula contra lo que Odoo tiene registrado
-(descuentos en líneas de orden/factura y notas de crédito).
+(descuentos en líneas de orden/factura y notas de crédito). Este es un
+concepto DISTINTO de ``cxc_routing.BandejaDestino.AUDITORIA_PRECIOS``:
+este módulo audita si el MONTO de descuento aplicado en Odoo coincide con
+lo que el motor calcula (independiente de si la orden está pagada);
+``cxc_routing`` audita si la orden salió de CxC por la LISTA de precios
+correcta cuando el pago real cubrió la factura pero ningún teórico
+(BS/USD) quedó pagado — cobertura de pago, no monto de descuento. Ambas
+alimentan la misma tabla persistida (``repo.all_auditoria()`` /
+``GET /api/auditoria-descuentos``) pero por rutas distintas del código.
 
 Regla de negocio (principio rector):
   |diferencia| <= tolerance_rounding  → OK       (coincide)
@@ -9,8 +17,14 @@ Regla de negocio (principio rector):
   |diferencia| > tolerance_red        → DISCREPANCIA (va a bandeja)
 
 Las NCs siempre reducen el saldo deudor independientemente del resultado.
-Los descuentos de la orden: si el motor calcula más que Odoo, la diferencia
-se aplica; si Odoo tiene más que el motor, va a bandeja sin penalizar al cliente.
+Los descuentos de la orden: si el motor calcula más que Odoo
+(``diferencia_usd > 0``), es descuento PENDIENTE por aplicar y la
+diferencia se resta del saldo; si Odoo tiene más que el motor
+(``diferencia_usd < 0``), es SOBRE-DESCUENTO -- Odoo aplicó más de lo que
+el motor aprobaría. Un sobre-descuento va a bandeja para que se revise
+por qué se aplicó (sin bloquear nada más del flujo), y bloquea aprobar
+un descuento de sistema ADICIONAL sobre esa orden hasta que se revise
+(ver ``_detectar_sobre_descuento_vigente`` en ``web/app.py``).
 """
 
 from __future__ import annotations

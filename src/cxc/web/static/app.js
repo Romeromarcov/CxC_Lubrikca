@@ -1327,10 +1327,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1384,7 +1384,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1414,7 +1414,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="45" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1485,6 +1485,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${fmt(item.venta_bruta_real)}</td>
                 <td>${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
+                <td>${descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)}</td>
+                <td title="${item.orden_real_subtotal_teoricos_bloqueado ? 'Bloqueado: sobre-descuento sin revisar en Auditoría -- no se resta el teórico' : ''}"><strong style="color:${item.orden_real_subtotal_teoricos_bloqueado ? '#dc2626' : '#7c3aed'};">${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}</strong></td>
                 <td>${estatusPagoBadge(item.estatus_pago_real_orden)}</td>
                 <td>${fmt(item.total_facturado_antes_impuestos)}</td>
                 <td>${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
@@ -1496,7 +1498,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${estatusPagoBadge(item.estatus_pago_real_factura)}</td>
                 <td><span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span></td>
                 <td><span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span></td>
-                <td>${descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)}</td>
                 <td title="${item.descuento_aplicado_sistema_motivo ?? ''}">${descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct)}</td>
                 <td>${fmt(item.saldo_pendiente_cxc)}</td>
                 <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>

@@ -439,6 +439,65 @@ def test_descuento_pendiente_aplicar_cuando_motor_exige_mas_que_odoo() -> None:
     assert pend["descuento_validacion_orden"] == "discrepancia"
 
 
+def test_orden_real_subtotal_teoricos_resta_el_total_del_motor_de_venta_bruta_real_con_imp() -> (
+    None
+):
+    """Puntos 5-6 (agosto 2026): nueva columna de totales de orden real --
+
+    (venta_bruta_real menos TODO el descuento que el motor exige, esté ya
+    materializado en Odoo o no) + impuestos, sin piso negativo, y sin
+    bloqueo (SO_PENDIENTE no tiene sobre-descuento -- Odoo tiene MENOS
+    aplicado que el motor)."""
+    from cxc.config import AppConfig
+
+    config = AppConfig.from_env()
+    multiplicador = 1 + float(config.engine.iva_rate) + (
+        float(config.engine.igtf_rate) if config.engine.igtf_activo else 0.0
+    )
+
+    by_so = _run_get_ventas()
+    pend = by_so["SO_PENDIENTE"]
+    assert pend["orden_real_subtotal_teoricos_bloqueado"] is False
+    base_esperada = max(0.0, pend["venta_bruta_real"] - pend["descuento_motor_total"])
+    esperado = round(base_esperada * multiplicador, 2)
+    assert pend["orden_real_subtotal_teoricos"] == esperado
+    assert pend["orden_real_subtotal_teoricos"] < pend["venta_bruta_real"] * multiplicador
+
+
+def test_orden_real_subtotal_teoricos_no_resta_teorico_si_hay_sobre_descuento() -> None:
+    """Si Odoo ya tiene aplicado MÁS descuento del que el motor calcula
+
+    (sobre-descuento, Tarea 2), el subtotal no debe restar el teórico
+    encima -- solo se le suman impuestos a venta_bruta_real, igual que
+    venta_neta_real."""
+    from cxc.config import AppConfig
+
+    config = AppConfig.from_env()
+    multiplicador = 1 + float(config.engine.iva_rate) + (
+        float(config.engine.igtf_rate) if config.engine.igtf_activo else 0.0
+    )
+
+    # SO_OK: motor exige $5.00, Odoo ya tiene 20% ($20 sobre $100) -- sobre-descuento.
+    lineas_sobre_descuento = [
+        LineaOrden(
+            linea_id="1",
+            so_id="SO_OK",
+            producto="1",
+            marca="Sinoco",
+            categoria="*",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            descuento=Decimal("20.0"),
+        ),
+        *[ln for ln in _lineas_orden_estandar() if ln.so_id != "SO_OK"],
+    ]
+    by_so = _run_get_ventas(lineas=lineas_sobre_descuento)
+    ok = by_so["SO_OK"]
+    assert ok["orden_real_subtotal_teoricos_bloqueado"] is True
+    esperado = round(ok["venta_bruta_real"] * multiplicador, 2)
+    assert ok["orden_real_subtotal_teoricos"] == esperado
+
+
 def test_nota_credito_reduce_facturado_neto_logica_reutilizada() -> None:
     """N/C (lógica ya existente): factura $200 - NC $30 = neto $170, sin N/D."""
     by_so = _run_get_ventas()
@@ -548,6 +607,10 @@ def test_post_aprobar_descuento_sistema_nunca_toca_odoo() -> None:
 
     invocar Odoo/_connect en absoluto (invariante: Odoo es solo lectura)."""
     mock_repo = MagicMock()
+    # Tarea 2 (agosto 2026): el endpoint ahora chequea sobre-descuento antes
+    # de aprobar -- get_orden=None hace que ese chequeo (pura lectura del
+    # espejo, sin Odoo) salga temprano sin necesitar mockear facturas/líneas.
+    mock_repo.get_orden.return_value = None
 
     with patch("cxc.web.app.get_repo", return_value=mock_repo):
         res = client.post(
