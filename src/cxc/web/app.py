@@ -1718,6 +1718,58 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.api_route("/api/backfill/entregas", methods=["GET", "POST"])
+async def api_backfill_entregas():
+    """Backfill manual de una sola vez del espejo ``entregas``/``lineas_
+
+    entrega`` -- pedido explícito del usuario (agosto 2026): casi todas
+    las órdenes ya entregadas en el pasado no tenían ``fecha_entrega``,
+    dato que alimenta las reglas de ventana de pago Contado del motor de
+    descuentos. Causa raíz confirmada: el sync delta (``IncrementalSync.
+    run``) usa un ÚNICO cursor ``last_sync`` compartido por todas las
+    entidades -- ``entregas``/``facturas`` se agregaron como espejo
+    DESPUÉS de que ese cursor ya llevaba corriendo un tiempo (Fase 0 del
+    plan de consolidación de fuentes), así que ``changed_entregas(since)``
+    solo capturó despachos con ``write_date`` posterior a ese punto. Un
+    ``stock.picking`` ya "done" no vuelve a tocarse en Odoo, así que su
+    ``write_date`` quedó viejo para siempre -- nunca calificó para el
+    delta (confirmado en producción: 22 de 565 órdenes facturadas tenían
+    entrega en el espejo antes de este backfill). Igual patrón que
+    ``/api/backfill/ventas-teoricos``: corre bajo demanda con
+    ``since=None`` (trae el historial completo vía Odoo, sin límite de
+    fecha) y hace upsert -- NO toca el cursor ``last_sync``, así que el
+    sync incremental normal sigue exactamente igual después de correr
+    esto. Idempotente, se puede repetir sin riesgo.
+    """
+    try:
+        config = AppConfig.from_env()
+        repo = get_repo()
+        reader = OdooXmlRpcReader(config.odoo)
+
+        entregas = await asyncio.to_thread(reader.changed_entregas, None)
+        entregas_lineas = await asyncio.to_thread(reader.changed_entregas_lineas, None)
+        repo.upsert_entregas(entregas)
+        repo.upsert_entregas_lineas(entregas_lineas)
+
+        _REPORTE_SALDOS_CACHE["data"] = None
+        _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
+        _VENTAS_CACHE["data"] = None
+        _VENTAS_CACHE["timestamp"] = 0.0
+
+        return {
+            "status": "ok",
+            "entregas": len(entregas),
+            "entregas_lineas": len(entregas_lineas),
+            "mensaje": (
+                f"{len(entregas)} entrega(s) y {len(entregas_lineas)} línea(s) "
+                "de entrega sincronizadas desde el historial completo de Odoo."
+            ),
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 _SCRAPER_HORA_INICIO = 6  # primera captura del día, 6:00
 _SCRAPER_HORA_FIN = 22  # última captura del día, 22:00 (inclusive)
 
