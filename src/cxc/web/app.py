@@ -1974,6 +1974,11 @@ async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("configuracion", cxc_session)
 
 
+@app.get("/inventario", response_class=HTMLResponse)
+async def page_inventario(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("inventario", cxc_session)
+
+
 # --- AUTH & ADMIN API ENDPOINTS ---
 
 
@@ -5154,6 +5159,96 @@ async def post_config_listas_precio_clasificacion(req: PricelistClasificacionReq
             "message": "Clasificación Industrial/Comercial de listas actualizada.",
             **clasificacion,
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/inventario/catalogo")
+async def get_inventario_catalogo():
+    """Ficha descriptiva de presentaciones (Fase D, plan de Inventario/
+
+    Catálogo, agosto 2026, pedido explícito del usuario) -- código,
+    nombre, presentación, litros, peso, unidades por paleta. Todo sale
+    del espejo local (``repo.all_catalogo()``), SIN llamadas a Odoo en
+    vivo. La presentación se deriva del nombre con la MISMA regex que
+    ``OdooXmlRpcReader._productos`` (contenido entre paréntesis al final
+    del nombre) -- no se duplica el dato en el espejo, se recalcula acá
+    porque es barato y puro.
+    """
+    try:
+        repo = get_repo()
+        resultado = []
+        for p in repo.all_catalogo():
+            m = re.search(r"\(([^)]*)\)\s*$", (p.nombre or "").strip())
+            resultado.append(
+                {
+                    "producto_id": p.producto_id,
+                    "codigo": p.codigo,
+                    "nombre": p.nombre,
+                    "marca": p.marca,
+                    "presentacion": m.group(1).strip().upper() if m else "",
+                    "litros": float(p.volumen),
+                    "peso": float(p.peso),
+                    "unidades_por_paleta": float(p.unidades_por_paleta),
+                }
+            )
+        resultado.sort(key=lambda r: r["nombre"])
+        return resultado
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/inventario/listas")
+async def get_inventario_listas():
+    """Listas de precio agrupadas Industrial/Comercial x USD/VES (Fase D)
+
+    -- cruza las listas reales de Odoo (id/nombre/moneda/vigencia) con el
+    mapeo de clasificación de ``get_pricelist_clasificacion`` (Fase C).
+    Consulta liviana a propósito (sin las reglas de precio por producto
+    que sí trae ``/api/config/listas-precio`` -- acá solo hace falta
+    saber a qué grupo pertenece cada lista).
+    """
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        repo = get_repo()
+        clasif = get_pricelist_clasificacion(repo)
+
+        pricelists: list[dict[str, Any]] = []
+        if execute:
+            pricelists = execute(
+                "product.pricelist",
+                "search_read",
+                [[["active", "in", [True, False]]]],
+                {
+                    "fields": ["id", "name", "currency_id", "active"],
+                    "context": {"active_test": False},
+                    "order": "id asc",
+                },
+            )
+
+        def _moneda(pl: dict[str, Any]) -> str:
+            cur = pl.get("currency_id")
+            return cur[1] if isinstance(cur, list | tuple) and len(cur) > 1 else "USD"
+
+        por_id = {
+            pl["id"]: {
+                "id": pl["id"],
+                "name": pl["name"],
+                "moneda": _moneda(pl),
+                "active": pl["active"],
+            }
+            for pl in pricelists
+        }
+
+        grupos: dict[str, list[dict[str, Any]]] = {k: [] for k in _CLASIFICACION_KEYS}
+        for k in _CLASIFICACION_KEYS:
+            for pid_str in clasif.get(k, []):
+                pl_info = por_id.get(int(pid_str)) if pid_str.isdigit() else None
+                grupos[k].append(pl_info or {"id": pid_str, "name": "(no encontrada en Odoo)"})
+        return grupos
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

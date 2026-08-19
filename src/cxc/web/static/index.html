@@ -32,6 +32,7 @@
             <a href="/ventas" class="tab-btn nav-link" data-page="ventas" style="text-decoration: none;">💰 Ventas</a>
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
             <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
+            <a href="/inventario" class="tab-btn nav-link" data-page="inventario" style="text-decoration: none;">📦 Inventario</a>
             <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
         </nav>
 
@@ -1242,6 +1243,47 @@
                         <div id="conformes-pager" class="table-pager"></div>
                     </section>
                 </div>
+            </div>
+        </div>
+
+        <!-- PESTAÑA: INVENTARIO -->
+        <div id="tab-inventario" class="tab-panel">
+            <div class="inventario-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="card" style="padding:1.5rem;">
+                    <h2 style="margin:0 0 0.25rem 0;">📦 Listas de Precio por Categoría</h2>
+                    <p style="color:#475569; margin:0 0 1rem 0;">Listas vigentes según el mapeo de clasificación configurado en Configuración → Listas de Precio.</p>
+                    <div id="inventario-listas-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:1rem;">
+                        <div style="grid-column: 1 / -1; color:#64748b;">Cargando listas...</div>
+                    </div>
+                </section>
+
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <div>
+                            <h2 style="margin:0;">🗂️ Ficha de Catálogo (Presentaciones)</h2>
+                            <p style="color:#475569; margin:0.25rem 0 0 0;">Código, presentación, litros, peso y unidades por paleta -- alimentado directamente de Odoo (product.product + product.packaging), sin datos hardcodeados.</p>
+                        </div>
+                        <input type="text" id="inventario-catalogo-search" placeholder="🔍 Buscar por código o nombre..." style="padding:0.5rem 0.75rem; border:1px solid #cbd5e1; border-radius:8px; min-width:240px;">
+                    </div>
+                    <div class="table-wrapper" style="max-height:600px; overflow-y:auto;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Descripción</th>
+                                    <th>Marca</th>
+                                    <th>Presentación</th>
+                                    <th>Litros</th>
+                                    <th>Peso (kg)</th>
+                                    <th>Und. x Paleta</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventario-catalogo-table-body">
+                                <tr><td colspan="7" class="table-empty">Cargando catálogo...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 

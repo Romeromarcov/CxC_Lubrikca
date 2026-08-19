@@ -23,6 +23,7 @@ ALL_PAGES = [
     "ventas",
     "reporte",
     "auditoria",
+    "inventario",
     "configuracion",
 ]
 

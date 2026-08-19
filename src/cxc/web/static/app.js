@@ -226,6 +226,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "ventas": "tab-ventas",
             "reporte": "tab-reporte",
             "auditoria": "tab-auditoria",
+            "inventario": "tab-inventario",
             "configuracion": "tab-config"
         };
 
@@ -270,6 +271,8 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (path === "auditoria") {
                 if (typeof loadAuditoria === "function") loadAuditoria();
                 if (typeof loadAuditoriaVentasAlertas === "function") loadAuditoriaVentasAlertas();
+            } else if (path === "inventario") {
+                if (typeof loadInventario === "function") loadInventario();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadListasMapeo === "function") loadListasMapeo();
@@ -4077,6 +4080,86 @@ document.addEventListener("DOMContentLoaded", () => {
             alert("❌ Error de red al guardar la clasificación.");
         }
     };
+
+    // --- INVENTARIO (Fase D, agosto 2026) ---
+    let _inventarioCatalogoData = [];
+
+    function _renderInventarioCatalogo(filtro) {
+        const body = document.getElementById("inventario-catalogo-table-body");
+        if (!body) return;
+        const f = (filtro || "").trim().toLowerCase();
+        const filas = f
+            ? _inventarioCatalogoData.filter(p =>
+                (p.codigo || "").toLowerCase().includes(f) || (p.nombre || "").toLowerCase().includes(f))
+            : _inventarioCatalogoData;
+
+        if (filas.length === 0) {
+            body.innerHTML = '<tr><td colspan="7" class="table-empty">No hay productos que coincidan.</td></tr>';
+            return;
+        }
+        body.innerHTML = filas.map(p => `
+            <tr>
+                <td><strong>${p.codigo || 'N/A'}</strong></td>
+                <td>${p.nombre}</td>
+                <td>${p.marca || '—'}</td>
+                <td>${p.presentacion || '—'}</td>
+                <td>${(p.litros || 0).toFixed(2)} L</td>
+                <td>${(p.peso || 0).toFixed(2)}</td>
+                <td>${p.unidades_por_paleta > 0 ? p.unidades_por_paleta : '—'}</td>
+            </tr>
+        `).join('');
+    }
+
+    window.loadInventario = async function() {
+        const listasGrid = document.getElementById("inventario-listas-grid");
+        const catalogoBody = document.getElementById("inventario-catalogo-table-body");
+        if (!listasGrid && !catalogoBody) return;
+
+        const labels = {
+            industrial_usd: "Industrial — USD",
+            industrial_ves: "Industrial — VES",
+            comercial_usd: "Comercial — USD",
+            comercial_ves: "Comercial — VES",
+        };
+
+        try {
+            const [listasRes, catalogoRes] = await Promise.all([
+                fetch('/api/inventario/listas'),
+                fetch('/api/inventario/catalogo'),
+            ]);
+
+            if (listasGrid) {
+                const listas = await listasRes.json();
+                const grupos = Object.keys(labels).map(key => {
+                    const items = listas[key] || [];
+                    const filas = items.length
+                        ? items.map(pl => `<li>#${pl.id} — ${pl.name}${pl.active === false ? ' <span style="color:#dc2626;">⚠ archivada</span>' : ''}</li>`).join('')
+                        : '<li style="color:#94a3b8;">Sin listas asignadas.</li>';
+                    return `
+                        <div class="card" style="padding:1rem; border:1px solid #e2e8f0;">
+                            <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">${labels[key]}</h3>
+                            <ul style="margin:0; padding-left:1.1rem; font-size:0.85rem; color:#334155;">${filas}</ul>
+                        </div>
+                    `;
+                }).join('');
+                listasGrid.innerHTML = grupos;
+            }
+
+            if (catalogoBody) {
+                _inventarioCatalogoData = await catalogoRes.json();
+                _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value);
+            }
+        } catch (err) {
+            console.error("Error cargando Inventario:", err);
+            if (listasGrid) listasGrid.innerHTML = '<div style="color:#dc2626;">Error de red al cargar listas.</div>';
+            if (catalogoBody) catalogoBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
+        }
+    };
+
+    const _inventarioSearchEl = document.getElementById("inventario-catalogo-search");
+    if (_inventarioSearchEl) {
+        _inventarioSearchEl.addEventListener("input", () => _renderInventarioCatalogo(_inventarioSearchEl.value));
+    }
 
     // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
     let currentSugerenciasList = [];
