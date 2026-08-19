@@ -1464,8 +1464,30 @@ async def run_sync_in_background():
             reader = OdooXmlRpcReader(config.odoo)
 
             if _first_run:
-                print("FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas.")
-                since_override = datetime.now() - timedelta(days=7)
+                # Hallazgo real (agosto 2026, DB Postgres local vacía): un
+                # cliente puede no tener cambios en Odoo en los últimos 7
+                # días aunque tenga una orden reciente (write_date de
+                # res.partner no se toca al crear una orden) -- con la
+                # ventana de 7 días aplicada TAMBIÉN a clientes, una orden
+                # podía llegar sin su cliente y violar la FK
+                # ordenes_venta.cliente_id (visto en vivo: cliente_id=725
+                # ausente). Con cursor nunca fijado (``get_last_sync() is
+                # None`` -- primera vez real, no un simple reinicio del
+                # server), se hace un sync SIN acotar por fecha (since=None
+                # -- ver changed_clientes: ya maneja este caso con
+                # active_test=False) para garantizar que todo cliente
+                # referenciado exista antes que su(s) orden(es). Con cursor
+                # ya fijado (reinicio normal), se mantiene el catch-up de 7
+                # días como antes.
+                _es_bootstrap_real = repo.get_last_sync() is None
+                if _es_bootstrap_real:
+                    print("FastAPI Daemon: Primera corrida — DB vacía, sync completo sin acotar.")
+                    since_override = None
+                else:
+                    print(
+                        "FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas."
+                    )
+                    since_override = datetime.now() - timedelta(days=7)
                 clientes = reader.changed_clientes(since_override)
                 ordenes = reader.changed_ordenes(since_override)
                 lineas = reader.changed_lineas(since_override)
