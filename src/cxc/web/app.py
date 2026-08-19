@@ -698,6 +698,43 @@ def _pagos_bcv_binance_por_orden(
     return result
 
 
+def _wh_iva_aplicado_por_orden(
+    execute: Any, invoice_ids: list[int], inv_id_to_so: dict[int, str]
+) -> dict[str, bool]:
+    """``account.move.wh_iva`` EN VIVO ("¿Ya se ha retenido esta factura con
+
+    el IVA?") para las facturas de un conjunto de órdenes -- el mismo
+    patrón de ``_estado_pago_facturas_desde_odoo``/``_pagos_bcv_binance_
+    por_orden`` (campo mutable de ``account.move`` que el espejo nunca
+    captura, se consulta acotado por id). Confirmado en vivo (agosto
+    2026, factura 9872/orden S00851): el documento de retención
+    (``account.wh.iva``, ligado vía ``move_id``) puede existir en estado
+    "draft" con este flag todavía en False -- solo cuando Odoo lo marca
+    True la retención está realmente aplicada/asociada a la factura.
+    Usado por ``/api/bandeja`` (Bandeja 3) para dejar de mostrar una
+    orden una vez el comprobante ya fue procesado en Odoo, sin depender
+    de inferir el estado a partir del saldo pendiente.
+    """
+    result: dict[str, bool] = {}
+    if not execute or not invoice_ids:
+        return result
+    try:
+        recs = execute(
+            "account.move",
+            "read",
+            [invoice_ids],
+            {"fields": ["id", "wh_iva"]},
+        )
+    except Exception as e:
+        logger.warning("Error consultando wh_iva en vivo en account.move: %s", e)
+        return result
+    for r in recs:
+        so = inv_id_to_so.get(int(r["id"]))
+        if so and r.get("wh_iva"):
+            result[so] = True
+    return result
+
+
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -6103,7 +6140,24 @@ async def get_bandeja_facturacion():
                 #    porcentaje fijo) -- `wh_iva_rate`/`retencion_iva_est`
                 #    quedan solo como referencia informativa en la UI, ya no
                 #    como criterio de entrada a esta bandeja.
-                if wh_agent:
+                #
+                # 3. Salida de la bandeja (pedido explicito del usuario,
+                #    mismo dia): la retencion se aplica MANUALMENTE en Odoo
+                #    -- una vez procesada, la orden debe dejar de aparecer
+                #    sola, sin depender de inferirlo por el saldo. Odoo
+                #    expone esto directo en `account.move.wh_iva` (boolean,
+                #    "¿Ya se ha retenido esta factura con el IVA?"),
+                #    respaldado por el documento `account.wh.iva` (estado
+                #    draft/confirmed/done/cancel, ligado via `move_id`) --
+                #    verificado en vivo con la factura 9872 de S00851: ya
+                #    existe un documento de retencion pero sigue en
+                #    "draft" con `wh_iva=False`, confirmando que aun
+                #    corresponde mostrarla aqui. `wh_iva_aplicado` se
+                #    consulta en vivo (`_wh_iva_aplicado_por_orden`, mismo
+                #    patron que `_estado_pago_facturas_desde_odoo` --
+                #    campo mutable que el espejo nunca captura) y ya viene
+                #    resuelto en `item` desde Ventas.
+                if wh_agent and not item.get("wh_iva_aplicado"):
                     monto_factura_real = float(item.get("total_facturado_neto") or 0.0) or tot_motor
                     subtotal_est = monto_factura_real / 1.16
                     iva_total_est = monto_factura_real - subtotal_est
@@ -9766,6 +9820,7 @@ def _get_ventas_sync(
         invoice_ids_all: list[int] = []
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
+        wh_iva_aplicado_map: dict[str, bool] = {}
 
         # Fase 2/4/5 (plan de consolidación de fuentes, agosto 2026):
         # entregas, litros, facturación (facturado/NC/ND) y descuentos de
@@ -9825,6 +9880,9 @@ def _get_ventas_sync(
                     tasas_rows_pago,
                     hist_rows_pago,
                     facturado_con_imp_por_so=facturado_con_imp_map,
+                )
+                wh_iva_aplicado_map = _wh_iva_aplicado_por_orden(
+                    execute, invoice_ids_all, inv_id_to_so
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -10159,6 +10217,11 @@ def _get_ventas_sync(
                     # nacimiento de la orden), expuesto ahora como columna
                     # propia junto a los totales de factura.
                     "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # True si Odoo ya marcó la factura como retenida
+                    # (``account.move.wh_iva``, en vivo) -- usado por
+                    # /api/bandeja para sacar la orden de la bandeja de
+                    # retención de IVA una vez el comprobante fue procesado.
+                    "wh_iva_aplicado": wh_iva_aplicado_map.get(o.so_id, False),
                     # Montos crudos usados para comparar contra cada
                     # teórico (val_bcv/val_binance -- distintos de
                     # monto_pagado_bcv/_usd, que solo existen una vez

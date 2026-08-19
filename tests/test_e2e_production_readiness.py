@@ -1002,6 +1002,112 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
         assert "SO_IVA2" not in so_ids
 
 
+def test_e2e_14c_bandeja3_sale_si_odoo_ya_marco_wh_iva_aplicado():
+    """Bandeja 3: una orden que calificaría por saldo pendiente (dentro del
+
+    IVA total) NO debe aparecer si Odoo ya marcó ``account.move.wh_iva =
+    True`` -- la retención se aplica manualmente en Odoo (caso real
+    S00851, pedido explícito del usuario); una vez procesada ahí, debe
+    dejar de mostrarse en la bandeja sin depender solo de inferirlo por
+    el saldo.
+    """
+    from cxc.config import EngineConfig
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_WH_OK", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move":
+            return [
+                {
+                    "id": 9101,
+                    "payment_state": "partial",
+                    "amount_residual": 12.0,
+                    "wh_iva": True,
+                }
+            ]
+        return []
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_AGENTE3",
+                "nombre": "Cliente Agente 3",
+                "wh_iva_agent": "True",
+                "wh_iva_rate": "75",
+            }
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="9101",
+            numero="FAC/9101",
+            so_id="SO_WH_OK",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        )
+    ]
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_WH_OK",
+            cliente_id="C_AGENTE3",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="8",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="9101",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    # Pagó $104 de $116 -- el saldo ($12) cabe dentro del IVA total ($16),
+    # calificaría normalmente si no fuera porque Odoo ya marcó wh_iva=True.
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_WH_OK",
+            pago_id="P_WH_OK",
+            so_id="SO_WH_OK",
+            monto_aplicado=Decimal("104.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        so_ids = {item["so_id"] for item in res.json()["iva_pendiente_agentes"]}
+        assert "SO_WH_OK" not in so_ids
+
+
 def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     """Bandeja de Auditoría de Precios (nueva, Sección 5 del Manual): una
 
