@@ -273,6 +273,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadListasMapeo === "function") loadListasMapeo();
+                if (typeof loadListasClasificacion === "function") loadListasClasificacion();
                 if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
                 if (currentUserSession && currentUserSession.rol === "admin" && typeof loadAdminUsuarios === "function") {
                     loadAdminUsuarios();
@@ -3994,6 +3995,86 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (err) {
             console.error("Error guardando mapeo de listas:", err);
             alert("❌ Error de red al guardar la configuración.");
+        }
+    };
+
+    // --- CLASIFICACIÓN INDUSTRIAL/COMERCIAL DE LISTAS (Fase C, solo consulta) ---
+    window.loadListasClasificacion = async function() {
+        const boxes = {
+            industrial_usd: document.getElementById("industrial-usd-pricelists-checkboxes"),
+            industrial_ves: document.getElementById("industrial-ves-pricelists-checkboxes"),
+            comercial_usd: document.getElementById("comercial-usd-pricelists-checkboxes"),
+            comercial_ves: document.getElementById("comercial-ves-pricelists-checkboxes"),
+        };
+        if (!boxes.industrial_usd) return;
+
+        try {
+            const [plRes, clasifRes] = await Promise.all([
+                fetch('/api/config/listas-precio'),
+                fetch('/api/config/listas-precio-clasificacion')
+            ]);
+            const pricelists = await plRes.json();
+            const clasif = await clasifRes.json();
+
+            if (!Array.isArray(pricelists) || pricelists.length === 0) {
+                Object.values(boxes).forEach(box => {
+                    box.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
+                });
+                return;
+            }
+
+            const archivedWarning = (pl) => pl.active === false
+                ? '<span style="color:#dc2626; font-weight:700; margin-left:4px;" title="Esta lista está archivada en Odoo">⚠ archivada</span>'
+                : '';
+
+            Object.entries(boxes).forEach(([key, box]) => {
+                const checkedIds = (Array.isArray(clasif[key]) ? clasif[key] : []).map(String);
+                box.innerHTML = pricelists.map(pl => {
+                    const checked = checkedIds.includes(String(pl.id)) ? 'checked' : '';
+                    return `
+                        <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
+                            <input type="checkbox" name="cfg_clasif_${key}" value="${pl.id}" ${checked}>
+                            <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
+                        </label>
+                    `;
+                }).join('');
+            });
+        } catch (err) {
+            console.error("Error cargando clasificación Industrial/Comercial:", err);
+            Object.values(boxes).forEach(box => {
+                if (box) box.innerHTML = '<span style="font-size:0.85rem; color:#dc2626;">Error de red al cargar.</span>';
+            });
+        }
+    };
+
+    window.saveListasClasificacion = async function(event) {
+        if (event) event.preventDefault();
+        const read = (key) => Array.from(
+            document.querySelectorAll(`input[name="cfg_clasif_${key}"]:checked`)
+        ).map(el => el.value);
+
+        const payload = {
+            industrial_usd: read("industrial_usd"),
+            industrial_ves: read("industrial_ves"),
+            comercial_usd: read("comercial_usd"),
+            comercial_ves: read("comercial_ves"),
+        };
+
+        try {
+            const res = await fetch('/api/config/listas-precio-clasificacion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Clasificación guardada exitosamente.");
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo guardar."));
+            }
+        } catch (err) {
+            console.error("Error guardando clasificación Industrial/Comercial:", err);
+            alert("❌ Error de red al guardar la clasificación.");
         }
     };
 

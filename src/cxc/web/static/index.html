@@ -2444,6 +2444,49 @@
                     </form>
                 </section>
 
+                <!-- Clasificación Industrial/Comercial de Listas de Precio -->
+                <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2; border-left: 5px solid #7c3aed;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h2 style="color: #6d28d9; margin:0;">Clasificación de Listas: Industrial / Comercial</h2>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Marca qué listas de precio corresponden a ventas Industriales y cuáles a Comerciales, dentro de cada una USD y VES. Es distinto de la categoría del producto (se relacionan, pero no son lo mismo). Por ahora es solo de consulta -- no afecta el cálculo de descuentos.</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary" onclick="loadListasClasificacion()">🔄 Cargar Clasificación</button>
+                    </div>
+
+                    <form id="listas-clasificacion-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="saveListasClasificacion(event)">
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#7c3aed;">Industrial — USD ($)</label>
+                                <div id="industrial-usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#a21caf;">Industrial — VES (Bs)</label>
+                                <div id="industrial-ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group-row" style="margin-top: 1rem;">
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#0369a1;">Comercial — USD ($)</label>
+                                <div id="comercial-usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label style="font-weight:700; color:#0e7490;">Comercial — VES (Bs)</label>
+                                <div id="comercial-ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
+                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">💾 Guardar Clasificación Industrial/Comercial</button>
+                    </form>
+                </section>
+
                 <!-- Listas de Precios de Odoo -->
                 <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2;">
                     <div class="panel-header">

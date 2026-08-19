@@ -894,6 +894,13 @@ class PricelistMapRequest(BaseModel):
     historical_pricelist_enabled: bool = True
 
 
+class PricelistClasificacionRequest(BaseModel):
+    industrial_usd: list[str] = []
+    industrial_ves: list[str] = []
+    comercial_usd: list[str] = []
+    comercial_ves: list[str] = []
+
+
 class VincularMasivoRequest(BaseModel):
     items: list[VinculacionRequest]
 
@@ -4985,6 +4992,82 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     ]
 
 
+# Fase C (plan de Inventario/Catálogo, agosto 2026, pedido explícito del
+# usuario): segundo eje de clasificación de listas, ortogonal al USD/VES
+# de arriba -- Industrial vs Comercial (ventas industriales/comerciales,
+# relacionado con pero DISTINTO de la categoría del producto). Por ahora
+# SOLO de consulta -- no alimenta el motor de descuentos ni el cálculo de
+# precios, a diferencia de valid_pricelists_usd/_ves. Mismo patrón de
+# caché en 3 niveles (memoria -> JSON -> config persistente) que el
+# mapeo USD/VES, pero sin default forzado (una clasificación vacía es
+# válida -- "todavía no se clasificó", no un error).
+CLASIFICACION_LISTAS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_clasificacion.json"
+)
+_PRICELIST_CLASIFICACION_CACHE: dict[str, list[str]] = {}
+_CLASIFICACION_KEYS = (
+    "industrial_usd",
+    "industrial_ves",
+    "comercial_usd",
+    "comercial_ves",
+)
+
+
+def _load_clasificacion_from_json() -> dict[str, list[str]] | None:
+    try:
+        if os.path.exists(CLASIFICACION_LISTAS_FILE):
+            with open(CLASIFICACION_LISTAS_FILE, encoding="utf-8") as f:
+                j_data = json.load(f)
+                result = {k: [str(x) for x in j_data.get(k, [])] for k in _CLASIFICACION_KEYS}
+                if any(result.values()):
+                    return result
+    except Exception:
+        pass
+    return None
+
+
+def _save_clasificacion_to_json(clasificacion: dict[str, list[str]]) -> None:
+    try:
+        os.makedirs(os.path.dirname(CLASIFICACION_LISTAS_FILE), exist_ok=True)
+        with open(CLASIFICACION_LISTAS_FILE, "w", encoding="utf-8") as f:
+            json.dump({k: clasificacion.get(k, []) for k in _CLASIFICACION_KEYS}, f, indent=2)
+    except Exception:
+        pass
+
+
+def get_pricelist_clasificacion(repo=None) -> dict[str, list[str]]:
+    """Devuelve las listas clasificadas Industrial/Comercial x USD/VES.
+
+    Siempre las 4 claves de ``_CLASIFICACION_KEYS`` presentes (lista vacía
+    si nunca se configuró esa combinación) -- ver docstring arriba del
+    porqué existe aparte de ``get_valid_pricelists_usd_and_ves``.
+    """
+    global _PRICELIST_CLASIFICACION_CACHE
+    if any(_PRICELIST_CLASIFICACION_CACHE.get(k) for k in _CLASIFICACION_KEYS):
+        return {k: _PRICELIST_CLASIFICACION_CACHE.get(k, []) for k in _CLASIFICACION_KEYS}
+
+    json_result = _load_clasificacion_from_json()
+    if json_result:
+        _PRICELIST_CLASIFICACION_CACHE.update(json_result)
+        return json_result
+
+    try:
+        if repo is None:
+            repo = get_repo()
+        result: dict[str, list[str]] = {}
+        for k in _CLASIFICACION_KEYS:
+            val = repo.get_config(f"valid_pricelists_{k}")
+            result[k] = [x.strip() for x in val.split(",") if x.strip()] if val else []
+        if any(result.values()):
+            _PRICELIST_CLASIFICACION_CACHE.update(result)
+            _save_clasificacion_to_json(result)
+            return result
+    except Exception:
+        pass
+
+    return {k: [] for k in _CLASIFICACION_KEYS}
+
+
 @app.get("/api/config/listas-precio-mapeo")
 async def get_config_listas_precio_mapeo():
     try:
@@ -5032,6 +5115,44 @@ async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
             "valid_pricelists_usd": usd_list,
             "valid_pricelists_ves": ves_list,
             "historical_pricelist_enabled": req.historical_pricelist_enabled,
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/config/listas-precio-clasificacion")
+async def get_config_listas_precio_clasificacion():
+    try:
+        repo = get_repo()
+        return get_pricelist_clasificacion(repo)
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/config/listas-precio-clasificacion")
+async def post_config_listas_precio_clasificacion(req: PricelistClasificacionRequest):
+    global _PRICELIST_CLASIFICACION_CACHE
+    try:
+        clasificacion = {
+            "industrial_usd": [str(x) for x in req.industrial_usd],
+            "industrial_ves": [str(x) for x in req.industrial_ves],
+            "comercial_usd": [str(x) for x in req.comercial_usd],
+            "comercial_ves": [str(x) for x in req.comercial_ves],
+        }
+        _PRICELIST_CLASIFICACION_CACHE.update(clasificacion)
+        _save_clasificacion_to_json(clasificacion)
+        try:
+            repo = get_repo()
+            for k, v in clasificacion.items():
+                repo.set_config(f"valid_pricelists_{k}", ",".join(v))
+        except Exception as cfg_err:
+            logger.warning("No se pudo guardar clasificación Industrial/Comercial: %s", cfg_err)
+        return {
+            "status": "success",
+            "message": "Clasificación Industrial/Comercial de listas actualizada.",
+            **clasificacion,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
