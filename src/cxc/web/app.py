@@ -6074,35 +6074,55 @@ async def get_bandeja_facturacion():
                     )
 
                 # Tarea 5: retencion de IVA. El cliente-agente de retencion no
-                # paga en efectivo la porcion de IVA que retiene (wh_rate% del
-                # IVA); en su lugar entrega un comprobante de retencion. El
-                # saldo que el motor ve pendiente (tot_motor - abono, ya con
-                # descuentos aplicados) es "normal" si cabe dentro de esa
-                # porcion retenida -- no es que el cliente deba mas, es que
-                # falta el comprobante. IVA Venezuela = 16%; se estima el
-                # subtotal despejando el total del MOTOR (tot_motor, ya con
-                # descuentos aplicados) -- no el monto bruto original: si la
-                # orden tuvo descuentos ya reflejados en la factura real, el
-                # 16% debe calcularse sobre lo efectivamente facturado, no
-                # sobre el precio de lista previo al descuento.
+                # paga en efectivo la porcion de IVA que retiene; en su lugar
+                # entrega un comprobante de retencion. El saldo que el motor
+                # ve pendiente (monto_factura - abono, ya con descuentos
+                # aplicados) es "normal" si cabe dentro del IVA total de la
+                # factura -- no es que el cliente deba mas, es que falta el
+                # comprobante. IVA Venezuela = 16%.
+                #
+                # Hallazgo real (caso S00851, agosto 2026, pedido explicito
+                # del usuario): dos bugs encontrados juntos.
+                # 1. `abono` (arriba) sale SOLO de Vinculaciones -- una orden
+                #    con pago real reconciliado en Odoo pero sin Vinculacion
+                #    manual todavia se veia como "$0 pagado" aca, aunque
+                #    Ventas ya resuelve exactamente este mismo caso via
+                #    `monto_pagado_factura_odoo` (Vinculacion tiene
+                #    precedencia si existe; si no, cae al pago reconciliado
+                #    en vivo). Se reusa esa misma fuente unica de verdad aca
+                #    en vez de tener una segunda logica de "cuanto se pago"
+                #    que puede desincronizarse.
+                # 2. El % de retencion real puede variar por documento (no es
+                #    fijo por cliente pese a que `wh_iva_rate` es un campo
+                #    del cliente) -- verificado en vivo, S00851: el cliente
+                #    tiene wh_iva_rate=75% guardado, pero en esa factura
+                #    puntual retuvo el 100% del IVA. Comparar el saldo
+                #    pendiente contra "75% del IVA" nunca iba a calificar. Se
+                #    acepta cualquier saldo pendiente que quepa en el IVA
+                #    TOTAL de la factura (0-100% de retencion, sin asumir un
+                #    porcentaje fijo) -- `wh_iva_rate`/`retencion_iva_est`
+                #    quedan solo como referencia informativa en la UI, ya no
+                #    como criterio de entrada a esta bandeja.
                 if wh_agent:
-                    subtotal_est = tot_motor / 1.16
-                    iva_total_est = tot_motor - subtotal_est
+                    monto_factura_real = float(item.get("total_facturado_neto") or 0.0) or tot_motor
+                    subtotal_est = monto_factura_real / 1.16
+                    iva_total_est = monto_factura_real - subtotal_est
                     iva_retenido_est = iva_total_est * (wh_rate / 100.0)
-                    saldo_pendiente_motor = tot_motor - abono
-                    if 0 <= saldo_pendiente_motor <= iva_retenido_est + 0.05:
+                    abono_odoo = float(item.get("monto_pagado_factura_odoo") or 0.0)
+                    saldo_pendiente_motor = monto_factura_real - abono_odoo
+                    if 0 <= saldo_pendiente_motor <= iva_total_est + 0.05:
                         iva_pendiente_agentes.append(
                             {
                                 "so_id": o.so_id,
                                 "cliente_nombre": c_name,
                                 "factura_id": o.factura_id or "Odoo",
-                                "monto_factura": tot_motor,
+                                "monto_factura": monto_factura_real,
                                 "wh_iva_rate": wh_rate,
                                 "base_cobrada": round(subtotal_est, 2),
                                 "iva_total_estimado": round(iva_total_est, 2),
                                 "retencion_iva_est": round(iva_retenido_est, 2),
                                 "monto_iva_retenido_est": round(iva_retenido_est, 2),
-                                "monto_pagado": abono,
+                                "monto_pagado": abono_odoo,
                                 "saldo_pendiente": round(saldo_pendiente_motor, 2),
                                 "estado_comprobante": "Pendiente Comprobante IVA",
                                 "estado": "Pendiente Comprobante IVA",
