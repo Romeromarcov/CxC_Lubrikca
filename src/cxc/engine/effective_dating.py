@@ -8,14 +8,11 @@ regía entonces, no con el de hoy.
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 
 from ..models import (
     Condicion,
     DescuentoMarcaCategoria,
     DescuentoProducto,
-    DescuentoVolumen,
-    PromocionPrimeraCompra,
     ReglaRecurrencia,
     TipoDescuento,
 )
@@ -195,24 +192,6 @@ def descuento_vigente(
     )
 
 
-def promocion_primera_compra_vigente(
-    promos: list[PromocionPrimeraCompra],
-    *,
-    fecha: date,
-    cantidad_comercial: Decimal,
-) -> PromocionPrimeraCompra | None:
-    """Promoción de primera compra vigente a ``fecha`` con suficiente cantidad comercial."""
-    candidatas = [
-        p
-        for p in promos
-        if _vigente(p.vigencia_desde, p.vigencia_hasta, p.activo, fecha)
-        and cantidad_comercial >= p.compra_minima
-    ]
-    if not candidatas:
-        return None
-    return max(candidatas, key=lambda p: (p.compra_minima, p.vigencia_desde))
-
-
 def regla_recurrencia_vigente(
     reglas: list[ReglaRecurrencia],
     *,
@@ -235,105 +214,6 @@ def regla_recurrencia_vigente(
     return max(
         candidatas,
         key=lambda r: (r.vigencia_desde, -r.valor),
-    )
-
-
-def descuento_volumen_vigente(
-    reglas: list[DescuentoVolumen],
-    marca: str,
-    categoria: str,
-    litros: Decimal,
-    cantidad_unidades: Decimal = Decimal("0"),
-    fecha: date = date(2026, 1, 1),
-    lista_precios: str = "*",
-    valid_ves: list[str] | None = None,
-    valid_usd: list[str] | None = None,
-    historial_litros_cajas: list[tuple[date, Decimal, Decimal]] | None = None,
-) -> DescuentoVolumen | None:
-    """Retorna la regla de descuento por volumen aplicable para la marca/categoría.
-
-    HALLAZGO (auditoría unidad_medida, agosto 2026, no corregido sin
-    confirmar con negocio primero): a diferencia de Contado/Recompra, este
-    matcher solo recibe la categoría RAÍZ (Comercial/Industrial) -- el
-    agrupado de litros/cajas en discounts.py suma por (marca, categoría raíz)
-    sin desglosar por subcategoría/presentación real. Reglas de volumen que
-    usan valores legado "PAILA"/"TAMBOR"/"CAJA" como `categoria` matchean
-    correctamente (rama especial de ``_match_categoria`` los trata como
-    equivalentes a Industrial/Comercial en general), pero una regla nueva
-    creada con una subcategoría real específica (ej. "Elite", vía el
-    selector en cascada de Configuración) NUNCA matcheará ninguna línea,
-    porque el acumulado se hace por categoría raíz, no por subcategoría. Si
-    el negocio necesita reglas de volumen específicas por subcategoría, hay
-    que rediseñar el agrupado en discounts.py (cambiar la clave de
-    ``litros_por_mc``/``cajas_por_mc`` a incluir subcategoría) -- eso
-    cambiaría cómo se acumulan los umbrales para las 3 reglas de volumen
-    SINOCO/PAILA ya activas en producción, así que no se toca sin validar
-    primero que el negocio realmente quiere ese cambio de comportamiento.
-
-    ``historial_litros_cajas``: lista de (fecha_orden, litros, cajas) de
-    OTRAS órdenes del mismo cliente para ese mismo grupo marca/categoría --
-    usada SOLO por reglas con ``tipo_evaluacion == "acumulado"`` para sumar
-    al total de esta orden dentro de la ventana de ``dias_evaluacion`` de
-    CADA regla (``dias_evaluacion <= 0`` = histórico total, sin límite).
-    Reglas "orden" (default) ignoran esto y siguen evaluando solo esta
-    orden, exactamente como antes de este cableo (cero regresión).
-    """
-    candidatas = []
-    for r in reglas:
-        if not _match_marca(r.marca, marca):
-            continue
-        if not _match_categoria(r.categoria, categoria):
-            continue
-        if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
-            continue
-        if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
-            continue
-
-        litros_eval = litros
-        cantidad_eval = cantidad_unidades
-        es_acumulado = str(getattr(r, "tipo_evaluacion", "orden") or "orden").lower() == "acumulado"
-        if es_acumulado and historial_litros_cajas:
-            dias = int(getattr(r, "dias_evaluacion", 0) or 0)
-            litros_acum = litros
-            cajas_acum = cantidad_unidades
-            for fecha_h, litros_h, cajas_h in historial_litros_cajas:
-                if dias <= 0 or (fecha - fecha_h).days <= dias:
-                    litros_acum += litros_h
-                    cajas_acum += cajas_h
-            litros_eval = litros_acum
-            cantidad_eval = cajas_acum
-
-        unidad = str(r.unidad_medida or "").upper()
-        is_liters_rule = (unidad == "LITROS") or (
-            r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
-        )
-        if is_liters_rule:
-            if litros_eval < r.litros_minimo:
-                continue
-        else:
-            val_eval = cantidad_eval if cantidad_eval > 0 else litros_eval
-            thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
-            if val_eval < thresh:
-                continue
-            if r.max_cantidad and r.max_cantidad < 999999 and val_eval > r.max_cantidad:
-                continue
-
-        candidatas.append(r)
-
-    if not candidatas:
-        return None
-
-    def specificity(r: DescuentoVolumen) -> int:
-        score = 0
-        if r.marca != "*":
-            score += 2
-        if r.categoria != "*":
-            score += 1
-        return score
-
-    return max(
-        candidatas,
-        key=lambda r: (specificity(r), r.porcentaje),
     )
 
 
