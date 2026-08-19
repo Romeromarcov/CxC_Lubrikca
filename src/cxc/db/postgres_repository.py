@@ -1161,6 +1161,7 @@ def _catalogo_to_row(p: Producto) -> dict[str, Any]:
         "marca": p.marca,
         "volumen": p.volumen,
         "peso": p.peso,
+        "unidades_por_paleta": p.unidades_por_paleta,
     }
 
 
@@ -1172,6 +1173,7 @@ def _row_to_catalogo(r: Any) -> Producto:
         marca=r.marca,
         volumen=r.volumen,
         peso=r.peso,
+        unidades_por_paleta=getattr(r, "unidades_por_paleta", None) or Decimal("0"),
     )
 
 

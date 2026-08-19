@@ -56,6 +56,32 @@ def test_map_producto_sin_marca_ni_volumen_no_rompe():
     assert p.peso == Decimal("0")
 
 
+def test_map_producto_con_unidades_por_paleta():
+    rec = {
+        "id": 804,
+        "default_code": "SKU-804",
+        "name": "Producto con paleta",
+        "product_volume": 1.0,
+        "weight": 1.0,
+        "brand_id": False,
+    }
+    p = map_producto_espejo(rec, Decimal("150"))
+    assert p.unidades_por_paleta == Decimal("150")
+
+
+def test_map_producto_sin_unidades_por_paleta_default_cero():
+    rec = {
+        "id": 805,
+        "default_code": "SKU-805",
+        "name": "Sin paleta",
+        "product_volume": 1.0,
+        "weight": 1.0,
+        "brand_id": False,
+    }
+    p = map_producto_espejo(rec)
+    assert p.unidades_por_paleta == Decimal("0")
+
+
 def test_map_producto_usa_product_volume_no_volume_generico():
     """Verificado en vivo (agosto 2026, producto real 1034): volume=6.0
 
@@ -124,6 +150,106 @@ def test_changed_catalogo_incluye_productos_archivados():
     reader.changed_catalogo(since=None)
     active_clauses = [c for c in captured_domain["domain"] if c[0] == "active"]
     assert active_clauses == [["active", "in", [True, False]]]
+
+
+def test_changed_catalogo_filtra_sale_ok():
+    """Odoo distingue productos de VENTA de los de compra/gasto con
+
+    sale_ok (pedido explícito del usuario, agosto 2026) -- sin este
+    filtro, el catálogo mezclaba productos que Lubrikca nunca vende."""
+    captured_domain = {}
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            captured_domain["domain"] = args[0]
+            return []
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    reader.changed_catalogo(since=None)
+    sale_ok_clauses = [c for c in captured_domain["domain"] if c[0] == "sale_ok"]
+    assert sale_ok_clauses == [["sale_ok", "=", True]]
+
+
+def test_changed_catalogo_incluye_unidades_por_paleta_desde_packaging():
+    """"Und. x Paleta" no vive en product.product -- es product.packaging
+
+    (name="Paleta"), confirmado en vivo contra Odoo real (producto 1085,
+    qty=150.0, coincide exacto con la ficha de referencia del usuario)."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            return [
+                {
+                    "id": 1,
+                    "default_code": "SKU-1",
+                    "name": "P1",
+                    "product_volume": 1.0,
+                    "weight": 1.0,
+                    "brand_id": False,
+                }
+            ]
+        if model == "product.packaging":
+            domain = args[0]
+            product_ids = next(c[2] for c in domain if c[0] == "product_id")
+            assert 1 in product_ids
+            return [{"product_id": [1, "P1"], "qty": 150.0}]
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    result = reader.changed_catalogo(since=None)
+    assert len(result) == 1
+    assert result[0].unidades_por_paleta == Decimal("150.0")
+
+
+def test_changed_catalogo_sin_regla_de_packaging_deja_cero():
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            return [
+                {
+                    "id": 2,
+                    "default_code": "SKU-2",
+                    "name": "P2",
+                    "product_volume": 1.0,
+                    "weight": 1.0,
+                    "brand_id": False,
+                }
+            ]
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    result = reader.changed_catalogo(since=None)
+    assert result[0].unidades_por_paleta == Decimal("0")
+
+
+def test_changed_catalogo_falla_de_packaging_no_rompe_el_catalogo():
+    """Si la consulta de product.packaging falla (permisos, modelo
+
+    inexistente en alguna instalación de Odoo), el catálogo sigue
+    sincronizando -- solo se pierde el dato de unidades por paleta."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.product":
+            return [
+                {
+                    "id": 3,
+                    "default_code": "SKU-3",
+                    "name": "P3",
+                    "product_volume": 1.0,
+                    "weight": 1.0,
+                    "brand_id": False,
+                }
+            ]
+        raise ConnectionError("modelo no disponible")
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    result = reader.changed_catalogo(since=None)
+    assert len(result) == 1
+    assert result[0].unidades_por_paleta == Decimal("0")
 
 
 # --- Repository: InMemoryRepository round-trip ------------------------------
@@ -207,6 +333,31 @@ def test_incremental_sync_no_rompe_si_backend_no_soporta_catalogo():
     result = IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 10, 0))
     assert result.catalogo == 0
     assert repo.all_catalogo() == []
+
+
+def test_incremental_sync_sync_catalogo_false_no_consulta_ni_sincroniza():
+    """Fase B (agosto 2026): el catálogo se saca del ciclo de 5 min del
+
+    daemon -- sync_catalogo=False debe evitar la consulta por completo
+    (no solo descartar el resultado), para no gastar una llamada a Odoo
+    en cada corrida."""
+
+    class _ReaderQueRevientaSiPidenCatalogo(_FakeOdooReaderConCatalogo):
+        def changed_catalogo(self, since):
+            raise AssertionError("no debía llamarse con sync_catalogo=False")
+
+    repo = InMemoryRepository()
+    reader = _ReaderQueRevientaSiPidenCatalogo(catalogo_full=[b.producto("P1")])
+    result = IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 10, 0), sync_catalogo=False)
+    assert result.catalogo == 0
+    assert repo.all_catalogo() == []
+
+
+def test_incremental_sync_sync_catalogo_true_por_defecto():
+    repo = InMemoryRepository()
+    reader = _FakeOdooReaderConCatalogo(catalogo_full=[b.producto("P1")])
+    result = IncrementalSync(repo, reader).run(datetime(2026, 6, 27, 10, 0))
+    assert result.catalogo == 1
 
 
 def test_incremental_sync_total_incluye_las_3_tablas_nuevas_de_fase_0():

@@ -375,6 +375,7 @@ def producto(
     marca: str = "Sinoco",
     volumen: str = "1.0",
     peso: str = "1.0",
+    unidades_por_paleta: str = "0",
 ) -> Producto:
     return Producto(
         producto_id=producto_id,
@@ -383,6 +384,7 @@ def producto(
         marca=marca,
         volumen=Decimal(volumen),
         peso=Decimal(peso),
+        unidades_por_paleta=Decimal(unidades_por_paleta),
     )
 
 

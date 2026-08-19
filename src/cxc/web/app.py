@@ -1487,6 +1487,10 @@ async def run_sync_in_background():
     """
     _first_run = True
     _last_daily_recalc_date: date | None = None
+    # Catálogo: cambia con poca frecuencia (precios/nombres de producto),
+    # no necesita el ciclo de 5 min -- se sincroniza una vez por día
+    # calendario, mismo patrón que _last_daily_recalc_date.
+    _last_catalogo_sync_date: date | None = None
     while True:
         try:
             config = AppConfig.from_env()
@@ -1546,7 +1550,10 @@ async def run_sync_in_background():
             else:
                 print("FastAPI Daemon: Iniciando ciclo de sync incremental...")
                 sync = IncrementalSync(repo, reader)
-                result = sync.run(datetime.now())
+                _sync_catalogo_hoy = _last_catalogo_sync_date != date.today()
+                result = sync.run(datetime.now(), sync_catalogo=_sync_catalogo_hoy)
+                if _sync_catalogo_hoy:
+                    _last_catalogo_sync_date = date.today()
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0

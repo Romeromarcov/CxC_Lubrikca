@@ -187,6 +187,11 @@ class Producto:
     marca: str
     volumen: Decimal
     peso: Decimal
+    # Unidades por paleta -- de product.packaging (name="Paleta") en Odoo,
+    # NO hardcodeado (pedido explícito del usuario, agosto 2026: ficha
+    # descriptiva de presentaciones retroalimentada de Odoo). 0 si el
+    # producto no tiene ese tipo de empaque definido.
+    unidades_por_paleta: Decimal = Decimal("0")
 
 
 # --- 3.2e Líneas de Factura (espejo, agosto 2026 -- Fase 4/5 del plan de

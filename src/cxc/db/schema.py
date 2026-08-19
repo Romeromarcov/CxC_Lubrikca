@@ -144,6 +144,7 @@ catalogo = Table(
     Column("marca", String, nullable=False, server_default=""),
     Column("volumen", MONEY, nullable=False, server_default="0"),
     Column("peso", MONEY, nullable=False, server_default="0"),
+    Column("unidades_por_paleta", MONEY, nullable=False, server_default="0"),
 )
 
 # --- 3.2e LineasFactura (espejo, sync-owned -- Fase 4/5 del plan de

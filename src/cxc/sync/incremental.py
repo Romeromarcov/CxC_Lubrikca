@@ -68,11 +68,22 @@ class IncrementalSync:
             )
             return 0
 
-    def run(self, now: datetime) -> SyncResult:
+    def run(self, now: datetime, sync_catalogo: bool = True) -> SyncResult:
         """Ejecuta una corrida delta. ``now`` = sello de tiempo del servidor.
 
         El cursor avanza a ``now`` (inicio de corrida) para no perder filas
         escritas durante la lectura en la próxima corrida.
+
+        ``sync_catalogo=False``: salta la consulta de catálogo (``product.
+        template``) en esta corrida -- el catálogo cambia con poca
+        frecuencia (precios/nombres de producto, no ventas), así que no
+        necesita el mismo ciclo de 5 minutos que clientes/órdenes/pagos. El
+        daemon (ver ``run_sync_in_background``) lo pasa en ``False`` en la
+        mayoría de los ciclos y en ``True`` una vez al día, reusando el
+        mismo patrón de recálculo diario ya construido para las ventanas de
+        pago. El sync manual (``/api/sync/manual``) y la primera corrida
+        siempre lo dejan en ``True`` (default) -- necesitan el catálogo
+        completo desde el arranque.
         """
         since = self._repo.get_last_sync()
         logger.info("Sync delta desde %s", since)
@@ -83,7 +94,7 @@ class IncrementalSync:
         pagos = self._reader.changed_pagos(since)
         facturas = self._reader.changed_facturas(since)
         entregas = self._reader.changed_entregas(since)
-        catalogo = self._reader.changed_catalogo(since)
+        catalogo = self._reader.changed_catalogo(since) if sync_catalogo else []
         lineas_factura = self._reader.changed_lineas_factura(since)
         entregas_lineas = self._reader.changed_entregas_lineas(since)
 

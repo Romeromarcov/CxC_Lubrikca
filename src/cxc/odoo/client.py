@@ -18,6 +18,7 @@ Diseño para testabilidad sin red:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from abc import ABC, abstractmethod
@@ -40,6 +41,8 @@ from ..models import (
     Pago,
     Producto,
 )
+
+logger = logging.getLogger("cxc.odoo")
 
 ODOO_DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 ODOO_DATE_FMT = "%Y-%m-%d"
@@ -247,7 +250,9 @@ def map_entrega_espejo(rec: dict[str, Any]) -> Entrega:
     )
 
 
-def map_producto_espejo(rec: dict[str, Any]) -> Producto:
+def map_producto_espejo(
+    rec: dict[str, Any], unidades_por_paleta: Decimal | None = None
+) -> Producto:
     # "product_volume" (custom, litros de producto), NO "volume" (genérico
     # de logística/empaque de Odoo) -- verificado en vivo (agosto 2026,
     # producto 1034: volume=6.0 vs product_volume=5.67, campos genuinamente
@@ -264,6 +269,9 @@ def map_producto_espejo(rec: dict[str, Any]) -> Producto:
         marca=str(marca),
         volumen=volumen,
         peso=peso,
+        unidades_por_paleta=(
+            unidades_por_paleta if unidades_por_paleta is not None else Decimal("0")
+        ),
     )
 
 
@@ -669,13 +677,54 @@ class OdooXmlRpcReader(OdooReader):
         vivo de litros (``_get_ventas_sync``) -- sin este filtro, un
         producto descontinuado referenciado en una orden histórica
         desaparece silenciosamente del espejo y su litraje queda en 0.
+
+        ``sale_ok`` (pedido explícito del usuario, agosto 2026): Odoo
+        distingue productos de VENTA de los de compra/gasto con este
+        campo -- sin filtrarlo, el catálogo/inventario mezclaba productos
+        que Lubrikca nunca vende. Se mantiene el mismo filtro
+        ``active in [True, False]`` de arriba (un producto de venta
+        archivado sigue siendo relevante para órdenes históricas).
+
+        ``product.packaging`` (mismo hallazgo, agosto 2026): "unidades por
+        paleta" no vive en ``product.product`` -- es un modelo aparte,
+        ``product.packaging`` con ``name="Paleta"``. Se consulta en un
+        segundo ``search_read`` acotado a los productos de este batch
+        (confirmado en vivo: coincide exacto con la ficha de referencia
+        del usuario, ej. producto 1085/"0725": qty=150.0).
         """
         recs = self._search_read(
             self.MODEL_PRODUCT,
-            self._delta(since) + [["active", "in", [True, False]]],
-            ["id", "default_code", "name", "product_volume", "weight", "brand_id"],
+            self._delta(since) + [["active", "in", [True, False]], ["sale_ok", "=", True]],
+            [
+                "id",
+                "default_code",
+                "name",
+                "product_volume",
+                "weight",
+                "brand_id",
+                "list_price_usd",
+            ],
         )
-        return [map_producto_espejo(r) for r in recs]
+        if not recs:
+            return []
+
+        prod_ids = [r["id"] for r in recs]
+        paleta_qty: dict[int, Decimal] = {}
+        try:
+            paletas = self._search_read(
+                "product.packaging",
+                [["product_id", "in", prod_ids], ["name", "=", "Paleta"]],
+                ["product_id", "qty"],
+            )
+            for p in paletas:
+                pid_info = p.get("product_id")
+                pid = pid_info[0] if isinstance(pid_info, list | tuple) else pid_info
+                if pid:
+                    paleta_qty[int(pid)] = _dec(p.get("qty"))
+        except Exception as e:
+            logger.warning("No se pudo leer product.packaging (unidades por paleta): %s", e)
+
+        return [map_producto_espejo(r, paleta_qty.get(r["id"])) for r in recs]
 
     # --- LineasFactura (espejo, Fase 4/5 del plan de consolidación de
     # fuentes) -- mitad "factura" de la lógica de descuentos de línea que
