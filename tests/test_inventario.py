@@ -66,55 +66,66 @@ def test_inventario_catalogo_ordena_por_nombre():
     assert nombres == ["A Producto", "Z Producto"]
 
 
-def test_inventario_listas_agrupa_por_clasificacion():
+def test_inventario_comparativo_usa_lista_vigente_y_suma_iva():
     repo = MagicMock()
-    repo.get_config.side_effect = lambda k: {
-        "valid_pricelists_industrial_usd": "8",
-        "valid_pricelists_comercial_ves": "3,9",
-    }.get(k)
+    repo.all_catalogo.return_value = [_producto(producto_id="100", nombre="Producto Comparado")]
 
     def fake_execute(model, method, args, kwargs=None):
-        assert model == "product.pricelist"
+        assert model == "product.pricelist.item"
         return [
-            {"id": 8, "name": "Pago USD", "currency_id": [1, "USD"], "active": True},
-            {"id": 3, "name": "USD", "currency_id": [1, "USD"], "active": True},
-            {"id": 9, "name": "Lista Industrial 3%", "currency_id": [1, "USD"], "active": False},
+            {"pricelist_id": [8, "Pago USD"], "product_tmpl_id": [100, "P"], "fixed_price": 100.0},
+            {"pricelist_id": [5, "USD"], "product_tmpl_id": [100, "P"], "fixed_price": 90.0},
         ]
 
     with (
         patch("cxc.web.app.get_repo", return_value=repo),
         patch("cxc.web.app._connect", return_value=fake_execute),
-        patch.object(app_module, "_load_clasificacion_from_json", return_value=None),
-        patch.object(app_module, "_save_clasificacion_to_json"),
+        patch.object(
+            app_module,
+            "get_pricelist_vigente_por_grupo",
+            return_value={
+                "comercial_usd": "8",
+                "comercial_ves": "5",
+                "industrial_usd": None,
+                "industrial_ves": None,
+            },
+        ),
     ):
-        app_module._PRICELIST_CLASIFICACION_CACHE.clear()
-        res = client.get("/api/inventario/listas")
-        app_module._PRICELIST_CLASIFICACION_CACHE.clear()
+        res = client.get("/api/inventario/comparativo?categoria=comercial")
 
     assert res.status_code == 200
     data = res.json()
-    assert [pl["id"] for pl in data["industrial_usd"]] == [8]
-    assert data["industrial_ves"] == []
-    assert data["comercial_usd"] == []
-    ves_ids = sorted(pl["id"] for pl in data["comercial_ves"])
-    assert ves_ids == [3, 9]
+    assert data["usd_lista_id"] == "8"
+    assert data["ves_lista_id"] == "5"
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    # IVA 16% (default de config en tests) sobre el precio fijo de la regla.
+    assert item["precio_usd_con_iva"] == 116.0
+    assert item["precio_ves_con_iva"] == 104.4
 
 
-def test_inventario_listas_sin_conexion_odoo_devuelve_vacio():
+def test_inventario_comparativo_sin_lista_vigente_devuelve_items_vacios():
     repo = MagicMock()
-    repo.get_config.return_value = None
+    repo.all_catalogo.return_value = [_producto()]
     with (
         patch("cxc.web.app.get_repo", return_value=repo),
         patch("cxc.web.app._connect", return_value=None),
-        patch.object(app_module, "_load_clasificacion_from_json", return_value=None),
-        patch.object(app_module, "_save_clasificacion_to_json"),
+        patch.object(
+            app_module,
+            "get_pricelist_vigente_por_grupo",
+            return_value={k: None for k in app_module._CLASIFICACION_KEYS},
+        ),
     ):
-        app_module._PRICELIST_CLASIFICACION_CACHE.clear()
-        res = client.get("/api/inventario/listas")
-        app_module._PRICELIST_CLASIFICACION_CACHE.clear()
+        res = client.get("/api/inventario/comparativo?categoria=industrial")
     assert res.status_code == 200
     data = res.json()
-    assert all(v == [] for v in data.values())
+    assert data["usd_lista_id"] is None
+    assert data["items"] == []
+
+
+def test_inventario_comparativo_categoria_invalida_400():
+    res = client.get("/api/inventario/comparativo?categoria=rara")
+    assert res.status_code == 400
 
 
 def test_pagina_inventario_incluida_en_permisos_de_todos_los_roles():

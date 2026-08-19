@@ -1251,9 +1251,49 @@
             <div class="inventario-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="card" style="padding:1.5rem;">
                     <h2 style="margin:0 0 0.25rem 0;">📦 Listas de Precio por Categoría</h2>
-                    <p style="color:#475569; margin:0 0 1rem 0;">Listas vigentes según el mapeo de clasificación configurado en Configuración → Listas de Precio.</p>
-                    <div id="inventario-listas-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:1rem;">
-                        <div style="grid-column: 1 / -1; color:#64748b;">Cargando listas...</div>
+                    <p style="color:#475569; margin:0 0 1rem 0;">Comparativo de precios (con IVA incluido) entre la lista USD y la lista VES vigentes de cada categoría, según el mapeo configurado en Configuración → Listas de Precio.</p>
+
+                    <div class="subtab-nav" role="tablist">
+                        <button type="button" class="subtab-btn active" data-inv-subtab="industrial" onclick="switchInventarioSubtab('industrial')">Industrial</button>
+                        <button type="button" class="subtab-btn" data-inv-subtab="comercial" onclick="switchInventarioSubtab('comercial')">Comercial</button>
+                    </div>
+
+                    <div class="subtab-panel active" data-inv-subtab-panel="industrial" style="margin-top:1rem;">
+                        <p id="inventario-comparativo-industrial-header" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;">Cargando...</p>
+                        <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Código</th>
+                                        <th>Producto</th>
+                                        <th>Precio USD (c/IVA)</th>
+                                        <th>Precio VES (c/IVA)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="inventario-comparativo-industrial-body">
+                                    <tr><td colspan="4" class="table-empty">Cargando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="subtab-panel" data-inv-subtab-panel="comercial" style="display:none; margin-top:1rem;">
+                        <p id="inventario-comparativo-comercial-header" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;">Cargando...</p>
+                        <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Código</th>
+                                        <th>Producto</th>
+                                        <th>Precio USD (c/IVA)</th>
+                                        <th>Precio VES (c/IVA)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="inventario-comparativo-comercial-body">
+                                    <tr><td colspan="4" class="table-empty">Cargando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
 
@@ -2450,30 +2490,34 @@
                     </div>
                 </section>
 
-                <!-- Mapeo Configurable de Listas de Precios Históricas (USD y VES) -->
+                <!-- Mapeo UNIFICADO de Listas de Precio (agosto 2026: reemplaza los 2
+                     mapeos separados que había antes -- una sola fuente de verdad por
+                     lista, para no arrastrar lógica/endpoints duplicados). -->
                 <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2; border-left: 5px solid var(--accent-blue, #2563eb);">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
-                            <h2 style="color: #1e40af; margin:0;">Mapeo Configurable de Listas de Precios Históricas (USD y VES)</h2>
-                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Selecciona qué listas de precios de Odoo deben tomarse como referencia para cálculos en USD y en Bolívares (VES). El sistema aplicará la regla con vigencia activa según la fecha de cada orden.</p>
+                            <h2 style="color: #1e40af; margin:0;">Mapeo de Listas de Precio</h2>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Por cada lista: si alimenta el cálculo en Moneda USD o VES (el motor de descuentos usa TODAS las marcadas, como respaldo entre sí), su Categoría Industrial/Comercial (solo consulta, para Inventario), y cuál es la "Vigente" a mostrar cuando haya más de una candidata en el mismo grupo Categoría+Moneda.</p>
                         </div>
-                        <button type="button" class="btn btn-secondary" onclick="loadListasMapeo()">🔄 Cargar Mapeo</button>
+                        <button type="button" class="btn btn-secondary" onclick="loadPricelistMapeo()">🔄 Cargar Mapeo</button>
                     </div>
 
-                    <form id="listas-mapeo-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="saveListasMapeo(event)">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#1e40af;">Listas Válidas para USD ($)</label>
-                                <div id="usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#065f46;">Listas Válidas para VES (Bs)</label>
-                                <div id="ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
+                    <form id="pricelist-mapeo-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="savePricelistMapeo(event)">
+                        <div class="table-wrapper" style="max-height:420px; overflow-y:auto;">
+                            <table class="cxc-table mini">
+                                <thead>
+                                    <tr>
+                                        <th>Lista</th>
+                                        <th>Estado</th>
+                                        <th>Moneda</th>
+                                        <th>Categoría</th>
+                                        <th>Vigente</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pricelist-mapeo-table-body">
+                                    <tr><td colspan="5" class="table-empty">Cargando listas de Odoo...</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                         <div class="form-group" style="margin-top: 1rem; background:#fffbeb; padding:12px; border-radius:8px; border:1px solid #fde68a;">
                             <label style="display:flex; align-items:center; gap:8px; font-weight:700; color:#92400e; cursor:pointer;">
@@ -2482,50 +2526,7 @@
                             </label>
                             <p style="color:#92400e; margin:0.35rem 0 0 1.6rem; font-size:0.82rem;">Sustituye el precio de lista por el precio de la tabla histórica (USD / BCV-Euro) en órdenes de ese período y en órdenes sin lista asignada. Desactivar solo si se decide dejar de aplicar la excepción histórica.</p>
                         </div>
-                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">💾 Guardar Configuración de Listas</button>
-                    </form>
-                </section>
-
-                <!-- Clasificación Industrial/Comercial de Listas de Precio -->
-                <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2; border-left: 5px solid #7c3aed;">
-                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <h2 style="color: #6d28d9; margin:0;">Clasificación de Listas: Industrial / Comercial</h2>
-                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Marca qué listas de precio corresponden a ventas Industriales y cuáles a Comerciales, dentro de cada una USD y VES. Es distinto de la categoría del producto (se relacionan, pero no son lo mismo). Por ahora es solo de consulta -- no afecta el cálculo de descuentos.</p>
-                        </div>
-                        <button type="button" class="btn btn-secondary" onclick="loadListasClasificacion()">🔄 Cargar Clasificación</button>
-                    </div>
-
-                    <form id="listas-clasificacion-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="saveListasClasificacion(event)">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#7c3aed;">Industrial — USD ($)</label>
-                                <div id="industrial-usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#a21caf;">Industrial — VES (Bs)</label>
-                                <div id="industrial-ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="form-group-row" style="margin-top: 1rem;">
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#0369a1;">Comercial — USD ($)</label>
-                                <div id="comercial-usd-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label style="font-weight:700; color:#0e7490;">Comercial — VES (Bs)</label>
-                                <div id="comercial-ves-pricelists-checkboxes" style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; max-height:160px; overflow-y:auto;">
-                                    <span style="font-size:0.85rem; color:#64748b;">Cargando listas de Odoo...</span>
-                                </div>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">💾 Guardar Clasificación Industrial/Comercial</button>
+                        <button type="submit" class="btn-primary" style="margin-top: 1rem;">💾 Guardar Mapeo de Listas</button>
                     </form>
                 </section>
 

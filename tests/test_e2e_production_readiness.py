@@ -44,13 +44,13 @@ def _reset_module_level_caches():
     _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
     _app_module._SALDOS_REALES_CACHE["data"] = None
     _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
-    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    _app_module._PRICELIST_MAPEO_CACHE_UNIFICADO.clear()
     yield
     _app_module._REPORTE_SALDOS_CACHE["data"] = None
     _app_module._REPORTE_SALDOS_CACHE["timestamp"] = 0.0
     _app_module._SALDOS_REALES_CACHE["data"] = None
     _app_module._SALDOS_REALES_CACHE["timestamp"] = 0.0
-    _app_module._PRICELIST_MAPEO_CACHE.clear()
+    _app_module._PRICELIST_MAPEO_CACHE_UNIFICADO.clear()
     with contextlib.suppress(Exception):
         client.cookies.delete("cxc_session")
 
@@ -541,39 +541,56 @@ def test_e2e_08b_reporte_diario_resumen_cobranza_desglose_metodo_y_ves():
 
 
 def test_e2e_09_listas_precio_mapeo():
-    """Test 9: Configuración y lectura de mapeo de Listas de Precios por vigencia."""
+    """Test 9: Configuración y lectura del mapeo UNIFICADO de Listas de
+
+    Precios (moneda/categoría/vigente por lista) -- reemplaza a los 2
+    endpoints separados que existían antes (agosto 2026, unificados a
+    pedido explícito del usuario)."""
     import cxc.web.app as app_module
 
     # Clear in-process pricelist cache so mock data is actually read from Sheets
-    app_module._PRICELIST_MAPEO_CACHE.clear()
+    app_module._PRICELIST_MAPEO_CACHE_UNIFICADO.clear()
 
+    legacy_config = {
+        "valid_pricelists_usd": "4,6",
+        "valid_pricelists_ves": "5,7",
+    }
     mock_repo = MagicMock()
-    mock_repo.get_config.side_effect = lambda key: (
-        "4,6"
-        if key == "valid_pricelists_usd"
-        else ("5,7" if key == "valid_pricelists_ves" else None)
-    )
+    mock_repo.get_config.side_effect = lambda key: legacy_config.get(key)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
-        patch("cxc.web.app._load_mapeo_from_json", return_value=None),
+        patch("cxc.web.app._load_pricelist_mapeo_from_json", return_value=None),
+        patch("cxc.web.app._save_pricelist_mapeo_to_json"),
     ):
-        res_get = client.get("/api/config/listas-precio-mapeo")
+        res_get = client.get("/api/config/pricelist-mapeo")
         assert res_get.status_code == 200
         data_get = res_get.json()
-        assert data_get["valid_pricelists_usd"] == ["4", "6"]
-        assert data_get["valid_pricelists_ves"] == ["5", "7"]
+        # Migración automática desde las claves legadas (primera lectura,
+        # sin mapeo unificado todavía guardado): moneda se rellena, sin
+        # categoria/vigente (sin equivalente legado).
+        assert data_get["mapeo"]["4"]["moneda"] == "usd"
+        assert data_get["mapeo"]["6"]["moneda"] == "usd"
+        assert data_get["mapeo"]["5"]["moneda"] == "ves"
+        assert data_get["mapeo"]["7"]["moneda"] == "ves"
 
         # Clear cache again before POST test
-        app_module._PRICELIST_MAPEO_CACHE.clear()
+        app_module._PRICELIST_MAPEO_CACHE_UNIFICADO.clear()
 
-        payload = {"valid_pricelists_usd": ["4", "8"], "valid_pricelists_ves": ["5", "9"]}
-        res_post = client.post("/api/config/listas-precio-mapeo", json=payload)
+        payload = {
+            "mapeo": {
+                "8": {"moneda": "usd", "categoria": "comercial", "vigente": True},
+                "5": {"moneda": "ves", "categoria": "comercial", "vigente": True},
+                "9": {"moneda": "ves", "categoria": "industrial", "vigente": True},
+            },
+            "historical_pricelist_enabled": True,
+        }
+        res_post = client.post("/api/config/pricelist-mapeo", json=payload)
         assert res_post.status_code == 200
         resp_data = res_post.json()
         assert resp_data["status"] == "success"
-        assert resp_data["valid_pricelists_usd"] == ["4", "8"]
-        assert resp_data["valid_pricelists_ves"] == ["5", "9"]
+        assert resp_data["mapeo"]["8"]["categoria"] == "comercial"
+        assert resp_data["mapeo"]["9"]["vigente"] is True
         mock_repo.set_config.assert_called()
 
 

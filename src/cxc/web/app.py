@@ -888,17 +888,15 @@ class MetaRequest(BaseModel):
     marca_fallback: str = "GLOBAL OIL"
 
 
-class PricelistMapRequest(BaseModel):
-    valid_pricelists_usd: list[str]
-    valid_pricelists_ves: list[str]
+class FilaMapeoRequest(BaseModel):
+    moneda: str = ""  # "usd" | "ves" | ""
+    categoria: str = ""  # "industrial" | "comercial" | ""
+    vigente: bool = False
+
+
+class PricelistMapeoUnificadoRequest(BaseModel):
+    mapeo: dict[str, FilaMapeoRequest] = {}
     historical_pricelist_enabled: bool = True
-
-
-class PricelistClasificacionRequest(BaseModel):
-    industrial_usd: list[str] = []
-    industrial_ves: list[str] = []
-    comercial_usd: list[str] = []
-    comercial_ves: list[str] = []
 
 
 class VincularMasivoRequest(BaseModel):
@@ -4404,39 +4402,149 @@ async def post_config_meta(req: MetaRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-MAPEO_LISTAS_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_mapeo.json"
+# Mapeo UNIFICADO de listas de precio (agosto 2026, pedido explícito del
+# usuario tras revisar Configuración en vivo): reemplaza los DOS sistemas
+# de mapeo que existían por separado (valid_pricelists_usd/_ves, que
+# alimenta al motor, y valid_pricelists_industrial_usd/_ves/_comercial_usd/
+# _ves, Fase C, solo consulta) -- tenerlos separados significaba dos
+# fuentes de verdad para la misma lista de precios (una podía decir
+# "válida para USD" sin que la otra supiera si es Industrial o Comercial),
+# riesgo real de que se desincronicen. Ahora hay UNA sola estructura por
+# lista: {pricelist_id: {"moneda": "usd"|"ves"|"", "categoria":
+# "industrial"|"comercial"|"", "vigente": bool}}. "vigente" es NUEVO: si
+# en el futuro hay dos listas con la misma categoría+moneda superpuestas
+# en el tiempo, marca cuál es "la" que se muestra en Inventario -- el
+# motor de descuentos sigue usando TODAS las listas con esa moneda como
+# cadena de fallback (moneda, no vigente, es lo que lee
+# get_valid_pricelists_usd_and_ves), sin cambio de comportamiento ahí.
+PRICELIST_MAPEO_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "secrets", "pricelist_mapeo.json"
+)
+_PRICELIST_MAPEO_CACHE_UNIFICADO: dict[str, dict[str, Any]] = {}
+_CLASIFICACION_KEYS = (
+    "industrial_usd",
+    "industrial_ves",
+    "comercial_usd",
+    "comercial_ves",
 )
 
-# In-process cache for pricelist mapping — survives page refreshes within same process lifetime
-_PRICELIST_MAPEO_CACHE: dict[str, list[str]] = {}
 
-
-def _load_mapeo_from_json() -> tuple[list[str], list[str]] | None:
-    """Lee mapeo desde el archivo JSON local. Retorna None si no existe o falla."""
+def _load_pricelist_mapeo_from_json() -> dict[str, dict[str, Any]] | None:
     try:
-        if os.path.exists(MAPEO_LISTAS_FILE):
-            with open(MAPEO_LISTAS_FILE, encoding="utf-8") as f:
-                j_data = json.load(f)
-                usd = [str(x) for x in j_data.get("valid_pricelists_usd", [])]
-                ves = [str(x) for x in j_data.get("valid_pricelists_ves", [])]
-                if usd:
-                    return usd, ves
+        if os.path.exists(PRICELIST_MAPEO_FILE):
+            with open(PRICELIST_MAPEO_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and data:
+                    return data
     except Exception:
         pass
     return None
 
 
-def _save_mapeo_to_json(usd_list: list[str], ves_list: list[str]) -> None:
-    """Persiste el mapeo en el archivo JSON local."""
+def _save_pricelist_mapeo_to_json(mapeo: dict[str, dict[str, Any]]) -> None:
     try:
-        os.makedirs(os.path.dirname(MAPEO_LISTAS_FILE), exist_ok=True)
-        with open(MAPEO_LISTAS_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                {"valid_pricelists_usd": usd_list, "valid_pricelists_ves": ves_list}, f, indent=2
-            )
+        os.makedirs(os.path.dirname(PRICELIST_MAPEO_FILE), exist_ok=True)
+        with open(PRICELIST_MAPEO_FILE, "w", encoding="utf-8") as f:
+            json.dump(mapeo, f, indent=2)
     except Exception:
         pass
+
+
+def _migrar_mapeo_pricelist_legado(repo) -> dict[str, dict[str, Any]]:
+    """Reconstruye el mapeo unificado a partir de las 6 claves de config
+
+    legadas (valid_pricelists_usd/_ves/_industrial_usd/_industrial_ves/
+    _comercial_usd/_comercial_ves) -- corre UNA sola vez, solo si el
+    mapeo unificado todavía no existe (ver get_pricelist_mapeo). No
+    inventa ningún "vigente" (campo nuevo sin equivalente legado).
+    """
+    mapeo: dict[str, dict[str, Any]] = {}
+
+    def _leer(key: str) -> list[str]:
+        val = repo.get_config(key)
+        return [x.strip() for x in val.split(",") if x.strip()] if val else []
+
+    def _fila(pid: str) -> dict[str, Any]:
+        return mapeo.setdefault(pid, {"moneda": "", "categoria": "", "vigente": False})
+
+    for pid in _leer("valid_pricelists_usd"):
+        _fila(pid)["moneda"] = "usd"
+    for pid in _leer("valid_pricelists_ves"):
+        _fila(pid)["moneda"] = "ves"
+    for pid in _leer("valid_pricelists_industrial_usd"):
+        _fila(pid)["categoria"] = "industrial"
+    for pid in _leer("valid_pricelists_industrial_ves"):
+        _fila(pid)["categoria"] = "industrial"
+    for pid in _leer("valid_pricelists_comercial_usd"):
+        _fila(pid)["categoria"] = "comercial"
+    for pid in _leer("valid_pricelists_comercial_ves"):
+        _fila(pid)["categoria"] = "comercial"
+    return mapeo
+
+
+def get_pricelist_mapeo(repo=None) -> dict[str, dict[str, Any]]:
+    """Mapeo unificado (moneda/categoría/vigente) por pricelist_id.
+
+    Orden de prioridad: memoria de proceso -> archivo JSON local -> config
+    persistente (Postgres/Sheets, con migración automática de las 6
+    claves legadas la primera vez) -- mismo patrón de 3 niveles que ya
+    usaban por separado los dos mapeos que este reemplaza.
+    """
+    global _PRICELIST_MAPEO_CACHE_UNIFICADO
+    if _PRICELIST_MAPEO_CACHE_UNIFICADO:
+        return _PRICELIST_MAPEO_CACHE_UNIFICADO
+
+    json_result = _load_pricelist_mapeo_from_json()
+    if json_result:
+        _PRICELIST_MAPEO_CACHE_UNIFICADO = json_result
+        return json_result
+
+    try:
+        if repo is None:
+            repo = get_repo()
+        val = repo.get_config("pricelist_mapeo_unificado")
+        if val:
+            mapeo = json.loads(val)
+            _PRICELIST_MAPEO_CACHE_UNIFICADO = mapeo
+            _save_pricelist_mapeo_to_json(mapeo)
+            return mapeo
+        mapeo = _migrar_mapeo_pricelist_legado(repo)
+        if mapeo:
+            set_pricelist_mapeo(mapeo, repo)
+            return mapeo
+    except Exception:
+        pass
+    return {}
+
+
+def set_pricelist_mapeo(mapeo: dict[str, dict[str, Any]], repo=None) -> None:
+    global _PRICELIST_MAPEO_CACHE_UNIFICADO
+    _PRICELIST_MAPEO_CACHE_UNIFICADO = mapeo
+    _save_pricelist_mapeo_to_json(mapeo)
+    try:
+        if repo is None:
+            repo = get_repo()
+        repo.set_config("pricelist_mapeo_unificado", json.dumps(mapeo))
+    except Exception as e:
+        logger.warning("No se pudo guardar el mapeo unificado de listas: %s", e)
+
+
+def get_pricelist_vigente_por_grupo(repo=None) -> dict[str, str | None]:
+    """Para cada grupo categoría x moneda, el pricelist_id marcado
+
+    ``vigente: true``, o ``None`` si ninguno lo está todavía. Usado por
+    Inventario para la tabla comparativa -- ahí hace falta UN precio por
+    grupo, no una lista de candidatos como en el motor de descuentos.
+    """
+    mapeo = get_pricelist_mapeo(repo)
+    result: dict[str, str | None] = {k: None for k in _CLASIFICACION_KEYS}
+    for pid, m in mapeo.items():
+        cat, mon = m.get("categoria"), m.get("moneda")
+        if cat and mon and m.get("vigente"):
+            key = f"{cat}_{mon}"
+            if key in result:
+                result[key] = pid
+    return result
 
 
 # Tarea 2 (auditoria precios/saldos Ventas): ventana de vigencia de la Lista
@@ -4950,46 +5058,19 @@ def resolver_tasa_bcv_vinculacion(
 
 
 def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
-    """Obtiene las listas de precios USD y VES configuradas.
-    Orden de prioridad:
-    1. In-process memory cache (más rápido, persiste entre requests del mismo proceso)
-    2. Archivo JSON local (persiste entre requests, no entre deploys en Railway)
-    3. Google Sheets _Meta (más lento pero persistente entre deploys)
-    4. Variables de entorno (fallback final)
+    """Listas de precio USD/VES que alimentan el motor -- deriva del
+
+    mapeo unificado (``get_pricelist_mapeo``, campo ``moneda``). Preserva
+    la cadena de fallback existente: TODAS las listas con moneda="usd"
+    (o "ves") cuentan, sin importar su categoría/vigencia -- eso solo
+    afecta qué se muestra en Inventario, no qué usa el motor para
+    resolver precios (ver ``_primer_id_activo``/``OdooPriceResolver``).
     """
-    global _PRICELIST_MAPEO_CACHE
-    # 1. In-process memory cache
-    if _PRICELIST_MAPEO_CACHE.get("usd") and _PRICELIST_MAPEO_CACHE.get("ves"):
-        return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
-
-    # 2. JSON file
-    json_result = _load_mapeo_from_json()
-    if json_result:
-        usd_list, ves_list = json_result
-        _PRICELIST_MAPEO_CACHE["usd"] = usd_list
-        _PRICELIST_MAPEO_CACHE["ves"] = ves_list
+    mapeo = get_pricelist_mapeo(repo)
+    usd_list = [pid for pid, m in mapeo.items() if m.get("moneda") == "usd"]
+    ves_list = [pid for pid, m in mapeo.items() if m.get("moneda") == "ves"]
+    if usd_list:
         return usd_list, ves_list
-
-    # 3. Google Sheets _Meta
-    try:
-        if repo is None:
-            repo = get_repo()
-        usd_str = repo.get_config("valid_pricelists_usd")
-        ves_str = repo.get_config("valid_pricelists_ves")
-
-        usd_list = [x.strip() for x in usd_str.split(",") if x.strip()] if usd_str else []
-        ves_list = [x.strip() for x in ves_str.split(",") if x.strip()] if ves_str else []
-
-        if usd_list:
-            _PRICELIST_MAPEO_CACHE["usd"] = usd_list
-            _PRICELIST_MAPEO_CACHE["ves"] = ves_list or [os.environ.get("ODOO_PRICELIST_BCV", "5")]
-            # Also write to JSON so next cold start loads instantly
-            _save_mapeo_to_json(usd_list, _PRICELIST_MAPEO_CACHE["ves"])
-            return _PRICELIST_MAPEO_CACHE["usd"], _PRICELIST_MAPEO_CACHE["ves"]
-    except Exception:
-        pass
-
-    # 4. Environment variable fallback
     usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
     ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
     return [x.strip() for x in usd_env.split(",") if x.strip()], [
@@ -4997,90 +5078,36 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     ]
 
 
-# Fase C (plan de Inventario/Catálogo, agosto 2026, pedido explícito del
-# usuario): segundo eje de clasificación de listas, ortogonal al USD/VES
-# de arriba -- Industrial vs Comercial (ventas industriales/comerciales,
-# relacionado con pero DISTINTO de la categoría del producto). Por ahora
-# SOLO de consulta -- no alimenta el motor de descuentos ni el cálculo de
-# precios, a diferencia de valid_pricelists_usd/_ves. Mismo patrón de
-# caché en 3 niveles (memoria -> JSON -> config persistente) que el
-# mapeo USD/VES, pero sin default forzado (una clasificación vacía es
-# válida -- "todavía no se clasificó", no un error).
-CLASIFICACION_LISTAS_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "secrets", "listas_precio_clasificacion.json"
-)
-_PRICELIST_CLASIFICACION_CACHE: dict[str, list[str]] = {}
-_CLASIFICACION_KEYS = (
-    "industrial_usd",
-    "industrial_ves",
-    "comercial_usd",
-    "comercial_ves",
-)
-
-
-def _load_clasificacion_from_json() -> dict[str, list[str]] | None:
-    try:
-        if os.path.exists(CLASIFICACION_LISTAS_FILE):
-            with open(CLASIFICACION_LISTAS_FILE, encoding="utf-8") as f:
-                j_data = json.load(f)
-                result = {k: [str(x) for x in j_data.get(k, [])] for k in _CLASIFICACION_KEYS}
-                if any(result.values()):
-                    return result
-    except Exception:
-        pass
-    return None
-
-
-def _save_clasificacion_to_json(clasificacion: dict[str, list[str]]) -> None:
-    try:
-        os.makedirs(os.path.dirname(CLASIFICACION_LISTAS_FILE), exist_ok=True)
-        with open(CLASIFICACION_LISTAS_FILE, "w", encoding="utf-8") as f:
-            json.dump({k: clasificacion.get(k, []) for k in _CLASIFICACION_KEYS}, f, indent=2)
-    except Exception:
-        pass
-
-
 def get_pricelist_clasificacion(repo=None) -> dict[str, list[str]]:
-    """Devuelve las listas clasificadas Industrial/Comercial x USD/VES.
+    """Listas Industrial/Comercial x USD/VES -- deriva del mapeo unificado
 
-    Siempre las 4 claves de ``_CLASIFICACION_KEYS`` presentes (lista vacía
-    si nunca se configuró esa combinación) -- ver docstring arriba del
-    porqué existe aparte de ``get_valid_pricelists_usd_and_ves``.
+    (campos ``categoria``+``moneda``). Solo de consulta (Inventario), no
+    alimenta el motor -- ver docstring de ``get_pricelist_mapeo``.
     """
-    global _PRICELIST_CLASIFICACION_CACHE
-    if any(_PRICELIST_CLASIFICACION_CACHE.get(k) for k in _CLASIFICACION_KEYS):
-        return {k: _PRICELIST_CLASIFICACION_CACHE.get(k, []) for k in _CLASIFICACION_KEYS}
-
-    json_result = _load_clasificacion_from_json()
-    if json_result:
-        _PRICELIST_CLASIFICACION_CACHE.update(json_result)
-        return json_result
-
-    try:
-        if repo is None:
-            repo = get_repo()
-        result: dict[str, list[str]] = {}
-        for k in _CLASIFICACION_KEYS:
-            val = repo.get_config(f"valid_pricelists_{k}")
-            result[k] = [x.strip() for x in val.split(",") if x.strip()] if val else []
-        if any(result.values()):
-            _PRICELIST_CLASIFICACION_CACHE.update(result)
-            _save_clasificacion_to_json(result)
-            return result
-    except Exception:
-        pass
-
-    return {k: [] for k in _CLASIFICACION_KEYS}
+    mapeo = get_pricelist_mapeo(repo)
+    result: dict[str, list[str]] = {k: [] for k in _CLASIFICACION_KEYS}
+    for pid, m in mapeo.items():
+        cat, mon = m.get("categoria"), m.get("moneda")
+        if cat and mon:
+            key = f"{cat}_{mon}"
+            if key in result:
+                result[key].append(pid)
+    return result
 
 
-@app.get("/api/config/listas-precio-mapeo")
-async def get_config_listas_precio_mapeo():
+@app.get("/api/config/pricelist-mapeo")
+async def get_config_pricelist_mapeo():
+    """Mapeo UNIFICADO (moneda/categoría/vigente por lista) -- reemplaza
+
+    los antiguos /api/config/listas-precio-mapeo y
+    /api/config/listas-precio-clasificacion (dos endpoints, dos fuentes
+    de verdad para la misma lista de precios -- unificado a pedido
+    explícito del usuario, agosto 2026).
+    """
     try:
         repo = get_repo()
-        usd_list, ves_list = get_valid_pricelists_usd_and_ves(repo)
         return {
-            "valid_pricelists_usd": usd_list,
-            "valid_pricelists_ves": ves_list,
+            "mapeo": get_pricelist_mapeo(repo),
             "historical_pricelist_enabled": is_historical_pricelist_enabled(repo),
         }
     except Exception as e:
@@ -5088,76 +5115,33 @@ async def get_config_listas_precio_mapeo():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.post("/api/config/listas-precio-mapeo")
-async def post_config_listas_precio_mapeo(req: PricelistMapRequest):
-    global _PRICELIST_MAPEO_CACHE
+@app.post("/api/config/pricelist-mapeo")
+async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
     try:
-        usd_list = [str(x) for x in req.valid_pricelists_usd] if req.valid_pricelists_usd else ["4"]
-        ves_list = [str(x) for x in req.valid_pricelists_ves] if req.valid_pricelists_ves else ["5"]
-
-        # 1. Update in-process memory cache immediately (fastest — no I/O required)
-        _PRICELIST_MAPEO_CACHE["usd"] = usd_list
-        _PRICELIST_MAPEO_CACHE["ves"] = ves_list
-
-        # 2. Write to JSON file (persists across requests, lost on Railway deploy)
-        _save_mapeo_to_json(usd_list, ves_list)
-
-        # 3. Write to Google Sheets _Meta (true persistent storage across deploys)
+        mapeo = {
+            str(pid): {
+                "moneda": fila.moneda if fila.moneda in ("usd", "ves") else "",
+                "categoria": (
+                    fila.categoria if fila.categoria in ("industrial", "comercial") else ""
+                ),
+                "vigente": bool(fila.vigente),
+            }
+            for pid, fila in req.mapeo.items()
+        }
+        repo = get_repo()
+        set_pricelist_mapeo(mapeo, repo)
         try:
-            repo = get_repo()
-            repo.set_config("valid_pricelists_usd", ",".join(usd_list))
-            repo.set_config("valid_pricelists_ves", ",".join(ves_list))
             repo.set_config(
                 "historical_pricelist_enabled",
                 "true" if req.historical_pricelist_enabled else "false",
             )
-        except Exception as sheets_err:
-            logger.warning("No se pudo guardar mapeo en Google Sheets: %s", sheets_err)
-
+        except Exception as cfg_err:
+            logger.warning("No se pudo guardar historical_pricelist_enabled: %s", cfg_err)
         return {
             "status": "success",
             "message": "Mapeo de listas de precios actualizado correctamente.",
-            "valid_pricelists_usd": usd_list,
-            "valid_pricelists_ves": ves_list,
+            "mapeo": mapeo,
             "historical_pricelist_enabled": req.historical_pricelist_enabled,
-        }
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@app.get("/api/config/listas-precio-clasificacion")
-async def get_config_listas_precio_clasificacion():
-    try:
-        repo = get_repo()
-        return get_pricelist_clasificacion(repo)
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@app.post("/api/config/listas-precio-clasificacion")
-async def post_config_listas_precio_clasificacion(req: PricelistClasificacionRequest):
-    global _PRICELIST_CLASIFICACION_CACHE
-    try:
-        clasificacion = {
-            "industrial_usd": [str(x) for x in req.industrial_usd],
-            "industrial_ves": [str(x) for x in req.industrial_ves],
-            "comercial_usd": [str(x) for x in req.comercial_usd],
-            "comercial_ves": [str(x) for x in req.comercial_ves],
-        }
-        _PRICELIST_CLASIFICACION_CACHE.update(clasificacion)
-        _save_clasificacion_to_json(clasificacion)
-        try:
-            repo = get_repo()
-            for k, v in clasificacion.items():
-                repo.set_config(f"valid_pricelists_{k}", ",".join(v))
-        except Exception as cfg_err:
-            logger.warning("No se pudo guardar clasificación Industrial/Comercial: %s", cfg_err)
-        return {
-            "status": "success",
-            "message": "Clasificación Industrial/Comercial de listas actualizada.",
-            **clasificacion,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -5200,55 +5184,95 @@ async def get_inventario_catalogo():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.get("/api/inventario/listas")
-async def get_inventario_listas():
-    """Listas de precio agrupadas Industrial/Comercial x USD/VES (Fase D)
+@app.get("/api/inventario/comparativo")
+async def get_inventario_comparativo(categoria: str):
+    """Tabla comparativa USD vs VES para una categoría (Industrial o
 
-    -- cruza las listas reales de Odoo (id/nombre/moneda/vigencia) con el
-    mapeo de clasificación de ``get_pricelist_clasificacion`` (Fase C).
-    Consulta liviana a propósito (sin las reglas de precio por producto
-    que sí trae ``/api/config/listas-precio`` -- acá solo hace falta
-    saber a qué grupo pertenece cada lista).
+    Comercial), estilo las sub-pestañas de Auditoría (pedido explícito
+    del usuario, agosto 2026) -- reemplaza a ``/api/inventario/listas``
+    (mostraba nombres de lista sin precios; esto sí resuelve el precio
+    real por producto en la lista "vigente" USD y VES de la categoría,
+    CON IVA incluido, que es lo que el usuario pidió ver).
+
+    Usa ``get_pricelist_vigente_por_grupo`` (mapeo unificado) para saber
+    CUÁL lista es "la" vigente de cada moneda en esta categoría -- si
+    todavía no se marcó ninguna como vigente, ese lado queda vacío
+    (``None``) en vez de adivinar.
     """
     try:
+        if categoria not in ("industrial", "comercial"):
+            raise HTTPException(
+                status_code=400, detail="categoria debe ser 'industrial' o 'comercial'"
+            )
+        repo = get_repo()
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        repo = get_repo()
-        clasif = get_pricelist_clasificacion(repo)
+        vigentes = get_pricelist_vigente_por_grupo(repo)
+        usd_id_str = vigentes.get(f"{categoria}_usd")
+        ves_id_str = vigentes.get(f"{categoria}_ves")
+        iva_rate = float(config.engine.iva_rate)
 
-        pricelists: list[dict[str, Any]] = []
-        if execute:
-            pricelists = execute(
-                "product.pricelist",
+        catalogo = repo.all_catalogo()
+        cand_ids = [int(x) for x in (usd_id_str, ves_id_str) if x]
+
+        precios_usd: dict[int, float] = {}
+        precios_ves: dict[int, float] = {}
+        if execute and cand_ids:
+            prod_ids = [int(p.producto_id) for p in catalogo if p.producto_id.isdigit()]
+            rules = execute(
+                "product.pricelist.item",
                 "search_read",
-                [[["active", "in", [True, False]]]],
-                {
-                    "fields": ["id", "name", "currency_id", "active"],
-                    "context": {"active_test": False},
-                    "order": "id asc",
-                },
+                [
+                    [
+                        ["pricelist_id", "in", cand_ids],
+                        ["product_tmpl_id", "in", prod_ids],
+                        ["compute_price", "=", "fixed"],
+                    ]
+                ],
+                {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"]},
             )
+            for r in rules:
+                pl_raw = r.get("pricelist_id")
+                pl_id = pl_raw[0] if isinstance(pl_raw, list | tuple) else pl_raw
+                pt_raw = r.get("product_tmpl_id")
+                pt_id = pt_raw[0] if isinstance(pt_raw, list | tuple) else pt_raw
+                if not pt_id:
+                    continue
+                if usd_id_str and pl_id == int(usd_id_str):
+                    precios_usd[pt_id] = float(r.get("fixed_price") or 0.0)
+                if ves_id_str and pl_id == int(ves_id_str):
+                    precios_ves[pt_id] = float(r.get("fixed_price") or 0.0)
 
-        def _moneda(pl: dict[str, Any]) -> str:
-            cur = pl.get("currency_id")
-            return cur[1] if isinstance(cur, list | tuple) and len(cur) > 1 else "USD"
-
-        por_id = {
-            pl["id"]: {
-                "id": pl["id"],
-                "name": pl["name"],
-                "moneda": _moneda(pl),
-                "active": pl["active"],
-            }
-            for pl in pricelists
+        items = []
+        for p in catalogo:
+            if not p.producto_id.isdigit():
+                continue
+            pid = int(p.producto_id)
+            if pid not in precios_usd and pid not in precios_ves:
+                continue
+            items.append(
+                {
+                    "producto_id": p.producto_id,
+                    "codigo": p.codigo,
+                    "nombre": p.nombre,
+                    "precio_usd_con_iva": (
+                        round(precios_usd[pid] * (1 + iva_rate), 2) if pid in precios_usd else None
+                    ),
+                    "precio_ves_con_iva": (
+                        round(precios_ves[pid] * (1 + iva_rate), 2) if pid in precios_ves else None
+                    ),
+                }
+            )
+        items.sort(key=lambda r: r["nombre"])
+        return {
+            "categoria": categoria,
+            "usd_lista_id": usd_id_str,
+            "ves_lista_id": ves_id_str,
+            "iva_rate": iva_rate,
+            "items": items,
         }
-
-        grupos: dict[str, list[dict[str, Any]]] = {k: [] for k in _CLASIFICACION_KEYS}
-        for k in _CLASIFICACION_KEYS:
-            for pid_str in clasif.get(k, []):
-                pl_info = por_id.get(int(pid_str)) if pid_str.isdigit() else None
-                grupos[k].append(pl_info or {"id": pid_str, "name": "(no encontrada en Odoo)"})
-        return grupos
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

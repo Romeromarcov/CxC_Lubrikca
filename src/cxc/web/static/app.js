@@ -275,8 +275,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadInventario === "function") loadInventario();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
-                if (typeof loadListasMapeo === "function") loadListasMapeo();
-                if (typeof loadListasClasificacion === "function") loadListasClasificacion();
+                if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
                 if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
                 if (currentUserSession && currentUserSession.rol === "admin" && typeof loadAdminUsuarios === "function") {
                     loadAdminUsuarios();
@@ -2092,7 +2091,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadPromociones,
             loadExclusiones,
             loadListasPrecio,
-            loadListasMapeo,
+            loadPricelistMapeo,
             loadOdooProductos,
             loadClientesAuditoria,
             loadSettingsMeta
@@ -3828,26 +3827,23 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // --- LISTAS DE PRECIOS MAPEO ---
-    window.loadListasMapeo = async function() {
-        const usdBox = document.getElementById("usd-pricelists-checkboxes");
-        const vesBox = document.getElementById("ves-pricelists-checkboxes");
-        if (!usdBox || !vesBox) return;
+    // --- MAPEO UNIFICADO DE LISTAS DE PRECIO (agosto 2026) -- reemplaza los
+    // 2 mapeos separados (USD/VES para el motor, Industrial/Comercial solo
+    // consulta) que existían antes: una sola tabla, un solo endpoint, sin
+    // dos fuentes de verdad para la misma lista de precios.
+    window.loadPricelistMapeo = async function() {
+        const body = document.getElementById("pricelist-mapeo-table-body");
+        if (!body) return;
 
         try {
-            usdBox.innerHTML = '<span style="font-size:0.85rem; color:#64748b;">Cargando...</span>';
-            vesBox.innerHTML = '<span style="font-size:0.85rem; color:#64748b;">Cargando...</span>';
-
+            body.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando...</td></tr>';
             const [plRes, mapRes] = await Promise.all([
                 fetch('/api/config/listas-precio'),
-                fetch('/api/config/listas-precio-mapeo')
+                fetch('/api/config/pricelist-mapeo')
             ]);
-
             const pricelists = await plRes.json();
             const mapData = await mapRes.json();
-
-            const validUSD = (Array.isArray(mapData.valid_pricelists_usd) && mapData.valid_pricelists_usd.length > 0) ? mapData.valid_pricelists_usd.map(String) : ["4"];
-            const validVES = (Array.isArray(mapData.valid_pricelists_ves) && mapData.valid_pricelists_ves.length > 0) ? mapData.valid_pricelists_ves.map(String) : ["5"];
+            const mapeo = mapData.mapeo || {};
 
             const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
             if (histCheckbox) {
@@ -3855,61 +3851,41 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (!Array.isArray(pricelists) || pricelists.length === 0) {
-                usdBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
-                vesBox.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
+                body.innerHTML = '<tr><td colspan="5" class="table-empty">No se encontraron listas de precios en Odoo.</td></tr>';
                 return;
             }
 
-            // Hallazgo real (auditoría del mapeo, agosto 2026): nada impedía
-            // marcar como "válida" una lista ARCHIVADA en Odoo -- eso
-            // producía precios congelados/stale sin que se notara. Se
-            // muestra una advertencia visible en vez de desmarcarla sola
-            // (la decisión de qué lista usar es del negocio, no del código).
-            const archivedWarning = (pl) => pl.active === false
-                ? '<span style="color:#dc2626; font-weight:700; margin-left:4px;" title="Esta lista está archivada en Odoo -- sus precios pueden estar congelados">⚠ archivada</span>'
-                : '';
-
-            usdBox.innerHTML = pricelists.map(pl => {
-                const checked = validUSD.includes(String(pl.id)) ? 'checked' : '';
+            body.innerHTML = pricelists.map(pl => {
+                const fila = mapeo[String(pl.id)] || { moneda: "", categoria: "", vigente: false };
+                const estado = pl.active === false
+                    ? '<span style="color:#dc2626; font-weight:700;" title="Lista archivada en Odoo -- sus precios pueden estar congelados">⚠ Archivada</span>'
+                    : '<span style="color:#059669;">✓ Vigente en Odoo</span>';
                 return `
-                    <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
-                        <input type="checkbox" name="cfg_listas_usd" value="${pl.id}" ${checked}>
-                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
-                    </label>
+                    <tr data-pricelist-id="${pl.id}">
+                        <td><strong>#${pl.id}</strong> ${pl.name} (${pl.moneda})</td>
+                        <td>${estado}</td>
+                        <td>
+                            <select class="pm-moneda" style="padding:0.3rem;">
+                                <option value="" ${fila.moneda === "" ? "selected" : ""}>—</option>
+                                <option value="usd" ${fila.moneda === "usd" ? "selected" : ""}>USD</option>
+                                <option value="ves" ${fila.moneda === "ves" ? "selected" : ""}>VES</option>
+                            </select>
+                        </td>
+                        <td>
+                            <select class="pm-categoria" style="padding:0.3rem;">
+                                <option value="" ${fila.categoria === "" ? "selected" : ""}>—</option>
+                                <option value="industrial" ${fila.categoria === "industrial" ? "selected" : ""}>Industrial</option>
+                                <option value="comercial" ${fila.categoria === "comercial" ? "selected" : ""}>Comercial</option>
+                            </select>
+                        </td>
+                        <td style="text-align:center;">
+                            <input type="checkbox" class="pm-vigente" ${fila.vigente ? "checked" : ""}>
+                        </td>
+                    </tr>
                 `;
             }).join('');
 
-            vesBox.innerHTML = pricelists.map(pl => {
-                const checked = validVES.includes(String(pl.id)) ? 'checked' : '';
-                return `
-                    <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
-                        <input type="checkbox" name="cfg_listas_ves" value="${pl.id}" ${checked}>
-                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
-                    </label>
-                `;
-            }).join('');
-
-            // Hallazgo real: si la MISMA lista queda marcada como válida en
-            // USD y en VES a la vez, ambas columnas muestran el mismo
-            // precio (no es un bug de cálculo, es la config elegida) --
-            // se avisa explícitamente para que sea una decisión consciente.
-            const overlap = validUSD.filter(id => validVES.includes(id));
-            let overlapWarnEl = document.getElementById("listas-mapeo-overlap-warning");
-            if (!overlapWarnEl) {
-                overlapWarnEl = document.createElement("div");
-                overlapWarnEl.id = "listas-mapeo-overlap-warning";
-                overlapWarnEl.style.cssText = "margin-top:0.75rem;";
-                const mapeoForm = document.getElementById("listas-mapeo-form");
-                const historicalGroup = mapeoForm ? mapeoForm.querySelector(".form-group[style*='fffbeb']") : null;
-                if (mapeoForm && historicalGroup) {
-                    mapeoForm.insertBefore(overlapWarnEl, historicalGroup);
-                }
-            }
-            overlapWarnEl.innerHTML = overlap.length > 0
-                ? `<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 12px; border-radius:8px; font-size:0.85rem;">⚠ La(s) lista(s) #${overlap.join(', #')} está(n) marcada(s) como válida(s) para USD y para VES a la vez -- por eso muestran el mismo precio en ambas columnas del catálogo. Si no es intencional, desmarca una de las dos.</div>`
-                : '';
-
-            // Dynamically populate M2M Listas checkboxes in all rule forms
+            // Dynamically populate M2M Listas checkboxes in all rule forms.
             const ruleFormListContainers = [
                 { selector: ".m2m-rec-lista", parent: "m2m-rec-listas-box" },
                 { selector: ".m2m-pp-lista", parent: "m2m-pp-listas-box" },
@@ -3948,136 +3924,65 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (err) {
             console.error("Error cargando mapeo de listas:", err);
-            usdBox.innerHTML = '<span style="color:#ef4444; font-size:0.85rem;">Error al cargar listas.</span>';
-            vesBox.innerHTML = '<span style="color:#ef4444; font-size:0.85rem;">Error al cargar listas.</span>';
+            body.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
         }
     };
 
-    window.saveListasMapeo = async function(event) {
+    window.savePricelistMapeo = async function(event) {
         if (event) event.preventDefault();
-        const usdChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_usd"]:checked')).map(el => el.value);
-        const vesChecked = Array.from(document.querySelectorAll('input[name="cfg_listas_ves"]:checked')).map(el => el.value);
+        const rows = document.querySelectorAll("#pricelist-mapeo-table-body tr[data-pricelist-id]");
+        const mapeo = {};
+        rows.forEach(row => {
+            const pid = row.dataset.pricelistId;
+            mapeo[pid] = {
+                moneda: row.querySelector(".pm-moneda")?.value || "",
+                categoria: row.querySelector(".pm-categoria")?.value || "",
+                vigente: row.querySelector(".pm-vigente")?.checked || false,
+            };
+        });
 
-        if (usdChecked.length === 0 && vesChecked.length === 0) {
-            alert("⚠️ Debes seleccionar al menos una lista de precios USD y una VES.");
+        const hayUsd = Object.values(mapeo).some(f => f.moneda === "usd");
+        const hayVes = Object.values(mapeo).some(f => f.moneda === "ves");
+        if (!hayUsd && !hayVes) {
+            alert("⚠️ Debes marcar al menos una lista con Moneda USD y una con VES.");
             return;
+        }
+
+        // Aviso (no bloqueante) si dos listas activas comparten el mismo
+        // grupo Categoría+Moneda y ambas están "Vigente" -- ambiguo para
+        // Inventario, que espera UNA vigente por grupo.
+        const vigentesPorGrupo = {};
+        Object.values(mapeo).forEach(f => {
+            if (f.categoria && f.moneda && f.vigente) {
+                const key = `${f.categoria}_${f.moneda}`;
+                vigentesPorGrupo[key] = (vigentesPorGrupo[key] || 0) + 1;
+            }
+        });
+        const gruposDuplicados = Object.entries(vigentesPorGrupo).filter(([, n]) => n > 1).map(([k]) => k);
+        if (gruposDuplicados.length > 0) {
+            if (!confirm(`⚠️ Hay más de una lista "Vigente" en el mismo grupo (${gruposDuplicados.join(", ")}). Inventario usará una cualquiera de ellas. ¿Guardar de todas formas?`)) {
+                return;
+            }
         }
 
         const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
         const histEnabled = histCheckbox ? histCheckbox.checked : true;
 
         try {
-            const res = await fetch('/api/config/listas-precio-mapeo', {
+            const res = await fetch('/api/config/pricelist-mapeo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    valid_pricelists_usd: usdChecked,
-                    valid_pricelists_ves: vesChecked,
-                    historical_pricelist_enabled: histEnabled
-                })
+                body: JSON.stringify({ mapeo, historical_pricelist_enabled: histEnabled })
             });
             const data = await res.json();
             if (res.ok) {
-                // Use the saved values directly from the response to re-check boxes
-                // This avoids stale cache issues from re-fetching
-                const savedUSD = (data.valid_pricelists_usd || usdChecked).map(String);
-                const savedVES = (data.valid_pricelists_ves || vesChecked).map(String);
-
-                // Re-render with the confirmed saved values
-                document.querySelectorAll('input[name="cfg_listas_usd"]').forEach(cb => {
-                    cb.checked = savedUSD.includes(String(cb.value));
-                });
-                document.querySelectorAll('input[name="cfg_listas_ves"]').forEach(cb => {
-                    cb.checked = savedVES.includes(String(cb.value));
-                });
-
-                alert("✅ Configuración guardada exitosamente.\nUSD: " + savedUSD.join(", ") + "\nVES: " + savedVES.join(", "));
+                alert("✅ Mapeo de listas guardado exitosamente.");
             } else {
                 alert("❌ Error: " + (data.detail || "No se pudo guardar."));
             }
         } catch (err) {
             console.error("Error guardando mapeo de listas:", err);
             alert("❌ Error de red al guardar la configuración.");
-        }
-    };
-
-    // --- CLASIFICACIÓN INDUSTRIAL/COMERCIAL DE LISTAS (Fase C, solo consulta) ---
-    window.loadListasClasificacion = async function() {
-        const boxes = {
-            industrial_usd: document.getElementById("industrial-usd-pricelists-checkboxes"),
-            industrial_ves: document.getElementById("industrial-ves-pricelists-checkboxes"),
-            comercial_usd: document.getElementById("comercial-usd-pricelists-checkboxes"),
-            comercial_ves: document.getElementById("comercial-ves-pricelists-checkboxes"),
-        };
-        if (!boxes.industrial_usd) return;
-
-        try {
-            const [plRes, clasifRes] = await Promise.all([
-                fetch('/api/config/listas-precio'),
-                fetch('/api/config/listas-precio-clasificacion')
-            ]);
-            const pricelists = await plRes.json();
-            const clasif = await clasifRes.json();
-
-            if (!Array.isArray(pricelists) || pricelists.length === 0) {
-                Object.values(boxes).forEach(box => {
-                    box.innerHTML = '<span style="font-size:0.85rem; color:#94a3b8;">No se encontraron listas de precios en Odoo.</span>';
-                });
-                return;
-            }
-
-            const archivedWarning = (pl) => pl.active === false
-                ? '<span style="color:#dc2626; font-weight:700; margin-left:4px;" title="Esta lista está archivada en Odoo">⚠ archivada</span>'
-                : '';
-
-            Object.entries(boxes).forEach(([key, box]) => {
-                const checkedIds = (Array.isArray(clasif[key]) ? clasif[key] : []).map(String);
-                box.innerHTML = pricelists.map(pl => {
-                    const checked = checkedIds.includes(String(pl.id)) ? 'checked' : '';
-                    return `
-                        <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
-                            <input type="checkbox" name="cfg_clasif_${key}" value="${pl.id}" ${checked}>
-                            <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
-                        </label>
-                    `;
-                }).join('');
-            });
-        } catch (err) {
-            console.error("Error cargando clasificación Industrial/Comercial:", err);
-            Object.values(boxes).forEach(box => {
-                if (box) box.innerHTML = '<span style="font-size:0.85rem; color:#dc2626;">Error de red al cargar.</span>';
-            });
-        }
-    };
-
-    window.saveListasClasificacion = async function(event) {
-        if (event) event.preventDefault();
-        const read = (key) => Array.from(
-            document.querySelectorAll(`input[name="cfg_clasif_${key}"]:checked`)
-        ).map(el => el.value);
-
-        const payload = {
-            industrial_usd: read("industrial_usd"),
-            industrial_ves: read("industrial_ves"),
-            comercial_usd: read("comercial_usd"),
-            comercial_ves: read("comercial_ves"),
-        };
-
-        try {
-            const res = await fetch('/api/config/listas-precio-clasificacion', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (res.ok) {
-                alert("✅ Clasificación guardada exitosamente.");
-            } else {
-                alert("❌ Error: " + (data.detail || "No se pudo guardar."));
-            }
-        } catch (err) {
-            console.error("Error guardando clasificación Industrial/Comercial:", err);
-            alert("❌ Error de red al guardar la clasificación.");
         }
     };
 
@@ -4110,49 +4015,74 @@ document.addEventListener("DOMContentLoaded", () => {
         `).join('');
     }
 
-    window.loadInventario = async function() {
-        const listasGrid = document.getElementById("inventario-listas-grid");
-        const catalogoBody = document.getElementById("inventario-catalogo-table-body");
-        if (!listasGrid && !catalogoBody) return;
+    const _inventarioComparativoCargado = { industrial: false, comercial: false };
 
-        const labels = {
-            industrial_usd: "Industrial — USD",
-            industrial_ves: "Industrial — VES",
-            comercial_usd: "Comercial — USD",
-            comercial_ves: "Comercial — VES",
-        };
+    window.switchInventarioSubtab = function(name) {
+        document.querySelectorAll(".subtab-btn[data-inv-subtab]").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.invSubtab === name);
+        });
+        document.querySelectorAll(".subtab-panel[data-inv-subtab-panel]").forEach(panel => {
+            panel.style.display = (panel.dataset.invSubtabPanel === name) ? "block" : "none";
+        });
+        if (!_inventarioComparativoCargado[name]) {
+            _loadInventarioComparativo(name);
+        }
+    };
 
+    async function _loadInventarioComparativo(categoria) {
+        const header = document.getElementById(`inventario-comparativo-${categoria}-header`);
+        const body = document.getElementById(`inventario-comparativo-${categoria}-body`);
+        if (!body) return;
+        const fmt = (v) => v == null ? '—' : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
         try {
-            const [listasRes, catalogoRes] = await Promise.all([
-                fetch('/api/inventario/listas'),
-                fetch('/api/inventario/catalogo'),
-            ]);
+            const res = await fetch(`/api/inventario/comparativo?categoria=${categoria}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Error al cargar');
 
-            if (listasGrid) {
-                const listas = await listasRes.json();
-                const grupos = Object.keys(labels).map(key => {
-                    const items = listas[key] || [];
-                    const filas = items.length
-                        ? items.map(pl => `<li>#${pl.id} — ${pl.name}${pl.active === false ? ' <span style="color:#dc2626;">⚠ archivada</span>' : ''}</li>`).join('')
-                        : '<li style="color:#94a3b8;">Sin listas asignadas.</li>';
-                    return `
-                        <div class="card" style="padding:1rem; border:1px solid #e2e8f0;">
-                            <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">${labels[key]}</h3>
-                            <ul style="margin:0; padding-left:1.1rem; font-size:0.85rem; color:#334155;">${filas}</ul>
-                        </div>
-                    `;
-                }).join('');
-                listasGrid.innerHTML = grupos;
+            _inventarioComparativoCargado[categoria] = true;
+            if (header) {
+                const usdTxt = data.usd_lista_id ? `Lista #${data.usd_lista_id} (USD)` : 'sin lista USD vigente asignada';
+                const vesTxt = data.ves_lista_id ? `Lista #${data.ves_lista_id} (VES)` : 'sin lista VES vigente asignada';
+                header.textContent = `Comparando: ${usdTxt} vs. ${vesTxt} -- precios con IVA (${(data.iva_rate * 100).toFixed(0)}%) incluido.`;
             }
-
-            if (catalogoBody) {
-                _inventarioCatalogoData = await catalogoRes.json();
-                _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value);
+            if (data.items.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" class="table-empty">Sin productos con precio en las listas vigentes de esta categoría -- revisa el Mapeo de Listas en Configuración.</td></tr>';
+                return;
             }
+            body.innerHTML = data.items.map(it => `
+                <tr>
+                    <td><strong>${it.codigo || 'N/A'}</strong></td>
+                    <td>${it.nombre}</td>
+                    <td>${fmt(it.precio_usd_con_iva)}</td>
+                    <td>${fmt(it.precio_ves_con_iva)}</td>
+                </tr>
+            `).join('');
         } catch (err) {
-            console.error("Error cargando Inventario:", err);
-            if (listasGrid) listasGrid.innerHTML = '<div style="color:#dc2626;">Error de red al cargar listas.</div>';
-            if (catalogoBody) catalogoBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
+            console.error(`Error cargando comparativo Inventario (${categoria}):`, err);
+            if (header) header.textContent = 'Error al cargar.';
+            body.innerHTML = '<tr><td colspan="4" class="table-empty" style="color:#dc2626;">Error de red al cargar el comparativo.</td></tr>';
+        }
+    }
+
+    window.loadInventario = async function() {
+        const catalogoBody = document.getElementById("inventario-catalogo-table-body");
+        if (!catalogoBody && !document.getElementById("inventario-comparativo-industrial-body")) return;
+
+        // Sub-pestaña activa (default "industrial") + catálogo se cargan en paralelo.
+        _inventarioComparativoCargado.industrial = false;
+        _inventarioComparativoCargado.comercial = false;
+        const activeSubtab = document.querySelector(".subtab-btn[data-inv-subtab].active")?.dataset.invSubtab || "industrial";
+        _loadInventarioComparativo(activeSubtab);
+
+        if (catalogoBody) {
+            try {
+                const res = await fetch('/api/inventario/catalogo');
+                _inventarioCatalogoData = await res.json();
+                _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value);
+            } catch (err) {
+                console.error("Error cargando catálogo de Inventario:", err);
+                catalogoBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
+            }
         }
     };
 
