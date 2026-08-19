@@ -3856,12 +3856,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
+            // Hallazgo real (auditoría del mapeo, agosto 2026): nada impedía
+            // marcar como "válida" una lista ARCHIVADA en Odoo -- eso
+            // producía precios congelados/stale sin que se notara. Se
+            // muestra una advertencia visible en vez de desmarcarla sola
+            // (la decisión de qué lista usar es del negocio, no del código).
+            const archivedWarning = (pl) => pl.active === false
+                ? '<span style="color:#dc2626; font-weight:700; margin-left:4px;" title="Esta lista está archivada en Odoo -- sus precios pueden estar congelados">⚠ archivada</span>'
+                : '';
+
             usdBox.innerHTML = pricelists.map(pl => {
                 const checked = validUSD.includes(String(pl.id)) ? 'checked' : '';
                 return `
                     <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
                         <input type="checkbox" name="cfg_listas_usd" value="${pl.id}" ${checked}>
-                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})</span>
+                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
                     </label>
                 `;
             }).join('');
@@ -3871,10 +3880,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 return `
                     <label style="display:flex; align-items:center; gap:8px; font-size:0.88rem; cursor:pointer;">
                         <input type="checkbox" name="cfg_listas_ves" value="${pl.id}" ${checked}>
-                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})</span>
+                        <span><strong>#${pl.id}</strong> - ${pl.name} (${pl.moneda})${archivedWarning(pl)}</span>
                     </label>
                 `;
             }).join('');
+
+            // Hallazgo real: si la MISMA lista queda marcada como válida en
+            // USD y en VES a la vez, ambas columnas muestran el mismo
+            // precio (no es un bug de cálculo, es la config elegida) --
+            // se avisa explícitamente para que sea una decisión consciente.
+            const overlap = validUSD.filter(id => validVES.includes(id));
+            let overlapWarnEl = document.getElementById("listas-mapeo-overlap-warning");
+            if (!overlapWarnEl) {
+                overlapWarnEl = document.createElement("div");
+                overlapWarnEl.id = "listas-mapeo-overlap-warning";
+                overlapWarnEl.style.cssText = "margin-top:0.75rem;";
+                const mapeoForm = document.getElementById("listas-mapeo-form");
+                const historicalGroup = mapeoForm ? mapeoForm.querySelector(".form-group[style*='fffbeb']") : null;
+                if (mapeoForm && historicalGroup) {
+                    mapeoForm.insertBefore(overlapWarnEl, historicalGroup);
+                }
+            }
+            overlapWarnEl.innerHTML = overlap.length > 0
+                ? `<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 12px; border-radius:8px; font-size:0.85rem;">⚠ La(s) lista(s) #${overlap.join(', #')} está(n) marcada(s) como válida(s) para USD y para VES a la vez -- por eso muestran el mismo precio en ambas columnas del catálogo. Si no es intencional, desmarca una de las dos.</div>`
+                : '';
 
             // Dynamically populate M2M Listas checkboxes in all rule forms
             const ruleFormListContainers = [

@@ -976,6 +976,36 @@ class EliminarDescuentoRequest(BaseModel):
     regla_id: str
 
 
+def _primer_id_activo(execute: Any, ids: list[int]) -> int | None:
+    """Evita que una lista de precios ARCHIVADA en Odoo quede como
+
+    "primaria" solo por aparecer primero en la config de texto (bug real,
+    agosto 2026: ``valid_pricelists_usd = "7,8"`` con #7 archivada y con 86
+    reglas de precio viejas que YA difieren de las de #8 -- ej. producto
+    1063: $92.24 en #7 vs $102.59 en #8 -- el motor calculaba con precios
+    obsoletos sin que nadie lo notara). Devuelve el primer id de ``ids``
+    que sigue activo en Odoo, preservando el orden dado; si ninguno está
+    activo o falla la consulta, cae al primero de la lista original (mismo
+    comportamiento que antes, nunca empeora nada).
+    """
+    if not ids:
+        return None
+    try:
+        activos = execute(
+            "product.pricelist",
+            "search_read",
+            [[["id", "in", ids]]],
+            {"fields": ["id", "active"], "context": {"active_test": False}},
+        )
+        activos_set = {a["id"] for a in activos if a.get("active")}
+    except Exception:
+        return ids[0]
+    for i in ids:
+        if i in activos_set:
+            return i
+    return ids[0]
+
+
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
         meta = repo.all_config()
@@ -1615,8 +1645,10 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
             raise HTTPException(status_code=503, detail="Sin conexión a Odoo")
 
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
-        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
+        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
+        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
+        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
         pricelist_ids = {"USD": primary_usd_id, "BCV": primary_ves_id}
         fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
         resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
@@ -2344,8 +2376,10 @@ def recalculate_all(so_id: str):
         )
         execute = _connect(config.odoo)
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
-        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
+        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
+        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
+        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
         # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
         # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
         # valid_ves (Configuración), este dict solo cubre el caso residual
@@ -2400,8 +2434,10 @@ def recalculate_all_orders():
                 print(f"Error re-sincronizando Vinculaciones con Odoo: {e_relink}", file=sys.stderr)
 
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        primary_usd_id = int(usd_lists[0]) if usd_lists and usd_lists[0].isdigit() else 4
-        primary_ves_id = int(ves_lists[0]) if ves_lists and ves_lists[0].isdigit() else 5
+        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
+        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
+        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
+        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
         # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
         # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
         # valid_ves (Configuración), este dict solo cubre el caso residual
@@ -6434,9 +6470,20 @@ async def get_odoo_productos():
                 elif p_id in cand_ves_ids:
                     prices_ves[pt_id] = float(r.get("fixed_price") or 0.0)
 
+        # Bug real (agosto 2026, auditoría del mapeo de listas): la columna
+        # VES caía a $0.00 fijo cuando ninguna lista candidata VES tenía
+        # regla para el producto, a diferencia de la columna USD que sí
+        # caía a "Precio de venta $" (list_price_usd). Como la lista "VES"
+        # NO son precios en bolívares (son una pricelist EN USD que el
+        # mapeo marca como la que corresponde a pagos en VES -- ver
+        # get_valid_pricelists_usd_and_ves), el mismo fallback aplica: sin
+        # regla fija en ninguna candidata, usar list_price_usd también acá.
+        list_price_usd_por_id = {p["id"]: float(p.get("list_price_usd") or 0.0) for p in prods}
+
         resultado = []
         for p in prods:
             pid = p["id"]
+            fallback_usd = list_price_usd_por_id.get(pid, 0.0)
             resultado.append(
                 {
                     "id": pid,
@@ -6445,8 +6492,8 @@ async def get_odoo_productos():
                     "precio_publico": float(p.get("list_price") or 0.0),
                     # Sin regla en la pricelist -- fallback a "Precio de venta $"
                     # (list_price_usd), NUNCA list_price (esa está en VES).
-                    "precio_usd": prices_usd.get(pid, float(p.get("list_price_usd") or 0.0)),
-                    "precio_ves_usd": prices_ves.get(pid, 0.0),
+                    "precio_usd": prices_usd.get(pid, fallback_usd),
+                    "precio_ves_usd": prices_ves.get(pid, fallback_usd),
                     "litros": float(p.get("product_volume") or 0.0),
                 }
             )
