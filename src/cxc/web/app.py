@@ -6209,14 +6209,27 @@ async def get_bandeja_facturacion():
                 #    patron que `_estado_pago_facturas_desde_odoo` --
                 #    campo mutable que el espejo nunca captura) y ya viene
                 #    resuelto en `item` desde Ventas.
-                if wh_agent and not item.get("wh_iva_aplicado"):
+                #
+                # 4. Alcance de la bandeja (pedido explicito del usuario,
+                #    2026-08-20): "todo el que deba el IVA entra a
+                #    revision" -- ya NO se exige `wh_agent` (cliente
+                #    marcado como agente de retencion) para entrar aqui.
+                #    Un cliente SIN ese flag que igual deja pendiente un
+                #    saldo que cabe dentro del IVA de su factura no es una
+                #    retencion legitima (en Venezuela solo los agentes
+                #    designados retienen IVA por ley) -- pero igual amerita
+                #    revision manual (puede ser un agente no catalogado
+                #    todavia, un error del cliente, o un pago incompleto
+                #    real). Se distingue con `es_agente_retencion` para que
+                #    la UI no lo etiquete como una retencion normal.
+                if not item.get("wh_iva_aplicado"):
                     monto_factura_real = float(item.get("total_facturado_neto") or 0.0) or tot_motor
                     subtotal_est = monto_factura_real / 1.16
                     iva_total_est = monto_factura_real - subtotal_est
-                    iva_retenido_est = iva_total_est * (wh_rate / 100.0)
+                    iva_retenido_est = iva_total_est * (wh_rate / 100.0) if wh_agent else 0.0
                     abono_odoo = float(item.get("monto_pagado_factura_odoo") or 0.0)
                     saldo_pendiente_motor = monto_factura_real - abono_odoo
-                    if 0 <= saldo_pendiente_motor <= iva_total_est + 0.05:
+                    if 0.05 < saldo_pendiente_motor <= iva_total_est + 0.05:
                         iva_pendiente_agentes.append(
                             {
                                 "so_id": o.so_id,
@@ -6224,14 +6237,23 @@ async def get_bandeja_facturacion():
                                 "factura_id": o.factura_id or "Odoo",
                                 "monto_factura": monto_factura_real,
                                 "wh_iva_rate": wh_rate,
+                                "es_agente_retencion": wh_agent,
                                 "base_cobrada": round(subtotal_est, 2),
                                 "iva_total_estimado": round(iva_total_est, 2),
                                 "retencion_iva_est": round(iva_retenido_est, 2),
                                 "monto_iva_retenido_est": round(iva_retenido_est, 2),
                                 "monto_pagado": abono_odoo,
                                 "saldo_pendiente": round(saldo_pendiente_motor, 2),
-                                "estado_comprobante": "Pendiente Comprobante IVA",
-                                "estado": "Pendiente Comprobante IVA",
+                                "estado_comprobante": (
+                                    "Pendiente Comprobante IVA"
+                                    if wh_agent
+                                    else "Debe IVA -- sin agente de retención registrado"
+                                ),
+                                "estado": (
+                                    "Pendiente Comprobante IVA"
+                                    if wh_agent
+                                    else "Debe IVA -- sin agente de retención registrado"
+                                ),
                             }
                         )
 

@@ -1108,6 +1108,92 @@ def test_e2e_14c_bandeja3_sale_si_odoo_ya_marco_wh_iva_aplicado():
         assert "SO_WH_OK" not in so_ids
 
 
+def test_e2e_14d_bandeja3_entra_aunque_cliente_no_sea_agente_de_retencion():
+    """Bandeja 3: pedido explícito del usuario (2026-08-20) -- "todo el que
+
+    deba el IVA entra a revisión". Un cliente SIN ``wh_iva_agent`` que deja
+    pendiente un saldo que cabe dentro del IVA de su factura ya NO se
+    descarta silenciosamente -- entra a la bandeja igual, marcado con
+    ``es_agente_retencion: False`` y un estado distinto ("Debe IVA -- sin
+    agente de retención registrado") para que no se confunda con una
+    retención legítima.
+    """
+    from cxc.config import EngineConfig
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "cliente_id": "C_NOAGENTE",
+                "nombre": "Cliente Sin Agente",
+                "wh_iva_agent": "False",
+                "wh_iva_rate": "0",
+            }
+        ]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_NOAGENTE",
+            cliente_id="C_NOAGENTE",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-NOAGENTE",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_NOAGENTE",
+            lista_aplicada="4",
+            precio_base_calculado=Decimal("116.00"),
+            total_descuentos=Decimal("0"),
+            ncs_calculadas=Decimal("0"),
+            total_motor=Decimal("116.00"),
+        ),
+    ]
+    # Pagó $104 de $116 -- el saldo ($12) cabe dentro del IVA total ($16),
+    # pero este cliente NO es agente de retención registrado.
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_NOAGENTE",
+            pago_id="P_NOAGENTE",
+            so_id="SO_NOAGENTE",
+            monto_aplicado=Decimal("104.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        items = {item["so_id"]: item for item in res.json()["iva_pendiente_agentes"]}
+        assert "SO_NOAGENTE" in items
+        assert items["SO_NOAGENTE"]["es_agente_retencion"] is False
+        assert "sin agente de retención" in items["SO_NOAGENTE"]["estado"]
+
+
 def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     """Bandeja de Auditoría de Precios (nueva, Sección 5 del Manual): una
 
