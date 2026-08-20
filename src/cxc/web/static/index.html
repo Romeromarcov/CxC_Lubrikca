@@ -436,7 +436,7 @@
                 <section class="tray-panel card">
                     <div class="panel-header">
                         <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
-                        <p>Órdenes ya facturadas que requieren emisión de N/C por obsequio de producto o descuento porcentual no aplicado inicialmente.</p>
+                        <p>Órdenes ya facturadas, pagadas vs algún teórico, sin descuento real pendiente -- solo diferencial cambiario o pronto pago (tolerancia normal del motor, nada que aprobar aquí).</p>
                     </div>
                     <div class="table-wrapper">
                         <table class="cxc-table">
@@ -455,6 +455,34 @@
                             <tbody id="bandeja2-table-body">
                                 <tr>
                                     <td colspan="8" class="table-empty">Cargando órdenes pendientes por N/C...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- BANDEJA "DESCUENTOS PENDIENTES POR APROBAR" (Fase 3, auditoría del ciclo CxC) -->
+                <section class="tray-panel card" style="border-left: 5px solid #d97706;">
+                    <div class="panel-header">
+                        <h2>Descuentos Pendientes por Aprobar</h2>
+                        <p>Órdenes facturadas donde el cliente ya pagó lo que corresponde con el descuento teórico del motor, pero ese descuento todavía no existe como NC en Odoo -- hay que aprobarlo y materializarlo allá.</p>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Factura Odoo</th>
+                                    <th>Abono ($)</th>
+                                    <th>Descuento Pendiente ($ / %)</th>
+                                    <th>Incluye Diferencial</th>
+                                    <th>Detalle</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-descuentos-pendientes-table-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -488,6 +516,40 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- BANDEJA "CANDIDATOS A CIERRE DE FACTURA" (Regla 3 de Diferencial Cambiario -- movida
+                     desde Configuración: es un reporte de trabajo diario de Facturación, no una tarea de
+                     configuración, y Configuración tiene permisos más restringidos que Facturación. -->
+                <details class="tray-panel card" style="border-left: 5px solid #2563eb;">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">🎯 Candidatos a Cierre de Factura (Diferencial Cambiario)</h2>
+                        <p style="margin:0.25rem 0 0">
+                            NO es un descuento automático -- lista órdenes candidatas según el diferencial de mercado del día
+                            (BCV vs Binance) comparado contra el diferencial máximo configurado en Configuración &gt; Descuentos &gt;
+                            Diferencial Cambiario. Gerencia decide manualmente cuánto otorgar por orden; verificar en Odoo antes
+                            de aprobar. Clic para expandir.
+                        </p>
+                    </summary>
+                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>SO</th>
+                                    <th>Cliente</th>
+                                    <th>Teórico VES</th>
+                                    <th>Pagado (eq. BCV)</th>
+                                    <th>% Pagado</th>
+                                    <th>Monto Candidato Máximo</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="dif-candidatos-table-body">
+                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
 
                 <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA (colapsable, consulta poco frecuente) -->
                 <details class="tray-panel card">
@@ -2319,35 +2381,12 @@
                         </table>
                     </div>
 
-                    <div class="mini-table-wrapper" style="margin-top:24px; border-top:2px dashed #cbd5e1; padding-top:16px;">
-                        <h3>🎯 Regla 3 — Candidatos a Cierre de Factura</h3>
-                        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:10px;">
-                            NO es un descuento automático -- lista órdenes candidatas según el diferencial de mercado del día
-                            (BCV vs Binance) comparado contra el diferencial máximo configurado arriba. Gerencia decide manualmente
-                            cuánto otorgar por orden. Requiere una fila "Candidatos a Cierre de Factura" vigente y activa arriba
-                            para habilitarse.
-                            El % pagado se prorratea correctamente cuando un pago reconcilia facturas de varias órdenes del mismo
-                            cliente (proporcional a lo facturado de cada una) -- aun así, gerencia debe verificar en Odoo antes
-                            de aprobar cualquier descuento real.
-                        </p>
-                        <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin-bottom:10px;"></div>
-                        <table class="cxc-table mini">
-                            <thead>
-                                <tr>
-                                    <th>SO</th>
-                                    <th>Cliente</th>
-                                    <th>Teórico VES</th>
-                                    <th>Pagado (eq. BCV)</th>
-                                    <th>% Pagado</th>
-                                    <th>Monto Candidato Máximo</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="dif-candidatos-table-body">
-                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                    <p style="color:var(--text-muted); font-size:0.82rem; margin-top:16px; border-top:2px dashed #cbd5e1; padding-top:12px;">
+                        🎯 El reporte "Candidatos a Cierre de Factura" (Regla 3) se movió a
+                        <strong>Facturación</strong> -- es un reporte de trabajo diario, no una tarea de
+                        configuración. Requiere una fila "Candidatos a Cierre de Factura" vigente y activa
+                        arriba para habilitarse allá.
+                    </p>
                 </section>
 
                 <!-- Días de Crédito Máximo por Volumen (alerta, no alimenta recompra) -->

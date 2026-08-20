@@ -149,6 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
     const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
     const bandejaPendientesCerrarTableBody = document.getElementById("bandeja-pendientes-cerrar-table-body");
+    const bandejaDescuentosPendientesTableBody = document.getElementById("bandeja-descuentos-pendientes-table-body");
 
     // User Session & Multi-Page Initialization
     let currentUserSession = null;
@@ -261,6 +262,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadReporte === "function") loadReporte();
             } else if (path === "facturacion") {
                 if (typeof loadBandeja === "function") loadBandeja();
+                if (typeof loadDiferencialCandidatos === "function") loadDiferencialCandidatos();
             } else if (path === "cobranza") {
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
             } else if (path === "ventas") {
@@ -1053,6 +1055,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
             if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td></tr>';
+            if (bandejaDescuentosPendientesTableBody) bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -1065,6 +1068,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray3 = data.iva_pendiente_agentes || [];
                 const tray4 = data.auditoria_precios || [];
                 const tray5 = data.pendientes_por_cerrar || [];
+                const trayDescPend = data.descuentos_pendientes_aprobar || [];
 
                 // Render Tray 1
                 if (bandeja1TableBody) {
@@ -1117,6 +1121,31 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><span class="state-badge abiertas" title="La emisión de N/C se hace directamente en Odoo; esta bandeja es de seguimiento, no de acción">Pendiente en Odoo</span></td>
                             `;
                             bandeja2TableBody.appendChild(row);
+                        });
+                    }
+                }
+
+                // Render Tray "Descuentos Pendientes por Aprobar" (Fase 3, auditoría del ciclo CxC)
+                if (bandejaDescuentosPendientesTableBody) {
+                    if (trayDescPend.length === 0) {
+                        bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay descuentos pendientes por aprobar.</td></tr>';
+                    } else {
+                        bandejaDescuentosPendientesTableBody.innerHTML = "";
+                        trayDescPend.forEach(item => {
+                            const row = document.createElement("tr");
+                            const detalle = (item.descuentos_detalle || [])
+                                .map(d => `${d.descripcion}: ${fmt(d.monto)}`)
+                                .join("; ");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td><span class="state-badge">${item.factura_id || 'Odoo'}</span></td>
+                                <td><strong style="color:#059669">${fmt(item.monto_pagado || 0)}</strong></td>
+                                <td><strong style="color:#d97706">${fmt(item.descuento_pendiente_aplicar || 0)} (${(item.descuento_pendiente_pct || 0).toFixed(1)}%)</strong></td>
+                                <td>${item.incluye_diferencial_cambiario ? '<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Sí</span>' : 'No'}</td>
+                                <td style="font-size:0.8rem">${detalle || '-'}</td>
+                            `;
+                            bandejaDescuentosPendientesTableBody.appendChild(row);
                         });
                     }
                 }
@@ -1202,6 +1231,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
             if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar pendientes por cerrar.</td></tr>';
+            if (bandejaDescuentosPendientesTableBody) bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar descuentos pendientes por aprobar.</td></tr>';
         }
     }
 
