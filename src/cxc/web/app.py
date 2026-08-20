@@ -3583,12 +3583,25 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             monto_orig = float(o.monto_total)
             saldo_deudor_bcv = max(0.0, monto_orig - abono_bcv)
             saldo_deudor_lista_usd = max(0.0, monto_total_proyectado_usd - abono_binance)
-            # NCs reducen el saldo con descuento (son hechos contables reales)
+            # Fase 1 (auditoría del ciclo CxC, agosto 2026): `total_descuentos_
+            # monto` es libre de impuesto (base subtotal del motor, igual que
+            # `venta_bruta_teorica`/`precio_base_calculado`) -- restarlo
+            # directo de `saldo_deudor_*` (que SÍ trae IVA, viene de `monto_
+            # orig`/`monto_total_proyectado_usd`) subestima el saldo real:
+            # un descuento de $100 sobre el subtotal reduce el total CON IVA
+            # en $116, no en $100. Se reaplica el IVA al monto del descuento
+            # antes de restarlo -- mismo orden "descuento sobre subtotal,
+            # impuesto sobre lo ya descontado" que ya usa `/api/ventas`
+            # (`ves_neta_teorica_iva`/`usd_neta_teorica_iva`), sin necesitar
+            # trackear aquí un subtotal separado por lista VES/USD. Los NCs
+            # de Odoo (`ncs_odoo_monto_usd`) NO llevan este ajuste -- ya son
+            # documentos reales con impuesto incluido (`amount_total`).
+            descuentos_motor_con_iva = total_descuentos_monto * (1 + float(config.engine.iva_rate))
             saldo_con_descuento_bcv = max(
-                0.0, saldo_deudor_bcv - total_descuentos_monto - ncs_odoo_monto_usd
+                0.0, saldo_deudor_bcv - descuentos_motor_con_iva - ncs_odoo_monto_usd
             )
             saldo_con_descuento_lista_usd = max(
-                0.0, saldo_deudor_lista_usd - total_descuentos_monto - ncs_odoo_monto_usd
+                0.0, saldo_deudor_lista_usd - descuentos_motor_con_iva - ncs_odoo_monto_usd
             )
 
             # Venta bruta teórica: lo que la orden DEBIÓ sumar con el precio
@@ -3604,6 +3617,19 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             venta_bruta_teorica = float(b.precio_base_calculado) if b else monto_orig
             venta_bruta_teorica_con_iva = venta_bruta_teorica * (1 + float(config.engine.iva_rate))
             diferencia_precio_lista = round(venta_bruta_teorica_con_iva - monto_orig, 2)
+
+            # Fase 1 (auditoría del ciclo CxC): las dos etapas del "descuento
+            # teórico pendiente por aplicar" expuestas por separado, para que
+            # el dashboard pueda mostrar tanto el subtotal con descuento como
+            # el neto con impuestos sobre ese subtotal -- mismo cálculo que
+            # ya usa `descuentos_motor_con_iva` arriba, solo que aquí se
+            # expone cada etapa en vez de solo el resultado final restado.
+            subtotal_teorico_con_descuento = round(
+                max(0.0, venta_bruta_teorica - total_descuentos_monto), 2
+            )
+            neto_teorico_con_descuento_iva = round(
+                subtotal_teorico_con_descuento * (1 + float(config.engine.iva_rate)), 2
+            )
 
             # Árbol de enrutamiento de CxC (Sección 5 del Manual) -- ver
             # src/cxc/engine/cxc_routing.py, misma fuente de verdad que
@@ -3822,6 +3848,12 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     "saldo_deudor_con_descuentos": saldo_con_descuento_bcv,
                     "saldo_con_descuento_bcv": saldo_con_descuento_bcv,
                     "saldo_con_descuento_lista_usd": saldo_con_descuento_lista_usd,
+                    # Fase 1: subtotal con descuento teórico (antes de
+                    # impuestos) y neto teórico (ese subtotal + IVA) por
+                    # separado -- antes solo se exponía el saldo ya neteado
+                    # contra lo pagado, sin las dos etapas visibles.
+                    "subtotal_teorico_con_descuento": subtotal_teorico_con_descuento,
+                    "neto_teorico_con_descuento_iva": neto_teorico_con_descuento_iva,
                     "saldo_factura_odoo": saldo_factura_odoo,
                     "factura_odoo_nombre": factura_odoo_nombre,
                     "descuentos_desglose": descuentos_desglose,
@@ -3852,6 +3884,15 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                         "auditoria_estado": audit_nc.estado.value,
                     },
                     "auditoria_descuentos": audit_descuentos_summary,
+                    # Fase 2: mismo valor que `audit_descuentos_summary.
+                    # descuento_adicional` (`discount_audit.py`,
+                    # descuento_adicional_a_aplicar = max(0, motor - odoo))
+                    # expuesto también como columna de primer nivel -- antes
+                    # solo vivía anidado, sin que el dashboard lo mostrara
+                    # como una columna propia.
+                    "descuento_pendiente_por_aplicar": round(
+                        float(audit_orden.descuento_adicional_a_aplicar), 2
+                    ),
                     "reconciliacion": {"resultado": conc.resultado.value if conc else "pendiente"}
                     if conc
                     else None,
