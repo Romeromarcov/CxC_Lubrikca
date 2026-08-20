@@ -1194,6 +1194,95 @@ def test_e2e_14d_bandeja3_entra_aunque_cliente_no_sea_agente_de_retencion():
         assert "sin agente de retención" in items["SO_NOAGENTE"]["estado"]
 
 
+def test_e2e_14e_bandeja_descuentos_pendientes_aprobar_separada_de_nc():
+    """Fase 3 (auditoría del ciclo CxC, agosto 2026): una orden facturada
+
+    cuyo cliente ya pagó lo que corresponde con el descuento TEÓRICO del
+    motor (nada aplicado todavía en Odoo/NC/sistema) debe caer en la
+    bandeja nueva ``descuentos_pendientes_aprobar`` -- NO en
+    ``notas_credito_pendientes`` (esa queda solo para diferencial
+    cambiario/pronto pago sin descuento pendiente real).
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_F3", "nombre": "Cliente Fase3"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_F3",
+            cliente_id="C_F3",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("119.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="FAC-F3",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_F3",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("100.00"),
+            total_descuentos=Decimal("20.00"),
+            ncs_calculadas=Decimal("0"),
+            total_motor=Decimal("95.20"),
+        ),
+    ]
+    # Teórico VES: $100 subtotal - $20 descuento = $80, con IVA+IGTF
+    # (19%) = $95.20 -- el cliente pagó exactamente eso.
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(
+            so_id="SO_F3",
+            teorico_ves=Decimal("100"),
+            teorico_usd=Decimal("999"),
+            descuentos_teorico_ves=Decimal("20"),
+            descuentos_teorico_usd=Decimal("0"),
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_F3",
+            pago_id="P_F3",
+            so_id="SO_F3",
+            monto_aplicado=Decimal("95.20"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_facturas.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/bandeja")
+        assert res.status_code == 200
+        data = res.json()
+        pend_ids = {item["so_id"]: item for item in data["descuentos_pendientes_aprobar"]}
+        assert "SO_F3" in pend_ids
+        assert pend_ids["SO_F3"]["descuento_pendiente_aplicar"] == pytest.approx(20.0, abs=0.05)
+        assert "SO_F3" not in {i["so_id"] for i in data["notas_credito_pendientes"]}
+
+
 def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     """Bandeja de Auditoría de Precios (nueva, Sección 5 del Manual): una
 

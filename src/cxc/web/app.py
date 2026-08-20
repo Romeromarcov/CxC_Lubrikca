@@ -6004,8 +6004,15 @@ async def get_bandeja_facturacion():
 
     - **Bandeja 1** (``facturacion_1``): pagado vs algún teórico, orden
       SIN factura todavía -- lista para facturar en Odoo.
-    - **Bandeja 2** (``facturacion_2``): igual pero orden YA facturada --
-      pendiente ajustes (diferencial cambiario o pronto pago).
+    - **Bandeja 2** (``facturacion_2``): igual pero orden YA facturada.
+      Se reparte en dos listas según ``descuento_pendiente_aplicar``
+      (Fase 6 de ``/api/ventas``) sea > $0.05 o no:
+      ``descuentos_pendientes_aprobar`` (NUEVA, Fase 3 de la auditoría del
+      ciclo CxC) -- el cliente ya pagó lo que corresponde con el
+      descuento teórico, pero ese descuento no existe todavía como NC en
+      Odoo; y ``notas_credito_pendientes`` -- sin descuento pendiente,
+      solo diferencial cambiario o pronto pago (la tolerancia normal del
+      motor, nada que aprobar).
     - **Bandeja de Auditoría de Precios** (``auditoria_precios``, NUEVA):
       pagado vs la Factura Neta Real en Odoo pero NO vs ningún teórico --
       sospecha de facturación con precio/lista por debajo del estándar
@@ -6063,6 +6070,7 @@ async def get_bandeja_facturacion():
 
         ordenes_por_facturar = []
         notas_credito_pendientes = []
+        descuentos_pendientes_aprobar = []
         iva_pendiente_agentes = []
         auditoria_precios = []
 
@@ -6152,6 +6160,15 @@ async def get_bandeja_facturacion():
                         "saldo_pendiente": round(max(0.0, tot_motor - abono), 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
+                        # Fase 2 (auditoría del ciclo CxC): a diferencia de
+                        # `descuento_aplicar_monto` (lo que el motor calculó
+                        # en TOTAL, sin ver si ya se aplicó), esta es la
+                        # cifra dinámica de `/api/ventas` ("Fase 6") que ya
+                        # neta lo que Odoo/NC/descuento de sistema ya
+                        # cubrieron -- lo que realmente falta por aplicar
+                        # ahora mismo. Ya estaba calculada en `item`, solo
+                        # no se reusaba aquí.
+                        "descuento_pendiente_por_aplicar": item.get("descuento_pendiente_aplicar"),
                         "precio_base": monto_orig,
                         "descuento_sistema_aprobado": (
                             round(float(descuento_sistema_map[o.so_id]["monto"]), 2)
@@ -6180,28 +6197,74 @@ async def get_bandeja_facturacion():
                     # de entrada, un concepto distinto (ver docstring del
                     # endpoint); si el motor sí calculó una NC pendiente, se
                     # sigue mostrando aquí como dato adicional (nc_monto).
-                    nc_calc = float(b.ncs_calculadas) if b else 0.0
-                    detalles_b = b.descuentos_detalle if b else []
-                    detalle_nc = next((d for d in detalles_b if d.origen == "primera_compra"), None)
-                    concepto = (
-                        detalle_nc.descripcion
-                        if detalle_nc
-                        else "Pendiente ajuste (diferencial cambiario o pronto pago)"
-                    )
-                    notas_credito_pendientes.append(
-                        {
-                            "so_id": o.so_id,
-                            "cliente_nombre": c_name,
-                            "factura_id": o.factura_id or "Odoo",
-                            "monto_pagado": abono,
-                            "nc_monto": nc_calc,
-                            "nc_porcentaje": (nc_calc / monto_orig * 100.0)
-                            if monto_orig > 0
-                            else 0.0,
-                            "concepto": concepto,
-                            "cxc_routing_motivo": clasificacion.motivo,
-                        }
-                    )
+                    #
+                    # Fase 3 (auditoría del ciclo CxC, agosto 2026): esta
+                    # misma condición de entrada mezclaba DOS motivos
+                    # distintos bajo un solo texto genérico -- "diferencial
+                    # cambiario / pronto pago" (nada por aprobar, es la
+                    # tolerancia normal del motor) vs. "el cliente ya pagó
+                    # lo que corresponde con el descuento teórico aplicado,
+                    # pero ese descuento todavía no existe como NC en Odoo"
+                    # (escenarios 1.3-1.7 y sus espejos en USD/lista nativa
+                    # del análisis). Se separan en dos listas usando la
+                    # misma cifra dinámica de `/api/ventas` ("Fase 6",
+                    # `descuento_pendiente_aplicar` -- ya neta lo que Odoo/
+                    # NC/sistema ya cubrieron) en vez de crear un cálculo
+                    # paralelo.
+                    descuento_pend = float(item.get("descuento_pendiente_aplicar") or 0.0)
+                    if descuento_pend > 0.05:
+                        detalles_b = b.descuentos_detalle if b else []
+                        es_diferencial = any(d.origen == "bcv_completo" for d in detalles_b)
+                        descuentos_pendientes_aprobar.append(
+                            {
+                                "so_id": o.so_id,
+                                "cliente_nombre": c_name,
+                                "factura_id": o.factura_id or "Odoo",
+                                "monto_pagado": abono,
+                                "descuento_pendiente_aplicar": round(descuento_pend, 2),
+                                "descuento_pendiente_pct": round(
+                                    descuento_pend / monto_orig * 100.0, 2
+                                )
+                                if monto_orig > 0
+                                else 0.0,
+                                "incluye_diferencial_cambiario": es_diferencial,
+                                "descuentos_detalle": [
+                                    {
+                                        "origen": d.origen,
+                                        "descripcion": d.descripcion,
+                                        "monto": float(d.monto),
+                                    }
+                                    for d in detalles_b
+                                ],
+                                "estado": "Pendiente Aprobar Descuento / NC",
+                                "cxc_routing_motivo": clasificacion.motivo,
+                            }
+                        )
+                    else:
+                        nc_calc = float(b.ncs_calculadas) if b else 0.0
+                        detalles_b = b.descuentos_detalle if b else []
+                        detalle_nc = next(
+                            (d for d in detalles_b if d.origen == "primera_compra"), None
+                        )
+                        concepto = (
+                            detalle_nc.descripcion
+                            if detalle_nc
+                            else "Pendiente ajuste (diferencial cambiario o pronto pago)"
+                        )
+                        notas_credito_pendientes.append(
+                            {
+                                "so_id": o.so_id,
+                                "cliente_nombre": c_name,
+                                "factura_id": o.factura_id or "Odoo",
+                                "monto_pagado": abono,
+                                "nc_monto": nc_calc,
+                                "nc_porcentaje": (nc_calc / monto_orig * 100.0)
+                                if monto_orig > 0
+                                else 0.0,
+                                "concepto": concepto,
+                                "cxc_routing_motivo": clasificacion.motivo,
+                            }
+                        )
 
                 # Tarea 5: retencion de IVA. El cliente-agente de retencion no
                 # paga en efectivo la porcion de IVA que retiene; en su lugar
@@ -6317,6 +6380,12 @@ async def get_bandeja_facturacion():
         return {
             "ordenes_por_facturar": ordenes_por_facturar,
             "notas_credito_pendientes": notas_credito_pendientes,
+            # Fase 3 (auditoría del ciclo CxC): bandeja nueva -- el cliente
+            # ya pagó lo que corresponde con el descuento teórico aplicado,
+            # pero ese descuento todavía no existe como NC en Odoo. Antes
+            # esto no tenía destino propio; caía sin distinguirse dentro de
+            # `notas_credito_pendientes`.
+            "descuentos_pendientes_aprobar": descuentos_pendientes_aprobar,
             "iva_pendiente_agentes": iva_pendiente_agentes,
             "auditoria_precios": auditoria_precios,
             "pendientes_por_cerrar": pendientes_por_cerrar,
