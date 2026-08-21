@@ -1431,6 +1431,10 @@
                                 <label title="No todos los productos tienen marca (brand_id) asignada en Odoo -- cuando una línea de orden no trae marca, se le asigna esta marca por defecto para que las reglas de descuento por marca puedan matchear igual">Marca Fallback (sin marca en Odoo)</label>
                                 <input type="text" id="cfg-meta-marca-fallback" value="GLOBAL OIL" required>
                             </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Cuando un producto no tiene precio propio en una lista Industrial (VES o USD), el fallback al precio de ficha se ajusta por este % de aumento (ej. 0.04 = 4%: el precio de ficha se divide entre 1 - 0.04). El % de fallback USD Comercial (35%) NO se configura aquí -- se lee de la regla vigente 'Diferencial Fijo VES/USD' en Descuentos por Diferencial Cambiario.">Ajuste Fallback Lista Industrial (% aumento)</label>
+                                <input type="number" id="cfg-meta-ajuste-industrial" min="0" max="1" step="0.0001" value="0.04" required>
+                            </div>
                         </div>
                         <button type="submit" class="btn-primary">💾 Guardar Ajustes Generales</button>
                     </form>

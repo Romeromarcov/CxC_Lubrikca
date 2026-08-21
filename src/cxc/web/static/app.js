@@ -83,6 +83,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgMetaDays = document.getElementById("cfg-meta-days");
     const cfgMetaRecompra = document.getElementById("cfg-meta-recompra");
     const cfgMetaMarcaFallback = document.getElementById("cfg-meta-marca-fallback");
+    const cfgMetaAjusteIndustrial = document.getElementById("cfg-meta-ajuste-industrial");
 
     const tasaForm = document.getElementById("tasa-form");
     const cfgTasaBcv = document.getElementById("cfg-tasa-bcv");
@@ -2152,6 +2153,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (cfgMetaDays) cfgMetaDays.value = data.cash_window_business_days || 3;
                 if (cfgMetaRecompra) cfgMetaRecompra.value = data.descuento_recompra || 0.05;
                 if (cfgMetaMarcaFallback) cfgMetaMarcaFallback.value = data.marca_fallback || "GLOBAL OIL";
+                if (cfgMetaAjusteIndustrial) cfgMetaAjusteIndustrial.value = data.fallback_industrial_ajuste_pct || 0.04;
             }
         } catch (err) {
             console.error("Error loading settings meta:", err);
@@ -2165,7 +2167,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const payload = {
                 cash_window_business_days: parseInt(cfgMetaDays.value),
                 descuento_recompra: parseFloat(cfgMetaRecompra.value),
-                marca_fallback: (cfgMetaMarcaFallback?.value || "GLOBAL OIL").trim()
+                marca_fallback: (cfgMetaMarcaFallback?.value || "GLOBAL OIL").trim(),
+                fallback_industrial_ajuste_pct: parseFloat(cfgMetaAjusteIndustrial?.value || "0.04")
             };
 
             try {

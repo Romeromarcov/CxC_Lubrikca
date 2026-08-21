@@ -1065,6 +1065,7 @@ class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
     marca_fallback: str = "GLOBAL OIL"
+    fallback_industrial_ajuste_pct: float = 0.04
 
 
 class FilaMapeoRequest(BaseModel):
@@ -4691,6 +4692,8 @@ async def get_config_meta():
             meta["descuento_recompra"] = "0.05"
         if "marca_fallback" not in meta:
             meta["marca_fallback"] = "GLOBAL OIL"
+        if "fallback_industrial_ajuste_pct" not in meta:
+            meta["fallback_industrial_ajuste_pct"] = str(_AJUSTE_INDUSTRIAL_PCT_DEFAULT)
         return meta
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4706,6 +4709,7 @@ async def post_config_meta(req: MetaRequest):
         repo.set_regla_recurrencia_porcentaje("recompra", Decimal(str(req.descuento_recompra)))
         repo.set_config("marca_fallback", req.marca_fallback or "GLOBAL OIL")
         set_marca_fallback(req.marca_fallback)
+        set_ajuste_industrial_pct(Decimal(str(req.fallback_industrial_ajuste_pct)), repo)
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
