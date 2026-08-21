@@ -939,6 +939,45 @@ def _detectar_vinculaciones_pendientes_a_revisar(
     return revisar
 
 
+def _pagado_confirmado_por_so(vincs: list[Vinculacion]) -> dict[str, Decimal]:
+    """Suma de Vinculaciones ``CONCILIADO`` por ``so_id`` -- Fase 0
+
+    (arquitectura de pagos, agosto 2026, pedido explícito del usuario):
+    solo lo que Odoo ya confirmó cuenta como "pagado" para decidir si una
+    orden está saldada / sale de CxC activa. Una Vinculación ``PENDIENTE``
+    (sugerencia FIFO automática de la Fase 1 sin confirmar todavía, o una
+    vinculación manual muy reciente) NO cuenta -- mismo criterio que ya
+    aplica el motor de descuentos (``EngineRunner._abonos``) desde la
+    Fase 0.
+
+    Hallazgo real (pedido explícito del usuario, 2026-08-21): varios
+    endpoints (``get_resumen``, ``get_ordenes_pendientes``, ``_get_
+    reporte_saldos_sync``, ``get_bandeja_facturacion``, ``_get_ventas_
+    sync``) sumaban TODAS las Vinculaciones sin filtrar por estado --
+    con la Fase 1 ya corriendo en producción (203 Vinculaciones
+    ``PENDIENTE`` creadas automáticamente), esas órdenes se mostraban
+    "pagadas" en Ventas/Bandeja/Reporte basándose en una adivinanza sin
+    confirmar, mientras el motor (ya corregido) correctamente no les
+    otorgaba ningún descuento por la misma razón -- exactamente la
+    inconsistencia que la Fase 0 quería evitar.
+
+    NO se usa en todos lados a propósito -- dos excepciones deliberadas,
+    documentadas en su propio código: ``_get_conciliaciones_sugerencias_
+    sync`` (necesita TODAS, para no volver a sugerir dinero que un pago ya
+    tiene reclamado aunque sea de forma provisional) y ``get_auditoria``
+    (su chequeo de discrepancias ya documentó por qué filtrar generaba
+    falsos positivos con el significado anterior de "pendiente" -- antes
+    de la Fase 1, era solo un estado transitorio de segundos/minutos, no
+    una adivinanza que puede tardar en confirmarse).
+    """
+    result: dict[str, Decimal] = {}
+    for v in vincs:
+        if v.estado != EstadoVinculacion.CONCILIADO:
+            continue
+        result[v.so_id] = result.get(v.so_id, Decimal("0")) + v.monto_aplicado
+    return result
+
+
 def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
     """IDs (str) de ``account.payment`` que ya no son válidos como "pago sin
 
@@ -2379,9 +2418,14 @@ async def get_resumen():
         # desde el espejo, no Odoo en vivo -- ver _entregas_desde_espejo.
         entrega_valida_set, _ = _entregas_desde_espejo(repo, so_names_r)
         vincs = repo.all_vinculaciones()
-        linked_by_so: dict[str, Decimal] = {}
-        for v in vincs:
-            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+        # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real
+        # para "Total por Cobrar" (abajo). La sección 2 ("Pagos sin
+        # asignar", más abajo) sí usa `vincs` sin filtrar a propósito --
+        # un pago con una Vinculación PENDIENTE ya está reclamado, aunque
+        # no esté confirmado, y no debe ofrecerse de nuevo como "sin
+        # asignar" (mismo criterio que ya documenta
+        # _get_conciliaciones_sugerencias_sync).
+        linked_by_so = _pagado_confirmado_por_so(vincs)
         total_por_cobrar = sum(
             max(Decimal("0"), o.monto_total - linked_by_so.get(o.so_id, Decimal("0")))
             for o in ordenes
@@ -2466,14 +2510,8 @@ async def get_ordenes_pendientes(cliente_id: str):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
-        vincs = repo.all_vinculaciones()
-
-        # Calculate sum of linked payment amounts per so_id
-        linked_by_so = {}
-        for v in vincs:
-            # We assume linked amount is matching currency of the order (USD)
-            # or in terms of the applied amount
-            linked_by_so[v.so_id] = linked_by_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+        # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real.
+        linked_by_so = _pagado_confirmado_por_so(repo.all_vinculaciones())
 
         # Filter outstanding orders for this client
         pendientes = []
@@ -3037,7 +3075,9 @@ def _get_reporte_saldos_sync(refresh: bool = False):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
-        vincs = repo.all_vinculaciones()
+        # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real
+        # para decidir si una orden está saldada.
+        vincs = [v for v in repo.all_vinculaciones() if v.estado == EstadoVinculacion.CONCILIADO]
         concs = {c.so_id: c for c in repo.all_conciliaciones()}
 
         # Load clients once
@@ -6175,7 +6215,9 @@ async def get_bandeja_facturacion():
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
         clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
-        vincs = repo.all_vinculaciones()
+        # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real
+        # para decidir si una orden sale de CxC activa.
+        vincs = [v for v in repo.all_vinculaciones() if v.estado == EstadoVinculacion.CONCILIADO]
 
         pagos_by_so = {}
         for v in vincs:
@@ -10102,8 +10144,20 @@ def _get_ventas_sync(
         # abono (ya calculados en engine/equivalents.py -- NUNCA se compara
         # contra VES directo). Agrupados por orden en una sola pasada para
         # no golpear la BD/Sheets una vez por fila.
+        #
+        # Fase 0 (arquitectura de pagos, agosto 2026, pedido explícito del
+        # usuario): solo Vinculaciones CONCILIADO cuentan aquí -- antes
+        # esta lista incluía cualquier PENDIENTE (sugerencia FIFO de la
+        # Fase 1 sin confirmar por Odoo), así que una orden podía verse
+        # "pagada" en Ventas por una adivinanza sin confirmar, mientras el
+        # motor de descuentos (ya corregido en la Fase 0) correctamente no
+        # le otorgaba ningún descuento por la misma razón. Confirmado en
+        # producción: 203 Vinculaciones PENDIENTE creadas por el auto-FIFO,
+        # todas afectadas por este mismo hueco antes de este fix.
         vincs_por_so: dict[str, list[Vinculacion]] = {}
         for v in repo.all_vinculaciones():
+            if v.estado != EstadoVinculacion.CONCILIADO:
+                continue
             vincs_por_so.setdefault(v.so_id, []).append(v)
 
         # Alerta "Revisar" (devolución/entrega de más/cancelada sin

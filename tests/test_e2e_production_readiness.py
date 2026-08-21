@@ -4462,3 +4462,76 @@ def test_e2e_49_vinculacion_pendiente_no_facturada_sin_umbral_de_dias():
 
     so_ids_revisar = {r["so_id"] for r in revisar}
     assert so_ids_revisar == {"SO_LISTA"}
+
+
+def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_en_ventas():
+    """Fase 0 (arquitectura de pagos, agosto 2026, pedido explícito del
+
+    usuario): hallazgo real -- con la Fase 1 (auto-FIFO) ya corriendo en
+    producción, 203 Vinculaciones PENDIENTE se estaban contando como pago
+    real en Ventas/Bandeja (``vincs_por_so``/``pagos_by_so`` sin filtrar
+    por estado), aunque el motor de descuentos (Fase 0) ya no les otorgaba
+    ningún descuento por la misma razón. Una Vinculación PENDIENTE que
+    cubre el 100% de la orden NO debe verse "pagada" -- ni en Ventas
+    (``estatus_pago_real_orden``) ni en Bandeja (no debe salir de CxC).
+    """
+    from cxc.config import EngineConfig
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_PEND", "nombre": "Cliente Pendiente"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_PEND",
+            cliente_id="C_PEND",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    # Vinculación PENDIENTE (sugerencia FIFO sin confirmar) que cubre el
+    # 100% de la orden -- NO debe contar como pagado real.
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_PEND",
+            pago_id="P_PEND",
+            so_id="SO_PEND",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+        ),
+    ]
+    mock_repo.all_facturas.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res_ventas = client.get("/api/ventas")
+        assert res_ventas.status_code == 200
+        item = {it["so_id"]: it for it in res_ventas.json()["items"]}["SO_PEND"]
+        # El monto pagado "real" (val_ref_nacimiento, de vincs_por_so) debe
+        # dar $0 -- el único abono existente es PENDIENTE, no cuenta.
+        assert item["monto_pagado_factura_odoo"] == 0.0
+        assert item["estatus_pago_real_orden"] != "pagada"

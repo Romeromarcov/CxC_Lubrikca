@@ -20,6 +20,7 @@ from cxc.config import EngineConfig
 from cxc.models import (
     BandejaFacturacion,
     Entrega,
+    EstadoVinculacion,
     Factura,
     LineaFactura,
     LineaOrden,
@@ -645,6 +646,10 @@ def _vinc(so_id: str, *, equiv_bcv=None, equiv_binance=None, monto="0") -> Vincu
         es_tasa_heredada=False,
         equiv_usd_bcv=Decimal(str(equiv_bcv)) if equiv_bcv is not None else None,
         equiv_usd_binance=Decimal(str(equiv_binance)) if equiv_binance is not None else None,
+        # Fase 0 (arquitectura de pagos): estos tests construyen un pago ya
+        # confirmado -- CONCILIADO explícito, si no el default del dataclass
+        # (PENDIENTE) haría que Ventas ya no lo cuente como pagado real.
+        estado=EstadoVinculacion.CONCILIADO,
     )
 
 
