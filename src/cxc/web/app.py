@@ -3834,6 +3834,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 nacio_en_lista_usd=(
                     not is_historical and lista_id_str in [str(x) for x in usd_ids]
                 ),
+                venta_real_pagada=(not o.facturada) and saldo_deudor_bcv <= 1.0,
             )
 
             if clasificacion_cxc.sale_de_cxc:
@@ -6373,9 +6374,16 @@ async def get_bandeja_facturacion():
                 (desc_monto / monto_orig * 100.0) if (monto_orig > 0 and desc_monto > 0) else 0.0
             )
 
-            teorico_bs_pagado = item["estatus_pago_teorico_ves"] == "pagada"
-            teorico_usd_pagado = item["estatus_pago_teorico_usd"] == "pagada"
-            factura_real_pagada = item["estatus_pago_real_factura"] == "pagada"
+            # Flags CONFIRMADO (solo CONCILIADO) -- NUNCA los 4
+            # ``estatus_pago_*`` planos del item, que desde la corrección
+            # del usuario (agosto 2026) colapsan una Vinculación PENDIENTE
+            # a "pagada" para que Ventas no la muestre como ruido. Esta
+            # bandeja SÍ decide acciones reales (enrutar a Facturar,
+            # Auditoría de Precios), así que exige confirmación real.
+            teorico_bs_pagado = bool(item["teorico_bs_pagado_confirmado"])
+            teorico_usd_pagado = bool(item["teorico_usd_pagado_confirmado"])
+            factura_real_pagada = bool(item["factura_real_pagada_confirmada"])
+            venta_real_pagada = bool(item["venta_real_pagada_confirmada"])
 
             # Tolerancia de retención de IVA -- solo relevante mientras la
             # orden no está facturada (gate de Bandeja 1); una vez
@@ -6401,6 +6409,7 @@ async def get_bandeja_facturacion():
                 teorico_usd_pagado=teorico_usd_pagado,
                 factura_real_pagada=factura_real_pagada,
                 nacio_en_lista_usd=bool(item.get("nacio_en_lista_usd")),
+                venta_real_pagada=venta_real_pagada,
             )
 
             if clasificacion.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS:
@@ -10826,6 +10835,9 @@ def _get_ventas_sync(
             factura_real_pagada_confirmada = tiene_factura and (
                 _estado_pago(val_ref_nacimiento, target_factura) == "pagada"
             )
+            venta_real_pagada_confirmada = (
+                _estado_pago(val_ref_nacimiento, target_orden) == "pagada"
+            )
             clasificacion_cxc = clasificar_estado_cxc(
                 so_id=o.so_id,
                 facturada=bool(o.facturada),
@@ -10833,6 +10845,7 @@ def _get_ventas_sync(
                 teorico_usd_pagado=teorico_usd_pagado_confirmado,
                 factura_real_pagada=factura_real_pagada_confirmada,
                 nacio_en_lista_usd=es_lista_usd_nacimiento,
+                venta_real_pagada=venta_real_pagada_confirmada,
             )
 
             items.append(
@@ -11016,6 +11029,19 @@ def _get_ventas_sync(
                         else None
                     ),
                     "cxc_routing_motivo": clasificacion_cxc.motivo,
+                    # Flags CONFIRMADO (solo CONCILIADO, nunca una
+                    # Vinculación PENDIENTE) -- distintos de los 4
+                    # ``estatus_pago_*`` de arriba, que colapsan a "pagada"
+                    # para que Ventas no muestre ruido de un pago aún sin
+                    # reconciliar (corrección del usuario, agosto 2026).
+                    # Cualquier consumidor que decida algo REAL con el
+                    # resultado (sacar una orden de CxC, enrutarla a una
+                    # bandeja de acción) debe usar estos, no los de arriba
+                    # -- ver ``/api/bandeja`` (get_bandeja_facturacion).
+                    "teorico_bs_pagado_confirmado": teorico_bs_pagado_confirmado,
+                    "teorico_usd_pagado_confirmado": teorico_usd_pagado_confirmado,
+                    "factura_real_pagada_confirmada": factura_real_pagada_confirmada,
+                    "venta_real_pagada_confirmada": venta_real_pagada_confirmada,
                 }
             )
             # Antigüedad ("Días Vencido" en la UI de Ventas): fuente única

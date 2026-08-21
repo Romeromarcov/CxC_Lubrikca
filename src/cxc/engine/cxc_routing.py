@@ -9,20 +9,33 @@ Matriz de Saldos Netos:
   Col 3: Venta Real (orden Odoo)
   Col 4: Factura Neta Real (Odoo, neta de NC/ND)
 
-Regla de negocio (Manual del Proceso Administrativo, sección 5):
+Regla de negocio (Manual del Proceso Administrativo, sección 5 -- con dos
+correcciones del usuario, agosto 2026, sobre la primera versión de este
+árbol):
 
   1. Si lo pagado cubre el Teórico USD (Col 2) → sale de CxC activa,
      rumbo a Bandeja de Facturación 2 (si ya facturada) o Bandeja de
      Facturación 1 (si no facturada).
   2. Si no cubre el Teórico USD pero sí cubre el Teórico BS (Col 1) →
      mismo destino que el caso 1 (misma regla facturada/no-facturada).
-  3. Si no cubre NINGÚN teórico pero sí cubre la Factura Neta Real
+  3. Si la orden AÚN NO está facturada pero lo pagado ya cubre la Venta
+     Real (Col 3, el monto real de la orden en Odoo, sin depender de
+     ningún teórico) → sale de CxC activa, rumbo a Bandeja de
+     Facturación 1. Corrección del usuario: después de emitida la
+     factura, la segunda fuente de verdad es la propia orden real -- los
+     teóricos existen para calcular descuentos y para auditoría, no para
+     bloquear que una orden ya pagada al monto real pase a facturarse.
+  4. Si no cubre NINGÚN teórico pero sí cubre la Factura Neta Real
      (Col 4, solo aplica si ya está facturada) → el pago es insuficiente
-     contra el precio de lista pero Odoo ya lo dio por pagado: sospecha
-     de facturación con precio/lista por debajo del estándar autorizado.
-     La orden PERMANECE en CxC activa y además se enruta a la nueva
-     Bandeja de Auditoría de Precios.
-  4. Cualquier otro caso: permanece en CxC activa, sin enrutamiento
+     contra el precio de lista, pero legalmente lo que vale es la
+     factura: si el cliente ya la pagó, no hay mucho que reclamarle.
+     Corrección del usuario: la orden SALE de CxC activa (ya está
+     saldada) y ADEMÁS se enruta a la Bandeja de Auditoría de Precios,
+     para revisar internamente por qué se facturó con un precio/lista
+     por debajo del estándar autorizado -- la auditoría es un tema
+     posterior de control interno, no una condición para cerrar la
+     cobranza.
+  5. Cualquier otro caso: permanece en CxC activa, sin enrutamiento
      especial.
 
 Aclaratoria del usuario (agosto 2026) sobre las reglas 1/2: la lista con
@@ -69,14 +82,17 @@ def clasificar_estado_cxc(
     teorico_usd_pagado: bool,
     factura_real_pagada: bool,
     nacio_en_lista_usd: bool = False,
+    venta_real_pagada: bool = False,
     tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
 
-    Los tres flags `*_pagado`/`*_pagada` deben venir ya calculados
-    (ej. desde las columnas `estatus_pago_teorico_ves`/`_usd`/
-    `estatus_pago_real_factura` de `/api/ventas`, colapsando su estado
-    a booleano: True solo si el estado es "pagada").
+    Los flags `*_pagado`/`*_pagada` deben venir ya calculados (ej. desde
+    las columnas `estatus_pago_teorico_ves`/`_usd`/`estatus_pago_real_
+    orden`/`_factura` de `/api/ventas`, colapsando su estado a booleano:
+    True solo si el estado es "pagada" CONFIRMADO -- nunca una Vinculación
+    PENDIENTE sin reconciliar en Odoo, ver Fase 0 del plan de arquitectura
+    de pagos).
 
     `nacio_en_lista_usd`: True si la orden nació en una lista de precios
     USD (no VES, no ventana histórica). Cambia la evaluación de las
@@ -85,6 +101,10 @@ def clasificar_estado_cxc(
     alcanza -- ver aclaratoria en el docstring del módulo). Para una orden
     VES/histórica (`False`, default), se mantiene el OR original: cualquiera
     de los dos teóricos pagado es suficiente.
+
+    `venta_real_pagada`: True si lo pagado cubre el monto real de la
+    orden en Odoo (Col 3), independiente de cualquier teórico -- solo
+    tiene efecto para órdenes AÚN NO facturadas (regla 3).
 
     `tolerance` se documenta pero no se usa dentro de esta función —
     la tolerancia ya debe haberse aplicado al calcular los flags de
@@ -110,15 +130,30 @@ def clasificar_estado_cxc(
             motivo="Pagado vs Teórico Lista BS (referencia BCV)",
         )
 
+    if not facturada and venta_real_pagada:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.FACTURACION_1,
+            motivo=(
+                "Pagado vs Venta Real (orden Odoo), sin cubrir ningún "
+                "teórico -- los teóricos son referencia de descuento/"
+                "auditoría, no un requisito para facturar una orden ya "
+                "pagada al monto real"
+            ),
+        )
+
     if facturada and factura_real_pagada:
         return ClasificacionCxC(
             so_id=so_id,
-            sale_de_cxc=False,
+            sale_de_cxc=True,
             bandeja_destino=BandejaDestino.AUDITORIA_PRECIOS,
             motivo=(
                 "Pagado vs Factura Neta Real en Odoo pero NO vs ningún "
-                "teórico -- posible facturación con precio/lista por "
-                "debajo del estándar autorizado"
+                "teórico -- legalmente la factura ya está saldada, sale "
+                "de CxC activa; se enruta ADEMÁS a Auditoría de Precios "
+                "para revisar internamente por qué se facturó con un "
+                "precio/lista por debajo del estándar autorizado"
             ),
         )
 

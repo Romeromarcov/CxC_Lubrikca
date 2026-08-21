@@ -509,3 +509,76 @@ def test_pendiente_se_muestra_pagada_en_ventas_pero_no_saca_de_cxc():
         assert item["estatus_pago_real_factura"] == "pagada"
         # Real: sigue en CxC activa -- CONCILIADO es lo único que la saca.
         assert item["sale_de_cxc"] is False
+
+
+def test_bandeja_facturacion_no_enruta_orden_con_solo_pago_pendiente():
+    """Bug real encontrado al revisar el thread de la corrección anterior:
+
+    ``get_bandeja_facturacion`` (``/api/bandeja``) lee ``item[
+    "estatus_pago_teorico_ves"]`` de ``/api/ventas`` para decidir su
+    propio enrutamiento -- pero ese campo AHORA colapsa una Vinculación
+    PENDIENTE a "pagada" (commit 89d6ebb, corrección del usuario). Sin
+    arreglo, esto haría que Bandeja 1 mostrara "lista para facturar" una
+    orden con solo un pago FIFO sin confirmar por Odoo -- exactamente el
+    riesgo que la Fase 0 existe para evitar. Se corrigió leyendo los
+    campos ``*_confirmado``/``*_confirmada`` (solo CONCILIADO) que
+    ``/api/ventas`` expone aparte. Esta orden NO debe aparecer en ninguna
+    bandeja de acción.
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_H1",
+            cliente_id="CLI_H",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_H1", teorico_ves=Decimal("100.00"), teorico_usd=Decimal("100.00")),
+    ]
+    # Solo un pago PENDIENTE (FIFO sin confirmar) que cubre el objetivo --
+    # /api/ventas lo muestra como "pagada" (colapso visual), pero NO debe
+    # bastar para que Bandeja 1 lo enrute a facturar.
+    mock_repo.all_vinculaciones.return_value = [
+        _vinc("SO_H1", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_H1", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res_ventas = client.get("/api/ventas")
+        assert res_ventas.status_code == 200
+        item = {it["so_id"]: it for it in res_ventas.json()["items"]}["SO_H1"]
+        # Confirma la premisa del test: el display SÍ dice "pagada".
+        assert item["estatus_pago_teorico_ves"] == "pagada"
+        # Pero el flag confirmado (solo CONCILIADO) sigue en False.
+        assert item["teorico_bs_pagado_confirmado"] is False
+
+        res_bandeja = client.get("/api/bandeja")
+        assert res_bandeja.status_code == 200
+        data = res_bandeja.json()
+        so_ids_en_facturar = {o["so_id"] for o in data["ordenes_por_facturar"]}
+        assert "SO_H1" not in so_ids_en_facturar

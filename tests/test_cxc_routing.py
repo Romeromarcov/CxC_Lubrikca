@@ -67,6 +67,14 @@ def test_pagado_ambos_teoricos_prioriza_usd():
 
 
 def test_pagado_solo_vs_factura_real_no_vs_teoricos_va_a_auditoria_precios():
+    """Corrección del usuario (agosto 2026, artefacto de verificación):
+
+    legalmente lo que vale es la factura -- si el cliente ya la pagó, no
+    hay mucho que reclamarle, así que la orden SALE de CxC activa (antes
+    permanecía). Se enruta ADEMÁS a Auditoría de Precios para revisión
+    interna del precio/lista aplicado -- eso es un tema de control
+    posterior, no una condición para cerrar la cobranza.
+    """
     r = clasificar_estado_cxc(
         so_id="S00357",
         facturada=True,
@@ -74,7 +82,7 @@ def test_pagado_solo_vs_factura_real_no_vs_teoricos_va_a_auditoria_precios():
         teorico_usd_pagado=False,
         factura_real_pagada=True,
     )
-    assert r.sale_de_cxc is False
+    assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS
 
 
@@ -151,6 +159,45 @@ def test_sin_pago_suficiente_permanece_en_cxc_sin_bandeja():
         teorico_bs_pagado=False,
         teorico_usd_pagado=False,
         factura_real_pagada=False,
+    )
+    assert r.sale_de_cxc is False
+    assert r.bandeja_destino is None
+
+
+def test_venta_real_pagada_no_facturada_va_a_bandeja_1_sin_cubrir_teoricos():
+    """Corrección del usuario (agosto 2026): después de emitida la factura,
+
+    la segunda fuente de verdad es la propia orden real -- si el pago
+    cubre el monto real de la orden (Col 3) y todavía no está facturada,
+    debe pasar a Bandeja 1 aunque no cubra ningún teórico. Los teóricos
+    son solo referencia de descuento/auditoría, no un requisito para
+    facturar.
+    """
+    r = clasificar_estado_cxc(
+        so_id="S00008",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        venta_real_pagada=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.FACTURACION_1
+
+
+def test_venta_real_pagada_no_aplica_si_ya_esta_facturada():
+    """``venta_real_pagada`` solo tiene efecto en órdenes SIN facturar --
+
+    una vez facturada, lo que manda es ``factura_real_pagada`` (regla 4),
+    no la venta real de la orden.
+    """
+    r = clasificar_estado_cxc(
+        so_id="S00009",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        venta_real_pagada=True,
     )
     assert r.sale_de_cxc is False
     assert r.bandeja_destino is None
