@@ -4,12 +4,19 @@ El motor lee el precio REAL del producto en la pricelist que aplica (no
 multiplica por un factor). En producción esto consulta Odoo; el mapeo de nombre
 lógico de lista (USD/BCV) → id de pricelist en Odoo es parametrizable y se
 documenta en SETUP.md (es específico del entorno, como las credenciales).
+
+Excepción, agregada agosto 2026 (pedido explícito del usuario, ver
+``FallbackFichaConfig``): SOLO cuando la pricelist pedida no tiene ninguna
+regla de precio fijo para el producto, el fallback a la ficha del producto
+sí aplica un factor -- reglas configurables por moneda/categoría de la
+lista, nunca al precio real de una pricelist con regla propia.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -18,6 +25,51 @@ from ..decimal_utils import to_decimal
 from ..engine.price_resolver import PriceResolver
 
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
+
+
+@dataclass(frozen=True)
+class FallbackFichaConfig:
+    """Reglas de fallback a la ficha del producto cuando una pricelist no
+
+    tiene precio fijo propio (pedido explícito del usuario, agosto 2026 --
+    caso real orden S00868/producto 1655: la Lista #5 VES no tenía precio
+    para ese producto, y el resolver caía silenciosamente al precio de la
+    Lista #8 USD, dando Teórico VES == Teórico USD por coincidencia).
+
+    A diferencia del fallback anterior (probar OTRAS pricelists
+    configuradas), este va DIRECTO a ``list_price_usd`` de la ficha, con un
+    ajuste que depende de la moneda/categoría de la lista que pidió el
+    precio (no de qué producto sea):
+
+    - VES comercial: ficha tal cual.
+    - USD comercial: ficha × (1 − ``diferencial_fijo_pct``) -- mismo
+      porcentaje que la regla de Diferencial Cambiario vigente
+      ``fijo_35_ves_usd`` (hoy 35%), NO un valor separado -- si esa regla
+      cambia, este fallback cambia con ella automáticamente.
+    - Industrial (VES o USD): el resultado de la regla anterior, dividido
+      entre ``(1 - ajuste_industrial_pct)`` -- el valor configurado
+      (``ajuste_industrial_pct``) es el % de AUMENTO deseado (ej. 0.04 para
+      +4%), no el divisor -- el divisor (0.96) se deriva de él.
+    """
+
+    moneda_por_lista: dict[int, str] = field(default_factory=dict)
+    categoria_por_lista: dict[int, str] = field(default_factory=dict)
+    diferencial_fijo_pct: Decimal = Decimal("0.35")
+    ajuste_industrial_pct: Decimal = Decimal("0.04")
+
+    def precio_fallback(self, pricelist_id: int, precio_ficha: Decimal) -> Decimal:
+        moneda = self.moneda_por_lista.get(pricelist_id, "")
+        categoria = self.categoria_por_lista.get(pricelist_id, "")
+        base = (
+            precio_ficha * (Decimal("1") - self.diferencial_fijo_pct)
+            if moneda == "usd"
+            else precio_ficha
+        )
+        if categoria == "industrial":
+            divisor = Decimal("1") - self.ajuste_industrial_pct
+            if divisor > Decimal("0"):
+                base = base / divisor
+        return base
 
 # Caché COMPARTIDA a nivel de módulo (agosto 2026, Fase 2 del plan de
 # rendimiento del usuario -- hallazgo real: el caché anterior era un dict
@@ -50,9 +102,16 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         execute: ExecuteFn,
         pricelist_ids: dict[str, int],
         fallback_pricelist_ids: list[int] | None = None,
+        fallback_ficha: FallbackFichaConfig | None = None,
     ) -> None:
         self._execute = execute
         self._pricelist_ids = pricelist_ids
+        # Pedido explícito del usuario (agosto 2026): si se provee, el
+        # fallback va DIRECTO a la ficha del producto con las reglas de
+        # FallbackFichaConfig -- reemplaza el paso de "probar otras
+        # pricelists" de abajo. None (default) preserva el comportamiento
+        # anterior para quien no la pase todavía.
+        self._fallback_ficha = fallback_ficha
         # Tarea 4 (auditoria saldos teoricos): ambas listas (USD y VES/BCV)
         # están fijadas en USD por definición de negocio -- si la lista
         # asignada a la orden no tiene una regla de precio fijo para el
@@ -149,7 +208,11 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         es_fallback = False
         if prod_id:
             precio = self._precio_fijo_en_lista(pricelist_id, prod_id, fecha)
-            if precio is None:
+            if precio is None and self._fallback_ficha is None:
+                # Comportamiento anterior (sin FallbackFichaConfig): probar
+                # otras pricelists configuradas antes de rendirse a la
+                # ficha -- se preserva solo para llamadores que todavía no
+                # pasan la config nueva.
                 es_fallback = True
                 for fallback_id in self._fallback_pricelist_ids:
                     if fallback_id == pricelist_id:
@@ -159,24 +222,37 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
                         break
 
         if precio is None:
-            # Sin regla de precio fijo en ninguna pricelist candidata -- usar
-            # el campo "Precio de venta $" (list_price_usd) de la ficha del
-            # producto, NUNCA "list_price" (esa está en VES, la moneda de la
-            # compañía en Odoo -- tratarla como USD infla el precio ~800x).
-            # Verificado en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W
-            # SAE 40 (Tambor)" sin regla en la lista de la orden -- list_price
+            # Sin regla de precio fijo en la lista pedida (ni, en el modo
+            # viejo, en ninguna de respaldo) -- usar el campo "Precio de
+            # venta $" (list_price_usd) de la ficha del producto, NUNCA
+            # "list_price" (esa está en VES, la moneda de la compañía en
+            # Odoo -- tratarla como USD infla el precio ~800x). Verificado
+            # en vivo: S00700/S00718, producto "GLOBAL MOTORGAS W SAE 40
+            # (Tambor)" sin regla en la lista de la orden -- list_price
             # devuelve 1,457,052.51 (VES) vs list_price_usd 1,961.54 (USD).
             es_fallback = True
-            precio = Decimal("0.0")
+            precio_ficha = Decimal("0.0")
             if prod_id:
                 try:
                     prod = self._execute(
                         "product.product", "read", [[prod_id]], {"fields": ["list_price_usd"]}
                     )
                     if prod and isinstance(prod, list) and len(prod) > 0:
-                        precio = to_decimal(str(prod[0].get("list_price_usd") or "0.0"))
+                        precio_ficha = to_decimal(str(prod[0].get("list_price_usd") or "0.0"))
                 except Exception:
-                    precio = Decimal("0.0")
+                    precio_ficha = Decimal("0.0")
+            # Pedido explícito del usuario: caso real S00868/producto 1655
+            # (Sinoco Hidráulico 68 Paila) -- Lista #5 VES sin precio propio
+            # caía silenciosamente al precio de la Lista #8 USD, dando
+            # Teórico VES == Teórico USD por coincidencia. Con
+            # FallbackFichaConfig, el fallback va directo a la ficha con el
+            # ajuste que corresponde a la moneda/categoría de LA LISTA
+            # PEDIDA (nunca a otra pricelist) -- ver docstring de esa clase.
+            precio = (
+                self._fallback_ficha.precio_fallback(pricelist_id, precio_ficha)
+                if self._fallback_ficha is not None and pricelist_id is not None
+                else precio_ficha
+            )
 
         self._cache[clave] = precio
         # No cachear compartido un resultado de fallback ($0 por producto sin

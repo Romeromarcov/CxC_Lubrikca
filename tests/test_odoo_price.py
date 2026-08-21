@@ -168,3 +168,92 @@ def test_odoo_price_resolver_volumen_cache_compartido_sobrevive_entre_instancias
     resolver2 = OdooPriceResolver(fake_execute, {"USD": 4})
     assert resolver2.volumen("555") == Decimal("20.5")
     assert len(calls) == 1
+
+
+def test_fallback_ficha_config_ves_comercial_usa_ficha_tal_cual():
+    from cxc.odoo.price import FallbackFichaConfig
+
+    cfg = FallbackFichaConfig(
+        moneda_por_lista={5: "ves"},
+        categoria_por_lista={5: "comercial"},
+        diferencial_fijo_pct=Decimal("0.35"),
+        ajuste_industrial_pct=Decimal("0.04"),
+    )
+    assert cfg.precio_fallback(5, Decimal("100.00")) == Decimal("100.00")
+
+
+def test_fallback_ficha_config_usd_comercial_resta_el_diferencial_vigente():
+    from cxc.odoo.price import FallbackFichaConfig
+
+    cfg = FallbackFichaConfig(
+        moneda_por_lista={8: "usd"},
+        categoria_por_lista={8: "comercial"},
+        diferencial_fijo_pct=Decimal("0.35"),
+        ajuste_industrial_pct=Decimal("0.04"),
+    )
+    # ficha $100 - 35% = $65.
+    assert cfg.precio_fallback(8, Decimal("100.00")) == Decimal("65.00")
+
+
+def test_fallback_ficha_config_ves_industrial_divide_por_el_ajuste():
+    from cxc.odoo.price import FallbackFichaConfig
+
+    cfg = FallbackFichaConfig(
+        moneda_por_lista={9: "ves"},
+        categoria_por_lista={9: "industrial"},
+        diferencial_fijo_pct=Decimal("0.35"),
+        ajuste_industrial_pct=Decimal("0.04"),
+    )
+    # ficha $100 / 0.96 = $104.1666...
+    resultado = cfg.precio_fallback(9, Decimal("100.00"))
+    assert resultado == Decimal("100.00") / Decimal("0.96")
+
+
+def test_fallback_ficha_config_usd_industrial_aplica_ambos_ajustes():
+    from cxc.odoo.price import FallbackFichaConfig
+
+    cfg = FallbackFichaConfig(
+        moneda_por_lista={10: "usd"},
+        categoria_por_lista={10: "industrial"},
+        diferencial_fijo_pct=Decimal("0.35"),
+        ajuste_industrial_pct=Decimal("0.04"),
+    )
+    # (ficha $100 - 35%) / 0.96 = $65 / 0.96.
+    resultado = cfg.precio_fallback(10, Decimal("100.00"))
+    assert resultado == Decimal("65.00") / Decimal("0.96")
+
+
+def test_odoo_price_resolver_con_fallback_ficha_no_cae_a_otra_pricelist():
+    """Caso real S00868/producto 1655 (Sinoco Hidráulico 68 Paila): la
+
+    Lista #5 VES no tenía precio propio, y el resolver caía silenciosamente
+    al precio de la Lista #8 USD ($56.03), dando Teórico VES == Teórico USD
+    por coincidencia. Con ``FallbackFichaConfig``, el fallback debe ir
+    DIRECTO a la ficha (nunca a la Lista #8), aunque esa otra lista sí
+    tenga regla propia para el producto.
+    """
+    from cxc.odoo.price import FallbackFichaConfig
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "product.pricelist.item":
+            pricelist_id = args[0][0][1]
+            if pricelist_id == 8:
+                # La Lista #8 SÍ tiene precio -- no debe usarse para la
+                # Lista #5, que es la que se está pidiendo.
+                return [{"fixed_price": "56.03", "date_start": False, "date_end": False}]
+            return []
+        if model == "product.product":
+            return [{"list_price_usd": 120.0}]
+        return []
+
+    cfg = FallbackFichaConfig(
+        moneda_por_lista={5: "ves", 8: "usd"},
+        categoria_por_lista={5: "comercial", 8: "comercial"},
+        diferencial_fijo_pct=Decimal("0.35"),
+        ajuste_industrial_pct=Decimal("0.04"),
+    )
+    resolver = OdooPriceResolver(fake_execute, {"USD": 8, "BCV": 5}, [8, 5], cfg)
+    precio_ves = resolver.precio("1655", "5")
+    # Ficha $120, lista VES comercial -> tal cual, NUNCA $56.03 de la Lista 8.
+    assert precio_ves == Decimal("120.0")
+    assert resolver.fue_fallback("1655", "5") is True

@@ -48,7 +48,7 @@ from cxc.models import (
     set_marca_fallback,
 )
 from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
-from cxc.odoo.price import OdooPriceResolver
+from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
@@ -1842,7 +1842,9 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
         primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
         pricelist_ids = {"USD": primary_usd_id, "BCV": primary_ves_id}
         fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
+        resolver = OdooPriceResolver(
+            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
+        )
         runner = EngineRunner(repo, resolver, config.engine)
 
         procesadas = await asyncio.to_thread(
@@ -2639,7 +2641,9 @@ def recalculate_all(so_id: str):
         # puntual de la orden no tiene item propio para un producto, probar
         # las demás pricelists configuradas antes de asumir precio 0.
         fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
+        resolver = OdooPriceResolver(
+            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
+        )
         runner = EngineRunner(repo, resolver, config.engine)
 
         # Calculate this SO
@@ -2725,7 +2729,9 @@ def recalculate_all_orders():
         # puntual de la orden no tiene item propio para un producto, probar
         # las demás pricelists configuradas antes de asumir precio 0.
         fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(execute, pricelist_ids, fallback_pricelist_ids)
+        resolver = OdooPriceResolver(
+            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
+        )
         runner = EngineRunner(repo, resolver, config.engine)
 
         resultados = runner.run_all(date.today())
@@ -3373,7 +3379,11 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         }
         _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
         price_resolver_engine = (
-            OdooPriceResolver(execute, pricelist_ids_map, _fallback_pl_ids) if execute else None
+            OdooPriceResolver(
+                execute, pricelist_ids_map, _fallback_pl_ids, build_fallback_ficha_config(repo)
+            )
+            if execute
+            else None
         )
 
         # Pre-fetch all collections once outside loop to eliminate N+1 I/O overhead
@@ -4846,6 +4856,89 @@ def get_pricelist_vigente_por_grupo(repo=None) -> dict[str, str | None]:
             if key in result:
                 result[key] = pid
     return result
+
+
+_AJUSTE_INDUSTRIAL_PCT_DEFAULT = Decimal("0.04")
+
+
+def get_ajuste_industrial_pct(repo=None) -> Decimal:
+    """% de AUMENTO deseado para el fallback de precio en listas
+
+    industriales (pedido explícito del usuario, agosto 2026) -- ej. 0.04
+    para +4%, que ``FallbackFichaConfig.precio_fallback`` traduce al
+    divisor correspondiente (÷0.96). Configurable vía ``app_settings``;
+    0.04 si nunca se configuró.
+    """
+    if repo is None:
+        repo = get_repo()
+    try:
+        val = repo.get_config("fallback_industrial_ajuste_pct")
+        if val:
+            return Decimal(val)
+    except Exception as e:
+        logger.warning("Error leyendo fallback_industrial_ajuste_pct: %s", e)
+    return _AJUSTE_INDUSTRIAL_PCT_DEFAULT
+
+
+def set_ajuste_industrial_pct(pct: Decimal, repo=None) -> None:
+    if repo is None:
+        repo = get_repo()
+    repo.set_config("fallback_industrial_ajuste_pct", str(pct))
+
+
+def get_diferencial_fijo_pct(repo=None) -> Decimal:
+    """% de la regla de Diferencial Cambiario ``fijo_35_ves_usd`` vigente
+
+    (hoy 35%) -- reusado tal cual por el fallback de precio en listas USD
+    (pedido explícito del usuario: "el 35% va atado al descuento que esté
+    configurado como vigente... no un valor separado"). Si no hay ninguna
+    regla vigente de ese tipo, 0.35 por defecto (mismo valor histórico).
+    """
+    if repo is None:
+        repo = get_repo()
+    try:
+        reglas = repo.descuentos_diferencial_cambiario()
+        regla = next(
+            (
+                r
+                for r in reglas
+                if r.tipo_diferencial == "fijo_35_ves_usd"
+                and _vigente_diferencial_local(r, date.today())
+            ),
+            None,
+        )
+        if regla is not None:
+            return Decimal(str(regla.porcentaje_fijo))
+    except Exception as e:
+        logger.warning("Error leyendo la regla fijo_35_ves_usd vigente: %s", e)
+    return Decimal("0.35")
+
+
+def build_fallback_ficha_config(repo=None) -> FallbackFichaConfig:
+    """Arma ``FallbackFichaConfig`` desde la config real -- un solo lugar
+
+    que todos los constructores de ``OdooPriceResolver`` reusan, en vez de
+    repetir esta lectura de config 5 veces.
+    """
+    if repo is None:
+        repo = get_repo()
+    mapeo = get_pricelist_mapeo(repo)
+    moneda_por_lista: dict[int, str] = {}
+    categoria_por_lista: dict[int, str] = {}
+    for pid_str, m in mapeo.items():
+        if not pid_str.isdigit():
+            continue
+        pid = int(pid_str)
+        if m.get("moneda"):
+            moneda_por_lista[pid] = m["moneda"]
+        if m.get("categoria"):
+            categoria_por_lista[pid] = m["categoria"]
+    return FallbackFichaConfig(
+        moneda_por_lista=moneda_por_lista,
+        categoria_por_lista=categoria_por_lista,
+        diferencial_fijo_pct=get_diferencial_fijo_pct(repo),
+        ajuste_industrial_pct=get_ajuste_industrial_pct(repo),
+    )
 
 
 # Tarea 2 (auditoria precios/saldos Ventas): ventana de vigencia de la Lista
@@ -10988,7 +11081,12 @@ async def get_ventas_detalle(so_id: str):
             fallback_pl_ids_pr = [
                 int(x) for x in (*usd_ids_pr, *ves_ids_pr) if str(x).isdigit()
             ]
-            price_resolver = OdooPriceResolver(execute, pricelist_ids_map_pr, fallback_pl_ids_pr)
+            price_resolver = OdooPriceResolver(
+                execute,
+                pricelist_ids_map_pr,
+                fallback_pl_ids_pr,
+                build_fallback_ficha_config(repo),
+            )
 
         def _litros(producto_id: str, cantidad: float) -> tuple[float, float]:
             if price_resolver is None or not producto_id:
