@@ -14,6 +14,7 @@ from cxc.models import (
     DescuentoVolumen,
     Entrega,
     EntregaLinea,
+    EstadoVinculacion,
     Factura,
     Feriado,
     LineaFactura,
@@ -146,7 +147,18 @@ def vinculacion(
     es_heredada: bool = False,
     moneda_abono: Moneda = Moneda.USD,
     tipo_tasa_abono: TipoTasa = TipoTasa.N_A,
+    estado: EstadoVinculacion = EstadoVinculacion.CONCILIADO,
 ) -> Vinculacion:
+    """``estado`` por defecto ``CONCILIADO`` -- Fase 0 del plan de
+
+    arquitectura de pagos (agosto 2026): el motor solo trata como "abono
+    real" (gate de ``requiere_pago_previo``) las Vinculaciones que Odoo ya
+    confirmó -- una ``PENDIENTE`` (sugerencia FIFO sin confirmar) no
+    cuenta. La mayoría de los tests de este archivo construyen un pago ya
+    hecho y confirmado (esa es la intención que están probando); los tests
+    que específicamente cubren el gate PENDIENTE/CONCILIADO pasan
+    ``estado=EstadoVinculacion.PENDIENTE`` explícito.
+    """
     return Vinculacion(
         vinc_id=vinc_id,
         pago_id=pago_id,
@@ -158,6 +170,7 @@ def vinculacion(
         es_tasa_heredada=es_heredada,
         moneda_abono=moneda_abono,
         tipo_tasa_abono=tipo_tasa_abono,
+        estado=estado,
     )
 
 

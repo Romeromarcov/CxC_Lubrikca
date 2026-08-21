@@ -15,6 +15,7 @@ from datetime import date
 
 from ..models import (
     BandejaFacturacion,
+    EstadoVinculacion,
     LineaOrden,
     MetodoPago,
     OrdenVenta,
@@ -57,8 +58,33 @@ class EngineRunner:
         self._cfg = engine_config
 
     def _abonos(self, vincs: list[Vinculacion]) -> list[tuple[Vinculacion, MetodoPago]]:
+        """Abonos "reales" para el motor -- Vinculaciones ``PENDIENTE`` (aún
+
+        sin confirmar por Odoo, sea por vinculación manual reciente o por
+        una sugerencia FIFO auto-vinculada) NO cuentan aquí. Fase 0 del plan
+        de arquitectura de pagos (agosto 2026, pedido explícito del
+        usuario): antes CUALQUIER Vinculación destrababa reglas con
+        ``requiere_pago_previo=True`` (Contado, Recompra, Diferencial
+        Cambiario) sin importar si Odoo ya la había reconciliado -- riesgo
+        real una vez se automatice la vinculación FIFO (una sugerencia
+        equivocada aprobaría un descuento real antes de que Odoo confirme
+        nada). El filtro es sobre TODO ``inp.abonos``, no solo las reglas
+        con pago previo, porque ninguna regla del motor debería tratar
+        dinero sin confirmar como dinero real -- las reglas sin pago previo
+        (Volumen, fallback de Primera Compra) no leen ``inp.abonos`` de
+        todas formas, así que no se ven afectadas.
+
+        La ventana de pago (Contado) sigue evaluándose correctamente de
+        forma retroactiva una vez la Vinculación se promueve a
+        ``CONCILIADO``: ``within_window`` compara la fecha REAL del abono
+        (``Vinculacion.hora_pago_confirmada``, que viene de ``Pago.
+        fecha_pago``), nunca la fecha en que se confirmó -- ver
+        ``_resincronizar_vinculaciones_con_odoo`` en ``app.py``, que dispara
+        el recálculo de la orden al promover el estado.
+        """
+        vincs_confirmadas = [v for v in vincs if v.estado == EstadoVinculacion.CONCILIADO]
         abonos: list[tuple[Vinculacion, MetodoPago]] = []
-        for v in vincs:
+        for v in vincs_confirmadas:
             pago = self._repo.get_pago(v.pago_id)
             if pago is None:
                 logger.warning("Vinculación %s sin pago %s; se omite", v.vinc_id, v.pago_id)
@@ -194,8 +220,15 @@ class EngineRunner:
                 )
             ):
                 orden_anterior_cliente = o
+        # Fase 0 (mismo criterio que ``_abonos``): "orden anterior pagada
+        # completo" -- el gate de Recompra -- tampoco debe contar
+        # Vinculaciones sin confirmar por Odoo.
         orden_anterior_cliente_vincs = (
-            self._repo.vinculaciones_de_orden(orden_anterior_cliente.so_id)
+            [
+                v
+                for v in self._repo.vinculaciones_de_orden(orden_anterior_cliente.so_id)
+                if v.estado == EstadoVinculacion.CONCILIADO
+            ]
             if orden_anterior_cliente is not None
             else []
         )

@@ -754,6 +754,20 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     saber qué Vinculación local corresponde a cuál orden de Odoo sin más
     contexto.
 
+    Fase 0 (plan de arquitectura de pagos, agosto 2026, pedido explícito
+    del usuario): en el caso simple, además de corregir el ``so_id`` si
+    diverge, esta función es la que PROMUEVE la Vinculación de
+    ``PENDIENTE`` a ``CONCILIADO`` -- antes esta rama solo hacía ``continue``
+    cuando ya coincidía, sin tocar el estado, así que ninguna Vinculación
+    llegaba nunca a ``CONCILIADO`` (motor.runner._abonos() la sigue
+    tratando como no confirmada para siempre). Se llama justo antes de
+    ``runner.run_all()`` en ``recalculate_all_orders`` -- la promoción
+    dispara el recálculo completo de la orden en la misma corrida, así el
+    descuento retroactivo (ventana evaluada contra la fecha REAL del
+    abono, nunca la de confirmación -- ver ``within_window`` en
+    discounts.py) queda reflejado de inmediato, aunque la ventana de pago
+    ya haya cerrado en el calendario.
+
     Devuelve la lista de cambios/discrepancias detectados (para logging).
     """
     conciliados_por_pago = {c["pago_id"]: c for c in get_live_pagos_conciliados(execute)}
@@ -776,12 +790,25 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
 
         so_ids_locales = {v.so_id for v in vincs_locales}
         if so_ids_locales == so_ids_odoo:
-            continue  # ya coincide
+            # Ya coincide -- Odoo confirma que la asignación es correcta.
+            # Promueve cualquier Vinculación todavía PENDIENTE (manual
+            # reciente o auto-FIFO) a CONCILIADO; nada que hacer con las
+            # que ya estaban confirmadas.
+            for v in vincs_locales:
+                if v.estado != EstadoVinculacion.CONCILIADO:
+                    vincs_a_actualizar.append(
+                        dataclasses_replace(v, estado=EstadoVinculacion.CONCILIADO)
+                    )
+            continue
 
         if len(vincs_locales) == 1 and len(so_ids_odoo) == 1:
             v = vincs_locales[0]
             so_id_nuevo = next(iter(so_ids_odoo))
-            vincs_a_actualizar.append(dataclasses_replace(v, so_id=so_id_nuevo))
+            vincs_a_actualizar.append(
+                dataclasses_replace(
+                    v, so_id=so_id_nuevo, estado=EstadoVinculacion.CONCILIADO
+                )
+            )
             cambios.append(
                 {
                     "pago_id": pago_id,

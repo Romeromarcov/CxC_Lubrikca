@@ -3547,6 +3547,9 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
     assert vincs_actualizadas[0].so_id == "SO_B"
     # monto_aplicado NO se toca -- solo se corrige a qué orden cuenta el pago.
     assert vincs_actualizadas[0].monto_aplicado == Decimal("500.00")
+    # Fase 0: al confirmar cuál es la orden correcta, Odoo ya reconcilió el
+    # pago -- se promueve a CONCILIADO en la misma corrección.
+    assert vincs_actualizadas[0].estado == EstadoVinculacion.CONCILIADO
 
     mock_repo.append_auditoria_rows.assert_called_once()
     (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
@@ -3557,9 +3560,10 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
 
 
 def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
-    """Si la Vinculación local ya coincide con lo que Odoo reconcilió, no se
+    """Si la Vinculación local ya está CONCILIADA y coincide con lo que
 
-    debe tocar nada -- ni update_vinculaciones ni auditoría.
+    Odoo reconcilió, no se debe tocar nada -- ni update_vinculaciones ni
+    auditoría.
     """
     from cxc.web.app import _resincronizar_vinculaciones_con_odoo
 
@@ -3574,6 +3578,7 @@ def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
             tasa_bcv_aplicada=Decimal("40.0"),
             tasa_binance_aplicada=Decimal("45.0"),
             es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
         )
     ]
 
@@ -3583,6 +3588,44 @@ def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
     assert cambios == []
     mock_repo.update_vinculaciones.assert_not_called()
     mock_repo.append_auditoria_rows.assert_not_called()
+
+
+def test_e2e_43b_odoo_confirma_promueve_pendiente_a_conciliado():
+    """Fase 0 (plan de arquitectura de pagos, agosto 2026): si la
+
+    Vinculación local coincide con lo que Odoo reconcilió pero sigue en
+    PENDIENTE (sugerencia FIFO aún sin confirmar, o vinculación manual
+    reciente), debe promoverse a CONCILIADO -- sin generar fila de
+    auditoría (no es una discrepancia, es una confirmación).
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+        )
+    ]
+
+    fake_execute = _fake_execute_pago_conciliado(["SO_B"])
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert cambios == []
+    mock_repo.append_auditoria_rows.assert_not_called()
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    assert len(vincs_actualizadas) == 1
+    assert vincs_actualizadas[0].vinc_id == "V1"
+    assert vincs_actualizadas[0].estado == EstadoVinculacion.CONCILIADO
+    assert vincs_actualizadas[0].so_id == "SO_B"
 
 
 def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():

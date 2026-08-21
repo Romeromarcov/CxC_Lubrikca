@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -103,6 +104,83 @@ def test_runner_calcula_y_persiste_bandeja() -> None:
     # Los equivalentes quedaron congelados en la vinculación.
     vinc = repo.vinculaciones_de_orden("SO1")[0]
     assert vinc.equiv_usd_binance is not None
+
+
+def test_runner_vinculacion_pendiente_no_activa_contado() -> None:
+    """Fase 0 (plan de arquitectura de pagos, agosto 2026): una Vinculación
+
+    PENDIENTE (sugerencia FIFO sin confirmar por Odoo, o vinculación manual
+    reciente) NO debe activar Contado aunque el monto pagado calce exacto
+    contra el neto -- solo Vinculaciones CONCILIADO cuentan como "abono
+    real" para reglas con requiere_pago_previo=True. Mismo escenario que
+    test_runner_calcula_y_persiste_bandeja (que SÍ aplica contado, porque
+    ahí la Vinculación es CONCILIADO por defecto del builder), pero con
+    estado=PENDIENTE explícito.
+    """
+    from cxc.models import EstadoVinculacion
+
+    repo = _seed()
+    # Sobreescribe la única Vinculación de SO1 a PENDIENTE.
+    vinc_pendiente = dataclasses.replace(
+        repo.vinculaciones_de_orden("SO1")[0], estado=EstadoVinculacion.PENDIENTE
+    )
+    repo.add_vinculacion(vinc_pendiente)
+
+    # Sin abonos CONCILIADO, _determinar_lista cae a la lista de
+    # nacimiento de la orden ("BCV", default del builder) como techo
+    # provisional -- el resolver necesita precio ahí también.
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("100")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    runner.run_all(date(2026, 6, 8))
+    bandeja = repo.get_bandeja("SO1")
+    assert bandeja is not None
+    assert bandeja.total_descuentos == Decimal("0")
+    origenes = {d.origen for d in bandeja.descuentos_detalle}
+    assert "contado" not in origenes
+
+
+def test_runner_contado_retroactivo_tras_conciliar_despues_de_cerrar_ventana() -> None:
+    """Fase 0: si la Vinculación se confirma (CONCILIADO) DESPUÉS de que la
+
+    ventana de pago ya cerró en el calendario, el Contado igual debe
+    aplicarse -- la ventana se evalúa contra la fecha REAL del abono
+    (``hora_pago_confirmada``, que viene de la fecha real del pago), nunca
+    contra la fecha en que se recalculó/confirmó. Pedido explícito del
+    usuario: el descuento no se pierde por una confirmación tardía de Odoo.
+
+    Pago por el NETO COMPLETO ($97, a diferencia de ``_seed()`` que usa
+    $94 -- un pago parcial solo alcanza para el estado "proyectado", que
+    SÍ se pierde si la ventana cierra sin liquidar del todo; acá se
+    necesita "confirmado" -- liquidado en su totalidad -- para probar el
+    caso real de retroactividad).
+    """
+    repo = _seed()
+    repo.upsert_pagos([b.pago("PG1", cliente_id="C1", monto="97", metodo_id="M1")])
+    repo.add_vinculacion(
+        b.vinculacion(
+            "V1",
+            pago_id="PG1",
+            so_id="SO1",
+            monto_aplicado="97",
+            moneda_abono=Moneda.USD,
+            tipo_tasa_abono=TipoTasa.N_A,
+            # Pagado el mismo día de la entrega (2026-06-05) -- bien
+            # dentro de la ventana de 3 días hábiles.
+            hora=datetime(2026, 6, 5, 10, 0),
+        )
+    )
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    # Se recalcula casi un mes después de que la ventana cerró -- solo
+    # posible en la práctica si Odoo confirmó el pago recién ahí.
+    runner.run_all(date(2026, 7, 1))
+    bandeja = repo.get_bandeja("SO1")
+    assert bandeja is not None
+    origenes = {d.origen for d in bandeja.descuentos_detalle}
+    assert "contado" in origenes
+    assert bandeja.total_descuentos == Decimal("3.00")
 
 
 def test_runner_recompra_aplica_con_orden_anterior_pagada() -> None:
