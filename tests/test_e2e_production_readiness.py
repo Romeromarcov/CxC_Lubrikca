@@ -4122,3 +4122,130 @@ def test_e2e_51_cobranza_pagos_unificado_cerrado_empresa_y_usd_1a1():
         assert item["monto_pago_eur"] == 250.0
         assert item["puede_vincular"] is False
         assert item["puede_cerrar_huerfano"] is False
+
+
+def test_e2e_46_auto_vincular_fifo_pendientes():
+    """Fase 1 (plan de arquitectura de pagos, agosto 2026): la confirmación
+
+    FIFO ahora corre sola -- mismo escenario que test_e2e_10 (un pago de
+    $500 reparte FIFO contra dos órdenes abiertas del cliente, la más
+    antigua primero), pero llamando directo a
+    ``_auto_vincular_fifo_pendientes`` (lo que corre el daemon cada ciclo)
+    en vez de que un humano apruebe manualmente en Cobranza. Las
+    Vinculaciones creadas quedan PENDIENTE, no CONCILIADO -- confirmadas
+    por Odoo en el siguiente paso del ciclo (_resincronizar_vinculaciones_
+    con_odoo), no por esta función.
+    """
+    from cxc.web.app import _auto_vincular_fifo_pendientes
+
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_AUTO_1",
+                "cliente_id": "CLI_AUTO",
+                "monto": "500.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-15",
+                "vendedor": "juan@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else ([{"cliente_id": "CLI_AUTO", "nombre": "Cliente Auto"}] if sheet == "Clientes" else [])
+    )
+
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_AUTO_1",
+            cliente_id="CLI_AUTO",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("300.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+        ),
+        OrdenVenta(
+            so_id="SO_AUTO_2",
+            cliente_id="CLI_AUTO",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 10),
+            fecha_entrega=date(2026, 7, 10),
+            monto_total=Decimal("400.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+        ),
+    ]
+    mock_repo.get_pago.return_value = Pago(
+        pago_id="P_AUTO_1",
+        cliente_id="CLI_AUTO",
+        monto=Decimal("500.00"),
+        moneda=Moneda.USD,
+        metodo_pago="Zelle",
+        fecha_pago=datetime(2026, 7, 15, 10, 0),
+        vendedor_email="juan@lubrikca.com",
+    )
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        processed = _auto_vincular_fifo_pendientes(mock_repo)
+
+    assert processed == 2
+    assert mock_repo.update_vinculacion.call_count == 2
+    vincs_creadas = [c.args[0] for c in mock_repo.update_vinculacion.call_args_list]
+    por_so = {v.so_id: v for v in vincs_creadas}
+    assert por_so["SO_AUTO_1"].monto_aplicado == Decimal("300.00")
+    assert por_so["SO_AUTO_2"].monto_aplicado == Decimal("200.00")
+    for v in vincs_creadas:
+        # Fase 0: queda PENDIENTE -- no destraba descuentos hasta que
+        # Odoo confirme la reconciliación en el siguiente paso del ciclo.
+        assert v.estado == EstadoVinculacion.PENDIENTE
+        assert v.confirmado_por == "Auto-FIFO (daemon)"
+
+
+def test_e2e_47_auto_vincular_fifo_excluye_sin_orden_y_duplicados():
+    """Fase 1: un pago sin ninguna orden abierta que cubrir (sugerencia
+
+    "SIN_ORDEN") y un pago marcado como posible duplicado NO deben
+    auto-vincularse -- ambos casos requieren juicio humano (el primero
+    literalmente no tiene destino; el segundo podría ser un error de
+    carga en Odoo).
+    """
+    from cxc.web.app import _auto_vincular_fifo_pendientes
+
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_HUERFANO",
+                "cliente_id": "CLI_SIN_ORDEN",
+                "monto": "100.0",
+                "moneda": "USD",
+                "fecha_pago": "2026-07-15",
+                "vendedor": "juan@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "CLI_SIN_ORDEN", "nombre": "Cliente Sin Orden"}]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = []  # sin órdenes abiertas del cliente
+    mock_repo.get_pago.return_value = Pago(
+        pago_id="P_HUERFANO",
+        cliente_id="CLI_SIN_ORDEN",
+        monto=Decimal("100.00"),
+        moneda=Moneda.USD,
+        metodo_pago="Zelle",
+        fecha_pago=datetime(2026, 7, 15, 10, 0),
+        vendedor_email="juan@lubrikca.com",
+    )
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        processed = _auto_vincular_fifo_pendientes(mock_repo)
+
+    assert processed == 0
+    mock_repo.update_vinculacion.assert_not_called()

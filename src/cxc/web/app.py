@@ -2549,6 +2549,14 @@ def recalculate_all_orders():
     solo se refrescaban cuando un humano vinculaba manualmente algo desde la
     UI. Reutiliza la misma lógica que recalculate_all(so_id), pero para
     runner.run_all() en vez de una sola orden.
+
+    Fase 1 (plan de arquitectura de pagos, agosto 2026): antes de
+    resincronizar con Odoo, corre la confirmación FIFO automática
+    (``_auto_vincular_fifo_pendientes``) -- crea Vinculaciones PENDIENTE
+    para pagos sin asignar contra las órdenes abiertas más antiguas del
+    cliente. El orden importa: si Odoo ya reconcilió alguno de esos pagos
+    en el mismo ciclo, el resync que sigue justo después las promueve a
+    CONCILIADO de una vez, sin esperar al próximo ciclo.
     """
     try:
         print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
@@ -2557,6 +2565,13 @@ def recalculate_all_orders():
             get_repo() if config.database.repo_backend == "postgres" else _fresh_sheets_repo(config)
         )
         execute = _connect(config.odoo)
+
+        try:
+            n_auto_vinc = _auto_vincular_fifo_pendientes(repo)
+            if n_auto_vinc:
+                print(f"Auto-FIFO: {n_auto_vinc} vinculación(es) PENDIENTE creada(s).")
+        except Exception as e_fifo:
+            print(f"Error en auto-vinculación FIFO: {e_fifo}", file=sys.stderr)
 
         if execute:
             try:
@@ -6422,68 +6437,91 @@ async def get_bandeja_facturacion():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _vincular_masivo_sync(
+    repo: Any,
+    items: list[tuple[str, str, float]],
+    confirmado_por: str = "Aprobador Masivo FIFO",
+) -> tuple[int, set[str]]:
+    """Núcleo de ``/api/vincular-masivo`` -- crea Vinculaciones ``PENDIENTE``
+
+    a partir de una lista de ``(pago_id, so_id, monto_aplicado)``. Extraído
+    del endpoint (Fase 1 del plan de arquitectura de pagos, agosto 2026)
+    para reusarlo también desde el ciclo del daemon (``_auto_vincular_
+    fifo_pendientes``), sin duplicar la lógica de tasas/equivalentes.
+
+    Siempre queda en ``PENDIENTE`` -- gracias a la Fase 0, una Vinculación
+    en ese estado NO destraba descuentos con ``requiere_pago_previo`` hasta
+    que ``_resincronizar_vinculaciones_con_odoo`` la promueva a
+    ``CONCILIADO`` confirmando con Odoo.
+    """
+    last_tasa = repo.last_serie_tasa()
+    tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+    tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
+
+    processed = 0
+    so_ids_affected: set[str] = set()
+
+    for pago_id, so_id, monto_aplicado in items:
+        pago = repo.get_pago(pago_id)
+        if not pago:
+            continue
+
+        monto_dec = Decimal(str(monto_aplicado))
+        if monto_dec <= Decimal("0"):
+            continue
+
+        hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
+        tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+            repo, so_id, hora_pago_confirmada, tasa_bcv_ultima
+        )
+
+        if pago.moneda == "USD":
+            equiv_usd_bcv = monto_dec
+            equiv_usd_binance = monto_dec
+            equiv_ves_bcv = monto_dec * tasa_bcv
+            equiv_ves_binance = monto_dec * tasa_binance
+        else:
+            equiv_usd_bcv = monto_dec / tasa_bcv
+            equiv_usd_binance = monto_dec / tasa_binance
+            equiv_ves_bcv = monto_dec
+            equiv_ves_binance = monto_dec
+
+        vinc_id = f"VINC_{pago_id}_{so_id}"
+        vinc = Vinculacion(
+            vinc_id=vinc_id,
+            pago_id=pago_id,
+            so_id=so_id,
+            monto_aplicado=monto_dec,
+            hora_pago_confirmada=hora_pago_confirmada,
+            tasa_bcv_aplicada=tasa_bcv,
+            tasa_binance_aplicada=tasa_binance,
+            es_tasa_heredada=False,
+            equiv_usd_bcv=equiv_usd_bcv,
+            equiv_usd_binance=equiv_usd_binance,
+            equiv_ves_bcv=equiv_ves_bcv,
+            equiv_ves_binance=equiv_ves_binance,
+            confirmado_por=confirmado_por,
+            timestamp_registro=datetime.now(),
+            estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda(pago.moneda),
+            tipo_tasa_abono=TipoTasa.BCV,
+            bcv_variante=bcv_variante,
+        )
+
+        repo.update_vinculacion(vinc)
+        processed += 1
+        so_ids_affected.add(so_id)
+
+    return processed, so_ids_affected
+
+
 @app.post("/api/vincular-masivo")
 async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: BackgroundTasks):
     try:
         repo = get_repo()
-        last_tasa = repo.last_serie_tasa()
-        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-        tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
-
-        processed = 0
-        so_ids_affected = set()
-
-        for item in req.items:
-            pago = repo.get_pago(item.pago_id)
-            if not pago:
-                continue
-
-            monto_dec = Decimal(str(item.monto_aplicado))
-            if monto_dec <= Decimal("0"):
-                continue
-
-            hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
-            # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
-            tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-                repo, item.so_id, hora_pago_confirmada, tasa_bcv_ultima
-            )
-
-            if pago.moneda == "USD":
-                equiv_usd_bcv = monto_dec
-                equiv_usd_binance = monto_dec
-                equiv_ves_bcv = monto_dec * tasa_bcv
-                equiv_ves_binance = monto_dec * tasa_binance
-            else:
-                equiv_usd_bcv = monto_dec / tasa_bcv
-                equiv_usd_binance = monto_dec / tasa_binance
-                equiv_ves_bcv = monto_dec
-                equiv_ves_binance = monto_dec
-
-            vinc_id = f"VINC_{item.pago_id}_{item.so_id}"
-            vinc = Vinculacion(
-                vinc_id=vinc_id,
-                pago_id=item.pago_id,
-                so_id=item.so_id,
-                monto_aplicado=monto_dec,
-                hora_pago_confirmada=hora_pago_confirmada,
-                tasa_bcv_aplicada=tasa_bcv,
-                tasa_binance_aplicada=tasa_binance,
-                es_tasa_heredada=False,
-                equiv_usd_bcv=equiv_usd_bcv,
-                equiv_usd_binance=equiv_usd_binance,
-                equiv_ves_bcv=equiv_ves_bcv,
-                equiv_ves_binance=equiv_ves_binance,
-                confirmado_por="Aprobador Masivo FIFO",
-                timestamp_registro=datetime.now(),
-                estado=EstadoVinculacion.PENDIENTE,
-                moneda_abono=Moneda(pago.moneda),
-                tipo_tasa_abono=TipoTasa.BCV,
-                bcv_variante=bcv_variante,
-            )
-
-            repo.update_vinculacion(vinc)
-            processed += 1
-            so_ids_affected.add(item.so_id)
+        items = [(it.pago_id, it.so_id, it.monto_aplicado) for it in req.items]
+        processed, so_ids_affected = _vincular_masivo_sync(repo, items)
 
         for so_id in so_ids_affected:
             background_tasks.add_task(recalculate_all, so_id)
@@ -6496,6 +6534,44 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _auto_vincular_fifo_pendientes(repo: Any) -> int:
+    """Fase 1 (plan de arquitectura de pagos, agosto 2026, pedido explícito
+
+    del usuario): automatiza la confirmación FIFO que ya existía como
+    sugerencia manual (``/api/conciliaciones/sugerencias``) -- esa función
+    YA reparte cada pago FIFO por orden más antigua (``open_orders_by_
+    client`` ordenado por fecha, ``monto_aplicar = min(monto_pago_restante,
+    o["saldo_pendiente"])``, remanente a la siguiente orden), justo el
+    criterio que pidió el usuario. Antes esas sugerencias quedaban
+    dormidas hasta que un humano entraba a Cobranza y las aprobaba a mano
+    -- nunca pasó en producción (0 Vinculaciones). Se corre cada ciclo del
+    daemon, creando las Vinculaciones directamente vía ``_vincular_masivo_
+    sync`` (mismo núcleo que el botón manual).
+
+    Se excluyen las filas "SIN_ORDEN" (dinero sobrante sin orden abierta
+    que cubrir -- no hay nada que vincular) y los pagos marcados como
+    posible duplicado (requieren juicio humano, no se auto-vinculan).
+    Como quedan en PENDIENTE (Fase 0), una sugerencia equivocada no
+    destraba ningún descuento -- solo se confirma cuando Odoo la reconcilia.
+    """
+    try:
+        sugerencias = _get_conciliaciones_sugerencias_sync(None)
+    except Exception as e:
+        logger.warning("Error obteniendo sugerencias FIFO para auto-vincular: %s", e)
+        return 0
+
+    items = [
+        (s["pago_id"], s["so_id"], s["monto_sugerido"])
+        for s in sugerencias
+        if s.get("so_id") and not s.get("posible_duplicado") and s.get("monto_sugerido", 0) > 0.05
+    ]
+    if not items:
+        return 0
+
+    processed, _so_ids = _vincular_masivo_sync(repo, items, confirmado_por="Auto-FIFO (daemon)")
+    return processed
 
 
 def _get_vinculacion_or_404(repo: Any, vinc_id: str) -> Vinculacion:
