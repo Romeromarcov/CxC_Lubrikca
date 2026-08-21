@@ -10536,7 +10536,8 @@ def _get_ventas_sync(
                         f"Entrega de más ({cant_entregada:.2f} entregado "
                         f"vs {cant_pedida:.2f} pedido)"
                     )
-            if live_state in ("cancel", "cancelled") and entrega_valida:
+            orden_cancelada_sin_devolver = live_state in ("cancel", "cancelled") and entrega_valida
+            if orden_cancelada_sin_devolver:
                 revisar_motivos.append("Orden cancelada en Odoo, mercancía sin devolver")
             litros_orden = litros_por_so.get(o.so_id, 0.0)
             dias_credito_real = dias_credito_odoo_map.get(o.so_id, 0)
@@ -10547,7 +10548,8 @@ def _get_ventas_sync(
                     f"({dias_credito_real}d otorgados vs {max_dias_permitido}d "
                     f"máximo para {litros_orden:.0f}L)"
                 )
-            revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
+            # revisar_motivo se termina de armar más abajo, después de
+            # calcular total_nc_aplicada -- ver "falta_nc_por_devolucion".
 
             b = bandeja_map.get(o.so_id)
             monto_orig = float(o.monto_total)  # amount_total Odoo: YA con impuestos
@@ -10603,6 +10605,23 @@ def _get_ventas_sync(
             total_facturado_neto = (
                 total_facturado_con_impuestos - total_nc_aplicada + total_nd_aplicada
             )
+            # Pedido del usuario (artefacto de verificación, agosto 2026):
+            # la alerta de devolución debe decir explícitamente cuándo falta
+            # la Nota de Crédito que la formaliza -- antes solo señalaba que
+            # había una devolución/cancelación, sin decir si ya se corrigió
+            # el lado financiero. Solo aplica a órdenes YA facturadas (antes
+            # de facturar, la corrección pasa por las líneas reales de Odoo,
+            # nunca por una NC -- ver sección "Modificación de una orden").
+            falta_nc_por_devolucion = (
+                bool(o.facturada)
+                and (bool(o.tiene_devolucion) or orden_cancelada_sin_devolver)
+                and total_nc_aplicada <= 0.005
+            )
+            if falta_nc_por_devolucion:
+                revisar_motivos.append(
+                    "Falta crear Nota de Crédito en Odoo por la devolución"
+                )
+            revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
             # Fase 3 (plan de arquitectura de pagos, agosto 2026, pedido
             # explícito del usuario): la retención de IVA debe comunicarse
             # a Ventas igual que ya hacen NC/ND -- antes `wh_iva_aplicado`
@@ -10868,6 +10887,7 @@ def _get_ventas_sync(
                     "diferencia": diferencia,
                     "alerta": alerta,
                     "revisar_motivo": revisar_motivo,
+                    "falta_nc_por_devolucion": falta_nc_por_devolucion,
                     # Días de crédito reales (payment_term de Odoo) y fecha
                     # de entrega efectiva (ALM/OUT, stock.picking saliente
                     # "done") -- mismo criterio que ya usa el reporte de CxC.

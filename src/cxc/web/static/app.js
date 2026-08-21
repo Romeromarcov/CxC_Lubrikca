@@ -1467,9 +1467,14 @@ document.addEventListener("DOMContentLoaded", () => {
             if (item.revisar_motivo) {
                 row.style.background = "#fffbeb";
             }
-            const revisarCell = item.revisar_motivo
-                ? `<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;cursor:help;" title="${item.revisar_motivo}">🔍 Revisar</span>`
-                : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>';
+            // falta_nc_por_devolucion: acción pendiente concreta (crear la
+            // NC en Odoo), no solo una señal de "revisar" -- badge propio,
+            // más urgente, para que no se confunda con el resto de motivos.
+            const revisarCell = item.falta_nc_por_devolucion
+                ? `<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;cursor:help;" title="${item.revisar_motivo}">📄 Falta NC</span>`
+                : (item.revisar_motivo
+                    ? `<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;cursor:help;" title="${item.revisar_motivo}">🔍 Revisar</span>`
+                    : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>');
 
             const naVal = (v) => v != null ? fmt(v) : '—';
             const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');

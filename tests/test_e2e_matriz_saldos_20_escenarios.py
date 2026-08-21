@@ -582,3 +582,137 @@ def test_bandeja_facturacion_no_enruta_orden_con_solo_pago_pendiente():
         data = res_bandeja.json()
         so_ids_en_facturar = {o["so_id"] for o in data["ordenes_por_facturar"]}
         assert "SO_H1" not in so_ids_en_facturar
+
+
+def test_devolucion_facturada_sin_nc_marca_falta_nc_por_devolucion():
+    """Pedido del usuario en el artefacto de verificación ("Implementalo"):
+
+    una orden facturada con devolución registrada, pero SIN ninguna Nota
+    de Crédito todavía en Odoo, debe decir explícitamente que falta
+    crearla -- no solo "hay una devolución, revisar".
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_I1",
+            cliente_id="CLI_I",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+            tiene_devolucion=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="I1",
+            numero="FAC/I1",
+            so_id="SO_I1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_I1", "state": "sale", "amount_untaxed": 100.0}]
+        # Sin NC alguna en account.move -- reversed_entry_id vacío.
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_I1"]
+        assert item["falta_nc_por_devolucion"] is True
+        assert "Falta crear Nota de Crédito" in item["revisar_motivo"]
+
+
+def test_devolucion_facturada_con_nc_no_marca_falta():
+    """Espejo: si ya existe la NC en Odoo (total_nc_aplicada > 0), la
+
+    devolución sigue apareciendo en "revisar" (informativo) pero YA NO se
+    marca "falta crear NC" -- el lado financiero ya está corregido.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_I2",
+            cliente_id="CLI_I",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+            tiene_devolucion=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    # NC/ND se leen del espejo Factura (Fase 2), no de account.move en
+    # vivo -- una fila move_type="out_refund" con el mismo so_id basta.
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="I2",
+            numero="FAC/I2",
+            so_id="SO_I2",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
+        Factura(
+            factura_id="I2NC",
+            numero="NC/I2",
+            so_id="SO_I2",
+            move_type="out_refund",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 16),
+            moneda="USD",
+            monto_total=Decimal("20.00"),
+            monto_sin_impuestos=Decimal("17.24"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("20.00"),
+            monto_sin_impuestos_signed_usd=Decimal("17.24"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_I2", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_I2"]
+        assert item["falta_nc_por_devolucion"] is False
+        assert "Devolución registrada" in item["revisar_motivo"]
