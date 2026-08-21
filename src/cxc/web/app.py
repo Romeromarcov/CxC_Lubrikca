@@ -10449,34 +10449,39 @@ def _get_ventas_sync(
                 return "parcial"
             return "sin_pago"
 
-        def _estado_pago_con_pendiente(
+        def _estado_pago_display(
             pagado_confirmado: float,
             pagado_incl_pendiente: float,
             target: float,
-            facturada: bool,
         ) -> str:
-            """Dos estados intermedios nuevos (pedido del usuario en el
+            """Valor que se MUESTRA en /api/ventas -- distinto del que se usa
 
-            artefacto de verificación, agosto 2026): una Vinculación
-            PENDIENTE (FIFO sugerida o vínculo manual reciente, aún sin
-            reconciliar en Odoo) que YA cubre el objetivo no debe verse
-            igual que "sin_pago" -- el dinero ya está vinculado, solo falta
-            que Odoo lo confirme. Se distingue por texto según si la orden
-            ya está facturada (hay una factura real en Odoo esperando esa
-            reconciliación) o no (no hay nada que reconciliar todavía en
-            Odoo -- lo "pendiente" es, de hecho, la única confirmación que
-            existe por ahora, dentro de la app). Nunca cambia el criterio
-            de "pagado real" en ningún otro lado del sistema -- ver
-            ``vincs_por_so`` (solo CONCILIADO) vs
-            ``vincs_pendientes_por_so`` más arriba: los gates de
-            descuento, saldo real y salida de CxC siguen usando
-            exclusivamente lo confirmado.
+            para decidir cosas reales (descuentos, salida de CxC), que sigue
+            exclusivamente CONCILIADO. Primera vuelta de este cambio
+            (artefacto de verificación, agosto 2026) agregó un estado
+            intermedio ("pagada_pendiente_odoo"/"pagada_temporal_app") para
+            una Vinculación PENDIENTE que ya cubre el objetivo -- corrección
+            del usuario en la misma conversación: si el pago YA se reporta y
+            reduce el saldo, no debe verse como "pendiente" en Ventas -- eso
+            es un detalle de Cobranza/Administración, no algo que el equipo
+            de Ventas necesite ver. Por eso aquí se colapsa directo a
+            "pagada" en cuanto lo PENDIENTE cubre el objetivo, sin texto
+            intermedio.
+
+            CRÍTICO: este colapso es solo visual. El árbol de CxC
+            (``clasificar_estado_cxc``, más abajo) NUNCA usa este valor --
+            recalcula sus propios 3 flags con ``_estado_pago`` sobre los
+            montos CONFIRMADOS únicamente (``val_bcv``/``val_binance``/
+            ``val_ref_nacimiento``, sin el `_incl_pendiente`), para que una
+            sugerencia FIFO sin confirmar no saque la orden de CxC activa ni
+            destrabe ningún descuento -- ver ``vincs_por_so`` (solo
+            CONCILIADO) vs ``vincs_pendientes_por_so`` más arriba.
             """
             estado = _estado_pago(pagado_confirmado, target)
             if estado == "pagada":
                 return estado
             if target > _EPS_PAGO and pagado_incl_pendiente >= target - _EPS_PAGO:
-                return "pagada_pendiente_odoo" if facturada else "pagada_temporal_app"
+                return "pagada"
             return estado
 
         def _sin_datos_teorico(
@@ -10745,17 +10750,16 @@ def _get_ventas_sync(
             )
 
             target_orden = max(0.0, venta_neta_real - descuento_aplicado_sistema)
-            estatus_pago_real_orden = _estado_pago_con_pendiente(
-                val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden, o.facturada
+            estatus_pago_real_orden = _estado_pago_display(
+                val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden
             )
 
             if tiene_factura:
                 target_factura = max(0.0, total_facturado_neto - descuento_aplicado_sistema)
-                estatus_pago_real_factura = _estado_pago_con_pendiente(
+                estatus_pago_real_factura = _estado_pago_display(
                     val_ref_nacimiento,
                     val_ref_nacimiento_incl_pendiente,
                     target_factura,
-                    o.facturada,
                 )
             else:
                 estatus_pago_real_factura = "sin_factura"
@@ -10770,8 +10774,8 @@ def _get_ventas_sync(
                     _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
                     or ves_neta_teorica_iva is None
                 )
-                else _estado_pago_con_pendiente(
-                    val_bcv, val_bcv_incl_pendiente, ves_neta_teorica_iva, o.facturada
+                else _estado_pago_display(
+                    val_bcv, val_bcv_incl_pendiente, ves_neta_teorica_iva
                 )
             )
             estatus_pago_teorico_usd = (
@@ -10780,8 +10784,8 @@ def _get_ventas_sync(
                     _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
                     or usd_neta_teorica_iva is None
                 )
-                else _estado_pago_con_pendiente(
-                    val_binance, val_binance_incl_pendiente, usd_neta_teorica_iva, o.facturada
+                else _estado_pago_display(
+                    val_binance, val_binance_incl_pendiente, usd_neta_teorica_iva
                 )
             )
 
@@ -10801,15 +10805,33 @@ def _get_ventas_sync(
                 total_alertas += 1
 
             # Árbol de enrutamiento de CxC (Sección 5 del Manual): decide si
-            # la orden sale de CxC activa y a qué bandeja se enruta, en
-            # base a los mismos 3 estatus de pago ya calculados arriba
-            # (colapsados a booleano: True solo si el estado es "pagada").
+            # la orden sale de CxC activa y a qué bandeja se enruta. NUNCA
+            # usa los 3 estatus de arriba tal cual -- esos ya colapsan una
+            # Vinculación PENDIENTE a "pagada" para que Ventas no la vea
+            # como pendiente (corrección del usuario, agosto 2026). Salir
+            # de CxC activa es una acción real (deja de rastrear la
+            # cobranza), así que recalcula sus propios 3 flags con
+            # ``_estado_pago`` sobre SOLO lo CONCILIADO -- una sugerencia
+            # FIFO sin confirmar no debe sacar una orden de CxC.
+            teorico_bs_pagado_confirmado = (
+                not _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
+                and ves_neta_teorica_iva is not None
+                and _estado_pago(val_bcv, ves_neta_teorica_iva) == "pagada"
+            )
+            teorico_usd_pagado_confirmado = (
+                not _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
+                and usd_neta_teorica_iva is not None
+                and _estado_pago(val_binance, usd_neta_teorica_iva) == "pagada"
+            )
+            factura_real_pagada_confirmada = tiene_factura and (
+                _estado_pago(val_ref_nacimiento, target_factura) == "pagada"
+            )
             clasificacion_cxc = clasificar_estado_cxc(
                 so_id=o.so_id,
                 facturada=bool(o.facturada),
-                teorico_bs_pagado=estatus_pago_teorico_ves == "pagada",
-                teorico_usd_pagado=estatus_pago_teorico_usd == "pagada",
-                factura_real_pagada=estatus_pago_real_factura == "pagada",
+                teorico_bs_pagado=teorico_bs_pagado_confirmado,
+                teorico_usd_pagado=teorico_usd_pagado_confirmado,
+                factura_real_pagada=factura_real_pagada_confirmada,
                 nacio_en_lista_usd=es_lista_usd_nacimiento,
             )
 

@@ -1479,8 +1479,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const estatusPagoBadge = (estado) => {
                 const map = {
                     pagada: ['#dcfce7', '#15803d', '✓ Pagada'],
-                    pagada_pendiente_odoo: ['#dbeafe', '#1d4ed8', '⏳ Pagada — pendiente confirmar en Odoo'],
-                    pagada_temporal_app: ['#dbeafe', '#0e7490', '⏳ Confirmada temporalmente (app)'],
                     parcial: ['#fef3c7', '#b45309', '~ Parcial'],
                     sin_pago: ['#fee2e2', '#991b1b', '✗ Sin pago'],
                     sin_factura: ['#f1f5f9', '#64748b', '— Sin factura'],

@@ -4464,16 +4464,24 @@ def test_e2e_49_vinculacion_pendiente_no_facturada_sin_umbral_de_dias():
     assert so_ids_revisar == {"SO_LISTA"}
 
 
-def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_en_ventas():
+def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
     """Fase 0 (arquitectura de pagos, agosto 2026, pedido explícito del
 
     usuario): hallazgo real -- con la Fase 1 (auto-FIFO) ya corriendo en
     producción, 203 Vinculaciones PENDIENTE se estaban contando como pago
     real en Ventas/Bandeja (``vincs_por_so``/``pagos_by_so`` sin filtrar
     por estado), aunque el motor de descuentos (Fase 0) ya no les otorgaba
-    ningún descuento por la misma razón. Una Vinculación PENDIENTE que
-    cubre el 100% de la orden NO debe verse "pagada" -- ni en Ventas
-    (``estatus_pago_real_orden``) ni en Bandeja (no debe salir de CxC).
+    ningún descuento por la misma razón.
+
+    Corrección posterior del usuario (mismo hilo del artefacto de
+    verificación): el TEXTO que ve Ventas para una Vinculación PENDIENTE
+    que cubre el 100% de la orden SÍ se colapsa a "pagada" (si el pago ya
+    se reportó y reduce el saldo, no debe verse "pendiente" en un reporte
+    de Ventas -- eso es un detalle de Cobranza/Administración). Lo que
+    NUNCA debe pasar es que esto cuente como dinero real (
+    ``monto_pagado_factura_odoo``, exclusivamente CONCILIADO) ni que saque
+    la orden de CxC activa (``sale_de_cxc``, que recalcula sus propios
+    flags solo con CONCILIADO) -- eso sigue exigiendo confirmación real.
     """
     from cxc.config import EngineConfig
 
@@ -4534,4 +4542,7 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_en_ventas():
         # El monto pagado "real" (val_ref_nacimiento, de vincs_por_so) debe
         # dar $0 -- el único abono existente es PENDIENTE, no cuenta.
         assert item["monto_pagado_factura_odoo"] == 0.0
-        assert item["estatus_pago_real_orden"] != "pagada"
+        # El texto SÍ se colapsa a "pagada" (corrección del usuario), pero
+        # la orden no sale de CxC activa -- eso sigue exigiendo CONCILIADO.
+        assert item["estatus_pago_real_orden"] == "pagada"
+        assert item["sale_de_cxc"] is False
