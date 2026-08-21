@@ -1,5 +1,5 @@
 import contextlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -4249,3 +4249,125 @@ def test_e2e_47_auto_vincular_fifo_excluye_sin_orden_y_duplicados():
 
     assert processed == 0
     mock_repo.update_vinculacion.assert_not_called()
+
+
+def test_e2e_48_vinculacion_pendiente_facturada_pasado_el_umbral_se_marca():
+    """Fase 2 (plan de arquitectura de pagos, agosto 2026): una Vinculación
+
+    PENDIENTE sobre una orden YA FACTURADA, creada hace más días que el
+    umbral (default 2) sin que Odoo la confirme, debe marcarse para
+    revisión -- señal de que la sugerencia FIFO probablemente esté mal.
+    """
+    from cxc.web.app import _detectar_vinculaciones_pendientes_a_revisar
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_STALE",
+            pago_id="P1",
+            so_id="SO_FACT",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now() - timedelta(days=5),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            timestamp_registro=datetime.now() - timedelta(days=5),
+        ),
+    ]
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_FACT",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_auditoria.return_value = []
+
+    with patch("cxc.web.app._get_saldos_reales_por_so_sync", return_value={"SO_FACT": 50.0}):
+        revisar = _detectar_vinculaciones_pendientes_a_revisar(mock_repo)
+
+    assert len(revisar) == 1
+    assert revisar[0]["so_id"] == "SO_FACT"
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert audit_rows[0]["tipo_auditoria"] == "vinculacion_pendiente_revisar"
+
+
+def test_e2e_49_vinculacion_pendiente_no_facturada_sin_umbral_de_dias():
+    """Fase 2: para una orden SIN facturar, no hay plazo de días -- solo se
+
+    marca cuando el saldo real (que ya neta la Vinculación PENDIENTE) llega
+    a ~0 (lista para facturar). Si todavía no lo cubre, se queda esperando
+    sin alerta aunque hayan pasado muchos días -- esperar el pago antes de
+    facturar es la razón de ser del sistema, no una anomalía.
+    """
+    from cxc.web.app import _detectar_vinculaciones_pendientes_a_revisar
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_CUBRE",
+            pago_id="P1",
+            so_id="SO_LISTA",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now() - timedelta(days=30),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            timestamp_registro=datetime.now() - timedelta(days=30),
+        ),
+        Vinculacion(
+            vinc_id="V_NO_CUBRE",
+            pago_id="P2",
+            so_id="SO_ESPERA",
+            monto_aplicado=Decimal("50.00"),
+            hora_pago_confirmada=datetime.now() - timedelta(days=30),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            timestamp_registro=datetime.now() - timedelta(days=30),
+        ),
+    ]
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_LISTA",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+        OrdenVenta(
+            so_id="SO_ESPERA",
+            cliente_id="C1",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("500.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_auditoria.return_value = []
+
+    with patch(
+        "cxc.web.app._get_saldos_reales_por_so_sync",
+        return_value={"SO_LISTA": 0.0, "SO_ESPERA": 400.0},
+    ):
+        revisar = _detectar_vinculaciones_pendientes_a_revisar(mock_repo)
+
+    so_ids_revisar = {r["so_id"] for r in revisar}
+    assert so_ids_revisar == {"SO_LISTA"}

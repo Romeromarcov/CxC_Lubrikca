@@ -863,6 +863,119 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     return cambios
 
 
+def _detectar_vinculaciones_pendientes_a_revisar(
+    repo: Any, dias_umbral_facturada: int = 2
+) -> list[dict[str, Any]]:
+    """Fase 2 (plan de arquitectura de pagos, agosto 2026, pedido explícito
+
+    del usuario): marca en Auditoría las Vinculaciones ``PENDIENTE`` (Fase
+    1, auto-FIFO o manuales) que ya ameritan revisión -- el criterio es
+    DISTINTO según si la orden ya está facturada:
+
+    - **Facturada**: umbral configurable (``dias_umbral_facturada``,
+      default 2 días) desde que se creó la Vinculación (``timestamp_
+      registro``) sin que Odoo la haya confirmado (``_resincronizar_
+      vinculaciones_con_odoo`` la habría promovido a ``CONCILIADO``) --
+      señal de que la sugerencia FIFO probablemente esté mal.
+    - **NO facturada**: sin plazo -- se marca solo cuando el saldo real
+      pendiente de la orden (``_get_saldos_reales_por_so_sync``, ya neta
+      lo que estas Vinculaciones PENDIENTE aportan) ya llegó a ~0. Ahí SÍ
+      hay algo que decidir (facturar); mientras no llegue, esperar sin
+      alerta es el comportamiento correcto -- eso es la razón de ser del
+      sistema, no una anomalía.
+
+    Deduplicado por día -- no reinserta la misma fila de auditoría en
+    cada ciclo de 5 minutos si la condición sigue vigente.
+    """
+    vincs_pendientes = [
+        v for v in repo.all_vinculaciones() if v.estado == EstadoVinculacion.PENDIENTE
+    ]
+    if not vincs_pendientes:
+        return []
+
+    ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+    saldos_reales = _get_saldos_reales_por_so_sync() or {}
+    hoy = date.today()
+
+    try:
+        existing_audit_rows = repo.all_auditoria()
+    except Exception:
+        existing_audit_rows = []
+    today_str = hoy.isoformat()
+    existing_audit_keys = {
+        (r.get("so_id", ""), r.get("tipo_auditoria", ""))
+        for r in existing_audit_rows
+        if str(r.get("timestamp_audit", ""))[:10] == today_str
+    }
+
+    revisar: list[dict[str, Any]] = []
+    for v in vincs_pendientes:
+        o = ordenes_map.get(v.so_id)
+        if o is None:
+            continue
+
+        if o.facturada:
+            creada = v.timestamp_registro
+            if creada is None:
+                continue
+            dias_pendiente = (hoy - creada.date()).days
+            if dias_pendiente < dias_umbral_facturada:
+                continue
+            motivo = (
+                f"Vinculación PENDIENTE hace {dias_pendiente} día(s) "
+                f"(umbral: {dias_umbral_facturada}) sin confirmar por Odoo -- "
+                "orden ya facturada."
+            )
+        else:
+            saldo = saldos_reales.get(v.so_id)
+            if saldo is None or saldo > 0.05:
+                continue  # aún no cubre el neto -- esperar es lo correcto, sin alerta.
+            motivo = (
+                "El saldo pendiente por confirmar ya cubre el neto de la orden "
+                "(sin facturar todavía) -- lista para facturar."
+            )
+
+        revisar.append(
+            {
+                "vinc_id": v.vinc_id,
+                "pago_id": v.pago_id,
+                "so_id": v.so_id,
+                "facturada": o.facturada,
+                "motivo": motivo,
+            }
+        )
+
+    nuevas_rows = [
+        r
+        for r in revisar
+        if (r["so_id"], "vinculacion_pendiente_revisar") not in existing_audit_keys
+    ]
+    if nuevas_rows and hasattr(repo, "append_auditoria_rows"):
+        ahora = datetime.now()
+        audit_rows = [
+            {
+                "audit_id": f"VINC_STALE_{r['vinc_id']}_{today_str}",
+                "so_id": r["so_id"],
+                "tipo_auditoria": "vinculacion_pendiente_revisar",
+                "motor_calcula_usd": "",
+                "odoo_registrado_usd": "",
+                "diferencia_usd": "",
+                "detalle_odoo": "",
+                "detalle_motor": r["motivo"],
+                "estado": "pendiente_revision",
+                "revisado_por": "",
+                "timestamp_audit": ahora.isoformat(),
+            }
+            for r in nuevas_rows
+        ]
+        try:
+            repo.append_auditoria_rows(audit_rows)
+        except Exception as e_aud:
+            logger.warning("Error guardando auditoría de Vinculaciones pendientes: %s", e_aud)
+
+    return revisar
+
+
 def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
     """IDs (str) de ``account.payment`` que ya no son válidos como "pago sin
 
@@ -2580,6 +2693,19 @@ def recalculate_all_orders():
                     print(f"Re-vinculación por Odoo: {len(cambios)} discrepancia(s) revisada(s).")
             except Exception as e_relink:
                 print(f"Error re-sincronizando Vinculaciones con Odoo: {e_relink}", file=sys.stderr)
+
+        # Fase 2 (plan de arquitectura de pagos): corre DESPUÉS del resync
+        # de Odoo -- así una Vinculación que este mismo ciclo se promovió a
+        # CONCILIADO no aparece marcada como "pendiente por revisar".
+        try:
+            n_revisar = _detectar_vinculaciones_pendientes_a_revisar(repo)
+            if n_revisar:
+                print(f"Vinculaciones PENDIENTE a revisar: {len(n_revisar)}.")
+        except Exception as e_stale:
+            print(
+                f"Error detectando Vinculaciones pendientes a revisar: {e_stale}",
+                file=sys.stderr,
+            )
 
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
