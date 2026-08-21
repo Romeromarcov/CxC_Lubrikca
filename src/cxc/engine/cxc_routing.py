@@ -50,6 +50,31 @@ Nota: la comparación es binaria (pagada / no pagada) contra cada
 columna con una tolerancia; no se involucra aquí el concepto de "parcial"
 — eso es responsabilidad de las columnas de estatus de pago ya existentes
 en `/api/ventas`. Este árbol solo decide el destino final de la orden.
+
+Estado "en proceso de pago" (agosto 2026, precedente citado por el
+usuario -- Odoo mismo distingue 4 estados de pago de factura: sin pagar,
+parcialmente pagado, EN PROCESO DE PAGO, pagado; "en proceso de pago"
+significa que el cobro ya se aplicó y solo falta la conciliación
+bancaria, y ESE estado ya saca la factura de Cuentas por Cobrar en Odoo,
+aunque sea visiblemente distinto de "pagado" para quien lo mira).
+
+Se replica la misma idea acá: una Vinculación PENDIENTE (vinculada a esta
+orden vía FIFO o a mano, pero aún sin que Odoo la reconcilie) le da al
+cliente el mismo "beneficio de la duda" que Odoo -- ya reportó el pago y
+se aplicó a este pedido, falta solo la conciliación. Las 4 reglas de
+arriba se re-evalúan una segunda vez con montos que INCLUYEN lo
+PENDIENTE (parámetros `*_incl_pendiente`) SOLO si ninguna de las
+versiones estrictas (CONCILIADO) alcanzó -- si alcanzan, la orden sale de
+CxC activa igual que con las reglas 1-4, pero con `confirmado=False` y un
+`bandeja_destino` propio (`EN_PROCESO_DE_PAGO`) en vez de mezclarse con
+"pagada"/Auditoría de Precios, para que quede visible que falta ese
+último paso -- igual que Odoo lo deja visible.
+
+CRÍTICO: esta re-evaluación NUNCA debe alimentarse de nada que no sea
+estrictamente "vinculado a ESTA orden, aunque sin confirmar" (Vinculación
+PENDIENTE) -- nunca de una adivinanza sin ningún vínculo. Y nunca debe
+usarse para gates reales que no sean "sale de CxC activa" (descuentos,
+saldo real, motor) -- esos siguen exigiendo CONCILIADO, sin excepción.
 """
 
 from __future__ import annotations
@@ -63,6 +88,7 @@ class BandejaDestino(StrEnum):
     FACTURACION_1 = "facturacion_1"
     FACTURACION_2 = "facturacion_2"
     AUDITORIA_PRECIOS = "auditoria_precios"
+    EN_PROCESO_DE_PAGO = "en_proceso_de_pago"
 
 
 @dataclass
@@ -73,6 +99,11 @@ class ClasificacionCxC:
     sale_de_cxc: bool
     bandeja_destino: BandejaDestino | None
     motivo: str
+    # False cuando la salida de CxC se decidió por la versión "en proceso
+    # de pago" (Vinculación PENDIENTE, aún sin reconciliar en Odoo) en vez
+    # de por un pago realmente CONCILIADO. True en cualquier otro caso,
+    # incluyendo cuando la orden NO sale de CxC.
+    confirmado: bool = True
 
 
 def clasificar_estado_cxc(
@@ -83,6 +114,10 @@ def clasificar_estado_cxc(
     factura_real_pagada: bool,
     nacio_en_lista_usd: bool = False,
     venta_real_pagada: bool = False,
+    teorico_bs_pagado_incl_pendiente: bool = False,
+    teorico_usd_pagado_incl_pendiente: bool = False,
+    venta_real_pagada_incl_pendiente: bool = False,
+    factura_real_pagada_incl_pendiente: bool = False,
     tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
@@ -105,6 +140,13 @@ def clasificar_estado_cxc(
     `venta_real_pagada`: True si lo pagado cubre el monto real de la
     orden en Odoo (Col 3), independiente de cualquier teórico -- solo
     tiene efecto para órdenes AÚN NO facturadas (regla 3).
+
+    `*_incl_pendiente`: mismas 4 referencias, pero calculadas incluyendo
+    una Vinculación PENDIENTE (vinculada a ESTA orden, aún sin
+    reconciliar en Odoo) -- ver "Estado en proceso de pago" en el
+    docstring del módulo. Solo se consultan si ninguna versión CONCILIADO
+    alcanzó; si alguna de estas sí, la orden sale de CxC activa con
+    `bandeja_destino=EN_PROCESO_DE_PAGO` y `confirmado=False`.
 
     `tolerance` se documenta pero no se usa dentro de esta función —
     la tolerancia ya debe haberse aplicado al calcular los flags de
@@ -167,6 +209,64 @@ def clasificar_estado_cxc(
                 "USD -- no alcanza sin el Teórico USD (su referencia "
                 "nativa) también pagado"
             ),
+        )
+
+    # "En proceso de pago" (segunda pasada, mismo criterio que las reglas
+    # 1-4 pero incluyendo lo PENDIENTE) -- solo se llega aquí si NINGUNA
+    # versión CONCILIADO alcanzó arriba. Mismo "beneficio de la duda" que
+    # Odoo le da a una factura in_payment: sale de CxC activa, pero con
+    # bandeja y motivo propios para que quede visible que falta la
+    # conciliación.
+    if teorico_usd_pagado_incl_pendiente:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            motivo=(
+                "Pagado vs Teórico Lista USD, pero vía una Vinculación "
+                "aún sin reconciliar en Odoo -- equivalente a 'En "
+                "proceso de pago' en Odoo"
+            ),
+            confirmado=False,
+        )
+
+    if teorico_bs_pagado_incl_pendiente and not nacio_en_lista_usd:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            motivo=(
+                "Pagado vs Teórico Lista BS, pero vía una Vinculación "
+                "aún sin reconciliar en Odoo -- equivalente a 'En "
+                "proceso de pago' en Odoo"
+            ),
+            confirmado=False,
+        )
+
+    if not facturada and venta_real_pagada_incl_pendiente:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            motivo=(
+                "Pagado vs Venta Real, pero vía una Vinculación aún sin "
+                "reconciliar en Odoo -- equivalente a 'En proceso de "
+                "pago' en Odoo"
+            ),
+            confirmado=False,
+        )
+
+    if facturada and factura_real_pagada_incl_pendiente:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            motivo=(
+                "Pagado vs Factura Neta Real, pero vía una Vinculación "
+                "aún sin reconciliar en Odoo -- equivalente a 'En "
+                "proceso de pago' en Odoo"
+            ),
+            confirmado=False,
         )
 
     return ClasificacionCxC(

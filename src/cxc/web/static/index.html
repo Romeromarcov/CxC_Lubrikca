@@ -608,6 +608,37 @@
                         </table>
                     </div>
                 </details>
+
+                <!-- EN PROCESO DE PAGO (colapsable, solo visibilidad -- ya salió de CxC) -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Facturada</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-en-proceso-de-pago-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
             </div>
         </div>
 

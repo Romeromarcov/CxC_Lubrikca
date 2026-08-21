@@ -4473,15 +4473,17 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
     por estado), aunque el motor de descuentos (Fase 0) ya no les otorgaba
     ningún descuento por la misma razón.
 
-    Corrección posterior del usuario (mismo hilo del artefacto de
-    verificación): el TEXTO que ve Ventas para una Vinculación PENDIENTE
-    que cubre el 100% de la orden SÍ se colapsa a "pagada" (si el pago ya
-    se reportó y reduce el saldo, no debe verse "pendiente" en un reporte
-    de Ventas -- eso es un detalle de Cobranza/Administración). Lo que
-    NUNCA debe pasar es que esto cuente como dinero real (
-    ``monto_pagado_factura_odoo``, exclusivamente CONCILIADO) ni que saque
-    la orden de CxC activa (``sale_de_cxc``, que recalcula sus propios
-    flags solo con CONCILIADO) -- eso sigue exigiendo confirmación real.
+    Evolución del mismo hilo del artefacto de verificación: el TEXTO que
+    ve Ventas para una Vinculación PENDIENTE que cubre el 100% de la
+    orden se colapsa a "pagada" -- y, citando el precedente de Odoo ("en
+    proceso de pago" ya saca la factura de Cuentas por Cobrar, aunque
+    falte la conciliación bancaria), la orden TAMBIÉN sale de CxC activa
+    -- pero con ``cxc_confirmado=False`` y ``bandeja_destino=
+    "en_proceso_de_pago"``, nunca mezclada con una salida por pago
+    realmente CONCILIADO. Lo que NUNCA debe pasar es que esto cuente
+    como dinero real (``monto_pagado_factura_odoo``, exclusivamente
+    CONCILIADO) ni que destrabe ningún descuento (``_abonos`` en
+    runner.py sigue exigiendo CONCILIADO, sin excepción).
     """
     from cxc.config import EngineConfig
 
@@ -4542,7 +4544,10 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
         # El monto pagado "real" (val_ref_nacimiento, de vincs_por_so) debe
         # dar $0 -- el único abono existente es PENDIENTE, no cuenta.
         assert item["monto_pagado_factura_odoo"] == 0.0
-        # El texto SÍ se colapsa a "pagada" (corrección del usuario), pero
-        # la orden no sale de CxC activa -- eso sigue exigiendo CONCILIADO.
+        # El texto se colapsa a "pagada", y la orden sale de CxC activa
+        # (precedente Odoo "en proceso de pago") -- pero marcada
+        # explícitamente como no confirmada.
         assert item["estatus_pago_real_orden"] == "pagada"
-        assert item["sale_de_cxc"] is False
+        assert item["sale_de_cxc"] is True
+        assert item["cxc_confirmado"] is False
+        assert item["bandeja_destino"] == "en_proceso_de_pago"

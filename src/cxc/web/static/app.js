@@ -149,6 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
     const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
+    const bandejaEnProcesoDePagoTableBody = document.getElementById("bandeja-en-proceso-de-pago-table-body");
     const bandejaPendientesCerrarTableBody = document.getElementById("bandeja-pendientes-cerrar-table-body");
     const bandejaDescuentosPendientesTableBody = document.getElementById("bandeja-descuentos-pendientes-table-body");
 
@@ -1055,6 +1056,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
+            if (bandejaEnProcesoDePagoTableBody) bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td></tr>';
             if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td></tr>';
             if (bandejaDescuentosPendientesTableBody) bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td></tr>';
 
@@ -1068,6 +1070,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
                 const tray3 = data.iva_pendiente_agentes || [];
                 const tray4 = data.auditoria_precios || [];
+                const trayEnProceso = data.en_proceso_de_pago || [];
                 const tray5 = data.pendientes_por_cerrar || [];
                 const trayDescPend = data.descuentos_pendientes_aprobar || [];
 
@@ -1197,6 +1200,32 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
+                // Render Tray "En Proceso de Pago" (precedente de Odoo citado por
+                // el usuario -- ya salió de CxC, falta la conciliación bancaria)
+                if (bandejaEnProcesoDePagoTableBody) {
+                    if (trayEnProceso.length === 0) {
+                        bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay órdenes en proceso de pago.</td></tr>';
+                    } else {
+                        bandejaEnProcesoDePagoTableBody.innerHTML = "";
+                        trayEnProceso.forEach(item => {
+                            const row = document.createElement("tr");
+                            row.innerHTML = `
+                                <td><strong>${item.so_id}</strong></td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${item.fecha || ''}</td>
+                                <td>${item.facturada ? 'Sí' : 'No'}</td>
+                                <td>${item.lista_aplicada_label || ''}</td>
+                                <td>${item.ves_neta_teorica_iva != null ? fmt(item.ves_neta_teorica_iva) : '-'}</td>
+                                <td>${item.usd_neta_teorica_iva != null ? fmt(item.usd_neta_teorica_iva) : '-'}</td>
+                                <td>${item.venta_neta_real != null ? fmt(item.venta_neta_real) : '-'}</td>
+                                <td>${item.total_facturado_neto != null ? fmt(item.total_facturado_neto) : '-'}</td>
+                                <td><span class="state-badge" style="background:#dbeafe;color:#1d4ed8" title="${item.motivo || ''}">⏳ En proceso de pago</span></td>
+                            `;
+                            bandejaEnProcesoDePagoTableBody.appendChild(row);
+                        });
+                    }
+                }
+
                 // Render Tray 5 (Pendientes por Cerrar -- movida desde Reporte de Saldos)
                 if (bandejaPendientesCerrarTableBody) {
                     if (tray5.length === 0) {
@@ -1224,6 +1253,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (badge3) badge3.textContent = String(tray3.length);
                 const badgeAudPrecios = document.getElementById("bandeja-auditoria-precios-count-badge");
                 if (badgeAudPrecios) badgeAudPrecios.textContent = String(tray4.length);
+                const badgeEnProceso = document.getElementById("bandeja-en-proceso-de-pago-count-badge");
+                if (badgeEnProceso) badgeEnProceso.textContent = String(trayEnProceso.length);
             }
         } catch (err) {
             console.error("Error loading bandeja:", err);

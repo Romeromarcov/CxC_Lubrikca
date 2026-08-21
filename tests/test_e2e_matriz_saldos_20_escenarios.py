@@ -293,16 +293,17 @@ def test_escenario_b_fallback_a_ficha_no_contamina_saldo_teorico_ves():
         assert item["usd_neta_teorica"] == 120.0
 
 
-def test_pago_pendiente_no_conciliado_no_mueve_saldo_real_ni_saca_de_cxc():
+def test_pago_pendiente_no_conciliado_sale_de_cxc_como_en_proceso_de_pago():
     """Combinación del gate CONCILIADO (Fase 0) con el patrón D: una
 
     Vinculación PENDIENTE (sugerencia FIFO sin confirmar) que cubriría
     exactamente el neto con descuento se muestra "pagada" en el estatus de
-    Ventas (colapso visual, corrección del usuario -- ver
-    ``test_pendiente_se_muestra_pagada_en_ventas_pero_no_saca_de_cxc``),
-    pero el saldo real (``monto_pagado_factura_odoo``, que solo cuenta
-    CONCILIADO) y la salida de CxC activa NO deben moverse -- eso sigue
-    exigiendo confirmación real de Odoo.
+    Ventas (colapso visual). Y desde el precedente de Odoo citado por el
+    usuario ("en proceso de pago" ya saca la factura de CxC, distinguible
+    de "pagado") también SALE de CxC activa -- pero con
+    ``cxc_confirmado=False``, nunca confundida con un pago realmente
+    CONCILIADO. El saldo real (``monto_pagado_factura_odoo``, que solo
+    cuenta CONCILIADO) sigue en $0 -- eso no cambia.
     """
     from cxc.models import VentasTeorico
 
@@ -353,7 +354,9 @@ def test_pago_pendiente_no_conciliado_no_mueve_saldo_real_ni_saca_de_cxc():
         item = {it["so_id"]: it for it in res.json()["items"]}["SO_D1"]
         assert item["estatus_pago_teorico_ves"] == "pagada"
         assert item["monto_pagado_factura_odoo"] == 0.0
-        assert item["sale_de_cxc"] is False
+        assert item["sale_de_cxc"] is True
+        assert item["cxc_confirmado"] is False
+        assert item["bandeja_destino"] == "en_proceso_de_pago"
 
 
 def test_retencion_iva_confirmada_mas_nc_reduce_saldo_factura_real():
@@ -435,19 +438,18 @@ def test_retencion_iva_confirmada_mas_nc_reduce_saldo_factura_real():
         assert item["total_facturado_neto"] < 232.0
 
 
-def test_pendiente_se_muestra_pagada_en_ventas_pero_no_saca_de_cxc():
-    """Corrección del usuario sobre su propia propuesta (mismo hilo del
+def test_pendiente_se_muestra_pagada_en_ventas_y_sale_de_cxc_sin_confirmar():
+    """Evolución del mismo hilo del artefacto de verificación (agosto 2026):
 
-    artefacto de verificación, agosto 2026): primero pidió un estado
-    intermedio visible ("pagada pendiente de confirmar en Odoo"), luego
-    aclaró que si el pago YA reduce el saldo no debería verse como
-    "pendiente" en el reporte de Ventas -- eso es un detalle de
-    Cobranza/Administración. Resultado: una Vinculación PENDIENTE (sin
-    confirmar por Odoo) que cubre el teórico se muestra directo como
-    "pagada" en /api/ventas (colapsado, sin texto intermedio) -- PERO el
-    árbol de CxC (``clasificar_estado_cxc``) sigue exigiendo CONCILIADO
-    para sacar la orden de CxC activa o destrabar cualquier descuento --
-    ese colapso es puramente visual.
+    primero un estado intermedio visible ("pagada pendiente de confirmar
+    en Odoo"); después, colapsar a "pagada" en Ventas sin sacar la orden
+    de CxC; y finalmente (citando el precedente de Odoo -- "en proceso de
+    pago" ya saca la factura de CxC aunque falte la conciliación
+    bancaria) la orden SÍ sale de CxC activa cuando una Vinculación
+    PENDIENTE la cubre, pero con ``cxc_confirmado=False`` y
+    ``bandeja_destino="en_proceso_de_pago"`` -- nunca confundida con un
+    pago realmente CONCILIADO, y nunca destraba ningún descuento (eso
+    sigue siendo exclusivo de CONCILIADO, ver ``_abonos`` en runner.py).
     """
     from cxc.models import VentasTeorico
 
@@ -507,8 +509,11 @@ def test_pendiente_se_muestra_pagada_en_ventas_pero_no_saca_de_cxc():
         # Visual: se ve "pagada", sin texto intermedio.
         assert item["estatus_pago_teorico_ves"] == "pagada"
         assert item["estatus_pago_real_factura"] == "pagada"
-        # Real: sigue en CxC activa -- CONCILIADO es lo único que la saca.
-        assert item["sale_de_cxc"] is False
+        # Real: sale de CxC (precedente Odoo "en proceso de pago"), pero
+        # marcada explícitamente como NO confirmada.
+        assert item["sale_de_cxc"] is True
+        assert item["cxc_confirmado"] is False
+        assert item["bandeja_destino"] == "en_proceso_de_pago"
 
 
 def test_bandeja_facturacion_no_enruta_orden_con_solo_pago_pendiente():
@@ -716,3 +721,64 @@ def test_devolucion_facturada_con_nc_no_marca_falta():
         item = {it["so_id"]: it for it in res.json()["items"]}["SO_I2"]
         assert item["falta_nc_por_devolucion"] is False
         assert "Devolución registrada" in item["revisar_motivo"]
+
+
+def test_bandeja_lista_en_proceso_de_pago_no_como_accion_requerida():
+    """/api/bandeja expone la nueva lista "en_proceso_de_pago" (precedente
+
+    de Odoo citado por el usuario) -- la orden con solo un pago PENDIENTE
+    que cubre el teórico aparece ahí, visible pero SIN mezclarse con las
+    bandejas de acción real (ordenes_por_facturar, auditoria_precios).
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_J1",
+            cliente_id="CLI_J",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_J1", teorico_ves=Decimal("100.00"), teorico_usd=Decimal("100.00")),
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        _vinc("SO_J1", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_J1", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res_bandeja = client.get("/api/bandeja")
+        assert res_bandeja.status_code == 200
+        data = res_bandeja.json()
+
+        so_ids_en_proceso = {o["so_id"] for o in data["en_proceso_de_pago"]}
+        assert "SO_J1" in so_ids_en_proceso
+
+        so_ids_en_facturar = {o["so_id"] for o in data["ordenes_por_facturar"]}
+        so_ids_auditoria = {o["so_id"] for o in data["auditoria_precios"]}
+        assert "SO_J1" not in so_ids_en_facturar
+        assert "SO_J1" not in so_ids_auditoria

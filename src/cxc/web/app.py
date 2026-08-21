@@ -6291,11 +6291,24 @@ async def get_bandeja_facturacion():
       Odoo; y ``notas_credito_pendientes`` -- sin descuento pendiente,
       solo diferencial cambiario o pronto pago (la tolerancia normal del
       motor, nada que aprobar).
-    - **Bandeja de Auditoría de Precios** (``auditoria_precios``, NUEVA):
-      pagado vs la Factura Neta Real en Odoo pero NO vs ningún teórico --
+    - **Bandeja de Auditoría de Precios** (``auditoria_precios``): pagado
+      vs la Factura Neta Real en Odoo pero NO vs ningún teórico --
       sospecha de facturación con precio/lista por debajo del estándar
-      autorizado. La orden permanece en CxC activa (no sale de ninguna
-      bandeja anterior), esta es visibilidad adicional.
+      autorizado. Corrección del usuario (agosto 2026): la orden SALE de
+      CxC activa (legalmente la factura ya está saldada) -- esta bandeja
+      es control interno posterior, no una condición para mantenerla en
+      cobranza.
+    - **En proceso de pago** (``en_proceso_de_pago``, NUEVA, agosto
+      2026): mismo criterio que Bandeja 1/2/Auditoría, pero cubierto por
+      una Vinculación PENDIENTE (vinculada a esta orden vía FIFO o a
+      mano, aún sin reconciliar en Odoo) en vez de una CONCILIADA.
+      Precedente citado por el usuario: Odoo mismo tiene un estado "en
+      proceso de pago" para una factura cuyo cobro ya se aplicó pero
+      falta la conciliación bancaria, y ESE estado ya la saca de Cuentas
+      por Cobrar -- se replica igual acá: la orden SALE de CxC activa
+      (no se sigue mostrando como deuda pendiente), pero queda en esta
+      lista aparte (nunca mezclada con "pagada" real) para que Cobranza
+      sepa que falta ese último paso.
 
     Retención de IVA (clientes agentes de retención): en Bandeja 1 (orden
     SIN facturar todavía), un cliente agente de retención no paga en
@@ -6353,6 +6366,12 @@ async def get_bandeja_facturacion():
         descuentos_pendientes_aprobar = []
         iva_pendiente_agentes = []
         auditoria_precios = []
+        # Visibilidad, no acción -- ver "en proceso de pago" en
+        # cxc_routing.py. Sale de CxC activa (no se cobra dos veces) pero
+        # queda listada aparte para que Cobranza sepa que falta la
+        # conciliación con Odoo, igual que Odoo mismo lo muestra distinto
+        # de "pagado".
+        en_proceso_de_pago = []
 
         for so_id, item in ventas_items.items():
             o = ordenes_map.get(so_id)
@@ -6384,6 +6403,10 @@ async def get_bandeja_facturacion():
             teorico_usd_pagado = bool(item["teorico_usd_pagado_confirmado"])
             factura_real_pagada = bool(item["factura_real_pagada_confirmada"])
             venta_real_pagada = bool(item["venta_real_pagada_confirmada"])
+            teorico_bs_pagado_incl_pendiente = bool(item["teorico_bs_pagado_incl_pendiente"])
+            teorico_usd_pagado_incl_pendiente = bool(item["teorico_usd_pagado_incl_pendiente"])
+            factura_real_pagada_incl_pendiente = bool(item["factura_real_pagada_incl_pendiente"])
+            venta_real_pagada_incl_pendiente = bool(item["venta_real_pagada_incl_pendiente"])
 
             # Tolerancia de retención de IVA -- solo relevante mientras la
             # orden no está facturada (gate de Bandeja 1); una vez
@@ -6410,7 +6433,29 @@ async def get_bandeja_facturacion():
                 factura_real_pagada=factura_real_pagada,
                 nacio_en_lista_usd=bool(item.get("nacio_en_lista_usd")),
                 venta_real_pagada=venta_real_pagada,
+                teorico_bs_pagado_incl_pendiente=teorico_bs_pagado_incl_pendiente,
+                teorico_usd_pagado_incl_pendiente=teorico_usd_pagado_incl_pendiente,
+                factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
+                venta_real_pagada_incl_pendiente=venta_real_pagada_incl_pendiente,
             )
+
+            if clasificacion.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO:
+                en_proceso_de_pago.append(
+                    {
+                        "so_id": o.so_id,
+                        "cliente_nombre": c_name,
+                        "facturada": bool(o.facturada),
+                        "fecha": o.fecha.isoformat()
+                        if hasattr(o.fecha, "isoformat")
+                        else str(o.fecha),
+                        "ves_neta_teorica_iva": item.get("ves_neta_teorica_iva"),
+                        "usd_neta_teorica_iva": item.get("usd_neta_teorica_iva"),
+                        "venta_neta_real": item.get("venta_neta_real"),
+                        "total_facturado_neto": item.get("total_facturado_neto"),
+                        "lista_aplicada_label": item.get("lista_aplicada_label"),
+                        "motivo": clasificacion.motivo,
+                    }
+                )
 
             if clasificacion.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS:
                 auditoria_precios.append(
@@ -6676,6 +6721,7 @@ async def get_bandeja_facturacion():
             "descuentos_pendientes_aprobar": descuentos_pendientes_aprobar,
             "iva_pendiente_agentes": iva_pendiente_agentes,
             "auditoria_precios": auditoria_precios,
+            "en_proceso_de_pago": en_proceso_de_pago,
             "pendientes_por_cerrar": pendientes_por_cerrar,
         }
     except Exception as e:
@@ -10857,6 +10903,29 @@ def _get_ventas_sync(
             venta_real_pagada_confirmada = (
                 _estado_pago(val_ref_nacimiento, target_orden) == "pagada"
             )
+            # "En proceso de pago" (precedente citado por el usuario: el
+            # estado homónimo de Odoo ya saca una factura de CxC aunque
+            # falte la conciliación bancaria) -- mismas 4 referencias,
+            # pero incluyendo una Vinculación PENDIENTE ya vinculada a
+            # ESTA orden. Solo entran en juego dentro de
+            # clasificar_estado_cxc si ninguna versión confirmada arriba
+            # alcanzó -- ver cxc_routing.py.
+            teorico_bs_pagado_incl_pendiente = (
+                not _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
+                and ves_neta_teorica_iva is not None
+                and _estado_pago(val_bcv_incl_pendiente, ves_neta_teorica_iva) == "pagada"
+            )
+            teorico_usd_pagado_incl_pendiente = (
+                not _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
+                and usd_neta_teorica_iva is not None
+                and _estado_pago(val_binance_incl_pendiente, usd_neta_teorica_iva) == "pagada"
+            )
+            factura_real_pagada_incl_pendiente = tiene_factura and (
+                _estado_pago(val_ref_nacimiento_incl_pendiente, target_factura) == "pagada"
+            )
+            venta_real_pagada_incl_pendiente = (
+                _estado_pago(val_ref_nacimiento_incl_pendiente, target_orden) == "pagada"
+            )
             clasificacion_cxc = clasificar_estado_cxc(
                 so_id=o.so_id,
                 facturada=bool(o.facturada),
@@ -10865,6 +10934,10 @@ def _get_ventas_sync(
                 factura_real_pagada=factura_real_pagada_confirmada,
                 nacio_en_lista_usd=es_lista_usd_nacimiento,
                 venta_real_pagada=venta_real_pagada_confirmada,
+                teorico_bs_pagado_incl_pendiente=teorico_bs_pagado_incl_pendiente,
+                teorico_usd_pagado_incl_pendiente=teorico_usd_pagado_incl_pendiente,
+                venta_real_pagada_incl_pendiente=venta_real_pagada_incl_pendiente,
+                factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
             )
 
             items.append(
@@ -11062,6 +11135,22 @@ def _get_ventas_sync(
                     "teorico_usd_pagado_confirmado": teorico_usd_pagado_confirmado,
                     "factura_real_pagada_confirmada": factura_real_pagada_confirmada,
                     "venta_real_pagada_confirmada": venta_real_pagada_confirmada,
+                    # Mismos 4, pero incluyendo una Vinculación PENDIENTE
+                    # -- solo para consumidores que necesiten replicar
+                    # ellos mismos el árbol de CxC con el estado "en
+                    # proceso de pago" (ver ``/api/bandeja``).
+                    "teorico_bs_pagado_incl_pendiente": teorico_bs_pagado_incl_pendiente,
+                    "teorico_usd_pagado_incl_pendiente": teorico_usd_pagado_incl_pendiente,
+                    "factura_real_pagada_incl_pendiente": factura_real_pagada_incl_pendiente,
+                    "venta_real_pagada_incl_pendiente": venta_real_pagada_incl_pendiente,
+                    # True solo si sale_de_cxc se decidió por un pago
+                    # realmente CONCILIADO; False cuando salió por la
+                    # rama "en proceso de pago" (bandeja_destino ==
+                    # "en_proceso_de_pago") -- precedente citado por el
+                    # usuario: el estado homónimo de Odoo también saca la
+                    # factura de CxC aunque falte la conciliación
+                    # bancaria, distinguible del todo confirmado.
+                    "cxc_confirmado": clasificacion_cxc.confirmado,
                 }
             )
             # Antigüedad ("Días Vencido" en la UI de Ventas): fuente única

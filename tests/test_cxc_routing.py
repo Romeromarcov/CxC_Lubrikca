@@ -201,3 +201,90 @@ def test_venta_real_pagada_no_aplica_si_ya_esta_facturada():
     )
     assert r.sale_de_cxc is False
     assert r.bandeja_destino is None
+
+
+def test_teorico_usd_pendiente_va_en_proceso_de_pago_no_confirmado():
+    """Precedente citado por el usuario: Odoo tiene un estado "en proceso
+
+    de pago" para facturas cuyo cobro ya se aplicó pero falta la
+    conciliación bancaria -- ESE estado ya saca la factura de CxC en
+    Odoo, aunque quede visiblemente distinto de "pagado". Se replica: una
+    Vinculación PENDIENTE (vinculada a esta orden, sin confirmar por
+    Odoo) que cubre el Teórico USD saca la orden de CxC activa, pero con
+    su propio destino y confirmado=False -- nunca se confunde con un
+    pago realmente CONCILIADO.
+    """
+    r = clasificar_estado_cxc(
+        so_id="S00010",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        teorico_usd_pagado_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
+    assert r.confirmado is False
+
+
+def test_confirmado_real_tiene_prioridad_sobre_pendiente():
+    """Si el Teórico USD ya está CONCILIADO, no debe caer nunca en la
+
+    rama "en proceso de pago" aunque también se pase incl_pendiente=True
+    -- la versión confirmada siempre gana."""
+    r = clasificar_estado_cxc(
+        so_id="S00011",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=True,
+        factura_real_pagada=False,
+        teorico_usd_pagado_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.FACTURACION_2
+    assert r.confirmado is True
+
+
+def test_venta_real_pendiente_no_facturada_va_en_proceso_de_pago():
+    r = clasificar_estado_cxc(
+        so_id="S00012",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        venta_real_pagada_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
+    assert r.confirmado is False
+
+
+def test_nacio_en_lista_usd_bloquea_en_proceso_de_pago_via_bs_tambien():
+    """La restricción de lista nativa (regla 1/2) también aplica a la
+
+    versión "en proceso de pago" -- una orden nacida en USD no sale de
+    CxC solo porque el Teórico BS esté pendiente-cubierto."""
+    r = clasificar_estado_cxc(
+        so_id="S00013",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        nacio_en_lista_usd=True,
+        teorico_bs_pagado_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is False
+    assert r.bandeja_destino is None
+
+
+def test_sin_ninguna_referencia_pendiente_permanece_en_cxc():
+    r = clasificar_estado_cxc(
+        so_id="S00014",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+    )
+    assert r.sale_de_cxc is False
+    assert r.bandeja_destino is None
+    assert r.confirmado is True
