@@ -698,43 +698,6 @@ def _pagos_bcv_binance_por_orden(
     return result
 
 
-def _wh_iva_aplicado_por_orden(
-    execute: Any, invoice_ids: list[int], inv_id_to_so: dict[int, str]
-) -> dict[str, bool]:
-    """``account.move.wh_iva`` EN VIVO ("¿Ya se ha retenido esta factura con
-
-    el IVA?") para las facturas de un conjunto de órdenes -- el mismo
-    patrón de ``_estado_pago_facturas_desde_odoo``/``_pagos_bcv_binance_
-    por_orden`` (campo mutable de ``account.move`` que el espejo nunca
-    captura, se consulta acotado por id). Confirmado en vivo (agosto
-    2026, factura 9872/orden S00851): el documento de retención
-    (``account.wh.iva``, ligado vía ``move_id``) puede existir en estado
-    "draft" con este flag todavía en False -- solo cuando Odoo lo marca
-    True la retención está realmente aplicada/asociada a la factura.
-    Usado por ``/api/bandeja`` (Bandeja 3) para dejar de mostrar una
-    orden una vez el comprobante ya fue procesado en Odoo, sin depender
-    de inferir el estado a partir del saldo pendiente.
-    """
-    result: dict[str, bool] = {}
-    if not execute or not invoice_ids:
-        return result
-    try:
-        recs = execute(
-            "account.move",
-            "read",
-            [invoice_ids],
-            {"fields": ["id", "wh_iva"]},
-        )
-    except Exception as e:
-        logger.warning("Error consultando wh_iva en vivo en account.move: %s", e)
-        return result
-    for r in recs:
-        so = inv_id_to_so.get(int(r["id"]))
-        if so and r.get("wh_iva"):
-            result[so] = True
-    return result
-
-
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -4964,6 +4927,12 @@ def _facturacion_por_so_desde_espejo(
     invoice_ids_all: list[int] = []
     inv_id_to_so: dict[int, str] = {}
     inv_usd_ratio_map: dict[int, float] = {}
+    # Fase 3 (plan de arquitectura de pagos, agosto 2026): True si ALGUNA
+    # factura out_invoice de la orden ya tiene la retención de IVA
+    # confirmada en Odoo (account.move.wh_iva, espejado -- ver
+    # Factura.wh_iva_aplicado). Reemplaza la consulta en vivo
+    # _wh_iva_aplicado_por_orden.
+    wh_iva_aplicado_por_so: dict[str, bool] = {}
 
     for f in facturas:
         if f.estado != "posted":
@@ -4980,6 +4949,8 @@ def _facturacion_por_so_desde_espejo(
         else:
             facturado_con_imp[so] = facturado_con_imp.get(so, 0.0) + con_imp
             facturado_antes_imp[so] = facturado_antes_imp.get(so, 0.0) + antes_imp
+            if f.wh_iva_aplicado:
+                wh_iva_aplicado_por_so[so] = True
 
         if f.so_id and f.move_type in ("out_invoice", "out_refund") and f.factura_id.isdigit():
             fid = int(f.factura_id)
@@ -5000,6 +4971,7 @@ def _facturacion_por_so_desde_espejo(
         "invoice_ids_all": invoice_ids_all,
         "inv_id_to_so": inv_id_to_so,
         "inv_usd_ratio_map": inv_usd_ratio_map,
+        "wh_iva_aplicado_por_so": wh_iva_aplicado_por_so,
     }
 
 
@@ -6476,11 +6448,11 @@ async def get_bandeja_facturacion():
                 #    verificado en vivo con la factura 9872 de S00851: ya
                 #    existe un documento de retencion pero sigue en
                 #    "draft" con `wh_iva=False`, confirmando que aun
-                #    corresponde mostrarla aqui. `wh_iva_aplicado` se
-                #    consulta en vivo (`_wh_iva_aplicado_por_orden`, mismo
-                #    patron que `_estado_pago_facturas_desde_odoo` --
-                #    campo mutable que el espejo nunca captura) y ya viene
-                #    resuelto en `item` desde Ventas.
+                #    corresponde mostrarla aqui. `wh_iva_aplicado` se lee
+                #    del espejo `Factura` (Fase 3, agosto 2026 -- antes
+                #    era una consulta en vivo, `_wh_iva_aplicado_por_orden`,
+                #    ya retirada) y ya viene resuelto en `item` desde
+                #    Ventas.
                 #
                 # 4. Alcance de la bandeja (pedido explicito del usuario,
                 #    2026-08-20): "todo el que deba el IVA entra a
@@ -10256,6 +10228,12 @@ def _get_ventas_sync(
             invoice_ids_all = fact_espejo["invoice_ids_all"]
             inv_id_to_so = fact_espejo["inv_id_to_so"]
             inv_usd_ratio_map = fact_espejo["inv_usd_ratio_map"]
+            # Fase 3 (plan de arquitectura de pagos): antes se consultaba
+            # en vivo (_wh_iva_aplicado_por_orden) en el bloque `if
+            # execute` de abajo -- ahora viene del espejo Factura, igual de
+            # fresco (mismo sync incremental) y sin depender de Odoo en
+            # cada carga de página.
+            wh_iva_aplicado_map = fact_espejo["wh_iva_aplicado_por_so"]
 
             desc_orden_odoo_map, desc_factura_odoo_map = _descuentos_lineas_desde_espejo(
                 repo, so_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map
@@ -10293,9 +10271,6 @@ def _get_ventas_sync(
                     tasas_rows_pago,
                     hist_rows_pago,
                     facturado_con_imp_por_so=facturado_con_imp_map,
-                )
-                wh_iva_aplicado_map = _wh_iva_aplicado_por_orden(
-                    execute, invoice_ids_all, inv_id_to_so
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -10424,6 +10399,22 @@ def _get_ventas_sync(
             total_facturado_neto = (
                 total_facturado_con_impuestos - total_nc_aplicada + total_nd_aplicada
             )
+            # Fase 3 (plan de arquitectura de pagos, agosto 2026, pedido
+            # explícito del usuario): la retención de IVA debe comunicarse
+            # a Ventas igual que ya hacen NC/ND -- antes `wh_iva_aplicado`
+            # solo decidía si la orden salía de la Bandeja 3, sin tocar
+            # nunca este saldo; una orden con retención ya confirmada en
+            # Odoo se veía "parcialmente pagada" para siempre. Una vez
+            # confirmada, el cliente ya no debe en efectivo el IVA (0-100%
+            # retenido según el documento -- mismo rango que ya acepta la
+            # Bandeja 3, sin asumir un porcentaje fijo), así que el saldo
+            # objetivo baja por el IVA estimado completo de la factura.
+            iva_retenido_confirmado = 0.0
+            if wh_iva_aplicado_map.get(o.so_id) and total_facturado_neto > 0.005:
+                iva_retenido_confirmado = total_facturado_neto - (
+                    total_facturado_neto / (1 + iva_rate)
+                )
+                total_facturado_neto = max(0.0, total_facturado_neto - iva_retenido_confirmado)
             tiene_factura = total_facturado_con_impuestos > 0.005
 
             # Tarea 3c: descuentos ya aplicados en Odoo (orden/factura, columnas
@@ -10616,6 +10607,9 @@ def _get_ventas_sync(
                     "total_nc_aplicada": round(total_nc_aplicada, 2),
                     "total_nd_aplicada": round(total_nd_aplicada, 2),
                     "total_facturado_neto": round(total_facturado_neto, 2),
+                    # Fase 3: informativo -- cuánto de total_facturado_neto
+                    # ya se restó por retención de IVA confirmada en Odoo.
+                    "iva_retenido_confirmado": round(iva_retenido_confirmado, 2),
                     "diferencia": diferencia,
                     "alerta": alerta,
                     "revisar_motivo": revisar_motivo,

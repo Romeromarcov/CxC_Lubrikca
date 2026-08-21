@@ -232,6 +232,7 @@ def map_factura_espejo(rec: dict[str, Any]) -> Factura:
         factura_origen_id=factura_origen_id or None,
         monto_total_signed_usd=_dec(rec.get("amount_total_signed_usd")),
         monto_sin_impuestos_signed_usd=_dec(rec.get("amount_untaxed_signed_usd")),
+        wh_iva_aplicado=bool(rec.get("wh_iva")),
     )
 
 
@@ -633,6 +634,7 @@ class OdooXmlRpcReader(OdooReader):
                 "state",
                 "reversed_entry_id",
                 "debit_origin_id",
+                "wh_iva",
             ],
         )
         return [map_factura_espejo(r) for r in recs]

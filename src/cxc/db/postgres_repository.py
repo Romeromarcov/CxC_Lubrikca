@@ -1108,6 +1108,7 @@ def _factura_to_row(f: Factura) -> dict[str, Any]:
         "factura_origen_id": f.factura_origen_id,
         "monto_total_signed_usd": f.monto_total_signed_usd,
         "monto_sin_impuestos_signed_usd": f.monto_sin_impuestos_signed_usd,
+        "wh_iva_aplicado": f.wh_iva_aplicado,
     }
 
 
@@ -1126,6 +1127,7 @@ def _row_to_factura(r: Any) -> Factura:
         factura_origen_id=r.factura_origen_id,
         monto_total_signed_usd=r.monto_total_signed_usd,
         monto_sin_impuestos_signed_usd=r.monto_sin_impuestos_signed_usd,
+        wh_iva_aplicado=getattr(r, "wh_iva_aplicado", False) or False,
     )
 
 

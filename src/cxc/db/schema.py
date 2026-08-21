@@ -115,6 +115,9 @@ facturas = Table(
     Column("factura_origen_id", String, nullable=True),
     Column("monto_total_signed_usd", MONEY, nullable=False, server_default="0"),
     Column("monto_sin_impuestos_signed_usd", MONEY, nullable=False, server_default="0"),
+    # Fase 3 (plan de arquitectura de pagos, agosto 2026): account.move.
+    # wh_iva espejado -- ver docstring de Factura.wh_iva_aplicado.
+    Column("wh_iva_aplicado", Boolean, nullable=False, server_default="false"),
 )
 
 # --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación

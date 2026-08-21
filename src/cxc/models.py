@@ -143,6 +143,15 @@ class Factura:
     # trae (factura muy antigua, moneda ya USD, etc.).
     monto_total_signed_usd: Decimal = Decimal("0")
     monto_sin_impuestos_signed_usd: Decimal = Decimal("0")
+    # Fase 3 (plan de arquitectura de pagos, agosto 2026): "¿Ya se ha
+    # retenido esta factura con el IVA?" -- account.move.wh_iva en Odoo.
+    # Técnicamente mutable (cambia una vez cuando Odoo procesa la
+    # retención, casi nunca se revierte) pero se trata como espejo igual
+    # que el resto de esta clase -- a diferencia de amount_residual (que
+    # cambia con CADA pago aplicado y necesita estar siempre fresco), un
+    # atraso de hasta 5 minutos en este campo es aceptable. Reemplaza la
+    # consulta en vivo que existía antes (_wh_iva_aplicado_por_orden).
+    wh_iva_aplicado: bool = False
 
 
 # --- 3.2c Entregas (espejo, sync-owned -- Fase 0 del plan de consolidación

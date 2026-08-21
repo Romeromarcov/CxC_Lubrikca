@@ -1016,15 +1016,6 @@ def test_e2e_14c_bandeja3_sale_si_odoo_ya_marco_wh_iva_aplicado():
     def _fake_execute(model, method, args, kwargs=None):
         if model == "sale.order":
             return [{"name": "SO_WH_OK", "state": "sale", "amount_untaxed": 100.0}]
-        if model == "account.move":
-            return [
-                {
-                    "id": 9101,
-                    "payment_state": "partial",
-                    "amount_residual": 12.0,
-                    "wh_iva": True,
-                }
-            ]
         return []
 
     mock_repo = MagicMock()
@@ -1054,6 +1045,9 @@ def test_e2e_14c_bandeja3_sale_si_odoo_ya_marco_wh_iva_aplicado():
             estado="posted",
             monto_total_signed_usd=Decimal("116.00"),
             monto_sin_impuestos_signed_usd=Decimal("100.00"),
+            # Fase 3: wh_iva_aplicado ahora viene del espejo Factura, ya
+            # no de una consulta en vivo a account.move.
+            wh_iva_aplicado=True,
         )
     ]
     mock_repo.all_ordenes.return_value = [
@@ -1281,6 +1275,103 @@ def test_e2e_14e_bandeja_descuentos_pendientes_aprobar_separada_de_nc():
         assert "SO_F3" in pend_ids
         assert pend_ids["SO_F3"]["descuento_pendiente_aplicar"] == pytest.approx(20.0, abs=0.05)
         assert "SO_F3" not in {i["so_id"] for i in data["notas_credito_pendientes"]}
+
+
+def test_e2e_14f_ventas_retencion_confirmada_reduce_saldo_igual_que_nc():
+    """Fase 3 (plan de arquitectura de pagos, agosto 2026, pedido explícito
+
+    del usuario): una factura con retención de IVA ya confirmada en Odoo
+    (``Factura.wh_iva_aplicado`` -- espejo) debe reducir el saldo objetivo
+    de Ventas por el IVA estimado, igual que ya hacen NC/ND -- antes solo
+    afectaba si la orden salía de Bandeja 3, nunca ``total_facturado_neto``/
+    ``saldo_pendiente_cxc``/``estatus_pago_real_factura``.
+
+    Factura de $116 ($100 subtotal + 16% IVA). El cliente pagó exactamente
+    el subtotal ($100, sin el IVA) -- sin la retención confirmada eso
+    quedaría "parcial" para siempre; con ``wh_iva_aplicado=True`` debe
+    verse "pagada".
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "C_RET", "nombre": "Cliente Retencion"}] if sheet == "Clientes" else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_RET",
+            cliente_id="C_RET",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="9999",
+        ),
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="9999",
+            numero="FAC/9999",
+            so_id="SO_RET",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 1),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+            wh_iva_aplicado=True,
+        )
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V_RET",
+            pago_id="P_RET",
+            so_id="SO_RET",
+            monto_aplicado=Decimal("100.00"),
+            hora_pago_confirmada=datetime.now(),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+        ),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_entregas.return_value = []
+    mock_repo.all_catalogo.return_value = []
+
+    fake_config = MagicMock()
+    from cxc.config import EngineConfig
+
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        items = {it["so_id"]: it for it in res.json()["items"]}
+
+    item = items["SO_RET"]
+    assert item["iva_retenido_confirmado"] == pytest.approx(16.0, abs=0.05)
+    # total_facturado_neto y saldo_pendiente_cxc (su target, antes de
+    # comparar contra lo pagado) bajan de $116 a $100 -- el IVA retenido
+    # ya no se debe en efectivo, mismo tratamiento que ya recibe una NC.
+    assert item["total_facturado_neto"] == pytest.approx(100.0, abs=0.05)
+    assert item["saldo_pendiente_cxc"] == pytest.approx(100.0, abs=0.05)
+    # El cliente pagó exactamente ese target ($100) -- con la retención
+    # confirmada, la factura ya se ve "pagada", no "parcial" para siempre.
+    assert item["estatus_pago_real_factura"] == "pagada"
 
 
 def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
