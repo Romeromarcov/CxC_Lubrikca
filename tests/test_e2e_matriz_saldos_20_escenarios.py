@@ -428,3 +428,122 @@ def test_retencion_iva_confirmada_mas_nc_reduce_saldo_factura_real():
         assert item["iva_retenido_confirmado"] > 0
         # El total facturado neto debe reflejar la NC restada también.
         assert item["total_facturado_neto"] < 232.0
+
+
+def test_pendiente_facturada_muestra_pagada_pendiente_confirmar_odoo():
+    """Nuevo estado intermedio (pedido del usuario en el artefacto de
+
+    verificación): una orden YA FACTURADA con una Vinculación PENDIENTE
+    (sin confirmar por Odoo) que cubre el teórico debe verse
+    "pagada_pendiente_odoo" -- ni "sin_pago" (el dinero ya está vinculado)
+    ni "pagada" (Odoo todavía no lo confirmó). No debe salir de CxC activa
+    (eso sigue exigiendo CONCILIADO).
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_F1",
+            cliente_id="CLI_F",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_F1", teorico_ves=Decimal("100.00"), teorico_usd=Decimal("100.00")),
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        _vinc("SO_F1", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="F1",
+            numero="FAC/F1",
+            so_id="SO_F1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_F1", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_F1"]
+        assert item["estatus_pago_teorico_ves"] == "pagada_pendiente_odoo"
+        assert item["estatus_pago_real_factura"] == "pagada_pendiente_odoo"
+
+
+def test_pendiente_no_facturada_muestra_confirmada_temporal_app():
+    """Espejo del test anterior para una orden SIN factura todavía: el
+
+    mismo pago PENDIENTE se etiqueta "pagada_temporal_app" -- no hay
+    ninguna factura en Odoo esperando reconciliación todavía, así que
+    hablar de "pendiente confirmar en Odoo" sería engañoso. La orden
+    tampoco sale de CxC activa.
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_G1",
+            cliente_id="CLI_G",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_G1", teorico_ves=Decimal("100.00"), teorico_usd=Decimal("100.00")),
+    ]
+    mock_repo.all_vinculaciones.return_value = [
+        _vinc("SO_G1", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_G1", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_G1"]
+        assert item["estatus_pago_teorico_ves"] == "pagada_temporal_app"
+        assert item["estatus_pago_real_factura"] == "sin_factura"

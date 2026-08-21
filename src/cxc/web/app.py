@@ -10252,8 +10252,17 @@ def _get_ventas_sync(
         # producción: 203 Vinculaciones PENDIENTE creadas por el auto-FIFO,
         # todas afectadas por este mismo hueco antes de este fix.
         vincs_por_so: dict[str, list[Vinculacion]] = {}
+        # Comentario del usuario en el artefacto de verificación (agosto
+        # 2026): una Vinculación PENDIENTE que cubre el teórico no debe
+        # verse igual que "sin pago" -- el dinero ya está ahí (sugerencia
+        # FIFO o vínculo manual reciente), solo falta que Odoo lo
+        # reconcilie. Se guarda aparte (nunca mezclada con vincs_por_so,
+        # que sigue siendo solo CONCILIADO para todo lo que ya dependía de
+        # "pago real") para computar un estado intermedio informativo.
+        vincs_pendientes_por_so: dict[str, list[Vinculacion]] = {}
         for v in repo.all_vinculaciones():
             if v.estado != EstadoVinculacion.CONCILIADO:
+                vincs_pendientes_por_so.setdefault(v.so_id, []).append(v)
                 continue
             vincs_por_so.setdefault(v.so_id, []).append(v)
 
@@ -10439,6 +10448,36 @@ def _get_ventas_sync(
             if pagado > _EPS_PAGO:
                 return "parcial"
             return "sin_pago"
+
+        def _estado_pago_con_pendiente(
+            pagado_confirmado: float,
+            pagado_incl_pendiente: float,
+            target: float,
+            facturada: bool,
+        ) -> str:
+            """Dos estados intermedios nuevos (pedido del usuario en el
+
+            artefacto de verificación, agosto 2026): una Vinculación
+            PENDIENTE (FIFO sugerida o vínculo manual reciente, aún sin
+            reconciliar en Odoo) que YA cubre el objetivo no debe verse
+            igual que "sin_pago" -- el dinero ya está vinculado, solo falta
+            que Odoo lo confirme. Se distingue por texto según si la orden
+            ya está facturada (hay una factura real en Odoo esperando esa
+            reconciliación) o no (no hay nada que reconciliar todavía en
+            Odoo -- lo "pendiente" es, de hecho, la única confirmación que
+            existe por ahora, dentro de la app). Nunca cambia el criterio
+            de "pagado real" en ningún otro lado del sistema -- ver
+            ``vincs_por_so`` (solo CONCILIADO) vs
+            ``vincs_pendientes_por_so`` más arriba: los gates de
+            descuento, saldo real y salida de CxC siguen usando
+            exclusivamente lo confirmado.
+            """
+            estado = _estado_pago(pagado_confirmado, target)
+            if estado == "pagada":
+                return estado
+            if target > _EPS_PAGO and pagado_incl_pendiente >= target - _EPS_PAGO:
+                return "pagada_pendiente_odoo" if facturada else "pagada_temporal_app"
+            return estado
 
         def _sin_datos_teorico(
             teorico_row: Any, bruta: float | None, precio_base: float
@@ -10680,18 +10719,44 @@ def _get_ventas_sync(
                 p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
                 val_bcv = float(p_bcv_binance.get("monto_pagado_bcv", 0.0))
                 val_binance = float(p_bcv_binance.get("monto_pagado_usd_binance", 0.0))
+            # Comentario del usuario (artefacto de verificación, agosto
+            # 2026): además de "confirmado" (CONCILIADO, arriba) se calcula
+            # cuánto sumaría si se incluyera lo PENDIENTE (vinculado -- FIFO
+            # o manual -- pero aún sin reconciliar en Odoo), SOLO para
+            # exponer los 2 estados intermedios nuevos más abajo. Nunca se
+            # usa para "target"/saldo real ni para ningún gate de
+            # descuento -- eso sigue siendo exclusivamente CONCILIADO.
+            vincs_pend_orden = vincs_pendientes_por_so.get(o.so_id, [])
+            if vincs_pend_orden:
+                val_bcv_incl_pendiente = val_bcv + float(valor_pagado_bcv_usd(vincs_pend_orden))
+                val_binance_incl_pendiente = val_binance + float(
+                    valor_pagado_binance_usd(vincs_pend_orden)
+                )
+            else:
+                val_bcv_incl_pendiente = val_bcv
+                val_binance_incl_pendiente = val_binance
             es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
             )
             val_ref_nacimiento = val_binance if es_lista_usd_nacimiento else val_bcv
+            val_ref_nacimiento_incl_pendiente = (
+                val_binance_incl_pendiente if es_lista_usd_nacimiento else val_bcv_incl_pendiente
+            )
 
             target_orden = max(0.0, venta_neta_real - descuento_aplicado_sistema)
-            estatus_pago_real_orden = _estado_pago(val_ref_nacimiento, target_orden)
+            estatus_pago_real_orden = _estado_pago_con_pendiente(
+                val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden, o.facturada
+            )
 
             if tiene_factura:
                 target_factura = max(0.0, total_facturado_neto - descuento_aplicado_sistema)
-                estatus_pago_real_factura = _estado_pago(val_ref_nacimiento, target_factura)
+                estatus_pago_real_factura = _estado_pago_con_pendiente(
+                    val_ref_nacimiento,
+                    val_ref_nacimiento_incl_pendiente,
+                    target_factura,
+                    o.facturada,
+                )
             else:
                 estatus_pago_real_factura = "sin_factura"
 
@@ -10705,7 +10770,9 @@ def _get_ventas_sync(
                     _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
                     or ves_neta_teorica_iva is None
                 )
-                else _estado_pago(val_bcv, ves_neta_teorica_iva)
+                else _estado_pago_con_pendiente(
+                    val_bcv, val_bcv_incl_pendiente, ves_neta_teorica_iva, o.facturada
+                )
             )
             estatus_pago_teorico_usd = (
                 "sin_datos"
@@ -10713,7 +10780,9 @@ def _get_ventas_sync(
                     _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
                     or usd_neta_teorica_iva is None
                 )
-                else _estado_pago(val_binance, usd_neta_teorica_iva)
+                else _estado_pago_con_pendiente(
+                    val_binance, val_binance_incl_pendiente, usd_neta_teorica_iva, o.facturada
+                )
             )
 
             if tiene_factura:
