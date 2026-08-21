@@ -15,6 +15,7 @@ from datetime import date
 
 from ..models import (
     BandejaFacturacion,
+    Entrega,
     EstadoVinculacion,
     LineaOrden,
     MetodoPago,
@@ -356,7 +357,13 @@ class EngineRunner:
         comparación que más se necesita para órdenes ya facturadas (ver
         docstring de la tabla en ``db/schema.py``). Órdenes canceladas/
         borrador se saltan igual que ``run_all`` (no tiene sentido un
-        teórico para una orden que nunca se concretó).
+        teórico para una orden que nunca se concretó) -- EXCEPTO
+        (corrección del usuario, artefacto de verificación, agosto 2026)
+        si la mercancía YA fue entregada (``Entrega`` outgoing "done") y
+        NO hay ninguna devolución registrada: cancelar la orden en Odoo
+        después de despachada no revierte la venta real, así que se sigue
+        tratando como una venta real y se recalcula igual que cualquier
+        otra orden.
 
         ``limite``: tope de órdenes a procesar en esta corrida (cada una
         implica varias llamadas a Odoo vía el price resolver) -- None
@@ -370,13 +377,25 @@ class EngineRunner:
         for ln in self._repo.all_lineas():
             if ln.so_id:
                 lineas_index.setdefault(ln.so_id, []).append(ln)
+        entregas_index: dict[str, list[Entrega]] = {}
+        for e in self._repo.all_entregas():
+            if e.so_id:
+                entregas_index.setdefault(e.so_id, []).append(e)
         procesadas = 0
         for o in self._repo.all_ordenes():
             if limite is not None and procesadas >= limite:
                 break
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft"):
-                continue
+                entregada_sin_devolver = (
+                    not o.tiene_devolucion
+                    and any(
+                        e.tipo == "outgoing" and e.estado == "done"
+                        for e in entregas_index.get(o.so_id, [])
+                    )
+                )
+                if not entregada_sin_devolver:
+                    continue
             existente = existentes.get(o.so_id)
             fingerprint_actual = fingerprint_lineas(lineas_index.get(o.so_id, []))
             if (

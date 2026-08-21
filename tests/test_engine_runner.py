@@ -365,3 +365,68 @@ def test_run_teoricos_pendientes_recalcula_si_cambiaron_las_lineas() -> None:
 
     # Ya con la huella actualizada, una tercera corrida no lo vuelve a tocar.
     assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0
+
+
+def test_run_teoricos_pendientes_recalcula_orden_cancelada_entregada_sin_devolucion() -> None:
+    """Corrección del usuario (artefacto de verificación, agosto 2026):
+
+    cancelar una orden en Odoo DESPUÉS de que la mercancía ya salió del
+    almacén (y sin ninguna devolución registrada) no revierte la venta
+    real -- el teórico se sigue calculando igual que cualquier otra
+    orden, no se salta como una cancelación normal.
+    """
+    repo = _seed()
+    orden = repo.get_orden("SO1")
+    assert orden is not None
+    orden.estado_orden = "cancel"
+    repo.upsert_ordenes([orden])
+    repo.upsert_entregas([b.entrega("E1", so_id="SO1", tipo="outgoing", estado="done")])
+
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    procesadas = runner.run_teoricos_pendientes(date(2026, 6, 8))
+    assert procesadas == 1
+    teorico = repo.get_ventas_teorico("SO1")
+    assert teorico is not None
+    assert teorico.teorico_usd == Decimal("100.00")
+
+
+def test_run_teoricos_pendientes_salta_cancelada_con_devolucion() -> None:
+    """Espejo del test anterior: si SÍ hay devolución registrada, la
+
+    cancelación se comporta como siempre -- se salta, ningún teórico se
+    calcula para una venta que efectivamente se revirtió.
+    """
+    repo = _seed()
+    orden = repo.get_orden("SO1")
+    assert orden is not None
+    orden.estado_orden = "cancel"
+    orden.tiene_devolucion = True
+    repo.upsert_ordenes([orden])
+    repo.upsert_entregas([b.entrega("E1", so_id="SO1", tipo="outgoing", estado="done")])
+
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    procesadas = runner.run_teoricos_pendientes(date(2026, 6, 8))
+    assert procesadas == 0
+    assert repo.get_ventas_teorico("SO1") is None
+
+
+def test_run_teoricos_pendientes_salta_cancelada_sin_entrega() -> None:
+    """Una orden cancelada sin ninguna entrega "done" se sigue saltando --
+
+    la excepción solo aplica cuando la mercancía realmente salió."""
+    repo = _seed()
+    orden = repo.get_orden("SO1")
+    assert orden is not None
+    orden.estado_orden = "cancel"
+    repo.upsert_ordenes([orden])
+
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    procesadas = runner.run_teoricos_pendientes(date(2026, 6, 8))
+    assert procesadas == 0
+    assert repo.get_ventas_teorico("SO1") is None
