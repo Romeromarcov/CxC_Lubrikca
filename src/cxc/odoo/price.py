@@ -234,8 +234,21 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
             precio_ficha = Decimal("0.0")
             if prod_id:
                 try:
+                    # Bug real en producción (agosto 2026, hallazgo al
+                    # verificar el fallback en vivo para S00868): este
+                    # campo (custom, no estándar de Odoo) solo existe con
+                    # valor real en product.template -- leerlo desde
+                    # product.product (variante) devuelve 0.0 SIEMPRE,
+                    # aunque el id numérico coincida por casualidad con el
+                    # template (caso de un solo variante por producto).
+                    # Verificado en vivo: producto 1655,
+                    # product.product.list_price_usd=0.0 vs
+                    # product.template.list_price_usd=86.21. `prod_id` ya
+                    # se usa como product_tmpl_id en
+                    # ``_precio_fijo_en_lista`` (línea ~144), así que es
+                    # consistente leerlo aquí también como template.
                     prod = self._execute(
-                        "product.product", "read", [[prod_id]], {"fields": ["list_price_usd"]}
+                        "product.template", "read", [[prod_id]], {"fields": ["list_price_usd"]}
                     )
                     if prod and isinstance(prod, list) and len(prod) > 0:
                         precio_ficha = to_decimal(str(prod[0].get("list_price_usd") or "0.0"))

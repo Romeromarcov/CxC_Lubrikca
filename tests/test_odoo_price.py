@@ -45,7 +45,7 @@ def test_odoo_price_resolver_fallback_usa_list_price_usd_no_list_price():
     def fake_execute(model, method, args, kwargs=None):
         if model == "product.pricelist.item":
             return []
-        if model == "product.product":
+        if model == "product.template":
             return [{"list_price_usd": 1961.54, "list_price": 1457052.50817}]
         return []
 
@@ -83,7 +83,7 @@ def test_odoo_price_resolver_fue_fallback_true_si_uso_precio_de_ficha():
     def fake_execute(model, method, args, kwargs=None):
         if model == "product.pricelist.item":
             return []
-        if model == "product.product":
+        if model == "product.template":
             return [{"list_price_usd": 50.0}]
         return []
 
@@ -132,7 +132,7 @@ def test_odoo_price_resolver_fallback_no_se_cachea_compartido():
 
     def fake_execute_sin_regla(model, method, args, kwargs=None):
         calls.append(model)
-        if model == "product.product":
+        if model == "product.template":
             return [{"list_price_usd": 10.0}]
         return []
 
@@ -242,7 +242,7 @@ def test_odoo_price_resolver_con_fallback_ficha_no_cae_a_otra_pricelist():
                 # Lista #5, que es la que se está pidiendo.
                 return [{"fixed_price": "56.03", "date_start": False, "date_end": False}]
             return []
-        if model == "product.product":
+        if model == "product.template":
             return [{"list_price_usd": 120.0}]
         return []
 
