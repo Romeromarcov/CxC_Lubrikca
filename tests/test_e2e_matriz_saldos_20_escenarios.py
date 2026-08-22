@@ -135,6 +135,11 @@ def test_escenario_a_descuento_ya_aplicado_en_odoo_conciliado_saldo_cero():
         item = {it["so_id"]: it for it in res.json()["items"]}["SO_A1"]
         assert item["estatus_pago_real_factura"] == "pagada"
         assert item["total_facturado_neto"] == 92.80
+        # Rediseño de Ventas (agosto 2026): campo consolidado "pagada" y
+        # "saldo_cxc" -- CONCILIADO cubre el neto exacto, así que sale de
+        # CxC confirmada y el saldo consolidado es 0.
+        assert item["pagada"] is True
+        assert item["saldo_cxc"] == 0.0
 
 
 def test_escenario_c_descuento_motor_pendiente_no_se_confunde_con_pagado():
@@ -517,6 +522,89 @@ def test_pendiente_se_muestra_pagada_en_ventas_y_sale_de_cxc_sin_confirmar():
         assert item["sale_de_cxc"] is True
         assert item["cxc_confirmado"] is False
         assert item["bandeja_destino"] == "en_proceso_de_pago"
+        # Rediseño de Ventas (agosto 2026): "beneficio de la duda" pedido
+        # explícitamente por el usuario -- "en proceso de pago" también
+        # debe verse como pagada=True y saldo_cxc=0 en el campo
+        # consolidado, igual que un CONCILIADO real.
+        assert item["pagada"] is True
+        assert item["saldo_cxc"] == 0.0
+
+
+def test_no_pagada_saldo_cxc_usa_teorico_nativo_de_la_orden():
+    """Rediseño de Ventas (agosto 2026): orden VES nativa, facturada, SIN
+
+    ningún pago vinculado -- "pagada" debe dar False (nunca "depende") y
+    "saldo_cxc" debe mostrar el saldo contra el teórico VES neto de la
+    orden (única referencia que, por definición, no se cumplió si la
+    orden no salió de CxC por ninguna regla del árbol).
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_N1",
+            cliente_id="CLI_N",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("92.80"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_N1",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("80.00"),
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="N1",
+            numero="FAC/N1",
+            so_id="SO_N1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("92.80"),
+            monto_sin_impuestos=Decimal("80.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("92.80"),
+            monto_sin_impuestos_signed_usd=Decimal("80.00"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_N1", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move.line":
+            return [
+                {
+                    "move_id": [900, "FAC/N1"],
+                    "discount": 20.0,
+                    "quantity": 1,
+                    "price_unit": 100.0,
+                    "price_subtotal": 80.0,
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_N1"]
+        assert item["pagada"] is False
+        assert item["saldo_cxc"] == 92.80
 
 
 def test_bandeja_facturacion_enruta_pago_pendiente_pero_marcado_no_confirmado():

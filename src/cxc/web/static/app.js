@@ -1399,10 +1399,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         try {
-            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Cargando reporte de ventas...</td></tr>';
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
                 return;
             }
             const data = await res.json();
@@ -1456,7 +1456,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             applyVentasFilters();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
             console.error(err);
         }
     }
@@ -1486,7 +1486,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="46" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1496,12 +1496,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (item.alerta) {
                 row.style.background = "#fef2f2";
             }
-            const difColor = item.diferencia > 0.05 ? "#b91c1c" : (item.diferencia < -0.05 ? "#0369a1" : "#059669");
-            const alertaCell = item.alerta
-                ? '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;">⚠️ Facturado de menos</span>'
-                : (item.facturada
-                    ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">OK</span>'
-                    : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>');
             if (item.revisar_motivo) {
                 row.style.background = "#fffbeb";
             }
@@ -1515,70 +1509,31 @@ document.addEventListener("DOMContentLoaded", () => {
                     : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>');
 
             const naVal = (v) => v != null ? fmt(v) : '—';
-            const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
-            const valLabel = (v) => v === 'ok' ? '✓ OK' : (v === 'discrepancia_menor' ? '~ Menor' : '⚠ Discrepancia');
-            const pctTxt = (p) => p != null ? ` (${(p * 100).toFixed(1)}%)` : '';
-            const descMontoPct = (monto, pct) => `${fmt(monto)}<small style="color:#64748b;">${pctTxt(pct)}</small>`;
-            const estatusPagoBadge = (estado) => {
-                const map = {
-                    pagada: ['#dcfce7', '#15803d', '✓ Pagada'],
-                    parcial: ['#fef3c7', '#b45309', '~ Parcial'],
-                    sin_pago: ['#fee2e2', '#991b1b', '✗ Sin pago'],
-                    sin_factura: ['#f1f5f9', '#64748b', '— Sin factura'],
-                    sin_datos: ['#e0e7ff', '#4338ca', '? Sin datos teóricos'],
-                };
-                const [bg, fg, label] = map[estado] || ['#f1f5f9', '#64748b', estado || '—'];
-                return `<span class="state-badge" style="background:${bg};color:${fg};font-weight:600;">${label}</span>`;
-            };
+            const facturadaCell = item.facturada
+                ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">✓ Sí</span>'
+                : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>';
+            const pagadaCell = item.pagada
+                ? `<span class="state-badge" style="background:#dcfce7;color:#15803d;font-weight:600;" title="${item.cxc_confirmado ? 'Pago conciliado en Odoo' : 'En proceso de pago -- vinculado, aún sin conciliar en Odoo'}">✓ ${item.cxc_confirmado ? 'Pagada' : 'En proceso'}</span>`
+                : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:600;">✗ Pendiente</span>';
 
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
-                <td><small>${item.fecha}</small></td>
                 <td><small>${item.fecha_entrega ?? '—'}</small></td>
                 <td>${item.cliente_nombre}</td>
-                <td><small>${item.vendedor}</small></td>
                 <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
-                <td><small title="${item.lista_aplicada ?? ''}">${item.lista_aplicada_label ?? '—'}</small></td>
                 <td style="text-align:right">${item.dias_credito ?? 0}</td>
                 <td style="text-align:right" title="Vence: ${item.fecha_vencimiento ?? '—'}">${
                     (item.dias_vencido || 0) > 0
                         ? `<strong style="color:#dc2626">${item.dias_vencido} d</strong>`
                         : '<span style="color:#059669">Vigente</span>'
                 }</td>
-                <td>${naVal(item.ves_bruta_teorica)}</td>
-                <td>${naVal(item.ves_bruta_teorica_iva)}</td>
-                <td>${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
-                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica)}</strong></td>
-                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
-                <td>${fmt(item.monto_pagado_bcv)}</td>
-                <td>${estatusPagoBadge(item.estatus_pago_teorico_ves)}</td>
-                <td>${naVal(item.usd_bruta_teorica)}</td>
-                <td>${naVal(item.usd_bruta_teorica_iva)}</td>
-                <td>${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
-                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica)}</strong></td>
-                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
-                <td>${fmt(item.monto_pagado_usd)}</td>
-                <td>${estatusPagoBadge(item.estatus_pago_teorico_usd)}</td>
-                <td>${fmt(item.venta_bruta_real)}</td>
-                <td>${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
+                <td>${facturadaCell}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
-                <td>${descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)}</td>
-                <td title="${item.orden_real_subtotal_teoricos_bloqueado ? 'Bloqueado: sobre-descuento sin revisar en Auditoría -- no se resta el teórico' : ''}"><strong style="color:${item.orden_real_subtotal_teoricos_bloqueado ? '#dc2626' : '#7c3aed'};">${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}</strong></td>
-                <td>${estatusPagoBadge(item.estatus_pago_real_orden)}</td>
-                <td>${fmt(item.total_facturado_antes_impuestos)}</td>
-                <td>${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
-                <td>${fmt(item.total_facturado_con_impuestos)}</td>
-                <td>${fmt(item.total_nc_aplicada)}</td>
-                <td>${fmt(item.total_nd_aplicada)}</td>
                 <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
-                <td>${fmt(item.monto_pagado_factura_odoo)}</td>
-                <td>${estatusPagoBadge(item.estatus_pago_real_factura)}</td>
-                <td><span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span></td>
-                <td><span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span></td>
-                <td title="${item.descuento_aplicado_sistema_motivo ?? ''}">${descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct)}</td>
-                <td>${fmt(item.saldo_pendiente_cxc)}</td>
-                <td><strong style="color:${difColor};">${fmt(item.diferencia)}</strong></td>
-                <td>${alertaCell}</td>
+                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
+                <td>${pagadaCell}</td>
+                <td><strong style="color:${item.saldo_cxc > 0 ? '#b91c1c' : '#059669'};">${fmt(item.saldo_cxc)}</strong></td>
                 <td>${revisarCell}</td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
@@ -1663,6 +1618,107 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
     }
 
+    // Rediseño de Ventas (agosto 2026): la tabla principal se redujo a lo
+    // esencial (orden/cliente/pago) -- todo lo demás que antes vivía como
+    // columna propia (vendedor, teóricos brutos/descuentos por lista,
+    // validación orden/factura, desglose de descuentos, N/C-N/D, montos
+    // pagados por ruta, Diferencia/Alerta) se muestra aquí, en el resumen
+    // del modal de Detalle. Lee del mismo `ventasData` que ya alimenta la
+    // tabla (sin pegarle de nuevo al backend) -- el item ya trae todos
+    // estos campos desde /api/ventas.
+    function _renderDetalleOrdenResumen(item) {
+        const cont = document.getElementById("modal-detalle-orden-resumen");
+        if (!cont) return;
+        if (!item) {
+            cont.innerHTML = "";
+            return;
+        }
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const naVal = (v) => v != null ? fmt(v) : '—';
+        const pctTxt = (p) => p != null ? ` (${(p * 100).toFixed(1)}%)` : '';
+        const descMontoPct = (monto, pct) => `${fmt(monto)}<small style="color:#64748b;">${pctTxt(pct)}</small>`;
+        const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
+        const valLabel = (v) => v === 'ok' ? '✓ OK' : (v === 'discrepancia_menor' ? '~ Menor' : '⚠ Discrepancia');
+        const difColor = item.diferencia > 0.05 ? "#b91c1c" : (item.diferencia < -0.05 ? "#0369a1" : "#059669");
+
+        const campo = (label, valorHtml, title) => `
+            <div style="min-width:150px;" ${title ? `title="${title}"` : ''}>
+                <div style="font-size:0.72rem;color:#64748b;text-transform:uppercase;letter-spacing:0.03em;">${label}</div>
+                <div style="font-size:0.9rem;">${valorHtml}</div>
+            </div>`;
+
+        cont.innerHTML = `
+            <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.85rem 1rem;background:#f8fafc;border-radius:10px;border:1px solid hsl(var(--border-card));margin-bottom:0.25rem;">
+                ${campo('Vendedor', item.vendedor || 'Sin Vendedor')}
+                ${campo('Fecha de orden', item.fecha || '—')}
+                ${campo('Lista aplicada', item.lista_aplicada_label || '—', item.lista_aplicada ?? '')}
+                ${campo('Validación Orden', `<span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span>`)}
+                ${campo('Validación Factura', `<span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span>`)}
+                ${campo('Diferencia', `<strong style="color:${difColor};">${fmt(item.diferencia)}</strong>`, 'Venta teórica (lista aplicada) + IVA − Facturado Neto')}
+                ${item.alerta ? campo('Alerta', '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;">⚠️ Facturado de menos</span>') : ''}
+            </div>
+            <div style="overflow-x:auto;margin-bottom:0.25rem;">
+                <table class="cxc-table" style="font-size:0.82rem;">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th style="text-align:right">Bruta</th>
+                            <th style="text-align:right">Desc. Motor</th>
+                            <th style="text-align:right">Neta</th>
+                            <th style="text-align:right">Neta + Imp.</th>
+                            <th style="text-align:right">Pagado</th>
+                            <th style="text-align:right">Estatus</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Teórico VES (BCV)</td>
+                            <td style="text-align:right">${naVal(item.ves_bruta_teorica)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
+                            <td style="text-align:right">${naVal(item.ves_neta_teorica)}</td>
+                            <td style="text-align:right"><strong>${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_bcv)}</td>
+                            <td style="text-align:right">${item.estatus_pago_teorico_ves ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Teórico USD (Binance)</td>
+                            <td style="text-align:right">${naVal(item.usd_bruta_teorica)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
+                            <td style="text-align:right">${naVal(item.usd_neta_teorica)}</td>
+                            <td style="text-align:right"><strong>${naVal(item.usd_neta_teorica_iva)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_usd)}</td>
+                            <td style="text-align:right">${item.estatus_pago_teorico_usd ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Real Orden</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
+                            <td style="text-align:right" colspan="1">${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}</td>
+                            <td style="text-align:right"><strong>${fmt(item.venta_neta_real)}</strong></td>
+                            <td style="text-align:right">—</td>
+                            <td style="text-align:right">${item.estatus_pago_real_orden ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Real Factura</td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
+                            <td style="text-align:right">—</td>
+                            <td style="text-align:right"><strong>${fmt(item.total_facturado_con_impuestos)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
+                            <td style="text-align:right">${item.estatus_pago_real_factura ?? '—'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.6rem 1rem;font-size:0.85rem;">
+                ${campo('N/C Aplicada', fmt(item.total_nc_aplicada))}
+                ${campo('N/D Aplicada', fmt(item.total_nd_aplicada))}
+                ${campo('Desc. Pendiente', descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct))}
+                ${campo('Desc. Sistema', descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct), item.descuento_aplicado_sistema_motivo ?? '')}
+            </div>
+        `;
+    }
+
     async function abrirModalDetalleOrden(soId) {
         const modal = document.getElementById("modal-detalle-orden");
         const titulo = document.getElementById("modal-detalle-orden-titulo");
@@ -1676,6 +1732,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body.innerHTML = '<p class="table-empty">Cargando líneas...</p>';
         modal.style.display = "flex";
         _detalleOrdenData = null;
+        _renderDetalleOrdenResumen(ventasData.find(it => it.so_id === soId));
 
         try {
             const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
@@ -1705,6 +1762,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const modal = document.getElementById("modal-detalle-orden");
         if (modal) modal.style.display = "none";
         _detalleOrdenData = null;
+        _renderDetalleOrdenResumen(null);
     }
 
     window.abrirModalDetalleOrden = abrirModalDetalleOrden;

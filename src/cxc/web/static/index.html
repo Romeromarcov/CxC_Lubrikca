@@ -930,12 +930,13 @@
 
         <!-- Modal de detalle de orden (Fase 5 -- líneas de producto por modo) -->
         <div id="modal-detalle-orden" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
-            <div class="card" style="max-width:900px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
+            <div class="card" style="max-width:1080px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <h2 style="margin:0;" id="modal-detalle-orden-titulo">Detalle de Orden</h2>
                     <button class="btn btn-secondary" onclick="cerrarModalDetalleOrden()" style="padding:0.3rem 0.7rem;">✕</button>
                 </div>
                 <p id="modal-detalle-orden-subtitulo" style="margin:0 0 1rem 0; color:#64748b; font-size:0.85rem;"></p>
+                <div id="modal-detalle-orden-resumen" style="margin-bottom:1.25rem;"></div>
                 <div style="margin-bottom:1rem;">
                     <label for="modal-detalle-orden-modo" style="font-size:0.85rem; font-weight:600; margin-right:0.5rem;">Modo:</label>
                     <select id="modal-detalle-orden-modo" style="padding:0.4rem 0.7rem; border-radius:8px; border:1px solid hsl(var(--border-card)); font-family:inherit; font-size:0.85rem;">
@@ -1023,48 +1024,18 @@
                             <thead>
                                 <tr>
                                     <th>Orden (SO)</th>
-                                    <th>Fecha</th>
-                                    <th title="Fecha de la entrega efectiva (ALM/OUT, stock.picking saliente en estado 'done') -- mismo criterio que el reporte de Cuentas por Cobrar">Fecha Entrega</th>
+                                    <th title="Fecha de la entrega efectiva (ALM/OUT, stock.picking saliente en estado 'done') -- mismo criterio que el reporte de Cuentas por Cobrar">Fecha (Entrega)</th>
                                     <th>Cliente</th>
-                                    <th>Vendedor</th>
                                     <th title="Lista de precios con la que nació la orden">Lista Nacimiento</th>
-                                    <th title="Lista que terminó aplicando el motor (puede ganar la del método de pago sobre la de nacimiento -- hoy siempre igual a Nacimiento porque el sistema aún no tiene pagos vinculados; el mecanismo de reselección ya está probado y listo para cuando existan)">Lista Aplicada</th>
                                     <th title="Días de crédito reales otorgados por Odoo (payment_term de la orden)">Días Crédito</th>
-                                    <th title="Fecha de vencimiento (Fecha Entrega + Días Crédito) y días vencido -- fuente única para las demás páginas (Reporte de Saldos, CxC por Cliente), calculado aquí una sola vez">Días Vencido</th>
-                                    <th title="Precio de lista VES vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta VES</th>
-                                    <th title="Teórica Bruta VES + IVA">Teórica Bruta VES + Imp.</th>
-                                    <th title="Descuento que calcula el motor específicamente para la lista VES (reglas con listas_aplicables propias -- puede diferir del de la lista USD) -- monto y %">Desc. Teórico VES</th>
-                                    <th title="Teórica Bruta VES menos los descuentos que calcula el motor para esa lista">Teórica Neta VES</th>
-                                    <th title="Teórica Neta VES + IVA (+ IGTF si aplica)">Teórica Neta VES + Imp.</th>
-                                    <th title="Monto pagado convertido a USD con la tasa BCV del día de cada pago (tasa BCV-Euro si la orden cae en la ventana de la Lista Histórica de Auditoría)">Monto Pagado BCV</th>
-                                    <th title="Equivalente pagado a referencia BCV (SIEMPRE) vs. Teórica Neta VES + Imp.">Estatus Pago Teórico VES</th>
-                                    <th title="Precio de lista USD vigente para la fecha de la orden, sin descuentos, sin impuestos">Teórica Bruta USD</th>
-                                    <th title="Teórica Bruta USD + IVA">Teórica Bruta USD + Imp.</th>
-                                    <th title="Descuento que calcula el motor específicamente para la lista USD (reglas con listas_aplicables propias -- puede diferir del de la lista VES) -- monto y %">Desc. Teórico USD</th>
-                                    <th title="Teórica Bruta USD menos los descuentos que calcula el motor para esa lista">Teórica Neta USD</th>
-                                    <th title="Teórica Neta USD + IVA (+ IGTF si aplica)">Teórica Neta USD + Imp.</th>
-                                    <th title="Monto pagado convertido a USD con la tasa Binance del día de cada pago">Monto Pagado USD (Binance)</th>
-                                    <th title="Equivalente pagado a referencia Binance (SIEMPRE) vs. Teórica Neta USD + Imp.">Estatus Pago Teórico USD</th>
-                                    <th title="Subtotal real de la orden en Odoo (amount_untaxed)">Venta Bruta Real</th>
-                                    <th title="Descuento que Odoo ya tiene aplicado en la orden (líneas) -- monto y %">Desc. Aplicado (Orden)</th>
+                                    <th title="Fecha de vencimiento (Fecha Entrega + Días Crédito) y días vencido -- fuente única para las demás páginas (Reporte de Saldos, CxC por Cliente)">Días Vencido</th>
+                                    <th title="¿Existe factura posted en Odoo para esta orden?">Facturada</th>
                                     <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
-                                    <th title="Descuento que el motor exige y todavía no está reflejado en Odoo/N.C./sistema -- se resta dinámicamente al aplicar cualquiera de esos 3 mecanismos, monto y %">Desc. Pendiente</th>
-                                    <th title="Venta Bruta Real + impuestos, menos el descuento TEÓRICO total del motor (aplicado o no) -- cuánto debería costar esta orden si se aplicaran todos los descuentos que calcula el motor. Si la orden está bloqueada por sobre-descuento (Odoo ya aplicó más de lo que el motor calcula), se muestra sin restar el teórico -- primero hay que revisar el caso en Auditoría de Descuentos">Orden Real (Subtotal+Imp.) c/ Desc. Teóricos</th>
-                                    <th title="Equivalente pagado (BCV si nació en VES/Lista Histórica, Binance si USD) vs. Venta Neta Real menos Desc. Sistema">Estatus Pago (Real Orden)</th>
-                                    <th title="Suma de facturas posted, antes de impuestos">Facturado antes Imp.</th>
-                                    <th title="Descuento que Odoo ya tiene aplicado en la factura -- monto y %">Desc. Aplicado (Factura)</th>
-                                    <th title="Suma de facturas posted, con impuestos">Facturado con Imp.</th>
-                                    <th title="Notas de Crédito aplicadas a la(s) factura(s) de esta orden">N/C Aplicada</th>
-                                    <th title="Notas de Débito aplicadas a la(s) factura(s) de esta orden">N/D Aplicada</th>
                                     <th title="Facturado con impuestos, menos Notas de Crédito, más Notas de Débito">Facturado Neto</th>
-                                    <th title="Total pagado según lo que aparece en Odoo (mismo equivalente que usa Estatus Pago Real Orden/Factura)">Monto Pagado Factura (Odoo)</th>
-                                    <th title="Equivalente pagado (BCV/Binance según lista de nacimiento) vs. Facturado Neto menos Desc. Sistema -- 'sin_factura' si aún no hay factura">Estatus Pago (Real Factura)</th>
-                                    <th title="¿El descuento de la orden en Odoo coincide con lo que dictamina el motor?">Validación Orden</th>
-                                    <th title="¿El descuento de la factura en Odoo coincide con lo que dictamina el motor?">Validación Factura</th>
-                                    <th title="Descuento aprobado manualmente desde la Bandeja 1 de Facturación (nunca se escribe a Odoo, solo ajusta el saldo interno de CxC) -- monto y %">Desc. Sistema</th>
-                                    <th title="Facturado Neto (u orden neta real si no facturada) menos Desc. Sistema -- target real de CxC para efectos internos">Saldo Pendiente CxC</th>
-                                    <th title="Venta teórica (según la lista aplicada) + IVA − Facturado Neto">Diferencia</th>
-                                    <th title="Facturado Neto por debajo de la Venta Neta Teórica + Impuestos en una orden ya facturada">Alerta</th>
+                                    <th title="Teórica Neta VES + IVA (+ IGTF si aplica) -- según la lista VES vigente para la fecha de la orden">Teórica Neta VES + Imp.</th>
+                                    <th title="Teórica Neta USD + IVA (+ IGTF si aplica) -- según la lista USD vigente para la fecha de la orden">Teórica Neta USD + Imp.</th>
+                                    <th title="Respuesta única (sí/no) del árbol de enrutamiento de CxC (ver Manual, Sección 5): incluye 'en proceso de pago' -- una Vinculación ya vinculada aunque falte conciliar en Odoo, mismo criterio que usa Odoo para sacar una factura de CxC">Pagada</th>
+                                    <th title="$0 si la orden ya salió de CxC (Pagada = sí, incluye 'en proceso de pago'); si sigue en CxC, saldo contra el teórico de la lista con la que nació la orden (BS o USD), neto de descuento y de lo pagado conciliado">Saldo CxC</th>
                                     <th title="Devolución (total/parcial), entrega de más, u orden cancelada en Odoo cuya mercancía nunca fue devuelta -- pasar el mouse para ver el motivo">Revisar</th>
                                     <th>Detalle</th>
                                     <th>Pagos</th>
@@ -1072,7 +1043,7 @@
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="46" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="16" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
