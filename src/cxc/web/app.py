@@ -9857,6 +9857,91 @@ async def get_tasas_historicas():
     # Eliminada.
 
 
+def _detectar_pagos_con_residual_sin_aplicar(
+    execute: Any,
+    pago_ids: list[int],
+    tolerancia_usd: Decimal = Decimal("0.05"),
+) -> list[dict[str, Any]]:
+    """Pagos con un remanente sin conciliar en SU PROPIA línea contable de
+
+    Cuentas por Cobrar -- invisible en cualquier reporte que solo mire la
+    factura (la factura puede mostrar residual $0 aunque el pago haya
+    dejado algo suelto). Bug real (reportado por el usuario, agosto 2026,
+    cliente TERA, factura 00000167): pago PBNB/2026/00005 por $27.781,08,
+    factura por $27.780,60 -- $0,48 sin ningún destino. La factura (Odoo,
+    ``account.move.amount_residual_usd``) mostraba $0 porque Odoo cerró
+    la reconciliación desde ESE lado; solo la línea del propio pago
+    conservaba el rastro: ``account.move.line.amount_residual_currency =
+    -0.48`` con ``reconciled = False`` (verificado en vivo). Se descartó
+    un primer intento que parseaba el texto que Odoo genera en el asiento
+    de "Ajuste Cambio" (journal Exchange Difference) -- ese "Pago: X$" es
+    el monto TOTAL del pago, no lo que le tocó a esa factura puntual, así
+    que un pago repartido entre varias facturas disparaba falsos
+    positivos enormes (caso real encontrado: $30.038 "de más" que
+    resultó ser un pago normal repartido en 3 facturas). El campo de la
+    línea contable, en cambio, es la fuente que el propio Odoo usa para
+    decidir si el pago está genuinamente cerrado -- sin adivinar nada.
+
+    ``state != "cancel"`` en el pago (verificado en vivo, pedido explícito
+    del usuario tras encontrar 100 asientos de Ajuste Cambio cancelados en
+    la muestra real): un pago cancelado no debe generar una alerta de
+    "residual sin aplicar" -- ya no representa dinero real pendiente.
+    """
+    if not execute or not pago_ids:
+        return []
+    try:
+        pagos = execute(
+            "account.payment",
+            "read",
+            [pago_ids],
+            {"fields": ["id", "name", "move_id", "state"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo pagos para residual sin aplicar: %s", e)
+        return []
+    pagos_por_move = {
+        p["move_id"][0]: p for p in pagos if p.get("move_id") and p.get("state") != "cancel"
+    }
+    if not pagos_por_move:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [
+                [
+                    ["move_id", "in", list(pagos_por_move.keys())],
+                    ["account_id.account_type", "=", "asset_receivable"],
+                ]
+            ],
+            {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo líneas de CxC de pagos para residual sin aplicar: %s", e)
+        return []
+
+    resultado: list[dict[str, Any]] = []
+    for line in lines:
+        if line.get("reconciled"):
+            continue
+        residual = parse_decimal_safe(str(line.get("amount_residual_currency") or "0"))
+        if abs(residual) <= tolerancia_usd:
+            continue
+        move_ref = line.get("move_id")
+        move_id = move_ref[0] if move_ref else None
+        pago = pagos_por_move.get(move_id)
+        if not pago:
+            continue
+        resultado.append(
+            {
+                "pago_id": str(pago["id"]),
+                "numero_pago_odoo": pago.get("name"),
+                "residual_sin_aplicar_usd": round(float(residual), 2),
+            }
+        )
+    return resultado
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -9884,6 +9969,20 @@ async def get_auditoria():
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
         all_candidate_ids = list(set(usd_ids + ves_ids))
         rules_all = _get_pricelist_items_fixed(execute, all_candidate_ids)
+
+        # Pagos con residual sin aplicar en su propia línea de CxC -- ver
+        # docstring de _detectar_pagos_con_residual_sin_aplicar (bug real,
+        # cliente TERA, agosto 2026). Escanea TODOS los pagos ya
+        # sincronizados localmente (2 llamadas batch a Odoo, sin loop por
+        # pago).
+        pago_ids_int = [
+            int(p.get("pago_id"))
+            for p in _all_pagos_rows(repo)
+            if str(p.get("pago_id", "")).strip().isdigit()
+        ]
+        pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
+            execute, pago_ids_int
+        )
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
@@ -10309,6 +10408,11 @@ async def get_auditoria():
             "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
             "anomalias_aceptadas": anomalias_aceptadas,
             "venta_bruta_teorica_auditoria": venta_bruta_teorica_auditoria,
+            # Ver _detectar_pagos_con_residual_sin_aplicar -- pagos con un
+            # remanente sin conciliar en su propia línea de CxC, invisible
+            # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
+            # muestra residual $0 (bug real, cliente TERA, agosto 2026).
+            "pagos_con_residual_sin_aplicar": pagos_residual_sin_aplicar,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
@@ -10316,6 +10420,7 @@ async def get_auditoria():
                 "monto_discrepancia_total": round(
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
                 ),
+                "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
             },
         }
     except Exception as e:

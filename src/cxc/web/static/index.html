@@ -1161,6 +1161,30 @@
                             </table>
                         </div>
                     </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Pagos con Residual sin Aplicar</h2>
+                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Pagos donde Odoo aún registra un saldo sin conciliar en la línea contable del propio pago -- invisible en Ventas/Cobranza porque la factura ya cerró en $0. Revisar y aplicar manualmente en Odoo si corresponde.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Pago ID</th>
+                                        <th>N° Pago Odoo</th>
+                                        <th>Residual sin Aplicar ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pagos-residual-table-body">
+                                    <tr>
+                                        <td colspan="3" class="table-empty">No hay pagos con residual sin aplicar.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->

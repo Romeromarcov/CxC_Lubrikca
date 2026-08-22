@@ -4827,6 +4827,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
         const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
         const bodyConformes = document.getElementById("conformes-table-body");
+        const bodyResidual = document.getElementById("pagos-residual-table-body");
 
         const elKpiConformes = document.getElementById("audit-kpi-conformes");
         const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
@@ -4856,13 +4857,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 const discrepancias = data.discrepancias || [];
                 const discFacturas = data.discrepancias_facturas_odoo || [];
                 const aceptadas = data.anomalias_aceptadas || [];
+                const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
 
                 if (elKpiConformes) elKpiConformes.textContent = conformes.length;
-                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length;
+                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
                 if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
 
                 const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
-                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length);
+                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length + pagosResidual.length);
                 const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
                 if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length + conformes.length);
 
@@ -4941,6 +4943,23 @@ document.addEventListener("DOMContentLoaded", () => {
                     conformesFullList = conformes;
                     conformesPage = 1;
                     renderConformesPage();
+                }
+
+                // Render Pagos con Residual sin Aplicar (ver
+                // _detectar_pagos_con_residual_sin_aplicar -- bug real,
+                // cliente TERA, agosto 2026).
+                if (bodyResidual) {
+                    if (pagosResidual.length === 0) {
+                        bodyResidual.innerHTML = '<tr><td colspan="3" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
+                    } else {
+                        bodyResidual.innerHTML = pagosResidual.map(p => `
+                            <tr>
+                                <td><strong>${escapeHtml(p.pago_id)}</strong></td>
+                                <td>${escapeHtml(p.numero_pago_odoo)}</td>
+                                <td><strong style="color:#dc2626;">${fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                            </tr>
+                        `).join('');
+                    }
                 }
             }
         } catch (err) {
