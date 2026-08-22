@@ -11292,6 +11292,55 @@ def _get_ventas_sync(
                 factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
             )
 
+            # Consolidación pedida por el usuario (agosto 2026): un solo
+            # campo "pagada" (sí/no, nunca "depende de cuál mires") en vez
+            # de exponer 3 estatus de pago distintos en la tabla -- reusa
+            # ``clasificacion_cxc.sale_de_cxc``, la MISMA fuente que ya
+            # decide si la orden sale de CxC en Bandeja/Reporte por
+            # Cliente, para que Ventas nunca diga algo distinto a esas
+            # otras vistas. "En proceso de pago" (confirmado=False) cuenta
+            # como pagada -- mismo beneficio de la duda del precedente de
+            # Odoo (ver cxc_routing.py).
+            pagada = clasificacion_cxc.sale_de_cxc
+
+            # Saldo CxC: $0 si ya salió de CxC (sin importar por cuál
+            # regla, ni si está "confirmado" o "en proceso de pago" -- ya
+            # no se rastrea como deuda activa). Si sigue en CxC, se
+            # muestra el saldo contra el TEÓRICO NATIVO de la orden (BS si
+            # nació en VES/histórica, USD si nació en USD) -- por
+            # definición, la única referencia que todavía no se cumplió
+            # (si se hubiera cumplido, la orden ya habría salido por la
+            # regla 1/2 del árbol). Cae al saldo de Factura/Venta Real
+            # (mismo criterio que ``_saldos_4_columnas_item``, ya neto de
+            # descuento de sistema y de lo pagado CONCILIADO) solo si
+            # todavía no hay ningún teórico confiable para esta orden.
+            if pagada:
+                saldo_cxc = 0.0
+            else:
+                sin_datos_nativo = (
+                    _sin_datos_teorico(teorico_row, usd_bruta_teorica, precio_base_calculado)
+                    if es_lista_usd_nacimiento
+                    else _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
+                )
+                neta_nativa_iva = (
+                    usd_neta_teorica_iva if es_lista_usd_nacimiento else ves_neta_teorica_iva
+                )
+                if not sin_datos_nativo and neta_nativa_iva is not None:
+                    saldo_cxc = round(max(0.0, neta_nativa_iva - val_ref_nacimiento), 2)
+                elif tiene_factura:
+                    saldo_cxc = round(
+                        max(
+                            0.0,
+                            total_facturado_neto - descuento_aplicado_sistema - val_ref_nacimiento,
+                        ),
+                        2,
+                    )
+                else:
+                    saldo_cxc = round(
+                        max(0.0, venta_neta_real - descuento_aplicado_sistema - val_ref_nacimiento),
+                        2,
+                    )
+
             items.append(
                 {
                     "so_id": o.so_id,
@@ -11503,6 +11552,17 @@ def _get_ventas_sync(
                     # factura de CxC aunque falte la conciliación
                     # bancaria, distinguible del todo confirmado.
                     "cxc_confirmado": clasificacion_cxc.confirmado,
+                    # Campos consolidados (rediseño de Ventas, agosto 2026):
+                    # UN SOLO booleano de pago y UN SOLO saldo, ambos
+                    # derivados del árbol de enrutamiento de CxC arriba --
+                    # nunca "depende de cuál mires" (pedido explícito del
+                    # usuario). "pagada" == sale_de_cxc (incluye "en
+                    # proceso de pago"); "saldo_cxc" es 0 en ese mismo
+                    # caso, o el saldo contra el teórico nativo de la
+                    # orden si sigue en CxC. Ver docstring del cálculo
+                    # arriba (justo antes de este items.append).
+                    "pagada": pagada,
+                    "saldo_cxc": saldo_cxc,
                 }
             )
             # Antigüedad ("Días Vencido" en la UI de Ventas): fuente única
