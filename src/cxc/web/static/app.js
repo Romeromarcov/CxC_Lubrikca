@@ -4397,9 +4397,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 } else if (sugIdx !== undefined) {
                     accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`
                         + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
-                    checkboxCell = `<td></td>`;
                 }
-            } else if (item.puede_marcar_recibido) {
+            }
+            // Independiente del estado (corrección del usuario,
+            // 2026-08-22): un pago YA reportado se puede recibir/generar
+            // recibo aunque todavía esté "pendiente" de vincular a una
+            // orden -- puede_marcar_recibido ya viene así calculado desde
+            // el backend para filas "pendiente" también, el checkbox no
+            // debe depender de a qué rama de vinculación cayó la fila.
+            if (item.puede_marcar_recibido) {
                 checkboxCell = `<td style="text-align:center;"><input type="checkbox" class="check-cobranza-item" value="${item.pago_id}" data-vendedor="${item.vendedor || ''}"></td>`;
             }
 
