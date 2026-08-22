@@ -3616,6 +3616,7 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
             tasa_bcv_aplicada=Decimal("40.0"),
             tasa_binance_aplicada=Decimal("45.0"),
             es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
         )
     ]
 
@@ -3628,6 +3629,7 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
             "so_id_anterior": "SO_A",
             "so_id_nuevo": "SO_B",
             "requiere_revision_manual": False,
+            "tipo": "so_id_repuntado",
         }
     ]
 
@@ -3670,6 +3672,7 @@ def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
             tasa_binance_aplicada=Decimal("45.0"),
             es_tasa_heredada=False,
             estado=EstadoVinculacion.CONCILIADO,
+            moneda_abono=Moneda.USD,
         )
     ]
 
@@ -3703,6 +3706,7 @@ def test_e2e_43b_odoo_confirma_promueve_pendiente_a_conciliado():
             tasa_binance_aplicada=Decimal("45.0"),
             es_tasa_heredada=False,
             estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda.USD,
         )
     ]
 
@@ -3717,6 +3721,157 @@ def test_e2e_43b_odoo_confirma_promueve_pendiente_a_conciliado():
     assert vincs_actualizadas[0].vinc_id == "V1"
     assert vincs_actualizadas[0].estado == EstadoVinculacion.CONCILIADO
     assert vincs_actualizadas[0].so_id == "SO_B"
+
+
+def test_e2e_43c_pago_cancelado_en_odoo_desconcilia_la_vinculacion():
+    """Pregunta del usuario (2026-08-22): "¿qué pasa si un pago ya
+
+    confirmado y conciliado se cancela o se modifica en Odoo por error
+    humano?" -- una Vinculación CONCILIADO cuyo pago YA NO aparece
+    reconciliado en Odoo (se canceló, o se deshizo la reconciliación) se
+    demueve a PENDIENTE. El motor deja de contarla como abono real en el
+    siguiente ciclo (no hace falta ninguna lógica de "revertir descuento"
+    aparte -- `_abonos()` ya filtra por CONCILIADO).
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    # El pago YA NO aparece reconciliado en Odoo -- se canceló.
+    fake_execute = lambda model, method, args, kwargs=None: []  # noqa: E731
+
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert len(cambios) == 1
+    assert cambios[0]["tipo"] == "desconciliado"
+    assert cambios[0]["requiere_revision_manual"] is False
+
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    assert len(vincs_actualizadas) == 1
+    assert vincs_actualizadas[0].estado == EstadoVinculacion.PENDIENTE
+    # so_id y monto no se tocan -- solo el estado.
+    assert vincs_actualizadas[0].so_id == "SO_B"
+    assert vincs_actualizadas[0].monto_aplicado == Decimal("500.00")
+
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert audit_rows[0]["tipo_auditoria"] == "vinculacion_desconciliada_por_odoo"
+    assert audit_rows[0]["estado"] == "aplicado"
+
+
+def test_e2e_43d_pago_pendiente_desconciliado_no_genera_ruido():
+    """Espejo: si el pago ya no está reconciliado en Odoo pero la
+
+    Vinculación local YA estaba en PENDIENTE (nunca llegó a CONCILIADO),
+    no hay nada que demover ni auditar -- evita ruido en cada ciclo.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    fake_execute = lambda model, method, args, kwargs=None: []  # noqa: E731
+
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert cambios == []
+    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.append_auditoria_rows.assert_not_called()
+
+
+def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
+    """Segundo caso de la misma pregunta del usuario: el pago SIGUE
+
+    reconciliado contra la misma orden, pero alguien editó su monto en
+    Odoo después de que esta Vinculación quedó CONCILIADO -- los
+    equivalentes congelados se recalculan a partir del valor actual de
+    Odoo (mismo criterio "Odoo prevalece" que ya aplica al so_id: no es
+    ambiguo, solo un dato que cambió).
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = None
+    mock_repo.last_serie_tasa.return_value = SerieTasa(
+        timestamp=datetime(2026, 7, 1),
+        tasa_bcv=Decimal("40.0"),
+        tasa_binance=Decimal("45.0"),
+        fuente="test",
+        es_heredada=False,
+        capturada_ok=True,
+    )
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.CONCILIADO,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    # El pago sigue conciliado contra SO_B, pero Odoo ahora dice $650, no $500.
+    fake_execute = _fake_execute_pago_conciliado(["SO_B"])
+
+    def fake_execute_monto_distinto(model, method, args, kwargs=None):
+        rows = fake_execute(model, method, args, kwargs)
+        if model == "account.payment" and method == "search_read":
+            for r in rows:
+                r["amount"] = 650.0
+                r["amount_ref"] = 650.0
+        return rows
+
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute_monto_distinto)
+
+    assert len(cambios) == 1
+    assert cambios[0]["tipo"] == "monto_o_fecha_actualizado"
+    assert cambios[0]["requiere_revision_manual"] is False
+
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    assert len(vincs_actualizadas) == 1
+    v_nueva = vincs_actualizadas[0]
+    # Sigue CONCILIADO -- Odoo confirma el mismo so_id, solo cambió el monto.
+    assert v_nueva.estado == EstadoVinculacion.CONCILIADO
+    assert v_nueva.so_id == "SO_B"
+    assert v_nueva.monto_aplicado == Decimal("650.0")
+    # USD puro -- ambos equivalentes USD deben ser el monto tal cual.
+    assert v_nueva.equiv_usd_bcv == Decimal("650.0")
+    assert v_nueva.equiv_usd_binance == Decimal("650.0")
+
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert audit_rows[0]["tipo_auditoria"] == "vinculacion_actualizada_por_cambio_en_odoo"
 
 
 def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
@@ -3739,6 +3894,7 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
             tasa_bcv_aplicada=Decimal("40.0"),
             tasa_binance_aplicada=Decimal("45.0"),
             es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
         )
     ]
 

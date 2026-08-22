@@ -731,22 +731,91 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     discounts.py) queda reflejado de inmediato, aunque la ventana de pago
     ya haya cerrado en el calendario.
 
+    Corrección del usuario (agosto 2026, "¿qué pasa si un pago ya
+    conciliado se cancela o se modifica en Odoo por error humano?"):
+    "Odoo siempre prevalece" también corre HACIA ATRÁS, no solo hacia
+    adelante. Dos casos nuevos, ambos auto-corregidos (sin revisión
+    manual -- a diferencia del caso multi-orden, ninguno es ambiguo, solo
+    un dato que cambió):
+
+    - **Pago desconciliado**: una Vinculación ya ``CONCILIADO`` cuyo pago
+      YA NO aparece en ``get_live_pagos_conciliados`` (se canceló, o se
+      deshizo la reconciliación) se demueve a ``PENDIENTE`` -- el motor
+      deja de contarla como abono real en el mismo ciclo, revirtiendo
+      cualquier descuento que hubiera destrabado, sin lógica de reversa
+      aparte.
+    - **Pago modificado**: si el pago SIGUE reconciliado contra la misma
+      orden pero su monto, moneda o fecha en Odoo ya no coinciden con lo
+      que quedó congelado en la Vinculación, se recalculan los
+      equivalentes (misma fórmula que una Vinculación nueva) a partir de
+      los valores actuales de Odoo. El "congelado" siempre existió para
+      proteger contra la deriva de LAS TASAS con el tiempo, no para
+      ignorar una corrección real del propio pago.
+
     Devuelve la lista de cambios/discrepancias detectados (para logging).
     """
     conciliados_por_pago = {c["pago_id"]: c for c in get_live_pagos_conciliados(execute)}
-    if not conciliados_por_pago:
+    todas_vincs = repo.all_vinculaciones()
+    # Ya NO se puede cortar temprano solo porque Odoo no reporta ningún
+    # pago reconciliado ahora mismo -- eso es justo la señal de "pago
+    # desconciliado" para cualquier Vinculación que YA estaba CONCILIADO
+    # (ver más abajo). Antes este early-return dejaba esas Vinculaciones
+    # completamente fuera de alcance de la función.
+    if not conciliados_por_pago and not any(
+        v.estado == EstadoVinculacion.CONCILIADO for v in todas_vincs
+    ):
         return []
 
     vincs_por_pago: dict[str, list[Vinculacion]] = {}
-    for v in repo.all_vinculaciones():
+    for v in todas_vincs:
         vincs_por_pago.setdefault(v.pago_id, []).append(v)
+
+    # Tasas actuales -- solo se usan si hace falta RECALCULAR los
+    # equivalentes congelados de una Vinculación ya CONCILIADO cuyo pago
+    # cambió en Odoo (ver más abajo). Se resuelven una sola vez, no por
+    # cada Vinculación.
+    last_tasa = repo.last_serie_tasa()
+    tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+    tasa_binance_ultima = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
 
     cambios: list[dict[str, Any]] = []
     vincs_a_actualizar: list[Vinculacion] = []
     for pago_id, vincs_locales in vincs_por_pago.items():
         conciliado = conciliados_por_pago.get(pago_id)
         if not conciliado:
-            continue  # este pago aun no esta reconciliado en Odoo -- nada que verificar
+            # Corrección del usuario (agosto 2026): "Odoo siempre
+            # prevalece" también aplica cuando un pago YA conciliado deja
+            # de estarlo -- se canceló, o alguien deshizo la
+            # reconciliación en Odoo (error humano, poco común pero
+            # posible). Antes esta rama solo hacía `continue`, así que
+            # una Vinculación CONCILIADO quedaba congelada en ese estado
+            # para siempre, aunque el pago real ya no respaldara nada --
+            # seguía destrabando descuentos y contando como dinero real.
+            # Se demueve a PENDIENTE (nunca se borra: puede volver a
+            # reconciliarse después) -- el motor deja de contarla en el
+            # mismo ciclo (``_abonos()`` filtra por CONCILIADO), sin
+            # necesidad de ninguna lógica de "revertir descuento" aparte.
+            for v in vincs_locales:
+                if v.estado == EstadoVinculacion.CONCILIADO:
+                    vincs_a_actualizar.append(
+                        dataclasses_replace(v, estado=EstadoVinculacion.PENDIENTE)
+                    )
+                    cambios.append(
+                        {
+                            "pago_id": pago_id,
+                            "so_id_anterior": v.so_id,
+                            "so_id_nuevo": v.so_id,
+                            "requiere_revision_manual": False,
+                            "tipo": "desconciliado",
+                            "detalle": (
+                                f"Pago {pago_id} ya no aparece reconciliado en Odoo "
+                                "(cancelado o reconciliación deshecha) -- Vinculación "
+                                "regresada a PENDIENTE"
+                            ),
+                        }
+                    )
+            continue
+
         so_ids_odoo = set(conciliado["so_ids"])
         if not so_ids_odoo:
             continue
@@ -755,13 +824,90 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         if so_ids_locales == so_ids_odoo:
             # Ya coincide -- Odoo confirma que la asignación es correcta.
             # Promueve cualquier Vinculación todavía PENDIENTE (manual
-            # reciente o auto-FIFO) a CONCILIADO; nada que hacer con las
-            # que ya estaban confirmadas.
+            # reciente o auto-FIFO) a CONCILIADO.
             for v in vincs_locales:
                 if v.estado != EstadoVinculacion.CONCILIADO:
                     vincs_a_actualizar.append(
                         dataclasses_replace(v, estado=EstadoVinculacion.CONCILIADO)
                     )
+                    continue
+                # Corrección del usuario: aunque el so_id siga siendo el
+                # mismo, el PAGO pudo editarse en Odoo (monto, moneda o
+                # fecha) después de que esta Vinculación quedó
+                # CONCILIADO -- los equivalentes congelados
+                # (monto_aplicado/tasa_*_aplicada) no se actualizan solos.
+                # Se recalculan con la MISMA fórmula que usa una
+                # Vinculación nueva, a partir de los valores actuales de
+                # Odoo -- "Odoo prevalece" aplica igual aquí que al
+                # so_id: no hace falta revisión manual porque no hay
+                # ambigüedad, solo un dato que cambió.
+                monto_odoo = parse_decimal_safe(str(conciliado.get("monto_original") or "0"))
+                moneda_odoo = str(conciliado.get("moneda") or "USD").upper()
+                fecha_odoo_str = conciliado.get("fecha_pago") or ""
+                cambio_monto = monto_odoo > 0 and abs(monto_odoo - v.monto_aplicado) > Decimal(
+                    "0.01"
+                )
+                cambio_moneda = moneda_odoo and moneda_odoo != str(v.moneda_abono.value).upper()
+                cambio_fecha = (
+                    fecha_odoo_str and fecha_odoo_str != v.hora_pago_confirmada.date().isoformat()
+                )
+                if not (cambio_monto or cambio_moneda or cambio_fecha):
+                    continue
+                try:
+                    hora_pago_nueva = (
+                        datetime.strptime(fecha_odoo_str, "%Y-%m-%d")
+                        if fecha_odoo_str
+                        else v.hora_pago_confirmada
+                    )
+                except ValueError:
+                    hora_pago_nueva = v.hora_pago_confirmada
+                tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+                    repo, v.so_id, hora_pago_nueva, tasa_bcv_ultima
+                )
+                monto_nuevo = monto_odoo if monto_odoo > 0 else v.monto_aplicado
+                if moneda_odoo == "USD":
+                    equiv_usd_bcv = monto_nuevo
+                    equiv_usd_binance = monto_nuevo
+                    equiv_ves_bcv = monto_nuevo * tasa_bcv
+                    equiv_ves_binance = monto_nuevo * tasa_binance_ultima
+                else:
+                    equiv_usd_bcv = monto_nuevo / tasa_bcv
+                    equiv_usd_binance = monto_nuevo / tasa_binance_ultima
+                    equiv_ves_bcv = monto_nuevo
+                    equiv_ves_binance = monto_nuevo
+                try:
+                    moneda_nueva = Moneda(moneda_odoo)
+                except ValueError:
+                    moneda_nueva = v.moneda_abono
+                vincs_a_actualizar.append(
+                    dataclasses_replace(
+                        v,
+                        monto_aplicado=monto_nuevo,
+                        hora_pago_confirmada=hora_pago_nueva,
+                        tasa_bcv_aplicada=tasa_bcv,
+                        tasa_binance_aplicada=tasa_binance_ultima,
+                        bcv_variante=bcv_variante,
+                        moneda_abono=moneda_nueva,
+                        equiv_usd_bcv=equiv_usd_bcv,
+                        equiv_usd_binance=equiv_usd_binance,
+                        equiv_ves_bcv=equiv_ves_bcv,
+                        equiv_ves_binance=equiv_ves_binance,
+                    )
+                )
+                cambios.append(
+                    {
+                        "pago_id": pago_id,
+                        "so_id_anterior": v.so_id,
+                        "so_id_nuevo": v.so_id,
+                        "requiere_revision_manual": False,
+                        "tipo": "monto_o_fecha_actualizado",
+                        "detalle": (
+                            f"Pago {pago_id} cambió en Odoo (monto/moneda/fecha) -- "
+                            f"Vinculación recalculada: {v.monto_aplicado} "
+                            f"{v.moneda_abono.value} -> {monto_nuevo} {moneda_nueva.value}"
+                        ),
+                    }
+                )
             continue
 
         if len(vincs_locales) == 1 and len(so_ids_odoo) == 1:
@@ -778,6 +924,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                     "so_id_anterior": v.so_id,
                     "so_id_nuevo": so_id_nuevo,
                     "requiere_revision_manual": False,
+                    "tipo": "so_id_repuntado",
                 }
             )
         else:
@@ -787,6 +934,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                     "so_id_anterior": ", ".join(sorted(so_ids_locales)),
                     "so_id_nuevo": ", ".join(sorted(so_ids_odoo)),
                     "requiere_revision_manual": True,
+                    "tipo": "discrepancia_multi_orden",
                 }
             )
 
@@ -795,21 +943,31 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
 
     if cambios and hasattr(repo, "append_auditoria_rows"):
         ahora = datetime.now()
+        # ``tipo_auditoria``/``detalle_odoo`` por defecto cubren el caso
+        # histórico (re-apuntado de so_id) -- los 3 casos nuevos
+        # (desconciliado, monto/fecha actualizado, multi-orden) traen su
+        # propio "tipo"/"detalle" ya armado desde donde se generó el
+        # cambio.
+        _TIPO_AUDITORIA_POR_CAMBIO = {
+            "desconciliado": "vinculacion_desconciliada_por_odoo",
+            "monto_o_fecha_actualizado": "vinculacion_actualizada_por_cambio_en_odoo",
+            "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
+            "so_id_repuntado": "vinculacion_revinculada_por_odoo",
+        }
         audit_rows = [
             {
                 "audit_id": f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}",
                 "pago_id": c["pago_id"],
                 "so_id": c["so_id_nuevo"],
-                "tipo_auditoria": (
-                    "vinculacion_discrepancia_multi_orden"
-                    if c["requiere_revision_manual"]
-                    else "vinculacion_revinculada_por_odoo"
+                "tipo_auditoria": _TIPO_AUDITORIA_POR_CAMBIO.get(
+                    c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
                 ),
                 "motor_calcula_usd": "",
                 "odoo_registrado_usd": "",
                 "diferencia_usd": "",
-                "detalle_odoo": (
-                    f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}"
+                "detalle_odoo": c.get(
+                    "detalle",
+                    f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
                 ),
                 "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
                 "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
