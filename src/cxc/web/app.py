@@ -1199,6 +1199,11 @@ class VinculacionRequest(BaseModel):
     monto_aplicado: float
 
 
+class VinculacionEditRequest(BaseModel):
+    so_id: str
+    monto_aplicado: float
+
+
 class TasaRequest(BaseModel):
     tasa_bcv: float
     tasa_binance: float
@@ -2767,6 +2772,106 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             "message": "Vinculación guardada. Recálculo en segundo plano iniciado.",
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.put("/api/vinculacion/{vinc_id}/editar")
+async def put_editar_vinculacion(
+    vinc_id: str, req: VinculacionEditRequest, background_tasks: BackgroundTasks
+):
+    """Edita la orden y/o el monto de una Vinculación ya existente.
+
+    Pedido explícito del usuario (agosto 2026): antes, corregir "a qué
+    orden aplica este pago" solo se podía hacer creando una Vinculación
+    NUEVA (``POST /api/vincular``) -- como ``vinc_id`` se deriva de
+    ``pago_id`` + ``so_id``, cambiar el ``so_id`` ahí generaría un
+    ``vinc_id`` DISTINTO en vez de corregir el existente, dejando la
+    Vinculación vieja huérfana apuntando a la orden equivocada (bug real
+    que este endpoint nuevo evita -- edita el MISMO registro, nunca crea
+    uno paralelo).
+
+    Solo permitido si la Vinculación AÚN NO está CONCILIADO en Odoo --
+    "Odoo prevalece" aplica también acá: una vez Odoo confirma a qué
+    factura aplica un pago, esa asignación ya no se edita a mano (si
+    Odoo se equivocó, corregirlo en Odoo -- el resync de
+    ``_resincronizar_vinculaciones_con_odoo`` lo refleja solo).
+    """
+    try:
+        repo = get_repo()
+        vinc = _get_vinculacion_or_404(repo, vinc_id)
+        if vinc.estado == EstadoVinculacion.CONCILIADO:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Esta Vinculación ya está conciliada en Odoo -- no se puede "
+                    "editar a mano. Si Odoo tiene un dato incorrecto, corrígelo "
+                    "ahí; el sistema lo reflejará solo en el siguiente ciclo."
+                ),
+            )
+
+        pago = repo.get_pago(vinc.pago_id)
+        if not pago:
+            raise HTTPException(status_code=404, detail="Pago no encontrado.")
+
+        so_id_anterior = vinc.so_id
+        so_id_nuevo = req.so_id.strip()
+        if not so_id_nuevo:
+            raise HTTPException(status_code=400, detail="Debes indicar una orden.")
+        monto_dec = Decimal(str(req.monto_aplicado))
+        if monto_dec <= Decimal("0"):
+            raise HTTPException(status_code=400, detail="El monto debe ser positivo.")
+
+        last_tasa = repo.last_serie_tasa()
+        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
+        tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
+        hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # La orden nueva puede caer en una ventana histórica distinta a la
+        # anterior -- se re-resuelve la tasa BCV, nunca se reusa la vieja.
+        tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+            repo, so_id_nuevo, hora_pago_confirmada, tasa_bcv_ultima
+        )
+
+        if pago.moneda == "USD":
+            equiv_usd_bcv = monto_dec
+            equiv_usd_binance = monto_dec
+            equiv_ves_bcv = monto_dec * tasa_bcv
+            equiv_ves_binance = monto_dec * tasa_binance
+        else:
+            equiv_usd_bcv = monto_dec / tasa_bcv
+            equiv_usd_binance = monto_dec / tasa_binance
+            equiv_ves_bcv = monto_dec
+            equiv_ves_binance = monto_dec
+
+        # Mismo vinc_id -- esto es una EDICIÓN, no una Vinculación nueva.
+        vinc.so_id = so_id_nuevo
+        vinc.monto_aplicado = monto_dec
+        vinc.tasa_bcv_aplicada = tasa_bcv
+        vinc.tasa_binance_aplicada = tasa_binance
+        vinc.bcv_variante = bcv_variante
+        vinc.equiv_usd_bcv = equiv_usd_bcv
+        vinc.equiv_usd_binance = equiv_usd_binance
+        vinc.equiv_ves_bcv = equiv_ves_bcv
+        vinc.equiv_ves_binance = equiv_ves_binance
+
+        repo.update_vinculacion(vinc)
+
+        # Recalcular AMBAS órdenes -- la anterior pierde este abono, la
+        # nueva lo gana.
+        background_tasks.add_task(recalculate_all, so_id_anterior)
+        if so_id_nuevo != so_id_anterior:
+            background_tasks.add_task(recalculate_all, so_id_nuevo)
+
+        return {
+            "status": "success",
+            "vinc_id": vinc_id,
+            "so_id": so_id_nuevo,
+            "monto_aplicado": float(monto_dec),
+            "message": "Vinculación editada. Recálculo en segundo plano iniciado.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

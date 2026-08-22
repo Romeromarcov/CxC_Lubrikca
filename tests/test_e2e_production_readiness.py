@@ -1955,6 +1955,97 @@ def test_e2e_18_editar_tasa_binance_valida_min_max_del_dia():
         assert abs(data["equiv_usd_binance"] - 1000.0 / 40.5) < 1e-6
 
 
+def test_e2e_18b_editar_vinculacion_pendiente_cambia_orden_y_monto():
+    """Pedido del usuario (2026-08-22): botón para editar a qué orden y con
+
+    qué monto aplica un pago, mientras siga sin conciliar en Odoo. Debe
+    editar el MISMO vinc_id (nunca crear uno paralelo -- ver docstring del
+    endpoint), y disparar recálculo de ambas órdenes (la que pierde el
+    abono y la que lo gana).
+    """
+    vinc = Vinculacion(
+        vinc_id="V_EDIT2",
+        pago_id="P_EDIT2",
+        so_id="SO_VIEJA",
+        monto_aplicado=Decimal("300.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        estado=EstadoVinculacion.PENDIENTE,
+        moneda_abono=Moneda.USD,
+    )
+    mock_pago = Pago(
+        pago_id="P_EDIT2",
+        cliente_id="CLI_EDIT2",
+        monto=Decimal("500.00"),
+        moneda=Moneda.USD,
+        metodo_pago="Zelle",
+        fecha_pago=datetime(2026, 7, 10, 10, 0),
+        vendedor_email="v@lubrikca.com",
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+    mock_repo.get_pago.return_value = mock_pago
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.recalculate_all") as mock_recalc,
+    ):
+        res = client.put(
+            "/api/vinculacion/V_EDIT2/editar",
+            json={"so_id": "SO_NUEVA", "monto_aplicado": 350.0},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["vinc_id"] == "V_EDIT2"
+        assert data["so_id"] == "SO_NUEVA"
+        assert data["monto_aplicado"] == 350.0
+
+        mock_repo.update_vinculacion.assert_called_once()
+        (vinc_actualizada,), _ = mock_repo.update_vinculacion.call_args
+        # Mismo vinc_id -- es una edición, no una Vinculación nueva.
+        assert vinc_actualizada.vinc_id == "V_EDIT2"
+        assert vinc_actualizada.so_id == "SO_NUEVA"
+        assert vinc_actualizada.monto_aplicado == Decimal("350.0")
+        # Editar no confirma -- sigue PENDIENTE hasta que Odoo la reconcilie.
+        assert vinc_actualizada.estado == EstadoVinculacion.PENDIENTE
+
+        # Recalcula ambas órdenes: la vieja pierde el abono, la nueva lo gana.
+        recalculadas = {call.args[0] for call in mock_recalc.call_args_list}
+        assert recalculadas == {"SO_VIEJA", "SO_NUEVA"}
+
+
+def test_e2e_18c_editar_vinculacion_conciliada_se_rechaza():
+    """"Odoo prevalece" aplica también a la edición manual: una Vinculación
+
+    ya CONCILIADO no se puede editar a mano -- si Odoo tiene el dato mal,
+    se corrige en Odoo, no en la app.
+    """
+    vinc = Vinculacion(
+        vinc_id="V_CONC",
+        pago_id="P_CONC",
+        so_id="SO_CONC",
+        monto_aplicado=Decimal("300.00"),
+        hora_pago_confirmada=datetime(2026, 7, 10, 10, 0),
+        tasa_bcv_aplicada=Decimal("36.0"),
+        tasa_binance_aplicada=Decimal("40.0"),
+        es_tasa_heredada=False,
+        estado=EstadoVinculacion.CONCILIADO,
+        moneda_abono=Moneda.USD,
+    )
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [vinc]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.put(
+            "/api/vinculacion/V_CONC/editar",
+            json={"so_id": "SO_OTRA", "monto_aplicado": 999.0},
+        )
+        assert res.status_code == 400
+        mock_repo.update_vinculacion.assert_not_called()
+
+
 def test_e2e_editar_tasa_binance_pago_pendiente_valida_min_max_y_persiste():
     """Pedido del usuario (agosto 2026): editar la tasa Binance de un pago
 

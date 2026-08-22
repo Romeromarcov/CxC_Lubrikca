@@ -4576,6 +4576,23 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>`;
         }
 
+        // Pedido explícito del usuario (2026-08-22): editar a qué orden y
+        // con qué monto aplica un pago YA vinculado, mientras Odoo no lo
+        // haya conciliado todavía -- "Odoo prevalece" una vez conciliado,
+        // ya no se edita a mano (ver PUT /api/vinculacion/{vinc_id}/editar).
+        if (base.vinc_id && base.estado !== 'conciliado_odoo') {
+            html += `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
+                <label style="font-weight:700; font-size:0.85rem; display:block; margin-bottom:0.5rem;">✏️ Editar Orden y Monto Aplicado</label>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <select id="edit-vinc-so-select" data-vinc="${base.vinc_id}" data-cliente="${base.cliente_id}" style="min-width:220px; padding:4px 6px; font-size:0.8rem;">
+                        <option value="${base.so_id || ''}">${base.so_id || 'Cargando órdenes...'}</option>
+                    </select>
+                    <input type="number" step="0.01" id="edit-vinc-monto" value="${base.monto_aplicado ?? ''}" placeholder="Monto aplicado" style="width:140px; padding:4px 6px; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="guardarEdicionVinculacion('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Cambios</button>
+                </div>
+            </div>`;
+        }
+
         html += `<h3 style="margin:1rem 0 0.5rem;">📋 Reparto / Órdenes y Facturas</h3>
             <div style="overflow-x:auto;">
             <table class="cxc-table"><thead><tr>
@@ -4600,7 +4617,65 @@ document.addEventListener("DOMContentLoaded", () => {
         body.innerHTML = html;
         const bcvVarianteSelect = body.querySelector(`.select-bcv-variante[data-vinc="${base.vinc_id}"]`);
         if (bcvVarianteSelect && base.bcv_variante) bcvVarianteSelect.value = base.bcv_variante;
+
+        // Poblar el selector de "Editar Orden" con las órdenes reales del
+        // cliente -- la orden actual siempre queda como primera opción
+        // (aunque ya no aparezca "pendiente" en Odoo) para que el campo
+        // nunca se quede vacío ni pierda el valor actual mientras carga.
+        const editSoSelect = document.getElementById("edit-vinc-so-select");
+        if (editSoSelect && base.cliente_id) {
+            fetch(`/api/ordenes-pendientes/${base.cliente_id}`)
+                .then(res => res.ok ? res.json() : [])
+                .then(orders => {
+                    const actual = base.so_id || '';
+                    const vistas = new Set();
+                    let opts = '';
+                    if (actual) {
+                        opts += `<option value="${actual}">${actual} (orden actual)</option>`;
+                        vistas.add(actual);
+                    }
+                    orders.forEach(o => {
+                        if (vistas.has(o.so_id)) return;
+                        vistas.add(o.so_id);
+                        opts += `<option value="${o.so_id}">${o.so_id} - ${o.fecha} (Saldo: ${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(o.saldo_pendiente)})</option>`;
+                    });
+                    editSoSelect.innerHTML = opts || `<option value="${actual}">${actual}</option>`;
+                    editSoSelect.value = actual;
+                })
+                .catch(err => console.error("Error cargando órdenes para editar vinculación:", err));
+        }
+
         modal.style.display = "flex";
+    };
+
+    window.guardarEdicionVinculacion = async function(vincId) {
+        const soSelect = document.getElementById("edit-vinc-so-select");
+        const montoInput = document.getElementById("edit-vinc-monto");
+        if (!soSelect || !montoInput) return;
+        const so_id = soSelect.value;
+        const monto_aplicado = parseFloat(montoInput.value);
+        if (!so_id || !monto_aplicado || monto_aplicado <= 0) {
+            alert("Selecciona una orden e indica un monto válido.");
+            return;
+        }
+        try {
+            const res = await fetch(`/api/vinculacion/${vincId}/editar`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ so_id, monto_aplicado })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                alert("✅ Vinculación editada. Recálculo en segundo plano iniciado.");
+                cerrarModalDetallePago();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+            } else {
+                alert(`❌ ${data.detail || "Error al editar la vinculación."}`);
+            }
+        } catch (err) {
+            console.error("Error editando vinculación:", err);
+            alert("❌ Error al editar la vinculación.");
+        }
     };
 
     window.cerrarModalDetallePago = function() {
