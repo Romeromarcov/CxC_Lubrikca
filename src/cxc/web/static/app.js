@@ -1647,6 +1647,37 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div style="font-size:0.9rem;">${valorHtml}</div>
             </div>`;
 
+        // Saldo por fila -- MISMO target que usa cada estatus_pago_* en el
+        // backend (ver _get_ventas_sync): los teóricos comparan contra su
+        // propia neta+imp (sin restar Desc. Sistema, que solo aplica a lo
+        // real); Real Orden/Real Factura restan Desc. Sistema antes de
+        // comparar. Nunca deben coincidir entre sí -- son 4 referencias
+        // distintas -- por diseño solo UNA de ellas alimenta el "Saldo CxC"
+        // consolidado (ver estrella más abajo).
+        const saldoTeoricoVes = item.ves_neta_teorica_iva != null
+            ? Math.max(0, item.ves_neta_teorica_iva - (item.monto_pagado_bcv || 0)) : null;
+        const saldoTeoricoUsd = item.usd_neta_teorica_iva != null
+            ? Math.max(0, item.usd_neta_teorica_iva - (item.monto_pagado_usd || 0)) : null;
+        const targetOrden = Math.max(0, (item.venta_neta_real || 0) - (item.descuento_aplicado_sistema || 0));
+        const saldoRealOrden = Math.max(0, targetOrden - (item.monto_pagado_factura_odoo || 0));
+        const targetFactura = Math.max(0, (item.total_facturado_neto || 0) - (item.descuento_aplicado_sistema || 0));
+        const saldoRealFactura = item.facturada
+            ? Math.max(0, targetFactura - (item.monto_pagado_factura_odoo || 0)) : null;
+
+        // ¿Cuál de las 4 referencias es la que realmente alimenta el
+        // "Saldo CxC" consolidado de la fila principal? MISMA lógica que
+        // el backend (ver saldo_cxc en app.py): la lista con la que nació
+        // la orden, o Real Factura/Real Orden como fallback si esa lista
+        // no tiene teórico calculado todavía.
+        const esUsdNacimiento = !!item.nacio_en_lista_usd;
+        const netaNativaTeorica = esUsdNacimiento ? item.usd_neta_teorica_iva : item.ves_neta_teorica_iva;
+        const refKey = netaNativaTeorica != null
+            ? (esUsdNacimiento ? 'usd' : 'ves')
+            : (item.facturada ? 'factura' : 'orden');
+        const refBadge = (key) => key === refKey
+            ? ' <span title="Esta es la referencia que alimenta el Saldo CxC consolidado de la orden" style="color:#b45309;">★</span>'
+            : '';
+
         cont.innerHTML = `
             <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.85rem 1rem;background:#f8fafc;border-radius:10px;border:1px solid hsl(var(--border-card));margin-bottom:0.25rem;">
                 ${campo('Vendedor', item.vendedor || 'Sin Vendedor')}
@@ -1667,44 +1698,49 @@ document.addEventListener("DOMContentLoaded", () => {
                             <th style="text-align:right">Neta</th>
                             <th style="text-align:right">Neta + Imp.</th>
                             <th style="text-align:right">Pagado</th>
+                            <th style="text-align:right">Saldo</th>
                             <th style="text-align:right">Estatus</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
-                            <td>Teórico VES (BCV)</td>
+                            <td>Teórico VES (BCV)${refBadge('ves')}</td>
                             <td style="text-align:right">${naVal(item.ves_bruta_teorica)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
                             <td style="text-align:right">${naVal(item.ves_neta_teorica)}</td>
                             <td style="text-align:right"><strong>${naVal(item.ves_neta_teorica_iva)}</strong></td>
                             <td style="text-align:right">${fmt(item.monto_pagado_bcv)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoTeoricoVes)}</strong></td>
                             <td style="text-align:right">${item.estatus_pago_teorico_ves ?? '—'}</td>
                         </tr>
                         <tr>
-                            <td>Teórico USD (Binance)</td>
+                            <td>Teórico USD (Binance)${refBadge('usd')}</td>
                             <td style="text-align:right">${naVal(item.usd_bruta_teorica)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
                             <td style="text-align:right">${naVal(item.usd_neta_teorica)}</td>
                             <td style="text-align:right"><strong>${naVal(item.usd_neta_teorica_iva)}</strong></td>
                             <td style="text-align:right">${fmt(item.monto_pagado_usd)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoTeoricoUsd)}</strong></td>
                             <td style="text-align:right">${item.estatus_pago_teorico_usd ?? '—'}</td>
                         </tr>
                         <tr>
-                            <td>Real Orden</td>
+                            <td>Real Orden${refBadge('orden')}</td>
                             <td style="text-align:right">${fmt(item.venta_bruta_real)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
-                            <td style="text-align:right" colspan="1">${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real - item.descuento_aplicado_orden)}</td>
                             <td style="text-align:right"><strong>${fmt(item.venta_neta_real)}</strong></td>
-                            <td style="text-align:right">—</td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
+                            <td style="text-align:right"><strong>${fmt(saldoRealOrden)}</strong></td>
                             <td style="text-align:right">${item.estatus_pago_real_orden ?? '—'}</td>
                         </tr>
                         <tr>
-                            <td>Real Factura</td>
+                            <td>Real Factura${refBadge('factura')}</td>
                             <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
-                            <td style="text-align:right">—</td>
-                            <td style="text-align:right"><strong>${fmt(item.total_facturado_con_impuestos)}</strong></td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos - item.descuento_aplicado_factura)}</td>
+                            <td style="text-align:right"><strong>${fmt(item.total_facturado_neto)}</strong></td>
                             <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoRealFactura)}</strong></td>
                             <td style="text-align:right">${item.estatus_pago_real_factura ?? '—'}</td>
                         </tr>
                     </tbody>
@@ -1715,6 +1751,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${campo('N/D Aplicada', fmt(item.total_nd_aplicada))}
                 ${campo('Desc. Pendiente', descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct))}
                 ${campo('Desc. Sistema', descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct), item.descuento_aplicado_sistema_motivo ?? '')}
+                ${campo('Orden Real c/ Desc. Teóricos', `${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}`, 'Cuánto debería costar la orden si se aplicaran TODOS los descuentos que calcula el motor (aplicados o no) -- valor hipotético, no el saldo real')}
             </div>
         `;
     }
