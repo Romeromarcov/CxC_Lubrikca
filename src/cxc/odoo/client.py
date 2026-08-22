@@ -868,6 +868,60 @@ class OdooXmlRpcReader(OdooReader):
         return out
 
     # --- Pagos ---------------------------------------------------------------
+    def _montos_reembolsados_en_pagos(self, move_ids: list[int]) -> dict[int, Decimal]:
+        """``move_id`` -> monto reembolsado, para pagos donde una devolución de
+
+        sobrepago quedó registrada como una línea EXTRA dentro del MISMO
+        asiento del pago (caso real, agosto 2026, cliente Inversiones Sai
+        2006 -- el cliente pagó de más y la diferencia se le devolvió por
+        banco, todo en un solo asiento manual en vez del flujo normal de
+        Odoo "Registrar Pago" + conciliar).
+
+        Detección genérica (no depende de nombres de cuenta, que pueden
+        variar): CUALQUIER línea de CRÉDITO en el asiento cuya cuenta sea
+        de tipo ``asset_cash`` (banco/efectivo real) es una devolución --
+        un pago de cliente normal SIEMPRE debita ese tipo de cuenta (o la
+        cuenta puente de "recibos pendientes", que es ``asset_current``,
+        nunca ``asset_cash``), jamás la acredita. La cuenta por cobrar
+        (``asset_receivable``) se excluye aparte porque ESA sí se acredita
+        siempre, por la porción que de verdad se aplicó -- no es un
+        reembolso.
+
+        Multi-moneda: se suma ``amount_currency`` (la moneda PROPIA de la
+        línea -- la del pago, no la de la compañía), nunca ``credit``
+        directo -- ``credit``/``debit`` en ``account.move.line`` SIEMPRE
+        están en moneda de la compañía (VES), así que para un pago en USD
+        restar ``credit`` (VES) de ``amount`` (USD) mezclaría unidades sin
+        convertir. ``amount_currency`` ya viene en la moneda de la línea
+        (negativo en el lado crédito), lo mismo que ``Pago.monto``/
+        ``account.payment.amount`` -- misma unidad, resta directa correcta.
+        """
+        if not move_ids:
+            return {}
+        lines = self._search_read(
+            self.MODEL_MOVE_LINE,
+            [["move_id", "in", move_ids], ["credit", ">", 0]],
+            ["move_id", "account_id", "amount_currency"],
+        )
+        if not lines:
+            return {}
+        account_ids = list(_ids_of(lines, "account_id"))
+        tipos = {
+            a["id"]: a.get("account_type")
+            for a in self._execute(
+                "account.account", "read", [account_ids], {"fields": ["id", "account_type"]}
+            )
+        }
+        reembolsos: dict[int, Decimal] = {}
+        for ln in lines:
+            acc_id = _m2o_id(ln.get("account_id"))
+            if not acc_id or tipos.get(int(acc_id)) != "asset_cash":
+                continue
+            move_id = int(_m2o_id(ln.get("move_id")))
+            monto_linea = abs(_dec(ln.get("amount_currency")))
+            reembolsos[move_id] = reembolsos.get(move_id, Decimal("0")) + monto_linea
+        return reembolsos
+
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
         domain = self._delta(since) + [
             ["payment_type", "=", "inbound"],
@@ -877,13 +931,41 @@ class OdooXmlRpcReader(OdooReader):
         recs = self._search_read(
             self.MODEL_PAGO,
             domain,
-            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "is_reconciled"],
+            [
+                "id",
+                "partner_id",
+                "amount",
+                "currency_id",
+                "journal_id",
+                "date",
+                "is_reconciled",
+                "move_id",
+            ],
         )
         partner_ids = _ids_of(recs, "partner_id")
         vendedores = self._vendedor_por_partner(partner_ids)
+        move_ids = [int(_m2o_id(r["move_id"])) for r in recs if r.get("move_id")]
+        try:
+            reembolsos = self._montos_reembolsados_en_pagos(move_ids)
+        except Exception as e_reembolso:
+            logger.warning("Error detectando reembolsos embebidos en pagos: %s", e_reembolso)
+            reembolsos = {}
         for r in recs:
             pid = _m2o_id(r.get("partner_id"))
             r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
+            move_id_r = int(_m2o_id(r["move_id"])) if r.get("move_id") else None
+            reembolso = reembolsos.get(move_id_r, Decimal("0")) if move_id_r else Decimal("0")
+            if reembolso > 0:
+                monto_neto = max(Decimal("0"), _dec(r.get("amount")) - reembolso)
+                logger.warning(
+                    "Pago %s: monto bruto %s, reembolso embebido %s en el mismo "
+                    "asiento -- monto neto usado para FIFO/saldos: %s",
+                    r.get("id"),
+                    r.get("amount"),
+                    reembolso,
+                    monto_neto,
+                )
+                r["amount"] = monto_neto
         return [map_pago(r) for r in recs]
 
     def pagos_reconciliados_por_orden(

@@ -273,6 +273,8 @@ class FakeExecute:
             ("product.product", "read"): "productos",
             ("account.payment", "search_read"): "pagos",
             ("account.move", "search_read"): "facturas",
+            ("account.move.line", "search_read"): "move_lines",
+            ("account.account", "read"): "accounts",
         }.get((model, method))
         return self.data.get(key, [])
 
@@ -440,6 +442,141 @@ def test_changed_pagos_resuelve_vendedor_y_journal() -> None:
     assert p.metodo_pago == "29"
     assert p.moneda == Moneda.USD
     assert p.vendedor_email == "ruta07@gmail.com"
+
+
+def test_changed_pagos_resta_devolucion_embebida_en_el_mismo_asiento() -> None:
+    """Caso real (agosto 2026, cliente Inversiones Sai 2006, C.A): el
+
+    cliente pagó de más y la diferencia se le devolvió por banco, todo
+    registrado en un asiento manual de 3 líneas (débito recibos
+    pendientes, crédito AR parcial, crédito banco por la devolución) en
+    vez del flujo normal "Registrar Pago" + conciliar. El monto que el
+    sistema usa para FIFO/saldos debe ser el NETO (lo que de verdad se
+    aplicó a Cuentas por Cobrar), no el bruto -- si no, queda un residuo
+    fantasma sin ninguna orden a la que aplicarlo.
+    """
+    fake = FakeExecute(
+        {
+            "pagos": [
+                {
+                    "id": 1084,
+                    "partner_id": [1482, "Inversiones Sai 2006, C.A"],
+                    "amount": 4784.56,
+                    "currency_id": [2, "VES"],
+                    "journal_id": [30, "Banco Bancamiga 7806"],
+                    "date": "2026-07-21",
+                    "move_id": [5940, "PBAMI/2026/00294"],
+                }
+            ],
+            "partners_read": [{"id": 1482, "user_id": False}],
+            "users": [],
+            "move_lines": [
+                # Débito -- recibos pendientes (asset_current, nunca reembolso).
+                {
+                    "move_id": [5940, "x"],
+                    "account_id": [409, "Recibos pendientes"],
+                    "amount_currency": 4784.56,
+                },
+                # Crédito -- AR, la porción que sí se aplicó (asset_receivable, excluida).
+                {
+                    "move_id": [5940, "x"],
+                    "account_id": [52, "AR"],
+                    "amount_currency": -1566.02,
+                },
+                # Crédito -- banco real (asset_cash) = la devolución.
+                {
+                    "move_id": [5940, "x"],
+                    "account_id": [391, "Banco Bancamiga"],
+                    "amount_currency": -3218.54,
+                },
+            ],
+            "accounts": [
+                {"id": 409, "account_type": "asset_current"},
+                {"id": 52, "account_type": "asset_receivable"},
+                {"id": 391, "account_type": "asset_cash"},
+            ],
+        }
+    )
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    p = reader.changed_pagos(None)[0]
+    # 4784.56 - 3218.54 (reembolso real) = 1566.02 -- NUNCA el bruto.
+    assert p.monto == Decimal("1566.02")
+
+
+def test_changed_pagos_pago_normal_sin_reembolso_no_se_toca() -> None:
+    """Un pago normal (2 líneas: débito banco, crédito AR -- sin ninguna
+
+    línea extra de crédito a un banco) no debe verse afectado -- el monto
+    sigue siendo el bruto original."""
+    fake = FakeExecute(
+        {
+            "pagos": [
+                {
+                    "id": 900,
+                    "partner_id": [10, "Cliente Normal"],
+                    "amount": 500.0,
+                    "currency_id": [1, "USD"],
+                    "journal_id": [29, "Zelle"],
+                    "date": "2026-07-01",
+                    "move_id": [800, "PAY/900"],
+                }
+            ],
+            "partners_read": [{"id": 10, "user_id": False}],
+            "users": [],
+            "move_lines": [
+                {"move_id": [800, "x"], "account_id": [52, "AR"], "amount_currency": -500.0},
+            ],
+            "accounts": [
+                {"id": 52, "account_type": "asset_receivable"},
+            ],
+        }
+    )
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    p = reader.changed_pagos(None)[0]
+    assert p.monto == Decimal("500.0")
+
+
+def test_changed_pagos_reembolso_total_no_baja_de_cero() -> None:
+    """Devolución del 100% (nada se aplicó a ninguna orden) -- el monto
+
+    neto debe quedar en $0, nunca negativo, aunque por algún redondeo el
+    reembolso registrado superara ligeramente el monto bruto."""
+    fake = FakeExecute(
+        {
+            "pagos": [
+                {
+                    "id": 1200,
+                    "partner_id": [20, "Cliente Reembolsado"],
+                    "amount": 200.0,
+                    "currency_id": [1, "USD"],
+                    "journal_id": [29, "Zelle"],
+                    "date": "2026-07-05",
+                    "move_id": [900, "PAY/1200"],
+                }
+            ],
+            "partners_read": [{"id": 20, "user_id": False}],
+            "users": [],
+            "move_lines": [
+                {
+                    "move_id": [900, "x"],
+                    "account_id": [409, "Recibos pendientes"],
+                    "amount_currency": 200.0,
+                },
+                {
+                    "move_id": [900, "x"],
+                    "account_id": [391, "Banco"],
+                    "amount_currency": -200.5,
+                },
+            ],
+            "accounts": [
+                {"id": 409, "account_type": "asset_current"},
+                {"id": 391, "account_type": "asset_cash"},
+            ],
+        }
+    )
+    reader = OdooXmlRpcReader(_config(), execute=fake)
+    p = reader.changed_pagos(None)[0]
+    assert p.monto == Decimal("0")
 
 
 def test_changed_ordenes_vacio_no_falla() -> None:
