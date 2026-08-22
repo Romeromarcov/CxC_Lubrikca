@@ -4221,53 +4221,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    window.aprobarSugerenciasSeleccionadas = async function() {
-        const selectedChecks = Array.from(document.querySelectorAll(".check-sugerencia-item:checked"));
-        if (selectedChecks.length === 0) {
-            alert("Por favor selecciona al menos un pago con sugerencia para aprobar.");
-            return;
-        }
-
-        const itemsToApprove = selectedChecks.map(c => {
-            const idx = parseInt(c.dataset.idx);
-            const item = currentSugerenciasList[idx];
-            return {
-                pago_id: item.pago_id,
-                so_id: item.so_id,
-                monto_aplicado: item.monto_sugerido
-            };
-        });
-
-        const totalMonto = itemsToApprove.reduce((sum, i) => sum + i.monto_aplicado, 0);
-
-        if (!confirm(`¿Desea aprobar masivamente ${itemsToApprove.length} vinculación(es) sugerida(s) por un total de $${totalMonto.toFixed(2)} USD?`)) return;
-
-        try {
-            const res = await fetch('/api/vincular-masivo', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: itemsToApprove })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                alert(`🎉 ${data.message}`);
-                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
-                loadKPIs();
-            } else {
-                alert("❌ Error procesando lote: " + (data.detail || "Error desconocido."));
-            }
-        } catch (err) {
-            console.error("Error en aprobación masiva:", err);
-            alert("❌ Error de comunicación con el servidor.");
-        }
-    };
-
     // COBRANZA UNIFICADA -- reemplaza las 4 tablas históricas (Pagos
     // Pendientes por Asociar, Mapa de Conciliación, Pagos Conciliados y el
     // registro de Cobranza) con una sola fuente de datos (/api/cobranza/pagos)
     // y una sola tabla. Reusa TAL CUAL las acciones ya existentes
     // (aprobarSugerenciaIndividual, abrirModalVincularManual, cerrarPagoHuerfano,
-    // aprobarSugerenciasSeleccionadas, generarReciboSeleccionados/toggleAllCobranza)
+    // generarReciboSeleccionados/toggleAllCobranza)
     // -- currentSugerenciasList se repuebla acá con los pendientes de la
     // tabla unificada (con alias de campos para que esas funciones, que
     // esperan el esquema viejo de /api/conciliaciones/sugerencias, sigan
@@ -4425,9 +4384,16 @@ document.addEventListener("DOMContentLoaded", () => {
             let checkboxCell = '<td></td>';
             if (item.estado === "pendiente") {
                 if (tieneSugerencia && !item.posible_duplicado && sugIdx !== undefined) {
+                    // Aprobación masiva retirada (pedido del usuario,
+                    // 2026-08-22): Auto-FIFO (daemon) ya vincula estas
+                    // filas automáticamente cada ciclo -- el botón "Bulk"
+                    // solo aprobaba EXACTAMENTE este mismo subconjunto
+                    // (con so_id, no duplicado), nunca los casos que sí
+                    // requieren juicio humano (duplicados, sin orden). El
+                    // botón individual "✓ Vincular" sigue para quien no
+                    // quiera esperar al siguiente ciclo.
                     accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
                         <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden</button>`;
-                    checkboxCell = `<td style="text-align:center;"><input type="checkbox" class="check-sugerencia-item" data-idx="${sugIdx}" checked></td>`;
                 } else if (sugIdx !== undefined) {
                     accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`
                         + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
@@ -4496,7 +4462,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.renderCobranzaCerrados = renderCobranzaCerrados;
 
     window.toggleAllCobranza = function(el) {
-        document.querySelectorAll(".check-cobranza-item, .check-sugerencia-item").forEach(cb => cb.checked = el.checked);
+        document.querySelectorAll(".check-cobranza-item").forEach(cb => cb.checked = el.checked);
     };
 
     window.abrirModalDetallePago = function(pago_id) {
