@@ -10925,13 +10925,46 @@ def _get_ventas_sync(
                 venta_bruta_real = monto_orig / (1 + iva_rate) if iva_rate > -1 else monto_orig
             venta_neta_real = monto_orig
 
-            # Sin cálculo del motor aún (bandeja no recalculada) -- mejor
-            # estimación disponible es el subtotal real, sin descuento conocido.
-            # Estos dos NO se exponen como columnas (Tarea 2: redundantes con
-            # el bloque VES/USD explícito de abajo) -- se usan solo para
-            # "diferencia"/"alerta" contra la lista realmente aplicada.
-            venta_bruta_teorica = float(b.precio_base_calculado) if b else venta_bruta_real
-            venta_neta_teorica = float(b.total_motor) if b else venta_bruta_teorica
+            # Bug real reportado por el usuario (agosto 2026, tras el fix
+            # del fallback de precios): "Diferencia" seguía mostrando el
+            # dato viejo para órdenes YA facturadas. Causa -- BandejaFacturacion
+            # (``b.precio_base_calculado``) es un snapshot que ``run_all()``
+            # NUNCA recalcula una vez facturada la orden (por diseño, para
+            # comparar "qué se calculó al momento" vs "qué se facturó
+            # realmente") -- si el precio se calculó mal ANTES del fix
+            # (ej. el fallback a otra lista, ya corregido), quedaba
+            # congelado con el valor incorrecto para siempre, sin importar
+            # cuántas veces se corrigiera el motor después.
+            #
+            # VentasTeorico (``teoricos_map``) SÍ se re-verifica solo cada
+            # ciclo mientras ``usa_fallback_ves``/``_usd`` siga marcado (ver
+            # ``run_teoricos_pendientes``) -- se usa esa fuente, ya
+            # actualizada, para "Diferencia"/"Alerta" en vez del snapshot
+            # congelado. Solo se cae a ``b.precio_base_calculado`` si
+            # todavía no existe ninguna fila de VentasTeorico para la
+            # orden (no debería pasar en producción, pero mantiene el
+            # comportamiento anterior como red de seguridad).
+            _teorico_row_diff = teoricos_map.get(o.so_id)
+            if _teorico_row_diff is not None:
+                _es_usd_nac_diff = (
+                    str(o.lista_precios) in usd_ids_str
+                    and not es_historica_map.get(o.so_id, False)
+                )
+                if _es_usd_nac_diff:
+                    venta_bruta_teorica = float(_teorico_row_diff.teorico_usd)
+                    _desc_diff = float(_teorico_row_diff.descuentos_teorico_usd)
+                else:
+                    venta_bruta_teorica = float(_teorico_row_diff.teorico_ves)
+                    _desc_diff = float(_teorico_row_diff.descuentos_teorico_ves)
+                venta_neta_teorica = max(0.0, venta_bruta_teorica - _desc_diff)
+            elif b:
+                venta_bruta_teorica = float(b.precio_base_calculado)
+                venta_neta_teorica = float(b.total_motor)
+            else:
+                # Sin cálculo del motor aún -- mejor estimación disponible
+                # es el subtotal real, sin descuento conocido.
+                venta_bruta_teorica = venta_bruta_real
+                venta_neta_teorica = venta_bruta_teorica
 
             venta_bruta_teorica_iva = venta_bruta_teorica * (1 + iva_rate)
             venta_neta_teorica_impuestos = venta_neta_teorica * (1 + iva_rate + igtf_rate)

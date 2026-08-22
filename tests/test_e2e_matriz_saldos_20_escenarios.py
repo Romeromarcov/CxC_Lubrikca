@@ -814,3 +814,91 @@ def test_bandeja_lista_en_proceso_de_pago_para_orden_ya_facturada():
         so_ids_auditoria = {o["so_id"] for o in data["auditoria_precios"]}
         assert "SO_J1" not in so_ids_en_facturar
         assert "SO_J1" not in so_ids_auditoria
+
+
+def test_diferencia_usa_ventas_teoricos_ya_corregido_no_el_snapshot_congelado():
+    """Bug real reportado por el usuario (agosto 2026): después del fix del
+
+    fallback de precios (commit 297bd4c), la columna "Diferencia" seguía
+    mostrando el dato viejo para órdenes ya facturadas. Causa:
+    BandejaFacturacion es un snapshot que run_all() nunca recalcula una
+    vez facturada la orden -- si el precio se calculó mal ANTES del fix,
+    quedaba congelado con el valor incorrecto para siempre. VentasTeorico
+    sí se re-verifica cada ciclo mientras usa_fallback_ves/_usd siga
+    marcado -- "Diferencia" debe usar esa fuente ya corregida, no el
+    snapshot viejo de BandejaFacturacion.
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_K1",
+            cliente_id="CLI_K",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("116.00"),  # facturado exacto al valor ya corregido
+            lista_precios="5",  # nace en lista VES
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    # Snapshot VIEJO -- BandejaFacturacion nunca se recalculó tras
+    # facturar, quedó con el precio incorrecto de antes del fix ($0, el
+    # bug real del fallback).
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_K1",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("0.00"),
+            total_motor=Decimal("0.00"),
+        ),
+    ]
+    # VentasTeorico SÍ se re-verificó (usa_fallback_ves) y ya tiene el
+    # valor correcto: $100 -- coincide con lo realmente facturado.
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(
+            so_id="SO_K1",
+            teorico_ves=Decimal("100.00"),
+            teorico_usd=Decimal("100.00"),
+            usa_fallback_ves=True,
+        ),
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="K1",
+            numero="FAC/K1",
+            so_id="SO_K1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_K1", "state": "sale", "amount_untaxed": 100.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_K1"]
+        # Si usara el snapshot viejo ($0), la diferencia sería -$116 (falsa
+        # alarma enorme). Con VentasTeorico ya corregido ($100 + 16% IVA =
+        # $116, exactamente lo facturado), la diferencia debe ser $0.
+        assert item["diferencia"] == 0.0
+        assert item["alerta"] is False
