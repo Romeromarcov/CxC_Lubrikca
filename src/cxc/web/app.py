@@ -1805,13 +1805,26 @@ def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     sin caer a otro día): la tabla ya trae ``tasa_bcv_euro`` (Odoo
     ``res.currency.rate``, sembrado por ``scripts/cargar_tasas_historicas.py``).
     Devuelve ``None`` si ese día no tiene fila -- quien llama decide el fallback.
+
+    Guardia de plausibilidad (bug real, agosto 2026, pedida por el
+    usuario): MISMO criterio que ya usa ``get_bcv_euro_rate_for_datetime``
+    (ratio EUR/BCV-USD >= 1.05, EUR nunca es más barato que BCV-USD en la
+    serie real) -- pero esta función no la tenía, así que un día sembrado
+    con ``tasa_bcv_euro`` corrupto/igual al BCV (dato de origen dañado, no
+    detectable por "> 0") se devolvía sin más, produciendo tarjetas "Tasa
+    BCV" y "Tasa BCV-EUR" idénticas en la UI. Se compara contra el
+    ``tasa_bcv_usd`` de la MISMA fila (mismo día), no uno buscado aparte.
     """
     fecha_str = fecha.isoformat()
     for r in rows:
         if str(r.get("fecha", ""))[:10] == fecha_str:
             val = parse_decimal_safe(r.get("tasa_bcv_euro", "0"))
-            if val > Decimal("0"):
-                return val
+            if val <= Decimal("0"):
+                continue
+            tasa_bcv_fila = parse_decimal_safe(r.get("tasa_bcv_usd", "0"))
+            if tasa_bcv_fila > Decimal("0") and (val / tasa_bcv_fila) < Decimal("1.05"):
+                continue
+            return val
     return None
 
 
@@ -6296,6 +6309,19 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
+            # Bug real (reportado por el usuario, agosto 2026, cliente
+            # Inversiones Mi Linda Yemaire): la tarjeta "Tasa BCV" mostraba
+            # el mismo valor que "Tasa BCV-EUR" -- idéntico, no una
+            # coincidencia -- porque el bloque de abajo sustituye
+            # ``bcv_rate`` (la variable de CONVERSIÓN interna, correcta:
+            # un pago huérfano de cliente con órdenes históricas debe
+            # convertirse con la tasa EUR) sin distinguirla de la variable
+            # de DISPLAY para la tarjeta "Tasa BCV" pura -- el BCV-USD real
+            # nunca se mostraba. Se separan: ``bcv_rate_real`` congela el
+            # BCV-USD verdadero ANTES de la sustitución histórica, para la
+            # tarjeta; ``bcv_rate`` sigue siendo la base de conversión
+            # (sin cambios de comportamiento en el monto USD calculado).
+            bcv_rate_real = bcv_rate
             if moneda == "VES" and cliente_id_pago in clientes_con_orden_historica:
                 # Pago aún sin reconciliar -- tax_today (si vino) es solo la
                 # tasa BCV genérica del día, sin contexto de orden histórica.
@@ -6358,6 +6384,12 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                         "saldo_pendiente_usd": saldo_usd,
                         "moneda": moneda,
                         "tasa_bcv": bcv_rate,
+                        # Ver comentario arriba (bcv_rate_real) -- SOLO para
+                        # mostrar en la tarjeta "Tasa BCV", nunca para
+                        # recalcular montos (eso sigue usando bcv_rate, la
+                        # base de conversión real para clientes con órdenes
+                        # históricas).
+                        "tasa_bcv_real": bcv_rate_real,
                         "tasa_binance": binance_rate,
                         "vendedor": vendedor,
                         "posible_duplicado": pid in pagos_duplicados,
@@ -6464,6 +6496,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 "monto_pago_original": float(p["monto_original_raw"]),
                 "moneda_pago": p["moneda"],
                 "tasa_bcv": float(bcv_rate),
+                "tasa_bcv_real": float(p["tasa_bcv_real"]),
                 "tasa_binance": float(binance_rate),
                 "posible_duplicado": p["posible_duplicado"],
                 "duplicado_de": p["duplicado_de"],
@@ -9578,7 +9611,15 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "cliente_nombre": item["cliente_nombre"],
                     "monto_pago_original": item["monto_pago_original"],
                     "moneda_pago": item["moneda_pago"],
-                    "tasa_bcv": item["tasa_bcv"],
+                    # "tasa_bcv" acá es SOLO para la tarjeta de display --
+                    # item["tasa_bcv_real"] es el BCV-USD real (nunca la
+                    # sustitución EUR usada internamente para convertir
+                    # montos de clientes con órdenes históricas, ver
+                    # bcv_rate_real en _get_conciliaciones_sugerencias_sync
+                    # -- esa base de conversión ya quedó aplicada en
+                    # monto_pago_bcv_usd/monto_pago_binance_usd, no hace
+                    # falta repetirla aquí).
+                    "tasa_bcv": item["tasa_bcv_real"],
                     "tasa_binance": tasa_binance_item,
                     "monto_pago_bcv_usd": item["monto_pago"],
                     "monto_pago_binance_usd": monto_binance_usd_item,
@@ -9670,11 +9711,28 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "so_saldo_teorico_bs": saldos_reparto_vinc["so_saldo_teorico_bs"],
                     "so_saldo_teorico_usd": saldos_reparto_vinc["so_saldo_teorico_usd"],
                     "so_saldo_pendiente": saldos_reparto_vinc["so_saldo_pendiente"],
-                    # Residual REAL de la factura vinculada (Odoo,
-                    # amount_residual_usd) -- más preciso que el genérico
-                    # de _saldos_orden_para_reparto cuando ya hay factura
-                    # específica ligada a este pago.
-                    "factura_saldo_odoo": item["residual_facturas_usd"],
+                    # Bug real (reportado por el usuario, agosto 2026,
+                    # pago 139/Devenalsa): para una Vinculación LOCAL
+                    # (``item.get("vinc_id")`` presente), "residual_
+                    # facturas_usd" viene de ``o.monto_total -
+                    # linked_so_total`` -- una resta local que SÍ cuenta
+                    # Vinculaciones PENDIENTE (aún sin conciliar en Odoo),
+                    # así que no es realmente "residual de Odoo" pese al
+                    # nombre del campo en la UI ("Saldo Factura (Odoo)").
+                    # Eso hacía que la misma orden mostrara DOS saldos
+                    # distintos en la tabla de Reparto del modal (esta fila
+                    # vs. la de "pendiente"/sugerencia, que sí usa el saldo
+                    # neto del motor vía _saldos_orden_para_reparto) sin
+                    # ser en realidad un error de datos -- se unifica a la
+                    # MISMA fuente. Para un pago conciliado DIRECTO en Odoo
+                    # (vinc_id es None, viene de get_live_pagos_conciliados)
+                    # "residual_facturas_usd" SÍ es el residual real leído
+                    # de Odoo -- ese caso se deja intacto.
+                    "factura_saldo_odoo": (
+                        saldos_reparto_vinc["factura_saldo_odoo"]
+                        if item.get("vinc_id")
+                        else item["residual_facturas_usd"]
+                    ),
                     "so_id": item.get("so_id") or None,
                     "factura_id": item.get("factura_id"),
                     "facturas": item.get("facturas", []),

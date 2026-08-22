@@ -4159,6 +4159,88 @@ def test_e2e_46_get_eur_rate_for_date_lookup_dia_exacto():
     assert get_eur_rate_for_date(date(2026, 3, 19), rows) is None
 
 
+def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():
+    """Bug real (reportado por el usuario, agosto 2026, cliente Inversiones
+
+    Mi Linda Yemaire): un pago huérfano de un cliente con órdenes en la
+    ventana histórica sustituye ``bcv_rate`` por la tasa BCV-EUR para
+    convertir el monto a USD (correcto, ver comentario en
+    ``_get_conciliaciones_sugerencias_sync``) -- pero esa MISMA variable
+    alimentaba la tarjeta "Tasa BCV" de la UI, mostrando ahí también el
+    valor EUR (idéntico a la tarjeta "Tasa BCV-EUR", en vez del BCV-USD
+    real). ``tasa_bcv_real`` debe conservar el BCV-USD real aunque la
+    conversión interna use EUR.
+    """
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "256",
+                "cliente_id": "C_MILINDA",
+                "monto": "100.00",
+                "moneda": "VES",
+                "fecha_pago": "2026-04-30",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_MILINDA", "nombre": "Inversiones Mi Linda Yemaire 2019, C.A"}]
+            if sheet == "Clientes"
+            else (
+                [
+                    {
+                        "timestamp": "2026-04-30 12:00:00",
+                        "tasa_bcv": "487.1192",
+                        "tasa_binance": "570.9037",
+                        "tasa_bcv_euro": "569.7638",
+                    }
+                ]
+                if sheet == "SerieTasas"
+                else []
+            )
+        )
+    )
+    # Sin lista_precios asignada -- historica incondicional (ver
+    # es_orden_historica), sin depender de la ventana de fechas.
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_MILINDA",
+            cliente_id="C_MILINDA",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 4, 30),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        # La conversión a USD SÍ usa la tasa EUR (comportamiento correcto,
+        # sin cambios): 100 Bs / 569.7638 =~ $0.1755.
+        assert abs(item["tasa_bcv"] - 569.7638) < 0.001
+        # Pero la tarjeta de display debe mostrar el BCV-USD real, NUNCA
+        # el mismo valor que la tarjeta "Tasa BCV-EUR".
+        assert abs(item["tasa_bcv_real"] - 487.1192) < 0.001
+        assert item["tasa_bcv_real"] != item["tasa_bcv"]
+
+
 def test_e2e_47_resolve_metodo_pago_nombre_batch_journals():
     """``resolve_metodo_pago_nombre`` trae el catálogo completo de
 

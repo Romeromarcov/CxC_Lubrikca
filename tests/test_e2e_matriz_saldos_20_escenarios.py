@@ -28,9 +28,12 @@ from unittest.mock import MagicMock, patch
 from cxc.config import EngineConfig
 from cxc.models import (
     BandejaFacturacion,
+    Cliente,
     EstadoVinculacion,
     Factura,
+    Moneda,
     OrdenVenta,
+    Pago,
     Vinculacion,
 )
 
@@ -990,3 +993,141 @@ def test_diferencia_usa_ventas_teoricos_ya_corregido_no_el_snapshot_congelado():
         # $116, exactamente lo facturado), la diferencia debe ser $0.
         assert item["diferencia"] == 0.0
         assert item["alerta"] is False
+
+
+def test_reparto_cobranza_no_muestra_dos_saldos_distintos_para_la_misma_orden():
+    """Bug real (reportado por el usuario, agosto 2026, pago 139/Devenalsa):
+
+    la tabla "Reparto / Órdenes y Facturas" del modal de Detalle de Pago
+    mostraba DOS valores distintos de "Saldo Factura (Odoo)" para la
+    MISMA orden -- uno por la fila "pendiente" (sugerencia FIFO, usa el
+    saldo neto del motor vía ``_saldos_orden_para_reparto``) y otro por la
+    fila "vinculado" (Vinculación local, usaba ``orden.monto_total -
+    total_vinculado_local`` -- una resta que SÍ cuenta Vinculaciones
+    PENDIENTE, aunque el campo se llama "Saldo Factura (Odoo)" y Odoo no
+    ha reconciliado nada todavía). No es un duplicado en la base de datos
+    (una sola Vinculación real) -- es una inconsistencia de fórmula entre
+    las dos ramas que hace parecer un error. Después del fix, ambas ramas
+    deben usar la MISMA fuente.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_DEVN",
+            cliente_id="CLI_DEVN",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("92.80"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_DEVN",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("80.00"),
+        ),
+    ]
+    # PENDIENTE -- vinculada localmente, pero Odoo NO la ha conciliado
+    # todavía (mismo estado que el pago real de Devenalsa).
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="VINC_P_DEVN_SO_DEVN",
+            pago_id="P_DEVN",
+            so_id="SO_DEVN",
+            monto_aplicado=Decimal("16.07"),
+            hora_pago_confirmada=datetime(2026, 7, 15, 10, 0),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="F_DEVN",
+            numero="FAC/DEVN",
+            so_id="SO_DEVN",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("92.80"),
+            monto_sin_impuestos=Decimal("80.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("92.80"),
+            monto_sin_impuestos_signed_usd=Decimal("80.00"),
+        ),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_pagos.return_value = [
+        Pago(
+            pago_id="P_DEVN",
+            cliente_id="CLI_DEVN",
+            monto=Decimal("16.07"),
+            moneda=Moneda.USD,
+            metodo_pago="1",
+            fecha_pago=datetime(2026, 7, 15),
+            vendedor_email="v@lubrikca.com",
+        )
+    ]
+    mock_repo.all_pagos_full.return_value = [
+        {
+            "pago_id": "P_DEVN",
+            "cliente_id": "CLI_DEVN",
+            "monto": "16.07",
+            "moneda": "USD",
+            "fecha_pago": "2026-07-15",
+            "vendedor_email": "v@lubrikca.com",
+        }
+    ]
+    mock_repo.all_serie_tasas.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_clientes.return_value = [
+        Cliente(cliente_id="CLI_DEVN", nombre="Devenalsa", vendedor_email="v@lubrikca.com"),
+    ]
+    mock_repo.all_auditoria.return_value = []
+    mock_repo.all_anomalias_aceptadas.return_value = []
+    mock_repo.all_pagos_tasa_binance_override.return_value = []
+    mock_repo.all_lineas.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_DEVN", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move.line":
+            return [
+                {
+                    "move_id": [900, "FAC/DEVN"],
+                    "discount": 20.0,
+                    "quantity": 1,
+                    "price_unit": 100.0,
+                    "price_subtotal": 80.0,
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/cobranza/pagos")
+        assert res.status_code == 200
+        filas = [it for it in res.json() if it["so_id"] == "SO_DEVN"]
+        # La Vinculación PENDIENTE cubre $16.07 de $92.80 -- si sobreviviera
+        # cualquier sugerencia FIFO por el residuo, ambas filas deben
+        # coincidir en "factura_saldo_odoo" (misma orden, MISMA fuente).
+        saldos_odoo = {round(f["factura_saldo_odoo"], 2) for f in filas}
+        assert len(saldos_odoo) == 1, f"Saldo Factura Odoo inconsistente entre filas: {filas}"
+        # Una Vinculación apenas PENDIENTE (sin conciliar en Odoo) no debe
+        # reducir el saldo -- $92.80 completo, no $92.80-$16.07=$76.73 (el
+        # bug viejo).
+        assert round(next(iter(saldos_odoo)), 2) == 92.80
