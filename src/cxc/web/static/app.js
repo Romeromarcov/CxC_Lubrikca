@@ -705,6 +705,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Tamaño de la tarjeta proporcional al monto (área ~ monto, vía raíz
     // cuadrada -- si fuera lineal, un cliente con 10x más deuda tendría un
     // cuadro 10x más ancho Y 10x más alto, dominando toda la grilla).
+    // PRIORIDAD_GRID_UNIT_PX debe calzar con "minmax(...)"/"grid-auto-rows"
+    // de ``.prioridad-grid`` en styles.css -- es la celda base de la que
+    // cada tarjeta ocupa N columnas x M filas (``grid-column``/``grid-row:
+    // span``), para que auto-flow: dense pueda reempacar sin dejar huecos.
+    const PRIORIDAD_GRID_UNIT_PX = 65;
     const PRIORIDAD_CARD_MIN_PX = 130;
     const PRIORIDAD_CARD_MAX_PX = 260;
 
@@ -728,8 +733,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const px = _tamanoCardPrioridad(c.saldo_priorizacion || 0, maxMonto);
         const card = document.createElement("div");
         card.className = `prioridad-card ${clase}`;
-        card.style.width = `${px}px`;
-        card.style.height = `${Math.round(px * 0.72)}px`;
+        // Spans de grid (no ancho/alto en px) -- ver comentario de
+        // PRIORIDAD_GRID_UNIT_PX: así auto-flow: dense puede reempacar
+        // tarjetas chicas en los huecos que dejan las grandes.
+        const colSpan = Math.max(1, Math.round(px / PRIORIDAD_GRID_UNIT_PX));
+        const rowSpan = Math.max(1, Math.round((px * 0.72) / PRIORIDAD_GRID_UNIT_PX));
+        card.style.gridColumn = `span ${colSpan}`;
+        card.style.gridRow = `span ${rowSpan}`;
         // Tipografía también escala un poco con el tamaño, para que las
         // tarjetas chicas no queden con texto más grande que la propia tarjeta.
         const scale = (0.8 + 0.4 * (px - PRIORIDAD_CARD_MIN_PX) / (PRIORIDAD_CARD_MAX_PX - PRIORIDAD_CARD_MIN_PX)).toFixed(2);
