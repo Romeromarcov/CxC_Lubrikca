@@ -752,6 +752,15 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
       proteger contra la deriva de LAS TASAS con el tiempo, no para
       ignorar una corrección real del propio pago.
 
+    Corrección adicional (2026-08-22, misma pregunta llevada al caso de
+    re-apuntado): si Odoo reconcilió el pago contra una orden DISTINTA a
+    la vinculada localmente (a mano -- incluye el botón de editar -- o
+    por FIFO), el caso simple ya corregía el ``so_id`` pero dejaba el
+    monto/moneda/fecha viejos sin verificar. Ahora ambas correcciones
+    comparten la misma función (``_recalcular_desde_conciliado``): al
+    re-apuntar el ``so_id`` también se recalculan los equivalentes si el
+    pago real de Odoo para esa orden difiere de lo que había localmente.
+
     Devuelve la lista de cambios/discrepancias detectados (para logging).
     """
     conciliados_por_pago = {c["pago_id"]: c for c in get_live_pagos_conciliados(execute)}
@@ -777,6 +786,76 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     last_tasa = repo.last_serie_tasa()
     tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
     tasa_binance_ultima = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
+
+    def _recalcular_desde_conciliado(
+        v: Vinculacion, so_id_nuevo: str, conciliado: dict[str, Any]
+    ) -> tuple[Vinculacion, bool]:
+        """Devuelve (Vinculación con so_id/estado actualizados, hubo_cambio).
+
+        ``hubo_cambio`` es True si además del ``so_id`` también se
+        recalcularon monto/moneda/fecha (el pago cambió en Odoo, no solo
+        la orden a la que aplica) -- usado tanto por el caso "ya
+        coincide, pero el pago cambió" como por el caso "hay que
+        re-apuntar el so_id", para no perder de vista un monto real
+        distinto solo porque el so_id también divergía.
+        """
+        monto_odoo = parse_decimal_safe(str(conciliado.get("monto_original") or "0"))
+        moneda_odoo = str(conciliado.get("moneda") or "USD").upper()
+        fecha_odoo_str = conciliado.get("fecha_pago") or ""
+        cambio_monto = monto_odoo > 0 and abs(monto_odoo - v.monto_aplicado) > Decimal("0.01")
+        cambio_moneda = moneda_odoo and moneda_odoo != str(v.moneda_abono.value).upper()
+        cambio_fecha = (
+            fecha_odoo_str and fecha_odoo_str != v.hora_pago_confirmada.date().isoformat()
+        )
+        if not (cambio_monto or cambio_moneda or cambio_fecha):
+            return (
+                dataclasses_replace(v, so_id=so_id_nuevo, estado=EstadoVinculacion.CONCILIADO),
+                False,
+            )
+        try:
+            hora_pago_nueva = (
+                datetime.strptime(fecha_odoo_str, "%Y-%m-%d")
+                if fecha_odoo_str
+                else v.hora_pago_confirmada
+            )
+        except ValueError:
+            hora_pago_nueva = v.hora_pago_confirmada
+        tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+            repo, so_id_nuevo, hora_pago_nueva, tasa_bcv_ultima
+        )
+        monto_nuevo = monto_odoo if monto_odoo > 0 else v.monto_aplicado
+        if moneda_odoo == "USD":
+            equiv_usd_bcv = monto_nuevo
+            equiv_usd_binance = monto_nuevo
+            equiv_ves_bcv = monto_nuevo * tasa_bcv
+            equiv_ves_binance = monto_nuevo * tasa_binance_ultima
+        else:
+            equiv_usd_bcv = monto_nuevo / tasa_bcv
+            equiv_usd_binance = monto_nuevo / tasa_binance_ultima
+            equiv_ves_bcv = monto_nuevo
+            equiv_ves_binance = monto_nuevo
+        try:
+            moneda_nueva = Moneda(moneda_odoo)
+        except ValueError:
+            moneda_nueva = v.moneda_abono
+        return (
+            dataclasses_replace(
+                v,
+                so_id=so_id_nuevo,
+                estado=EstadoVinculacion.CONCILIADO,
+                monto_aplicado=monto_nuevo,
+                hora_pago_confirmada=hora_pago_nueva,
+                tasa_bcv_aplicada=tasa_bcv,
+                tasa_binance_aplicada=tasa_binance_ultima,
+                bcv_variante=bcv_variante,
+                moneda_abono=moneda_nueva,
+                equiv_usd_bcv=equiv_usd_bcv,
+                equiv_usd_binance=equiv_usd_binance,
+                equiv_ves_bcv=equiv_ves_bcv,
+                equiv_ves_binance=equiv_ves_binance,
+            ),
+            True,
+        )
 
     cambios: list[dict[str, Any]] = []
     vincs_a_actualizar: list[Vinculacion] = []
@@ -841,59 +920,10 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                 # Odoo -- "Odoo prevalece" aplica igual aquí que al
                 # so_id: no hace falta revisión manual porque no hay
                 # ambigüedad, solo un dato que cambió.
-                monto_odoo = parse_decimal_safe(str(conciliado.get("monto_original") or "0"))
-                moneda_odoo = str(conciliado.get("moneda") or "USD").upper()
-                fecha_odoo_str = conciliado.get("fecha_pago") or ""
-                cambio_monto = monto_odoo > 0 and abs(monto_odoo - v.monto_aplicado) > Decimal(
-                    "0.01"
-                )
-                cambio_moneda = moneda_odoo and moneda_odoo != str(v.moneda_abono.value).upper()
-                cambio_fecha = (
-                    fecha_odoo_str and fecha_odoo_str != v.hora_pago_confirmada.date().isoformat()
-                )
-                if not (cambio_monto or cambio_moneda or cambio_fecha):
+                v_nueva, hubo_cambio = _recalcular_desde_conciliado(v, v.so_id, conciliado)
+                if not hubo_cambio:
                     continue
-                try:
-                    hora_pago_nueva = (
-                        datetime.strptime(fecha_odoo_str, "%Y-%m-%d")
-                        if fecha_odoo_str
-                        else v.hora_pago_confirmada
-                    )
-                except ValueError:
-                    hora_pago_nueva = v.hora_pago_confirmada
-                tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-                    repo, v.so_id, hora_pago_nueva, tasa_bcv_ultima
-                )
-                monto_nuevo = monto_odoo if monto_odoo > 0 else v.monto_aplicado
-                if moneda_odoo == "USD":
-                    equiv_usd_bcv = monto_nuevo
-                    equiv_usd_binance = monto_nuevo
-                    equiv_ves_bcv = monto_nuevo * tasa_bcv
-                    equiv_ves_binance = monto_nuevo * tasa_binance_ultima
-                else:
-                    equiv_usd_bcv = monto_nuevo / tasa_bcv
-                    equiv_usd_binance = monto_nuevo / tasa_binance_ultima
-                    equiv_ves_bcv = monto_nuevo
-                    equiv_ves_binance = monto_nuevo
-                try:
-                    moneda_nueva = Moneda(moneda_odoo)
-                except ValueError:
-                    moneda_nueva = v.moneda_abono
-                vincs_a_actualizar.append(
-                    dataclasses_replace(
-                        v,
-                        monto_aplicado=monto_nuevo,
-                        hora_pago_confirmada=hora_pago_nueva,
-                        tasa_bcv_aplicada=tasa_bcv,
-                        tasa_binance_aplicada=tasa_binance_ultima,
-                        bcv_variante=bcv_variante,
-                        moneda_abono=moneda_nueva,
-                        equiv_usd_bcv=equiv_usd_bcv,
-                        equiv_usd_binance=equiv_usd_binance,
-                        equiv_ves_bcv=equiv_ves_bcv,
-                        equiv_ves_binance=equiv_ves_binance,
-                    )
-                )
+                vincs_a_actualizar.append(v_nueva)
                 cambios.append(
                     {
                         "pago_id": pago_id,
@@ -904,7 +934,8 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                         "detalle": (
                             f"Pago {pago_id} cambió en Odoo (monto/moneda/fecha) -- "
                             f"Vinculación recalculada: {v.monto_aplicado} "
-                            f"{v.moneda_abono.value} -> {monto_nuevo} {moneda_nueva.value}"
+                            f"{v.moneda_abono.value} -> {v_nueva.monto_aplicado} "
+                            f"{v_nueva.moneda_abono.value}"
                         ),
                     }
                 )
@@ -913,20 +944,37 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         if len(vincs_locales) == 1 and len(so_ids_odoo) == 1:
             v = vincs_locales[0]
             so_id_nuevo = next(iter(so_ids_odoo))
-            vincs_a_actualizar.append(
-                dataclasses_replace(
-                    v, so_id=so_id_nuevo, estado=EstadoVinculacion.CONCILIADO
+            # Pregunta del usuario (2026-08-22): si el pago quedó
+            # vinculado localmente (a mano, vía el nuevo botón de editar,
+            # o por una sugerencia FIFO) a una orden DISTINTA a la que
+            # Odoo terminó reconciliando, no basta con corregir el
+            # so_id -- el MONTO real conciliado en Odoo para esa otra
+            # orden también puede ser distinto del que se aplicó
+            # localmente. Antes solo se corregía el so_id, dejando el
+            # monto viejo (posiblemente editado a mano) sin verificar
+            # contra el valor real de Odoo.
+            v_nueva, hubo_cambio_monto = _recalcular_desde_conciliado(v, so_id_nuevo, conciliado)
+            vincs_a_actualizar.append(v_nueva)
+            detalle = (
+                (
+                    f"Pago {pago_id} reconciliado por Odoo contra otra orden -- "
+                    f"también se corrigió el monto: {v.monto_aplicado} "
+                    f"{v.moneda_abono.value} -> {v_nueva.monto_aplicado} "
+                    f"{v_nueva.moneda_abono.value}"
                 )
+                if hubo_cambio_monto
+                else None
             )
-            cambios.append(
-                {
-                    "pago_id": pago_id,
-                    "so_id_anterior": v.so_id,
-                    "so_id_nuevo": so_id_nuevo,
-                    "requiere_revision_manual": False,
-                    "tipo": "so_id_repuntado",
-                }
-            )
+            cambio_row = {
+                "pago_id": pago_id,
+                "so_id_anterior": v.so_id,
+                "so_id_nuevo": so_id_nuevo,
+                "requiere_revision_manual": False,
+                "tipo": "so_id_repuntado",
+            }
+            if detalle:
+                cambio_row["detalle"] = detalle
+            cambios.append(cambio_row)
         else:
             cambios.append(
                 {

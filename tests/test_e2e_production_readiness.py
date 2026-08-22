@@ -3743,6 +3743,61 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
     assert audit_rows[0]["estado"] == "aplicado"
 
 
+def test_e2e_42b_revincular_tambien_corrige_el_monto_si_odoo_difiere():
+    """Pregunta del usuario (2026-08-22): si el pago quedó vinculado
+
+    localmente (a mano, vía el botón de editar, o por FIFO) a una orden
+    DISTINTA a la que Odoo terminó reconciliando, no basta con corregir
+    el so_id -- el monto real conciliado en Odoo para esa orden también
+    puede diferir del que se aplicó localmente (ej. alguien lo editó a
+    mano con un valor equivocado antes de que Odoo confirmara). Ambas
+    correcciones deben aplicarse juntas, en la misma pasada.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_A",
+            monto_aplicado=Decimal("500.00"),  # editado a mano, distinto de Odoo
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+
+    # Odoo reconcilió el pago contra SO_B (no SO_A) y con monto real $650.
+    fake_execute_base = _fake_execute_pago_conciliado(["SO_B"])
+
+    def fake_execute(model, method, args, kwargs=None):
+        rows = fake_execute_base(model, method, args, kwargs)
+        if model == "account.payment" and method == "search_read":
+            for r in rows:
+                r["amount"] = 650.0
+                r["amount_ref"] = 650.0
+        return rows
+
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert len(cambios) == 1
+    assert cambios[0]["so_id_nuevo"] == "SO_B"
+    assert cambios[0]["tipo"] == "so_id_repuntado"
+    assert "monto" in cambios[0]["detalle"].lower()
+
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    v_nueva = vincs_actualizadas[0]
+    assert v_nueva.so_id == "SO_B"
+    assert v_nueva.estado == EstadoVinculacion.CONCILIADO
+    # El monto YA NO se queda pegado al valor local viejo -- se corrige
+    # al valor real que Odoo reconcilió.
+    assert v_nueva.monto_aplicado == Decimal("650.0")
+
+
 def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
     """Si la Vinculación local ya está CONCILIADA y coincide con lo que
 
