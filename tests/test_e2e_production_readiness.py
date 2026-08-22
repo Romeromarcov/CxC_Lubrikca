@@ -1516,6 +1516,7 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     mock_repo.all_vinculaciones.return_value = []
     mock_repo.all_serie_tasas.return_value = []
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_facturas.return_value = []
     mock_repo.all_pagos.return_value = [
         Pago(
             pago_id="P_ORPH",
@@ -1571,6 +1572,84 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
         assert orden_doc["saldos"]["factura_real"] is None
 
 
+def test_e2e_reporte_cxc_cliente_referencia_usa_numero_real_de_factura():
+    """Bug real (reportado por el usuario, agosto 2026, cliente TERA
+
+    INGENIERIA): la columna "Referencia" y la descripción del documento
+    mostraban ``OrdenVenta.factura_id`` -- el id INTERNO de Odoo
+    (``account.move.id``, ej. "10119"), nunca pensado para mostrarse --
+    en vez del número real de factura (``Factura.numero``, ej.
+    "00000586"). Se resuelve vía un mapa factura_id -> numero construido
+    desde ``repo.all_facturas()``.
+    """
+    from cxc.config import EngineConfig
+    from cxc.models import Factura
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [{"cliente_id": "CLI_TERA", "nombre": "TERA INGENIERIA"}]
+        if sheet == "Clientes"
+        else []
+    )
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="S00584",
+            cliente_id="CLI_TERA",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 19),
+            fecha_entrega=None,
+            monto_total=Decimal("21969.97"),
+            lista_precios="8",
+            es_primera_compra=False,
+            facturada=True,
+            factura_id="10119",
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_serie_tasas.return_value = []
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_pagos.return_value = []
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="10119",
+            numero="00000586",
+            so_id="S00584",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 6, 19),
+            moneda="USD",
+            monto_total=Decimal("21969.97"),
+            monto_sin_impuestos=Decimal("18939.63"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("21969.97"),
+            monto_sin_impuestos_signed_usd=Decimal("18939.63"),
+        ),
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+    ):
+        res = client.get("/api/reporte-cxc-cliente")
+        assert res.status_code == 200
+        cliente = res.json()["clientes"][0]
+        doc = next(d for d in cliente["documentos"] if d["tipo"] == "orden")
+        assert doc["factura_numero"] == "00000586"
+        assert doc["factura_id"] == "10119"
+        assert "00000586" in doc["descripcion"]
+        assert "10119" not in doc["descripcion"]
+
+
 def test_e2e_reporte_cxc_cliente_pago_ves_usa_ruta_correcta_por_columna():
     """Bug real reportado por el usuario: un pago huérfano en VES se
 
@@ -1608,6 +1687,7 @@ def test_e2e_reporte_cxc_cliente_pago_ves_usa_ruta_correcta_por_columna():
     mock_repo.all_descuentos_sistema_aprobados.return_value = []
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_facturas.return_value = []
     mock_repo.all_serie_tasas.return_value = [
         SerieTasa(
             timestamp=datetime(2026, 7, 1, 12, 0, 0),

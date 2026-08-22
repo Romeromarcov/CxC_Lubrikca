@@ -901,7 +901,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const docsHtml = (c.documentos || []).map(d => {
                     const orig = d.montos_originales || {};
                     const ref = d.tipo === 'orden'
-                        ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
+                        ? (d.factura_numero ? `${d.so_id} / ${d.factura_numero}` : d.so_id)
                         : (d.numero_pago_odoo || d.pago_id);
                     return `
                     <tr>

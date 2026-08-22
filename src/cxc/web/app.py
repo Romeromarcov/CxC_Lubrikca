@@ -4576,6 +4576,16 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
     try:
         repo = get_repo()
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        # Bug real (reportado por el usuario, agosto 2026, cliente TERA
+        # INGENIERIA): ``OrdenVenta.factura_id`` es el id INTERNO de Odoo
+        # (``account.move.id``, ver modelo -- clave de cruce con
+        # ``Factura``/``Vinculacion``, nunca pensado para mostrarse), pero
+        # el reporte lo exponía tal cual en "Referencia" y en la
+        # descripción del documento (ej. "10119" en vez del número real de
+        # factura "00000586"). Se resuelve a ``Factura.numero`` para
+        # display, sin tocar ``factura_id`` (lo siguen usando otros
+        # consumidores del payload como clave).
+        facturas_numero_map = {f.factura_id: f.numero for f in repo.all_facturas()}
 
         ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
         sugerencias = await get_conciliaciones_sugerencias(cxc_session=cxc_session)
@@ -4656,11 +4666,17 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     c["saldos"][k] += v
 
             factura_id = (o.factura_id if o else None) or None
+            factura_numero = facturas_numero_map.get(factura_id) if factura_id else None
             c["documentos"].append(
                 {
                     "tipo": "orden",
                     "so_id": item["so_id"],
                     "factura_id": factura_id if facturada else None,
+                    # Número real de factura (ej. "00000586") para mostrar
+                    # -- cae al id interno solo si Facturas aún no trajo
+                    # ese registro (nunca debería pasar para una orden ya
+                    # facturada, pero evita un "N/A" silencioso).
+                    "factura_numero": (factura_numero or factura_id) if facturada else None,
                     "fecha": item.get("fecha"),
                     "facturada": facturada,
                     "dias_vencido": dias_vencido,
@@ -4670,7 +4686,11 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     },
                     "descripcion": (
                         f"Orden {item['so_id']}"
-                        + (f" / Factura {factura_id}" if facturada and factura_id else "")
+                        + (
+                            f" / Factura {factura_numero or factura_id}"
+                            if facturada and factura_id
+                            else ""
+                        )
                         + (" (facturada)" if facturada else " (sin facturar)")
                     ),
                     "bandeja_destino": item.get("bandeja_destino"),
