@@ -293,17 +293,20 @@ def test_escenario_b_fallback_a_ficha_no_contamina_saldo_teorico_ves():
         assert item["usd_neta_teorica"] == 120.0
 
 
-def test_pago_pendiente_no_conciliado_sale_de_cxc_como_en_proceso_de_pago():
+def test_pago_pendiente_no_conciliado_no_facturada_sale_a_facturacion_1():
     """Combinación del gate CONCILIADO (Fase 0) con el patrón D: una
 
     Vinculación PENDIENTE (sugerencia FIFO sin confirmar) que cubriría
     exactamente el neto con descuento se muestra "pagada" en el estatus de
     Ventas (colapso visual). Y desde el precedente de Odoo citado por el
     usuario ("en proceso de pago" ya saca la factura de CxC, distinguible
-    de "pagado") también SALE de CxC activa -- pero con
-    ``cxc_confirmado=False``, nunca confundida con un pago realmente
-    CONCILIADO. El saldo real (``monto_pagado_factura_odoo``, que solo
-    cuenta CONCILIADO) sigue en $0 -- eso no cambia.
+    de "pagado") también SALE de CxC activa -- con ``cxc_confirmado=False``.
+    Corrección del 2026-08-22: como esta orden NO está facturada,
+    CONCILIADO nunca podrá alcanzarse (no hay factura que Odoo reconcilie
+    todavía) -- el destino debe ser Facturación 1 (acción real), no la
+    lista pasiva "en proceso de pago", o esta orden nunca avanzaría. El
+    saldo real (``monto_pagado_factura_odoo``, que solo cuenta CONCILIADO)
+    sigue en $0 -- eso no cambia.
     """
     from cxc.models import VentasTeorico
 
@@ -356,7 +359,7 @@ def test_pago_pendiente_no_conciliado_sale_de_cxc_como_en_proceso_de_pago():
         assert item["monto_pagado_factura_odoo"] == 0.0
         assert item["sale_de_cxc"] is True
         assert item["cxc_confirmado"] is False
-        assert item["bandeja_destino"] == "en_proceso_de_pago"
+        assert item["bandeja_destino"] == "facturacion_1"
 
 
 def test_retencion_iva_confirmada_mas_nc_reduce_saldo_factura_real():
@@ -516,19 +519,22 @@ def test_pendiente_se_muestra_pagada_en_ventas_y_sale_de_cxc_sin_confirmar():
         assert item["bandeja_destino"] == "en_proceso_de_pago"
 
 
-def test_bandeja_facturacion_no_enruta_orden_con_solo_pago_pendiente():
-    """Bug real encontrado al revisar el thread de la corrección anterior:
+def test_bandeja_facturacion_enruta_pago_pendiente_pero_marcado_no_confirmado():
+    """Historia completa de este caso, en dos correcciones:
 
-    ``get_bandeja_facturacion`` (``/api/bandeja``) lee ``item[
-    "estatus_pago_teorico_ves"]`` de ``/api/ventas`` para decidir su
-    propio enrutamiento -- pero ese campo AHORA colapsa una Vinculación
-    PENDIENTE a "pagada" (commit 89d6ebb, corrección del usuario). Sin
-    arreglo, esto haría que Bandeja 1 mostrara "lista para facturar" una
-    orden con solo un pago FIFO sin confirmar por Odoo -- exactamente el
-    riesgo que la Fase 0 existe para evitar. Se corrigió leyendo los
-    campos ``*_confirmado``/``*_confirmada`` (solo CONCILIADO) que
-    ``/api/ventas`` expone aparte. Esta orden NO debe aparecer en ninguna
-    bandeja de acción.
+    1) ``get_bandeja_facturacion`` leía ``item["estatus_pago_teorico_ves"]``
+       de ``/api/ventas``, que colapsa una Vinculación PENDIENTE a "pagada"
+       -- eso habría hecho que Bandeja 1 mostrara "lista para facturar" una
+       orden con solo un pago FIFO sin confirmar, el riesgo que la Fase 0
+       existe para evitar. Se corrigió leyendo los campos
+       ``*_confirmado``/``*_confirmada`` (solo CONCILIADO) en vez del texto.
+    2) Corrección posterior (2026-08-22, precedente de Odoo "en proceso de
+       pago"): para una orden SIN facturar, CONCILIADO nunca podrá
+       alcanzarse (no existe factura que Odoo reconcilie) -- así que "en
+       proceso de pago" SÍ debe enrutar a Bandeja 1 (o la orden nunca
+       tendría ningún camino a facturarse), pero la entrada se marca
+       ``cxc_confirmado=False`` para distinguirla de un pago realmente
+       confirmado por Odoo.
     """
     from cxc.models import VentasTeorico
 
@@ -585,8 +591,13 @@ def test_bandeja_facturacion_no_enruta_orden_con_solo_pago_pendiente():
         res_bandeja = client.get("/api/bandeja")
         assert res_bandeja.status_code == 200
         data = res_bandeja.json()
-        so_ids_en_facturar = {o["so_id"] for o in data["ordenes_por_facturar"]}
-        assert "SO_H1" not in so_ids_en_facturar
+        por_facturar = {o["so_id"]: o for o in data["ordenes_por_facturar"]}
+        assert "SO_H1" in por_facturar
+        assert por_facturar["SO_H1"]["cxc_confirmado"] is False
+        # Y nunca en la lista pasiva -- esa es solo para órdenes YA
+        # facturadas esperando la conciliación bancaria.
+        so_ids_en_proceso = {o["so_id"] for o in data["en_proceso_de_pago"]}
+        assert "SO_H1" not in so_ids_en_proceso
 
 
 def test_devolucion_facturada_sin_nc_marca_falta_nc_por_devolucion():
@@ -723,12 +734,17 @@ def test_devolucion_facturada_con_nc_no_marca_falta():
         assert "Devolución registrada" in item["revisar_motivo"]
 
 
-def test_bandeja_lista_en_proceso_de_pago_no_como_accion_requerida():
+def test_bandeja_lista_en_proceso_de_pago_para_orden_ya_facturada():
     """/api/bandeja expone la nueva lista "en_proceso_de_pago" (precedente
 
-    de Odoo citado por el usuario) -- la orden con solo un pago PENDIENTE
-    que cubre el teórico aparece ahí, visible pero SIN mezclarse con las
-    bandejas de acción real (ordenes_por_facturar, auditoria_precios).
+    de Odoo citado por el usuario) -- para una orden YA FACTURADA con
+    solo un pago PENDIENTE que cubre el teórico, CONCILIADO sí es
+    alcanzable (el resync automático de Odoo la promueve cuando
+    reconcilie), así que no hace falta forzar ninguna acción: aparece en
+    esta lista pasiva, visible pero SIN mezclarse con las bandejas de
+    acción real (ordenes_por_facturar, auditoria_precios). Espejo de
+    ``test_bandeja_facturacion_enruta_pago_pendiente_pero_marcado_no_confirmado``,
+    que cubre el caso NO facturado (ese sí necesita ir a acción).
     """
     from cxc.models import VentasTeorico
 
@@ -745,7 +761,7 @@ def test_bandeja_lista_en_proceso_de_pago_no_como_accion_requerida():
             lista_precios="5",
             es_primera_compra=False,
             estado_orden="sale",
-            facturada=False,
+            facturada=True,
         ),
     ]
     mock_repo.all_bandeja.return_value = []
@@ -754,6 +770,22 @@ def test_bandeja_lista_en_proceso_de_pago_no_como_accion_requerida():
     ]
     mock_repo.all_vinculaciones.return_value = [
         _vinc("SO_J1", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="J1",
+            numero="FAC/J1",
+            so_id="SO_J1",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("116.00"),
+            monto_sin_impuestos=Decimal("100.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("116.00"),
+            monto_sin_impuestos_signed_usd=Decimal("100.00"),
+        ),
     ]
     mock_repo.all_conciliaciones.return_value = []
     mock_repo.all_lineas.return_value = []

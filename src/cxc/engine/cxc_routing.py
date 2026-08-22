@@ -64,11 +64,28 @@ cliente el mismo "beneficio de la duda" que Odoo -- ya reportó el pago y
 se aplicó a este pedido, falta solo la conciliación. Las 4 reglas de
 arriba se re-evalúan una segunda vez con montos que INCLUYEN lo
 PENDIENTE (parámetros `*_incl_pendiente`) SOLO si ninguna de las
-versiones estrictas (CONCILIADO) alcanzó -- si alcanzan, la orden sale de
-CxC activa igual que con las reglas 1-4, pero con `confirmado=False` y un
-`bandeja_destino` propio (`EN_PROCESO_DE_PAGO`) en vez de mezclarse con
-"pagada"/Auditoría de Precios, para que quede visible que falta ese
-último paso -- igual que Odoo lo deja visible.
+versiones estrictas (CONCILIADO) alcanzó.
+
+Corrección del usuario (agosto 2026) sobre el destino de esta segunda
+pasada: CONCILIADO es estructuralmente IMPOSIBLE antes de que exista una
+factura -- Odoo solo puede reconciliar un pago contra un documento real,
+y no hay ningún documento que reconciliar hasta facturar. Si esta segunda
+pasada mandara toda orden no facturada a una lista pasiva
+(`EN_PROCESO_DE_PAGO`) igual que a una ya facturada, esa orden NUNCA
+tendría un camino para que alguien se entere de que ya está lista para
+facturar -- "en proceso de pago" es, en la práctica, la ÚNICA señal que
+una orden sin facturar podrá disparar jamás. Por eso el destino se separa
+según `facturada`:
+
+  - **NO facturada**: la segunda pasada enruta a `FACTURACION_1` (acción
+    real -- hay que facturarla), no a `EN_PROCESO_DE_PAGO`. Sigue
+    marcada `confirmado=False` para que quede visible que el pago
+    todavía no está reconciliado.
+  - **YA facturada**: la segunda pasada enruta a `EN_PROCESO_DE_PAGO`
+    (visibilidad, no acción) -- ahí SÍ existe un camino real a
+    CONCILIADO (el resync automático de Odoo cada ciclo), así que no
+    hace falta forzar ninguna acción, solo dejarlo visible mientras se
+    resuelve solo.
 
 CRÍTICO: esta re-evaluación NUNCA debe alimentarse de nada que no sea
 estrictamente "vinculado a ESTA orden, aunque sin confirmar" (Vinculación
@@ -214,14 +231,19 @@ def clasificar_estado_cxc(
     # "En proceso de pago" (segunda pasada, mismo criterio que las reglas
     # 1-4 pero incluyendo lo PENDIENTE) -- solo se llega aquí si NINGUNA
     # versión CONCILIADO alcanzó arriba. Mismo "beneficio de la duda" que
-    # Odoo le da a una factura in_payment: sale de CxC activa, pero con
-    # bandeja y motivo propios para que quede visible que falta la
-    # conciliación.
+    # Odoo le da a una factura in_payment. Destino según `facturada` --
+    # ver docstring del módulo: antes de facturar, CONCILIADO es
+    # estructuralmente imposible, así que esta señal DEBE enrutar a
+    # Facturación 1 (acción real) o la orden nunca tendría otro camino
+    # para que alguien note que ya está lista.
     if teorico_usd_pagado_incl_pendiente:
+        bandeja = (
+            BandejaDestino.EN_PROCESO_DE_PAGO if facturada else BandejaDestino.FACTURACION_1
+        )
         return ClasificacionCxC(
             so_id=so_id,
             sale_de_cxc=True,
-            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            bandeja_destino=bandeja,
             motivo=(
                 "Pagado vs Teórico Lista USD, pero vía una Vinculación "
                 "aún sin reconciliar en Odoo -- equivalente a 'En "
@@ -231,10 +253,13 @@ def clasificar_estado_cxc(
         )
 
     if teorico_bs_pagado_incl_pendiente and not nacio_en_lista_usd:
+        bandeja = (
+            BandejaDestino.EN_PROCESO_DE_PAGO if facturada else BandejaDestino.FACTURACION_1
+        )
         return ClasificacionCxC(
             so_id=so_id,
             sale_de_cxc=True,
-            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            bandeja_destino=bandeja,
             motivo=(
                 "Pagado vs Teórico Lista BS, pero vía una Vinculación "
                 "aún sin reconciliar en Odoo -- equivalente a 'En "
@@ -247,11 +272,12 @@ def clasificar_estado_cxc(
         return ClasificacionCxC(
             so_id=so_id,
             sale_de_cxc=True,
-            bandeja_destino=BandejaDestino.EN_PROCESO_DE_PAGO,
+            bandeja_destino=BandejaDestino.FACTURACION_1,
             motivo=(
                 "Pagado vs Venta Real, pero vía una Vinculación aún sin "
                 "reconciliar en Odoo -- equivalente a 'En proceso de "
-                "pago' en Odoo"
+                "pago' en Odoo, y sin facturar todavía esta es la única "
+                "señal que existirá -- se envía a facturar igual"
             ),
             confirmado=False,
         )

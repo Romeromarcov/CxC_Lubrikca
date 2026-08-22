@@ -245,7 +245,17 @@ def test_confirmado_real_tiene_prioridad_sobre_pendiente():
     assert r.confirmado is True
 
 
-def test_venta_real_pendiente_no_facturada_va_en_proceso_de_pago():
+def test_venta_real_pendiente_no_facturada_va_a_facturacion_1_no_confirmada():
+    """Corrección del usuario (2026-08-22): antes de facturar, CONCILIADO
+
+    es estructuralmente imposible (Odoo solo reconcilia contra un
+    documento real, y no hay ninguno hasta facturar) -- si "en proceso de
+    pago" mandara esta orden a una lista pasiva, nunca habría ninguna
+    señal que la hiciera avanzar. Por eso, para una orden SIN facturar,
+    "en proceso de pago" enruta a Facturación 1 igual que un pago
+    confirmado -- con confirmado=False para que quede visible que el
+    pago aún no está reconciliado.
+    """
     r = clasificar_estado_cxc(
         so_id="S00012",
         facturada=False,
@@ -255,7 +265,7 @@ def test_venta_real_pendiente_no_facturada_va_en_proceso_de_pago():
         venta_real_pagada_incl_pendiente=True,
     )
     assert r.sale_de_cxc is True
-    assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
+    assert r.bandeja_destino == BandejaDestino.FACTURACION_1
     assert r.confirmado is False
 
 
@@ -288,3 +298,43 @@ def test_sin_ninguna_referencia_pendiente_permanece_en_cxc():
     assert r.sale_de_cxc is False
     assert r.bandeja_destino is None
     assert r.confirmado is True
+
+
+def test_teorico_usd_pendiente_no_facturada_va_a_facturacion_1():
+    """Mismo matiz que venta_real: si el Teórico USD está cubierto vía
+
+    Vinculación PENDIENTE y la orden aún no está facturada, debe enrutar
+    a Facturación 1 -- no a la lista pasiva "en proceso de pago", porque
+    antes de facturar esa es la única señal que hará avanzar la orden.
+    """
+    r = clasificar_estado_cxc(
+        so_id="S00015",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        teorico_usd_pagado_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.FACTURACION_1
+    assert r.confirmado is False
+
+
+def test_teorico_bs_pendiente_facturada_va_en_proceso_de_pago_no_facturacion():
+    """Espejo del anterior: para una orden YA facturada, la misma señal
+
+    pendiente NO debe re-enrutarla a Facturación (ya está facturada) --
+    debe quedar en la lista pasiva "en proceso de pago", esperando a que
+    el resync automático de Odoo la confirme.
+    """
+    r = clasificar_estado_cxc(
+        so_id="S00016",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        teorico_bs_pagado_incl_pendiente=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
+    assert r.confirmado is False

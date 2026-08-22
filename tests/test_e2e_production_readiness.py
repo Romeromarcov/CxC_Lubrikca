@@ -4546,8 +4546,11 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
         assert item["monto_pagado_factura_odoo"] == 0.0
         # El texto se colapsa a "pagada", y la orden sale de CxC activa
         # (precedente Odoo "en proceso de pago") -- pero marcada
-        # explícitamente como no confirmada.
+        # explícitamente como no confirmada. Como esta orden NO está
+        # facturada, CONCILIADO nunca podrá alcanzarse -- el destino es
+        # Facturación 1 (acción real, corrección 2026-08-22), no una
+        # lista pasiva.
         assert item["estatus_pago_real_orden"] == "pagada"
         assert item["sale_de_cxc"] is True
         assert item["cxc_confirmado"] is False
-        assert item["bandeja_destino"] == "en_proceso_de_pago"
+        assert item["bandeja_destino"] == "facturacion_1"

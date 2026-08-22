@@ -1089,10 +1089,17 @@ document.addEventListener("DOMContentLoaded", () => {
                                 ? `<span class="state-badge cierre" style="background:#dcfce7;color:#166534" title="${(item.descuento_sistema_motivo || '').replace(/"/g, '&quot;')}">Descuento aprobado: ${fmt(item.descuento_sistema_aprobado)}</span>
                                    <button class="btn-primary" style="padding:4px 8px;font-size:0.7rem;margin-left:4px" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Editar</button>`
                                 : `<button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Aprobar Descuento</button>`;
+                            // cxc_confirmado === false: llegó aquí vía "en proceso
+                            // de pago" (Vinculación PENDIENTE, sin reconciliar en
+                            // Odoo todavía) -- antes de facturar es la única señal
+                            // posible, pero se distingue de un pago confirmado.
+                            const enProcesoBadge = item.cxc_confirmado === false
+                                ? ` <span class="state-badge" style="background:#dbeafe;color:#1d4ed8" title="${item.cxc_routing_motivo || ''}">⏳ En proceso de pago</span>`
+                                : '';
 
                             row.innerHTML = `
                                 <td><strong>${item.so_id}</strong></td>
-                                <td>${item.cliente_nombre || item.so_id}</td>
+                                <td>${item.cliente_nombre || item.so_id}${enProcesoBadge}</td>
                                 <td>${isAgent}</td>
                                 <td>${item.fecha || ''}</td>
                                 <td><strong style="color:#059669">${fmt(item.monto_pagado || item.precio_base || 0)}</strong></td>

@@ -6514,6 +6514,14 @@ async def get_bandeja_facturacion():
                             else None
                         ),
                         "cxc_routing_motivo": clasificacion.motivo,
+                        # Corrección del usuario (2026-08-22): antes de
+                        # facturar, CONCILIADO es estructuralmente
+                        # imposible -- "en proceso de pago" (Vinculación
+                        # PENDIENTE) SÍ enruta aquí para que la orden
+                        # tenga un camino a facturarse, pero se marca
+                        # False para distinguirla de un pago realmente
+                        # confirmado por Odoo.
+                        "cxc_confirmado": clasificacion.confirmado,
                     }
                 )
             elif o.facturada:
