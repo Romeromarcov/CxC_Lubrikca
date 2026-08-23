@@ -1939,8 +1939,52 @@ async def run_sync_in_background():
                 repo.upsert_ordenes(ordenes)
                 repo.upsert_lineas(lineas)
                 repo.upsert_pagos(pagos)
+                # Bug real (reportado por el usuario, agosto 2026, cliente
+                # CONSTRUCTORA GRANO AGREGADO): esta corrida "primera vez"
+                # nunca traía Facturas/Entregas/Catálogo/Líneas de Factura/
+                # Líneas de Entrega -- solo clientes/órdenes/líneas/pagos --
+                # a diferencia de IncrementalSync.run() (la corrida normal),
+                # que sí trae las 9 fuentes. Cualquier factura cuyo
+                # write_date en Odoo nunca cambió DESPUÉS del momento del
+                # bootstrap quedaba invisible para siempre (el ciclo delta
+                # normal solo mira "qué cambió desde el cursor", nunca
+                # vuelve a mirar hacia atrás). Confirmado en vivo: 358 de
+                # 695 facturas de venta posted en Odoo (51%) ausentes del
+                # espejo local -- afecta directamente total_facturado_neto/
+                # saldo_cxc de cualquier orden cuya factura cayó en ese
+                # hueco (se ve como "nunca facturada", comparando contra el
+                # monto TEÓRICO/real completo de la orden en vez del saldo
+                # de factura ya neteado). Se usa el mismo helper
+                # ``_sync_opcional`` de IncrementalSync (tolera backends que
+                # no implementen alguno de estos espejos) en vez de
+                # duplicar su try/except.
+                sync_bootstrap = IncrementalSync(repo, reader)
+                facturas = reader.changed_facturas(since_override)
+                entregas = reader.changed_entregas(since_override)
+                catalogo = reader.changed_catalogo(since_override)
+                lineas_factura = reader.changed_lineas_factura(since_override)
+                entregas_lineas = reader.changed_entregas_lineas(since_override)
+                sync_bootstrap._sync_opcional("facturas", facturas, repo.upsert_facturas)
+                sync_bootstrap._sync_opcional("entregas", entregas, repo.upsert_entregas)
+                sync_bootstrap._sync_opcional("catálogo", catalogo, repo.upsert_catalogo)
+                sync_bootstrap._sync_opcional(
+                    "líneas de factura", lineas_factura, repo.upsert_lineas_factura
+                )
+                sync_bootstrap._sync_opcional(
+                    "líneas de entrega", entregas_lineas, repo.upsert_entregas_lineas
+                )
                 repo.set_last_sync(datetime.now())
-                total_first = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
+                total_first = (
+                    len(clientes)
+                    + len(ordenes)
+                    + len(lineas)
+                    + len(pagos)
+                    + len(facturas)
+                    + len(entregas)
+                    + len(catalogo)
+                    + len(lineas_factura)
+                    + len(entregas_lineas)
+                )
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 _VENTAS_CACHE["data"] = None
