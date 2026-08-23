@@ -9942,6 +9942,200 @@ def _detectar_pagos_con_residual_sin_aplicar(
     return resultado
 
 
+def _detectar_pagos_con_importe_local_desincronizado(
+    execute: Any,
+    pago_ids: list[int],
+    tolerancia_ves: Decimal = Decimal("1.00"),
+) -> list[dict[str, Any]]:
+    """Bug real de Odoo (descrito por el usuario, agosto 2026, con el
+
+    método de detección exacto que propuso): editar la fecha o la tasa de
+    un pago YA reconciliado hace que Odoo recalcule "Importe local"
+    (``account.payment.amount_local``, el equivalente en Bs) con la tasa
+    del DÍA DE LA EDICIÓN -- pero el asiento contable original
+    (``account.move.line``, ya posteado) se queda con el monto VES viejo,
+    calculado con la tasa real del día del pago. El campo "Importe
+    local" del pago y el monto VES real de su propia línea contable
+    dejan de coincidir.
+
+    Verificado en vivo (pago 1208, PBNB/2026/00024): ``amount_local`` =
+    22.369,11 Bs pero la línea contable tiene ``debit`` = 23.005,81 Bs --
+    diferencia real de 636,70 Bs. El ``write_date`` del pago (2026-08-21)
+    es semanas posterior a su ``date`` (2026-07-30), confirmando que fue
+    editado después de posteado.
+
+    Se excluyen los pagos con ``amount_local == 0`` -- verificado en vivo
+    que es el comportamiento NORMAL para un pago en VES (la moneda de la
+    compañía es VES, así que "Importe local" simplemente no aplica/no se
+    calcula para esos, ~90 casos reales que NO son el bug -- el campo
+    solo es significativo para pagos en moneda extranjera, USD aquí).
+    """
+    if not execute or not pago_ids:
+        return []
+    try:
+        pagos = execute(
+            "account.payment",
+            "read",
+            [pago_ids],
+            {"fields": ["id", "name", "amount_local", "move_id", "state"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo pagos para importe local desincronizado: %s", e)
+        return []
+    pagos_por_move = {
+        p["move_id"][0]: p
+        for p in pagos
+        if p.get("move_id") and p.get("state") != "cancel" and p.get("amount_local")
+    }
+    if not pagos_por_move:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [[["move_id", "in", list(pagos_por_move.keys())], ["debit", ">", 0]]],
+            {"fields": ["id", "move_id", "debit"]},
+        )
+    except Exception as e:
+        logger.warning(
+            "Error leyendo líneas de pagos para importe local desincronizado: %s", e
+        )
+        return []
+
+    resultado: list[dict[str, Any]] = []
+    vistos: set[int] = set()
+    for line in lines:
+        move_ref = line.get("move_id")
+        move_id = move_ref[0] if move_ref else None
+        # Un pago con IGTF u otras líneas adicionales puede traer más de
+        # una línea con debit > 0 -- se toma la PRIMERA (la línea
+        # principal de "Outstanding Receipts", siempre la de mayor monto
+        # en los casos reales revisados) y se ignoran las demás del mismo
+        # asiento.
+        if move_id in vistos or move_id is None:
+            continue
+        vistos.add(move_id)
+        pago = pagos_por_move.get(move_id)
+        if not pago:
+            continue
+        importe_local = parse_decimal_safe(str(pago.get("amount_local") or "0"))
+        monto_asiento = parse_decimal_safe(str(line.get("debit") or "0"))
+        diferencia = importe_local - monto_asiento
+        if abs(diferencia) <= tolerancia_ves:
+            continue
+        resultado.append(
+            {
+                "pago_id": str(pago["id"]),
+                "numero_pago_odoo": pago.get("name"),
+                "importe_local_ves": round(float(importe_local), 2),
+                "monto_asiento_ves": round(float(monto_asiento), 2),
+                "diferencia_ves": round(float(diferencia), 2),
+            }
+        )
+    return resultado
+
+
+_AJUSTE_CAMBIO_FACTURA_RE = re.compile(r"Ajuste Cambio (?P<factura>\S+)")
+
+
+def _detectar_ajustes_cambio_huerfanos(
+    execute: Any, facturas_por_numero: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Asientos de "Ajuste Cambio" (journal Exchange Difference) que Odoo
+
+    posteó al reconciliar una factura VES contra un pago bajo devaluación
+    -- pero cuya reconciliación original ya no existe. Dos bugs reales de
+    Odoo, descritos por el usuario (agosto 2026) y confirmados en vivo:
+
+    1. Editar la fecha o la tasa de un pago YA reconciliado hace que Odoo
+       recalcule el ajuste con la tasa del DÍA DE LA EDICIÓN, no la tasa
+       que el usuario puso -- el ajuste queda numéricamente mal, pero
+       igual de "posted".
+    2. Al desvincular un pago de una factura (romper la conciliación),
+       el asiento de Ajuste Cambio asociado NO se cancela automáticamente
+       -- queda "posted" y sigue restando su residual, aunque la
+       reconciliación que lo originó ya no exista. El usuario ya viene
+       cancelándolos a mano cuando los detecta.
+
+    Esta función solo detecta el patrón (2) -- el más seguro de aislar
+    sin inventar ningún recálculo propio: un Ajuste Cambio "posted" cuya
+    PROPIA línea de Cuentas por Cobrar sigue con ``reconciled = False``
+    es, por definición, un asiento que quedó suelto (nunca se volvió a
+    conciliar con nada después de que se rompiera el vínculo original).
+    Verificado en vivo (factura 00000522/S00682): la factura sigue
+    ``payment_state = "partial"`` con $59,99 realmente pendientes, y el
+    pago que el ajuste dice haber ajustado (``PUSD1/2026/00601``) ya ni
+    siquiera existe -- exactamente el síntoma descrito.
+
+    El patrón (1) NO se intenta detectar aquí: requeriría recalcular la
+    tasa BCV "correcta" contra nuestro propio histórico para comparar,
+    con el mismo riesgo de falsos positivos que ya se descartó en
+    ``_detectar_pagos_con_residual_sin_aplicar`` (Odoo usa su propia
+    tabla de tasas, con su propio momento exacto de captura).
+    """
+    if not execute:
+        return []
+    try:
+        entries = execute(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["journal_id.code", "=", "EXCH"],
+                    ["state", "=", "posted"],
+                    ["ref", "like", "Ajuste Cambio%"],
+                ]
+            ],
+            {"fields": ["id", "name", "ref", "date"]},
+        )
+    except Exception as e:
+        logger.warning("Error consultando ajustes de cambio en Auditoría: %s", e)
+        return []
+    if not entries:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [
+                [
+                    ["move_id", "in", [e["id"] for e in entries]],
+                    ["account_id.account_type", "=", "asset_receivable"],
+                ]
+            ],
+            {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo líneas de ajustes de cambio en Auditoría: %s", e)
+        return []
+    lineas_por_move = {}
+    for line in lines:
+        move_ref = line.get("move_id")
+        if move_ref:
+            lineas_por_move[move_ref[0]] = line
+
+    resultado: list[dict[str, Any]] = []
+    for entry in entries:
+        linea = lineas_por_move.get(entry["id"])
+        if not linea or linea.get("reconciled"):
+            continue
+        m = _AJUSTE_CAMBIO_FACTURA_RE.search(str(entry.get("ref") or ""))
+        factura_numero = m.group("factura") if m else None
+        residual = parse_decimal_safe(str(linea.get("amount_residual_currency") or "0"))
+        resultado.append(
+            {
+                "move_id": entry["id"],
+                "move_name": entry.get("name"),
+                "factura_numero": factura_numero,
+                "so_id": facturas_por_numero.get(factura_numero) if factura_numero else None,
+                "residual_ves": round(float(residual), 2),
+                "fecha": entry.get("date"),
+                "ref": entry.get("ref"),
+            }
+        )
+    return resultado
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -9983,6 +10177,15 @@ async def get_auditoria():
         pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
             execute, pago_ids_int
         )
+        # Ver docstring de _detectar_pagos_con_importe_local_desincronizado
+        # -- bug real de Odoo (editar fecha/tasa de un pago ya
+        # reconciliado deja "Importe local" recalculado con la tasa del
+        # día de la edición, mientras el asiento ya posteado se queda con
+        # el monto VES viejo). Método de detección propuesto por el
+        # usuario directamente.
+        pagos_importe_local_desincronizado = _detectar_pagos_con_importe_local_desincronizado(
+            execute, pago_ids_int
+        )
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
@@ -10008,6 +10211,13 @@ async def get_auditoria():
         so_pagada_en_odoo: set[str] = set()
 
         facturas_dicts = _facturas_dicts_desde_espejo(repo, so_ids)
+        # Ver docstring de _detectar_ajustes_cambio_huerfanos -- bug real
+        # de Odoo (dos causas descritas por el usuario, agosto 2026):
+        # desvincular un pago de una factura no cancela su asiento de
+        # Ajuste Cambio, que queda "posted" restando un residual que ya
+        # no corresponde a ninguna reconciliación real.
+        facturas_por_numero = {d["name"]: d["invoice_origin"] for d in facturas_dicts}
+        ajustes_cambio_huerfanos = _detectar_ajustes_cambio_huerfanos(execute, facturas_por_numero)
         ids_para_estado_pago = [d["id"] for d in facturas_dicts if d["id"] is not None]
         estado_pago_map = (
             _estado_pago_facturas_desde_odoo(execute, ids_para_estado_pago) if execute else {}
@@ -10413,6 +10623,17 @@ async def get_auditoria():
             # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
             # muestra residual $0 (bug real, cliente TERA, agosto 2026).
             "pagos_con_residual_sin_aplicar": pagos_residual_sin_aplicar,
+            # Ver _detectar_ajustes_cambio_huerfanos -- asientos de Ajuste
+            # Cambio "posted" cuya reconciliación original ya no existe
+            # (bug real de Odoo, dos causas descritas por el usuario:
+            # editar fecha/tasa de un pago ya reconciliado, o desvincular
+            # un pago de una factura sin que Odoo cancele el ajuste).
+            "ajustes_cambio_huerfanos": ajustes_cambio_huerfanos,
+            # Ver _detectar_pagos_con_importe_local_desincronizado -- otro
+            # bug real de Odoo (editar fecha/tasa de un pago ya
+            # reconciliado deja "Importe local" y el asiento ya posteado
+            # con montos VES distintos). Método propuesto por el usuario.
+            "pagos_importe_local_desincronizado": pagos_importe_local_desincronizado,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
@@ -10421,6 +10642,10 @@ async def get_auditoria():
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
                 ),
                 "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
+                "total_ajustes_cambio_huerfanos": len(ajustes_cambio_huerfanos),
+                "total_pagos_importe_local_desincronizado": len(
+                    pagos_importe_local_desincronizado
+                ),
             },
         }
     except Exception as e:

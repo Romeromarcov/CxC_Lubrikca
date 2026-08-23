@@ -1185,6 +1185,59 @@
                             </table>
                         </div>
                     </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Ajustes de Cambio Huérfanos</h2>
+                            <p title="Bug real de Odoo: al desvincular un pago de una factura (romper la conciliación), el asiento de Ajuste Cambio (journal Exchange Difference) que Odoo generó para esa reconciliación no se cancela automáticamente -- queda posted, restando un residual que ya no corresponde a ninguna reconciliación real. Se detecta por su propia línea contable (reconciled=False), sin recalcular ninguna tasa.">Asientos de "Ajuste Cambio" en Odoo que quedaron sueltos (posted, pero sin ninguna reconciliación real detrás) -- normalmente porque se desvinculó el pago que los originó. Hay que revisarlos y cancelarlos manualmente en Odoo.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Asiento</th>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Residual (Bs.)</th>
+                                        <th>Fecha</th>
+                                        <th>Referencia</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ajustes-cambio-huerfanos-table-body">
+                                    <tr>
+                                        <td colspan="6" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Pagos con "Importe Local" Desincronizado</h2>
+                            <p title="Bug real de Odoo: editar la fecha o la tasa de un pago YA reconciliado hace que Odoo recalcule el equivalente en Bs (Importe local) con la tasa del DÍA DE LA EDICIÓN, no la que se puso -- pero el asiento contable ya posteado se queda con el monto VES viejo. Se detecta comparando account.payment.amount_local contra el monto Bs de la propia línea contable del pago (método propuesto directamente por el usuario).">Pagos donde el campo "Importe Local" (Bs.) ya no coincide con el monto que su propio asiento contable tiene posteado -- señal de que el pago se editó después de reconciliado. Hay que revisar y corregir en Odoo.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Pago ID</th>
+                                        <th>N° Pago Odoo</th>
+                                        <th>Importe Local (Bs.)</th>
+                                        <th>Monto en Asiento (Bs.)</th>
+                                        <th>Diferencia (Bs.)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pagos-importe-local-table-body">
+                                    <tr>
+                                        <td colspan="5" class="table-empty">No hay pagos con importe local desincronizado.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->

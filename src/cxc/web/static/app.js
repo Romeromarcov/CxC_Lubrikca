@@ -4828,6 +4828,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
         const bodyConformes = document.getElementById("conformes-table-body");
         const bodyResidual = document.getElementById("pagos-residual-table-body");
+        const bodyAjustesHuerfanos = document.getElementById("ajustes-cambio-huerfanos-table-body");
+        const bodyImporteLocal = document.getElementById("pagos-importe-local-table-body");
 
         const elKpiConformes = document.getElementById("audit-kpi-conformes");
         const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
@@ -4858,6 +4860,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 const discFacturas = data.discrepancias_facturas_odoo || [];
                 const aceptadas = data.anomalias_aceptadas || [];
                 const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
+                const ajustesHuerfanos = data.ajustes_cambio_huerfanos || [];
+                const pagosImporteLocal = data.pagos_importe_local_desincronizado || [];
 
                 if (elKpiConformes) elKpiConformes.textContent = conformes.length;
                 if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
@@ -4957,6 +4961,49 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong>${escapeHtml(p.pago_id)}</strong></td>
                                 <td>${escapeHtml(p.numero_pago_odoo)}</td>
                                 <td><strong style="color:#dc2626;">${fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Ajustes de Cambio Huérfanos (ver
+                // _detectar_ajustes_cambio_huerfanos -- bug real de Odoo,
+                // agosto 2026: desvincular un pago no cancela su Ajuste
+                // Cambio).
+                if (bodyAjustesHuerfanos) {
+                    if (ajustesHuerfanos.length === 0) {
+                        bodyAjustesHuerfanos.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:#059669">✅ No hay ajustes de cambio huérfanos detectados.</td></tr>';
+                    } else {
+                        const fmtVes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
+                        bodyAjustesHuerfanos.innerHTML = ajustesHuerfanos.map(a => `
+                            <tr>
+                                <td><span class="state-badge" style="background:#fef2f2; color:#dc2626; font-weight:600;">${escapeHtml(a.move_name)}</span></td>
+                                <td><strong>${escapeHtml(a.so_id || '—')}</strong></td>
+                                <td>${escapeHtml(a.factura_numero || '—')}</td>
+                                <td><strong style="color:#dc2626;">${fmtVes(a.residual_ves)}</strong></td>
+                                <td><small>${a.fecha ? String(a.fecha).substring(0, 10) : ''}</small></td>
+                                <td><small title="${escapeHtml(a.ref)}" style="color:#64748b;">${escapeHtml((a.ref || '').substring(0, 60))}${(a.ref || '').length > 60 ? '…' : ''}</small></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Pagos con Importe Local Desincronizado (ver
+                // _detectar_pagos_con_importe_local_desincronizado --
+                // bug real de Odoo, agosto 2026, método de detección
+                // propuesto por el usuario).
+                if (bodyImporteLocal) {
+                    if (pagosImporteLocal.length === 0) {
+                        bodyImporteLocal.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ningún pago tiene el importe local desincronizado de su asiento.</td></tr>';
+                    } else {
+                        const fmtVes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
+                        bodyImporteLocal.innerHTML = pagosImporteLocal.map(p => `
+                            <tr>
+                                <td><strong>${escapeHtml(p.pago_id)}</strong></td>
+                                <td>${escapeHtml(p.numero_pago_odoo)}</td>
+                                <td>${fmtVes(p.importe_local_ves)}</td>
+                                <td>${fmtVes(p.monto_asiento_ves)}</td>
+                                <td><strong style="color:#dc2626;">${fmtVes(p.diferencia_ves)}</strong></td>
                             </tr>
                         `).join('');
                     }
