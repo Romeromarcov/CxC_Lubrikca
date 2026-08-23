@@ -1212,6 +1212,32 @@
                             </table>
                         </div>
                     </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Pagos con "Importe Local" Desincronizado</h2>
+                            <p title="Bug real de Odoo: editar la fecha o la tasa de un pago YA reconciliado hace que Odoo recalcule el equivalente en Bs (Importe local) con la tasa del DÍA DE LA EDICIÓN, no la que se puso -- pero el asiento contable ya posteado se queda con el monto VES viejo. Se detecta comparando account.payment.amount_local contra el monto Bs de la propia línea contable del pago (método propuesto directamente por el usuario).">Pagos donde el campo "Importe Local" (Bs.) ya no coincide con el monto que su propio asiento contable tiene posteado -- señal de que el pago se editó después de reconciliado. Hay que revisar y corregir en Odoo.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Pago ID</th>
+                                        <th>N° Pago Odoo</th>
+                                        <th>Importe Local (Bs.)</th>
+                                        <th>Monto en Asiento (Bs.)</th>
+                                        <th>Diferencia (Bs.)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pagos-importe-local-table-body">
+                                    <tr>
+                                        <td colspan="5" class="table-empty">No hay pagos con importe local desincronizado.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->

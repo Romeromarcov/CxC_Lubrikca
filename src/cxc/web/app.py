@@ -9942,6 +9942,99 @@ def _detectar_pagos_con_residual_sin_aplicar(
     return resultado
 
 
+def _detectar_pagos_con_importe_local_desincronizado(
+    execute: Any,
+    pago_ids: list[int],
+    tolerancia_ves: Decimal = Decimal("1.00"),
+) -> list[dict[str, Any]]:
+    """Bug real de Odoo (descrito por el usuario, agosto 2026, con el
+
+    método de detección exacto que propuso): editar la fecha o la tasa de
+    un pago YA reconciliado hace que Odoo recalcule "Importe local"
+    (``account.payment.amount_local``, el equivalente en Bs) con la tasa
+    del DÍA DE LA EDICIÓN -- pero el asiento contable original
+    (``account.move.line``, ya posteado) se queda con el monto VES viejo,
+    calculado con la tasa real del día del pago. El campo "Importe
+    local" del pago y el monto VES real de su propia línea contable
+    dejan de coincidir.
+
+    Verificado en vivo (pago 1208, PBNB/2026/00024): ``amount_local`` =
+    22.369,11 Bs pero la línea contable tiene ``debit`` = 23.005,81 Bs --
+    diferencia real de 636,70 Bs. El ``write_date`` del pago (2026-08-21)
+    es semanas posterior a su ``date`` (2026-07-30), confirmando que fue
+    editado después de posteado.
+
+    Se excluyen los pagos con ``amount_local == 0`` -- verificado en vivo
+    que es el comportamiento NORMAL para un pago en VES (la moneda de la
+    compañía es VES, así que "Importe local" simplemente no aplica/no se
+    calcula para esos, ~90 casos reales que NO son el bug -- el campo
+    solo es significativo para pagos en moneda extranjera, USD aquí).
+    """
+    if not execute or not pago_ids:
+        return []
+    try:
+        pagos = execute(
+            "account.payment",
+            "read",
+            [pago_ids],
+            {"fields": ["id", "name", "amount_local", "move_id", "state"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo pagos para importe local desincronizado: %s", e)
+        return []
+    pagos_por_move = {
+        p["move_id"][0]: p
+        for p in pagos
+        if p.get("move_id") and p.get("state") != "cancel" and p.get("amount_local")
+    }
+    if not pagos_por_move:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [[["move_id", "in", list(pagos_por_move.keys())], ["debit", ">", 0]]],
+            {"fields": ["id", "move_id", "debit"]},
+        )
+    except Exception as e:
+        logger.warning(
+            "Error leyendo líneas de pagos para importe local desincronizado: %s", e
+        )
+        return []
+
+    resultado: list[dict[str, Any]] = []
+    vistos: set[int] = set()
+    for line in lines:
+        move_ref = line.get("move_id")
+        move_id = move_ref[0] if move_ref else None
+        # Un pago con IGTF u otras líneas adicionales puede traer más de
+        # una línea con debit > 0 -- se toma la PRIMERA (la línea
+        # principal de "Outstanding Receipts", siempre la de mayor monto
+        # en los casos reales revisados) y se ignoran las demás del mismo
+        # asiento.
+        if move_id in vistos or move_id is None:
+            continue
+        vistos.add(move_id)
+        pago = pagos_por_move.get(move_id)
+        if not pago:
+            continue
+        importe_local = parse_decimal_safe(str(pago.get("amount_local") or "0"))
+        monto_asiento = parse_decimal_safe(str(line.get("debit") or "0"))
+        diferencia = importe_local - monto_asiento
+        if abs(diferencia) <= tolerancia_ves:
+            continue
+        resultado.append(
+            {
+                "pago_id": str(pago["id"]),
+                "numero_pago_odoo": pago.get("name"),
+                "importe_local_ves": round(float(importe_local), 2),
+                "monto_asiento_ves": round(float(monto_asiento), 2),
+                "diferencia_ves": round(float(diferencia), 2),
+            }
+        )
+    return resultado
+
+
 _AJUSTE_CAMBIO_FACTURA_RE = re.compile(r"Ajuste Cambio (?P<factura>\S+)")
 
 
@@ -10082,6 +10175,15 @@ async def get_auditoria():
             if str(p.get("pago_id", "")).strip().isdigit()
         ]
         pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
+            execute, pago_ids_int
+        )
+        # Ver docstring de _detectar_pagos_con_importe_local_desincronizado
+        # -- bug real de Odoo (editar fecha/tasa de un pago ya
+        # reconciliado deja "Importe local" recalculado con la tasa del
+        # día de la edición, mientras el asiento ya posteado se queda con
+        # el monto VES viejo). Método de detección propuesto por el
+        # usuario directamente.
+        pagos_importe_local_desincronizado = _detectar_pagos_con_importe_local_desincronizado(
             execute, pago_ids_int
         )
 
@@ -10527,6 +10629,11 @@ async def get_auditoria():
             # editar fecha/tasa de un pago ya reconciliado, o desvincular
             # un pago de una factura sin que Odoo cancele el ajuste).
             "ajustes_cambio_huerfanos": ajustes_cambio_huerfanos,
+            # Ver _detectar_pagos_con_importe_local_desincronizado -- otro
+            # bug real de Odoo (editar fecha/tasa de un pago ya
+            # reconciliado deja "Importe local" y el asiento ya posteado
+            # con montos VES distintos). Método propuesto por el usuario.
+            "pagos_importe_local_desincronizado": pagos_importe_local_desincronizado,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
@@ -10536,6 +10643,9 @@ async def get_auditoria():
                 ),
                 "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
                 "total_ajustes_cambio_huerfanos": len(ajustes_cambio_huerfanos),
+                "total_pagos_importe_local_desincronizado": len(
+                    pagos_importe_local_desincronizado
+                ),
             },
         }
     except Exception as e:
