@@ -689,6 +689,78 @@ def test_bandeja_facturacion_enruta_pago_pendiente_pero_marcado_no_confirmado():
         # facturadas esperando la conciliación bancaria.
         so_ids_en_proceso = {o["so_id"] for o in data["en_proceso_de_pago"]}
         assert "SO_H1" not in so_ids_en_proceso
+        # Bug real (pedido explícito del usuario, agosto 2026, caso
+        # "Inversiones La Bendición del Nazareno" SO 00133): antes de este
+        # fix, `monto_pagado` solo sumaba Vinculaciones CONCILIADO -- para
+        # una orden en Bandeja 1 (sin facturar, CONCILIADO estructuralmente
+        # imposible) eso siempre daba $0, aunque la propia razón de estar
+        # en esta bandeja es que un pago PENDIENTE ya cubrió el teórico.
+        assert por_facturar["SO_H1"]["monto_pagado"] == 116.0
+        assert por_facturar["SO_H1"]["saldo_pendiente"] == 0.0
+
+
+def test_saldo_cxc_orden_sin_facturar_neta_pago_pendiente_sin_alcanzar_el_teorico():
+    """Bug real (pedido explícito del usuario, agosto 2026, caso "Inversiones
+
+    La Bendición del Nazareno" SO 00133): "las que aún no han sido
+    facturadas deben netear el saldo pendiente" -- una orden SIN facturar
+    con un pago PENDIENTE que cubre PARTE del teórico (no todo, así que
+    sigue en CxC activa) debe mostrar el saldo YA restando esa parte, no el
+    teórico completo congelado. Antes de este fix `saldo_cxc` solo restaba
+    Vinculaciones CONCILIADO (estructuralmente imposible sin factura), así
+    que se veía atascado en el teórico completo sin importar cuánto se
+    hubiera abonado.
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_H2",
+            cliente_id="CLI_H2",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("200.00"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(so_id="SO_H2", teorico_ves=Decimal("200.00"), teorico_usd=Decimal("200.00")),
+    ]
+    # Solo cubre 116 de 200 -- sigue en CxC activa, pero el saldo mostrado
+    # debe reflejar los 116 ya abonados (116 pendiente, aún sin confirmar).
+    mock_repo.all_vinculaciones.return_value = [
+        _vinc("SO_H2", "116.00", EstadoVinculacion.PENDIENTE)
+    ]
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_H2", "state": "sale", "amount_untaxed": 200.0}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res_ventas = client.get("/api/ventas")
+        assert res_ventas.status_code == 200
+        item = {it["so_id"]: it for it in res_ventas.json()["items"]}["SO_H2"]
+        assert item["pagada"] is False
+        # Teórico neto CON IVA (200 * 1.16 = 232) menos lo pendiente ya
+        # abonado (116) -- nunca los 232 completos sin netear nada.
+        assert item["saldo_cxc"] == 116.0
 
 
 def test_devolucion_facturada_sin_nc_marca_falta_nc_por_devolucion():
