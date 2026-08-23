@@ -7226,11 +7226,25 @@ def _vincular_masivo_sync(
     en ese estado NO destraba descuentos con ``requiere_pago_previo`` hasta
     que ``_resincronizar_vinculaciones_con_odoo`` la promueva a
     ``CONCILIADO`` confirmando con Odoo.
-    """
-    last_tasa = repo.last_serie_tasa()
-    tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-    tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
 
+    Bug real (reportado por el usuario, agosto 2026, cliente CONSTRUCTORA
+    GRANO AGREGADO/pagos 998 y 1029, encontrado al investigar por qué
+    S00427 se veía "menos pagado" justo después de que el auto-FIFO
+    creara sus Vinculaciones): antes se usaba SIEMPRE ``repo.
+    last_serie_tasa()`` -- la tasa MÁS RECIENTE del sistema, sin importar
+    qué tan vieja sea la fecha real del pago (``pago.fecha_pago``). Bajo
+    devaluación, vincular un pago de hace semanas/meses con la tasa de
+    HOY lo subvalúa en dólares (verificado en vivo: pago del 2026-06-22
+    vinculado con la tasa del 2026-08-23, 784.66 en vez de la real de ese
+    día, 612.43 -- 22% de diferencia). Ahora se busca la tasa del DÍA DEL
+    PAGO (``get_rate_for_datetime``, mismo criterio que ya usa
+    ``_get_conciliaciones_sugerencias_sync`` para las sugerencias FIFO
+    ANTES de confirmarlas) -- esa función ya trae su propio fallback de 3
+    niveles (SerieTasas del día -> TasasHistoricasAuditoria del día ->
+    36.5/38.0 hardcodeado como último recurso si de verdad no hay NADA
+    para esa fecha), no hace falta duplicarlo aquí.
+    """
+    tasas_rows = _all_serie_tasas_rows(repo)
     processed = 0
     so_ids_affected: set[str] = set()
 
@@ -7244,9 +7258,14 @@ def _vincular_masivo_sync(
             continue
 
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # get_rate_for_datetime ya trae su propio fallback de 3 niveles
+        # (SerieTasas del día -> TasasHistoricasAuditoria del día -> fila
+        # más cercana / 36.5-38.0 hardcodeado como último recurso) --
+        # nunca hace falta un fallback propio encima.
+        tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(hora_pago_confirmada, tasas_rows)
         # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id, hora_pago_confirmada, tasa_bcv_ultima
+            repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia
         )
 
         if pago.moneda == "USD":
