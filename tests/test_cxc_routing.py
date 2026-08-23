@@ -338,3 +338,60 @@ def test_teorico_bs_pendiente_facturada_va_en_proceso_de_pago_no_facturacion():
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
     assert r.confirmado is False
+
+
+def test_odoo_confirma_pagada_directo_sale_de_cxc_sin_auditoria():
+    """Regla 5 (pedido explícito del usuario, agosto 2026, auditoría de
+
+    saldos de CxC -- 107 órdenes reales confirmadas): si Odoo mismo ya
+    da la factura por saldada (payment_state EN VIVO), la orden sale de
+    CxC activa aunque NINGUNA de nuestras propias reconstrucciones
+    (teóricos, venta real, factura neta) haya llegado a esa conclusión
+    -- sin enrutar a Auditoría de Precios (a diferencia de la regla de
+    Factura Neta Real, acá el desajuste es de nuestra reconstrucción,
+    no de precio)."""
+    r = clasificar_estado_cxc(
+        so_id="S00608",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        factura_pagada_confirmada_odoo=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.FACTURACION_2
+    assert r.confirmado is True
+
+
+def test_odoo_confirma_pagada_no_aplica_si_no_esta_facturada():
+    """La señal solo existe una vez hay factura -- una orden sin facturar
+
+    no tiene payment_state que consultar."""
+    r = clasificar_estado_cxc(
+        so_id="S00609",
+        facturada=False,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=False,
+        factura_pagada_confirmada_odoo=True,
+    )
+    assert r.sale_de_cxc is False
+
+
+def test_factura_real_pagada_tiene_prioridad_sobre_odoo_confirmado():
+    """Si NUESTRA propia reconstrucción (Factura Neta Real) también
+
+    confirma el pago, esa regla (con su auditoría de precios) sigue
+    teniendo prioridad -- la señal de Odoo es solo un respaldo para
+    cuando la nuestra no alcanza, no reemplaza el enrutamiento más
+    específico."""
+    r = clasificar_estado_cxc(
+        so_id="S00610",
+        facturada=True,
+        teorico_bs_pagado=False,
+        teorico_usd_pagado=False,
+        factura_real_pagada=True,
+        factura_pagada_confirmada_odoo=True,
+    )
+    assert r.sale_de_cxc is True
+    assert r.bandeja_destino == BandejaDestino.AUDITORIA_PRECIOS

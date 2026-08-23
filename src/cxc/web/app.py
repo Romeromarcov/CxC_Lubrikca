@@ -5744,6 +5744,57 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
         return {}
 
 
+_PAYMENT_STATES_SALDADOS = {"paid", "in_payment", "reversed"}
+
+
+def _facturas_confirmadas_pagadas_por_so(
+    execute: Any, invoice_ids: list[int], inv_id_to_so: dict[int, str]
+) -> dict[str, bool]:
+    """True por ``so_id`` si TODAS sus ``out_invoice`` (facturas de venta,
+
+    nunca NC/ND) tienen ``payment_state`` en Odoo, EN VIVO, dentro de
+    {paid, in_payment, reversed} -- señal DIRECTA y autoritativa de que
+    Odoo ya considera la factura saldada, sin depender de que nuestra
+    propia reconstrucción bottom-up (Vinculaciones, teóricos, saldo de
+    factura neto) llegue independientemente al mismo resultado.
+
+    Pedido explícito del usuario (agosto 2026, auditoría de saldos de
+    CxC): 107 órdenes reales confirmadas en vivo donde Odoo ya daba la
+    factura por saldada pero nuestra reconstrucción no había llegado ahí
+    -- por un hueco de sync, una tasa mal congelada, o un pago que nunca
+    se vinculó localmente. Alimenta ``clasificar_estado_cxc`` (regla 5,
+    ``factura_pagada_confirmada_odoo``) -- nunca sustituye las reglas 1-4
+    existentes, solo cubre el hueco cuando esas no alcanzan.
+    """
+    if not execute or not invoice_ids:
+        return {}
+    try:
+        recs = execute(
+            "account.move",
+            "read",
+            [invoice_ids],
+            {"fields": ["id", "move_type", "payment_state"]},
+        )
+    except Exception as e:
+        logger.warning(
+            "Error consultando facturas confirmadas pagadas en Odoo: %s", e
+        )
+        return {}
+    estados_por_so: dict[str, list[str]] = {}
+    for r in recs:
+        if r.get("move_type") != "out_invoice":
+            continue
+        so = inv_id_to_so.get(int(r["id"]))
+        if not so:
+            continue
+        estados_por_so.setdefault(so, []).append(str(r.get("payment_state") or ""))
+    return {
+        so: all(ps in _PAYMENT_STATES_SALDADOS for ps in estados)
+        for so, estados in estados_por_so.items()
+        if estados
+    }
+
+
 def _agregar_fragmento_detalle(detalle: dict[str, str], key: str, frag: str) -> None:
     existente = detalle.get(key, "")
     detalle[key] = (existente + "; " + frag).lstrip("; ") if existente else frag
@@ -11311,6 +11362,7 @@ def _get_ventas_sync(
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
         wh_iva_aplicado_map: dict[str, bool] = {}
+        facturas_pagadas_confirmadas_odoo_map: dict[str, bool] = {}
 
         # Fase 2/4/5 (plan de consolidación de fuentes, agosto 2026):
         # entregas, litros, facturación (facturado/NC/ND) y descuentos de
@@ -11376,6 +11428,13 @@ def _get_ventas_sync(
                     tasas_rows_pago,
                     hist_rows_pago,
                     facturado_con_imp_por_so=facturado_con_imp_map,
+                )
+                # Ver _facturas_confirmadas_pagadas_por_so -- señal DIRECTA
+                # de Odoo (payment_state EN VIVO), no una reconstrucción
+                # bottom-up a partir de nuestras Vinculaciones. Alimenta la
+                # regla 5 de clasificar_estado_cxc.
+                facturas_pagadas_confirmadas_odoo_map = _facturas_confirmadas_pagadas_por_so(
+                    execute, invoice_ids_all, inv_id_to_so
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -11861,6 +11920,9 @@ def _get_ventas_sync(
                 teorico_usd_pagado_incl_pendiente=teorico_usd_pagado_incl_pendiente,
                 venta_real_pagada_incl_pendiente=venta_real_pagada_incl_pendiente,
                 factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
+                factura_pagada_confirmada_odoo=facturas_pagadas_confirmadas_odoo_map.get(
+                    o.so_id, False
+                ),
             )
 
             # Consolidación pedida por el usuario (agosto 2026): un solo

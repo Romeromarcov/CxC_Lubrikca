@@ -1249,3 +1249,86 @@ def test_reporte_cxc_cliente_neta_vinculacion_pendiente_de_la_orden():
         # netea, no muestra el saldo completo sin tocar.
         assert round(cliente["saldos"]["venta_real"], 2) == 76.73
         assert round(cliente["saldos"]["factura_real"], 2) == 76.73
+
+
+def test_odoo_confirma_pagada_directo_sin_vinculacion_local():
+    """Pedido explícito del usuario (agosto 2026, auditoría de saldos de
+
+    CxC -- 107 órdenes reales confirmadas en vivo): una orden facturada
+    SIN ninguna Vinculación local (nuestra reconstrucción bottom-up
+    nunca "ve" ningún pago) pero cuya factura Odoo YA marca
+    payment_state='paid' EN VIVO debe salir de CxC igual -- "pagada"
+    debe dar True y "saldo_cxc" debe dar $0, en vez de mostrar el saldo
+    completo sin tocar solo porque nuestras Vinculaciones no cuadraron.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_ODOO_PAID",
+            cliente_id="CLI_OP",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 7, 15),
+            fecha_entrega=None,
+            monto_total=Decimal("92.80"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_ODOO_PAID",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("80.00"),
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="9001",
+            numero="FAC/9001",
+            so_id="SO_ODOO_PAID",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 7, 15),
+            moneda="USD",
+            monto_total=Decimal("92.80"),
+            monto_sin_impuestos=Decimal("80.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("92.80"),
+            monto_sin_impuestos_signed_usd=Decimal("80.00"),
+        ),
+    ]
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_ODOO_PAID", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move.line":
+            return [
+                {
+                    "move_id": [900, "FAC/9001"],
+                    "discount": 20.0,
+                    "quantity": 1,
+                    "price_unit": 100.0,
+                    "price_subtotal": 80.0,
+                }
+            ]
+        if model == "account.move" and method == "read":
+            return [{"id": 9001, "move_type": "out_invoice", "payment_state": "paid"}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/ventas")
+        assert res.status_code == 200
+        item = {it["so_id"]: it for it in res.json()["items"]}["SO_ODOO_PAID"]
+        assert item["pagada"] is True
+        assert item["saldo_cxc"] == 0.0
+        assert item["sale_de_cxc"] is True
+        assert item["bandeja_destino"] == "facturacion_2"
