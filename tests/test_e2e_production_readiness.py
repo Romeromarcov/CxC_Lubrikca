@@ -3444,6 +3444,72 @@ def test_e2e_35_sugerencias_usa_saldo_real_no_calculo_naive():
         assert abs(segundo["saldo_pago"] - 150.0) < 0.01
 
 
+def test_e2e_35b_pago_ves_con_vinculacion_previa_sigue_sugerido_por_saldo_real():
+    """Bug real (cliente Grano Agregado, pago 1075/1267, agosto 2026): un
+
+    pago en VES con una Vinculación PENDIENTE ya existente (aunque sea
+    diminuta, de una asignación vieja) desaparecía PARA SIEMPRE de
+    sugerencias -- ``linked_pago`` sumaba ``Vinculacion.monto_aplicado``
+    crudo (denominado en VES, no en USD) directo contra ``monto_orig_usd``,
+    dejando un ``saldo_usd`` gigantesco y negativo. Un pago de $100 con solo
+    $12.5 ya vinculados (500 Bs de 4000 Bs a una tasa de 40) debe seguir
+    apareciendo con ~$87.5 de saldo real disponible, no desaparecer.
+    """
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P3",
+                "cliente_id": "C1",
+                "monto": "4000.0",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-20",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C1", "nombre": "Cliente Uno"}]
+            if sheet == "Clientes"
+            else (
+                [{"timestamp": "2026-07-20 12:00:00", "tasa_bcv": "40.0", "tasa_binance": "45.0"}]
+                if sheet == "SerieTasas"
+                else []
+            )
+        )
+    )
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="VINC_P3_SO_OLD",
+            pago_id="P3",
+            so_id="SO_OLD",
+            monto_aplicado=Decimal("500.0"),  # 500 Bs -- NO $500
+            hora_pago_confirmada=datetime(2026, 7, 20, 12, 0, 0),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            equiv_usd_bcv=Decimal("12.5"),  # 500 / 40
+            equiv_usd_binance=Decimal("11.11"),
+            estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda.VES,
+        )
+    ]
+    mock_repo.all_ordenes.return_value = []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=None),
+    ):
+        res = client.get("/api/conciliaciones/sugerencias")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        # Antes del fix: el pago desaparecía (saldo_usd = 100 - 500 < 0.05).
+        assert data[0]["pago_id"] == "P3"
+        assert abs(data[0]["saldo_pago"] - 87.5) < 0.01
+
+
 def test_e2e_36_sugerencias_cae_a_naive_si_reporte_saldos_falla():
     """Si get_reporte_saldos() falla (Odoo caído, error de datos), sugerencias
 
@@ -4135,6 +4201,13 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
     assert audit_rows[0]["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden"
     assert audit_rows[0]["estado"] == "pendiente_revision"
+    # Bug real (producción, agosto 2026): estos 3 campos son columnas
+    # NUMERIC/MONEY en Postgres -- guardar "" en vez de None rompía el
+    # INSERT real (InvalidTextRepresentation), aunque este mock no lo
+    # detectaba. No hay monto que comparar en un caso multi-orden ambiguo.
+    assert audit_rows[0]["motor_calcula_usd"] is None
+    assert audit_rows[0]["odoo_registrado_usd"] is None
+    assert audit_rows[0]["diferencia_usd"] is None
 
 
 def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
