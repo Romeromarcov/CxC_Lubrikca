@@ -35,7 +35,15 @@ correcciones del usuario, agosto 2026, sobre la primera versión de este
      por debajo del estándar autorizado -- la auditoría es un tema
      posterior de control interno, no una condición para cerrar la
      cobranza.
-  5. Cualquier otro caso: permanece en CxC activa, sin enrutamiento
+  5. Si Odoo mismo ya considera la factura saldada (``payment_state``
+     'paid'/'in_payment'/'reversed', EN VIVO) pero ninguna de las reglas
+     1-4 llegó a esa conclusión por nuestra propia reconstrucción de lo
+     pagado (hueco de sync, tasa mal congelada, una Vinculación que
+     nunca se creó) → sale de CxC activa igual, sin auditoría de
+     precios (a diferencia de la regla 4, aquí el desajuste es de nuestra
+     reconstrucción, no de precio). Pedido explícito del usuario (agosto
+     2026) tras confirmar en vivo 107 órdenes reales en este estado.
+  6. Cualquier otro caso: permanece en CxC activa, sin enrutamiento
      especial.
 
 Aclaratoria del usuario (agosto 2026) sobre las reglas 1/2: la lista con
@@ -135,6 +143,7 @@ def clasificar_estado_cxc(
     teorico_usd_pagado_incl_pendiente: bool = False,
     venta_real_pagada_incl_pendiente: bool = False,
     factura_real_pagada_incl_pendiente: bool = False,
+    factura_pagada_confirmada_odoo: bool = False,
     tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
@@ -164,6 +173,23 @@ def clasificar_estado_cxc(
     docstring del módulo. Solo se consultan si ninguna versión CONCILIADO
     alcanzó; si alguna de estas sí, la orden sale de CxC activa con
     `bandeja_destino=EN_PROCESO_DE_PAGO` y `confirmado=False`.
+
+    `factura_pagada_confirmada_odoo`: True si Odoo mismo (``account.
+    move.payment_state`` de TODAS las out_invoice de la orden, en vivo)
+    ya considera la factura saldada -- 'paid'/'in_payment'/'reversed'.
+    Pedido explícito del usuario (agosto 2026, auditoría de saldos de
+    Cuentas por Cobrar): antes de este flag, la única forma de salir de
+    CxC era reconstruir "pagado" de abajo hacia arriba a partir de
+    nuestras propias Vinculaciones -- cualquier hueco en esa
+    reconstrucción (sync incompleto, tasa mal congelada, un pago que
+    nunca se vinculó localmente) dejaba la orden viéndose pendiente
+    aunque Odoo, la fuente de verdad, ya la diera por saldada.
+    Confirmado en vivo: 107 órdenes reales en ese estado. Esta señal es
+    DIRECTA y autoritativa -- no requiere que ninguna otra columna
+    calzada exactamente, así que se evalúa junto con las reglas 1-4
+    (CONCILIADO), nunca junto a las `*_incl_pendiente` (esas siguen
+    siendo exclusivamente sobre Vinculaciones PENDIENTE nuestras, un
+    concepto distinto).
 
     `tolerance` se documenta pero no se usa dentro de esta función —
     la tolerancia ya debe haberse aplicado al calcular los flags de
@@ -213,6 +239,23 @@ def clasificar_estado_cxc(
                 "de CxC activa; se enruta ADEMÁS a Auditoría de Precios "
                 "para revisar internamente por qué se facturó con un "
                 "precio/lista por debajo del estándar autorizado"
+            ),
+        )
+
+    if facturada and factura_pagada_confirmada_odoo:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=True,
+            bandeja_destino=BandejaDestino.FACTURACION_2,
+            motivo=(
+                "Odoo mismo (payment_state de la factura) ya la da por "
+                "saldada -- pagada/en proceso de pago/revertida -- "
+                "aunque nuestra propia reconstrucción de lo pagado no "
+                "haya llegado al mismo resultado (hueco de sync, tasa, o "
+                "una Vinculación que nunca se creó). Se confía en Odoo "
+                "como fuente de verdad directa, sin auditoría de precios "
+                "-- a diferencia de la regla de Factura Neta Real, aquí "
+                "el desajuste es de RECONSTRUCCIÓN nuestra, no de precio."
             ),
         )
 

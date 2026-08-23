@@ -5744,6 +5744,57 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
         return {}
 
 
+_PAYMENT_STATES_SALDADOS = {"paid", "in_payment", "reversed"}
+
+
+def _facturas_confirmadas_pagadas_por_so(
+    execute: Any, invoice_ids: list[int], inv_id_to_so: dict[int, str]
+) -> dict[str, bool]:
+    """True por ``so_id`` si TODAS sus ``out_invoice`` (facturas de venta,
+
+    nunca NC/ND) tienen ``payment_state`` en Odoo, EN VIVO, dentro de
+    {paid, in_payment, reversed} -- señal DIRECTA y autoritativa de que
+    Odoo ya considera la factura saldada, sin depender de que nuestra
+    propia reconstrucción bottom-up (Vinculaciones, teóricos, saldo de
+    factura neto) llegue independientemente al mismo resultado.
+
+    Pedido explícito del usuario (agosto 2026, auditoría de saldos de
+    CxC): 107 órdenes reales confirmadas en vivo donde Odoo ya daba la
+    factura por saldada pero nuestra reconstrucción no había llegado ahí
+    -- por un hueco de sync, una tasa mal congelada, o un pago que nunca
+    se vinculó localmente. Alimenta ``clasificar_estado_cxc`` (regla 5,
+    ``factura_pagada_confirmada_odoo``) -- nunca sustituye las reglas 1-4
+    existentes, solo cubre el hueco cuando esas no alcanzan.
+    """
+    if not execute or not invoice_ids:
+        return {}
+    try:
+        recs = execute(
+            "account.move",
+            "read",
+            [invoice_ids],
+            {"fields": ["id", "move_type", "payment_state"]},
+        )
+    except Exception as e:
+        logger.warning(
+            "Error consultando facturas confirmadas pagadas en Odoo: %s", e
+        )
+        return {}
+    estados_por_so: dict[str, list[str]] = {}
+    for r in recs:
+        if r.get("move_type") != "out_invoice":
+            continue
+        so = inv_id_to_so.get(int(r["id"]))
+        if not so:
+            continue
+        estados_por_so.setdefault(so, []).append(str(r.get("payment_state") or ""))
+    return {
+        so: all(ps in _PAYMENT_STATES_SALDADOS for ps in estados)
+        for so, estados in estados_por_so.items()
+        if estados
+    }
+
+
 def _agregar_fragmento_detalle(detalle: dict[str, str], key: str, frag: str) -> None:
     existente = detalle.get(key, "")
     detalle[key] = (existente + "; " + frag).lstrip("; ") if existente else frag
@@ -7226,11 +7277,25 @@ def _vincular_masivo_sync(
     en ese estado NO destraba descuentos con ``requiere_pago_previo`` hasta
     que ``_resincronizar_vinculaciones_con_odoo`` la promueva a
     ``CONCILIADO`` confirmando con Odoo.
-    """
-    last_tasa = repo.last_serie_tasa()
-    tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-    tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
 
+    Bug real (reportado por el usuario, agosto 2026, cliente CONSTRUCTORA
+    GRANO AGREGADO/pagos 998 y 1029, encontrado al investigar por qué
+    S00427 se veía "menos pagado" justo después de que el auto-FIFO
+    creara sus Vinculaciones): antes se usaba SIEMPRE ``repo.
+    last_serie_tasa()`` -- la tasa MÁS RECIENTE del sistema, sin importar
+    qué tan vieja sea la fecha real del pago (``pago.fecha_pago``). Bajo
+    devaluación, vincular un pago de hace semanas/meses con la tasa de
+    HOY lo subvalúa en dólares (verificado en vivo: pago del 2026-06-22
+    vinculado con la tasa del 2026-08-23, 784.66 en vez de la real de ese
+    día, 612.43 -- 22% de diferencia). Ahora se busca la tasa del DÍA DEL
+    PAGO (``get_rate_for_datetime``, mismo criterio que ya usa
+    ``_get_conciliaciones_sugerencias_sync`` para las sugerencias FIFO
+    ANTES de confirmarlas) -- esa función ya trae su propio fallback de 3
+    niveles (SerieTasas del día -> TasasHistoricasAuditoria del día ->
+    36.5/38.0 hardcodeado como último recurso si de verdad no hay NADA
+    para esa fecha), no hace falta duplicarlo aquí.
+    """
+    tasas_rows = _all_serie_tasas_rows(repo)
     processed = 0
     so_ids_affected: set[str] = set()
 
@@ -7244,9 +7309,14 @@ def _vincular_masivo_sync(
             continue
 
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # get_rate_for_datetime ya trae su propio fallback de 3 niveles
+        # (SerieTasas del día -> TasasHistoricasAuditoria del día -> fila
+        # más cercana / 36.5-38.0 hardcodeado como último recurso) --
+        # nunca hace falta un fallback propio encima.
+        tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(hora_pago_confirmada, tasas_rows)
         # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id, hora_pago_confirmada, tasa_bcv_ultima
+            repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia
         )
 
         if pago.moneda == "USD":
@@ -11292,6 +11362,7 @@ def _get_ventas_sync(
         inv_id_to_so: dict[int, str] = {}
         pagos_bcv_binance_map: dict[str, dict[str, float]] = {}
         wh_iva_aplicado_map: dict[str, bool] = {}
+        facturas_pagadas_confirmadas_odoo_map: dict[str, bool] = {}
 
         # Fase 2/4/5 (plan de consolidación de fuentes, agosto 2026):
         # entregas, litros, facturación (facturado/NC/ND) y descuentos de
@@ -11357,6 +11428,13 @@ def _get_ventas_sync(
                     tasas_rows_pago,
                     hist_rows_pago,
                     facturado_con_imp_por_so=facturado_con_imp_map,
+                )
+                # Ver _facturas_confirmadas_pagadas_por_so -- señal DIRECTA
+                # de Odoo (payment_state EN VIVO), no una reconstrucción
+                # bottom-up a partir de nuestras Vinculaciones. Alimenta la
+                # regla 5 de clasificar_estado_cxc.
+                facturas_pagadas_confirmadas_odoo_map = _facturas_confirmadas_pagadas_por_so(
+                    execute, invoice_ids_all, inv_id_to_so
                 )
             except Exception as e_odoo:
                 logger.warning("Error consultando Odoo en get_ventas: %s", e_odoo)
@@ -11842,6 +11920,9 @@ def _get_ventas_sync(
                 teorico_usd_pagado_incl_pendiente=teorico_usd_pagado_incl_pendiente,
                 venta_real_pagada_incl_pendiente=venta_real_pagada_incl_pendiente,
                 factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
+                factura_pagada_confirmada_odoo=facturas_pagadas_confirmadas_odoo_map.get(
+                    o.so_id, False
+                ),
             )
 
             # Consolidación pedida por el usuario (agosto 2026): un solo
