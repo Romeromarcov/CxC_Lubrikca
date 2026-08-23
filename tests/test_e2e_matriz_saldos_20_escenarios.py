@@ -1008,7 +1008,9 @@ def test_reparto_cobranza_no_muestra_dos_saldos_distintos_para_la_misma_orden():
     ha reconciliado nada todavía). No es un duplicado en la base de datos
     (una sola Vinculación real) -- es una inconsistencia de fórmula entre
     las dos ramas que hace parecer un error. Después del fix, ambas ramas
-    deben usar la MISMA fuente.
+    deben usar la MISMA fuente -- y esa fuente ahora SÍ neta una
+    Vinculación PENDIENTE de la orden (pedido explícito posterior del
+    usuario, ver assert final).
     """
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
@@ -1127,7 +1129,123 @@ def test_reparto_cobranza_no_muestra_dos_saldos_distintos_para_la_misma_orden():
         # coincidir en "factura_saldo_odoo" (misma orden, MISMA fuente).
         saldos_odoo = {round(f["factura_saldo_odoo"], 2) for f in filas}
         assert len(saldos_odoo) == 1, f"Saldo Factura Odoo inconsistente entre filas: {filas}"
-        # Una Vinculación apenas PENDIENTE (sin conciliar en Odoo) no debe
-        # reducir el saldo -- $92.80 completo, no $92.80-$16.07=$76.73 (el
-        # bug viejo).
-        assert round(next(iter(saldos_odoo)), 2) == 92.80
+        # Pedido explícito del usuario (agosto 2026, cliente CONSTRUCTORA
+        # GRANO AGREGADO/S00608): una Vinculación PENDIENTE de ESTA orden
+        # SÍ debe restarse del saldo mostrado -- "beneficio de la duda",
+        # mismo criterio que ya usa sale_de_cxc/saldo_cxc en Ventas. Antes
+        # de ese pedido, este mismo test esperaba $92.80 sin tocar (ver
+        # commit anterior) -- $92.80-$16.07=$76.73 es ahora el valor
+        # correcto.
+        assert round(next(iter(saldos_odoo)), 2) == 76.73
+
+
+def test_reporte_cxc_cliente_neta_vinculacion_pendiente_de_la_orden():
+    """Pedido explícito del usuario (agosto 2026, cliente CONSTRUCTORA
+
+    GRANO AGREGADO/orden S00608): "los pagos no vinculados a la orden
+    aún deberían... rebajarse teóricamente de la orden... que sería
+    esa" -- una Vinculación PENDIENTE (vinculada localmente a ESTA
+    orden, aún sin conciliar en Odoo) debe restarse de los 4 saldos del
+    Reporte por Cliente, no solo mostrarse como saldo completo sin
+    tocar. Mismo "beneficio de la duda" que sale_de_cxc/saldo_cxc en
+    Ventas -- nunca gatea nada real (descuentos, salida de CxC
+    confirmada), solo lo que se MUESTRA aquí.
+    """
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_GRANO",
+            cliente_id="CLI_GRANO",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 6, 30),
+            fecha_entrega=None,
+            monto_total=Decimal("92.80"),
+            lista_precios="5",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=True,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = [
+        BandejaFacturacion(
+            so_id="SO_GRANO",
+            lista_aplicada="5",
+            precio_base_calculado=Decimal("100.00"),
+            total_motor=Decimal("80.00"),
+        ),
+    ]
+    # PENDIENTE -- vinculada localmente a SO_GRANO, Odoo aún no la
+    # reconcilió (mismo patrón que S00608 en producción: cubre PARTE
+    # del total, no todo).
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="VINC_P_GRANO_SO_GRANO",
+            pago_id="P_GRANO",
+            so_id="SO_GRANO",
+            monto_aplicado=Decimal("16.07"),
+            hora_pago_confirmada=datetime(2026, 6, 30, 10, 0),
+            tasa_bcv_aplicada=Decimal("60.0"),
+            tasa_binance_aplicada=Decimal("63.0"),
+            es_tasa_heredada=False,
+            estado=EstadoVinculacion.PENDIENTE,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    mock_repo.all_facturas.return_value = [
+        Factura(
+            factura_id="F_GRANO",
+            numero="FAC/GRANO",
+            so_id="SO_GRANO",
+            move_type="out_invoice",
+            es_nota_debito=False,
+            fecha=date(2026, 6, 30),
+            moneda="USD",
+            monto_total=Decimal("92.80"),
+            monto_sin_impuestos=Decimal("80.00"),
+            estado="posted",
+            monto_total_signed_usd=Decimal("92.80"),
+            monto_sin_impuestos_signed_usd=Decimal("80.00"),
+        ),
+    ]
+    mock_repo.all_ventas_teoricos.return_value = []
+    mock_repo.all_pagos.return_value = []
+    mock_repo.all_serie_tasas.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    mock_repo.all_pagos_huerfanos_cerrados.return_value = []
+    mock_repo.all_clientes.return_value = [
+        Cliente(
+            cliente_id="CLI_GRANO",
+            nombre="Constructora Grano Agregado",
+            vendedor_email="v@lubrikca.com",
+        ),
+    ]
+    mock_repo.all_lineas.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_GRANO", "state": "sale", "amount_untaxed": 100.0}]
+        if model == "account.move.line":
+            return [
+                {
+                    "move_id": [900, "FAC/GRANO"],
+                    "discount": 20.0,
+                    "quantity": 1,
+                    "price_unit": 100.0,
+                    "price_subtotal": 80.0,
+                }
+            ]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res = client.get("/api/reporte-cxc-cliente")
+        assert res.status_code == 200
+        cliente = next(c for c in res.json()["clientes"] if c["cliente_id"] == "CLI_GRANO")
+        # $92.80 - $16.07 (pendiente vinculado a ESTA orden) = $76.73 --
+        # netea, no muestra el saldo completo sin tocar.
+        assert round(cliente["saldos"]["venta_real"], 2) == 76.73
+        assert round(cliente["saldos"]["factura_real"], 2) == 76.73

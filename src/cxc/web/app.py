@@ -4517,11 +4517,23 @@ def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
     ``get_reporte_saldos``, o un cálculo naive) -- ahora son las mismas 4
     referencias que el resto del sistema ya usa (Teórico Lista BS, Teórico
     Lista USD, Venta Real, Factura Neta Real).
+
+    Pedido explícito del usuario (agosto 2026, cliente CONSTRUCTORA GRANO
+    AGREGADO/orden S00608): una Vinculación PENDIENTE de esta orden (ya
+    vinculada localmente, pero Odoo aún no la reconcilió) SÍ debe
+    restarse de estos 4 saldos -- antes no restaba nada (solo CONCILIADO
+    contaba), así que un pago ya vinculado pero no confirmado no
+    aparecía ni como pagado ni como "saldo a favor" en ningún lado,
+    mostrando el saldo completo sin tocar. Se usan los campos
+    ``*_incl_pendiente`` (mismo "beneficio de la duda" que ya usa
+    ``sale_de_cxc``/``saldo_cxc`` en Ventas) -- nunca gatean nada real
+    (descuentos, salida de CxC confirmada), solo cambian lo que se
+    MUESTRA aquí.
     """
     desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
-    pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
-    pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
-    pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
+    pagado_bcv = float(item.get("pagado_teorico_bcv_incl_pendiente") or 0.0)
+    pagado_binance = float(item.get("pagado_teorico_binance_incl_pendiente") or 0.0)
+    pagado_ref = float(item.get("monto_pagado_factura_odoo_incl_pendiente") or 0.0)
 
     saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
     saldo_teorico_usd = max(0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance)
@@ -11860,6 +11872,20 @@ def _get_ventas_sync(
                     # nacimiento de la orden), expuesto ahora como columna
                     # propia junto a los totales de factura.
                     "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # Mismo valor, pero incluyendo una Vinculación
+                    # PENDIENTE de ESTA orden (aún sin reconciliar en
+                    # Odoo) -- pedido explícito del usuario (agosto 2026,
+                    # cliente CONSTRUCTORA GRANO AGREGADO/S00608): un pago
+                    # ya vinculado localmente no debe verse como "$0
+                    # pagado" en el Reporte de Saldos solo porque Odoo
+                    # todavía no lo reconcilió -- mismo "beneficio de la
+                    # duda" que ya usa sale_de_cxc/saldo_cxc arriba. Nunca
+                    # se usa para gating real (descuentos, salida de CxC
+                    # confirmada) -- solo para _saldos_4_columnas_item
+                    # (Reporte por Cliente / modal de Cobranza).
+                    "monto_pagado_factura_odoo_incl_pendiente": round(
+                        val_ref_nacimiento_incl_pendiente, 2
+                    ),
                     # True si Odoo ya marcó la factura como retenida
                     # (``account.move.wh_iva``, en vivo) -- usado por
                     # /api/bandeja para sacar la orden de la bandeja de
@@ -11874,6 +11900,13 @@ def _get_ventas_sync(
                     # retención de IVA sin recalcular la conversión.
                     "pagado_teorico_bcv": round(val_bcv, 2),
                     "pagado_teorico_binance": round(val_binance, 2),
+                    # Mismos 2, incluyendo Vinculación PENDIENTE de esta
+                    # orden -- ver comentario de
+                    # monto_pagado_factura_odoo_incl_pendiente arriba.
+                    "pagado_teorico_bcv_incl_pendiente": round(val_bcv_incl_pendiente, 2),
+                    "pagado_teorico_binance_incl_pendiente": round(
+                        val_binance_incl_pendiente, 2
+                    ),
                     # Monto pagado con SU PROPIA tasa por ruta (BCV vs
                     # Binance del día del pago) -- distinto del "abono_bcv"/
                     # "abono_binance" que usa estatus_pago_real_orden/_
