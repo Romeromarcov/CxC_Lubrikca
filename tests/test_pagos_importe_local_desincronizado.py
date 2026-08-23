@@ -165,3 +165,89 @@ def test_respeta_tolerancia_custom() -> None:
 def test_sin_execute_o_sin_pago_ids_no_falla() -> None:
     assert _detectar_pagos_con_importe_local_desincronizado(None, [1]) == []
     assert _detectar_pagos_con_importe_local_desincronizado(lambda *a, **k: [], []) == []
+
+
+def test_pago_ves_nativo_usa_amount_en_vez_de_amount_local() -> None:
+    """Generalización (pedido explícito del usuario, agosto 2026): para un
+
+    pago en VES (moneda de la compañía), ``amount`` YA está en Bs -- el
+    "equivalente en Bs" a comparar es ese campo, no ``amount_local``
+    (siempre 0 para VES, verificado en vivo). Caso real: pago 1492
+    (PBAMI/2026/00467), amount=61.850,21 -- si el asiento quedara
+    desincronizado, debe detectarse igual que para un pago en USD."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "read":
+            return [
+                {
+                    "id": 1492,
+                    "name": "PBAMI/2026/00467",
+                    "amount": 61850.21,
+                    "amount_local": 0.0,
+                    "currency_id": [166, "VES"],
+                    "move_id": [10280, "x"],
+                    "state": "in_process",
+                }
+            ]
+        if model == "account.move.line" and method == "search_read":
+            # Asiento desincronizado a propósito -- 60000.00 en vez de
+            # los 61850.21 que el pago dice.
+            return [{"id": 26078, "move_id": [10280, "x"], "debit": 60000.00}]
+        return []
+
+    resultado = _detectar_pagos_con_importe_local_desincronizado(fake_execute, [1492])
+    assert len(resultado) == 1
+    assert resultado[0]["importe_local_ves"] == 61850.21
+    assert resultado[0]["monto_asiento_ves"] == 60000.00
+
+
+def test_pago_ves_nativo_sincronizado_no_se_marca() -> None:
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "read":
+            return [
+                {
+                    "id": 1492,
+                    "name": "PBAMI/2026/00467",
+                    "amount": 61850.21,
+                    "amount_local": 0.0,
+                    "currency_id": [166, "VES"],
+                    "move_id": [10280, "x"],
+                    "state": "in_process",
+                }
+            ]
+        if model == "account.move.line" and method == "search_read":
+            return [{"id": 26078, "move_id": [10280, "x"], "debit": 61850.21}]
+        return []
+
+    assert _detectar_pagos_con_importe_local_desincronizado(fake_execute, [1492]) == []
+
+
+def test_pago_enviado_usd_desincronizado_se_detecta_igual() -> None:
+    """Pedido explícito del usuario: la misma validación para pagos
+
+    ENVIADOS (a proveedores) -- la simetría del asiento (debit==credit en
+    un par balanceado) hace que la línea con debit>0 sea la correcta sin
+    lógica direccional extra, sea el pago entrante o saliente."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment" and method == "read":
+            return [
+                {
+                    "id": 223,
+                    "name": "PBAMI/2026/00060",
+                    "amount": 30.0,
+                    "amount_local": 21950.0,
+                    "currency_id": [1, "USD"],
+                    "move_id": [500, "x"],
+                    "state": "in_process",
+                }
+            ]
+        if model == "account.move.line" and method == "search_read":
+            # Línea de Cuentas por Pagar (CxP) con debit -- pago a un
+            # proveedor, no de un cliente.
+            return [{"id": 5001, "move_id": [500, "x"], "debit": 21948.91}]
+        return []
+
+    resultado = _detectar_pagos_con_importe_local_desincronizado(fake_execute, [223])
+    assert len(resultado) == 1
+    assert round(resultado[0]["diferencia_ves"], 2) == 1.09

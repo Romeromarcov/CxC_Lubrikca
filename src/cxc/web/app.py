@@ -9950,25 +9950,28 @@ def _detectar_pagos_con_importe_local_desincronizado(
     """Bug real de Odoo (descrito por el usuario, agosto 2026, con el
 
     método de detección exacto que propuso): editar la fecha o la tasa de
-    un pago YA reconciliado hace que Odoo recalcule "Importe local"
-    (``account.payment.amount_local``, el equivalente en Bs) con la tasa
-    del DÍA DE LA EDICIÓN -- pero el asiento contable original
-    (``account.move.line``, ya posteado) se queda con el monto VES viejo,
-    calculado con la tasa real del día del pago. El campo "Importe
-    local" del pago y el monto VES real de su propia línea contable
-    dejan de coincidir.
+    un pago YA reconciliado hace que Odoo recalcule el equivalente en Bs
+    con la tasa del DÍA DE LA EDICIÓN -- pero el asiento contable
+    original (``account.move.line``, ya posteado) se queda con el monto
+    VES viejo, calculado con la tasa real del día del pago.
+
+    Cubre AMBAS monedas nativas: para un pago en USD, "el equivalente en
+    Bs" es ``account.payment.amount_local``; para un pago en VES (moneda
+    de la compañía) es simplemente ``amount`` -- ese campo YA está en Bs,
+    y ``amount_local`` se queda en 0 siempre para esos (verificado en
+    vivo, ~90 casos reales, comportamiento normal de Odoo, no un hueco en
+    la cobertura). También cubre pagos ENVIADOS (a proveedores) además de
+    recibidos (de clientes) -- pedido explícito del usuario tras
+    confirmar en vivo que la simetría contable de un asiento de pago (2
+    líneas balanceadas, ``debit == credit`` del mismo par) hace que
+    comparar contra la línea con ``debit > 0`` funcione igual para
+    ambos sentidos, sin necesidad de lógica direccional extra.
 
     Verificado en vivo (pago 1208, PBNB/2026/00024): ``amount_local`` =
     22.369,11 Bs pero la línea contable tiene ``debit`` = 23.005,81 Bs --
     diferencia real de 636,70 Bs. El ``write_date`` del pago (2026-08-21)
     es semanas posterior a su ``date`` (2026-07-30), confirmando que fue
     editado después de posteado.
-
-    Se excluyen los pagos con ``amount_local == 0`` -- verificado en vivo
-    que es el comportamiento NORMAL para un pago en VES (la moneda de la
-    compañía es VES, así que "Importe local" simplemente no aplica/no se
-    calcula para esos, ~90 casos reales que NO son el bug -- el campo
-    solo es significativo para pagos en moneda extranjera, USD aquí).
     """
     if not execute or not pago_ids:
         return []
@@ -9977,15 +9980,22 @@ def _detectar_pagos_con_importe_local_desincronizado(
             "account.payment",
             "read",
             [pago_ids],
-            {"fields": ["id", "name", "amount_local", "move_id", "state"]},
+            {"fields": ["id", "name", "amount", "amount_local", "currency_id", "move_id", "state"]},
         )
     except Exception as e:
         logger.warning("Error leyendo pagos para importe local desincronizado: %s", e)
         return []
+
+    def _monto_esperado_ves(p: dict[str, Any]) -> Decimal:
+        moneda = p.get("currency_id")
+        if moneda and str(moneda[1]).strip().upper() == "VES":
+            return parse_decimal_safe(str(p.get("amount") or "0"))
+        return parse_decimal_safe(str(p.get("amount_local") or "0"))
+
     pagos_por_move = {
         p["move_id"][0]: p
         for p in pagos
-        if p.get("move_id") and p.get("state") != "cancel" and p.get("amount_local")
+        if p.get("move_id") and p.get("state") != "cancel" and _monto_esperado_ves(p)
     }
     if not pagos_por_move:
         return []
@@ -10018,7 +10028,7 @@ def _detectar_pagos_con_importe_local_desincronizado(
         pago = pagos_por_move.get(move_id)
         if not pago:
             continue
-        importe_local = parse_decimal_safe(str(pago.get("amount_local") or "0"))
+        importe_local = _monto_esperado_ves(pago)
         monto_asiento = parse_decimal_safe(str(line.get("debit") or "0"))
         diferencia = importe_local - monto_asiento
         if abs(diferencia) <= tolerancia_ves:
@@ -10059,13 +10069,15 @@ def _detectar_ajustes_cambio_huerfanos(
 
     Esta función solo detecta el patrón (2) -- el más seguro de aislar
     sin inventar ningún recálculo propio: un Ajuste Cambio "posted" cuya
-    PROPIA línea de Cuentas por Cobrar sigue con ``reconciled = False``
-    es, por definición, un asiento que quedó suelto (nunca se volvió a
-    conciliar con nada después de que se rompiera el vínculo original).
-    Verificado en vivo (factura 00000522/S00682): la factura sigue
-    ``payment_state = "partial"`` con $59,99 realmente pendientes, y el
-    pago que el ajuste dice haber ajustado (``PUSD1/2026/00601``) ya ni
-    siquiera existe -- exactamente el síntoma descrito.
+    PROPIA línea de Cuentas por Cobrar (facturas de venta) O Cuentas por
+    Pagar (facturas de compra -- pagos ENVIADOS a proveedores, pedido
+    explícito del usuario) sigue con ``reconciled = False`` es, por
+    definición, un asiento que quedó suelto (nunca se volvió a conciliar
+    con nada después de que se rompiera el vínculo original). Verificado
+    en vivo (factura 00000522/S00682): la factura sigue ``payment_state =
+    "partial"`` con $59,99 realmente pendientes, y el pago que el ajuste
+    dice haber ajustado (``PUSD1/2026/00601``) ya ni siquiera existe --
+    exactamente el síntoma descrito.
 
     El patrón (1) NO se intenta detectar aquí: requeriría recalcular la
     tasa BCV "correcta" contra nuestro propio histórico para comparar,
@@ -10100,7 +10112,13 @@ def _detectar_ajustes_cambio_huerfanos(
             [
                 [
                     ["move_id", "in", [e["id"] for e in entries]],
-                    ["account_id.account_type", "=", "asset_receivable"],
+                    # asset_receivable (Cuentas por Cobrar, facturas de
+                    # venta) Y liability_payable (Cuentas por Pagar,
+                    # facturas de compra) -- pedido explícito del usuario:
+                    # el mismo bug de Odoo aplica a pagos enviados a
+                    # proveedores, cuyo Ajuste Cambio reconcilia contra la
+                    # cuenta de CxP, no de CxC.
+                    ["account_id.account_type", "in", ["asset_receivable", "liability_payable"]],
                 ]
             ],
             {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
@@ -10177,14 +10195,31 @@ async def get_auditoria():
         pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
             execute, pago_ids_int
         )
+        # Pedido explícito del usuario: la misma validación también para
+        # pagos ENVIADOS (a proveedores), no solo recibidos -- esos nunca
+        # están en nuestro espejo local (solo rastreamos CxC), así que se
+        # traen en vivo aparte.
+        pago_ids_outbound_int: list[int] = []
+        if execute:
+            try:
+                pagos_outbound = execute(
+                    "account.payment",
+                    "search_read",
+                    [[["payment_type", "=", "outbound"], ["state", "!=", "cancel"]]],
+                    {"fields": ["id"]},
+                )
+                pago_ids_outbound_int = [p["id"] for p in pagos_outbound]
+            except Exception as e_out:
+                logger.warning("Error leyendo pagos enviados para Auditoría: %s", e_out)
+
         # Ver docstring de _detectar_pagos_con_importe_local_desincronizado
         # -- bug real de Odoo (editar fecha/tasa de un pago ya
         # reconciliado deja "Importe local" recalculado con la tasa del
         # día de la edición, mientras el asiento ya posteado se queda con
         # el monto VES viejo). Método de detección propuesto por el
-        # usuario directamente.
+        # usuario directamente. Cubre pagos recibidos Y enviados.
         pagos_importe_local_desincronizado = _detectar_pagos_con_importe_local_desincronizado(
-            execute, pago_ids_int
+            execute, pago_ids_int + pago_ids_outbound_int
         )
 
         # Load accepted anomalies from Google Sheets
