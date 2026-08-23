@@ -1187,10 +1187,28 @@ def _pagado_confirmado_por_so(vincs: list[Vinculacion]) -> dict[str, Decimal]:
 def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
     """IDs (str) de ``account.payment`` que ya no son válidos como "pago sin
 
-    asignar": reconciliados en Odoo, o en un estado distinto de
-    in_process/paid (account.payment no tiene estado "posted" -- ese es de
-    account.move). ``pago_id`` local es el ID numérico de Odoo
-    (``map_pago``: ``pago_id=str(rec["id"])``), nunca el campo "name".
+    asignar": completamente reconciliados en Odoo (sin ningún residual
+    disponible), o en un estado distinto de in_process/paid
+    (account.payment no tiene estado "posted" -- ese es de account.move).
+    ``pago_id`` local es el ID numérico de Odoo (``map_pago``:
+    ``pago_id=str(rec["id"])``), nunca el campo "name".
+
+    Bug real (reportado por el usuario, agosto 2026, cliente
+    CONSTRUCTORA GRANO AGREGADO/orden S00608): antes se usaba
+    ``reconciled_invoices_count > 0`` -- un pago que ya se aplicó a
+    CUALQUIER factura, aunque sea una fracción pequeña de su monto total,
+    quedaba marcado como "reconciliado" y desaparecía por completo del
+    universo de sugerencias FIFO, aunque le sobrara un residual enorme
+    disponible (Odoo lo sigue mostrando en "Outstanding credits" al ver
+    otra factura del mismo cliente). Verificado en vivo: el widget de
+    Odoo mostraba 4 pagos disponibles para S00608, pero el sistema solo
+    ofrecía 2 -- los otros 2 (PBAMI/2026/00274, PBAMI/2026/00264) ya
+    habían aplicado una fracción a otra factura de este mismo cliente y
+    quedaban invisibles pese a tener Bs. 2.426.534,47 y Bs. 98.479,26 de
+    residual genuino sin usar, respectivamente (``account.move.line``
+    propia del pago, ``reconciled=False`` -- misma fuente ya usada en
+    ``_detectar_pagos_con_residual_sin_aplicar``, la que Odoo mismo
+    consulta para decidir si un pago sigue teniendo saldo disponible).
     """
     reconciled: set[str] = set()
     p_ids = [int(pid) for pid in pago_ids if pid.isdigit()]
@@ -1200,17 +1218,52 @@ def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
         "account.payment",
         "search_read",
         [[["id", "in", p_ids]]],
-        {"fields": ["id", "is_reconciled", "state", "reconciled_invoices_count"]},
+        {"fields": ["id", "is_reconciled", "state", "move_id"]},
     )
+    candidatos_por_move: dict[int, str] = {}
     for op in odoo_pagos:
         pid_str = str(op.get("id", "")).strip()
-        is_rec = (
-            bool(op.get("is_reconciled"))
-            or int(op.get("reconciled_invoices_count") or 0) > 0
-            or str(op.get("state")) not in PAGO_ESTADOS_CONFIRMADOS
-        )
-        if is_rec and pid_str:
+        if not pid_str:
+            continue
+        if str(op.get("state")) not in PAGO_ESTADOS_CONFIRMADOS:
             reconciled.add(pid_str)
+            continue
+        move_ref = op.get("move_id")
+        if move_ref:
+            candidatos_por_move[move_ref[0]] = pid_str
+        elif bool(op.get("is_reconciled")):
+            # Sin move_id (raro) -- no hay línea contable que consultar,
+            # se cae al campo agregado de Odoo como antes.
+            reconciled.add(pid_str)
+
+    if candidatos_por_move:
+        try:
+            lines = execute(
+                "account.move.line",
+                "search_read",
+                [
+                    [
+                        ["move_id", "in", list(candidatos_por_move.keys())],
+                        ["account_id.account_type", "=", "asset_receivable"],
+                    ]
+                ],
+                {"fields": ["id", "move_id", "reconciled"]},
+            )
+            lineas_por_move = {
+                line["move_id"][0]: line for line in lines if line.get("move_id")
+            }
+        except Exception as e:
+            logger.warning(
+                "Error leyendo líneas de CxC en get_reconciled_pago_ids_odoo: %s", e
+            )
+            lineas_por_move = {}
+        for move_id, pid_str in candidatos_por_move.items():
+            linea = lineas_por_move.get(move_id)
+            # Sin línea AR encontrada para este move -- no se puede
+            # confirmar residual, se deja disponible (mejor ofrecerlo de
+            # más que ocultarlo de más).
+            if linea is not None and linea.get("reconciled"):
+                reconciled.add(pid_str)
     return reconciled
 
 
