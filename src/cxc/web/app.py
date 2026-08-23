@@ -1187,10 +1187,28 @@ def _pagado_confirmado_por_so(vincs: list[Vinculacion]) -> dict[str, Decimal]:
 def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
     """IDs (str) de ``account.payment`` que ya no son válidos como "pago sin
 
-    asignar": reconciliados en Odoo, o en un estado distinto de
-    in_process/paid (account.payment no tiene estado "posted" -- ese es de
-    account.move). ``pago_id`` local es el ID numérico de Odoo
-    (``map_pago``: ``pago_id=str(rec["id"])``), nunca el campo "name".
+    asignar": completamente reconciliados en Odoo (sin ningún residual
+    disponible), o en un estado distinto de in_process/paid
+    (account.payment no tiene estado "posted" -- ese es de account.move).
+    ``pago_id`` local es el ID numérico de Odoo (``map_pago``:
+    ``pago_id=str(rec["id"])``), nunca el campo "name".
+
+    Bug real (reportado por el usuario, agosto 2026, cliente
+    CONSTRUCTORA GRANO AGREGADO/orden S00608): antes se usaba
+    ``reconciled_invoices_count > 0`` -- un pago que ya se aplicó a
+    CUALQUIER factura, aunque sea una fracción pequeña de su monto total,
+    quedaba marcado como "reconciliado" y desaparecía por completo del
+    universo de sugerencias FIFO, aunque le sobrara un residual enorme
+    disponible (Odoo lo sigue mostrando en "Outstanding credits" al ver
+    otra factura del mismo cliente). Verificado en vivo: el widget de
+    Odoo mostraba 4 pagos disponibles para S00608, pero el sistema solo
+    ofrecía 2 -- los otros 2 (PBAMI/2026/00274, PBAMI/2026/00264) ya
+    habían aplicado una fracción a otra factura de este mismo cliente y
+    quedaban invisibles pese a tener Bs. 2.426.534,47 y Bs. 98.479,26 de
+    residual genuino sin usar, respectivamente (``account.move.line``
+    propia del pago, ``reconciled=False`` -- misma fuente ya usada en
+    ``_detectar_pagos_con_residual_sin_aplicar``, la que Odoo mismo
+    consulta para decidir si un pago sigue teniendo saldo disponible).
     """
     reconciled: set[str] = set()
     p_ids = [int(pid) for pid in pago_ids if pid.isdigit()]
@@ -1200,17 +1218,52 @@ def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
         "account.payment",
         "search_read",
         [[["id", "in", p_ids]]],
-        {"fields": ["id", "is_reconciled", "state", "reconciled_invoices_count"]},
+        {"fields": ["id", "is_reconciled", "state", "move_id"]},
     )
+    candidatos_por_move: dict[int, str] = {}
     for op in odoo_pagos:
         pid_str = str(op.get("id", "")).strip()
-        is_rec = (
-            bool(op.get("is_reconciled"))
-            or int(op.get("reconciled_invoices_count") or 0) > 0
-            or str(op.get("state")) not in PAGO_ESTADOS_CONFIRMADOS
-        )
-        if is_rec and pid_str:
+        if not pid_str:
+            continue
+        if str(op.get("state")) not in PAGO_ESTADOS_CONFIRMADOS:
             reconciled.add(pid_str)
+            continue
+        move_ref = op.get("move_id")
+        if move_ref:
+            candidatos_por_move[move_ref[0]] = pid_str
+        elif bool(op.get("is_reconciled")):
+            # Sin move_id (raro) -- no hay línea contable que consultar,
+            # se cae al campo agregado de Odoo como antes.
+            reconciled.add(pid_str)
+
+    if candidatos_por_move:
+        try:
+            lines = execute(
+                "account.move.line",
+                "search_read",
+                [
+                    [
+                        ["move_id", "in", list(candidatos_por_move.keys())],
+                        ["account_id.account_type", "=", "asset_receivable"],
+                    ]
+                ],
+                {"fields": ["id", "move_id", "reconciled"]},
+            )
+            lineas_por_move = {
+                line["move_id"][0]: line for line in lines if line.get("move_id")
+            }
+        except Exception as e:
+            logger.warning(
+                "Error leyendo líneas de CxC en get_reconciled_pago_ids_odoo: %s", e
+            )
+            lineas_por_move = {}
+        for move_id, pid_str in candidatos_por_move.items():
+            linea = lineas_por_move.get(move_id)
+            # Sin línea AR encontrada para este move -- no se puede
+            # confirmar residual, se deja disponible (mejor ofrecerlo de
+            # más que ocultarlo de más).
+            if linea is not None and linea.get("reconciled"):
+                reconciled.add(pid_str)
     return reconciled
 
 
@@ -1939,8 +1992,52 @@ async def run_sync_in_background():
                 repo.upsert_ordenes(ordenes)
                 repo.upsert_lineas(lineas)
                 repo.upsert_pagos(pagos)
+                # Bug real (reportado por el usuario, agosto 2026, cliente
+                # CONSTRUCTORA GRANO AGREGADO): esta corrida "primera vez"
+                # nunca traía Facturas/Entregas/Catálogo/Líneas de Factura/
+                # Líneas de Entrega -- solo clientes/órdenes/líneas/pagos --
+                # a diferencia de IncrementalSync.run() (la corrida normal),
+                # que sí trae las 9 fuentes. Cualquier factura cuyo
+                # write_date en Odoo nunca cambió DESPUÉS del momento del
+                # bootstrap quedaba invisible para siempre (el ciclo delta
+                # normal solo mira "qué cambió desde el cursor", nunca
+                # vuelve a mirar hacia atrás). Confirmado en vivo: 358 de
+                # 695 facturas de venta posted en Odoo (51%) ausentes del
+                # espejo local -- afecta directamente total_facturado_neto/
+                # saldo_cxc de cualquier orden cuya factura cayó en ese
+                # hueco (se ve como "nunca facturada", comparando contra el
+                # monto TEÓRICO/real completo de la orden en vez del saldo
+                # de factura ya neteado). Se usa el mismo helper
+                # ``_sync_opcional`` de IncrementalSync (tolera backends que
+                # no implementen alguno de estos espejos) en vez de
+                # duplicar su try/except.
+                sync_bootstrap = IncrementalSync(repo, reader)
+                facturas = reader.changed_facturas(since_override)
+                entregas = reader.changed_entregas(since_override)
+                catalogo = reader.changed_catalogo(since_override)
+                lineas_factura = reader.changed_lineas_factura(since_override)
+                entregas_lineas = reader.changed_entregas_lineas(since_override)
+                sync_bootstrap._sync_opcional("facturas", facturas, repo.upsert_facturas)
+                sync_bootstrap._sync_opcional("entregas", entregas, repo.upsert_entregas)
+                sync_bootstrap._sync_opcional("catálogo", catalogo, repo.upsert_catalogo)
+                sync_bootstrap._sync_opcional(
+                    "líneas de factura", lineas_factura, repo.upsert_lineas_factura
+                )
+                sync_bootstrap._sync_opcional(
+                    "líneas de entrega", entregas_lineas, repo.upsert_entregas_lineas
+                )
                 repo.set_last_sync(datetime.now())
-                total_first = len(clientes) + len(ordenes) + len(lineas) + len(pagos)
+                total_first = (
+                    len(clientes)
+                    + len(ordenes)
+                    + len(lineas)
+                    + len(pagos)
+                    + len(facturas)
+                    + len(entregas)
+                    + len(catalogo)
+                    + len(lineas_factura)
+                    + len(entregas_lineas)
+                )
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 _VENTAS_CACHE["data"] = None
@@ -4473,11 +4570,23 @@ def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
     ``get_reporte_saldos``, o un cálculo naive) -- ahora son las mismas 4
     referencias que el resto del sistema ya usa (Teórico Lista BS, Teórico
     Lista USD, Venta Real, Factura Neta Real).
+
+    Pedido explícito del usuario (agosto 2026, cliente CONSTRUCTORA GRANO
+    AGREGADO/orden S00608): una Vinculación PENDIENTE de esta orden (ya
+    vinculada localmente, pero Odoo aún no la reconcilió) SÍ debe
+    restarse de estos 4 saldos -- antes no restaba nada (solo CONCILIADO
+    contaba), así que un pago ya vinculado pero no confirmado no
+    aparecía ni como pagado ni como "saldo a favor" en ningún lado,
+    mostrando el saldo completo sin tocar. Se usan los campos
+    ``*_incl_pendiente`` (mismo "beneficio de la duda" que ya usa
+    ``sale_de_cxc``/``saldo_cxc`` en Ventas) -- nunca gatean nada real
+    (descuentos, salida de CxC confirmada), solo cambian lo que se
+    MUESTRA aquí.
     """
     desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
-    pagado_bcv = float(item.get("pagado_teorico_bcv") or 0.0)
-    pagado_binance = float(item.get("pagado_teorico_binance") or 0.0)
-    pagado_ref = float(item.get("monto_pagado_factura_odoo") or 0.0)
+    pagado_bcv = float(item.get("pagado_teorico_bcv_incl_pendiente") or 0.0)
+    pagado_binance = float(item.get("pagado_teorico_binance_incl_pendiente") or 0.0)
+    pagado_ref = float(item.get("monto_pagado_factura_odoo_incl_pendiente") or 0.0)
 
     saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
     saldo_teorico_usd = max(0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance)
@@ -11816,6 +11925,20 @@ def _get_ventas_sync(
                     # nacimiento de la orden), expuesto ahora como columna
                     # propia junto a los totales de factura.
                     "monto_pagado_factura_odoo": round(val_ref_nacimiento, 2),
+                    # Mismo valor, pero incluyendo una Vinculación
+                    # PENDIENTE de ESTA orden (aún sin reconciliar en
+                    # Odoo) -- pedido explícito del usuario (agosto 2026,
+                    # cliente CONSTRUCTORA GRANO AGREGADO/S00608): un pago
+                    # ya vinculado localmente no debe verse como "$0
+                    # pagado" en el Reporte de Saldos solo porque Odoo
+                    # todavía no lo reconcilió -- mismo "beneficio de la
+                    # duda" que ya usa sale_de_cxc/saldo_cxc arriba. Nunca
+                    # se usa para gating real (descuentos, salida de CxC
+                    # confirmada) -- solo para _saldos_4_columnas_item
+                    # (Reporte por Cliente / modal de Cobranza).
+                    "monto_pagado_factura_odoo_incl_pendiente": round(
+                        val_ref_nacimiento_incl_pendiente, 2
+                    ),
                     # True si Odoo ya marcó la factura como retenida
                     # (``account.move.wh_iva``, en vivo) -- usado por
                     # /api/bandeja para sacar la orden de la bandeja de
@@ -11830,6 +11953,13 @@ def _get_ventas_sync(
                     # retención de IVA sin recalcular la conversión.
                     "pagado_teorico_bcv": round(val_bcv, 2),
                     "pagado_teorico_binance": round(val_binance, 2),
+                    # Mismos 2, incluyendo Vinculación PENDIENTE de esta
+                    # orden -- ver comentario de
+                    # monto_pagado_factura_odoo_incl_pendiente arriba.
+                    "pagado_teorico_bcv_incl_pendiente": round(val_bcv_incl_pendiente, 2),
+                    "pagado_teorico_binance_incl_pendiente": round(
+                        val_binance_incl_pendiente, 2
+                    ),
                     # Monto pagado con SU PROPIA tasa por ruta (BCV vs
                     # Binance del día del pago) -- distinto del "abono_bcv"/
                     # "abono_binance" que usa estatus_pago_real_orden/_
