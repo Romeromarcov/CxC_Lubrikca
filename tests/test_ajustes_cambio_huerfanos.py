@@ -134,3 +134,37 @@ def test_sin_ajustes_no_llama_a_move_line() -> None:
 
 def test_sin_execute_no_falla() -> None:
     assert _detectar_ajustes_cambio_huerfanos(None, {}) == []
+
+
+def test_detecta_ajuste_huerfano_de_cuenta_por_pagar_pago_enviado() -> None:
+    """Pedido explícito del usuario: la misma validación aplica a facturas
+
+    de COMPRA (pagos enviados a proveedores) -- el Ajuste Cambio de esas
+    reconcilia contra la cuenta de Cuentas por Pagar (liability_payable),
+    no de Cuentas por Cobrar. La función debe cubrir ambas -- antes solo
+    filtraba asset_receivable y se perdía este caso por completo."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.move" and method == "search_read":
+            return [
+                {
+                    "id": 99,
+                    "name": "00001999",
+                    "ref": "Ajuste Cambio 00000900 | PBAMI/2026/00060 Pago: 30.00$ Monto: 30.00$",
+                    "date": "2026-08-01",
+                }
+            ]
+        if model == "account.move.line" and method == "search_read":
+            return [
+                {
+                    "id": 5555,
+                    "move_id": [99, "x"],
+                    "amount_residual_currency": 1500.0,
+                    "reconciled": False,
+                }
+            ]
+        return []
+
+    resultado = _detectar_ajustes_cambio_huerfanos(fake_execute, {})
+    assert len(resultado) == 1
+    assert resultado[0]["move_id"] == 99
