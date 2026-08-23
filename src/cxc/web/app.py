@@ -9942,6 +9942,107 @@ def _detectar_pagos_con_residual_sin_aplicar(
     return resultado
 
 
+_AJUSTE_CAMBIO_FACTURA_RE = re.compile(r"Ajuste Cambio (?P<factura>\S+)")
+
+
+def _detectar_ajustes_cambio_huerfanos(
+    execute: Any, facturas_por_numero: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Asientos de "Ajuste Cambio" (journal Exchange Difference) que Odoo
+
+    posteó al reconciliar una factura VES contra un pago bajo devaluación
+    -- pero cuya reconciliación original ya no existe. Dos bugs reales de
+    Odoo, descritos por el usuario (agosto 2026) y confirmados en vivo:
+
+    1. Editar la fecha o la tasa de un pago YA reconciliado hace que Odoo
+       recalcule el ajuste con la tasa del DÍA DE LA EDICIÓN, no la tasa
+       que el usuario puso -- el ajuste queda numéricamente mal, pero
+       igual de "posted".
+    2. Al desvincular un pago de una factura (romper la conciliación),
+       el asiento de Ajuste Cambio asociado NO se cancela automáticamente
+       -- queda "posted" y sigue restando su residual, aunque la
+       reconciliación que lo originó ya no exista. El usuario ya viene
+       cancelándolos a mano cuando los detecta.
+
+    Esta función solo detecta el patrón (2) -- el más seguro de aislar
+    sin inventar ningún recálculo propio: un Ajuste Cambio "posted" cuya
+    PROPIA línea de Cuentas por Cobrar sigue con ``reconciled = False``
+    es, por definición, un asiento que quedó suelto (nunca se volvió a
+    conciliar con nada después de que se rompiera el vínculo original).
+    Verificado en vivo (factura 00000522/S00682): la factura sigue
+    ``payment_state = "partial"`` con $59,99 realmente pendientes, y el
+    pago que el ajuste dice haber ajustado (``PUSD1/2026/00601``) ya ni
+    siquiera existe -- exactamente el síntoma descrito.
+
+    El patrón (1) NO se intenta detectar aquí: requeriría recalcular la
+    tasa BCV "correcta" contra nuestro propio histórico para comparar,
+    con el mismo riesgo de falsos positivos que ya se descartó en
+    ``_detectar_pagos_con_residual_sin_aplicar`` (Odoo usa su propia
+    tabla de tasas, con su propio momento exacto de captura).
+    """
+    if not execute:
+        return []
+    try:
+        entries = execute(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["journal_id.code", "=", "EXCH"],
+                    ["state", "=", "posted"],
+                    ["ref", "like", "Ajuste Cambio%"],
+                ]
+            ],
+            {"fields": ["id", "name", "ref", "date"]},
+        )
+    except Exception as e:
+        logger.warning("Error consultando ajustes de cambio en Auditoría: %s", e)
+        return []
+    if not entries:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [
+                [
+                    ["move_id", "in", [e["id"] for e in entries]],
+                    ["account_id.account_type", "=", "asset_receivable"],
+                ]
+            ],
+            {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo líneas de ajustes de cambio en Auditoría: %s", e)
+        return []
+    lineas_por_move = {}
+    for line in lines:
+        move_ref = line.get("move_id")
+        if move_ref:
+            lineas_por_move[move_ref[0]] = line
+
+    resultado: list[dict[str, Any]] = []
+    for entry in entries:
+        linea = lineas_por_move.get(entry["id"])
+        if not linea or linea.get("reconciled"):
+            continue
+        m = _AJUSTE_CAMBIO_FACTURA_RE.search(str(entry.get("ref") or ""))
+        factura_numero = m.group("factura") if m else None
+        residual = parse_decimal_safe(str(linea.get("amount_residual_currency") or "0"))
+        resultado.append(
+            {
+                "move_id": entry["id"],
+                "move_name": entry.get("name"),
+                "factura_numero": factura_numero,
+                "so_id": facturas_por_numero.get(factura_numero) if factura_numero else None,
+                "residual_ves": round(float(residual), 2),
+                "fecha": entry.get("date"),
+                "ref": entry.get("ref"),
+            }
+        )
+    return resultado
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -10008,6 +10109,13 @@ async def get_auditoria():
         so_pagada_en_odoo: set[str] = set()
 
         facturas_dicts = _facturas_dicts_desde_espejo(repo, so_ids)
+        # Ver docstring de _detectar_ajustes_cambio_huerfanos -- bug real
+        # de Odoo (dos causas descritas por el usuario, agosto 2026):
+        # desvincular un pago de una factura no cancela su asiento de
+        # Ajuste Cambio, que queda "posted" restando un residual que ya
+        # no corresponde a ninguna reconciliación real.
+        facturas_por_numero = {d["name"]: d["invoice_origin"] for d in facturas_dicts}
+        ajustes_cambio_huerfanos = _detectar_ajustes_cambio_huerfanos(execute, facturas_por_numero)
         ids_para_estado_pago = [d["id"] for d in facturas_dicts if d["id"] is not None]
         estado_pago_map = (
             _estado_pago_facturas_desde_odoo(execute, ids_para_estado_pago) if execute else {}
@@ -10413,6 +10521,12 @@ async def get_auditoria():
             # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
             # muestra residual $0 (bug real, cliente TERA, agosto 2026).
             "pagos_con_residual_sin_aplicar": pagos_residual_sin_aplicar,
+            # Ver _detectar_ajustes_cambio_huerfanos -- asientos de Ajuste
+            # Cambio "posted" cuya reconciliación original ya no existe
+            # (bug real de Odoo, dos causas descritas por el usuario:
+            # editar fecha/tasa de un pago ya reconciliado, o desvincular
+            # un pago de una factura sin que Odoo cancele el ajuste).
+            "ajustes_cambio_huerfanos": ajustes_cambio_huerfanos,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
@@ -10421,6 +10535,7 @@ async def get_auditoria():
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
                 ),
                 "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
+                "total_ajustes_cambio_huerfanos": len(ajustes_cambio_huerfanos),
             },
         }
     except Exception as e:

@@ -1185,6 +1185,33 @@
                             </table>
                         </div>
                     </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Ajustes de Cambio Huérfanos</h2>
+                            <p title="Bug real de Odoo: al desvincular un pago de una factura (romper la conciliación), el asiento de Ajuste Cambio (journal Exchange Difference) que Odoo generó para esa reconciliación no se cancela automáticamente -- queda posted, restando un residual que ya no corresponde a ninguna reconciliación real. Se detecta por su propia línea contable (reconciled=False), sin recalcular ninguna tasa.">Asientos de "Ajuste Cambio" en Odoo que quedaron sueltos (posted, pero sin ninguna reconciliación real detrás) -- normalmente porque se desvinculó el pago que los originó. Hay que revisarlos y cancelarlos manualmente en Odoo.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Asiento</th>
+                                        <th>Orden (SO)</th>
+                                        <th>Factura Odoo</th>
+                                        <th>Residual (Bs.)</th>
+                                        <th>Fecha</th>
+                                        <th>Referencia</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ajustes-cambio-huerfanos-table-body">
+                                    <tr>
+                                        <td colspan="6" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->
