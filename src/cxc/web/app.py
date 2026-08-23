@@ -1010,9 +1010,9 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                 "tipo_auditoria": _TIPO_AUDITORIA_POR_CAMBIO.get(
                     c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
                 ),
-                "motor_calcula_usd": "",
-                "odoo_registrado_usd": "",
-                "diferencia_usd": "",
+                "motor_calcula_usd": None,
+                "odoo_registrado_usd": None,
+                "diferencia_usd": None,
                 "detalle_odoo": c.get(
                     "detalle",
                     f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
@@ -1126,9 +1126,9 @@ def _detectar_vinculaciones_pendientes_a_revisar(
                 "audit_id": f"VINC_STALE_{r['vinc_id']}_{today_str}",
                 "so_id": r["so_id"],
                 "tipo_auditoria": "vinculacion_pendiente_revisar",
-                "motor_calcula_usd": "",
-                "odoo_registrado_usd": "",
-                "diferencia_usd": "",
+                "motor_calcula_usd": None,
+                "odoo_registrado_usd": None,
+                "diferencia_usd": None,
                 "detalle_odoo": "",
                 "detalle_motor": r["motivo"],
                 "estado": "pendiente_revision",
@@ -1180,7 +1180,7 @@ def _pagado_confirmado_por_so(vincs: list[Vinculacion]) -> dict[str, Decimal]:
     for v in vincs:
         if v.estado != EstadoVinculacion.CONCILIADO:
             continue
-        result[v.so_id] = result.get(v.so_id, Decimal("0")) + v.monto_aplicado
+        result[v.so_id] = result.get(v.so_id, Decimal("0")) + _vinc_usd_equiv(v)
     return result
 
 
@@ -2766,7 +2766,7 @@ async def get_resumen():
         linked_amounts: dict[str, Decimal] = {}
         for v in vincs:
             prev = linked_amounts.get(v.pago_id, Decimal("0"))
-            linked_amounts[v.pago_id] = prev + v.monto_aplicado
+            linked_amounts[v.pago_id] = prev + _vinc_usd_equiv(v)
         tasas_rows = _all_serie_tasas_rows(repo)
 
         # Igual que /api/conciliaciones/sugerencias: excluir pagos ya
@@ -2800,9 +2800,11 @@ async def get_resumen():
                     fecha_dt = datetime.now()
                 bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
 
-                # linked_amounts (Vinculacion.monto_aplicado) siempre esta en
-                # USD -- convertir el monto original ANTES de restar, nunca
-                # restar un monto en VES contra un aplicado en USD.
+                # linked_amounts ya está en USD (_vinc_usd_equiv, no
+                # monto_aplicado crudo -- ver su docstring: monto_aplicado
+                # está en moneda_abono, no siempre USD) -- convertir el
+                # monto original ANTES de restar, nunca restar un monto en
+                # VES contra un aplicado en USD.
                 monto_original_raw = parse_decimal_safe(p.get("monto", "0"))
                 monto_original_usd = pago_monto_usd(monto_original_raw, moneda, bcv_rate)
                 saldo_usd = monto_original_usd - linked_amounts.get(pid, Decimal("0"))
@@ -6318,6 +6320,33 @@ def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
     }
 
 
+def _vinc_usd_equiv(v: Vinculacion) -> Decimal:
+    """Cuánto de ``v`` cuenta en USD -- NUNCA ``v.monto_aplicado`` a secas.
+
+    Bug real (reportado por el usuario, agosto 2026, caso Grano Agregado
+    S00608): ``monto_aplicado`` está denominado en ``moneda_abono`` -- para
+    un pago en VES es un número en Bs (millones), no en dólares.
+    ``linked_pago``/``linked_so`` en ``_get_conciliaciones_sugerencias_sync``
+    sumaban ese monto crudo directo contra montos en USD, así que CUALQUIER
+    pago VES con una Vinculación ya existente (aunque fuera diminuta o
+    apuntara a otra orden) quedaba con un "saldo_usd" gigantesco y negativo
+    -- desaparecía de las sugerencias FIFO para siempre, sin importar cuánto
+    residual real quedara disponible en Odoo. Mismo criterio que
+    ``engine.equivalents.valor_pagado_usd`` (los equivalentes congelados
+    mandan, nunca se recalculan), pero tolerante a Vinculaciones viejas sin
+    equivalentes completos en vez de lanzar excepción en un endpoint vivo.
+    """
+    if v.moneda_abono == Moneda.USD:
+        return v.monto_aplicado
+    if v.tipo_tasa_abono == TipoTasa.BINANCE and v.equiv_usd_binance is not None:
+        return v.equiv_usd_binance
+    if v.equiv_usd_bcv is not None:
+        return v.equiv_usd_bcv
+    if v.equiv_usd_binance is not None:
+        return v.equiv_usd_binance
+    return v.monto_aplicado
+
+
 def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
     """Cuerpo síncrono de ``get_conciliaciones_sugerencias`` (Fase 1
 
@@ -6428,8 +6457,9 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
         linked_pago = {}
         linked_so = {}
         for v in vincs:
-            linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + v.monto_aplicado
-            linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + v.monto_aplicado
+            usd_equiv = _vinc_usd_equiv(v)
+            linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + usd_equiv
+            linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + usd_equiv
 
         # Bug real (reportado por el usuario, cliente Emprendimiento Tomas
         # Marcano 5): un pago huérfano (aún sin reconciliar en Odoo, así
@@ -6527,9 +6557,13 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 if Decimal("0.5") <= ratio <= Decimal("3"):
                     binance_rate = binance_del_dia
 
-            # monto_vinculado (Vinculacion.monto_aplicado) siempre esta en USD
-            # (la moneda de las ordenes) -- nunca restar directamente un saldo
-            # en VES contra esto; hay que convertir el monto original primero.
+            # monto_vinculado_usd usa _vinc_usd_equiv (nunca monto_aplicado
+            # crudo -- ese está en moneda_abono, no siempre USD; ver su
+            # docstring). Bug real corregido agosto 2026: sumar
+            # monto_aplicado crudo de un pago VES contra un saldo en USD
+            # dejaba a CUALQUIER pago VES con Vinculación existente fuera de
+            # las sugerencias para siempre (saldo_usd quedaba negativo por
+            # millones).
             monto_orig_usd = (
                 monto_orig_usd_odoo
                 if monto_orig_usd_odoo is not None
@@ -9400,7 +9434,9 @@ def _get_pagos_historial_sync():
         # vinculación manual todavía tiene saldo pendiente (residual).
         linked_so_total: dict[str, Decimal] = {}
         for v in vincs:
-            linked_so_total[v.so_id] = linked_so_total.get(v.so_id, Decimal("0")) + v.monto_aplicado
+            linked_so_total[v.so_id] = linked_so_total.get(
+                v.so_id, Decimal("0")
+            ) + _vinc_usd_equiv(v)
 
         historial = []
         vinculados_pago_ids: set[str] = set()
@@ -9420,7 +9456,7 @@ def _get_pagos_historial_sync():
             # Monto original del pago (no solo lo aplicado en esta
             # vinculación puntual) -- en USD, para poder verificar a ojo si
             # el residual mostrado cuadra contra el importe firmado del pago.
-            monto_pago_usd = float(v.monto_aplicado)
+            monto_pago_usd = float(_vinc_usd_equiv(v))
             if p_data:
                 fecha_p = str(p_data.get("fecha_pago") or p_data.get("fecha") or "")[:10]
                 try:
@@ -10474,7 +10510,7 @@ async def get_auditoria():
         vincs = repo.all_vinculaciones()
         pagos_by_so = {}
         for v in vincs:
-            pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(v.monto_aplicado)
+            pagos_by_so[v.so_id] = pagos_by_so.get(v.so_id, 0.0) + float(_vinc_usd_equiv(v))
 
         # Estado EN VIVO de cada orden -- el espejo local (estado_orden) puede
         # quedar desactualizado si una orden se cancela en Odoo y el sync

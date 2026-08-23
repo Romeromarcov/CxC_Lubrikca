@@ -699,7 +699,7 @@ def test_devolucion_factura_sobre_cantidad_entregada() -> None:
     orden = b.orden(primera=False)
     orden.entregada_completa = True
     orden.tiene_devolucion = True
-    linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="20")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="20", subtotal="150")
     linea.cantidad_entregada = Decimal("15")
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
     vinc = b.vinculacion(monto_aplicado="100", moneda_abono=Moneda.USD)
@@ -711,6 +711,33 @@ def test_devolucion_factura_sobre_cantidad_entregada() -> None:
     )
     res = calcular_factura(inp)
     assert res.precio_base_calculado == Decimal("150.00")  # 15 × 10, no 20 × 10
+
+
+def test_devolucion_reflejada_en_odoo_como_precio_cero_no_cantidad() -> None:
+    """Bug real (SO 00133, "Inversiones La Bendición del Nazareno", agosto
+
+    2026): la devolución no siempre baja ``cantidad_entregada`` -- a veces
+    Odoo la refleja dejando el ``price_subtotal`` de la línea en 0 (la
+    mercancía salió, pero se le dejó de cobrar). Si eso pasa, la línea debe
+    facturarse en 0 aunque ``cantidad_entregada`` siga mostrando la cantidad
+    original -- el ``subtotal`` de Odoo manda sobre la cantidad cuando hay
+    devolución.
+    """
+    orden = b.orden(primera=False)
+    orden.entregada_completa = True
+    orden.tiene_devolucion = True
+    linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="18", subtotal="0")
+    linea.cantidad_entregada = Decimal("18")  # Odoo NO bajó la cantidad
+    metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
+    vinc = b.vinculacion(monto_aplicado="0", moneda_abono=Moneda.USD)
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@USD": "10"}),
+    )
+    res = calcular_factura(inp)
+    assert res.precio_base_calculado == Decimal("0.00")  # no 18 × 10 = 180
 
 
 def test_sin_devolucion_factura_sobre_cantidad_pedida() -> None:

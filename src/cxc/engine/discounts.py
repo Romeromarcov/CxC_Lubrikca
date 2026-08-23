@@ -311,8 +311,25 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
     ``cantidad_entregada`` ya coincide con la cantidad ajustada. En cualquier otro
     caso se usa la cantidad pedida (base provisional; Lubrikca factura antes de
     despachar, donde ``qty_delivered`` aún puede ser 0).
+
+    Bug real (reportado por el usuario, agosto 2026, caso "Inversiones La
+    Bendición del Nazareno" SO 00133): algunas devoluciones NO se reflejan en
+    Odoo reduciendo ``qty_delivered`` de la línea -- se reflejan poniendo el
+    precio/``price_subtotal`` de la línea en 0 (la mercancía salió, pero se le
+    dejó de cobrar). ``cantidad_entregada`` en ese caso sigue mostrando la
+    cantidad original, así que el teórico repetía el valor de la devolución
+    contra la lista de precios propia, ignorando que Odoo ya la saldó en $0.
+    Si la línea tenía precio unitario real pero Odoo la dejó en subtotal 0,
+    se trata como devuelta (cantidad efectiva 0) sin importar
+    ``cantidad_entregada``.
     """
     if inp.orden.entregada_completa and inp.orden.tiene_devolucion:
+        if (
+            linea.subtotal == Decimal("0")
+            and linea.precio_unitario > Decimal("0")
+            and linea.cantidad_entregada > Decimal("0")
+        ):
+            return Decimal("0")
         return linea.cantidad_entregada
     return linea.cantidad
 
