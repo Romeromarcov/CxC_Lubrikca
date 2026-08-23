@@ -10,11 +10,11 @@ dato para esa fecha.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from cxc.web.app import get_bcv_euro_rate_for_datetime, get_rate_for_datetime
+from cxc.web.app import get_bcv_euro_rate_for_datetime, get_eur_rate_for_date, get_rate_for_datetime
 
 
 def test_usa_serie_tasas_si_hay_captura_del_mismo_dia() -> None:
@@ -113,3 +113,37 @@ def test_bcv_euro_rechaza_fila_de_otro_dia_aunque_ratio_sea_plausible() -> None:
     ]
     resultado = get_bcv_euro_rate_for_datetime(datetime(2026, 3, 3, 12, 0), rows)
     assert resultado is None
+
+
+def test_eur_rate_for_date_rechaza_fila_sembrada_igual_al_bcv() -> None:
+    """Bug real (reportado por el usuario, agosto 2026, pago de Inversiones
+
+    Mi Linda Yemaire 2026-04-30): a diferencia de
+    ``get_bcv_euro_rate_for_datetime`` (que ya rechaza un ratio EUR/BCV
+    implausible), ``get_eur_rate_for_date`` -- el fallback a
+    TasasHistoricasAuditoria -- no tenía ninguna guardia: si el dato
+    sembrado para ese día tiene ``tasa_bcv_euro`` corrupto/igual al BCV
+    (dañado en origen, no detectable solo con "> 0"), se devolvía sin
+    más, produciendo tarjetas "Tasa BCV" y "Tasa BCV-EUR" idénticas en la
+    UI. Mismo umbral (ratio >= 1.05) que la guardia hermana, comparado
+    contra el ``tasa_bcv_usd`` de la MISMA fila."""
+    rows = [
+        {"fecha": "2026-04-30", "tasa_bcv_usd": "487.1192", "tasa_bcv_euro": "487.1192"},
+    ]
+    assert get_eur_rate_for_date(date(2026, 4, 30), rows) is None
+
+
+def test_eur_rate_for_date_acepta_fila_con_ratio_plausible() -> None:
+    rows = [
+        {"fecha": "2026-04-30", "tasa_bcv_usd": "487.1192", "tasa_bcv_euro": "569.7638"},
+    ]
+    assert get_eur_rate_for_date(date(2026, 4, 30), rows) == Decimal("569.7638")
+
+
+def test_eur_rate_for_date_sin_tasa_bcv_usd_en_la_fila_no_aplica_guardia() -> None:
+    """Filas viejas (o de otras fuentes) sin ``tasa_bcv_usd`` -- no hay con
+
+    qué comparar, así que se confía en el dato tal cual (mismo
+    comportamiento que antes de la guardia para ese caso)."""
+    rows = [{"fecha": "2026-03-18", "tasa_bcv_euro": "520.642"}]
+    assert get_eur_rate_for_date(date(2026, 3, 18), rows) == Decimal("520.642")

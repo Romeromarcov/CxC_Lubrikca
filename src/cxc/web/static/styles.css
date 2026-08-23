@@ -796,16 +796,31 @@ body {
 }
 
 /* Grilla de priorización de cobro por cliente (Reporte de Saldos) --
-   flex-wrap (no grid de columnas fijas) porque cada tarjeta tiene un
-   tamaño propio, proporcional al monto de la deuda. */
+   CSS Grid con auto-flow: dense (no flex-wrap): cada tarjeta ocupa un
+   número de celdas de la unidad base (grid-column/row: span N,
+   calculado en JS a partir del monto -- ver _crearCardPrioridad),
+   "dense" retrocede a rellenar huecos que dejan las tarjetas grandes en
+   vez de dejarlos en blanco (bug real reportado por el usuario, agosto
+   2026: flex-wrap nunca reacomoda una tarjeta ya colocada, así que
+   cualquier tarjeta que no cupiera exacta en lo que quedaba de la fila
+   dejaba ese espacio vacío para siempre). Se recalcula solo, sin JS de
+   posicionamiento: perfecto para que las tarjetas entren/salgan al
+   cambiar filtros.  */
 .prioridad-grid {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+    grid-auto-rows: 65px;
+    grid-auto-flow: dense;
     gap: 0.7rem;
 }
 
 .prioridad-group {
+    /* Cuando la vista está agrupada (por vendedor/antigüedad), este div
+       es HIJO del grid externo (#reporte-prioridad-grid.prioridad-grid)
+       -- sin esto ocuparía una sola celda de 65px en vez de la fila
+       completa (a diferencia de flex, un grid item ignora width:100% si
+       no se le dice explícitamente cuántas columnas ocupar). */
+    grid-column: 1 / -1;
     width: 100%;
     display: flex;
     flex-direction: column;

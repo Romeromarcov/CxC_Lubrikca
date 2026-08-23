@@ -1805,13 +1805,26 @@ def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     sin caer a otro día): la tabla ya trae ``tasa_bcv_euro`` (Odoo
     ``res.currency.rate``, sembrado por ``scripts/cargar_tasas_historicas.py``).
     Devuelve ``None`` si ese día no tiene fila -- quien llama decide el fallback.
+
+    Guardia de plausibilidad (bug real, agosto 2026, pedida por el
+    usuario): MISMO criterio que ya usa ``get_bcv_euro_rate_for_datetime``
+    (ratio EUR/BCV-USD >= 1.05, EUR nunca es más barato que BCV-USD en la
+    serie real) -- pero esta función no la tenía, así que un día sembrado
+    con ``tasa_bcv_euro`` corrupto/igual al BCV (dato de origen dañado, no
+    detectable por "> 0") se devolvía sin más, produciendo tarjetas "Tasa
+    BCV" y "Tasa BCV-EUR" idénticas en la UI. Se compara contra el
+    ``tasa_bcv_usd`` de la MISMA fila (mismo día), no uno buscado aparte.
     """
     fecha_str = fecha.isoformat()
     for r in rows:
         if str(r.get("fecha", ""))[:10] == fecha_str:
             val = parse_decimal_safe(r.get("tasa_bcv_euro", "0"))
-            if val > Decimal("0"):
-                return val
+            if val <= Decimal("0"):
+                continue
+            tasa_bcv_fila = parse_decimal_safe(r.get("tasa_bcv_usd", "0"))
+            if tasa_bcv_fila > Decimal("0") and (val / tasa_bcv_fila) < Decimal("1.05"):
+                continue
+            return val
     return None
 
 
@@ -4563,6 +4576,16 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
     try:
         repo = get_repo()
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
+        # Bug real (reportado por el usuario, agosto 2026, cliente TERA
+        # INGENIERIA): ``OrdenVenta.factura_id`` es el id INTERNO de Odoo
+        # (``account.move.id``, ver modelo -- clave de cruce con
+        # ``Factura``/``Vinculacion``, nunca pensado para mostrarse), pero
+        # el reporte lo exponía tal cual en "Referencia" y en la
+        # descripción del documento (ej. "10119" en vez del número real de
+        # factura "00000586"). Se resuelve a ``Factura.numero`` para
+        # display, sin tocar ``factura_id`` (lo siguen usando otros
+        # consumidores del payload como clave).
+        facturas_numero_map = {f.factura_id: f.numero for f in repo.all_facturas()}
 
         ventas_data = await get_ventas(vendedor=None, cxc_session=cxc_session)
         sugerencias = await get_conciliaciones_sugerencias(cxc_session=cxc_session)
@@ -4643,11 +4666,17 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     c["saldos"][k] += v
 
             factura_id = (o.factura_id if o else None) or None
+            factura_numero = facturas_numero_map.get(factura_id) if factura_id else None
             c["documentos"].append(
                 {
                     "tipo": "orden",
                     "so_id": item["so_id"],
                     "factura_id": factura_id if facturada else None,
+                    # Número real de factura (ej. "00000586") para mostrar
+                    # -- cae al id interno solo si Facturas aún no trajo
+                    # ese registro (nunca debería pasar para una orden ya
+                    # facturada, pero evita un "N/A" silencioso).
+                    "factura_numero": (factura_numero or factura_id) if facturada else None,
                     "fecha": item.get("fecha"),
                     "facturada": facturada,
                     "dias_vencido": dias_vencido,
@@ -4657,7 +4686,11 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     },
                     "descripcion": (
                         f"Orden {item['so_id']}"
-                        + (f" / Factura {factura_id}" if facturada and factura_id else "")
+                        + (
+                            f" / Factura {factura_numero or factura_id}"
+                            if facturada and factura_id
+                            else ""
+                        )
                         + (" (facturada)" if facturada else " (sin facturar)")
                     ),
                     "bandeja_destino": item.get("bandeja_destino"),
@@ -6296,6 +6329,19 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
+            # Bug real (reportado por el usuario, agosto 2026, cliente
+            # Inversiones Mi Linda Yemaire): la tarjeta "Tasa BCV" mostraba
+            # el mismo valor que "Tasa BCV-EUR" -- idéntico, no una
+            # coincidencia -- porque el bloque de abajo sustituye
+            # ``bcv_rate`` (la variable de CONVERSIÓN interna, correcta:
+            # un pago huérfano de cliente con órdenes históricas debe
+            # convertirse con la tasa EUR) sin distinguirla de la variable
+            # de DISPLAY para la tarjeta "Tasa BCV" pura -- el BCV-USD real
+            # nunca se mostraba. Se separan: ``bcv_rate_real`` congela el
+            # BCV-USD verdadero ANTES de la sustitución histórica, para la
+            # tarjeta; ``bcv_rate`` sigue siendo la base de conversión
+            # (sin cambios de comportamiento en el monto USD calculado).
+            bcv_rate_real = bcv_rate
             if moneda == "VES" and cliente_id_pago in clientes_con_orden_historica:
                 # Pago aún sin reconciliar -- tax_today (si vino) es solo la
                 # tasa BCV genérica del día, sin contexto de orden histórica.
@@ -6358,6 +6404,12 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                         "saldo_pendiente_usd": saldo_usd,
                         "moneda": moneda,
                         "tasa_bcv": bcv_rate,
+                        # Ver comentario arriba (bcv_rate_real) -- SOLO para
+                        # mostrar en la tarjeta "Tasa BCV", nunca para
+                        # recalcular montos (eso sigue usando bcv_rate, la
+                        # base de conversión real para clientes con órdenes
+                        # históricas).
+                        "tasa_bcv_real": bcv_rate_real,
                         "tasa_binance": binance_rate,
                         "vendedor": vendedor,
                         "posible_duplicado": pid in pagos_duplicados,
@@ -6464,6 +6516,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 "monto_pago_original": float(p["monto_original_raw"]),
                 "moneda_pago": p["moneda"],
                 "tasa_bcv": float(bcv_rate),
+                "tasa_bcv_real": float(p["tasa_bcv_real"]),
                 "tasa_binance": float(binance_rate),
                 "posible_duplicado": p["posible_duplicado"],
                 "duplicado_de": p["duplicado_de"],
@@ -9578,7 +9631,15 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "cliente_nombre": item["cliente_nombre"],
                     "monto_pago_original": item["monto_pago_original"],
                     "moneda_pago": item["moneda_pago"],
-                    "tasa_bcv": item["tasa_bcv"],
+                    # "tasa_bcv" acá es SOLO para la tarjeta de display --
+                    # item["tasa_bcv_real"] es el BCV-USD real (nunca la
+                    # sustitución EUR usada internamente para convertir
+                    # montos de clientes con órdenes históricas, ver
+                    # bcv_rate_real en _get_conciliaciones_sugerencias_sync
+                    # -- esa base de conversión ya quedó aplicada en
+                    # monto_pago_bcv_usd/monto_pago_binance_usd, no hace
+                    # falta repetirla aquí).
+                    "tasa_bcv": item["tasa_bcv_real"],
                     "tasa_binance": tasa_binance_item,
                     "monto_pago_bcv_usd": item["monto_pago"],
                     "monto_pago_binance_usd": monto_binance_usd_item,
@@ -9670,11 +9731,28 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "so_saldo_teorico_bs": saldos_reparto_vinc["so_saldo_teorico_bs"],
                     "so_saldo_teorico_usd": saldos_reparto_vinc["so_saldo_teorico_usd"],
                     "so_saldo_pendiente": saldos_reparto_vinc["so_saldo_pendiente"],
-                    # Residual REAL de la factura vinculada (Odoo,
-                    # amount_residual_usd) -- más preciso que el genérico
-                    # de _saldos_orden_para_reparto cuando ya hay factura
-                    # específica ligada a este pago.
-                    "factura_saldo_odoo": item["residual_facturas_usd"],
+                    # Bug real (reportado por el usuario, agosto 2026,
+                    # pago 139/Devenalsa): para una Vinculación LOCAL
+                    # (``item.get("vinc_id")`` presente), "residual_
+                    # facturas_usd" viene de ``o.monto_total -
+                    # linked_so_total`` -- una resta local que SÍ cuenta
+                    # Vinculaciones PENDIENTE (aún sin conciliar en Odoo),
+                    # así que no es realmente "residual de Odoo" pese al
+                    # nombre del campo en la UI ("Saldo Factura (Odoo)").
+                    # Eso hacía que la misma orden mostrara DOS saldos
+                    # distintos en la tabla de Reparto del modal (esta fila
+                    # vs. la de "pendiente"/sugerencia, que sí usa el saldo
+                    # neto del motor vía _saldos_orden_para_reparto) sin
+                    # ser en realidad un error de datos -- se unifica a la
+                    # MISMA fuente. Para un pago conciliado DIRECTO en Odoo
+                    # (vinc_id es None, viene de get_live_pagos_conciliados)
+                    # "residual_facturas_usd" SÍ es el residual real leído
+                    # de Odoo -- ese caso se deja intacto.
+                    "factura_saldo_odoo": (
+                        saldos_reparto_vinc["factura_saldo_odoo"]
+                        if item.get("vinc_id")
+                        else item["residual_facturas_usd"]
+                    ),
                     "so_id": item.get("so_id") or None,
                     "factura_id": item.get("factura_id"),
                     "facturas": item.get("facturas", []),
@@ -9779,6 +9857,91 @@ async def get_tasas_historicas():
     # Eliminada.
 
 
+def _detectar_pagos_con_residual_sin_aplicar(
+    execute: Any,
+    pago_ids: list[int],
+    tolerancia_usd: Decimal = Decimal("0.05"),
+) -> list[dict[str, Any]]:
+    """Pagos con un remanente sin conciliar en SU PROPIA línea contable de
+
+    Cuentas por Cobrar -- invisible en cualquier reporte que solo mire la
+    factura (la factura puede mostrar residual $0 aunque el pago haya
+    dejado algo suelto). Bug real (reportado por el usuario, agosto 2026,
+    cliente TERA, factura 00000167): pago PBNB/2026/00005 por $27.781,08,
+    factura por $27.780,60 -- $0,48 sin ningún destino. La factura (Odoo,
+    ``account.move.amount_residual_usd``) mostraba $0 porque Odoo cerró
+    la reconciliación desde ESE lado; solo la línea del propio pago
+    conservaba el rastro: ``account.move.line.amount_residual_currency =
+    -0.48`` con ``reconciled = False`` (verificado en vivo). Se descartó
+    un primer intento que parseaba el texto que Odoo genera en el asiento
+    de "Ajuste Cambio" (journal Exchange Difference) -- ese "Pago: X$" es
+    el monto TOTAL del pago, no lo que le tocó a esa factura puntual, así
+    que un pago repartido entre varias facturas disparaba falsos
+    positivos enormes (caso real encontrado: $30.038 "de más" que
+    resultó ser un pago normal repartido en 3 facturas). El campo de la
+    línea contable, en cambio, es la fuente que el propio Odoo usa para
+    decidir si el pago está genuinamente cerrado -- sin adivinar nada.
+
+    ``state != "cancel"`` en el pago (verificado en vivo, pedido explícito
+    del usuario tras encontrar 100 asientos de Ajuste Cambio cancelados en
+    la muestra real): un pago cancelado no debe generar una alerta de
+    "residual sin aplicar" -- ya no representa dinero real pendiente.
+    """
+    if not execute or not pago_ids:
+        return []
+    try:
+        pagos = execute(
+            "account.payment",
+            "read",
+            [pago_ids],
+            {"fields": ["id", "name", "move_id", "state"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo pagos para residual sin aplicar: %s", e)
+        return []
+    pagos_por_move = {
+        p["move_id"][0]: p for p in pagos if p.get("move_id") and p.get("state") != "cancel"
+    }
+    if not pagos_por_move:
+        return []
+    try:
+        lines = execute(
+            "account.move.line",
+            "search_read",
+            [
+                [
+                    ["move_id", "in", list(pagos_por_move.keys())],
+                    ["account_id.account_type", "=", "asset_receivable"],
+                ]
+            ],
+            {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo líneas de CxC de pagos para residual sin aplicar: %s", e)
+        return []
+
+    resultado: list[dict[str, Any]] = []
+    for line in lines:
+        if line.get("reconciled"):
+            continue
+        residual = parse_decimal_safe(str(line.get("amount_residual_currency") or "0"))
+        if abs(residual) <= tolerancia_usd:
+            continue
+        move_ref = line.get("move_id")
+        move_id = move_ref[0] if move_ref else None
+        pago = pagos_por_move.get(move_id)
+        if not pago:
+            continue
+        resultado.append(
+            {
+                "pago_id": str(pago["id"]),
+                "numero_pago_odoo": pago.get("name"),
+                "residual_sin_aplicar_usd": round(float(residual), 2),
+            }
+        )
+    return resultado
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -9806,6 +9969,20 @@ async def get_auditoria():
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
         all_candidate_ids = list(set(usd_ids + ves_ids))
         rules_all = _get_pricelist_items_fixed(execute, all_candidate_ids)
+
+        # Pagos con residual sin aplicar en su propia línea de CxC -- ver
+        # docstring de _detectar_pagos_con_residual_sin_aplicar (bug real,
+        # cliente TERA, agosto 2026). Escanea TODOS los pagos ya
+        # sincronizados localmente (2 llamadas batch a Odoo, sin loop por
+        # pago).
+        pago_ids_int = [
+            int(p.get("pago_id"))
+            for p in _all_pagos_rows(repo)
+            if str(p.get("pago_id", "")).strip().isdigit()
+        ]
+        pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
+            execute, pago_ids_int
+        )
 
         # Load accepted anomalies from Google Sheets
         anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
@@ -10231,6 +10408,11 @@ async def get_auditoria():
             "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
             "anomalias_aceptadas": anomalias_aceptadas,
             "venta_bruta_teorica_auditoria": venta_bruta_teorica_auditoria,
+            # Ver _detectar_pagos_con_residual_sin_aplicar -- pagos con un
+            # remanente sin conciliar en su propia línea de CxC, invisible
+            # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
+            # muestra residual $0 (bug real, cliente TERA, agosto 2026).
+            "pagos_con_residual_sin_aplicar": pagos_residual_sin_aplicar,
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
@@ -10238,6 +10420,7 @@ async def get_auditoria():
                 "monto_discrepancia_total": round(
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
                 ),
+                "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
             },
         }
     except Exception as e:

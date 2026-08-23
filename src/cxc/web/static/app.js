@@ -705,6 +705,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Tamaño de la tarjeta proporcional al monto (área ~ monto, vía raíz
     // cuadrada -- si fuera lineal, un cliente con 10x más deuda tendría un
     // cuadro 10x más ancho Y 10x más alto, dominando toda la grilla).
+    // PRIORIDAD_GRID_UNIT_PX debe calzar con "minmax(...)"/"grid-auto-rows"
+    // de ``.prioridad-grid`` en styles.css -- es la celda base de la que
+    // cada tarjeta ocupa N columnas x M filas (``grid-column``/``grid-row:
+    // span``), para que auto-flow: dense pueda reempacar sin dejar huecos.
+    const PRIORIDAD_GRID_UNIT_PX = 65;
     const PRIORIDAD_CARD_MIN_PX = 130;
     const PRIORIDAD_CARD_MAX_PX = 260;
 
@@ -728,8 +733,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const px = _tamanoCardPrioridad(c.saldo_priorizacion || 0, maxMonto);
         const card = document.createElement("div");
         card.className = `prioridad-card ${clase}`;
-        card.style.width = `${px}px`;
-        card.style.height = `${Math.round(px * 0.72)}px`;
+        // Spans de grid (no ancho/alto en px) -- ver comentario de
+        // PRIORIDAD_GRID_UNIT_PX: así auto-flow: dense puede reempacar
+        // tarjetas chicas en los huecos que dejan las grandes.
+        const colSpan = Math.max(1, Math.round(px / PRIORIDAD_GRID_UNIT_PX));
+        const rowSpan = Math.max(1, Math.round((px * 0.72) / PRIORIDAD_GRID_UNIT_PX));
+        card.style.gridColumn = `span ${colSpan}`;
+        card.style.gridRow = `span ${rowSpan}`;
         // Tipografía también escala un poco con el tamaño, para que las
         // tarjetas chicas no queden con texto más grande que la propia tarjeta.
         const scale = (0.8 + 0.4 * (px - PRIORIDAD_CARD_MIN_PX) / (PRIORIDAD_CARD_MAX_PX - PRIORIDAD_CARD_MIN_PX)).toFixed(2);
@@ -901,7 +911,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const docsHtml = (c.documentos || []).map(d => {
                     const orig = d.montos_originales || {};
                     const ref = d.tipo === 'orden'
-                        ? (d.factura_id ? `${d.so_id} / ${d.factura_id}` : d.so_id)
+                        ? (d.factura_numero ? `${d.so_id} / ${d.factura_numero}` : d.so_id)
                         : (d.numero_pago_odoo || d.pago_id);
                     return `
                     <tr>
@@ -4817,6 +4827,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
         const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
         const bodyConformes = document.getElementById("conformes-table-body");
+        const bodyResidual = document.getElementById("pagos-residual-table-body");
 
         const elKpiConformes = document.getElementById("audit-kpi-conformes");
         const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
@@ -4846,13 +4857,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 const discrepancias = data.discrepancias || [];
                 const discFacturas = data.discrepancias_facturas_odoo || [];
                 const aceptadas = data.anomalias_aceptadas || [];
+                const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
 
                 if (elKpiConformes) elKpiConformes.textContent = conformes.length;
-                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length;
+                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
                 if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
 
                 const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
-                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length);
+                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length + pagosResidual.length);
                 const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
                 if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length + conformes.length);
 
@@ -4931,6 +4943,23 @@ document.addEventListener("DOMContentLoaded", () => {
                     conformesFullList = conformes;
                     conformesPage = 1;
                     renderConformesPage();
+                }
+
+                // Render Pagos con Residual sin Aplicar (ver
+                // _detectar_pagos_con_residual_sin_aplicar -- bug real,
+                // cliente TERA, agosto 2026).
+                if (bodyResidual) {
+                    if (pagosResidual.length === 0) {
+                        bodyResidual.innerHTML = '<tr><td colspan="3" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
+                    } else {
+                        bodyResidual.innerHTML = pagosResidual.map(p => `
+                            <tr>
+                                <td><strong>${escapeHtml(p.pago_id)}</strong></td>
+                                <td>${escapeHtml(p.numero_pago_odoo)}</td>
+                                <td><strong style="color:#dc2626;">${fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                            </tr>
+                        `).join('');
+                    }
                 }
             }
         } catch (err) {
