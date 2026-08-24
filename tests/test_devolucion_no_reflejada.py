@@ -120,5 +120,16 @@ def test_sin_catalogo_usa_nombre_de_la_propia_linea() -> None:
     assert resultado[0]["producto_nombre"] == "Producto sin match en catálogo"
 
 
+def test_ignora_lineas_de_ajuste_descuento() -> None:
+    """Una línea "Descuento" (precio_unitario negativo, no mercancía real)
+
+    nunca representa un faltante de devolución, aunque su cantidad
+    entregada sea 0 y la ordenada sea 1."""
+    orden = _orden("S00013")
+    linea = _linea("S00013", "L1", "999", "1", "0", "-110.7432")
+
+    assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
+
+
 def test_sin_ordenes_afectadas_no_falla() -> None:
     assert _detectar_devolucion_no_reflejada_en_cantidad([], []) == []

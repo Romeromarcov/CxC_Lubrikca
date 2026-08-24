@@ -10560,6 +10560,10 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
             continue
         if ln.cantidad_entregada >= ln.cantidad:
             continue
+        # Líneas de ajuste "Descuento" (precio_unitario negativo, no
+        # mercancía real) nunca representan un faltante de devolución.
+        if ln.precio_unitario < Decimal("0"):
+            continue
         prod = catalogo_map.get(ln.producto)
         faltante = ln.cantidad - ln.cantidad_entregada
         resultado.append(
