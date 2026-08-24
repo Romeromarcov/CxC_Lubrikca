@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import io
 import json
 import logging
 import os
@@ -13,8 +14,10 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from pydantic import BaseModel
 
 from cxc.auth import (
@@ -9640,6 +9643,60 @@ def _get_pagos_historial_sync():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_FECHA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _rows_to_xlsx_response(
+    rows: list[dict[str, Any]], column_labels: dict[str, str], filename_prefix: str
+) -> StreamingResponse:
+    """Exporta ``rows`` (dicts ya calculados por un endpoint JSON existente,
+    sin recalcular nada) a un .xlsx: una fila por item, TODOS sus campos
+    (no solo los visibles en la tabla web) en una sola hoja.
+    """
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = filename_prefix[:31]
+    ws.append([column_labels.get(k, k) for k in keys])
+    ws.freeze_panes = "A2"
+
+    for row in rows:
+        values: list[Any] = []
+        for k in keys:
+            v = row.get(k)
+            if isinstance(v, list | dict):
+                v = json.dumps(v, ensure_ascii=False, default=str) if v else ""
+            elif (
+                isinstance(v, str)
+                and ("fecha" in k or "timestamp" in k)
+                and _FECHA_ISO_RE.match(v)
+            ):
+                with contextlib.suppress(ValueError):
+                    v = datetime.fromisoformat(v[:19])
+            values.append(v)
+        ws.append(values)
+
+    for i in range(1, len(keys) + 1):
+        ws.column_dimensions[get_column_letter(i)].width = 18
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"{filename_prefix}_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/cobranza/pagos")
 async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=None)):
     """Vista unificada de pagos: reemplaza las 4 tablas históricas
@@ -10127,6 +10184,81 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+_COBRANZA_COLUMN_LABELS: dict[str, str] = {
+    "pago_id": "ID Pago",
+    "numero_pago_odoo": "N° Pago Odoo",
+    "pago_fecha": "Fecha Pago",
+    "cliente_id": "ID Cliente",
+    "cliente_nombre": "Cliente",
+    "vendedor": "Vendedor",
+    "monto_pago_original": "Monto Original",
+    "moneda_pago": "Moneda",
+    "tasa_bcv": "Tasa BCV",
+    "tasa_binance": "Tasa Binance",
+    "monto_pago_bcv_usd": "Monto BCV (USD)",
+    "monto_pago_binance_usd": "Monto Binance (USD)",
+    "monto_pago_eur": "Monto EUR",
+    "monto_aplicado": "Monto Aplicado",
+    "monto_por_aplicar": "Monto Por Aplicar",
+    "so_saldo_teorico_bs": "Saldo Teórico Orden (Bs)",
+    "so_saldo_teorico_usd": "Saldo Teórico Orden (USD)",
+    "so_saldo_pendiente": "Saldo Venta Real Orden",
+    "factura_saldo_odoo": "Saldo Factura (Odoo)",
+    "so_id": "Orden (SO)",
+    "factura_id": "Factura",
+    "facturas": "Facturas",
+    "estado": "Estado",
+    "origen": "Origen",
+    "confirmado_por": "Confirmado Por",
+    "posible_duplicado": "Posible Duplicado",
+    "duplicado_de": "Duplicado De",
+    "reasignado_por_odoo": "Reasignado por Odoo",
+    "reasignado_detalle": "Detalle Reasignación",
+    "metodo_pago_nombre": "Método de Pago",
+    "recibido": "Recibido",
+    "vendedor_email": "Email Vendedor",
+}
+
+
+@app.get("/api/cobranza/pagos/excel")
+async def get_cobranza_pagos_excel(
+    vendedor: str = "*",
+    estado: str = "*",
+    moneda: str = "*",
+    solo_duplicados: bool = False,
+    solo_alertas: bool = False,
+    search: str = "",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Export a Excel de la tabla principal de Cobranza -- reusa
+    ``get_cobranza_pagos_unificado`` tal cual y le aplica en Python los
+    MISMOS filtros que ``renderCobranzaUnificado`` aplica en el navegador
+    (ver app.js), para que el archivo coincida con lo que el usuario ve en
+    pantalla. No reimplementa ningún cálculo financiero.
+    """
+    items = await get_cobranza_pagos_unificado(cxc_session)
+    filtered = [i for i in items if i.get("estado") != "cerrado_empresa"]
+    if vendedor != "*":
+        filtered = [i for i in filtered if (i.get("vendedor") or "Sin Vendedor") == vendedor]
+    if estado != "*":
+        filtered = [i for i in filtered if i.get("estado") == estado]
+    if moneda != "*":
+        filtered = [i for i in filtered if i.get("moneda_pago") == moneda]
+    if solo_duplicados:
+        filtered = [i for i in filtered if i.get("posible_duplicado")]
+    if solo_alertas:
+        filtered = [i for i in filtered if i.get("reasignado_por_odoo")]
+    if search:
+        search_l = search.strip().lower()
+        search_fields = ("pago_id", "numero_pago_odoo", "cliente_nombre", "so_id")
+        filtered = [
+            i
+            for i in filtered
+            if any(search_l in str(i.get(f)).lower() for f in search_fields if i.get(f))
+        ]
+    return _rows_to_xlsx_response(filtered, _COBRANZA_COLUMN_LABELS, "cobranza")
 
 
 @app.get("/api/tasas-historicas")
@@ -12610,6 +12742,62 @@ def _get_ventas_sync(
     finally:
         if vendedor is None:
             _ventas_computing = False
+
+
+_VENTAS_COLUMN_LABELS: dict[str, str] = {
+    "so_id": "Orden (SO)",
+    "fecha_entrega": "Fecha (Entrega)",
+    "cliente_nombre": "Cliente",
+    "vendedor": "Vendedor",
+    "lista_nacimiento_label": "Lista Nacimiento",
+    "lista_aplicada_label": "Lista Aplicada",
+    "dias_credito": "Días Crédito",
+    "fecha_vencimiento": "Fecha Vencimiento",
+    "dias_vencido": "Días Vencido",
+    "facturada": "Facturada",
+    "venta_bruta_real": "Venta Bruta Real",
+    "venta_neta_real": "Venta Neta Real",
+    "total_facturado_neto": "Facturado Neto",
+    "total_nc_aplicada": "NC Aplicada",
+    "total_nd_aplicada": "ND Aplicada",
+    "ves_bruta_teorica": "Teórica Bruta VES",
+    "ves_neta_teorica_iva": "Teórica Neta VES + Imp.",
+    "usd_bruta_teorica": "Teórica Bruta USD",
+    "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
+    "pagada": "Pagada",
+    "saldo_cxc": "Saldo CxC",
+    "alerta": "Alerta",
+    "revisar_motivo": "Motivo Revisión",
+    "falta_nc_por_devolucion": "Falta NC por Devolución",
+    "descuento_pendiente_aplicar": "Descuento Pendiente",
+}
+
+
+@app.get("/api/ventas/excel")
+async def get_ventas_excel(
+    vendedor: str | None = None,
+    solo_alertas: bool = False,
+    search: str = "",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Export a Excel del reporte de Ventas -- reusa ``get_ventas`` tal cual
+    (mismo cálculo, mismo parámetro ``vendedor`` que ya filtra server-side)
+    y le aplica los MISMOS filtros client-side que ``applyVentasFilters``
+    (ver app.js) para que coincida con lo que el usuario ve en pantalla.
+    """
+    data = await get_ventas(vendedor=vendedor, cxc_session=cxc_session)
+    items = data.get("items", [])
+    if solo_alertas:
+        items = [i for i in items if i.get("alerta")]
+    if search:
+        search_l = search.strip().lower()
+        items = [
+            i
+            for i in items
+            if search_l in str(i.get("so_id") or "").lower()
+            or search_l in str(i.get("cliente_nombre") or "").lower()
+        ]
+    return _rows_to_xlsx_response(items, _VENTAS_COLUMN_LABELS, "ventas")
 
 
 @app.get("/api/ventas/{so_id}/detalle")
