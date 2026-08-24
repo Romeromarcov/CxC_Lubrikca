@@ -1238,6 +1238,83 @@
                             </table>
                         </div>
                     </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Vinculaciones Sobreaplicadas</h2>
+                            <p title="Caso real (agosto 2026, cliente Grano Agregado, pago 1267): dos Vinculaciones locales apuntando a órdenes distintas reclamaban, entre ambas, más dinero del que el pago realmente vale -- residuo de una corrida de auto-FIFO anterior al fix de _vinc_usd_equiv. Suma el equivalente USD de TODAS las Vinculaciones de cada pago (cualquier estado) y lo compara contra el monto real del pago.">Pagos cuyas Vinculaciones locales suman, entre todas, más de lo que el pago realmente vale -- señal de doble conteo. Revisar y corregir la asignación en Cobranza.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Pago ID</th>
+                                        <th>Monto Pago ($)</th>
+                                        <th>Total Vinculado ($)</th>
+                                        <th>Exceso ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vinculaciones-sobreaplicadas-table-body">
+                                    <tr>
+                                        <td colspan="4" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Tasa Implícita Fuera de Rango</h2>
+                            <p title="Forma general del bug de confundir Bs con USD (o congelar una tasa equivocada): la tasa implícita de una Vinculación en VES (monto_aplicado / equiv_usd_bcv) debe parecerse a la tasa BCV real de esa fecha (SerieTasas/TasasHistoricasAuditoria). Si difieren en más de ~15%, el equivalente USD ya congelado está mal aunque no haya sobreaplicación ni ningún otro chequeo lo detecte.">Vinculaciones en Bs. cuya tasa implícita (monto aplicado ÷ equivalente USD) no se parece a ninguna tasa BCV real de esa fecha. Revisar y recalcular el equivalente.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Vinc ID</th>
+                                        <th>Pago ID</th>
+                                        <th>Orden (SO)</th>
+                                        <th>Tasa Implícita</th>
+                                        <th>Tasa Real (fecha del abono)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vinculaciones-tasa-implausible-table-body">
+                                    <tr>
+                                        <td colspan="5" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
+                        <div class="panel-header">
+                            <h2>Devolución No Reflejada en Cantidad</h2>
+                            <p title="Caso real (agosto 2026, SO 00133/Inversiones La Bendición del Nazareno, 12 órdenes corregidas): una devolución puede reflejarse en Odoo poniendo el precio/subtotal de la línea en $0 en vez de bajar la cantidad entregada -- el motor de teóricos ya respeta esta señal, pero sin este chequeo nadie se entera de una devolución futura mal reflejada hasta auditarla a mano.">Líneas de órdenes con devolución donde Odoo dejó el precio en $0 pero la cantidad entregada sin bajar -- riesgo de sobrestimar el teórico con mercancía ya devuelta. Verificar en Odoo cómo se registró la devolución.</p>
+                        </div>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Orden (SO)</th>
+                                        <th>Producto</th>
+                                        <th>Cantidad Entregada</th>
+                                        <th>Precio Unitario ($)</th>
+                                        <th>Valor Potencial Afectado ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="devolucion-no-reflejada-table-body">
+                                    <tr>
+                                        <td colspan="5" class="table-empty">No hay devoluciones sin reflejar en la cantidad entregada.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->
