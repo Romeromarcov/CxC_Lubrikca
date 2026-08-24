@@ -10737,6 +10737,46 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
     return resultado
 
 
+def _es_descuento_manual_patron_obsequio_conocido(disc_pct: Decimal) -> bool:
+    """True si ``disc_pct`` (0-100) coincide con el patrón conocido de
+
+    "obsequio manual" que Check 2 de ``get_auditoria`` debe tratar como
+    explicado (no flagear "Descuento Manual No Explicado").
+
+    Bug real (reportado por el usuario, agosto 2026, orden S00679/factura
+    5407, producto "[0761] LIGA PARA FRENOS DOT3"): Check 2 marcaba como
+    "Descuento Manual No Explicado" cualquier línea con ``discount`` > 0 en
+    Odoo cuando el motor no calculó NINGÚN descuento de regla para toda la
+    orden (bandeja en cero) -- útil para detectar overrides manuales
+    reales, pero genera falso positivo con el mecanismo de "obsequio" que
+    el negocio ya usa en producción: un producto de regalo se deja en la
+    orden con ``discount=99.99%`` en vez de retirarlo o de configurar una
+    regla de motor, precisamente porque ``descuentos_producto``
+    (``DescuentoProducto``) está vacía en producción -- no existe ningún
+    mecanismo de regla configurada para "obsequio", el negocio depende
+    100% de este override manual en Odoo.
+
+    Confirmado con un barrido en vivo de Odoo (``sale.order.line`` con
+    ``discount >= 99``): el patrón "99.99% de descuento" aparece 3 veces,
+    siempre sobre el MISMO producto (LIGA PARA FRENOS DOT3, órdenes
+    S00671/S00674/S00679) con el mismo valor exacto -- evidencia de un
+    mecanismo deliberado y repetible, no de un error puntual. Un descuento
+    del 100.0% exacto (visto una sola vez, en S00336, sobre un producto
+    distinto) NO matchea este patrón y sigue flageado a propósito -- una
+    sola ocurrencia con un producto distinto no es evidencia suficiente de
+    un mecanismo sistémico, y 99.99% (nunca 100.0%) parece ser la
+    convención usada a propósito para que ``price_subtotal`` no quede en
+    cero exacto.
+
+    Si en el futuro aparece un producto obsequio nuevo con un valor de
+    descuento distinto, la forma correcta de resolverlo es configurar una
+    regla real en ``descuentos_producto`` (para que el motor la reconozca
+    y la bandeja dictamine un ``total_descuentos`` > 0), no ampliar este
+    rango a ciegas.
+    """
+    return Decimal("99.9") <= disc_pct < Decimal("100")
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -11017,13 +11057,23 @@ async def get_auditoria():
                     )
 
                 # Check 2: Manual unapproved line discounts
+                #
+                # Descuentos que matchean el patrón conocido de "obsequio
+                # manual" (ver docstring de
+                # ``_es_descuento_manual_patron_obsequio_conocido``) no se
+                # flagean -- son un mecanismo deliberado del negocio, no un
+                # override sin explicar.
                 disc = parse_decimal_safe(ln.get("descuento", "0"))
-                if disc > Decimal("0") and (
-                    not b
-                    or (
-                        b
-                        and b.total_descuentos == Decimal("0")
-                        and b.ncs_calculadas == Decimal("0")
+                if (
+                    disc > Decimal("0")
+                    and not _es_descuento_manual_patron_obsequio_conocido(disc)
+                    and (
+                        not b
+                        or (
+                            b
+                            and b.total_descuentos == Decimal("0")
+                            and b.ncs_calculadas == Decimal("0")
+                        )
                     )
                 ):
                     has_discrepancy = True
