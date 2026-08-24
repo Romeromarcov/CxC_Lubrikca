@@ -8280,6 +8280,45 @@ async def get_config_promociones():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
+    """Normaliza ``PromocionPrimeraCompra.productos`` a producto_id (Odoo
+
+    ``product.product``, el mismo espacio que ``LineaOrden.producto`` --
+    lo único que el motor de descuentos (``_evaluar_promociones_producto``
+    en engine/discounts.py) realmente compara).
+
+    Bug real (reportado por el usuario, agosto 2026, orden S00679):
+    ``PROMO_NUEVO_GLOBAL``/``PROMO_12_MAS_1`` (las 2 únicas reglas de
+    "obsequio" configuradas en producción) tenían ``productos`` guardado
+    como código de catálogo ("0761, 0561") o incluso un código con el cero
+    inicial recortado ("881") -- ninguno coincidía jamás con
+    ``ln.producto`` (el id real que usa el motor), así que la regla nunca
+    tuvo efecto desde que se creó, ni en el cálculo real ni en ninguna
+    auditoría que la consultara. Causa raíz: el selector de productos del
+    formulario guardaba el NOMBRE del producto o el id de
+    ``product.template`` (ninguno de los dos es ``product.product``).
+    Se resuelve aquí, una sola vez, al guardar -- cada token se acepta tal
+    cual si ya es un producto_id válido en el catálogo; si no, se busca
+    por código (``codigo``/``default_code``); si tampoco matchea, se deja
+    tal cual (mejor esfuerzo, no bloquea guardar la regla).
+    """
+    catalogo = repo.all_catalogo()
+    por_id = {p.producto_id for p in catalogo}
+    por_codigo = {p.codigo: p.producto_id for p in catalogo if p.codigo}
+    resueltos = []
+    for token in productos_str.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        if t in por_id:
+            resueltos.append(t)
+        elif t in por_codigo:
+            resueltos.append(por_codigo[t])
+        else:
+            resueltos.append(t)
+    return ",".join(resueltos)
+
+
 @app.post("/api/config/promociones")
 async def post_config_promociones(req: PromocionRequest):
     try:
@@ -8312,7 +8351,7 @@ async def post_config_promociones(req: PromocionRequest):
         promo = PromocionPrimeraCompra(
             regla_id=regla_id,
             tipo_beneficio=req.tipo_beneficio,
-            productos=req.productos,
+            productos=_resolver_productos_promo(req.productos, repo),
             valor=Decimal(str(req.valor)),
             compra_minima=Decimal(str(req.compra_minima)),
             regalo_tipo=req.regalo_tipo,
@@ -8348,7 +8387,7 @@ async def put_config_promociones(regla_id: str, req: PromocionRequest):
         promo = PromocionPrimeraCompra(
             regla_id=regla_id,
             tipo_beneficio=req.tipo_beneficio,
-            productos=req.productos,
+            productos=_resolver_productos_promo(req.productos, repo),
             valor=Decimal(str(req.valor)),
             compra_minima=Decimal(str(req.compra_minima)),
             regalo_tipo=req.regalo_tipo,
@@ -9021,7 +9060,7 @@ async def post_config_producto(req: ProductoPromoRequest):
         regla_id = f"PROD_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoProducto(
             regla_id=regla_id,
-            productos=req.productos,
+            productos=_resolver_productos_promo(req.productos, repo),
             marca=req.marca,
             categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
@@ -9055,7 +9094,7 @@ async def put_config_producto(regla_id: str, req: ProductoPromoRequest):
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
         rule = DescuentoProducto(
             regla_id=regla_id,
-            productos=req.productos,
+            productos=_resolver_productos_promo(req.productos, repo),
             marca=req.marca,
             categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
@@ -10744,44 +10783,61 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
     return resultado
 
 
-def _es_descuento_manual_patron_obsequio_conocido(disc_pct: Decimal) -> bool:
-    """True si ``disc_pct`` (0-100) coincide con el patrón conocido de
+def _es_descuento_manual_patron_obsequio_conocido(
+    disc_pct: Decimal,
+    producto_id: str,
+    fecha_orden: date,
+    promos_producto_activas: list[Any],
+) -> bool:
+    """True si la línea (``disc_pct``, ``producto_id``) corresponde a un
 
-    "obsequio manual" que Check 2 de ``get_auditoria`` debe tratar como
-    explicado (no flagear "Descuento Manual No Explicado").
+    obsequio real y configurado -- Check 2 de ``get_auditoria`` no debe
+    flagearla como "Descuento Manual No Explicado".
 
-    Bug real (reportado por el usuario, agosto 2026, orden S00679/factura
-    5407, producto "[0761] LIGA PARA FRENOS DOT3"): Check 2 marcaba como
-    "Descuento Manual No Explicado" cualquier línea con ``discount`` > 0 en
-    Odoo cuando el motor no calculó NINGÚN descuento de regla para toda la
-    orden (bandeja en cero) -- útil para detectar overrides manuales
-    reales, pero genera falso positivo con el mecanismo de "obsequio" que
-    el negocio ya usa en producción: un producto de regalo se deja en la
-    orden con ``discount=99.99%`` en vez de retirarlo o de configurar una
-    regla de motor, precisamente porque ``descuentos_producto``
-    (``DescuentoProducto``) está vacía en producción -- no existe ningún
-    mecanismo de regla configurada para "obsequio", el negocio depende
-    100% de este override manual en Odoo.
+    Corrección (agosto 2026, orden S00679/factura 5407, producto "[0761]
+    LIGA PARA FRENOS DOT3"): la primera versión de este chequeo confiaba
+    en CUALQUIER descuento en el rango 99.9%-100% como "obsequio",
+    basándose en que ``descuentos_producto`` estaba vacía -- pero el
+    usuario señaló correctamente que SÍ existe una regla configurada en
+    Configuración ("Reglas de Obsequio y Promociones"). La tabla real es
+    ``promocion_primera_compra`` (``PromocionPrimeraCompra``,
+    ``tipo_beneficio="producto"``), no ``descuentos_producto``. Al
+    investigarla se encontró la causa raíz verdadera: sus 2 reglas activas
+    (``PROMO_NUEVO_GLOBAL``, ``PROMO_12_MAS_1``) tenían el campo
+    ``productos`` guardado como código de catálogo o id de
+    ``product.template`` -- nunca como el ``producto_id`` real
+    (``product.product``) que ``LineaOrden.producto``/el motor de
+    descuentos comparan -- así que la regla NUNCA tuvo efecto desde que se
+    creó, ni en el cálculo real ni en ninguna auditoría. Se corrigieron
+    los 2 registros en producción y el selector de productos del
+    formulario (``_resolver_productos_promo`` normaliza a producto_id al
+    guardar, cualquiera sea el formato que el usuario seleccione).
 
-    Confirmado con un barrido en vivo de Odoo (``sale.order.line`` con
-    ``discount >= 99``): el patrón "99.99% de descuento" aparece 3 veces,
-    siempre sobre el MISMO producto (LIGA PARA FRENOS DOT3, órdenes
-    S00671/S00674/S00679) con el mismo valor exacto -- evidencia de un
-    mecanismo deliberado y repetible, no de un error puntual. Un descuento
-    del 100.0% exacto (visto una sola vez, en S00336, sobre un producto
-    distinto) NO matchea este patrón y sigue flageado a propósito -- una
-    sola ocurrencia con un producto distinto no es evidencia suficiente de
-    un mecanismo sistémico, y 99.99% (nunca 100.0%) parece ser la
-    convención usada a propósito para que ``price_subtotal`` no quede en
-    cero exacto.
-
-    Si en el futuro aparece un producto obsequio nuevo con un valor de
-    descuento distinto, la forma correcta de resolverlo es configurar una
-    regla real en ``descuentos_producto`` (para que el motor la reconozca
-    y la bandeja dictamine un ``total_descuentos`` > 0), no ampliar este
-    rango a ciegas.
+    Ahora este chequeo verifica la regla real -- ``producto_id`` debe
+    aparecer en una promo ``tipo_beneficio="producto"`` activa y vigente
+    para ``fecha_orden`` -- en vez de confiar ciegamente en el % de
+    descuento. El % (99.9-100 exclusivo, la convención real observada:
+    99.99%, nunca 100.0% exacto, para que ``price_subtotal`` no quede en
+    cero) sigue siendo parte de la condición -- ambas cosas deben
+    cumplirse. No se re-deriva aquí la condición de "compra_mínima" (units
+    del pedido que califican) que sí evalúa el motor real
+    (``_evaluar_promociones_producto`` en engine/discounts.py) -- esta
+    auditoría solo verifica que el producto puntual esté cubierto por
+    ALGUNA regla vigente, no que el pedido completo haya calificado; una
+    discrepancia de compra_mínima seguiría siendo detectable por otros
+    chequeos.
     """
-    return Decimal("99.9") <= disc_pct < Decimal("100")
+    if not (Decimal("99.9") <= disc_pct < Decimal("100")):
+        return False
+    for p in promos_producto_activas:
+        if p.vigencia_desde > fecha_orden:
+            continue
+        if p.vigencia_hasta is not None and p.vigencia_hasta < fecha_orden:
+            continue
+        productos = {t.strip() for t in p.productos.split(",") if t.strip()}
+        if producto_id in productos:
+            return True
+    return False
 
 
 def _parse_iso_date_param(value: str | None, default: date) -> date:
@@ -10948,6 +11004,13 @@ async def get_auditoria():
         # también órdenes facturadas) -- ver ventas_teoricos en db/schema.py.
         teoricos_map = {v.so_id: v for v in repo.all_ventas_teoricos()}
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        # Ver docstring de _es_descuento_manual_patron_obsequio_conocido --
+        # regla real de "obsequio" (Check 2, más abajo).
+        promos_producto_activas = [
+            p
+            for p in repo.promociones_primera_compra()
+            if p.tipo_beneficio == "producto" and p.activo
+        ]
 
         # Load UI configured pricelists (USD & VES) from _Meta
         config = AppConfig.from_env()
@@ -11217,7 +11280,9 @@ async def get_auditoria():
                 disc = parse_decimal_safe(ln.get("descuento", "0"))
                 if (
                     disc > Decimal("0")
-                    and not _es_descuento_manual_patron_obsequio_conocido(disc)
+                    and not _es_descuento_manual_patron_obsequio_conocido(
+                        disc, str(ln.get("producto", "")), o.fecha, promos_producto_activas
+                    )
                     and (
                         not b
                         or (

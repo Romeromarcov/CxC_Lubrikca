@@ -2892,7 +2892,15 @@ document.addEventListener("DOMContentLoaded", () => {
                     cfgPromoProductos.innerHTML = '';
                     data.forEach(p => {
                         const opt = document.createElement("option");
-                        opt.value = p.nombre || p.ref_interna || p.id;
+                        // Bug real (agosto 2026): usar p.nombre/p.id aquí guardaba
+                        // el NOMBRE del producto o el id de product.template (Odoo)
+                        // en la regla -- ninguno de los dos coincide con
+                        // LineaOrden.producto (product.product, el id real que
+                        // compara el motor de descuentos) ni con el que espera el
+                        // backend, dejando la regla de obsequio sin efecto nunca.
+                        // ref_interna (codigo/default_code) es estable y el
+                        // backend lo resuelve al producto_id correcto al guardar.
+                        opt.value = p.ref_interna || p.id;
                         opt.textContent = `[${p.ref_interna || 'N/A'}] ${p.nombre}`;
                         cfgPromoProductos.appendChild(opt);
                     });

@@ -1,57 +1,119 @@
 """``_es_descuento_manual_patron_obsequio_conocido`` -- Check 2 de
 
 ``get_auditoria`` ("Descuento Manual No Explicado") no debe flagear una
-línea cuyo descuento manual matchea el patrón conocido de "obsequio" que
-el negocio ya usa en producción.
+línea cuyo descuento manual corresponde a una regla de obsequio real y
+configurada.
 
-Bug real (reportado por el usuario, agosto 2026, orden S00679/factura
-5407, producto "[0761] LIGA PARA FRENOS DOT3"): Check 2 marcaba como
-"Descuento Manual No Explicado" un producto obsequio con
-``discount=99.99%`` en Odoo -- falso positivo, porque
-``descuentos_producto`` (DescuentoProducto) está vacía en producción y no
-existe ningún mecanismo de regla configurada para "obsequio"; el negocio
-depende 100% de este override manual. Confirmado con un barrido en vivo
-de Odoo: el patrón "99.99%" aparece 3 veces (S00671/S00674/S00679),
-siempre sobre el mismo producto y con el mismo valor exacto -- evidencia
-de un mecanismo deliberado. Un 100.0% exacto (visto una sola vez, en
-S00336, sobre un producto distinto) NO matchea este patrón a propósito --
-una sola ocurrencia con un producto distinto no basta como evidencia de
-un mecanismo sistémico, y sigue flageado como antes.
+Corrección (agosto 2026, orden S00679/factura 5407, producto "[0761] LIGA
+PARA FRENOS DOT3"): una primera versión de este chequeo aceptaba
+CUALQUIER descuento en 99.9%-100% como "obsequio", asumiendo que
+``descuentos_producto`` (vacía en producción) era el único mecanismo
+posible. El usuario señaló que SÍ existe una regla configurada en
+Configuración ("Reglas de Obsequio y Promociones") -- la tabla real es
+``promocion_primera_compra``. Al investigar se encontró la causa raíz
+verdadera: sus 2 reglas activas tenían el campo ``productos`` guardado
+como código de catálogo o id de ``product.template`` en vez del
+``producto_id`` real (``product.product``) que el motor de descuentos
+compara -- la regla nunca tuvo efecto desde que se creó. Se corrigieron
+los datos en producción y el selector del formulario. Este chequeo ahora
+verifica la regla real (producto_id en una promo activa y vigente para la
+fecha de la orden) en vez de confiar ciegamente en el %.
 """
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
+from cxc.models import PromocionPrimeraCompra
 from cxc.web.app import _es_descuento_manual_patron_obsequio_conocido
 
 
-def test_descuento_99_99_por_ciento_matchea_patron_obsequio() -> None:
-    """Caso real S00679/S00671/S00674 (LIGA PARA FRENOS DOT3, 99.99%)."""
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("99.99")) is True
+def _promo(
+    productos: str, vigencia_desde=date(2026, 1, 1), vigencia_hasta=None
+) -> PromocionPrimeraCompra:
+    return PromocionPrimeraCompra(
+        regla_id="PROMO_TEST",
+        tipo_beneficio="producto",
+        productos=productos,
+        vigencia_desde=vigencia_desde,
+        vigencia_hasta=vigencia_hasta,
+        activo=True,
+    )
 
 
-def test_descuento_100_0_por_ciento_no_matchea_patron_obsequio() -> None:
-    """Caso real S00336 (producto distinto, 100.0% exacto, una sola
+def test_descuento_99_99_con_producto_en_regla_activa_matchea() -> None:
+    """Caso real S00679/S00671/S00674 (LIGA PARA FRENOS DOT3, producto_id
 
-    ocurrencia): sigue tratándose como descuento manual sin explicar."""
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("100.0")) is False
-
-
-def test_descuento_parcial_no_matchea_patron_obsequio() -> None:
-    """Un descuento manual parcial (p.ej. 15%) es un caso genuinamente
-
-    distinto al patrón de obsequio y debe seguir flageado por Check 2."""
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("15")) is False
-
-
-def test_descuento_cero_no_matchea_patron_obsequio() -> None:
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("0")) is False
+    1033, cubierto por PROMO_NUEVO_GLOBAL una vez corregida)."""
+    promos = [_promo("1033,1022")]
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("99.99"), "1033", date(2026, 8, 1), promos
+        )
+        is True
+    )
 
 
-def test_limite_inferior_99_9_matchea() -> None:
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("99.9")) is True
+def test_descuento_99_99_sin_regla_para_ese_producto_no_matchea() -> None:
+    """El % por sí solo ya no basta -- el producto tiene que estar
+
+    listado en alguna regla activa. Sin eso, sigue siendo un descuento
+    manual sin explicar (el bug que este chequeo debía prevenir)."""
+    promos = [_promo("1033,1022")]
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("99.99"), "9999", date(2026, 8, 1), promos
+        )
+        is False
+    )
 
 
-def test_limite_superior_100_exacto_no_matchea() -> None:
-    assert _es_descuento_manual_patron_obsequio_conocido(Decimal("100")) is False
+def test_descuento_100_0_por_ciento_no_matchea_aunque_el_producto_este_en_regla() -> None:
+    """Caso real S00336: 100.0% exacto (no 99.99%) no matchea el patrón
+
+    -- ni siquiera si, hipotéticamente, el producto estuviera en una regla."""
+    promos = [_promo("1033")]
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("100.0"), "1033", date(2026, 8, 1), promos
+        )
+        is False
+    )
+
+
+def test_descuento_parcial_no_matchea() -> None:
+    promos = [_promo("1033")]
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("15"), "1033", date(2026, 8, 1), promos
+        )
+        is False
+    )
+
+
+def test_sin_promos_activas_no_matchea() -> None:
+    resultado = _es_descuento_manual_patron_obsequio_conocido(
+        Decimal("99.99"), "1033", date(2026, 8, 1), []
+    )
+    assert resultado is False
+
+
+def test_regla_fuera_de_vigencia_no_matchea() -> None:
+    promos = [_promo("1033", vigencia_desde=date(2026, 9, 1))]  # empieza después de la orden
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("99.99"), "1033", date(2026, 8, 1), promos
+        )
+        is False
+    )
+
+
+def test_regla_vencida_no_matchea() -> None:
+    promos = [_promo("1033", vigencia_hasta=date(2026, 6, 30))]
+    assert (
+        _es_descuento_manual_patron_obsequio_conocido(
+            Decimal("99.99"), "1033", date(2026, 8, 1), promos
+        )
+        is False
+    )
