@@ -8426,15 +8426,43 @@ async def get_config_exclusiones():
 
 @app.post("/api/config/exclusiones")
 async def post_config_exclusiones(req: ExclusionRequest):
+    """Registra un par de descuentos mutuamente excluyentes.
+
+    Bug real (auditoría de reglas, agosto 2026): las filas de
+    ``exclusiones`` en producción guardaban 'promocion'/'recompra', un
+    vocabulario que el motor no reconoce -- resuelve las exclusiones
+    buscando el nombre del componente en un dict cuyas claves son
+    'primera_compra'/'recurrencia'/'contado'/'volumen'/'bcv_completo'/
+    'producto'. La fila 'promocion' <-> 'recompra' nunca excluyó nada y no
+    había forma de notarlo: el endpoint aceptaba cualquier string y la
+    tabla de Configuración imprimía el valor crudo cuando no lo reconocía.
+    Se canoniza al guardar, igual que ``_resolver_productos_promo`` hace
+    con los productos de las reglas de obsequio.
+    """
     try:
         repo = get_repo()
+        from cxc.engine.discounts import (
+            COMPONENTES_DESCUENTO,
+            normalizar_componente_descuento,
+        )
         from cxc.models import ExclusionRegla
 
-        rule = ExclusionRegla(
-            regla_tipo_a=req.regla_tipo_a, regla_tipo_b=req.regla_tipo_b, activo=req.activo
-        )
+        tipo_a = normalizar_componente_descuento(req.regla_tipo_a)
+        tipo_b = normalizar_componente_descuento(req.regla_tipo_b)
+        for tipo in (tipo_a, tipo_b):
+            if tipo not in COMPONENTES_DESCUENTO:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Tipo de descuento desconocido: '{tipo}'. "
+                        f"Válidos: {', '.join(COMPONENTES_DESCUENTO)}."
+                    ),
+                )
+        rule = ExclusionRegla(regla_tipo_a=tipo_a, regla_tipo_b=tipo_b, activo=req.activo)
         repo.save_exclusion(rule)
         return {"status": "success", "message": "Exclusión registrada correctamente."}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
