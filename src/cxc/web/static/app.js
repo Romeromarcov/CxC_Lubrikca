@@ -1492,6 +1492,20 @@ document.addEventListener("DOMContentLoaded", () => {
         renderVentasTable(filtered);
     }
 
+    function descargarVentasExcel() {
+        const vendedorVal = document.getElementById("ventas-vendedor-filter")?.value || "*";
+        const soloAlertas = document.getElementById("ventas-solo-alertas")?.checked || false;
+        const searchVal = (document.getElementById("ventas-search")?.value || "").trim();
+
+        const params = new URLSearchParams();
+        if (vendedorVal !== "*") params.set("vendedor", vendedorVal);
+        if (soloAlertas) params.set("solo_alertas", "true");
+        if (searchVal) params.set("search", searchVal);
+
+        window.location.href = "/api/ventas/excel?" + params.toString();
+    }
+    window.descargarVentasExcel = descargarVentasExcel;
+
     function renderVentasTable(items) {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
@@ -4384,6 +4398,26 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadCobranzaUnificado = loadCobranzaUnificado;
+
+    function descargarCobranzaExcel() {
+        const params = new URLSearchParams();
+        const selVend = (document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
+        const selEstado = (document.getElementById("cobranza-estado-filter") || {}).value || "*";
+        const selMoneda = (document.getElementById("cobranza-moneda-filter") || {}).value || "*";
+        const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
+        const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
+        const search = ((document.getElementById("cobranza-search") || {}).value || "").trim();
+
+        if (selVend !== "*") params.set("vendedor", selVend);
+        if (selEstado !== "*") params.set("estado", selEstado);
+        if (selMoneda !== "*") params.set("moneda", selMoneda);
+        if (soloDup) params.set("solo_duplicados", "true");
+        if (soloAlertas) params.set("solo_alertas", "true");
+        if (search) params.set("search", search);
+
+        window.location.href = "/api/cobranza/pagos/excel?" + params.toString();
+    }
+    window.descargarCobranzaExcel = descargarCobranzaExcel;
 
     function renderCobranzaUnificado() {
         const tbody = document.getElementById("cobranza-table-body");
