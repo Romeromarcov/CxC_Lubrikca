@@ -187,7 +187,20 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
         lista_precios=_m2o_id(rec.get("pricelist_id")),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
         es_primera_compra=bool(rec.get("es_primera_compra", False)),
-        facturada=str(rec.get("invoice_status", "")) == "invoiced",
+        # Bug real (agosto 2026, orden S00817/Michele Carfora Vigliotti):
+        # ``invoice_status`` de Odoo puede volver a "to invoice" aunque YA
+        # exista una factura real posteada (número de factura y de control
+        # asignados) -- pasa cuando se corrige un descuento posterior a
+        # facturar vía una Nota de Crédito creada con el asistente
+        # "revertir" (``reversed_entry_id``), que Odoo usa como mecanismo
+        # de corrección pero que dispara el mismo ``qty_invoiced``/
+        # ``invoice_status`` que una reversión completa -- sin importar
+        # que la factura original siga posted y con pago aplicado.
+        # ``factura_id`` (resuelto aparte, por relación real de factura)
+        # es la señal más confiable de que existe una factura real -- se
+        # trata como suficiente además del criterio de Odoo, nunca en su
+        # lugar (una orden puede seguir sin ninguna de las dos).
+        facturada=str(rec.get("invoice_status", "")) == "invoiced" or bool(rec.get("factura_id")),
         factura_id=str(rec["factura_id"]) if rec.get("factura_id") else None,
         monto_facturado=None,  # lo computa la conciliación (USD vía tasa de factura)
         estado_orden=str(rec.get("state", "sale") or ""),

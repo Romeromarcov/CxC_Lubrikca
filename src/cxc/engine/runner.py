@@ -19,7 +19,9 @@ from ..models import (
     EstadoVinculacion,
     LineaOrden,
     MetodoPago,
+    Moneda,
     OrdenVenta,
+    TipoTasa,
     VentasTeorico,
     Vinculacion,
     set_marca_fallback,
@@ -92,12 +94,37 @@ class EngineRunner:
                 continue
             metodo = self._repo.get_metodo_pago(pago.metodo_pago)
             if metodo is None:
+                # Bug real corregido (agosto 2026, orden S00817/Michele
+                # Carfora Vigliotti): ``metodos_pago`` -- tabla de
+                # referencia sin panel propio en Configuración, nunca
+                # sembrada -- estaba COMPLETAMENTE VACÍA en producción, así
+                # que ESTE lookup fallaba para TODO pago, sin excepción, y
+                # la Vinculación (ya CONCILIADO, confirmada por Odoo) se
+                # descartaba entera de ``inp.abonos``. Eso apagaba, para
+                # TODA orden del sistema, cualquier regla con
+                # ``requiere_pago_previo=True`` (Contado/Pronto Pago,
+                # Diferencial Cambiario) -- nunca había abonos que
+                # evaluar. Ninguno de los campos de ``MetodoPago``
+                # (moneda/tipo_tasa/es_contado) se lee en ningún otro
+                # punto del motor (``Vinculacion.moneda_abono`` ya cubre
+                # la moneda real del abono, con datos siempre presentes) --
+                # el lookup solo servía, sin querer, como un gate que
+                # excluía el pago cuando fallaba. Se construye un
+                # MetodoPago de reserva a partir de la propia Vinculación
+                # en vez de descartar el abono.
                 logger.warning(
-                    "Pago %s con método %s inexistente; se omite",
+                    "Pago %s con método %s sin fila en metodos_pago; "
+                    "se usa un MetodoPago de reserva (no se descarta el abono)",
                     pago.pago_id,
                     pago.metodo_pago,
                 )
-                continue
+                metodo = MetodoPago(
+                    metodo_id=str(pago.metodo_pago),
+                    nombre="",
+                    moneda=v.moneda_abono or Moneda.USD,
+                    tipo_tasa=v.tipo_tasa_abono or TipoTasa.N_A,
+                    es_contado=True,
+                )
             abonos.append((v, metodo))
         return abonos
 

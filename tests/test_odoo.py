@@ -165,6 +165,27 @@ def test_map_orden_no_facturada() -> None:
     assert o.fecha_entrega is None
 
 
+def test_map_orden_facturada_por_factura_id_aunque_invoice_status_diga_to_invoice() -> None:
+    # Caso real S00817: Odoo reporta invoice_status="to invoice" aunque ya
+    # existe una factura posted con pago aplicado, porque una Nota de
+    # Crédito de corrección (creada vía "revertir factura") dispara el
+    # mismo qty_invoiced/invoice_status que una reversión completa.
+    o = map_orden(
+        {
+            "id": 817,
+            "name": "S00817",
+            "partner_id": [1, "X"],
+            "date_order": "2026-06-11 20:11:51",
+            "amount_total": "56704.73",
+            "pricelist_id": [5, "x"],
+            "invoice_status": "to invoice",
+            "factura_id": 10131,
+        }
+    )
+    assert o.facturada is True
+    assert o.factura_id == "10131"
+
+
 def test_map_orden_entrega_parcial_no_ancla_el_plazo() -> None:
     # Aunque haya una fecha de entrega, si no está completa no arranca el plazo.
     o = map_orden(
