@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import io
 import json
 import logging
 import os
@@ -13,8 +14,10 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from pydantic import BaseModel
 
 from cxc.auth import (
@@ -37,6 +40,13 @@ from cxc.engine.equivalents import (
     valor_pagado_binance_usd,
 )
 from cxc.engine.historical_pricing import es_orden_historica
+from cxc.engine.reportes_historicos import (
+    cobranza_por_vendedor,
+    cxc_vencida_no_pagada,
+    recuperacion_cartera,
+    resumen_cobranza_por_vendedor,
+    resumen_vencida_por_vendedor,
+)
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
     Cliente,
@@ -9640,6 +9650,60 @@ def _get_pagos_historial_sync():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_FECHA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _rows_to_xlsx_response(
+    rows: list[dict[str, Any]], column_labels: dict[str, str], filename_prefix: str
+) -> StreamingResponse:
+    """Exporta ``rows`` (dicts ya calculados por un endpoint JSON existente,
+    sin recalcular nada) a un .xlsx: una fila por item, TODOS sus campos
+    (no solo los visibles en la tabla web) en una sola hoja.
+    """
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = filename_prefix[:31]
+    ws.append([column_labels.get(k, k) for k in keys])
+    ws.freeze_panes = "A2"
+
+    for row in rows:
+        values: list[Any] = []
+        for k in keys:
+            v = row.get(k)
+            if isinstance(v, list | dict):
+                v = json.dumps(v, ensure_ascii=False, default=str) if v else ""
+            elif (
+                isinstance(v, str)
+                and ("fecha" in k or "timestamp" in k)
+                and _FECHA_ISO_RE.match(v)
+            ):
+                with contextlib.suppress(ValueError):
+                    v = datetime.fromisoformat(v[:19])
+            values.append(v)
+        ws.append(values)
+
+    for i in range(1, len(keys) + 1):
+        ws.column_dimensions[get_column_letter(i)].width = 18
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"{filename_prefix}_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/cobranza/pagos")
 async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=None)):
     """Vista unificada de pagos: reemplaza las 4 tablas históricas
@@ -10129,6 +10193,81 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+_COBRANZA_COLUMN_LABELS: dict[str, str] = {
+    "pago_id": "ID Pago",
+    "numero_pago_odoo": "N° Pago Odoo",
+    "pago_fecha": "Fecha Pago",
+    "cliente_id": "ID Cliente",
+    "cliente_nombre": "Cliente",
+    "vendedor": "Vendedor",
+    "monto_pago_original": "Monto Original",
+    "moneda_pago": "Moneda",
+    "tasa_bcv": "Tasa BCV",
+    "tasa_binance": "Tasa Binance",
+    "monto_pago_bcv_usd": "Monto BCV (USD)",
+    "monto_pago_binance_usd": "Monto Binance (USD)",
+    "monto_pago_eur": "Monto EUR",
+    "monto_aplicado": "Monto Aplicado",
+    "monto_por_aplicar": "Monto Por Aplicar",
+    "so_saldo_teorico_bs": "Saldo Teórico Orden (Bs)",
+    "so_saldo_teorico_usd": "Saldo Teórico Orden (USD)",
+    "so_saldo_pendiente": "Saldo Venta Real Orden",
+    "factura_saldo_odoo": "Saldo Factura (Odoo)",
+    "so_id": "Orden (SO)",
+    "factura_id": "Factura",
+    "facturas": "Facturas",
+    "estado": "Estado",
+    "origen": "Origen",
+    "confirmado_por": "Confirmado Por",
+    "posible_duplicado": "Posible Duplicado",
+    "duplicado_de": "Duplicado De",
+    "reasignado_por_odoo": "Reasignado por Odoo",
+    "reasignado_detalle": "Detalle Reasignación",
+    "metodo_pago_nombre": "Método de Pago",
+    "recibido": "Recibido",
+    "vendedor_email": "Email Vendedor",
+}
+
+
+@app.get("/api/cobranza/pagos/excel")
+async def get_cobranza_pagos_excel(
+    vendedor: str = "*",
+    estado: str = "*",
+    moneda: str = "*",
+    solo_duplicados: bool = False,
+    solo_alertas: bool = False,
+    search: str = "",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Export a Excel de la tabla principal de Cobranza -- reusa
+    ``get_cobranza_pagos_unificado`` tal cual y le aplica en Python los
+    MISMOS filtros que ``renderCobranzaUnificado`` aplica en el navegador
+    (ver app.js), para que el archivo coincida con lo que el usuario ve en
+    pantalla. No reimplementa ningún cálculo financiero.
+    """
+    items = await get_cobranza_pagos_unificado(cxc_session)
+    filtered = [i for i in items if i.get("estado") != "cerrado_empresa"]
+    if vendedor != "*":
+        filtered = [i for i in filtered if (i.get("vendedor") or "Sin Vendedor") == vendedor]
+    if estado != "*":
+        filtered = [i for i in filtered if i.get("estado") == estado]
+    if moneda != "*":
+        filtered = [i for i in filtered if i.get("moneda_pago") == moneda]
+    if solo_duplicados:
+        filtered = [i for i in filtered if i.get("posible_duplicado")]
+    if solo_alertas:
+        filtered = [i for i in filtered if i.get("reasignado_por_odoo")]
+    if search:
+        search_l = search.strip().lower()
+        search_fields = ("pago_id", "numero_pago_odoo", "cliente_nombre", "so_id")
+        filtered = [
+            i
+            for i in filtered
+            if any(search_l in str(i.get(f)).lower() for f in search_fields if i.get(f))
+        ]
+    return _rows_to_xlsx_response(filtered, _COBRANZA_COLUMN_LABELS, "cobranza")
+
+
 @app.get("/api/tasas-historicas")
 async def get_tasas_historicas():
     try:
@@ -10605,6 +10744,190 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
     return resultado
 
 
+def _es_descuento_manual_patron_obsequio_conocido(disc_pct: Decimal) -> bool:
+    """True si ``disc_pct`` (0-100) coincide con el patrón conocido de
+
+    "obsequio manual" que Check 2 de ``get_auditoria`` debe tratar como
+    explicado (no flagear "Descuento Manual No Explicado").
+
+    Bug real (reportado por el usuario, agosto 2026, orden S00679/factura
+    5407, producto "[0761] LIGA PARA FRENOS DOT3"): Check 2 marcaba como
+    "Descuento Manual No Explicado" cualquier línea con ``discount`` > 0 en
+    Odoo cuando el motor no calculó NINGÚN descuento de regla para toda la
+    orden (bandeja en cero) -- útil para detectar overrides manuales
+    reales, pero genera falso positivo con el mecanismo de "obsequio" que
+    el negocio ya usa en producción: un producto de regalo se deja en la
+    orden con ``discount=99.99%`` en vez de retirarlo o de configurar una
+    regla de motor, precisamente porque ``descuentos_producto``
+    (``DescuentoProducto``) está vacía en producción -- no existe ningún
+    mecanismo de regla configurada para "obsequio", el negocio depende
+    100% de este override manual en Odoo.
+
+    Confirmado con un barrido en vivo de Odoo (``sale.order.line`` con
+    ``discount >= 99``): el patrón "99.99% de descuento" aparece 3 veces,
+    siempre sobre el MISMO producto (LIGA PARA FRENOS DOT3, órdenes
+    S00671/S00674/S00679) con el mismo valor exacto -- evidencia de un
+    mecanismo deliberado y repetible, no de un error puntual. Un descuento
+    del 100.0% exacto (visto una sola vez, en S00336, sobre un producto
+    distinto) NO matchea este patrón y sigue flageado a propósito -- una
+    sola ocurrencia con un producto distinto no es evidencia suficiente de
+    un mecanismo sistémico, y 99.99% (nunca 100.0%) parece ser la
+    convención usada a propósito para que ``price_subtotal`` no quede en
+    cero exacto.
+
+    Si en el futuro aparece un producto obsequio nuevo con un valor de
+    descuento distinto, la forma correcta de resolverlo es configurar una
+    regla real en ``descuentos_producto`` (para que el motor la reconozca
+    y la bandeja dictamine un ``total_descuentos`` > 0), no ampliar este
+    rango a ciegas.
+    """
+    return Decimal("99.9") <= disc_pct < Decimal("100")
+
+
+def _parse_iso_date_param(value: str | None, default: date) -> date:
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Fecha inválida '{value}', use YYYY-MM-DD"
+        ) from e
+
+
+@app.get("/api/reportes/cxc-vencida-junio")
+async def get_reporte_cxc_vencida_junio(
+    cxc_session: str | None = Cookie(default=None),
+    corte: str | None = None,
+):
+    """CxC vencida y NO pagada a una fecha de corte (default 2026-06-30),
+    reconstruida punto-en-el-tiempo desde la red de conciliación real de
+    Odoo (``account.partial.reconcile.max_date``) -- no el estado actual.
+    Ver ``cxc.engine.reportes_historicos`` para el método completo.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        cutoff = _parse_iso_date_param(corte, date(2026, 6, 30))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        facturas = cxc_vencida_no_pagada(execute, repo, cutoff)
+        resumen = resumen_vencida_por_vendedor(facturas)
+        return {
+            "corte": cutoff.isoformat(),
+            "resumen_por_vendedor": resumen,
+            "total_facturas": len(facturas),
+            "total_monto_vencido_usd": round(sum(f.residual_al_corte_usd for f in facturas), 2),
+            "detalle": [
+                {
+                    "factura_id": f.factura_id,
+                    "numero": f.numero,
+                    "so_id": f.so_id,
+                    "cliente_id": f.cliente_id,
+                    "cliente_nombre": f.cliente_nombre,
+                    "vendedor": f.vendedor,
+                    "fecha_factura": f.fecha_factura,
+                    "fecha_vencimiento": f.fecha_vencimiento,
+                    "monto_total_usd": f.monto_total_usd,
+                    "pagado_al_corte_usd": f.pagado_al_corte_usd,
+                    "residual_al_corte_usd": f.residual_al_corte_usd,
+                    "payment_state_actual": f.payment_state_actual,
+                }
+                for f in facturas
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/reportes/cobranza-julio")
+async def get_reporte_cobranza_julio(
+    cxc_session: str | None = Cookie(default=None),
+    desde: str | None = None,
+    hasta: str | None = None,
+):
+    """Pagos de cliente confirmados en Odoo con fecha dentro de la ventana
+    (default julio 2026: 2026-07-01 a 2026-07-31), agrupados por vendedor.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        fecha_desde = _parse_iso_date_param(desde, date(2026, 7, 1))
+        fecha_hasta = _parse_iso_date_param(hasta, date(2026, 7, 31))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        pagos = cobranza_por_vendedor(execute, repo, fecha_desde, fecha_hasta)
+        resumen = resumen_cobranza_por_vendedor(pagos)
+        return {
+            "desde": fecha_desde.isoformat(),
+            "hasta": fecha_hasta.isoformat(),
+            "resumen_por_vendedor": resumen,
+            "total_pagos": len(pagos),
+            "total_monto_usd": round(sum(p.monto_usd for p in pagos), 2),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/reportes/recuperacion-julio")
+async def get_reporte_recuperacion_julio(
+    cxc_session: str | None = Cookie(default=None),
+    corte_vencida: str | None = None,
+    recuperacion_desde: str | None = None,
+    recuperacion_hasta: str | None = None,
+):
+    """Cruce de CxC vencida (default corte 2026-06-30) contra la cobranza
+    de la ventana de recuperación (default julio 2026). Devuelve el
+    detalle por factura y 2 vistas de totales por vendedor:
+    "específica" (solo lo cobrado contra ESAS facturas vencidas) y
+    "general, alternativa" (toda la cobranza de la ventana, métrica más
+    laxa -- ver docstring de ``recuperacion_cartera``).
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        cutoff = _parse_iso_date_param(corte_vencida, date(2026, 6, 30))
+        fecha_desde = _parse_iso_date_param(recuperacion_desde, date(2026, 7, 1))
+        fecha_hasta = _parse_iso_date_param(recuperacion_hasta, date(2026, 7, 31))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        resultado = recuperacion_cartera(execute, repo, cutoff, fecha_desde, fecha_hasta)
+        return {
+            "corte_vencida": cutoff.isoformat(),
+            "recuperacion_desde": fecha_desde.isoformat(),
+            "recuperacion_hasta": fecha_hasta.isoformat(),
+            "detalle": resultado["detalle"],
+            "totales_por_vendedor": [
+                {
+                    "vendedor": r.vendedor,
+                    "monto_vencido_30jun_usd": r.monto_vencido_30jun_usd,
+                    "cobrado_julio_especifico_usd": r.cobrado_julio_especifico_usd,
+                    "pct_recuperacion_especifica": r.pct_recuperacion_especifica,
+                    "cobrado_julio_general_usd": r.cobrado_julio_general_usd,
+                    "pct_recuperacion_general": r.pct_recuperacion_general,
+                }
+                for r in resultado["totales_por_vendedor"]
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -10885,13 +11208,23 @@ async def get_auditoria():
                     )
 
                 # Check 2: Manual unapproved line discounts
+                #
+                # Descuentos que matchean el patrón conocido de "obsequio
+                # manual" (ver docstring de
+                # ``_es_descuento_manual_patron_obsequio_conocido``) no se
+                # flagean -- son un mecanismo deliberado del negocio, no un
+                # override sin explicar.
                 disc = parse_decimal_safe(ln.get("descuento", "0"))
-                if disc > Decimal("0") and (
-                    not b
-                    or (
-                        b
-                        and b.total_descuentos == Decimal("0")
-                        and b.ncs_calculadas == Decimal("0")
+                if (
+                    disc > Decimal("0")
+                    and not _es_descuento_manual_patron_obsequio_conocido(disc)
+                    and (
+                        not b
+                        or (
+                            b
+                            and b.total_descuentos == Decimal("0")
+                            and b.ncs_calculadas == Decimal("0")
+                        )
                     )
                 ):
                     has_discrepancy = True
@@ -12610,6 +12943,62 @@ def _get_ventas_sync(
     finally:
         if vendedor is None:
             _ventas_computing = False
+
+
+_VENTAS_COLUMN_LABELS: dict[str, str] = {
+    "so_id": "Orden (SO)",
+    "fecha_entrega": "Fecha (Entrega)",
+    "cliente_nombre": "Cliente",
+    "vendedor": "Vendedor",
+    "lista_nacimiento_label": "Lista Nacimiento",
+    "lista_aplicada_label": "Lista Aplicada",
+    "dias_credito": "Días Crédito",
+    "fecha_vencimiento": "Fecha Vencimiento",
+    "dias_vencido": "Días Vencido",
+    "facturada": "Facturada",
+    "venta_bruta_real": "Venta Bruta Real",
+    "venta_neta_real": "Venta Neta Real",
+    "total_facturado_neto": "Facturado Neto",
+    "total_nc_aplicada": "NC Aplicada",
+    "total_nd_aplicada": "ND Aplicada",
+    "ves_bruta_teorica": "Teórica Bruta VES",
+    "ves_neta_teorica_iva": "Teórica Neta VES + Imp.",
+    "usd_bruta_teorica": "Teórica Bruta USD",
+    "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
+    "pagada": "Pagada",
+    "saldo_cxc": "Saldo CxC",
+    "alerta": "Alerta",
+    "revisar_motivo": "Motivo Revisión",
+    "falta_nc_por_devolucion": "Falta NC por Devolución",
+    "descuento_pendiente_aplicar": "Descuento Pendiente",
+}
+
+
+@app.get("/api/ventas/excel")
+async def get_ventas_excel(
+    vendedor: str | None = None,
+    solo_alertas: bool = False,
+    search: str = "",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Export a Excel del reporte de Ventas -- reusa ``get_ventas`` tal cual
+    (mismo cálculo, mismo parámetro ``vendedor`` que ya filtra server-side)
+    y le aplica los MISMOS filtros client-side que ``applyVentasFilters``
+    (ver app.js) para que coincida con lo que el usuario ve en pantalla.
+    """
+    data = await get_ventas(vendedor=vendedor, cxc_session=cxc_session)
+    items = data.get("items", [])
+    if solo_alertas:
+        items = [i for i in items if i.get("alerta")]
+    if search:
+        search_l = search.strip().lower()
+        items = [
+            i
+            for i in items
+            if search_l in str(i.get("so_id") or "").lower()
+            or search_l in str(i.get("cliente_nombre") or "").lower()
+        ]
+    return _rows_to_xlsx_response(items, _VENTAS_COLUMN_LABELS, "ventas")
 
 
 @app.get("/api/ventas/{so_id}/detalle")
