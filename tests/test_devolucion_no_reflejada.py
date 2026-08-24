@@ -1,11 +1,16 @@
-"""``_detectar_devolucion_no_reflejada_en_cantidad`` -- bug real (reportado
+"""``_detectar_devolucion_no_reflejada_en_cantidad`` -- por cada orden con
 
-por el usuario, agosto 2026, caso SO 00133/Inversiones La Bendición del
-Nazareno, 12 órdenes reales corregidas): una devolución puede reflejarse
-en Odoo poniendo el precio/``price_subtotal`` de la línea en $0 en vez de
-bajar ``cantidad_entregada`` -- el motor de teóricos (``_cantidad_
-efectiva``) ya respeta esta señal, pero nadie la vigila hacia adelante.
-Este chequeo expone cualquier devolución futura mal reflejada.
+devolución registrada, compara cantidad pedida vs entregada por línea
+(igual que la propia pantalla de la orden en Odoo).
+
+Corrección (agosto 2026, caso SO 00146/cliente con dos líneas: una
+100% entregada y otra con un faltante real de 4 unidades, revisado con
+el usuario): una versión anterior de este chequeo usaba
+``linea.subtotal == 0`` como señal de devolución -- resultó ser un falso
+positivo real, ``subtotal`` (``price_subtotal``) está en 0 para el 81% de
+TODAS las líneas del sistema por un hueco de backfill del sync, sin
+relación con devoluciones. Ahora se compara ``cantidad`` (pedida) vs
+``cantidad_entregada`` directamente.
 """
 
 from __future__ import annotations
@@ -13,90 +18,106 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from cxc.models import LineaOrden, OrdenVenta
+from cxc.models import LineaOrden, OrdenVenta, Producto
 from cxc.web.app import _detectar_devolucion_no_reflejada_en_cantidad
 
 
-def _orden(so_id, tiene_devolucion=True, entregada_completa=True) -> OrdenVenta:
+def _orden(so_id, tiene_devolucion=True) -> OrdenVenta:
     return OrdenVenta(
         so_id=so_id,
         cliente_id="C1",
         vendedor_email="v@lubrikca.com",
         fecha=date(2026, 3, 24),
         fecha_entrega=date(2026, 3, 25),
-        monto_total=Decimal("10843.49"),
+        monto_total=Decimal("1996.24"),
         lista_precios="3",
         es_primera_compra=False,
         facturada=False,
         tiene_devolucion=tiene_devolucion,
-        entregada_completa=entregada_completa,
     )
 
 
-def _linea(so_id, subtotal, precio_unitario, cantidad_entregada) -> LineaOrden:
+def _linea(so_id, linea_id, producto, cantidad, cantidad_entregada, precio_unitario) -> LineaOrden:
     return LineaOrden(
-        linea_id=f"L_{so_id}",
+        linea_id=linea_id,
         so_id=so_id,
-        producto="1056",
+        producto=producto,
         marca="",
         categoria="Comercial",
-        cantidad=Decimal(cantidad_entregada),
+        cantidad=Decimal(cantidad),
         precio_unitario=Decimal(precio_unitario),
         cantidad_entregada=Decimal(cantidad_entregada),
-        subtotal=Decimal(subtotal),
     )
 
 
-def test_detecta_linea_con_precio_cero_y_cantidad_sin_bajar() -> None:
-    orden = _orden("S00133")
-    linea = _linea("S00133", "0", "93.10", "18")
+def test_detecta_faltante_real_pero_no_la_linea_totalmente_entregada() -> None:
+    """Caso real S00146: línea 1025 (10 pedidas, 10 entregadas) NO se
 
-    resultado = _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea])
+    detecta -- línea 1027 (10 pedidas, 6 entregadas, faltante real de 4)
+    SÍ se detecta."""
+    orden = _orden("S00146")
+    linea_ok = _linea("S00146", "465", "1025", "10", "10", "85.45")
+    linea_faltante = _linea("S00146", "466", "1027", "10", "6", "86.64")
+    catalogo = [
+        Producto(
+            producto_id="1027",
+            codigo="0605",
+            nombre="SINOCO SAE 20W-50 (Paila)",
+            marca="Sinoco",
+            volumen=Decimal("0"),
+            peso=Decimal("0"),
+        )
+    ]
+
+    resultado = _detectar_devolucion_no_reflejada_en_cantidad(
+        [orden], [linea_ok, linea_faltante], catalogo
+    )
 
     assert len(resultado) == 1
-    assert resultado[0]["so_id"] == "S00133"
-    assert resultado[0]["valor_potencial_afectado"] == 1675.80
-
-
-def test_no_detecta_si_subtotal_coincide_con_cantidad_precio() -> None:
-    orden = _orden("S00001")
-    linea = _linea("S00001", "1675.80", "93.10", "18")  # subtotal real, no cero
-
-    assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
+    assert resultado[0]["so_id"] == "S00146"
+    assert resultado[0]["linea_id"] == "466"
+    assert resultado[0]["cantidad_ordenada"] == 10.0
+    assert resultado[0]["cantidad_entregada"] == 6.0
+    assert resultado[0]["faltante"] == 4.0
+    assert resultado[0]["producto_codigo"] == "0605"
+    assert resultado[0]["producto_nombre"] == "SINOCO SAE 20W-50 (Paila)"
+    assert resultado[0]["valor_potencial_afectado"] == 346.56  # 4 x 86.64
 
 
 def test_no_detecta_si_orden_no_tiene_devolucion() -> None:
     orden = _orden("S00002", tiene_devolucion=False)
-    linea = _linea("S00002", "0", "93.10", "18")
+    linea = _linea("S00002", "L1", "1056", "18", "6", "93.10")
 
     assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
 
 
-def test_no_detecta_si_orden_no_esta_entregada_completa() -> None:
-    orden = _orden("S00003", entregada_completa=False)
-    linea = _linea("S00003", "0", "93.10", "18")
+def test_no_detecta_si_cantidad_entregada_igual_a_la_pedida() -> None:
+    orden = _orden("S00133")
+    linea = _linea("S00133", "L1", "1056", "18", "18", "93.10")
 
     assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
 
 
-def test_no_detecta_linea_legitimamente_gratis() -> None:
-    """precio_unitario=0 desde el origen (producto promocional/gratis) no
+def test_no_detecta_si_cantidad_entregada_supera_la_pedida() -> None:
+    """Entrega de más -- otra cosa a revisar, pero no un faltante de
 
-    es una devolución mal reflejada -- nunca tuvo precio que cobrar."""
-    orden = _orden("S00004")
-    linea = _linea("S00004", "0", "0", "18")
-
-    assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
-
-
-def test_no_detecta_si_cantidad_entregada_ya_esta_en_cero() -> None:
-    """Si Odoo SÍ bajó cantidad_entregada a 0 para la devolución, el
-
-    comportamiento es correcto -- no hay nada que detectar."""
-    orden = _orden("S00005")
-    linea = _linea("S00005", "0", "93.10", "0")
+    devolución."""
+    orden = _orden("S00006")
+    linea = _linea("S00006", "L1", "1056", "10", "12", "93.10")
 
     assert _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea]) == []
+
+
+def test_sin_catalogo_usa_nombre_de_la_propia_linea() -> None:
+    orden = _orden("S00007")
+    linea = _linea("S00007", "L1", "1056", "10", "6", "93.10")
+    linea.nombre = "Producto sin match en catálogo"
+
+    resultado = _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea], catalogo=None)
+
+    assert len(resultado) == 1
+    assert resultado[0]["producto_codigo"] is None
+    assert resultado[0]["producto_nombre"] == "Producto sin match en catálogo"
 
 
 def test_sin_ordenes_afectadas_no_falla() -> None:

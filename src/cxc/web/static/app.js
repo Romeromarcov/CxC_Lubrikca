@@ -5052,20 +5052,22 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
-                // Render Devolución No Reflejada en Cantidad (ver
-                // _detectar_devolucion_no_reflejada_en_cantidad -- caso
-                // real SO 00133/Inversiones La Bendición del Nazareno).
+                // Render Faltante de Devolución por Línea (ver
+                // _detectar_devolucion_no_reflejada_en_cantidad -- compara
+                // cantidad pedida vs entregada, igual que la propia
+                // pantalla de la orden en Odoo).
                 if (bodyDevolucionNoReflejada) {
                     if (devolucionNoReflejada.length === 0) {
-                        bodyDevolucionNoReflejada.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ninguna devolución quedó sin reflejar en la cantidad entregada.</td></tr>';
+                        bodyDevolucionNoReflejada.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:#059669">✅ Ninguna orden con devolución tiene un faltante sin reflejar.</td></tr>';
                     } else {
                         bodyDevolucionNoReflejada.innerHTML = devolucionNoReflejada.map(d => `
                             <tr>
                                 <td><strong>${escapeHtml(d.so_id)}</strong></td>
-                                <td>${escapeHtml(d.producto)}</td>
+                                <td>${escapeHtml(d.producto_codigo)} <small style="color:#64748b;">${escapeHtml(d.producto_nombre)}</small></td>
+                                <td>${d.cantidad_ordenada}</td>
                                 <td>${d.cantidad_entregada}</td>
-                                <td>${fmt(d.precio_unitario)}</td>
-                                <td><strong style="color:#dc2626;">${fmt(d.valor_potencial_afectado)}</strong></td>
+                                <td><strong style="color:#dc2626;">${d.faltante}</strong></td>
+                                <td>${fmt(d.valor_potencial_afectado)}</td>
                             </tr>
                         `).join('');
                     }

@@ -312,24 +312,20 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
     caso se usa la cantidad pedida (base provisional; Lubrikca factura antes de
     despachar, donde ``qty_delivered`` aún puede ser 0).
 
-    Bug real (reportado por el usuario, agosto 2026, caso "Inversiones La
-    Bendición del Nazareno" SO 00133): algunas devoluciones NO se reflejan en
-    Odoo reduciendo ``qty_delivered`` de la línea -- se reflejan poniendo el
-    precio/``price_subtotal`` de la línea en 0 (la mercancía salió, pero se le
-    dejó de cobrar). ``cantidad_entregada`` en ese caso sigue mostrando la
-    cantidad original, así que el teórico repetía el valor de la devolución
-    contra la lista de precios propia, ignorando que Odoo ya la saldó en $0.
-    Si la línea tenía precio unitario real pero Odoo la dejó en subtotal 0,
-    se trata como devuelta (cantidad efectiva 0) sin importar
-    ``cantidad_entregada``.
+    Corrección (agosto 2026, caso SO 00133 revisado con el usuario): un
+    intento anterior de esta función trataba ``linea.subtotal == 0`` como
+    señal de que Odoo había "puesto la devolución en precio $0" -- pero
+    ``subtotal`` (``price_subtotal``) resultó estar en 0 para el 81% de
+    TODAS las líneas del sistema (hueco de backfill del sync, sin relación
+    con devoluciones -- ver ``changed_lineas``), y en vivo Odoo mostraba
+    ``price_subtotal`` real y ``qty_delivered == product_uom_qty`` (sin
+    ningún faltante) para esas mismas líneas de S00133. Ese criterio
+    generaba falsos positivos reales (líneas 100% entregadas y cobradas se
+    zaneaban a $0) -- se revierte a la lógica original, la única señal
+    confiable es ``cantidad_entregada`` (Odoo mismo la neta correctamente
+    cuando la devolución sí está aplicada, ver caso real S00146).
     """
     if inp.orden.entregada_completa and inp.orden.tiene_devolucion:
-        if (
-            linea.subtotal == Decimal("0")
-            and linea.precio_unitario > Decimal("0")
-            and linea.cantidad_entregada > Decimal("0")
-        ):
-            return Decimal("0")
         return linea.cantidad_entregada
     return linea.cantidad
 

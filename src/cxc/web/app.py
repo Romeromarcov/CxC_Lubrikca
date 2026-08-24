@@ -44,6 +44,7 @@ from cxc.models import (
     LineaOrden,
     Moneda,
     OrdenVenta,
+    Producto,
     TipoTasa,
     Vinculacion,
     set_marca_fallback,
@@ -10526,46 +10527,54 @@ def _detectar_vinculaciones_tasa_implicita_implausible(
 def _detectar_devolucion_no_reflejada_en_cantidad(
     ordenes: list[OrdenVenta],
     lineas: list[LineaOrden],
+    catalogo: list[Producto] | None = None,
 ) -> list[dict[str, Any]]:
-    """Línea de orden con devolución donde Odoo reflejó el ajuste poniendo
+    """Líneas de una orden con devolución donde la cantidad entregada es
 
-    el precio/subtotal en $0 en vez de bajar ``cantidad_entregada`` -- el
-    mismo patrón real que causaba que el motor de teóricos siguiera
-    cobrando mercancía devuelta (ver ``_cantidad_efectiva`` en
-    ``engine/discounts.py``, caso SO 00133/Inversiones La Bendición del
-    Nazareno, 12 órdenes reales corregidas agosto 2026). Este chequeo
-    expone CUALQUIER devolución futura mal reflejada por Odoo, no solo las
-    12 ya corregidas -- mismo criterio: ``subtotal == 0`` con
-    ``precio_unitario > 0`` y ``cantidad_entregada > 0`` en una orden
-    ``tiene_devolucion`` y ``entregada_completa``.
+    MENOR a la pedida -- mismo criterio que la propia Odoo (columnas
+    "Cantidad"/"Entregado" de la orden), para que un humano vea de un
+    vistazo dónde está el faltante real y decida si falta el ajuste de la
+    orden y/o la Nota de Crédito de la factura.
+
+    Corrección (agosto 2026, caso SO 00133/Inversiones La Bendición del
+    Nazareno, revisado con el usuario): una versión anterior de este
+    chequeo (y del motor, ver ``_cantidad_efectiva`` en
+    ``engine/discounts.py``) usaba ``linea.subtotal == 0`` como señal de
+    devolución -- resultó ser un falso positivo real: ``subtotal``
+    (``price_subtotal``) está en 0 para el 81% de TODAS las líneas del
+    sistema por un hueco de backfill del sync sin relación con
+    devoluciones, y Odoo en vivo mostraba precio real y ``qty_delivered ==
+    product_uom_qty`` (sin faltante) para las líneas que este chequeo
+    marcaba. La única señal confiable es la comparación directa
+    ``cantidad`` (pedida) vs ``cantidad_entregada`` -- exactamente lo que
+    Odoo muestra en su propia pantalla de la orden.
     """
-    ordenes_afectadas = {
-        o.so_id: o for o in ordenes if o.tiene_devolucion and o.entregada_completa
-    }
+    ordenes_afectadas = {o.so_id: o for o in ordenes if o.tiene_devolucion}
     if not ordenes_afectadas:
         return []
+    catalogo_map = {p.producto_id: p for p in (catalogo or [])}
     resultado: list[dict[str, Any]] = []
     for ln in lineas:
         o = ordenes_afectadas.get(ln.so_id)
         if o is None:
             continue
-        if (
-            ln.subtotal == Decimal("0")
-            and ln.precio_unitario > Decimal("0")
-            and ln.cantidad_entregada > Decimal("0")
-        ):
-            resultado.append(
-                {
-                    "so_id": ln.so_id,
-                    "linea_id": ln.linea_id,
-                    "producto": ln.producto,
-                    "cantidad_entregada": float(ln.cantidad_entregada),
-                    "precio_unitario": float(ln.precio_unitario),
-                    "valor_potencial_afectado": round(
-                        float(ln.cantidad_entregada * ln.precio_unitario), 2
-                    ),
-                }
-            )
+        if ln.cantidad_entregada >= ln.cantidad:
+            continue
+        prod = catalogo_map.get(ln.producto)
+        faltante = ln.cantidad - ln.cantidad_entregada
+        resultado.append(
+            {
+                "so_id": ln.so_id,
+                "linea_id": ln.linea_id,
+                "producto_codigo": prod.codigo if prod else None,
+                "producto_nombre": prod.nombre if prod else (ln.nombre or ln.producto),
+                "cantidad_ordenada": float(ln.cantidad),
+                "cantidad_entregada": float(ln.cantidad_entregada),
+                "faltante": float(faltante),
+                "precio_unitario": float(ln.precio_unitario),
+                "valor_potencial_afectado": round(float(faltante * ln.precio_unitario), 2),
+            }
+        )
     return resultado
 
 
@@ -11074,7 +11083,7 @@ async def get_auditoria():
             vincs, tasas_rows
         )
         devolucion_no_reflejada = _detectar_devolucion_no_reflejada_en_cantidad(
-            ordenes, repo.all_lineas()
+            ordenes, repo.all_lineas(), repo.all_catalogo()
         )
 
         return {
