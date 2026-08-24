@@ -4830,6 +4830,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const bodyResidual = document.getElementById("pagos-residual-table-body");
         const bodyAjustesHuerfanos = document.getElementById("ajustes-cambio-huerfanos-table-body");
         const bodyImporteLocal = document.getElementById("pagos-importe-local-table-body");
+        const bodySobreaplicadas = document.getElementById("vinculaciones-sobreaplicadas-table-body");
+        const bodyTasaImplausible = document.getElementById("vinculaciones-tasa-implausible-table-body");
+        const bodyDevolucionNoReflejada = document.getElementById("devolucion-no-reflejada-table-body");
 
         const elKpiConformes = document.getElementById("audit-kpi-conformes");
         const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
@@ -4862,6 +4865,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
                 const ajustesHuerfanos = data.ajustes_cambio_huerfanos || [];
                 const pagosImporteLocal = data.pagos_importe_local_desincronizado || [];
+                const vinculacionesSobreaplicadas = data.vinculaciones_sobreaplicadas || [];
+                const vinculacionesTasaImplausible = data.vinculaciones_tasa_implausible || [];
+                const devolucionNoReflejada = data.devolucion_no_reflejada_en_cantidad || [];
 
                 if (elKpiConformes) elKpiConformes.textContent = conformes.length;
                 if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
@@ -5004,6 +5010,62 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${fmtVes(p.importe_local_ves)}</td>
                                 <td>${fmtVes(p.monto_asiento_ves)}</td>
                                 <td><strong style="color:#dc2626;">${fmtVes(p.diferencia_ves)}</strong></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+                // Render Vinculaciones Sobreaplicadas (ver
+                // _detectar_vinculaciones_sobreaplicadas -- bug real, pago
+                // 1267/Grano Agregado, agosto 2026: dos Vinculaciones
+                // reclamando entre ambas más de lo que el pago vale).
+                if (bodySobreaplicadas) {
+                    if (vinculacionesSobreaplicadas.length === 0) {
+                        bodySobreaplicadas.innerHTML = '<tr><td colspan="4" class="table-empty" style="color:#059669">✅ Ningún pago tiene Vinculaciones que sumen más de lo que vale.</td></tr>';
+                    } else {
+                        bodySobreaplicadas.innerHTML = vinculacionesSobreaplicadas.map(v => `
+                            <tr>
+                                <td><strong>${escapeHtml(v.pago_id)}</strong></td>
+                                <td>${fmt(v.monto_pago_usd)}</td>
+                                <td>${fmt(v.total_vinculado_usd)}</td>
+                                <td><strong style="color:#dc2626;">${fmt(v.exceso_usd)}</strong></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Tasa Implícita Implausible (ver
+                // _detectar_vinculaciones_tasa_implicita_implausible --
+                // forma general del bug de confundir Bs con USD).
+                if (bodyTasaImplausible) {
+                    if (vinculacionesTasaImplausible.length === 0) {
+                        bodyTasaImplausible.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ninguna Vinculación tiene una tasa implícita fuera de rango.</td></tr>';
+                    } else {
+                        bodyTasaImplausible.innerHTML = vinculacionesTasaImplausible.map(v => `
+                            <tr>
+                                <td><strong>${escapeHtml(v.vinc_id)}</strong></td>
+                                <td>${escapeHtml(v.pago_id)}</td>
+                                <td>${escapeHtml(v.so_id)}</td>
+                                <td><strong style="color:#dc2626;">${(v.tasa_implicita || 0).toFixed(4)}</strong></td>
+                                <td>${(v.tasa_real || 0).toFixed(4)} <small style="color:#94a3b8;">(${(v.diferencia_pct || 0).toFixed(1)}% off)</small></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Render Devolución No Reflejada en Cantidad (ver
+                // _detectar_devolucion_no_reflejada_en_cantidad -- caso
+                // real SO 00133/Inversiones La Bendición del Nazareno).
+                if (bodyDevolucionNoReflejada) {
+                    if (devolucionNoReflejada.length === 0) {
+                        bodyDevolucionNoReflejada.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ninguna devolución quedó sin reflejar en la cantidad entregada.</td></tr>';
+                    } else {
+                        bodyDevolucionNoReflejada.innerHTML = devolucionNoReflejada.map(d => `
+                            <tr>
+                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
+                                <td>${escapeHtml(d.producto)}</td>
+                                <td>${d.cantidad_entregada}</td>
+                                <td>${fmt(d.precio_unitario)}</td>
+                                <td><strong style="color:#dc2626;">${fmt(d.valor_potencial_afectado)}</strong></td>
                             </tr>
                         `).join('');
                     }

@@ -41,6 +41,7 @@ from cxc.engine.runner import EngineRunner
 from cxc.models import (
     Cliente,
     EstadoVinculacion,
+    LineaOrden,
     Moneda,
     OrdenVenta,
     TipoTasa,
@@ -6471,10 +6472,17 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
         # cruzado contra ninguna) usando el mismo criterio que ya usa
         # ``_pagos_bcv_binance_por_orden``.
         _historical_enabled_sug = is_historical_pricelist_enabled(repo)
+        _usd_ids_sug, _ = get_valid_pricelists_usd_and_ves(repo)
+        _usd_ids_sug_set = set(_usd_ids_sug)
         clientes_con_orden_historica: set[str] = {
             str(o.cliente_id)
             for o in ordenes
-            if es_orden_historica(o.fecha, o.lista_precios, _historical_enabled_sug)
+            if es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                _historical_enabled_sug,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in _usd_ids_sug_set,
+            )
         }
 
         unallocated_pagos = []
@@ -9828,6 +9836,36 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 return None
             return float(monto_raw / Decimal(str(tasa_eur)))
 
+        def monto_bcv_real(pid: str, tasa_bcv_real: float | None) -> float | None:
+            """Equivalente USD de la tarjeta "Tasa BCV" -- SIEMPRE con la
+
+            tasa BCV real (nunca la sustitución EUR usada como base de
+            conversión interna para clientes con órdenes históricas). Bug
+            real (reportado por el usuario, agosto 2026, pago 1279/cliente
+            SJMG 2012 C.A.): la tarjeta mostraba ``tasa_bcv_real`` (752.09,
+            correcta) pero un equivalente calculado con la tasa BCV-EUR
+            (865.17, la base de conversión interna) -- inconsistente entre
+            sí. Mismo patrón que ``monto_eur``, aplicado a la tasa real en
+            vez de la EUR.
+            """
+            p_row = pagos_by_id.get(pid)
+            if p_row:
+                monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
+                moneda = str(p_row.get("moneda", "USD") or "USD").upper().strip()
+            else:
+                for h in historial:
+                    if h["pago_id"] == pid and h.get("vinc_id") is None:
+                        monto_raw = Decimal(str(h.get("monto_original", 0)))
+                        moneda = str(h.get("moneda", "USD") or "USD").upper().strip()
+                        break
+                else:
+                    return None
+            if moneda == "USD":
+                return float(monto_raw)
+            if tasa_bcv_real is None or tasa_bcv_real <= 0:
+                return None
+            return float(monto_raw / Decimal(str(tasa_bcv_real)))
+
         unificados: list[dict[str, Any]] = []
 
         # 1) Pendientes -- ya vienen con reparto FIFO resuelto.
@@ -9861,17 +9899,21 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "cliente_nombre": item["cliente_nombre"],
                     "monto_pago_original": item["monto_pago_original"],
                     "moneda_pago": item["moneda_pago"],
-                    # "tasa_bcv" acá es SOLO para la tarjeta de display --
-                    # item["tasa_bcv_real"] es el BCV-USD real (nunca la
-                    # sustitución EUR usada internamente para convertir
-                    # montos de clientes con órdenes históricas, ver
-                    # bcv_rate_real en _get_conciliaciones_sugerencias_sync
-                    # -- esa base de conversión ya quedó aplicada en
-                    # monto_pago_bcv_usd/monto_pago_binance_usd, no hace
-                    # falta repetirla aquí).
+                    # Bug real corregido (agosto 2026, pago 1279/cliente
+                    # SJMG 2012 C.A.): "tasa_bcv" mostraba item["tasa_bcv_
+                    # real"] (BCV-USD real) pero "monto_pago_bcv_usd" salía
+                    # de item["monto_pago"], calculado con la base de
+                    # conversión INTERNA (que para un cliente con órdenes
+                    # históricas es la sustitución BCV-EUR, ver bcv_rate en
+                    # _get_conciliaciones_sugerencias_sync) -- tasa y
+                    # equivalente mostrados juntos en la misma tarjeta no
+                    # coincidían entre sí. Ahora "monto_pago_bcv_usd" se
+                    # recalcula SIEMPRE con la tasa BCV real (monto_bcv_
+                    # real, mismo patrón que monto_eur) para que la tarjeta
+                    # sea internamente consistente.
                     "tasa_bcv": item["tasa_bcv_real"],
                     "tasa_binance": tasa_binance_item,
-                    "monto_pago_bcv_usd": item["monto_pago"],
+                    "monto_pago_bcv_usd": monto_bcv_real(pid, item["tasa_bcv_real"]),
                     "monto_pago_binance_usd": monto_binance_usd_item,
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": 0.0,
@@ -10384,6 +10426,149 @@ def _detectar_ajustes_cambio_huerfanos(
     return resultado
 
 
+def _detectar_vinculaciones_sobreaplicadas(
+    vincs: list[Vinculacion],
+    pagos_rows: list[dict[str, Any]],
+    tasas_rows: list[Any],
+    tolerancia_usd: Decimal = Decimal("0.05"),
+) -> list[dict[str, Any]]:
+    """Por cada pago, suma el equivalente USD de TODAS sus Vinculaciones
+
+    (cualquier estado, vía ``_vinc_usd_equiv``) y lo compara contra el
+    monto real del pago en USD -- si la suma excede el monto del pago, hay
+    doble conteo (dos Vinculaciones locales reclamando, entre ambas, más
+    dinero del que el pago realmente tiene). Bug real (agosto 2026, cliente
+    CONSTRUCTORA GRANO AGREGADO): el pago 1267 tenía una Vinculación por su
+    monto completo apuntando a S00608 Y otra Vinculación por una fracción
+    apuntando a S00799 -- juntas sumaban más de lo que el pago vale, un
+    residuo de una corrida de auto-FIFO anterior al fix de
+    ``_vinc_usd_equiv``. Este chequeo detecta cualquier caso similar hacia
+    adelante, sin depender de que un humano lo note por casualidad.
+    """
+    if not vincs or not pagos_rows:
+        return []
+    pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows if p.get("pago_id")}
+    por_pago: dict[str, Decimal] = {}
+    for v in vincs:
+        por_pago[v.pago_id] = por_pago.get(v.pago_id, Decimal("0")) + _vinc_usd_equiv(v)
+
+    resultado: list[dict[str, Any]] = []
+    for pid, aplicado in por_pago.items():
+        p = pagos_by_id.get(pid)
+        if not p:
+            continue
+        moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
+        monto_raw = parse_decimal_safe(p.get("monto", "0"))
+        fecha_str = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
+        try:
+            fecha_dt = (
+                datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
+            )
+        except ValueError:
+            fecha_dt = datetime.now()
+        bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
+        monto_usd_real = pago_monto_usd(monto_raw, moneda, bcv_rate)
+        exceso = aplicado - monto_usd_real
+        if exceso > tolerancia_usd:
+            resultado.append(
+                {
+                    "pago_id": pid,
+                    "monto_pago_usd": round(float(monto_usd_real), 2),
+                    "total_vinculado_usd": round(float(aplicado), 2),
+                    "exceso_usd": round(float(exceso), 2),
+                }
+            )
+    return resultado
+
+
+def _detectar_vinculaciones_tasa_implicita_implausible(
+    vincs: list[Vinculacion],
+    tasas_rows: list[Any],
+    tolerancia_pct: Decimal = Decimal("0.15"),
+) -> list[dict[str, Any]]:
+    """Para cada Vinculación en VES, compara la tasa IMPLÍCITA
+
+    (``monto_aplicado / equiv_usd_bcv``) contra la tasa BCV real de
+    ``SerieTasas``/``TasasHistoricasAuditoria`` para la fecha del abono
+    (``get_rate_for_datetime``, mismo fallback de 3 niveles que usa el
+    resto del sistema) -- si difieren en más de ``tolerancia_pct``, es la
+    forma general del bug real de esta sesión (confundir Bs con USD, o
+    congelar una tasa equivocada): el equivalente USD ya congelado no
+    corresponde a ninguna tasa BCV real de esa fecha.
+    """
+    if not vincs:
+        return []
+    resultado: list[dict[str, Any]] = []
+    for v in vincs:
+        if v.moneda_abono != Moneda.VES:
+            continue
+        if not v.equiv_usd_bcv or v.equiv_usd_bcv <= 0:
+            continue
+        tasa_implicita = v.monto_aplicado / v.equiv_usd_bcv
+        tasa_real, _ = get_rate_for_datetime(v.hora_pago_confirmada, tasas_rows)
+        if tasa_real <= 0:
+            continue
+        ratio = abs(tasa_implicita - tasa_real) / tasa_real
+        if ratio > tolerancia_pct:
+            resultado.append(
+                {
+                    "vinc_id": v.vinc_id,
+                    "pago_id": v.pago_id,
+                    "so_id": v.so_id,
+                    "tasa_implicita": round(float(tasa_implicita), 4),
+                    "tasa_real": round(float(tasa_real), 4),
+                    "diferencia_pct": round(float(ratio * 100), 1),
+                }
+            )
+    return resultado
+
+
+def _detectar_devolucion_no_reflejada_en_cantidad(
+    ordenes: list[OrdenVenta],
+    lineas: list[LineaOrden],
+) -> list[dict[str, Any]]:
+    """Línea de orden con devolución donde Odoo reflejó el ajuste poniendo
+
+    el precio/subtotal en $0 en vez de bajar ``cantidad_entregada`` -- el
+    mismo patrón real que causaba que el motor de teóricos siguiera
+    cobrando mercancía devuelta (ver ``_cantidad_efectiva`` en
+    ``engine/discounts.py``, caso SO 00133/Inversiones La Bendición del
+    Nazareno, 12 órdenes reales corregidas agosto 2026). Este chequeo
+    expone CUALQUIER devolución futura mal reflejada por Odoo, no solo las
+    12 ya corregidas -- mismo criterio: ``subtotal == 0`` con
+    ``precio_unitario > 0`` y ``cantidad_entregada > 0`` en una orden
+    ``tiene_devolucion`` y ``entregada_completa``.
+    """
+    ordenes_afectadas = {
+        o.so_id: o for o in ordenes if o.tiene_devolucion and o.entregada_completa
+    }
+    if not ordenes_afectadas:
+        return []
+    resultado: list[dict[str, Any]] = []
+    for ln in lineas:
+        o = ordenes_afectadas.get(ln.so_id)
+        if o is None:
+            continue
+        if (
+            ln.subtotal == Decimal("0")
+            and ln.precio_unitario > Decimal("0")
+            and ln.cantidad_entregada > Decimal("0")
+        ):
+            resultado.append(
+                {
+                    "so_id": ln.so_id,
+                    "linea_id": ln.linea_id,
+                    "producto": ln.producto,
+                    "cantidad_entregada": float(ln.cantidad_entregada),
+                    "precio_unitario": float(ln.precio_unitario),
+                    "valor_potencial_afectado": round(
+                        float(ln.cantidad_entregada * ln.precio_unitario), 2
+                    ),
+                }
+            )
+    return resultado
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -10417,9 +10602,10 @@ async def get_auditoria():
         # cliente TERA, agosto 2026). Escanea TODOS los pagos ya
         # sincronizados localmente (2 llamadas batch a Odoo, sin loop por
         # pago).
+        pagos_rows_local = _all_pagos_rows(repo)
         pago_ids_int = [
             int(p.get("pago_id"))
-            for p in _all_pagos_rows(repo)
+            for p in pagos_rows_local
             if str(p.get("pago_id", "")).strip().isdigit()
         ]
         pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
@@ -10877,12 +11063,39 @@ async def get_auditoria():
                 }
             )
 
+        # 3 chequeos nuevos (pedido explícito del usuario, agosto 2026,
+        # "que no vuelva a pasar y no haya casos ocultos"): cubren, hacia
+        # adelante, los 3 patrones de bug reales encontrados hoy -- ver
+        # docstring de cada detector.
+        vinculaciones_sobreaplicadas = _detectar_vinculaciones_sobreaplicadas(
+            vincs, pagos_rows_local, tasas_rows
+        )
+        vinculaciones_tasa_implausible = _detectar_vinculaciones_tasa_implicita_implausible(
+            vincs, tasas_rows
+        )
+        devolucion_no_reflejada = _detectar_devolucion_no_reflejada_en_cantidad(
+            ordenes, repo.all_lineas()
+        )
+
         return {
             "operaciones_conformes": operaciones_conformes,
             "discrepancias": discrepancias_pendientes,
             "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
             "anomalias_aceptadas": anomalias_aceptadas,
             "venta_bruta_teorica_auditoria": venta_bruta_teorica_auditoria,
+            # Ver _detectar_vinculaciones_sobreaplicadas -- Vinculaciones
+            # que entre todas suman más de lo que el pago realmente vale
+            # (doble conteo, caso real pago 1267/Grano Agregado).
+            "vinculaciones_sobreaplicadas": vinculaciones_sobreaplicadas,
+            # Ver _detectar_vinculaciones_tasa_implicita_implausible --
+            # tasa implícita (monto_aplicado/equiv_usd_bcv) muy distinta de
+            # la tasa BCV real de esa fecha (forma general del bug de
+            # confundir Bs con USD).
+            "vinculaciones_tasa_implausible": vinculaciones_tasa_implausible,
+            # Ver _detectar_devolucion_no_reflejada_en_cantidad -- línea con
+            # devolución que Odoo reflejó en precio $0 sin bajar la
+            # cantidad entregada (caso real SO 00133, 12 órdenes corregidas).
+            "devolucion_no_reflejada_en_cantidad": devolucion_no_reflejada,
             # Ver _detectar_pagos_con_residual_sin_aplicar -- pagos con un
             # remanente sin conciliar en su propia línea de CxC, invisible
             # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
@@ -10911,6 +11124,9 @@ async def get_auditoria():
                 "total_pagos_importe_local_desincronizado": len(
                     pagos_importe_local_desincronizado
                 ),
+                "total_vinculaciones_sobreaplicadas": len(vinculaciones_sobreaplicadas),
+                "total_vinculaciones_tasa_implausible": len(vinculaciones_tasa_implausible),
+                "total_devolucion_no_reflejada_en_cantidad": len(devolucion_no_reflejada),
             },
         }
     except Exception as e:
@@ -11346,7 +11562,12 @@ def _get_ventas_sync(
         # más abajo como el nuevo cálculo de Monto pagado BCV/USD (para
         # decidir si la ruta BCV de un pago usa la tasa BCV-Euro histórica).
         es_historica_map = {
-            o.so_id: es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            o.so_id: es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                historical_enabled,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
+            )
             for o in ordenes
         }
 
@@ -11847,7 +12068,12 @@ def _get_ventas_sync(
             else:
                 val_bcv_incl_pendiente = val_bcv
                 val_binance_incl_pendiente = val_binance
-            es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            es_historica_o = es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                historical_enabled,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
+            )
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
             )

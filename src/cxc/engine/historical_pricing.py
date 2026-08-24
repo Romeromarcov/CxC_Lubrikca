@@ -25,13 +25,32 @@ HISTORICAL_PRICE_LIST_START = date(2026, 2, 20)
 HISTORICAL_PRICE_LIST_END_EXCLUSIVE = date(2026, 3, 13)
 
 
-def es_orden_historica(fecha: date | None, lista_id_str: str, enabled: bool = True) -> bool:
+def es_orden_historica(
+    fecha: date | None,
+    lista_id_str: str,
+    enabled: bool = True,
+    lista_es_usd_valida: bool = False,
+) -> bool:
     """True si la orden debe usar la Lista Histórica de Auditoría en vez de
     su lista de Odoo asignada (o si nunca tuvo lista asignada -- ese caso es
-    incondicional, no depende del toggle ni de la ventana)."""
+    incondicional, no depende del toggle ni de la ventana).
+
+    Excepción real (pedido explícito del usuario, agosto 2026, caso SJMG
+    2012 C.A. / pago 1279): la ventana histórica (20-feb a 12-mar-2026)
+    existe porque, según los datos verificados, NINGUNA orden de ese
+    período tenía una lista de precios propia y confiable -- pero 11
+    órdenes reales de esa ventana SÍ tienen una lista USD real y vigente
+    asignada (ej. lista #7 "Pago USD Marzo"), y para esas la lista USD es
+    la excepción explícita: prevalece sobre la sustitución histórica
+    (Euro, ref. VES), tanto para el precio como para la clasificación
+    "nació en lista USD". `lista_es_usd_valida` debe venir ya resuelta por
+    el llamador (``str(lista_id_str) in <listas USD configuradas>``).
+    """
     lista_id_str = (lista_id_str or "").strip()
     if not lista_id_str or lista_id_str in ("0", "None"):
         return True
+    if lista_es_usd_valida:
+        return False
     if not enabled or fecha is None:
         return False
     return HISTORICAL_PRICE_LIST_START <= fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE

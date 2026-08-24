@@ -4576,6 +4576,92 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
         assert item["posible_duplicado"] is False
 
 
+def test_e2e_cobranza_pagos_tarjeta_bcv_no_usa_sustitucion_eur_en_su_equivalente():
+    """Bug real (reportado por el usuario, agosto 2026, pago 1279/cliente
+
+    SJMG 2012 C.A.): en ``/api/cobranza/pagos`` la tarjeta "Tasa BCV" de un
+    pago huérfano de un cliente con órdenes históricas mostraba la tasa BCV
+    REAL (752.09, vía ``tasa_bcv_real``) pero un "Equivalente" calculado con
+    la tasa BCV-EUR (865.17 -- la base de conversión interna para esos
+    clientes) -- tasa y dólares de la MISMA tarjeta no coincidían entre sí.
+    Ahora ``monto_pago_bcv_usd`` se recalcula siempre con la tasa BCV real.
+    """
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "1279",
+                "cliente_id": "C_SJMG",
+                "monto": "255300.00",
+                "moneda": "VES",
+                "fecha_pago": "2026-08-04",
+                "vendedor": "v@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "C_SJMG", "nombre": "SJMG 2012 C.A"}]
+            if sheet == "Clientes"
+            else (
+                [
+                    {
+                        "timestamp": "2026-08-04 12:00:00",
+                        "tasa_bcv": "752.0943",
+                        "tasa_binance": "847.0337",
+                        "tasa_bcv_euro": "865.1700",
+                    }
+                ]
+                if sheet == "SerieTasas"
+                else []
+            )
+        )
+    )
+    # Sin lista_precios asignada -- historica incondicional (ver
+    # es_orden_historica), dispara la sustitución EUR como base de
+    # conversión interna para este cliente huérfano.
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_SJMG",
+            cliente_id="C_SJMG",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 3, 1),
+            fecha_entrega=None,
+            monto_total=Decimal("100.00"),
+            lista_precios="",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch(
+            "cxc.web.app._get_reporte_saldos_sync",
+            return_value={"items": [], "saldo_minimo_pendientes": []},
+        ),
+    ):
+        res = client.get("/api/cobranza/pagos")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["pago_id"] == "1279"
+        # La tarjeta muestra la tasa BCV real...
+        assert abs(item["tasa_bcv"] - 752.0943) < 0.001
+        # ...y su equivalente debe salir de ESA MISMA tasa (255300 /
+        # 752.0943 =~ 339.45), nunca de la sustitución EUR (255300 /
+        # 865.17 =~ 295.03, el bug real).
+        assert abs(item["monto_pago_bcv_usd"] - 339.45) < 0.01
+
+
 def test_e2e_cobranza_saldo_orden_usa_4_columnas_en_tiempo_real():
     """Bug real reportado por el usuario: "Saldo Orden (CxC)" en el modal
 
