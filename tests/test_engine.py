@@ -713,23 +713,28 @@ def test_devolucion_factura_sobre_cantidad_entregada() -> None:
     assert res.precio_base_calculado == Decimal("150.00")  # 15 × 10, no 20 × 10
 
 
-def test_devolucion_reflejada_en_odoo_como_precio_cero_no_cantidad() -> None:
-    """Bug real (SO 00133, "Inversiones La Bendición del Nazareno", agosto
+def test_linea_con_subtotal_cero_pero_totalmente_entregada_no_se_zanea() -> None:
+    """Bug real corregido (SO 00133, "Inversiones La Bendición del
 
-    2026): la devolución no siempre baja ``cantidad_entregada`` -- a veces
-    Odoo la refleja dejando el ``price_subtotal`` de la línea en 0 (la
-    mercancía salió, pero se le dejó de cobrar). Si eso pasa, la línea debe
-    facturarse en 0 aunque ``cantidad_entregada`` siga mostrando la cantidad
-    original -- el ``subtotal`` de Odoo manda sobre la cantidad cuando hay
-    devolución.
+    Nazareno", agosto 2026): un intento anterior de ``_cantidad_efectiva``
+    trataba ``linea.subtotal == 0`` como señal de que Odoo había reflejado
+    la devolución en precio $0 -- pero ``subtotal`` (``price_subtotal``)
+    está en 0 para el 81% de TODAS las líneas del sistema (hueco de
+    backfill del sync sin relación con devoluciones), y en vivo Odoo
+    mostraba ``price_subtotal`` real y ``qty_delivered == product_uom_qty``
+    para esas mismas líneas de S00133 -- un falso positivo confirmado por
+    el usuario (línea 100% entregada, no devuelta, con precio real en
+    Odoo). ``cantidad_entregada`` (que Odoo SÍ neta correctamente cuando la
+    devolución está aplicada) es la única señal -- ``subtotal`` nunca debe
+    zanear una línea a $0.
     """
     orden = b.orden(primera=False)
     orden.entregada_completa = True
     orden.tiene_devolucion = True
     linea = b.linea(marca="Sinoco", categoria="*", precio="10", cantidad="18", subtotal="0")
-    linea.cantidad_entregada = Decimal("18")  # Odoo NO bajó la cantidad
+    linea.cantidad_entregada = Decimal("18")  # entregada completa, sin faltante real
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
-    vinc = b.vinculacion(monto_aplicado="0", moneda_abono=Moneda.USD)
+    vinc = b.vinculacion(monto_aplicado="180", moneda_abono=Moneda.USD)
     inp = _inputs(
         orden=orden,
         lineas=[linea],
@@ -737,7 +742,7 @@ def test_devolucion_reflejada_en_odoo_como_precio_cero_no_cantidad() -> None:
         resolver=_resolver(**{"P1@USD": "10"}),
     )
     res = calcular_factura(inp)
-    assert res.precio_base_calculado == Decimal("0.00")  # no 18 × 10 = 180
+    assert res.precio_base_calculado == Decimal("180.00")  # 18 × 10, no $0
 
 
 def test_sin_devolucion_factura_sobre_cantidad_pedida() -> None:

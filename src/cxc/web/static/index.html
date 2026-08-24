@@ -1292,8 +1292,8 @@
 
                     <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
                         <div class="panel-header">
-                            <h2>Devolución No Reflejada en Cantidad</h2>
-                            <p title="Caso real (agosto 2026, SO 00133/Inversiones La Bendición del Nazareno, 12 órdenes corregidas): una devolución puede reflejarse en Odoo poniendo el precio/subtotal de la línea en $0 en vez de bajar la cantidad entregada -- el motor de teóricos ya respeta esta señal, pero sin este chequeo nadie se entera de una devolución futura mal reflejada hasta auditarla a mano.">Líneas de órdenes con devolución donde Odoo dejó el precio en $0 pero la cantidad entregada sin bajar -- riesgo de sobrestimar el teórico con mercancía ya devuelta. Verificar en Odoo cómo se registró la devolución.</p>
+                            <h2>Faltante de Devolución por Línea</h2>
+                            <p title="Compara cantidad pedida vs entregada por línea, igual que la propia pantalla de la orden en Odoo -- solo para órdenes con devolución registrada. Un faltante real indica que hace falta el ajuste de cantidad en la orden y/o la Nota de Crédito en la factura.">Líneas de órdenes con devolución donde la cantidad entregada es menor a la pedida -- verificar si falta el ajuste en la orden y/o la Nota de Crédito en la factura.</p>
                         </div>
 
                         <div class="table-wrapper large-table">
@@ -1302,14 +1302,15 @@
                                     <tr>
                                         <th>Orden (SO)</th>
                                         <th>Producto</th>
-                                        <th>Cantidad Entregada</th>
-                                        <th>Precio Unitario ($)</th>
-                                        <th>Valor Potencial Afectado ($)</th>
+                                        <th>Cant. Ordenada</th>
+                                        <th>Cant. Entregada</th>
+                                        <th>Faltante</th>
+                                        <th>Valor Potencial ($)</th>
                                     </tr>
                                 </thead>
                                 <tbody id="devolucion-no-reflejada-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay devoluciones sin reflejar en la cantidad entregada.</td>
+                                        <td colspan="6" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
                                     </tr>
                                 </tbody>
                             </table>
