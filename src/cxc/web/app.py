@@ -7033,6 +7033,21 @@ async def get_bandeja_facturacion():
                 )
 
             if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_1:
+                # Bug real (pedido explícito del usuario, agosto 2026, caso
+                # "Inversiones La Bendición del Nazareno" SO 00133): `abono`
+                # solo suma Vinculaciones CONCILIADO -- estructuralmente
+                # imposible antes de facturar (ver docstring de
+                # cxc_routing.py), así que para TODA orden en Bandeja 1
+                # (por definición, sin facturar todavía) subestimaba lo
+                # pagado y mostraba "saldo_pendiente" como si nada se
+                # hubiera abonado, aunque la propia razón de estar en esta
+                # bandeja sea que una Vinculación PENDIENTE ya cubrió el
+                # teórico. Se usa el monto que INCLUYE lo pendiente (mismo
+                # que decidió el enrutamiento) -- nunca puede ser menor que
+                # `abono`, así que no introduce un hueco nuevo.
+                abono_para_facturar = float(
+                    item.get("monto_pagado_factura_odoo_incl_pendiente") or abono
+                )
                 ordenes_por_facturar.append(
                     {
                         "so_id": o.so_id,
@@ -7042,13 +7057,13 @@ async def get_bandeja_facturacion():
                         "fecha": o.fecha.isoformat()
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
-                        "monto_pagado": abono,
+                        "monto_pagado": abono_para_facturar,
                         "subtotal_neto": round(tot_motor / 1.16, 2) if tot_motor else 0.0,
                         "iva_estimado": (
                             round(tot_motor - tot_motor / 1.16, 2) if tot_motor else 0.0
                         ),
                         "total_motor": tot_motor,
-                        "saldo_pendiente": round(max(0.0, tot_motor - abono), 2),
+                        "saldo_pendiente": round(max(0.0, tot_motor - abono_para_facturar), 2),
                         "descuento_aplicar_monto": desc_monto,
                         "descuento_aplicar_pct": desc_pct,
                         # Fase 2 (auditoría del ciclo CxC): a diferencia de
@@ -11994,19 +12009,40 @@ def _get_ventas_sync(
                 neta_nativa_iva = (
                     usd_neta_teorica_iva if es_lista_usd_nacimiento else ves_neta_teorica_iva
                 )
+                # Pedido explícito del usuario (agosto 2026, caso "Inversiones
+                # La Bendición del Nazareno" SO 00133): una orden SIN
+                # facturar todavía debe restar del saldo mostrado también lo
+                # pagado vía Vinculación PENDIENTE (CONCILIADO es
+                # estructuralmente imposible antes de facturar -- ver
+                # docstring de cxc_routing.py) -- si no, el saldo se veía
+                # congelado en el teórico completo aunque ya se hubiera
+                # abonado la mayor parte, sin ninguna señal visual de que se
+                # va acercando a $0 (el punto en que la orden pasa sola a
+                # Bandeja de Facturación). Una orden YA facturada sigue
+                # exigiendo CONCILIADO -- ahí sí existe un camino real a
+                # confirmarse (el resync automático), así que forzar lo
+                # pendiente ahí ocultaría deuda genuina.
+                valor_pagado_para_saldo = (
+                    val_ref_nacimiento_incl_pendiente if not o.facturada else val_ref_nacimiento
+                )
                 if not sin_datos_nativo and neta_nativa_iva is not None:
-                    saldo_cxc = round(max(0.0, neta_nativa_iva - val_ref_nacimiento), 2)
+                    saldo_cxc = round(max(0.0, neta_nativa_iva - valor_pagado_para_saldo), 2)
                 elif tiene_factura:
                     saldo_cxc = round(
                         max(
                             0.0,
-                            total_facturado_neto - descuento_aplicado_sistema - val_ref_nacimiento,
+                            total_facturado_neto
+                            - descuento_aplicado_sistema
+                            - valor_pagado_para_saldo,
                         ),
                         2,
                     )
                 else:
                     saldo_cxc = round(
-                        max(0.0, venta_neta_real - descuento_aplicado_sistema - val_ref_nacimiento),
+                        max(
+                            0.0,
+                            venta_neta_real - descuento_aplicado_sistema - valor_pagado_para_saldo,
+                        ),
                         2,
                     )
 
