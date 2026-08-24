@@ -40,6 +40,13 @@ from cxc.engine.equivalents import (
     valor_pagado_binance_usd,
 )
 from cxc.engine.historical_pricing import es_orden_historica
+from cxc.engine.reportes_historicos import (
+    cobranza_por_vendedor,
+    cxc_vencida_no_pagada,
+    recuperacion_cartera,
+    resumen_cobranza_por_vendedor,
+    resumen_vencida_por_vendedor,
+)
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
     Cliente,
@@ -10775,6 +10782,150 @@ def _es_descuento_manual_patron_obsequio_conocido(disc_pct: Decimal) -> bool:
     rango a ciegas.
     """
     return Decimal("99.9") <= disc_pct < Decimal("100")
+
+
+def _parse_iso_date_param(value: str | None, default: date) -> date:
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Fecha inválida '{value}', use YYYY-MM-DD"
+        ) from e
+
+
+@app.get("/api/reportes/cxc-vencida-junio")
+async def get_reporte_cxc_vencida_junio(
+    cxc_session: str | None = Cookie(default=None),
+    corte: str | None = None,
+):
+    """CxC vencida y NO pagada a una fecha de corte (default 2026-06-30),
+    reconstruida punto-en-el-tiempo desde la red de conciliación real de
+    Odoo (``account.partial.reconcile.max_date``) -- no el estado actual.
+    Ver ``cxc.engine.reportes_historicos`` para el método completo.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        cutoff = _parse_iso_date_param(corte, date(2026, 6, 30))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        facturas = cxc_vencida_no_pagada(execute, repo, cutoff)
+        resumen = resumen_vencida_por_vendedor(facturas)
+        return {
+            "corte": cutoff.isoformat(),
+            "resumen_por_vendedor": resumen,
+            "total_facturas": len(facturas),
+            "total_monto_vencido_usd": round(sum(f.residual_al_corte_usd for f in facturas), 2),
+            "detalle": [
+                {
+                    "factura_id": f.factura_id,
+                    "numero": f.numero,
+                    "so_id": f.so_id,
+                    "cliente_id": f.cliente_id,
+                    "cliente_nombre": f.cliente_nombre,
+                    "vendedor": f.vendedor,
+                    "fecha_factura": f.fecha_factura,
+                    "fecha_vencimiento": f.fecha_vencimiento,
+                    "monto_total_usd": f.monto_total_usd,
+                    "pagado_al_corte_usd": f.pagado_al_corte_usd,
+                    "residual_al_corte_usd": f.residual_al_corte_usd,
+                    "payment_state_actual": f.payment_state_actual,
+                }
+                for f in facturas
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/reportes/cobranza-julio")
+async def get_reporte_cobranza_julio(
+    cxc_session: str | None = Cookie(default=None),
+    desde: str | None = None,
+    hasta: str | None = None,
+):
+    """Pagos de cliente confirmados en Odoo con fecha dentro de la ventana
+    (default julio 2026: 2026-07-01 a 2026-07-31), agrupados por vendedor.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        fecha_desde = _parse_iso_date_param(desde, date(2026, 7, 1))
+        fecha_hasta = _parse_iso_date_param(hasta, date(2026, 7, 31))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        pagos = cobranza_por_vendedor(execute, repo, fecha_desde, fecha_hasta)
+        resumen = resumen_cobranza_por_vendedor(pagos)
+        return {
+            "desde": fecha_desde.isoformat(),
+            "hasta": fecha_hasta.isoformat(),
+            "resumen_por_vendedor": resumen,
+            "total_pagos": len(pagos),
+            "total_monto_usd": round(sum(p.monto_usd for p in pagos), 2),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/reportes/recuperacion-julio")
+async def get_reporte_recuperacion_julio(
+    cxc_session: str | None = Cookie(default=None),
+    corte_vencida: str | None = None,
+    recuperacion_desde: str | None = None,
+    recuperacion_hasta: str | None = None,
+):
+    """Cruce de CxC vencida (default corte 2026-06-30) contra la cobranza
+    de la ventana de recuperación (default julio 2026). Devuelve el
+    detalle por factura y 2 vistas de totales por vendedor:
+    "específica" (solo lo cobrado contra ESAS facturas vencidas) y
+    "general, alternativa" (toda la cobranza de la ventana, métrica más
+    laxa -- ver docstring de ``recuperacion_cartera``).
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        cutoff = _parse_iso_date_param(corte_vencida, date(2026, 6, 30))
+        fecha_desde = _parse_iso_date_param(recuperacion_desde, date(2026, 7, 1))
+        fecha_hasta = _parse_iso_date_param(recuperacion_hasta, date(2026, 7, 31))
+        repo = get_repo()
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        resultado = recuperacion_cartera(execute, repo, cutoff, fecha_desde, fecha_hasta)
+        return {
+            "corte_vencida": cutoff.isoformat(),
+            "recuperacion_desde": fecha_desde.isoformat(),
+            "recuperacion_hasta": fecha_hasta.isoformat(),
+            "detalle": resultado["detalle"],
+            "totales_por_vendedor": [
+                {
+                    "vendedor": r.vendedor,
+                    "monto_vencido_30jun_usd": r.monto_vencido_30jun_usd,
+                    "cobrado_julio_especifico_usd": r.cobrado_julio_especifico_usd,
+                    "pct_recuperacion_especifica": r.pct_recuperacion_especifica,
+                    "cobrado_julio_general_usd": r.cobrado_julio_general_usd,
+                    "pct_recuperacion_general": r.pct_recuperacion_general,
+                }
+                for r in resultado["totales_por_vendedor"]
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/auditoria")
