@@ -9828,6 +9828,36 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 return None
             return float(monto_raw / Decimal(str(tasa_eur)))
 
+        def monto_bcv_real(pid: str, tasa_bcv_real: float | None) -> float | None:
+            """Equivalente USD de la tarjeta "Tasa BCV" -- SIEMPRE con la
+
+            tasa BCV real (nunca la sustitución EUR usada como base de
+            conversión interna para clientes con órdenes históricas). Bug
+            real (reportado por el usuario, agosto 2026, pago 1279/cliente
+            SJMG 2012 C.A.): la tarjeta mostraba ``tasa_bcv_real`` (752.09,
+            correcta) pero un equivalente calculado con la tasa BCV-EUR
+            (865.17, la base de conversión interna) -- inconsistente entre
+            sí. Mismo patrón que ``monto_eur``, aplicado a la tasa real en
+            vez de la EUR.
+            """
+            p_row = pagos_by_id.get(pid)
+            if p_row:
+                monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
+                moneda = str(p_row.get("moneda", "USD") or "USD").upper().strip()
+            else:
+                for h in historial:
+                    if h["pago_id"] == pid and h.get("vinc_id") is None:
+                        monto_raw = Decimal(str(h.get("monto_original", 0)))
+                        moneda = str(h.get("moneda", "USD") or "USD").upper().strip()
+                        break
+                else:
+                    return None
+            if moneda == "USD":
+                return float(monto_raw)
+            if tasa_bcv_real is None or tasa_bcv_real <= 0:
+                return None
+            return float(monto_raw / Decimal(str(tasa_bcv_real)))
+
         unificados: list[dict[str, Any]] = []
 
         # 1) Pendientes -- ya vienen con reparto FIFO resuelto.
@@ -9861,17 +9891,21 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "cliente_nombre": item["cliente_nombre"],
                     "monto_pago_original": item["monto_pago_original"],
                     "moneda_pago": item["moneda_pago"],
-                    # "tasa_bcv" acá es SOLO para la tarjeta de display --
-                    # item["tasa_bcv_real"] es el BCV-USD real (nunca la
-                    # sustitución EUR usada internamente para convertir
-                    # montos de clientes con órdenes históricas, ver
-                    # bcv_rate_real en _get_conciliaciones_sugerencias_sync
-                    # -- esa base de conversión ya quedó aplicada en
-                    # monto_pago_bcv_usd/monto_pago_binance_usd, no hace
-                    # falta repetirla aquí).
+                    # Bug real corregido (agosto 2026, pago 1279/cliente
+                    # SJMG 2012 C.A.): "tasa_bcv" mostraba item["tasa_bcv_
+                    # real"] (BCV-USD real) pero "monto_pago_bcv_usd" salía
+                    # de item["monto_pago"], calculado con la base de
+                    # conversión INTERNA (que para un cliente con órdenes
+                    # históricas es la sustitución BCV-EUR, ver bcv_rate en
+                    # _get_conciliaciones_sugerencias_sync) -- tasa y
+                    # equivalente mostrados juntos en la misma tarjeta no
+                    # coincidían entre sí. Ahora "monto_pago_bcv_usd" se
+                    # recalcula SIEMPRE con la tasa BCV real (monto_bcv_
+                    # real, mismo patrón que monto_eur) para que la tarjeta
+                    # sea internamente consistente.
                     "tasa_bcv": item["tasa_bcv_real"],
                     "tasa_binance": tasa_binance_item,
-                    "monto_pago_bcv_usd": item["monto_pago"],
+                    "monto_pago_bcv_usd": monto_bcv_real(pid, item["tasa_bcv_real"]),
                     "monto_pago_binance_usd": monto_binance_usd_item,
                     "monto_pago_eur": monto_eur(pid, extra["tasa_bcv_eur"]),
                     "monto_aplicado": 0.0,
