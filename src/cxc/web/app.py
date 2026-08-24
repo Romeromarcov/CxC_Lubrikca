@@ -781,13 +781,25 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     for v in todas_vincs:
         vincs_por_pago.setdefault(v.pago_id, []).append(v)
 
-    # Tasas actuales -- solo se usan si hace falta RECALCULAR los
-    # equivalentes congelados de una Vinculación ya CONCILIADO cuyo pago
-    # cambió en Odoo (ver más abajo). Se resuelven una sola vez, no por
-    # cada Vinculación.
-    last_tasa = repo.last_serie_tasa()
-    tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-    tasa_binance_ultima = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
+    # Tasas -- solo se usan si hace falta RECALCULAR los equivalentes
+    # congelados de una Vinculación ya CONCILIADO cuyo pago cambió en Odoo
+    # (ver más abajo). Se resuelven una sola vez, no por cada Vinculación.
+    #
+    # Bug real corregido (agosto 2026, recurrencia detectada por el chequeo
+    # de auditoría "tasa implícita implausible" -- VINC_1372_S00054 y
+    # VINC_989_S00127 seguían apareciendo con la tasa 784.66/885.08 DESPUÉS
+    # de haberlas corregido a mano esa misma sesión): esta función usaba
+    # ``repo.last_serie_tasa()`` -- la tasa MÁS RECIENTE, no la del día real
+    # del pago -- como default para CUALQUIER Vinculación recalculada fuera
+    # de la ventana histórica (``resolver_tasa_bcv_vinculacion`` solo
+    # corrige el caso EUR/ventana histórica; para todo lo demás devolvía
+    # ese default tal cual). El mismo bug que ``_vincular_masivo_sync`` ya
+    # tenía corregido esa misma mañana, pero en ESTA función nunca se
+    # tocó -- cada ciclo del daemon que reprocesaba un pago CONCILIADO
+    # modificado en Odoo volvía a congelar la tasa de HOY. Ahora se resuelve
+    # por la fecha real del pago (``get_rate_for_datetime``), igual que
+    # ``_vincular_masivo_sync``.
+    tasas_rows_resync = _all_serie_tasas_rows(repo)
 
     def _recalcular_desde_conciliado(
         v: Vinculacion, so_id_nuevo: str, conciliado: dict[str, Any]
@@ -822,18 +834,21 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             )
         except ValueError:
             hora_pago_nueva = v.hora_pago_confirmada
+        tasa_bcv_del_dia, tasa_binance_nueva = get_rate_for_datetime(
+            hora_pago_nueva, tasas_rows_resync
+        )
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id_nuevo, hora_pago_nueva, tasa_bcv_ultima
+            repo, so_id_nuevo, hora_pago_nueva, tasa_bcv_del_dia
         )
         monto_nuevo = monto_odoo if monto_odoo > 0 else v.monto_aplicado
         if moneda_odoo == "USD":
             equiv_usd_bcv = monto_nuevo
             equiv_usd_binance = monto_nuevo
             equiv_ves_bcv = monto_nuevo * tasa_bcv
-            equiv_ves_binance = monto_nuevo * tasa_binance_ultima
+            equiv_ves_binance = monto_nuevo * tasa_binance_nueva
         else:
             equiv_usd_bcv = monto_nuevo / tasa_bcv
-            equiv_usd_binance = monto_nuevo / tasa_binance_ultima
+            equiv_usd_binance = monto_nuevo / tasa_binance_nueva
             equiv_ves_bcv = monto_nuevo
             equiv_ves_binance = monto_nuevo
         try:
@@ -848,7 +863,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                 monto_aplicado=monto_nuevo,
                 hora_pago_confirmada=hora_pago_nueva,
                 tasa_bcv_aplicada=tasa_bcv,
-                tasa_binance_aplicada=tasa_binance_ultima,
+                tasa_binance_aplicada=tasa_binance_nueva,
                 bcv_variante=bcv_variante,
                 moneda_abono=moneda_nueva,
                 equiv_usd_bcv=equiv_usd_bcv,
@@ -2872,11 +2887,6 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
     try:
         repo = get_repo()
 
-        # Fetch latest exchange rates from SerieTasas
-        last_tasa = repo.last_serie_tasa()
-        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-        tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
-
         # Fetch payment to get currency
         pago = repo.get_pago(req.pago_id)
         if not pago:
@@ -2884,9 +2894,18 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
 
         monto_dec = Decimal(str(req.monto_aplicado))
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # Bug real corregido (agosto 2026): usaba repo.last_serie_tasa()
+        # (la tasa MÁS RECIENTE) en vez de la tasa real del día del pago --
+        # mismo bug ya corregido en _vincular_masivo_sync/_resincronizar_
+        # vinculaciones_con_odoo. get_rate_for_datetime resuelve por la
+        # fecha real (SerieTasas -> TasasHistoricasAuditoria -> default).
+        tasas_rows_vinc = _all_serie_tasas_rows(repo)
+        tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(
+            hora_pago_confirmada, tasas_rows_vinc
+        )
         # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, req.so_id, hora_pago_confirmada, tasa_bcv_ultima
+            repo, req.so_id, hora_pago_confirmada, tasa_bcv_del_dia
         )
 
         # Calculate equivalents
@@ -2983,14 +3002,18 @@ async def put_editar_vinculacion(
         if monto_dec <= Decimal("0"):
             raise HTTPException(status_code=400, detail="El monto debe ser positivo.")
 
-        last_tasa = repo.last_serie_tasa()
-        tasa_bcv_ultima = last_tasa.tasa_bcv if last_tasa else Decimal("36.5")
-        tasa_binance = last_tasa.tasa_binance if last_tasa else Decimal("38.0")
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
+        # Bug real corregido (agosto 2026): mismo criterio que
+        # POST /api/vincular -- la tasa real del día del pago, no la más
+        # reciente.
+        tasas_rows_vinc = _all_serie_tasas_rows(repo)
+        tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(
+            hora_pago_confirmada, tasas_rows_vinc
+        )
         # La orden nueva puede caer en una ventana histórica distinta a la
         # anterior -- se re-resuelve la tasa BCV, nunca se reusa la vieja.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id_nuevo, hora_pago_confirmada, tasa_bcv_ultima
+            repo, so_id_nuevo, hora_pago_confirmada, tasa_bcv_del_dia
         )
 
         if pago.moneda == "USD":
