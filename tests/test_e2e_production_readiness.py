@@ -4166,6 +4166,73 @@ def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
     assert audit_rows[0]["tipo_auditoria"] == "vinculacion_actualizada_por_cambio_en_odoo"
 
 
+def test_e2e_43b_recalculo_de_conciliado_usa_tasa_del_dia_del_pago_no_la_mas_reciente():
+    """Bug real corregido (agosto 2026, recurrencia detectada por el
+
+    chequeo de auditoría "tasa implícita implausible" -- VINC_1372_S00054
+    y VINC_989_S00127 seguían apareciendo con la tasa 784.66/885.08
+    DESPUÉS de haberlas corregido a mano esa misma sesión): cuando el
+    monto de un pago YA CONCILIADO cambia en Odoo, la Vinculación se
+    recalcula -- pero usaba ``repo.last_serie_tasa()`` (la tasa MÁS
+    RECIENTE del sistema) en vez de la tasa real del día del pago. Cada
+    ciclo del daemon que reprocesaba un pago modificado en Odoo volvía a
+    congelar la tasa de HOY.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_B",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
+            estado=EstadoVinculacion.CONCILIADO,  # ya conciliado, el pago cambió DESPUÉS
+        )
+    ]
+    # Tasa de HOY (mucho más alta, simula devaluación) -- NUNCA debe
+    # terminar en la Vinculación recalculada.
+    mock_repo.last_serie_tasa.return_value = SerieTasa(
+        timestamp=datetime(2026, 8, 23),
+        tasa_bcv=Decimal("784.6633"),
+        tasa_binance=Decimal("800.0"),
+        fuente="test",
+    )
+    # Tasa real del día del pago (2026-07-01).
+    mock_repo.all_serie_tasas.return_value = [
+        SerieTasa(
+            timestamp=datetime(2026, 7, 1, 12, 0),
+            tasa_bcv=Decimal("612.43"),
+            tasa_binance=Decimal("650.0"),
+            fuente="test",
+        )
+    ]
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    fake_execute_base = _fake_execute_pago_conciliado(["SO_B"])
+
+    def fake_execute(model, method, args, kwargs=None):
+        rows = fake_execute_base(model, method, args, kwargs)
+        if model == "account.payment" and method == "search_read":
+            for r in rows:
+                r["amount"] = 650.0  # monto cambió en Odoo -- fuerza el recálculo
+                r["amount_ref"] = 650.0
+        return rows
+
+    _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    mock_repo.update_vinculaciones.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    v_nueva = vincs_actualizadas[0]
+    assert v_nueva.tasa_bcv_aplicada == Decimal("612.43")
+    assert v_nueva.tasa_bcv_aplicada != Decimal("784.6633")
+
+
 def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     """Si Odoo reconcilió el pago contra VARIAS órdenes a la vez (multi-
 
