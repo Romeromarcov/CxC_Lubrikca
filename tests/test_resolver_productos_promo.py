@@ -27,11 +27,11 @@ def _catalogo_mock(productos: list[Producto]) -> MagicMock:
     return repo
 
 
-def _producto(producto_id: str, codigo: str) -> Producto:
+def _producto(producto_id: str, codigo: str, nombre: str = "x") -> Producto:
     return Producto(
         producto_id=producto_id,
         codigo=codigo,
-        nombre="x",
+        nombre=nombre,
         marca="",
         volumen=Decimal("0"),
         peso=Decimal("0"),
@@ -46,6 +46,16 @@ def test_resuelve_codigo_de_catalogo_a_producto_id() -> None:
 def test_producto_id_ya_valido_se_mantiene_tal_cual() -> None:
     repo = _catalogo_mock([_producto("1033", "0761")])
     assert _resolver_productos_promo("1033", repo) == "1033"
+
+
+def test_resuelve_nombre_completo_a_producto_id() -> None:
+    """Defensa adicional (agosto 2026): un navegador con app.js viejo en
+
+    caché (el ``?v=`` de index.html no se había actualizado el mismo día
+    del fix) siguió enviando el NOMBRE completo del producto al editar
+    una regla ya existente -- se resuelve igual que el código."""
+    repo = _catalogo_mock([_producto("1033", "0761", "LIGA PARA FRENOS DOT3 (1x12)")])
+    assert _resolver_productos_promo("LIGA PARA FRENOS DOT3 (1x12)", repo) == "1033"
 
 
 def test_token_sin_match_se_deja_tal_cual_mejor_esfuerzo() -> None:

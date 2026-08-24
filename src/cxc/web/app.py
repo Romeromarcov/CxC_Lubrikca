@@ -8299,12 +8299,18 @@ def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
     ``product.template`` (ninguno de los dos es ``product.product``).
     Se resuelve aquí, una sola vez, al guardar -- cada token se acepta tal
     cual si ya es un producto_id válido en el catálogo; si no, se busca
-    por código (``codigo``/``default_code``); si tampoco matchea, se deja
-    tal cual (mejor esfuerzo, no bloquea guardar la regla).
+    por código (``codigo``/``default_code``); si tampoco matchea, se busca
+    por nombre exacto (defensa adicional -- una versión vieja del
+    formulario en caché del navegador, sin el ``?v=`` de este archivo
+    actualizado, puede seguir enviando el nombre completo del producto
+    durante un tiempo aunque el código ya esté corregido); si tampoco
+    matchea, se deja tal cual (mejor esfuerzo, no bloquea guardar la
+    regla).
     """
     catalogo = repo.all_catalogo()
     por_id = {p.producto_id for p in catalogo}
     por_codigo = {p.codigo: p.producto_id for p in catalogo if p.codigo}
+    por_nombre = {p.nombre.strip().upper(): p.producto_id for p in catalogo if p.nombre}
     resueltos = []
     for token in productos_str.split(","):
         t = token.strip()
@@ -8314,6 +8320,8 @@ def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
             resueltos.append(t)
         elif t in por_codigo:
             resueltos.append(por_codigo[t])
+        elif t.upper() in por_nombre:
+            resueltos.append(por_nombre[t.upper()])
         else:
             resueltos.append(t)
     return ",".join(resueltos)
@@ -8426,15 +8434,43 @@ async def get_config_exclusiones():
 
 @app.post("/api/config/exclusiones")
 async def post_config_exclusiones(req: ExclusionRequest):
+    """Registra un par de descuentos mutuamente excluyentes.
+
+    Bug real (auditoría de reglas, agosto 2026): las filas de
+    ``exclusiones`` en producción guardaban 'promocion'/'recompra', un
+    vocabulario que el motor no reconoce -- resuelve las exclusiones
+    buscando el nombre del componente en un dict cuyas claves son
+    'primera_compra'/'recurrencia'/'contado'/'volumen'/'bcv_completo'/
+    'producto'. La fila 'promocion' <-> 'recompra' nunca excluyó nada y no
+    había forma de notarlo: el endpoint aceptaba cualquier string y la
+    tabla de Configuración imprimía el valor crudo cuando no lo reconocía.
+    Se canoniza al guardar, igual que ``_resolver_productos_promo`` hace
+    con los productos de las reglas de obsequio.
+    """
     try:
         repo = get_repo()
+        from cxc.engine.discounts import (
+            COMPONENTES_DESCUENTO,
+            normalizar_componente_descuento,
+        )
         from cxc.models import ExclusionRegla
 
-        rule = ExclusionRegla(
-            regla_tipo_a=req.regla_tipo_a, regla_tipo_b=req.regla_tipo_b, activo=req.activo
-        )
+        tipo_a = normalizar_componente_descuento(req.regla_tipo_a)
+        tipo_b = normalizar_componente_descuento(req.regla_tipo_b)
+        for tipo in (tipo_a, tipo_b):
+            if tipo not in COMPONENTES_DESCUENTO:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Tipo de descuento desconocido: '{tipo}'. "
+                        f"Válidos: {', '.join(COMPONENTES_DESCUENTO)}."
+                    ),
+                )
+        rule = ExclusionRegla(regla_tipo_a=tipo_a, regla_tipo_b=tipo_b, activo=req.activo)
         repo.save_exclusion(rule)
         return {"status": "success", "message": "Exclusión registrada correctamente."}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

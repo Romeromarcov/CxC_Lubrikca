@@ -151,6 +151,90 @@ class _Componentes:
 _ReglaT = TypeVar("_ReglaT")
 
 
+# Nombres canónicos de cada componente de descuento -- son las claves que usa
+# ``calcular_factura`` para resolver exclusiones y las mismas que ofrece el
+# <select> del panel "Exclusiones Mutuas de Descuentos" en Configuración.
+COMPONENTES_DESCUENTO = (
+    "primera_compra",
+    "recurrencia",
+    "contado",
+    "volumen",
+    "bcv_completo",
+    "producto",
+)
+
+# Bug real (auditoría agosto 2026, mismo patrón que el obsequio): las filas
+# de ``exclusiones`` en producción no venían del panel de Configuración sino
+# de un seed anterior, y guardaban un vocabulario distinto al que consume el
+# motor -- 'promocion' en vez de 'primera_compra' y 'recompra' en vez de
+# 'recurrencia'. ``calcular_factura`` resuelve exclusiones con
+# ``if ta in valores and tb in valores``, así que la fila
+# 'promocion' <-> 'recompra' NUNCA excluyó nada: quedó silenciosamente
+# muerta desde que se creó. La fila 'volumen' <-> 'recompra' sí surtía
+# efecto, pero solo de casualidad, por un caso especial hardcodeado con esos
+# strings literales dentro de ``_calcular_componentes`` -- no por el camino
+# general. Se normalizan los alias en el borde (lectura y guardado) para que
+# ambos caminos vean siempre los nombres canónicos.
+_ALIAS_COMPONENTES = {
+    "promocion": "primera_compra",
+    "promociones": "primera_compra",
+    "primera": "primera_compra",
+    "recompra": "recurrencia",
+    "recurrente": "recurrencia",
+    "pronto_pago": "contado",
+    "diferencial": "bcv_completo",
+    "diferencial_cambiario": "bcv_completo",
+}
+
+
+def normalizar_componente_descuento(nombre: str) -> str:
+    """Nombre canónico del componente de descuento para ``nombre``.
+
+    Devuelve el valor tal cual (en minúsculas, sin espacios) si ya es
+    canónico o si no se reconoce -- no inventa un componente que no exista.
+    Ver ``_ALIAS_COMPONENTES`` para el porqué de los alias.
+    """
+    limpio = (nombre or "").strip().lower()
+    return _ALIAS_COMPONENTES.get(limpio, limpio)
+
+
+def _pares_exclusion(exclusiones: list[ExclusionRegla]) -> set[tuple[str, str]]:
+    """Pares (a, b) activos, canonizados y en ambos sentidos."""
+    pares: set[tuple[str, str]] = set()
+    for ex in exclusiones:
+        if not getattr(ex, "activo", True):
+            continue
+        ta = normalizar_componente_descuento(ex.regla_tipo_a)
+        tb = normalizar_componente_descuento(ex.regla_tipo_b)
+        pares.add((ta, tb))
+        pares.add((tb, ta))
+    return pares
+
+
+def _aplicar_exclusiones(
+    valores: dict[str, Decimal], exclusiones: list[ExclusionRegla]
+) -> dict[str, Decimal]:
+    """Anula el menor de cada par excluyente ("se aplica el de mayor valor",
+
+    tal como lo describe el panel de Configuración). Devuelve un dict nuevo.
+    """
+    resultado = dict(valores)
+    for ex in exclusiones:
+        if not getattr(ex, "activo", True):
+            continue
+        ta = normalizar_componente_descuento(ex.regla_tipo_a)
+        tb = normalizar_componente_descuento(ex.regla_tipo_b)
+        if ta not in resultado or tb not in resultado:
+            continue
+        va, vb = resultado[ta], resultado[tb]
+        if va > 0 and vb > 0:
+            if va >= vb:
+                resultado[tb] = Decimal("0")
+            else:
+                resultado[ta] = Decimal("0")
+    return resultado
+
+
 def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_ReglaT]:
     """Tarea 1: excluye reglas con ``requiere_pago_previo=True`` cuando la
     orden/factura aún no tiene ningún abono vinculado (``inp.abonos`` vacío).
@@ -420,6 +504,20 @@ def _evaluar_promociones_producto(
     promos") -- las promos "recurrente" fuera de la primera compra NO
     deben inventar ese 2% de la nada, solo actúan si hay una regla
     explícitamente configurada.
+
+    Bug real corregido (auditoría de reglas, agosto 2026): la rama
+    porcentual coercía ``pct_general == 0`` a 2% SIEMPRE, también para las
+    promos recurrentes. Ese guard convertía un ``descuento_fallback``
+    configurado EXPLÍCITAMENTE en 0 -- que es lo que tienen las dos reglas
+    reales de producción, o sea "si no alcanza la compra mínima, no hay
+    nada" -- en un 2% inventado sobre el subtotal COMPLETO de la orden
+    (todas las líneas, no solo las de la categoría de la promo). Con
+    ``PROMO_12_MAS_1`` (recurrente, activa desde marzo 2026, compra mínima
+    12 cajas) eso significaba que toda orden recurrente con menos de 12
+    cajas venía recibiendo un 2% que nadie configuró, contradiciendo lo que
+    este mismo docstring ya declaraba sobre ``fallback_industrial``. La
+    coerción se mantiene solo bajo ``fallback_industrial`` (primera
+    compra), donde el 2% sí es un incentivo definido por negocio.
     """
     nc = Decimal("0")
     detalle_nc: DescuentoAplicado | None = None
@@ -487,8 +585,8 @@ def _evaluar_promociones_producto(
                     pcts.append(p.valor)
                 else:
                     pcts.append(p.descuento_fallback)
-            pct_general = max(pcts) if pcts else Decimal("0.02")
-            if pct_general == 0:
+            pct_general = max(pcts) if pcts else Decimal("0.0")
+            if pct_general == 0 and fallback_industrial:
                 pct_general = Decimal("0.02")
         elif fallback_industrial:
             pct_general = Decimal("0.02")
@@ -973,15 +1071,12 @@ def _calcular_componentes(
             descripcion="Dcto volumen " + ", ".join(detalles_vol),
             monto=q2(volumen_desc),
         )
-        # Apply dynamic exclusions (e.g., volumen excludes recompra)
-        exclusiones_activas = set()
-        for ex in inp.exclusiones:
-            if getattr(ex, "activo", True):
-                ta = (ex.regla_tipo_a or "").lower().strip()
-                tb = (ex.regla_tipo_b or "").lower().strip()
-                exclusiones_activas.add((ta, tb))
-                exclusiones_activas.add((tb, ta))
-        if ("volumen", "recompra") in exclusiones_activas:
+        # Volumen <-> Recompra es el único par que se resuelve aquí y no por
+        # el criterio general de "gana el de mayor valor": volumen anula la
+        # recompra siempre. Es el comportamiento con el que se validaron los
+        # montos en producción, así que se conserva tal cual; el resto de los
+        # pares se resuelve en ``calcular_factura``/``_teoricos_por_lista``.
+        if ("volumen", "recurrencia") in _pares_exclusion(inp.exclusiones):
             pct_recompra = Decimal("0")
             detalle_recompra = None
 
@@ -1167,28 +1262,52 @@ def conceptos_descuento_teorico(
     """Desglose de conceptos que conforman ``descuentos_teorico_ves``/``_usd``
 
     (Fase 6, modal de detalle en ``/api/ventas/{so_id}/detalle``): qué
-    reglas explican el descuento teórico de ESA lista específica. Mismos 3
-    componentes que suma ``_teoricos_por_lista`` (recompra + contado +
-    volumen) -- NO incluye BCV-completo/primera-compra, que no son
-    específicos de una lista (se calculan por abono o de forma orden-wide,
-    ver nota en ``_teoricos_por_lista``).
+    reglas explican el descuento teórico de ESA lista específica. Cubre los
+    mismos componentes que suma ``_teoricos_por_lista`` -- obsequio/primera
+    compra, recompra, contado, volumen y producto, con las exclusiones
+    mutuas ya resueltas -- para que el desglose cuadre con el total que se
+    muestra al lado. NO incluye BCV-completo, que se calcula por abono y no
+    es proyectable sin saber cómo pagará el cliente.
+
+    Bug real corregido junto con ``_teoricos_por_lista`` (auditoría agosto
+    2026): faltaban aquí los conceptos de obsequio y de descuento por
+    producto, así que el modal listaba conceptos que sumaban menos que el
+    total teórico de la fila.
     """
     try:
         comp = _calcular_componentes(inp, lista, pura_bcv, ignorar_pago_previo=True)
     except KeyError:
         return []
+    valores = _aplicar_exclusiones(
+        {
+            "primera_compra": comp.nc,
+            "recurrencia": comp.pct_recompra,
+            "contado": comp.contado_proy,
+            "volumen": comp.volumen,
+            "producto": comp.producto,
+        },
+        inp.exclusiones,
+    )
     conceptos: list[dict[str, Any]] = []
-    if comp.detalle_recompra is not None and comp.pct_recompra > 0:
+    if comp.detalle_nc is not None and valores["primera_compra"] > 0:
+        conceptos.append(
+            {"concepto": comp.detalle_nc.descripcion, "monto": comp.detalle_nc.monto}
+        )
+    if comp.detalle_recompra is not None and valores["recurrencia"] > 0:
         conceptos.append(
             {"concepto": comp.detalle_recompra.descripcion, "monto": comp.detalle_recompra.monto}
         )
-    if comp.contado_proy > 0:
+    if valores["contado"] > 0:
         conceptos.append(
-            {"concepto": "Contado por marca/categoría", "monto": q2(comp.contado_proy)}
+            {"concepto": "Contado por marca/categoría", "monto": q2(valores["contado"])}
         )
-    if comp.detalle_volumen is not None and comp.volumen > 0:
+    if comp.detalle_volumen is not None and valores["volumen"] > 0:
         conceptos.append(
             {"concepto": comp.detalle_volumen.descripcion, "monto": comp.detalle_volumen.monto}
+        )
+    if comp.detalle_producto is not None and valores["producto"] > 0:
+        conceptos.append(
+            {"concepto": comp.detalle_producto.descripcion, "monto": comp.detalle_producto.monto}
         )
     return conceptos
 
@@ -1202,6 +1321,36 @@ def _teoricos_por_lista(
     misma función que calcula el neto real -- para no duplicar la lógica de
     descuentos fuera del motor. Devuelve
     ``(teorico_ves, teorico_usd, equivalente_usd, descuentos_ves, descuentos_usd)``.
+
+    Bug real corregido (auditoría de reglas, agosto 2026): el usuario pidió
+    verificar que la regla de obsequio recién arreglada
+    (``promocion_primera_compra``) llegara a los teóricos de Ventas además
+    del neto. No llegaba. Esta función sumaba solo
+    ``pct_recompra + contado_proy + volumen``, dejando fuera ``nc``
+    (obsequio/primera compra/promos recurrentes) y ``producto``
+    (``descuentos_producto``, Panel 5). El neto real sí los cobra
+    -- ``calcular_factura`` resta ``final_nc`` y ``final_producto``, y la
+    capa web suma ``ncs_calculadas`` al total mostrado -- así que el
+    teórico venía saliendo sistemáticamente MENOR que el descuento
+    realmente aplicado, y una orden con obsequio parecía tener descuento
+    "no explicado" al compararla contra su teórico. El docstring anterior
+    justificaba la omisión diciendo que primera compra no era específica de
+    una lista, pero eso solo describe la rama de obsequio por producto
+    (valorada al ``precio_unitario`` real de la línea, igual en ambas
+    listas): la rama porcentual de ``_evaluar_promociones_producto`` sí usa
+    ``_precio_linea(inp, ln, lista)`` y da montos distintos en VES y USD.
+    En cualquiera de los dos casos el monto pertenece al teórico de la
+    lista, porque es exactamente lo que el neto de esa lista va a descontar.
+    ``producto`` no tenía justificación alguna -- Panel 5 se agregó después
+    y esta suma nunca se actualizó.
+
+    Las exclusiones mutuas se resuelven aquí con el mismo
+    ``_aplicar_exclusiones`` que usa ``calcular_factura``: antes el teórico
+    las ignoraba por completo, lo que al incorporar ``nc`` habría hecho que
+    teórico y neto discreparan justo en las órdenes donde obsequio y
+    recompra compiten. ``bcv_completo`` sigue fuera: se calcula a partir de
+    la moneda/tasa de los abonos reales, así que sin abonos no hay nada que
+    proyectar (ver nota en ``_calcular_componentes``).
     """
     try:
         comp_ves = _calcular_componentes(
@@ -1231,8 +1380,21 @@ def _teoricos_por_lista(
             volumen=Decimal("0"),
             nc=Decimal("0"),
         )
-    descuentos_ves = comp_ves.pct_recompra + comp_ves.contado_proy + comp_ves.volumen
-    descuentos_usd = comp_usd.pct_recompra + comp_usd.contado_proy + comp_usd.volumen
+    def _total_descuentos(comp: _Componentes) -> Decimal:
+        valores = _aplicar_exclusiones(
+            {
+                "primera_compra": comp.nc,
+                "recurrencia": comp.pct_recompra,
+                "contado": comp.contado_proy,
+                "volumen": comp.volumen,
+                "producto": comp.producto,
+            },
+            inp.exclusiones,
+        )
+        return sum(valores.values(), Decimal("0"))
+
+    descuentos_ves = _total_descuentos(comp_ves)
+    descuentos_usd = _total_descuentos(comp_usd)
     # 3a: "igual si nació en USD; teórico si nació en VES" -- en ambos casos
     # es el precio resuelto contra la lista USD vigente (mismo cálculo).
     equivalente_usd = comp_usd.precio_base
@@ -1341,24 +1503,17 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             within_window = max(fechas_abono) <= fin_ventana
     window_expired = fin_ventana is not None and inp.fecha_calculo > fin_ventana
     # Exclusiones en optimista
-    val_opt = {
-        "primera_compra": comp.nc,
-        "recurrencia": comp.pct_recompra,
-        "contado": comp.contado_proy,
-        "volumen": comp.volumen,
-        "bcv_completo": comp.diferencial_cambiario,
-        "producto": comp.producto,
-    }
-    for exc in inp.exclusiones:
-        if exc.activo:
-            ta, tb = exc.regla_tipo_a, exc.regla_tipo_b
-            if ta in val_opt and tb in val_opt:
-                va, vb = val_opt[ta], val_opt[tb]
-                if va > 0 and vb > 0:
-                    if va >= vb:
-                        val_opt[tb] = Decimal("0")
-                    else:
-                        val_opt[ta] = Decimal("0")
+    val_opt = _aplicar_exclusiones(
+        {
+            "primera_compra": comp.nc,
+            "recurrencia": comp.pct_recompra,
+            "contado": comp.contado_proy,
+            "volumen": comp.volumen,
+            "bcv_completo": comp.diferencial_cambiario,
+            "producto": comp.producto,
+        },
+        inp.exclusiones,
+    )
 
     descuentos_optimista = (
         val_opt["recurrencia"]
@@ -1386,24 +1541,17 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
 
     # Exclusiones en el cálculo final
     contado_aplicado_base = comp.contado_proy if contado_incluido else Decimal("0")
-    valores = {
-        "primera_compra": comp.nc,
-        "recurrencia": comp.pct_recompra,
-        "contado": contado_aplicado_base,
-        "volumen": comp.volumen,
-        "bcv_completo": comp.diferencial_cambiario,
-        "producto": comp.producto,
-    }
-    for exc in inp.exclusiones:
-        if exc.activo:
-            ta, tb = exc.regla_tipo_a, exc.regla_tipo_b
-            if ta in valores and tb in valores:
-                va, vb = valores[ta], valores[tb]
-                if va > 0 and vb > 0:
-                    if va >= vb:
-                        valores[tb] = Decimal("0")
-                    else:
-                        valores[ta] = Decimal("0")
+    valores = _aplicar_exclusiones(
+        {
+            "primera_compra": comp.nc,
+            "recurrencia": comp.pct_recompra,
+            "contado": contado_aplicado_base,
+            "volumen": comp.volumen,
+            "bcv_completo": comp.diferencial_cambiario,
+            "producto": comp.producto,
+        },
+        inp.exclusiones,
+    )
 
     final_nc = valores["primera_compra"]
     final_recompra = valores["recurrencia"]
