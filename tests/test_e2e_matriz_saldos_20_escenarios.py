@@ -763,6 +763,70 @@ def test_saldo_cxc_orden_sin_facturar_neta_pago_pendiente_sin_alcanzar_el_teoric
         assert item["saldo_cxc"] == 116.0
 
 
+def test_orden_ventana_historica_con_lista_usd_real_no_se_le_sustituye_la_lista():
+    """Bug real (pedido explícito del usuario, agosto 2026, caso SJMG 2012
+
+    C.A., orden con lista #7 "Pago USD Marzo" fechada 2026-03-11 -- dentro
+    de la ventana histórica 20-feb/12-mar-2026): 11 órdenes reales de esa
+    ventana tienen una lista USD real y vigente asignada -- para esas, la
+    lista USD prevalece sobre la sustitución histórica (Euro, ref. VES),
+    tanto en la clasificación ``nacio_en_lista_usd`` como en la etiqueta
+    mostrada (no debe aparecer "+ Lista Histórica de Auditoría").
+    """
+    from cxc.models import VentasTeorico
+
+    mock_repo = MagicMock()
+    mock_repo._g.read_rows.return_value = []
+    mock_repo.all_config.return_value = {
+        "valid_pricelists_usd": "7",
+        "valid_pricelists_ves": "5,3,4",
+    }
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_SJMG_HIST",
+            cliente_id="CLI_SJMG",
+            vendedor_email="v@lubrikca.com",
+            fecha=date(2026, 3, 11),
+            fecha_entrega=None,
+            monto_total=Decimal("255300.00"),
+            lista_precios="7",
+            es_primera_compra=False,
+            estado_orden="sale",
+            facturada=False,
+        ),
+    ]
+    mock_repo.all_bandeja.return_value = []
+    mock_repo.all_ventas_teoricos.return_value = [
+        VentasTeorico(
+            so_id="SO_SJMG_HIST", teorico_ves=Decimal("300.00"), teorico_usd=Decimal("339.45")
+        ),
+    ]
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_conciliaciones.return_value = []
+    mock_repo.all_lineas.return_value = []
+    mock_repo.all_reglas_dias_credito_volumen.return_value = []
+    mock_repo.all_descuentos_sistema_aprobados.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "sale.order":
+            return [{"name": "SO_SJMG_HIST", "state": "sale", "amount_untaxed": 255300.0}]
+        if model == "product.pricelist":
+            return [{"id": 7, "name": "Pago USD Marzo"}]
+        return []
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+    ):
+        res_ventas = client.get("/api/ventas")
+        assert res_ventas.status_code == 200
+        item = {it["so_id"]: it for it in res_ventas.json()["items"]}["SO_SJMG_HIST"]
+        assert item["nacio_en_lista_usd"] is True
+        assert "Lista Histórica de Auditoría" not in (item.get("lista_aplicada_label") or "")
+
+
 def test_devolucion_facturada_sin_nc_marca_falta_nc_por_devolucion():
     """Pedido del usuario en el artefacto de verificación ("Implementalo"):
 

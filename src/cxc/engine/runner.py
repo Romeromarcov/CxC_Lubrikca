@@ -196,7 +196,10 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer Lista Historica de Auditoria: %s", e)
         orden_es_historica = es_orden_historica(
-            orden.fecha, orden.lista_precios, historical_enabled
+            orden.fecha,
+            orden.lista_precios,
+            historical_enabled,
+            lista_es_usd_valida=str(orden.lista_precios or "").strip() in valid_usd,
         )
 
         # Recompra (ventana = días de crédito reales de la orden anterior +

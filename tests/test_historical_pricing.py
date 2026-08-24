@@ -15,7 +15,7 @@ from decimal import Decimal
 
 from cxc.config import EngineConfig
 from cxc.engine.discounts import EngineInputs, calcular_teorico_orden_con_fallback
-from cxc.engine.historical_pricing import cargar_mapa_historico
+from cxc.engine.historical_pricing import cargar_mapa_historico, es_orden_historica
 from cxc.engine.price_resolver import DictPriceResolver
 from cxc.models import LineaOrden, OrdenVenta
 
@@ -122,3 +122,53 @@ def test_teorico_ves_usa_lista_historica_pero_usd_usa_lista_7():
     assert resultado["teorico_ves"] == Decimal("66.81")
     assert resultado["teorico_usd"] == Decimal("86.21")
     assert resultado["teorico_ves"] != resultado["teorico_usd"]
+
+
+def test_orden_en_ventana_con_lista_usd_valida_no_es_historica():
+    """Bug real (pedido explícito del usuario, agosto 2026, caso SJMG 2012
+
+    C.A./orden con lista #7 "Pago USD Marzo"): la ventana histórica (20-feb
+    a 12-mar-2026) existe porque, según los datos verificados, ninguna
+    orden de ese período tenía lista propia confiable -- pero 11 órdenes
+    reales SÍ tienen una lista USD real y vigente asignada. Para esas, la
+    lista USD es una excepción explícita: prevalece sobre la ventana.
+    """
+    assert (
+        es_orden_historica(
+            date(2026, 3, 9), "7", enabled=True, lista_es_usd_valida=True
+        )
+        is False
+    )
+
+
+def test_orden_en_ventana_sin_lista_usd_valida_sigue_historica():
+    """Sin la excepción (lista_es_usd_valida=False, el default), el
+
+    comportamiento de la ventana no cambia -- solo se exceptúan las
+    órdenes con lista USD real confirmada."""
+    assert es_orden_historica(date(2026, 3, 9), "3", enabled=True) is True
+
+
+def test_lista_usd_valida_no_aplica_fuera_de_la_ventana():
+    """El parámetro nuevo no tiene ningún efecto fuera de la ventana
+
+    histórica -- una orden de abril nunca fue "histórica" para empezar,
+    con o sin lista USD."""
+    assert (
+        es_orden_historica(
+            date(2026, 4, 1), "7", enabled=True, lista_es_usd_valida=True
+        )
+        is False
+    )
+    assert es_orden_historica(date(2026, 4, 1), "7", enabled=True) is False
+
+
+def test_lista_usd_valida_no_rescata_orden_sin_lista_asignada():
+    """Una orden SIN lista asignada sigue siendo histórica incondicional
+
+    (no depende del toggle ni de la ventana) -- la excepción de lista USD
+    solo aplica cuando SÍ hay una lista real y esa lista es USD."""
+    assert (
+        es_orden_historica(date(2026, 3, 9), "", enabled=True, lista_es_usd_valida=True)
+        is True
+    )

@@ -6471,10 +6471,17 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
         # cruzado contra ninguna) usando el mismo criterio que ya usa
         # ``_pagos_bcv_binance_por_orden``.
         _historical_enabled_sug = is_historical_pricelist_enabled(repo)
+        _usd_ids_sug, _ = get_valid_pricelists_usd_and_ves(repo)
+        _usd_ids_sug_set = set(_usd_ids_sug)
         clientes_con_orden_historica: set[str] = {
             str(o.cliente_id)
             for o in ordenes
-            if es_orden_historica(o.fecha, o.lista_precios, _historical_enabled_sug)
+            if es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                _historical_enabled_sug,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in _usd_ids_sug_set,
+            )
         }
 
         unallocated_pagos = []
@@ -11380,7 +11387,12 @@ def _get_ventas_sync(
         # más abajo como el nuevo cálculo de Monto pagado BCV/USD (para
         # decidir si la ruta BCV de un pago usa la tasa BCV-Euro histórica).
         es_historica_map = {
-            o.so_id: es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            o.so_id: es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                historical_enabled,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
+            )
             for o in ordenes
         }
 
@@ -11881,7 +11893,12 @@ def _get_ventas_sync(
             else:
                 val_bcv_incl_pendiente = val_bcv
                 val_binance_incl_pendiente = val_binance
-            es_historica_o = es_orden_historica(o.fecha, o.lista_precios, historical_enabled)
+            es_historica_o = es_orden_historica(
+                o.fecha,
+                o.lista_precios,
+                historical_enabled,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
+            )
             es_lista_usd_nacimiento = (
                 str(o.lista_precios) in usd_ids_str and not es_historica_o
             )
