@@ -106,6 +106,31 @@ def test_runner_calcula_y_persiste_bandeja() -> None:
     assert vinc.equiv_usd_binance is not None
 
 
+def test_runner_abono_conciliado_cuenta_aunque_metodo_pago_no_este_sembrado() -> None:
+    """Bug real (agosto 2026, orden S00817/Michele Carfora Vigliotti): la
+    tabla ``metodos_pago`` -- de referencia, sin panel propio en
+    Configuración -- estaba completamente vacía en producción, y
+    ``EngineRunner._abonos()`` descartaba TODO abono cuyo
+    ``get_metodo_pago()`` no resolviera, dejando la orden sin contado pese a
+    tener una Vinculación CONCILIADO real. Ahora un ``metodo_pago`` sin fila
+    en la tabla usa un ``MetodoPago`` de reserva (a partir de los datos de
+    la propia Vinculación) en vez de descartar el abono.
+    """
+    repo = _seed()
+    # No se siembra ningún MetodoPago para "M1" -- simula la tabla vacía.
+    repo._metodos.clear()  # type: ignore[attr-defined]
+
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100")})
+    runner = EngineRunner(repo, resolver, CFG)
+
+    runner.run_all(date(2026, 6, 8))
+    bandeja = repo.get_bandeja("SO1")
+    assert bandeja is not None
+    origenes = {d.origen for d in bandeja.descuentos_detalle}
+    assert "contado" in origenes
+    assert bandeja.total_descuentos == Decimal("3.00")
+
+
 def test_runner_vinculacion_pendiente_no_activa_contado() -> None:
     """Fase 0 (plan de arquitectura de pagos, agosto 2026): una Vinculación
 
