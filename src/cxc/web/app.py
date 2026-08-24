@@ -8299,12 +8299,18 @@ def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
     ``product.template`` (ninguno de los dos es ``product.product``).
     Se resuelve aquí, una sola vez, al guardar -- cada token se acepta tal
     cual si ya es un producto_id válido en el catálogo; si no, se busca
-    por código (``codigo``/``default_code``); si tampoco matchea, se deja
-    tal cual (mejor esfuerzo, no bloquea guardar la regla).
+    por código (``codigo``/``default_code``); si tampoco matchea, se busca
+    por nombre exacto (defensa adicional -- una versión vieja del
+    formulario en caché del navegador, sin el ``?v=`` de este archivo
+    actualizado, puede seguir enviando el nombre completo del producto
+    durante un tiempo aunque el código ya esté corregido); si tampoco
+    matchea, se deja tal cual (mejor esfuerzo, no bloquea guardar la
+    regla).
     """
     catalogo = repo.all_catalogo()
     por_id = {p.producto_id for p in catalogo}
     por_codigo = {p.codigo: p.producto_id for p in catalogo if p.codigo}
+    por_nombre = {p.nombre.strip().upper(): p.producto_id for p in catalogo if p.nombre}
     resueltos = []
     for token in productos_str.split(","):
         t = token.strip()
@@ -8314,6 +8320,8 @@ def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
             resueltos.append(t)
         elif t in por_codigo:
             resueltos.append(por_codigo[t])
+        elif t.upper() in por_nombre:
+            resueltos.append(por_nombre[t.upper()])
         else:
             resueltos.append(t)
     return ",".join(resueltos)
