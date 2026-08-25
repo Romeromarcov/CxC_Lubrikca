@@ -371,6 +371,36 @@ def test_bandeja_auditoria_pago_id_ida_y_vuelta(repo: Repository) -> None:
     assert rows[0]["pago_id"] == "973"
 
 
+def test_delete_auditoria_rows(repo: Repository) -> None:
+    """Cleanup de filas de auditoría (ej. duplicados acumulados por el
+
+    bug de ``pago_id`` ausente, ver ``test_bandeja_auditoria_pago_id_ida_y_
+    vuelta``) -- borra por audit_id, deja intactas las demás filas.
+    """
+    repo.append_auditoria_rows(
+        [
+            {
+                "audit_id": "AUD_DEL_1",
+                "so_id": "S0001",
+                "tipo_auditoria": "vinculacion_discrepancia_multi_orden",
+                "estado": "pendiente_revision",
+                "timestamp_audit": datetime(2026, 8, 24, 0, 0).isoformat(),
+            },
+            {
+                "audit_id": "AUD_DEL_2",
+                "so_id": "S0002",
+                "tipo_auditoria": "vinculacion_discrepancia_multi_orden",
+                "estado": "pendiente_revision",
+                "timestamp_audit": datetime(2026, 8, 24, 0, 0).isoformat(),
+            },
+        ]
+    )
+    repo.delete_auditoria_rows(["AUD_DEL_1"])
+    ids = {r["audit_id"] for r in repo.all_auditoria()}
+    assert "AUD_DEL_1" not in ids
+    assert "AUD_DEL_2" in ids
+
+
 # --- Descuentos de sistema aprobados (Bandeja 1 de Facturación) ---------------
 
 

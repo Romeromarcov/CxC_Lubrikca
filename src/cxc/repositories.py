@@ -318,6 +318,9 @@ class Repository(ABC):
     def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None: ...
 
     @abstractmethod
+    def delete_auditoria_rows(self, audit_ids: list[str]) -> None: ...
+
+    @abstractmethod
     def all_listas_precios_historicas(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
@@ -804,6 +807,10 @@ class InMemoryRepository(Repository):
                 self._auditoria[i] = dict(f)
             else:
                 self._auditoria.append(dict(f))
+
+    def delete_auditoria_rows(self, audit_ids: list[str]) -> None:
+        target = set(audit_ids)
+        self._auditoria = [r for r in self._auditoria if r.get("audit_id") not in target]
 
     def update_auditoria_estado(self, audit_id: str, estado: str, revisado_por: str) -> None:
         for r in self._auditoria:

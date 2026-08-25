@@ -677,6 +677,14 @@ class PostgresRepository(Repository):
                 .values(estado=estado, revisado_por=revisado_por)
             )
 
+    def delete_auditoria_rows(self, audit_ids: list[str]) -> None:
+        if not audit_ids:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                delete(t.bandeja_auditoria).where(t.bandeja_auditoria.c.audit_id.in_(audit_ids))
+            )
+
     def all_listas_precios_historicas(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.listas_precios_historicas)).all()

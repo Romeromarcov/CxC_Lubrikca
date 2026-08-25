@@ -501,3 +501,7 @@ class SheetsRepository(Repository):
             "audit_id",
             {"audit_id": audit_id, "estado": estado, "revisado_por": revisado_por},
         )
+
+    def delete_auditoria_rows(self, audit_ids: list[str]) -> None:
+        for audit_id in audit_ids:
+            self._g.delete_row(g.T_BANDEJA_AUDITORIA, "audit_id", audit_id)
