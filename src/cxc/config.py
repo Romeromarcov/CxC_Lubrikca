@@ -63,36 +63,17 @@ class OdooConfig:
 
 
 @dataclass(frozen=True)
-class SheetsConfig:
-    spreadsheet_id: str
-    service_account_file: str
-
-    @classmethod
-    def from_env(cls) -> SheetsConfig:
-        return cls(
-            spreadsheet_id=_get("GOOGLE_SHEETS_SPREADSHEET_ID"),
-            service_account_file=_get("GOOGLE_SERVICE_ACCOUNT_FILE", default=""),
-        )
-
-
-@dataclass(frozen=True)
 class DatabaseConfig:
-    """PostgreSQL -- reemplazo gradual de Sheets como almacén principal.
+    """PostgreSQL -- único backend de ``Repository`` (Sheets se retiró por
 
-    ``repo_backend`` decide qué implementación de ``Repository`` usa
-    ``get_repo()`` ("sheets" | "postgres"); ``url`` es opcional porque la
-    mayoría de despliegues (mientras dure la migración) no la necesitan.
+    completo en agosto 2026, semanas después de completada la migración).
     """
 
     url: str | None
-    repo_backend: str
 
     @classmethod
     def from_env(cls) -> DatabaseConfig:
-        return cls(
-            url=_get_optional("DATABASE_URL"),
-            repo_backend=_get("REPO_BACKEND", "sheets").strip().lower(),
-        )
+        return cls(url=_get_optional("DATABASE_URL"))
 
 
 @dataclass(frozen=True)
@@ -235,7 +216,6 @@ class AppConfig:
     """Configuración raíz. Cada pieza toma solo lo que necesita."""
 
     odoo: OdooConfig
-    sheets: SheetsConfig
     binance: BinanceConfig
     bcv: BcvConfig
     alert: AlertConfig
@@ -251,7 +231,6 @@ class AppConfig:
             _maybe_load_dotenv()
         return cls(
             odoo=OdooConfig.from_env(),
-            sheets=SheetsConfig.from_env(),
             binance=BinanceConfig.from_env(),
             bcv=BcvConfig.from_env(),
             alert=AlertConfig.from_env(),

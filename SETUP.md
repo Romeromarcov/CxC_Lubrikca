@@ -1,9 +1,8 @@
 # SETUP — Configuración manual y operativa (lo que NO se codifica)
 
-Este documento cubre todo lo que el backend **no** automatiza: la app AppSheet,
-las credenciales/secretos, las automated actions de Odoo y la preparación del
-Google Sheet. El código backend está listo para correr sin editarse una vez que
-esto esté en su lugar.
+Este documento cubre todo lo que el backend **no** automatiza: credenciales/
+secretos y automated actions de Odoo. El código backend está listo para
+correr sin editarse una vez que esto esté en su lugar.
 
 ---
 
@@ -25,12 +24,6 @@ servicio.
 
 > Crear la API key en Odoo: *Preferencias → Seguridad de la cuenta → API Keys*.
 
-### Google Sheets
-| Var | Descripción |
-|---|---|
-| `GOOGLE_SHEETS_SPREADSHEET_ID` | Id del Sheet (de su URL) |
-| `GOOGLE_SERVICE_ACCOUNT_FILE` | Ruta al JSON de la service account |
-
 ### Scraper Binance (parametrizado — único punto de ajuste si cambia el formato)
 `BINANCE_P2P_URL`, `BINANCE_P2P_ASSET`, `BINANCE_P2P_FIAT`,
 `BINANCE_P2P_TRADE_TYPE_BUY/SELL`, `BINANCE_P2P_ROWS`,
@@ -41,46 +34,27 @@ Ver `.env.example` (todos con default sensato).
 
 ---
 
-## 2. Google Sheet — pestañas y cabeceras
+## 2. Esquema de datos
 
-El `SheetsRepository` espera **una pestaña por tabla**, con los encabezados en la
-fila 1 que coinciden con las claves del serializador (`src/cxc/sheets/serde.py`).
-Crear estas pestañas:
+El backend usa PostgreSQL como único almacén (ver `src/cxc/db/schema.py` para
+el esquema completo y `alembic/versions/` para el historial de migraciones).
+El `Procfile` corre `alembic upgrade head` en cada deploy (fase `release`); no
+requiere preparación manual de tablas.
 
-| Pestaña | Quién escribe | Cabeceras (fila 1) |
-|---|---|---|
-| `Clientes` | sync | `cliente_id, nombre, vendedor_email` |
-| `OrdenesVenta` | sync | `so_id, cliente_id, fecha, fecha_entrega, monto_total, lista_precios, vendedor_email, es_primera_compra, facturada, factura_id, monto_facturado, estado_entrega, entregada_completa, tiene_devolucion` |
-| `LineasOrden` | sync | `linea_id, so_id, producto, marca, categoria, cantidad, precio_unitario, cantidad_entregada` |
-| `Pagos` | sync | `pago_id, cliente_id, monto, moneda, metodo_pago, fecha_pago, vendedor_email` |
-| `MetodosPago` | Administración | `metodo_id, nombre, moneda, tipo_tasa, es_contado` |
-| `SerieTasas` | scraper (append) | `timestamp, tasa_bcv, tasa_binance, fuente, es_heredada, capturada_ok` |
-| `DescuentosMarcaCategoria` | Administración | `regla_id, marca, categoria, tipo_descuento, porcentaje, vigencia_desde, vigencia_hasta, activo` |
-| `PromocionPrimeraCompra` | Administración | `producto, vigencia_desde, vigencia_hasta, activo` |
-| `ReglasRecurrencia` | Administración | `condicion, tipo_beneficio, valor, vigencia_desde, vigencia_hasta, activo` |
-| `Feriados` | Administración | `fecha, descripcion, tipo` |
-| `Vinculaciones` | AppSheet | `vinc_id, pago_id, so_id, monto_aplicado, hora_pago_confirmada, tasa_bcv_aplicada, tasa_binance_aplicada, es_tasa_heredada, equiv_usd_bcv, equiv_usd_binance, equiv_ves_bcv, equiv_ves_binance, confirmado_por, timestamp_registro, estado, moneda_abono, tipo_tasa_abono` |
-| `BandejaFacturacion` | motor + AppSheet | `so_id, lista_aplicada, precio_base_calculado, descuentos_detalle, total_descuentos, ncs_calculadas, total_motor, requiere_revision, candidata_a_cierre, aprobado_por, estado` |
-| `Conciliacion` | conciliación | `so_id, total_motor, monto_odoo, ncs_odoo, diferencia, resultado, revisado_por` |
-| `_Meta` | sync | `key, value` (cursor `last_sync`) |
-
-**Formatos:** booleanos `TRUE`/`FALSE`; fechas ISO `YYYY-MM-DD`; datetimes ISO
-`YYYY-MM-DDTHH:MM:SS`; decimales con punto.
-
-Compartir el Sheet con el email de la **service account** (permiso de editor).
-
-**Datos de descuento iniciales** (sección 3.7), cargar en
-`DescuentosMarcaCategoria`:
-
-| regla_id | marca | categoria | tipo_descuento | porcentaje | vigencia_desde | activo |
-|---|---|---|---|---|---|---|
-| D1 | Global Oil | Comercial sintéticos | contado | 0.08 | 2026-01-01 | TRUE |
-| D2 | Global Oil | Industrial (pailas/tambores) | contado | 0.06 | 2026-01-01 | TRUE |
-| D3 | Sinoco | * | contado | 0.03 | 2026-01-01 | TRUE |
+> Nota histórica: el sistema usó Google Sheets como backend antes de la
+> migración a Postgres. Ese backend (`SheetsRepository`) se retiró por
+> completo del código en agosto 2026 -- ver `docs/REDISENO_DESCUENTOS_
+> UNIFICADOS.md` para el contexto de la migración.
 
 ---
 
-## 3. App AppSheet (pieza 3 — interfaz humana)
+## 3. App AppSheet (pieza 3 — interfaz humana, superada por el dashboard web)
+
+> Nota: esta sección describe el diseño original (AppSheet sobre Google
+> Sheets). El sistema hoy usa el dashboard web (`src/cxc/web/`) como interfaz
+> humana -- Cobranza, Ventas, Auditoría, Configuración. Se conserva esta
+> sección solo como referencia histórica del diseño de validaciones/security
+> filters; no aplica a la implementación actual.
 
 No se codifica aquí. Construir en AppSheet sobre el mismo Sheet:
 

@@ -86,26 +86,6 @@ def test_serie_tasa_averages_serde():
     assert st_back.diferencial_bcv_binance_pct == Decimal("3.94")
 
 
-def test_repository_new_discounts():
-    class DummyGateway:
-        def read_rows(self, table):
-            return []
-
-    from cxc.sheets.repository import SheetsRepository
-
-    repo = SheetsRepository(DummyGateway())
-    assert len(repo.descuentos_pronto_pago()) == 0
-    assert len(repo.descuentos_recompra()) == 0
-    assert len(repo.descuentos_producto()) == 0
-    assert len(repo.descuentos_diferencial_cambiario()) == 3
-    assert len(repo.descuentos_marca_categoria()) == 0
-    assert len(repo.descuentos_volumen()) == 0
-    assert len(repo.reglas_recurrencia()) == 0
-    assert len(repo.promociones_primera_compra()) == 0
-    assert len(repo.exclusiones()) == 0
-    assert len(repo.feriados()) == 0
-
-
 def test_effective_dating_helpers():
     from cxc.engine.effective_dating import _vigente
 

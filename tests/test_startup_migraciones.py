@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
@@ -23,23 +23,9 @@ from cxc.web.app import _aplicar_migraciones_pendientes
 _DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
-def test_no_hace_nada_si_el_backend_no_es_postgres() -> None:
-    fake_config = MagicMock()
-    fake_config.database.repo_backend = "sheets"
-    with (
-        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
-        patch("alembic.command.upgrade") as mock_upgrade,
-    ):
-        _aplicar_migraciones_pendientes()
-        mock_upgrade.assert_not_called()
-
-
 def test_no_propaga_excepcion_si_alembic_falla() -> None:
     """Best-effort: un fallo de Alembic se loggea, nunca tumba el arranque."""
-    fake_config = MagicMock()
-    fake_config.database.repo_backend = "postgres"
     with (
-        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
         patch("alembic.command.upgrade", side_effect=RuntimeError("DB no disponible")),
     ):
         _aplicar_migraciones_pendientes()  # no debe lanzar
@@ -78,12 +64,7 @@ def test_aplica_migraciones_pendientes_contra_postgres_real() -> None:
         assert "requiere_pago_previo" not in cols
         conn.rollback()
 
-    fake_config = MagicMock()
-    fake_config.database.repo_backend = "postgres"
-    with (
-        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
-        patch.dict(os.environ, {"DATABASE_URL": _DATABASE_URL}),
-    ):
+    with patch.dict(os.environ, {"DATABASE_URL": _DATABASE_URL}):
         _aplicar_migraciones_pendientes()
 
     def _has_column(conn: Any, table: str, column: str) -> bool:
