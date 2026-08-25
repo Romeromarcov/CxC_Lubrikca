@@ -4277,6 +4277,59 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     assert audit_rows[0]["diferencia_usd"] is None
 
 
+def test_e2e_resync_multi_orden_reusa_audit_id_de_discrepancia_abierta():
+    """Bug real (producción, agosto 2026, pago 973/Cauchera El Gordo): una
+
+    discrepancia "multi-orden" (ver ``test_e2e_44``) nunca se auto-resuelve
+    -- sin deduplicación, ``_resincronizar_vinculaciones_con_odoo`` genera
+    una fila NUEVA de auditoría (audit_id con sufijo de timestamp) en CADA
+    ciclo del daemon para la MISMA discrepancia sin resolver, para siempre.
+    Verificado en producción: 9268 filas de "discrepancia_multi_orden"
+    acumuladas (284 solo para el pago 973). Si ya existe una fila abierta
+    (``estado == "pendiente_revision"``) para el mismo ``(pago_id,
+    tipo_auditoria)``, debe reutilizarse su ``audit_id`` -- el upsert
+    actualiza esa fila en vez de insertar una duplicada.
+    """
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        Vinculacion(
+            vinc_id="V1",
+            pago_id="100",
+            so_id="SO_A",
+            monto_aplicado=Decimal("500.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
+        )
+    ]
+    # Simula una fila de auditoría YA abierta de un ciclo anterior del
+    # daemon, para la misma discrepancia (mismo pago_id + tipo_auditoria).
+    mock_repo.all_auditoria.return_value = [
+        {
+            "audit_id": "RELINK_100_20260101000000",
+            "pago_id": "100",
+            "tipo_auditoria": "vinculacion_discrepancia_multi_orden",
+            "estado": "pendiente_revision",
+        }
+    ]
+
+    fake_execute = _fake_execute_pago_conciliado(["SO_C", "SO_D"])
+    cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
+
+    assert len(cambios) == 1
+    mock_repo.append_auditoria_rows.assert_called_once()
+    (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
+    assert len(audit_rows) == 1
+    # Reutiliza el audit_id existente -- NO genera uno nuevo con timestamp
+    # de hoy (eso es exactamente lo que causaba las filas duplicadas).
+    assert audit_rows[0]["audit_id"] == "RELINK_100_20260101000000"
+    assert audit_rows[0]["pago_id"] == "100"
+
+
 def test_e2e_45_sugerencias_ignora_binance_implausible_del_historico():
     """Bug real (pago Odoo 29, tras el fix de tax_today): el spreadsheet usa
 

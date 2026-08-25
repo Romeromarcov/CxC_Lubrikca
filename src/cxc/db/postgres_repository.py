@@ -619,6 +619,7 @@ class PostgresRepository(Repository):
             {
                 "audit_id": r.audit_id,
                 "so_id": r.so_id,
+                "pago_id": r.pago_id or "",
                 "tipo_auditoria": r.tipo_auditoria,
                 "motor_calcula_usd": str(r.motor_calcula_usd)
                 if r.motor_calcula_usd is not None
@@ -647,6 +648,7 @@ class PostgresRepository(Repository):
                     {
                         "audit_id": f["audit_id"],
                         "so_id": f.get("so_id", ""),
+                        "pago_id": f.get("pago_id") or None,
                         "tipo_auditoria": f.get("tipo_auditoria", ""),
                         "motor_calcula_usd": f.get("motor_calcula_usd"),
                         "odoo_registrado_usd": f.get("odoo_registrado_usd"),

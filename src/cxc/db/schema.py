@@ -595,6 +595,18 @@ bandeja_auditoria = Table(
     metadata,
     Column("audit_id", String, primary_key=True),
     Column("so_id", String, nullable=False, index=True),
+    # Bug real (agosto 2026): esta tabla nunca tuvo columna pago_id --
+    # _resincronizar_vinculaciones_con_odoo (web/app.py) siempre construyó
+    # sus filas con pago_id, pero PostgresRepository lo descartaba en
+    # silencio (nunca estuvo en el schema), así que la trazabilidad
+    # "reasignado_por_odoo" de Cobranza nunca funcionó contra Postgres (el
+    # backend real de producción) y, sin pago_id para deduplicar, el
+    # resync -- que corre cada ciclo del daemon -- reescribía una fila
+    # NUEVA por cada discrepancia sin resolver en cada corrida (9268+ filas
+    # casi duplicadas acumuladas, pago 973 solo con 284). Ver
+    # tipo_auditoria+pago_id como clave de deduplicación en
+    # _resincronizar_vinculaciones_con_odoo.
+    Column("pago_id", String, nullable=True, index=True),
     Column("tipo_auditoria", String, nullable=False, server_default=""),
     Column("motor_calcula_usd", MONEY, nullable=True),
     Column("odoo_registrado_usd", MONEY, nullable=True),
