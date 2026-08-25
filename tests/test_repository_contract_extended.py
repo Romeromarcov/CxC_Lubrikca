@@ -339,6 +339,38 @@ def test_pagos_huerfanos_cerrados_upsert_y_lectura(repo: Repository) -> None:
     assert rows[0]["pago_id"] == "PG_HUERFANO"
 
 
+# --- BandejaAuditoria (pago_id) -------------------------------------------
+
+
+def test_bandeja_auditoria_pago_id_ida_y_vuelta(repo: Repository) -> None:
+    """Bug real (producción, agosto 2026): ``bandeja_auditoria`` nunca tuvo
+
+    columna ``pago_id`` en Postgres -- ``append_auditoria_rows``/
+    ``all_auditoria`` lo descartaban en silencio, así que la trazabilidad
+    "reasignado_por_odoo" de Cobranza nunca funcionó contra el backend real
+    de producción, y sin ``pago_id`` para deduplicar, el resync generaba
+    una fila nueva por cada discrepancia sin resolver en cada ciclo del
+    daemon (9268+ filas acumuladas). Ver migración ``d1e2f3a4b5c6``.
+    """
+    repo.append_auditoria_rows(
+        [
+            {
+                "audit_id": "AUD_PAGOID_TEST",
+                "pago_id": "973",
+                "so_id": "S00619",
+                "tipo_auditoria": "vinculacion_discrepancia_multi_orden",
+                "detalle_odoo": "Odoo reconcilió el pago 973 contra: S00619",
+                "detalle_motor": "Vinculación local apuntaba a: S00489, S00692",
+                "estado": "pendiente_revision",
+                "timestamp_audit": datetime(2026, 8, 24, 0, 0).isoformat(),
+            }
+        ]
+    )
+    rows = [r for r in repo.all_auditoria() if r["audit_id"] == "AUD_PAGOID_TEST"]
+    assert len(rows) == 1
+    assert rows[0]["pago_id"] == "973"
+
+
 # --- Descuentos de sistema aprobados (Bandeja 1 de Facturación) ---------------
 
 

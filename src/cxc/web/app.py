@@ -1029,28 +1029,66 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
             "so_id_repuntado": "vinculacion_revinculada_por_odoo",
         }
-        audit_rows = [
-            {
-                "audit_id": f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}",
-                "pago_id": c["pago_id"],
-                "so_id": c["so_id_nuevo"],
-                "tipo_auditoria": _TIPO_AUDITORIA_POR_CAMBIO.get(
-                    c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
-                ),
-                "motor_calcula_usd": None,
-                "odoo_registrado_usd": None,
-                "diferencia_usd": None,
-                "detalle_odoo": c.get(
-                    "detalle",
-                    f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
-                ),
-                "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
-                "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
-                "revisado_por": "",
-                "timestamp_audit": ahora.isoformat(),
-            }
-            for c in cambios
-        ]
+        # Bug real (agosto 2026, pago 973/Cauchera El Gordo): sin esta
+        # deduplicación, un caso "requiere_revision_manual" (ambiguo, nunca
+        # se auto-corrige -- ver "discrepancia_multi_orden" arriba) generaba
+        # una fila NUEVA con audit_id único (sufijo de timestamp) en CADA
+        # ciclo del daemon, para siempre, porque nada lo marca resuelto.
+        # Verificado en producción: 9268 filas de "discrepancia_multi_orden"
+        # acumuladas, 284 solo para el pago 973. Ahora, si YA existe una
+        # fila abierta (``estado == "pendiente_revision"``) para el mismo
+        # ``(pago_id, tipo_auditoria)``, se reutiliza su ``audit_id`` -- el
+        # upsert actualiza esa misma fila (refresca el timestamp) en vez de
+        # insertar una duplicada. Requiere ``pago_id`` real en
+        # ``all_auditoria()`` (antes ausente en Postgres -- ver migración
+        # ``d1e2f3a4b5c6``).
+        existing_open_audit_id: dict[tuple[str, str], str] = {}
+        if hasattr(repo, "all_auditoria"):
+            try:
+                for row in repo.all_auditoria():
+                    if row.get("estado") != "pendiente_revision":
+                        continue
+                    pid_existente = str(row.get("pago_id") or "").strip()
+                    tipo_existente = str(row.get("tipo_auditoria") or "").strip()
+                    if pid_existente and tipo_existente:
+                        existing_open_audit_id[(pid_existente, tipo_existente)] = row[
+                            "audit_id"
+                        ]
+            except Exception as e_lookup:
+                logger.warning(
+                    "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
+                    e_lookup,
+                )
+
+        audit_rows = []
+        for c in cambios:
+            tipo_auditoria = _TIPO_AUDITORIA_POR_CAMBIO.get(
+                c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
+            )
+            audit_id = existing_open_audit_id.get(
+                (str(c["pago_id"]), tipo_auditoria)
+            ) or f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}"
+            audit_rows.append(
+                {
+                    "audit_id": audit_id,
+                    "pago_id": c["pago_id"],
+                    "so_id": c["so_id_nuevo"],
+                    "tipo_auditoria": tipo_auditoria,
+                    "motor_calcula_usd": None,
+                    "odoo_registrado_usd": None,
+                    "diferencia_usd": None,
+                    "detalle_odoo": c.get(
+                        "detalle",
+                        f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
+                    ),
+                    "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
+                    "estado": "pendiente_revision"
+                    if c["requiere_revision_manual"]
+                    else "aplicado",
+                    "revisado_por": "",
+                    "timestamp_audit": ahora.isoformat(),
+                }
+            )
         try:
             repo.append_auditoria_rows(audit_rows)
         except Exception as e_aud:
