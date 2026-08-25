@@ -4,13 +4,6 @@
 # HTTP para scraper de tasas (Binance P2P / BCV). Endpoints públicos, sin credenciales.
 requests==2.32.3
 
-# Cliente Google Sheets (espejo de Odoo + tablas de trabajo).
-gspread==6.1.2
-google-auth==2.35.0
-# Solo para el modo OAuth de desarrollo (GspreadGateway.from_oauth). En
-# producción (cuenta de servicio) no se usa.
-google-auth-oauthlib==1.2.1
-
 # Carga de configuración por variables de entorno (no secretos en el repo).
 python-dotenv==1.0.1
 
@@ -18,13 +11,12 @@ python-dotenv==1.0.1
 fastapi==0.111.0
 uvicorn==0.30.1
 
-# Persistencia PostgreSQL (reemplaza gradualmente a Google Sheets como
-# almacen principal -- ver src/cxc/db/). SQLAlchemy Core (no ORM completo):
+# Persistencia PostgreSQL -- único backend de Repository (Google Sheets se
+# retiró por completo en agosto 2026). SQLAlchemy Core (no ORM completo):
 # tablas tipadas y queries componibles, sin sesiones/mapeo automático.
 # Driver sincrono (psycopg3, no asyncpg): Repository es una interfaz
-# sincrona hoy (igual que SheetsRepository/gspread) y el motor/sync/
-# reconciliador la consumen sin await -- un driver async forzaria a
-# reescribir esas piezas, que el plan de migracion deja sin tocar.
+# sincrona hoy, consumida sin await por el motor/sync/reconciliador -- un
+# driver async forzaria a reescribir esas piezas, fuera de alcance por ahora.
 sqlalchemy==2.0.35
 psycopg[binary]==3.2.3
 alembic==1.13.3

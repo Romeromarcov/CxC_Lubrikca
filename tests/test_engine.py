@@ -1311,20 +1311,6 @@ def test_descuento_vigente_elite_y_moneda_usd() -> None:
     assert d_ves is None
 
 
-def test_in_memory_gateway_delete_row() -> None:
-    from cxc.sheets.gateway import InMemorySheetGateway
-
-    gw = InMemorySheetGateway()
-    gw.seed("TestTable", [{"regla_id": "R1", "val": "A"}, {"regla_id": "R2", "val": "B"}])
-    assert len(gw.read_rows("TestTable")) == 2
-    deleted = gw.delete_row("TestTable", "regla_id", "R1")
-    assert deleted is True
-    assert len(gw.read_rows("TestTable")) == 1
-    assert gw.read_rows("TestTable")[0]["regla_id"] == "R2"
-    not_deleted = gw.delete_row("TestTable", "regla_id", "NON_EXISTENT")
-    assert not_deleted is False
-
-
 # NOTA (agosto 2026): "brecha cierre" (auto-aplicado por abono, sin ninguna
 # regla configurada) y la vieja "equiparación" sin tope fueron RETIRADOS del
 # motor -- ver bloque "(c) Diferencial Cambiario" en discounts.py. La

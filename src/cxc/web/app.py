@@ -64,8 +64,6 @@ from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
-from cxc.sheets.gateway import GspreadGateway
-from cxc.sheets.repository import SheetsRepository
 from cxc.sync.incremental import IncrementalSync
 
 logger = logging.getLogger("cxc.web.app")
@@ -1692,44 +1690,20 @@ class DescuentoVolumenRequest(BaseModel):
     descripcion: str = ""
 
 
-def _fresh_sheets_repo(config: AppConfig) -> SheetsRepository:
-    """Instancia nueva de ``SheetsRepository`` -- bypasea el cache de lectura
-
-    de 120s de ``GspreadGateway`` (ver ``gateway.py``) para no calcular sobre
-    datos potencialmente obsoletos. La usan ``get_repo()`` (backend sheets) y
-    ``recalculate_all``/``recalculate_all_orders``.
-    """
-    _sid = config.sheets.spreadsheet_id
-    print(
-        f"DEBUG: GOOGLE_SHEETS_SPREADSHEET_ID: length={len(_sid)}, repr={_sid!r}",
-        file=sys.stderr,
-    )
-    if os.environ.get("GOOGLE_TOKEN_JSON"):
-        gateway = GspreadGateway.from_env_vars(config.sheets.spreadsheet_id)
-    else:
-        gateway = GspreadGateway(config.sheets.spreadsheet_id, config.sheets.service_account_file)
-    return SheetsRepository(gateway)
-
-
 _repo_cache: Repository | None = None
 
 
 def get_repo() -> Repository:
-    """Repositorio activo -- ``REPO_BACKEND`` (env var, "sheets" por defecto)
+    """Repositorio activo -- único backend (Postgres, ver ``PostgresRepository``/
 
-    decide la implementación. Postgres se cachea (reusa el pool de
-    conexiones, ver ``PostgresRepository``/``cxc.db.engine``); Sheets se
-    reconstruye la primera vez igual que siempre.
+    ``cxc.db.engine``). Se cachea: reusa el pool de conexiones entre llamadas.
     """
     global _repo_cache
     if _repo_cache is None:
         config = AppConfig.from_env()
-        if config.database.repo_backend == "postgres":
-            if not config.database.url:
-                raise RuntimeError("REPO_BACKEND=postgres requiere configurar DATABASE_URL")
-            _repo_cache = PostgresRepository.from_url(config.database.url)
-        else:
-            _repo_cache = _fresh_sheets_repo(config)
+        if not config.database.url:
+            raise RuntimeError("DATABASE_URL no configurado")
+        _repo_cache = PostgresRepository.from_url(config.database.url)
     return _repo_cache
 
 
@@ -2393,13 +2367,9 @@ def _aplicar_migraciones_pendientes() -> None:
     requiere_pago_previo``/``bandeja_facturacion.equivalente_lista_usd``),
     el proceso `web` arrancaba de todos modos contra un esquema
     desactualizado. Esto es best-effort y no debe tumbar el arranque: si
-    falla (backend Sheets sin Postgres, DB no disponible, permisos), solo
-    se loggea -- el resto de la app sigue funcionando igual que antes de
-    este cambio.
+    falla (DB no disponible, permisos), solo se loggea -- el resto de la
+    app sigue funcionando igual que antes de este cambio.
     """
-    config = AppConfig.from_env()
-    if config.database.repo_backend != "postgres":
-        return
     try:
         from pathlib import Path
 
@@ -3112,14 +3082,10 @@ def recalculate_all(so_id: str):
     try:
         print(f"Recalculando orden {so_id}...")
         config = AppConfig.from_env()
-        # Postgres: reusar el pool compartido (get_repo()) -- crear un
-        # engine nuevo en cada llamada (esta función corre por cada
-        # vinculación manual, ademas del sync cada ~5 min) agotaría las
-        # conexiones. Sheets: instancia nueva a propósito (comportamiento
-        # preexistente, sin cambios) -- ver _fresh_sheets_repo().
-        repo = (
-            get_repo() if config.database.repo_backend == "postgres" else _fresh_sheets_repo(config)
-        )
+        # Reusa el pool compartido -- crear un engine nuevo en cada llamada
+        # (esta función corre por cada vinculación manual, además del sync
+        # cada ~5 min) agotaría las conexiones.
+        repo = get_repo()
         execute = _connect(config.odoo)
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
         usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
@@ -3176,9 +3142,7 @@ def recalculate_all_orders():
     try:
         print("Recalculando motor de descuentos y reconciliación (todas las órdenes)...")
         config = AppConfig.from_env()
-        repo = (
-            get_repo() if config.database.repo_backend == "postgres" else _fresh_sheets_repo(config)
-        )
+        repo = get_repo()
         execute = _connect(config.odoo)
 
         try:

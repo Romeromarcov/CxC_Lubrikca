@@ -1,8 +1,9 @@
 """Acceso a datos — interfaz abstracta + implementación en memoria.
 
-La lógica de negocio (motor, conciliación, etc.) NO conoce Google Sheets ni
-Odoo: opera sobre estas interfaces. En producción se usa ``SheetsRepository``
-(cxc.sheets); en tests, ``InMemoryRepository``. Eso permite probar todo sin red.
+La lógica de negocio (motor, conciliación, etc.) NO conoce Postgres ni
+Odoo: opera sobre estas interfaces. En producción se usa ``PostgresRepository``
+(cxc.db.postgres_repository); en tests, ``InMemoryRepository``. Eso permite
+probar todo sin red.
 
 Regla de oro de la plomería (sección 1.2): los métodos de escritura de las
 tablas-espejo (clientes, órdenes, líneas, pagos, estado factura) están separados
@@ -89,10 +90,9 @@ class Repository(ABC):
     def all_config(self) -> dict[str, str]: ...
 
     def invalidate_cache(self, table: str | None = None) -> None:
-        """No-op por defecto -- solo ``SheetsRepository`` tiene una caché de
+        """No-op por defecto -- Postgres siempre lee en vivo, sin caché
 
-        lectura (``GspreadGateway``, TTL 120s) que a veces hay que forzar a
-        refrescar tras un escritura; Postgres siempre lee en vivo.
+        propia que forzar a refrescar tras una escritura.
         """
         return None
 

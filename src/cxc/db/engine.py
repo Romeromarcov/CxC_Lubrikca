@@ -1,10 +1,9 @@
 """Construcción del engine sincrono de SQLAlchemy a partir de DATABASE_URL.
 
 Sincrono a propósito: ``Repository`` (``cxc.repositories``) es una interfaz
-sincrona hoy (igual que ``SheetsRepository``/gspread), consumida sin
-``await`` por el motor de descuentos, el sync incremental y el
-reconciliador. Un driver async forzaría a reescribir esas piezas -- el plan
-de migración las deja sin tocar.
+sincrona hoy, consumida sin ``await`` por el motor de descuentos, el sync
+incremental y el reconciliador. Un driver async forzaría a reescribir esas
+piezas -- fuera de alcance por ahora.
 """
 
 from __future__ import annotations

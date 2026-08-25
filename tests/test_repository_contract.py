@@ -337,10 +337,8 @@ def test_exclusiones_par_no_ordenado(repo: Repository) -> None:
 
 def test_postgres_descuentos_diferencial_cambiario_defaults_cuando_vacio() -> None:
     # InMemoryRepository no replica este fallback (no es parte del contrato
-    # abstracto, es un detalle que SheetsRepository y PostgresRepository
-    # comparten -- ver test_discounts_new.py::test_repository_new_discounts
-    # para la misma aserción contra SheetsRepository) -- por eso no está
-    # parametrizado sobre el fixture ``repo``.
+    # abstracto, es un detalle propio de PostgresRepository) -- por eso no
+    # está parametrizado sobre el fixture ``repo``.
     if not _DATABASE_URL:
         pytest.skip("DATABASE_URL no configurado -- se salta el backend Postgres")
     repo = _make_postgres_repo()
