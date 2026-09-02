@@ -14,13 +14,22 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=90"
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=74"
 pythonpath = ["src"]
 
 [tool.coverage.run]
 branch = true
 source = ["cxc"]
-omit = ["src/cxc/web/app.py"]
+# ``web/app.py`` estaba excluido y eso volvía la métrica engañosa
+# (auditoría de agosto 2026): concentra el 59% de las sentencias del
+# proyecto (5.582 de 9.428) y es donde vive casi toda la lógica
+# financiera -- bandeja, ventas, cobranza, auditoría, los 101 endpoints.
+# El "91,79%" que se reportaba era la cobertura de todo MENOS el archivo
+# donde aparecieron los bugs de esa misma auditoría. Con app.py incluido
+# el número real es 74% (app.py por sí solo: 62%).
+#
+# El umbral queda en el valor real medido, no en uno aspiracional: sirve
+# como trinquete contra retrocesos. Subirlo exige cubrir app.py.
 
 [tool.coverage.report]
 exclude_lines = [
