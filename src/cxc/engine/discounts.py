@@ -735,21 +735,21 @@ def _calcular_componentes(
                 for ln in inp.lineas:
                     cajas_linea = _cantidad_efectiva(inp, ln)
                     best_r = None
-                    for r in recompras_activas:
+                    for rc in recompras_activas:
                         marca_ok = (
-                            r.marca == "*"
-                            or r.marca.upper() in ln.resolved_marca.upper()
-                            or ln.resolved_marca.upper() in r.marca.upper()
+                            rc.marca == "*"
+                            or rc.marca.upper() in ln.resolved_marca.upper()
+                            or ln.resolved_marca.upper() in rc.marca.upper()
                         )
                         cat_ok = (
-                            _match_categoria(r.categoria, ln.categoria)
-                            or _match_categoria(r.categoria, ln.presentacion)
-                            or _match_categoria(r.categoria, ln.categoria_madre)
-                            or _match_categoria(r.categoria, getattr(ln, "subcategoria", ""))
+                            _match_categoria(rc.categoria, ln.categoria)
+                            or _match_categoria(rc.categoria, ln.presentacion)
+                            or _match_categoria(rc.categoria, ln.categoria_madre)
+                            or _match_categoria(rc.categoria, getattr(ln, "subcategoria", ""))
                         )
                         ventana_ok = ventana_pago_vigente(
-                            getattr(r, "ventana_pago_tipo", "vencimiento"),
-                            getattr(r, "ventana_pago_dias", 3),
+                            getattr(rc, "ventana_pago_tipo", "vencimiento"),
+                            getattr(rc, "ventana_pago_dias", 3),
                             fecha_orden,
                             fecha_emision=orden_anterior.fecha,
                             fecha_entrega=None,
@@ -759,10 +759,10 @@ def _calcular_componentes(
                             marca_ok
                             and cat_ok
                             and ventana_ok
-                            and r.min_cajas <= cajas_linea <= r.max_cajas
-                            and (best_r is None or r.porcentaje > best_r.porcentaje)
+                            and rc.min_cajas <= cajas_linea <= rc.max_cajas
+                            and (best_r is None or rc.porcentaje > best_r.porcentaje)
                         ):
-                            best_r = r
+                            best_r = rc
                     if best_r is not None:
                         if getattr(best_r, "aplica_a", "linea") == "subtotal":
                             existente = reglas_recompra_subtotal.get(best_r.regla_id)

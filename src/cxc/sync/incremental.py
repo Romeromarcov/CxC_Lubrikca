@@ -9,9 +9,12 @@ tocan las tablas de trabajo humano ni la auditoría inmutable.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
+from ..models import LineaOrden, OrdenVenta
 from ..odoo.client import OdooReader
 from ..repositories import Repository
 
@@ -47,7 +50,13 @@ class IncrementalSync:
         self._repo = repo
         self._reader = reader
 
-    def _sync_opcional(self, nombre: str, filas: list, upsert_fn) -> int:
+    # ``filas``/``upsert_fn`` quedan en ``Any``: este helper es deliberadamente
+    # genérico sobre los 5 espejos opcionales (facturas, entregas, catálogo,
+    # líneas de factura, líneas de entrega), cada uno con su propio tipo de
+    # fila y su propio ``upsert_*``.
+    def _sync_opcional(
+        self, nombre: str, filas: list[Any], upsert_fn: Callable[[Any], None]
+    ) -> int:
         """Upsert best-effort para espejos NUEVOS (Fase 0, agosto 2026) que
 
         no todos los backends soportan todavía (ej. Sheets, en retiro) --
@@ -145,7 +154,9 @@ class IncrementalSync:
         )
         return result
 
-    def reconciliar_lineas_borradas(self, ordenes: list, lineas: list) -> int:
+    def reconciliar_lineas_borradas(
+        self, ordenes: list[OrdenVenta], lineas: list[LineaOrden]
+    ) -> int:
         """Borra del espejo local líneas que Odoo confirma que ya no existen.
 
         ``changed_lineas`` (delta por ``write_date``) nunca puede detectar
