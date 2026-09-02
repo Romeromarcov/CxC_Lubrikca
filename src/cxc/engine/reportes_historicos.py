@@ -45,26 +45,48 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypedDict
+
+from ..repositories import Repository
 
 TOLERANCIA_USD = Decimal("0.05")
 
+# Fila cruda de Odoo (``search_read``/``read``): claves dinámicas según el
+# ``fields`` que pida cada consulta.
+OdooRec = dict[str, Any]
 
-def _partner_id_of(rec: dict) -> int | None:
+
+class EstadoPuntoEnElTiempo(TypedDict):
+    """Estado reconstruible de UNA factura: su total en moneda de compañía y
+    todas las aplicaciones de cobro ``(monto, fecha)`` que registró Odoo.
+
+    Es un ``TypedDict`` (no un dataclass) a propósito: en runtime sigue
+    siendo el mismo dict plano que ya construía ``build_point_in_time_state``
+    -- solo hace explícito para el chequeo de tipos que ``total_company`` y
+    los montos son ``Decimal``, para que ``paid_ratio_by_cutoff`` no calcule
+    el ratio sobre ``Any`` (que es exactamente donde un float se colaría sin
+    que nadie lo note).
+    """
+
+    total_company: Decimal
+    applications: list[tuple[Decimal, str]]
+
+
+def _partner_id_of(rec: OdooRec) -> int | None:
     p = rec.get("partner_id")
     if isinstance(p, list | tuple) and p:
         return int(p[0])
     return None
 
 
-def _partner_name_of(rec: dict) -> str:
+def _partner_name_of(rec: OdooRec) -> str:
     p = rec.get("partner_id")
     if isinstance(p, list | tuple) and len(p) > 1:
         return str(p[1])
     return ""
 
 
-def fetch_out_invoices_due_by(execute: Any, cutoff: date) -> list[dict]:
+def fetch_out_invoices_due_by(execute: Any, cutoff: date) -> list[OdooRec]:
     """out_invoice posteadas con vencimiento <= ``cutoff`` -- candidatas a
     "vencida" en esa fecha (el filtro de "sigue sin pagar" se aplica
     después, con la reconstrucción punto-en-el-tiempo)."""
@@ -80,10 +102,11 @@ def fetch_out_invoices_due_by(execute: Any, cutoff: date) -> list[dict]:
         ["invoice_date_due", "<=", cutoff.isoformat()],
         ["invoice_date_due", "!=", False],
     ]
-    return execute("account.move", "search_read", [domain], {"fields": fields})
+    filas: list[OdooRec] = execute("account.move", "search_read", [domain], {"fields": fields})
+    return filas
 
 
-def _fetch_receivable_lines(execute: Any, move_ids: list[int]) -> list[dict]:
+def _fetch_receivable_lines(execute: Any, move_ids: list[int]) -> list[OdooRec]:
     if not move_ids:
         return []
     fields = ["id", "move_id", "debit", "credit", "balance", "matched_credit_ids", "reconciled"]
@@ -91,14 +114,17 @@ def _fetch_receivable_lines(execute: Any, move_ids: list[int]) -> list[dict]:
         ["move_id", "in", move_ids],
         ["account_id.account_type", "=", "asset_receivable"],
     ]
-    return execute("account.move.line", "search_read", [domain], {"fields": fields})
+    filas: list[OdooRec] = execute(
+        "account.move.line", "search_read", [domain], {"fields": fields}
+    )
+    return filas
 
 
-def _fetch_partial_reconciles(execute: Any, ids: list[int]) -> list[dict]:
+def _fetch_partial_reconciles(execute: Any, ids: list[int]) -> list[OdooRec]:
     if not ids:
         return []
     fields = ["id", "debit_move_id", "credit_move_id", "amount", "max_date"]
-    out: list[dict] = []
+    out: list[OdooRec] = []
     chunk_size = 2000
     for i in range(0, len(ids), chunk_size):
         chunk = ids[i : i + chunk_size]
@@ -106,13 +132,15 @@ def _fetch_partial_reconciles(execute: Any, ids: list[int]) -> list[dict]:
     return out
 
 
-def build_point_in_time_state(execute: Any, invoices: list[dict]) -> dict[int, dict]:
+def build_point_in_time_state(
+    execute: Any, invoices: list[OdooRec]
+) -> dict[int, EstadoPuntoEnElTiempo]:
     """Por factura (move id): total en moneda de compañía + lista de
     aplicaciones de cobro ``(monto, fecha)`` -- listo para calcular el
     residual USD a cualquier fecha de corte con ``paid_ratio_by_cutoff``."""
     move_ids = [inv["id"] for inv in invoices]
     lines = _fetch_receivable_lines(execute, move_ids)
-    move_to_lines: dict[int, list[dict]] = defaultdict(list)
+    move_to_lines: dict[int, list[OdooRec]] = defaultdict(list)
     for ln in lines:
         m = ln.get("move_id")
         mid = m[0] if isinstance(m, list | tuple) else m
@@ -135,7 +163,7 @@ def build_point_in_time_state(execute: Any, invoices: list[dict]) -> dict[int, d
         max_date = str(r.get("max_date") or "")[:10]
         recs_by_debit_line[int(dm_id)].append((amt, max_date))
 
-    result: dict[int, dict] = {}
+    result: dict[int, EstadoPuntoEnElTiempo] = {}
     for mid, lns in move_to_lines.items():
         total_company = sum((Decimal(str(ln.get("debit") or "0")) for ln in lns), Decimal("0"))
         applications: list[tuple[Decimal, str]] = []
@@ -145,7 +173,7 @@ def build_point_in_time_state(execute: Any, invoices: list[dict]) -> dict[int, d
     return result
 
 
-def paid_ratio_by_cutoff(state: dict, cutoff: date) -> Decimal:
+def paid_ratio_by_cutoff(state: EstadoPuntoEnElTiempo, cutoff: date) -> Decimal:
     total = state["total_company"]
     if total == 0:
         return Decimal("0")
@@ -177,16 +205,16 @@ class FacturaVencida:
     payment_state_actual: str
 
 
-def vendedores_por_so(repo) -> dict[str, str]:
+def vendedores_por_so(repo: Repository) -> dict[str, str]:
     return {o.so_id: (o.vendedor_email or "") for o in repo.all_ordenes()}
 
 
-def vendedores_por_cliente(repo) -> dict[str, str]:
+def vendedores_por_cliente(repo: Repository) -> dict[str, str]:
     return {c.cliente_id: (c.vendedor_email or "") for c in repo.all_clientes()}
 
 
 def cxc_vencida_no_pagada(
-    execute: Any, repo, cutoff: date, tolerancia: Decimal = TOLERANCIA_USD
+    execute: Any, repo: Repository, cutoff: date, tolerancia: Decimal = TOLERANCIA_USD
 ) -> list[FacturaVencida]:
     """Facturas out_invoice cuyo vencimiento cae en o antes de ``cutoff`` y
     que, reconstruyendo únicamente lo conciliado en Odoo con ``max_date <=
@@ -236,8 +264,10 @@ def cxc_vencida_no_pagada(
     return out
 
 
-def resumen_vencida_por_vendedor(facturas: list[FacturaVencida]) -> list[dict]:
-    agg: dict[str, dict] = defaultdict(lambda: {"n_facturas": 0, "monto_vencido_usd": 0.0})
+def resumen_vencida_por_vendedor(facturas: list[FacturaVencida]) -> list[dict[str, Any]]:
+    agg: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"n_facturas": 0, "monto_vencido_usd": 0.0}
+    )
     for f in facturas:
         agg[f.vendedor]["n_facturas"] += 1
         agg[f.vendedor]["monto_vencido_usd"] += f.residual_al_corte_usd
@@ -261,7 +291,7 @@ class PagoEnVentana:
 
 
 def cobranza_por_vendedor(
-    execute: Any, repo, desde: date, hasta: date
+    execute: Any, repo: Repository, desde: date, hasta: date
 ) -> list[PagoEnVentana]:
     """account.payment inbound/customer confirmados (``in_process``/
     ``paid`` -- mismo criterio que ``get_live_pagos_confirmados``, NO
@@ -336,7 +366,7 @@ def cobranza_por_vendedor(
     return out
 
 
-def resumen_cobranza_por_vendedor(pagos: list[PagoEnVentana]) -> list[dict]:
+def resumen_cobranza_por_vendedor(pagos: list[PagoEnVentana]) -> list[dict[str, Any]]:
     agg: dict[str, float] = defaultdict(float)
     for p in pagos:
         agg[p.vendedor] += p.monto_usd
@@ -358,11 +388,11 @@ class RecuperacionVendedor:
 
 def recuperacion_cartera(
     execute: Any,
-    repo,
+    repo: Repository,
     cutoff_vencida: date,
     recuperacion_desde: date,
     recuperacion_hasta: date,
-) -> dict:
+) -> dict[str, Any]:
     """Cruce de ``cxc_vencida_no_pagada`` (a ``cutoff_vencida``) contra lo
     cobrado en [``recuperacion_desde``, ``recuperacion_hasta``].
 
@@ -384,8 +414,8 @@ def recuperacion_cartera(
     vend_por_so = vendedores_por_so(repo)
     vend_por_cliente = vendedores_por_cliente(repo)
 
-    detalle: list[dict] = []
-    rep3b: dict[str, dict] = defaultdict(
+    detalle: list[dict[str, Any]] = []
+    rep3b: dict[str, dict[str, float]] = defaultdict(
         lambda: {"monto_vencido_usd": 0.0, "cobrado_especifico_usd": 0.0}
     )
     for inv in invoices:
