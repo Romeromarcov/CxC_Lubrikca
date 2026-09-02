@@ -886,7 +886,18 @@ def _calcular_componentes(
                 fin_ventana_teorico = fin_ventana_contado(
                     inp.orden.fecha_entrega,
                     inp.engine_config.cash_window_business_days,
-                    inp.feriados_tabla,
+                    # Bug real (auditoría de agosto 2026): acá se pasaba
+                    # ``feriados_tabla`` -- la lista de objetos ``Feriado``
+                    # -- donde va el ``frozenset[date]`` de la property
+                    # ``feriados``. ``es_dia_habil`` evalúa ``d not in
+                    # feriados``, y un ``date`` nunca es igual a un
+                    # ``Feriado``, así que los feriados se ignoraban por
+                    # completo en ESTE camino (el teórico, sin abonos): la
+                    # ventana de contado terminaba antes de tiempo y
+                    # ``contado_proy`` se ponía en cero antes de vencer de
+                    # verdad. El otro call site (ventana con abonos reales)
+                    # siempre pasó ``inp.feriados``, que es lo correcto.
+                    inp.feriados,
                 )
             if inp.fecha_calculo > fin_ventana_teorico:
                 contado_proy = Decimal("0")
