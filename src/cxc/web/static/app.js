@@ -1,3 +1,19 @@
+// Sesión vencida o ausente -> de vuelta al login. Desde la auditoría de
+// agosto 2026 el backend exige sesión en TODA ruta /api/ (ver
+// exigir_sesion_en_api en web/app.py); antes respondía datos sin cookie,
+// así que el frontend nunca necesitó manejar el 401. Se envuelve fetch una
+// sola vez en vez de tocar las ~200 llamadas existentes.
+(function redirigirAlLoginSi401() {
+    const fetchOriginal = window.fetch;
+    window.fetch = async function (...args) {
+        const res = await fetchOriginal.apply(this, args);
+        if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
+            window.location.href = "/login";
+        }
+        return res;
+    };
+})();
+
 document.addEventListener("DOMContentLoaded", () => {
     function formatListasDisplay(raw) {
         if (!raw || raw === "*") return "Todas (*)";

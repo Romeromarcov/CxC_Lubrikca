@@ -13,8 +13,13 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Request, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -2453,6 +2458,65 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
     except Exception as e:
         logger.warning("Error buscando usuario de sesión %s: %s", email, e)
         return None
+
+
+# Únicas rutas de /api/ que pueden responder sin sesión: las que sirven
+# justamente para obtener una (o soltarla). Todo lo demás exige sesión --
+# ver ``exigir_sesion_en_api``.
+_API_RUTAS_PUBLICAS = frozenset(
+    {
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/register-password",
+        "/api/auth/reset-password",
+    }
+)
+
+
+def hay_sesion_valida(request: Request) -> bool:
+    """¿La petición trae una sesión válida? Único punto que consulta el
+
+    middleware -- separado para que la suite pueda sustituirlo por una
+    sesión válida sin tener que armar un usuario real en cada uno de los
+    ~130 tests de endpoints (ver ``tests/conftest.py``); los tests que sí
+    verifican el cierre de la API lo dejan intacto.
+    """
+    return get_current_user_from_cookie(request.cookies.get("cxc_session")) is not None
+
+
+@app.middleware("http")
+async def exigir_sesion_en_api(request: Request, call_next):
+    """Toda ruta ``/api/`` exige sesión salvo la lista blanca de arriba.
+
+    Hallazgo crítico de la auditoría de producción (agosto 2026): la
+    autenticación era OPT-IN endpoint por endpoint, y de 101 endpoints
+    solo ~8 la exigían de verdad. 33 endpoints de ESCRITURA no la pedían
+    -- entre ellos crear/editar todas las reglas de descuento, cargar
+    tasas de cambio, vincular pagos, aprobar descuentos de sistema y
+    descartar hallazgos de auditoría. Verificado en vivo contra el
+    despliegue público: ``GET /api/bandeja`` y ``GET /api/config/
+    descuentos-pronto-pago`` respondían 200 sin ninguna cookie. En los
+    endpoints que sí recibían ``cxc_session``, casi siempre se usaba para
+    FILTRAR por vendedor, no para bloquear: sin cookie el usuario queda en
+    ``None`` y el filtro (``visible()``) devuelve True, o sea se veía todo.
+
+    Se resuelve con middleware y no endpoint por endpoint a propósito: así
+    el default es cerrado y un endpoint nuevo nace protegido sin que nadie
+    tenga que acordarse. Endpoint por endpoint es fail-open, que es
+    exactamente cómo se llegó a esto.
+
+    Las rutas HTML (``/dashboard``, ``/cobranza``, ...) no pasan por acá:
+    son el cascarón de la SPA, no exponen datos, y ya redirigen a
+    ``/login`` cuando no hay sesión.
+    """
+    ruta = request.url.path
+    if (
+        ruta.startswith("/api/")
+        and ruta not in _API_RUTAS_PUBLICAS
+        and not hay_sesion_valida(request)
+    ):
+        return JSONResponse(status_code=401, content={"detail": "No autenticado"})
+    return await call_next(request)
 
 
 # --- MULTI-PAGE & AUTH ROUTES ---
