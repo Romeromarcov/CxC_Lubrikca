@@ -12081,7 +12081,21 @@ def _get_ventas_sync(
         ):
             return _VENTAS_CACHE["data"]
         if _ventas_computing:
-            return _VENTAS_CACHE["data"] or {"items": [], "kpis": {}}
+            # Ya hay un cálculo en vuelo. Medido en producción: con los
+            # cachés de Odoo fríos tarda ~624 s para 783 órdenes.
+            #
+            # Bug real (auditoría de agosto 2026): acá se devolvía
+            # ``{"items": []}`` a secas cuando todavía no había caché --
+            # exactamente lo que pasa tras cada despliegue y tras cada
+            # ciclo de sync que detectó cambios (se invalida el caché). La
+            # página de Ventas se veía VACÍA durante ~10 minutos, que para
+            # quien la abre es indistinguible de haber perdido los datos.
+            # Ahora se marca ``calculando`` para que la UI diga que está
+            # actualizando, y se devuelve lo último bueno si existe.
+            previo = _VENTAS_CACHE["data"]
+            if previo is not None:
+                return {**previo, "calculando": True}
+            return {"items": [], "kpis": {}, "calculando": True}
         _ventas_computing = True
     try:
         from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden

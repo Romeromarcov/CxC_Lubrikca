@@ -1420,6 +1420,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── Página Ventas: teórico (bruta/neta, con y sin impuestos) vs real ──
     let ventasData = [];
+    // Reintento mientras el backend calcula (ver "calculando" en loadVentas).
+    let ventasRecalculoTimer = null;
 
     async function loadVentas() {
         const tbody = document.getElementById("ventas-table-body");
@@ -1433,6 +1435,25 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             const data = await res.json();
             ventasData = data.items || [];
+
+            // El backend avisa que hay un cálculo en vuelo. Sin caché previo
+            // (tras un despliegue o un ciclo de sync con cambios) tarda
+            // varios minutos, y antes se veía una tabla vacía: idéntico a
+            // "no hay ventas". Se muestra el estado real y se reintenta solo.
+            if (ventasRecalculoTimer) { clearTimeout(ventasRecalculoTimer); ventasRecalculoTimer = null; }
+            if (data.calculando && ventasData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="16" class="table-empty">'
+                    + 'Calculando el reporte de ventas… Puede tardar varios minutos '
+                    + 'después de una actualización del sistema. Esta página se '
+                    + 'refresca sola cuando esté listo.</td></tr>';
+                ventasRecalculoTimer = setTimeout(loadVentas, 30000);
+                return;
+            }
+            if (data.calculando) {
+                // Hay datos, pero son los del cálculo anterior.
+                ventasRecalculoTimer = setTimeout(loadVentas, 30000);
+            }
+
             const kpis = data.kpis || {};
             const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
 
