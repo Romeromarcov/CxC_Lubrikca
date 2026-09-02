@@ -12414,7 +12414,22 @@ def _get_ventas_sync(
 
             # Tarea 3c: descuentos ya aplicados en Odoo (orden/factura, columnas
             # separadas) + validación visual contra lo que dictamina el motor.
-            motor_total_descuentos = Decimal(str(b.total_descuentos)) if b else Decimal("0")
+            # Bug real corregido (auditoría de producción, agosto 2026):
+            # esto usaba SOLO ``total_descuentos``, dejando fuera
+            # ``ncs_calculadas`` (obsequio / primera compra / promos por
+            # producto). Todo el resto del sistema define "lo que el motor
+            # exige" como la SUMA de ambos (ver ``desc_monto`` en
+            # get_resumen y ``desc_tot`` en el reporte de saldos), así que
+            # ``descuento_pendiente_aplicar`` -- la cifra que decide si una
+            # orden entra a "Pendiente Aprobar Descuento / NC" -- venía
+            # subestimada: un obsequio nunca contaba como pendiente por
+            # aplicar, y la validación NC-vs-descuento lo daba por
+            # satisfecho sin haberlo comparado nunca.
+            motor_total_descuentos = (
+                Decimal(str(b.total_descuentos)) + Decimal(str(b.ncs_calculadas))
+                if b
+                else Decimal("0")
+            )
             descuento_aplicado_orden = desc_orden_odoo_map.get(o.so_id, 0.0)
             descuento_aplicado_factura = desc_factura_odoo_map.get(o.so_id, 0.0)
             audit_orden = auditar_descuento_orden(

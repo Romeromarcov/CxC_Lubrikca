@@ -253,14 +253,54 @@ def test_build_inputs_sin_orden_anterior_para_primer_pedido_del_cliente() -> Non
     assert inp.orden_anterior_cliente_vincs == []
 
 
-def test_runner_omite_ordenes_facturadas() -> None:
+def test_runner_omite_facturada_sin_abono_conciliado() -> None:
+    """Una orden facturada SIN abono CONCILIADO no puede haber ganado nada
+
+    retroactivo -- se sigue saltando (comportamiento histórico)."""
+    from cxc.models import EstadoVinculacion
+
     repo = _seed()
     orden = repo.get_orden("SO1")
     assert orden is not None
     orden.facturada = True
     repo.upsert_ordenes([orden])
+    # La Vinculación del fixture es CONCILIADO por defecto -- se degrada a
+    # PENDIENTE para aislar el caso "facturada sin abono confirmado".
+    repo.add_vinculacion(
+        dataclasses.replace(
+            repo.vinculaciones_de_orden("SO1")[0], estado=EstadoVinculacion.PENDIENTE
+        )
+    )
     runner = EngineRunner(repo, DictPriceResolver({("P1", "USD"): Decimal("100")}), CFG)
     assert runner.run_all(date(2026, 6, 8)) == []
+
+
+def test_runner_calcula_facturada_con_abono_conciliado() -> None:
+    """Bug real (auditoría de producción, agosto 2026): ``run_all`` saltaba
+
+    TODA orden facturada, pero Contado/Diferencial exigen un abono
+    CONCILIADO y una Vinculación solo llega a CONCILIADO cuando Odoo
+    reconcilia el pago contra una FACTURA -- es decir, cuando la orden ya
+    está facturada. El descuento se ganaba justo cuando la orden se volvía
+    invisible, así que la Bandeja 2 (que lee la fila de bandeja para decir
+    cuánto emitir en Nota de Crédito) mostraba 0% en todas las facturadas.
+    """
+    repo = _seed()
+    orden = repo.get_orden("SO1")
+    assert orden is not None
+    orden.facturada = True
+    repo.upsert_ordenes([orden])
+
+    runner = EngineRunner(repo, DictPriceResolver({("P1", "USD"): Decimal("100")}), CFG)
+    resultados = runner.run_all(date(2026, 6, 8))
+
+    assert len(resultados) == 1
+    bandeja = repo.get_bandeja("SO1")
+    assert bandeja is not None
+    # El descuento de contado se calcula igual que si no estuviera
+    # facturada -- es exactamente el monto que debe emitirse como NC.
+    assert bandeja.total_descuentos == Decimal("3.00")
+    assert {d.origen for d in bandeja.descuentos_detalle} == {"contado"}
 
 
 def test_run_orden_inexistente_devuelve_none() -> None:
@@ -283,7 +323,6 @@ def test_run_teoricos_pendientes_calcula_ordenes_facturadas() -> None:
     resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
     runner = EngineRunner(repo, resolver, CFG)
 
-    assert runner.run_all(date(2026, 6, 8)) == []  # sigue saltando facturadas
     procesadas = runner.run_teoricos_pendientes(date(2026, 6, 8))
     assert procesadas == 1
 

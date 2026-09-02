@@ -910,11 +910,23 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
     ):
         res = client.get("/api/bandeja")
         assert res.status_code == 200
-        nc_items = res.json()["notas_credito_pendientes"]
-        assert len(nc_items) == 1
-        assert nc_items[0]["so_id"] == "SO_NC"
-        assert nc_items[0]["concepto"] == "NC obsequio (Aceite 20W50 Caja)"
-        assert nc_items[0]["nc_monto"] == 45.0
+        data = res.json()
+        # Bug real corregido (auditoría de producción, agosto 2026):
+        # ``motor_total_descuentos`` en /api/ventas omitía
+        # ``ncs_calculadas``, así que un obsequio NUNCA contaba como
+        # pendiente por aplicar y toda orden facturada caía en el bucket
+        # informativo. Acá Odoo está apagado (``_connect`` -> None), o sea
+        # la NC del obsequio todavía NO se emitió: los $45 SÍ están
+        # pendientes de aprobar/emitir.
+        pend = data["descuentos_pendientes_aprobar"]
+        assert len(pend) == 1
+        assert pend[0]["so_id"] == "SO_NC"
+        assert pend[0]["descuento_pendiente_aplicar"] == 45.0
+        # El concepto real de la NC (no un texto genérico) sigue expuesto,
+        # ahora vía el detalle del motor.
+        assert [d["descripcion"] for d in pend[0]["descuentos_detalle"]] == [
+            "NC obsequio (Aceite 20W50 Caja)"
+        ]
 
 
 def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():

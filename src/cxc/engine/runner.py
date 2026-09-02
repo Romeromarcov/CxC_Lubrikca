@@ -337,15 +337,44 @@ class EngineRunner:
         return bandeja
 
     def run_all(self, fecha_calculo: date) -> list[BandejaFacturacion]:
-        """Calcula la bandeja de toda orden activa no facturada.
+        """Calcula la bandeja de las órdenes activas.
 
         Persiste en LOTE (una sola escritura por tabla) en vez de una
         escritura por orden -- con cientos de órdenes, escribir de a una
         agota la cuota de la API de Sheets casi de inmediato.
+
+        Bug real corregido (auditoría de producción, agosto 2026): esta
+        función saltaba TODA orden con ``facturada=True``, pero Contado y
+        Diferencial Cambiario exigen un abono CONCILIADO, y una
+        Vinculación solo llega a CONCILIADO cuando Odoo reconcilia el pago
+        contra una FACTURA -- o sea, cuando la orden ya está facturada. El
+        descuento se ganaba justo en el instante en que la orden se volvía
+        invisible para el motor: la fila de bandeja nunca se creaba, y la
+        Bandeja 2 (que lee ``b.ncs_calculadas``/``b.descuentos_detalle``
+        para decir cuánto emitir en Nota de Crédito) mostraba 0% en TODAS
+        las facturadas. Medido en producción: 48 de 66 órdenes con abono
+        CONCILIADO tenían descuento real invisible ($17.181,72 en
+        descuentos + $2.042,55 en NCs).
+
+        Ahora una orden facturada SÍ se calcula, pero solo si tiene al
+        menos un abono CONCILIADO -- ese es exactamente el disparador de
+        negocio ("ya pagó, se ganó el descuento, hay que emitir la NC") y
+        acota el trabajo extra a las órdenes que lo necesitan en vez de
+        recalcular las ~800 facturadas en cada ciclo del daemon (que corre
+        cada 5 min, ver ``run_sync_in_background``). Una facturada sin
+        abono conciliado no puede haber ganado nada retroactivo, así que
+        se sigue saltando igual que antes.
         """
         resultados: list[BandejaFacturacion] = []
         todas_vincs: list[Vinculacion] = []
         ordenes = self._repo.all_ordenes()
+        # Órdenes con al menos un abono CONCILIADO -- única vía por la que
+        # una orden ya facturada puede tener descuento pendiente de NC.
+        so_con_abono_conciliado = {
+            v.so_id
+            for v in self._repo.all_vinculaciones()
+            if v.estado == EstadoVinculacion.CONCILIADO
+        }
         # Prefetch UNA sola vez -- ver docstring de build_inputs (bug de
         # rendimiento real, agosto 2026): sin esto, el historial "acumulado"
         # de Volumen hace una query lineas_de_orden por cada orden anterior
@@ -358,7 +387,7 @@ class EngineRunner:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
-            if o.facturada:
+            if o.facturada and o.so_id not in so_con_abono_conciliado:
                 continue
             resultado = self._calcular(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if resultado is None:
