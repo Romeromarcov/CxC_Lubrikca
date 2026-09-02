@@ -1,8 +1,31 @@
 """Fixtures compartidas de la suite."""
 
+from unittest.mock import patch
+
 import pytest
 
 from cxc.models import set_marca_fallback
+
+
+@pytest.fixture(autouse=True)
+def _sesion_valida_por_defecto(request):
+    """Da por autenticada toda petición a ``/api/`` en los tests.
+
+    Desde la auditoría de agosto 2026 el backend exige sesión en toda ruta
+    ``/api/`` (ver ``exigir_sesion_en_api`` en web/app.py). Los ~130 tests
+    de endpoints ya existentes verifican lógica de negocio, no
+    autenticación, y montar un usuario real en cada uno (con su repo
+    mockeado propio) solo agregaría ruido. Se sustituye el único punto que
+    consulta el middleware.
+
+    ``tests/test_auth_api_cerrada.py`` -- que verifica justamente el cierre
+    de la API -- queda excluido para que ejerza el middleware de verdad.
+    """
+    if request.node.fspath.basename == "test_auth_api_cerrada.py":
+        yield
+        return
+    with patch("cxc.web.app.hay_sesion_valida", return_value=True):
+        yield
 
 
 @pytest.fixture(autouse=True)

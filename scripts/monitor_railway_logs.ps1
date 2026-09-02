@@ -1,5 +1,5 @@
 # Monitor de salud de Staging (CxC_Lubrikca): logs de Railway (app + Postgres)
-# + salud directa de Postgres + comparacion Sheets vs Postgres.
+# + salud directa de Postgres.
 #
 # Pensado para correr como Tarea Programada de Windows. Independiente de
 # cualquier sesion de Claude Code: revisa todo, y si encuentra algo:
@@ -15,9 +15,19 @@ param(
     [string]$AppService = "CxC_Lubrikca",
     [string]$DbService = "Postgres",
     [string]$Since = "190m",
-    [string]$DatabaseUrl = "postgresql://postgres:gcGQsbzXyxjHAfnhrlPUgojVALCSBKZD@sakura.proxy.rlwy.net:59119/railway",
+    # Regla dura del proyecto: no hay secretos en el repo. Antes esta
+    # credencial de Postgres venia hardcodeada aca y quedo commiteada en el
+    # historial de git desde 2026-08-01 (ver auditoria de agosto 2026) --
+    # esa credencial debe rotarse en Railway, borrarla de aca no la saca del
+    # historial. Ahora se toma del entorno, igual que el resto del sistema.
+    [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$GoogleServiceAccountFile = "secrets\project-21467edd-9ee5-4503-a83-f593df3a3a7c.json"
 )
+
+if (-not $DatabaseUrl) {
+    Write-Error "Falta DATABASE_URL (variable de entorno o parametro -DatabaseUrl)."
+    exit 1
+}
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogFile = Join-Path $RepoRoot "railway_monitor_findings.log"

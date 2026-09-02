@@ -1594,6 +1594,12 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
         def all_ordenes(self):
             return self._ordenes
 
+        def all_vinculaciones(self):
+            # ``run_all`` la consulta para saber qué órdenes facturadas
+            # tienen abono CONCILIADO (y por tanto NC pendiente). Este
+            # fake solo ejercita el filtro de canceladas.
+            return []
+
         def all_lineas(self):
             return []
 
