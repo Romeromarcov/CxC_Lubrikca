@@ -61,33 +61,38 @@ class EngineRunner:
         self._cfg = engine_config
 
     def _abonos(self, vincs: list[Vinculacion]) -> list[tuple[Vinculacion, MetodoPago]]:
-        """Abonos "reales" para el motor -- Vinculaciones ``PENDIENTE`` (aún
+        """Abonos que el motor trata como dinero real.
 
-        sin confirmar por Odoo, sea por vinculación manual reciente o por
-        una sugerencia FIFO auto-vinculada) NO cuentan aquí. Fase 0 del plan
-        de arquitectura de pagos (agosto 2026, pedido explícito del
-        usuario): antes CUALQUIER Vinculación destrababa reglas con
-        ``requiere_pago_previo=True`` (Contado, Recompra, Diferencial
-        Cambiario) sin importar si Odoo ya la había reconciliado -- riesgo
-        real una vez se automatice la vinculación FIFO (una sugerencia
-        equivocada aprobaría un descuento real antes de que Odoo confirme
-        nada). El filtro es sobre TODO ``inp.abonos``, no solo las reglas
-        con pago previo, porque ninguna regla del motor debería tratar
-        dinero sin confirmar como dinero real -- las reglas sin pago previo
-        (Volumen, fallback de Primera Compra) no leen ``inp.abonos`` de
-        todas formas, así que no se ven afectadas.
+        Cuentan tanto ``CONCILIADO`` (Odoo ya reconcilió el pago) como
+        ``PENDIENTE`` -- el estado que la UI muestra como "en proceso de
+        pago". Decisión de negocio del usuario (auditoría de producción,
+        agosto 2026), que revierte la política "solo CONCILIADO" de la
+        Fase 0: "en proceso de pago" se implementó justamente para que un
+        pago ya vinculado se asuma como conciliado y se pueda facturar CON
+        el descuento; la reconciliación posterior en Odoo lo confirma.
 
-        La ventana de pago (Contado) sigue evaluándose correctamente de
-        forma retroactiva una vez la Vinculación se promueve a
-        ``CONCILIADO``: ``within_window`` compara la fecha REAL del abono
-        (``Vinculacion.hora_pago_confirmada``, que viene de ``Pago.
-        fecha_pago``), nunca la fecha en que se confirmó -- ver
-        ``_resincronizar_vinculaciones_con_odoo`` en ``app.py``, que dispara
-        el recálculo de la orden al promover el estado.
+        Sin esto había un bloqueo real: Contado y Diferencial Cambiario
+        exigen abono, pero una Vinculación solo llega a ``CONCILIADO``
+        cuando Odoo reconcilia el pago contra una FACTURA -- o sea, cuando
+        la orden YA se facturó. El descuento nunca alcanzaba a aplicarse
+        en la factura; a lo sumo quedaba como Nota de Crédito posterior.
+
+        Riesgo asumido explícitamente al tomar la decisión: una sugerencia
+        FIFO automática equivocada (``confirmado_por='Auto-FIFO (daemon)'``)
+        otorga descuento antes de que Odoo confirme nada. Se mitiga solo
+        parcialmente: si Odoo termina reconciliando ese pago contra OTRA
+        orden, ``_resincronizar_vinculaciones_con_odoo`` (``app.py``)
+        re-apunta la Vinculación y el recálculo siguiente le quita el
+        descuento a la orden equivocada. Un pago que nunca se reconcilia
+        se queda otorgando descuento indefinidamente.
+
+        La ventana de pago (Contado) se evalúa siempre contra la fecha REAL
+        del abono (``Vinculacion.hora_pago_confirmada``, que viene de
+        ``Pago.fecha_pago``), nunca la fecha en que se confirmó, así que el
+        resultado no cambia cuando el estado se promueve a ``CONCILIADO``.
         """
-        vincs_confirmadas = [v for v in vincs if v.estado == EstadoVinculacion.CONCILIADO]
         abonos: list[tuple[Vinculacion, MetodoPago]] = []
-        for v in vincs_confirmadas:
+        for v in vincs:
             pago = self._repo.get_pago(v.pago_id)
             if pago is None:
                 logger.warning("Vinculación %s sin pago %s; se omite", v.vinc_id, v.pago_id)
@@ -357,24 +362,21 @@ class EngineRunner:
         descuentos + $2.042,55 en NCs).
 
         Ahora una orden facturada SÍ se calcula, pero solo si tiene al
-        menos un abono CONCILIADO -- ese es exactamente el disparador de
-        negocio ("ya pagó, se ganó el descuento, hay que emitir la NC") y
-        acota el trabajo extra a las órdenes que lo necesitan en vez de
-        recalcular las ~800 facturadas en cada ciclo del daemon (que corre
-        cada 5 min, ver ``run_sync_in_background``). Una facturada sin
-        abono conciliado no puede haber ganado nada retroactivo, así que
-        se sigue saltando igual que antes.
+        menos un abono (ver ``_abonos``: cuentan CONCILIADO y PENDIENTE) --
+        ese es exactamente el disparador de negocio ("ya pagó, se ganó el
+        descuento, hay que emitir la NC") y acota el trabajo extra a las
+        órdenes que lo necesitan en vez de recalcular las ~780 activas en
+        cada ciclo del daemon (que corre cada 5 min, ver
+        ``run_sync_in_background``). Medido en producción: 214 órdenes por
+        ciclo en vez de 782. Una facturada sin ningún abono no puede haber
+        ganado nada retroactivo, así que se sigue saltando igual que antes.
         """
         resultados: list[BandejaFacturacion] = []
         todas_vincs: list[Vinculacion] = []
         ordenes = self._repo.all_ordenes()
-        # Órdenes con al menos un abono CONCILIADO -- única vía por la que
-        # una orden ya facturada puede tener descuento pendiente de NC.
-        so_con_abono_conciliado = {
-            v.so_id
-            for v in self._repo.all_vinculaciones()
-            if v.estado == EstadoVinculacion.CONCILIADO
-        }
+        # Órdenes con algún abono -- única vía por la que una orden ya
+        # facturada puede tener descuento pendiente de Nota de Crédito.
+        so_con_abono = {v.so_id for v in self._repo.all_vinculaciones()}
         # Prefetch UNA sola vez -- ver docstring de build_inputs (bug de
         # rendimiento real, agosto 2026): sin esto, el historial "acumulado"
         # de Volumen hace una query lineas_de_orden por cada orden anterior
@@ -387,7 +389,7 @@ class EngineRunner:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
-            if o.facturada and o.so_id not in so_con_abono_conciliado:
+            if o.facturada and o.so_id not in so_con_abono:
                 continue
             resultado = self._calcular(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if resultado is None:

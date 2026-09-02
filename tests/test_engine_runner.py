@@ -131,38 +131,40 @@ def test_runner_abono_conciliado_cuenta_aunque_metodo_pago_no_este_sembrado() ->
     assert bandeja.total_descuentos == Decimal("3.00")
 
 
-def test_runner_vinculacion_pendiente_no_activa_contado() -> None:
-    """Fase 0 (plan de arquitectura de pagos, agosto 2026): una Vinculación
+def test_runner_vinculacion_pendiente_si_activa_contado() -> None:
+    """Decisión de negocio del usuario (auditoría de producción, agosto
 
-    PENDIENTE (sugerencia FIFO sin confirmar por Odoo, o vinculación manual
-    reciente) NO debe activar Contado aunque el monto pagado calce exacto
-    contra el neto -- solo Vinculaciones CONCILIADO cuentan como "abono
-    real" para reglas con requiere_pago_previo=True. Mismo escenario que
-    test_runner_calcula_y_persiste_bandeja (que SÍ aplica contado, porque
-    ahí la Vinculación es CONCILIADO por defecto del builder), pero con
-    estado=PENDIENTE explícito.
+    2026): una Vinculación PENDIENTE -- lo que la UI muestra como "en
+    proceso de pago" -- SÍ activa Contado. El estado se creó justamente
+    para que un pago ya vinculado se asuma como conciliado y la orden se
+    pueda facturar CON el descuento; Odoo lo confirma después.
+
+    Revierte la política "solo CONCILIADO" de la Fase 0, que producía un
+    bloqueo real: una Vinculación solo llega a CONCILIADO cuando Odoo
+    reconcilia el pago contra una FACTURA (o sea, con la orden ya
+    facturada), así que el descuento nunca alcanzaba a aplicarse en la
+    factura misma.
     """
     from cxc.models import EstadoVinculacion
 
     repo = _seed()
     # Sobreescribe la única Vinculación de SO1 a PENDIENTE.
-    vinc_pendiente = dataclasses.replace(
-        repo.vinculaciones_de_orden("SO1")[0], estado=EstadoVinculacion.PENDIENTE
+    repo.add_vinculacion(
+        dataclasses.replace(
+            repo.vinculaciones_de_orden("SO1")[0], estado=EstadoVinculacion.PENDIENTE
+        )
     )
-    repo.add_vinculacion(vinc_pendiente)
 
-    # Sin abonos CONCILIADO, _determinar_lista cae a la lista de
-    # nacimiento de la orden ("BCV", default del builder) como techo
-    # provisional -- el resolver necesita precio ahí también.
     resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("100")})
     runner = EngineRunner(repo, resolver, CFG)
 
     runner.run_all(date(2026, 6, 8))
     bandeja = repo.get_bandeja("SO1")
     assert bandeja is not None
-    assert bandeja.total_descuentos == Decimal("0")
-    origenes = {d.origen for d in bandeja.descuentos_detalle}
-    assert "contado" not in origenes
+    # Mismo resultado que con la Vinculación CONCILIADO (ver
+    # test_runner_calcula_y_persiste_bandeja).
+    assert bandeja.total_descuentos == Decimal("3.00")
+    assert {d.origen for d in bandeja.descuentos_detalle} == {"contado"}
 
 
 def test_runner_contado_retroactivo_tras_conciliar_despues_de_cerrar_ventana() -> None:
@@ -253,24 +255,18 @@ def test_build_inputs_sin_orden_anterior_para_primer_pedido_del_cliente() -> Non
     assert inp.orden_anterior_cliente_vincs == []
 
 
-def test_runner_omite_facturada_sin_abono_conciliado() -> None:
-    """Una orden facturada SIN abono CONCILIADO no puede haber ganado nada
+def test_runner_omite_facturada_sin_ningun_abono() -> None:
+    """Una orden facturada SIN ningún abono no puede haber ganado nada
 
-    retroactivo -- se sigue saltando (comportamiento histórico)."""
-    from cxc.models import EstadoVinculacion
-
+    retroactivo -- se sigue saltando, que es lo que acota el trabajo del
+    ciclo del daemon a las órdenes que sí pueden tener NC pendiente."""
     repo = _seed()
     orden = repo.get_orden("SO1")
     assert orden is not None
     orden.facturada = True
     repo.upsert_ordenes([orden])
-    # La Vinculación del fixture es CONCILIADO por defecto -- se degrada a
-    # PENDIENTE para aislar el caso "facturada sin abono confirmado".
-    repo.add_vinculacion(
-        dataclasses.replace(
-            repo.vinculaciones_de_orden("SO1")[0], estado=EstadoVinculacion.PENDIENTE
-        )
-    )
+    repo._vinculaciones.clear()  # type: ignore[attr-defined]
+
     runner = EngineRunner(repo, DictPriceResolver({("P1", "USD"): Decimal("100")}), CFG)
     assert runner.run_all(date(2026, 6, 8)) == []
 
