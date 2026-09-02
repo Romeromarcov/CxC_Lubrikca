@@ -424,6 +424,23 @@ class PostgresRepository(Repository):
             ).first()
         return _row_to_metodo(row) if row else None
 
+    def add_metodo_pago(self, metodo: MetodoPago) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.metodos_pago,
+                [
+                    {
+                        "metodo_id": metodo.metodo_id,
+                        "nombre": metodo.nombre,
+                        "moneda": metodo.moneda.value,
+                        "tipo_tasa": metodo.tipo_tasa.value,
+                        "es_contado": metodo.es_contado,
+                    }
+                ],
+                ["metodo_id"],
+            )
+
     def all_serie_tasas(self) -> list[SerieTasa]:
         with self._engine.connect() as conn:
             rows = conn.execute(

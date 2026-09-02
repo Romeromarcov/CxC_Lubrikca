@@ -224,6 +224,15 @@ class Repository(ABC):
     @abstractmethod
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None: ...
 
+    # Promovido a abstracto en la auditoría de agosto 2026: existía solo en
+    # ``InMemoryRepository`` (duck-typing informal), así que
+    # ``sincronizar_metodos_pago`` reventaba contra Postgres -- el mismo
+    # patrón de divergencia entre backends que dejó ``bandeja_auditoria``
+    # sin ``pago_id`` en Postgres. La tabla ``metodos_pago`` existe en el
+    # esquema desde el inicio y estaba vacía en producción.
+    @abstractmethod
+    def add_metodo_pago(self, metodo: MetodoPago) -> None: ...
+
     @abstractmethod
     def all_serie_tasas(self) -> list[SerieTasa]: ...
 

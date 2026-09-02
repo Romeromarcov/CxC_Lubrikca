@@ -57,6 +57,7 @@ from cxc.models import (
     Cliente,
     EstadoVinculacion,
     LineaOrden,
+    MetodoPago,
     Moneda,
     OrdenVenta,
     Producto,
@@ -1940,6 +1941,70 @@ def resolve_metodo_pago_nombre(execute: Any) -> dict[int, str]:
     return {int(j["id"]): str(j.get("name") or "") for j in journals}
 
 
+def sincronizar_metodos_pago(repo: Any, execute: Any) -> int:
+    """Espeja ``account.journal`` de Odoo en la tabla ``metodos_pago``.
+
+    Corrección pedida por el usuario (auditoría de agosto 2026): "lo
+    importante es apoyarse de los journal de odoo, esa es la verdad". La
+    tabla estaba COMPLETAMENTE VACÍA en producción -- nunca se sembró y no
+    tiene panel en Configuración -- así que cada abono caía en el
+    ``MetodoPago`` de reserva de ``EngineRunner._abonos()`` y dejaba un
+    warning por pago. Antes de ese respaldo, directamente descartaba el
+    abono y la orden se quedaba sin descuento.
+
+    Se sincroniza en vez de sembrarse a mano justamente porque Odoo es la
+    fuente de verdad: si mañana agregan un banco, aparece solo.
+
+    El campo que de verdad consume el motor es ``moneda`` (decide si una
+    regla en USD o en VES aplica al abono, ver ``_calcular_componentes`` en
+    discounts.py). ``tipo_tasa`` y ``es_contado`` se derivan del diario por
+    coherencia, pero hoy ninguna regla los lee.
+    """
+    if not execute:
+        return 0
+    journals = execute(
+        "account.journal",
+        "search_read",
+        [[["type", "in", ["bank", "cash"]]]],
+        {"fields": ["id", "name", "type", "currency_id", "code"]},
+    )
+    if not journals:
+        return 0
+    # Un diario sin ``currency_id`` propio opera en la moneda de la empresa.
+    moneda_empresa = Moneda.VES
+    try:
+        empresas = execute("res.company", "search_read", [[]], {"fields": ["currency_id"]})
+        cur_emp = empresas[0].get("currency_id") if empresas else None
+        nombre_cur = cur_emp[1] if isinstance(cur_emp, list | tuple) and len(cur_emp) > 1 else ""
+        if str(nombre_cur).strip().upper() == "USD":
+            moneda_empresa = Moneda.USD
+    except Exception as e_cur:
+        logger.warning("No se pudo leer la moneda de la empresa; se asume VES: %s", e_cur)
+
+    for j in journals:
+        cur_j = j.get("currency_id")
+        cur_nombre = cur_j[1] if isinstance(cur_j, list | tuple) and len(cur_j) > 1 else ""
+        cur = str(cur_nombre).strip().upper()
+        moneda = Moneda.USD if cur == "USD" else (Moneda.VES if cur == "VES" else moneda_empresa)
+        etiqueta = f"{j.get('name') or ''} {j.get('code') or ''}".lower()
+        if "binance" in etiqueta:
+            tipo_tasa = TipoTasa.BINANCE
+        elif moneda == Moneda.USD:
+            tipo_tasa = TipoTasa.N_A
+        else:
+            tipo_tasa = TipoTasa.BCV
+        repo.add_metodo_pago(
+            MetodoPago(
+                metodo_id=str(j["id"]),
+                nombre=str(j.get("name") or ""),
+                moneda=moneda,
+                tipo_tasa=tipo_tasa,
+                es_contado=str(j.get("type") or "") == "cash",
+            )
+        )
+    return len(journals)
+
+
 def resolve_vendedor_validado(
     cliente_id: str,
     so_id: str | None,
@@ -3208,6 +3273,14 @@ def recalculate_all_orders():
         config = AppConfig.from_env()
         repo = get_repo()
         execute = _connect(config.odoo)
+
+        # Espejo de diarios de Odoo -> metodos_pago. Barato (una decena de
+        # filas) y va ANTES del motor: la moneda del método decide qué
+        # reglas aplican a cada abono. Ver sincronizar_metodos_pago.
+        try:
+            sincronizar_metodos_pago(repo, execute)
+        except Exception as e_mp:
+            print(f"Error sincronizando métodos de pago: {e_mp}", file=sys.stderr)
 
         try:
             n_auto_vinc = _auto_vincular_fifo_pendientes(repo)
