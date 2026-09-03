@@ -7,7 +7,7 @@ import pytest
 
 from cxc.models import set_marca_fallback
 
-# Credenciales de Odoo ficticias para que la suite sea HERMÉTICA.
+# Variables de entorno ficticias para que la suite sea HERMÉTICA.
 #
 # ``AppConfig.from_env()`` exige ODOO_URL/DB/USERNAME/PASSWORD y revienta
 # con KeyError si falta alguna. En una máquina de desarrollo eso no se nota
@@ -19,11 +19,15 @@ from cxc.models import set_marca_fallback
 #
 # El dominio es ``.test``, un TLD reservado que no resuelve: si algún test
 # intentara conectarse de verdad, falla en vez de tocar un Odoo real.
-_ODOO_ENV_DE_PRUEBA = {
+# Si agregás una variable obligatoria nueva en config.py, sumala acá: hay
+# un test que compara ambas listas y falla si se desincronizan
+# (tests/test_entorno_hermetico.py).
+_ENV_DE_PRUEBA = {
     "ODOO_URL": "https://odoo.invalido.test",
     "ODOO_DB": "cxc_test",
     "ODOO_USERNAME": "tests@cxc.test",
     "ODOO_PASSWORD": "no-es-una-credencial",
+    "BINANCE_P2P_URL": "https://binance.invalido.test/p2p",
 }
 
 
@@ -38,7 +42,7 @@ def _entorno_hermetico():
     CI. Anulándolo, lo que corre en local es exactamente lo que corre en el
     pipeline.
     """
-    faltantes = {k: v for k, v in _ODOO_ENV_DE_PRUEBA.items() if not os.environ.get(k)}
+    faltantes = {k: v for k, v in _ENV_DE_PRUEBA.items() if not os.environ.get(k)}
     with (
         patch("cxc.config._maybe_load_dotenv", lambda: None),
         patch.dict(os.environ, faltantes),
