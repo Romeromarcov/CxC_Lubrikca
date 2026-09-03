@@ -54,5 +54,5 @@ jobs:
       - name: Alembic (aplicar migraciones a la base de CI)
         run: alembic upgrade head
 
-       - name: Pytest (tests + coverage >= 73,9%)
+      - name: Pytest (tests + coverage >= 73,9%)
         run: pytest
