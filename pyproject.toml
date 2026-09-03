@@ -14,7 +14,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=73"
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=74"
 pythonpath = ["src"]
 
 [tool.coverage.run]
@@ -26,7 +26,7 @@ source = ["cxc"]
 # financiera -- bandeja, ventas, cobranza, auditoría, los 101 endpoints.
 # El "91,79%" que se reportaba era la cobertura de todo MENOS el archivo
 # donde aparecieron los bugs de esa misma auditoría. Con app.py incluido
-# el número real es 73,08% (app.py por sí solo: ~62%).
+# el número real es 74,17% (app.py por sí solo: ~62%).
 #
 # El umbral queda en el valor real medido, no en uno aspiracional: sirve
 # como trinquete contra retrocesos. Subirlo exige cubrir app.py.
@@ -40,7 +40,7 @@ source = ["cxc"]
 #    ``_entorno_hermetico`` en tests/conftest.py). Antes la cobertura
 #    dependía de si la máquina tenía ``.env``: daba 74,16% en desarrollo y
 #    73,10% en CI, así que un umbral tomado en local condenaba al pipeline
-#    a estar rojo. Hoy da 73,08% en los dos lados.
+#    a estar rojo. Hoy da 74,17% en los dos lados.
 
 [tool.coverage.report]
 exclude_lines = [
