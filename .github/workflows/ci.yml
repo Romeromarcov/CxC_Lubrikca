@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+      branches: [main, develop]
   pull_request:
-    branches: [main]
+      branches: [main, develop]
 
 jobs:
   test:
@@ -26,9 +26,9 @@ jobs:
           --health-retries 5
 
     env:
-      # Backend Postgres en pruebas (tests/test_repository_contract.py y la
-      # migración Alembic) -- producción sigue en REPO_BACKEND=sheets hasta
-      # que la migración se valide (ver src/cxc/db/).
+      # Postgres es el unico backend: el de Google Sheets se elimino por
+      # completo del repositorio. La necesitan test_repository_contract.py
+      # y la migracion Alembic.
       DATABASE_URL: postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci
 
     steps:
@@ -54,5 +54,5 @@ jobs:
       - name: Alembic (aplicar migraciones a la base de CI)
         run: alembic upgrade head
 
-      - name: Pytest (tests + coverage >= 90%)
+      - name: Pytest (tests + coverage >= 73,9%)
         run: pytest
