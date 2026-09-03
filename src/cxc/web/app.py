@@ -1336,6 +1336,81 @@ def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
     return reconciled
 
 
+def residual_disponible_por_pago(execute: Any, pago_ids: list[str]) -> dict[str, Decimal]:
+    """``pago_id`` -> cuánto le queda REALMENTE sin aplicar, según Odoo.
+
+    Es ``amount_residual_currency`` de la línea por cobrar del pago, en su
+    propia moneda: el mismo campo que Odoo consulta para decidir cuánto
+    crédito pendiente ofrecer, y el que ya usa
+    ``_detectar_pagos_con_residual_sin_aplicar``.
+
+    Bug real (auditoría de agosto 2026): el reparto FIFO calculaba el
+    disponible como ``monto_total - Vinculaciones locales``, sin restar lo
+    que Odoo YA había aplicado a facturas. Las dos mitades del criterio
+    eran inconsistentes: ``get_reconciled_pago_ids_odoo`` deja disponible
+    todo pago que no esté TOTALMENTE reconciliado (correcto -- ver el caso
+    S00608, un residual genuino no debe desaparecer), pero el monto se
+    tomaba completo en vez del residual. Medido en producción: de 260
+    pagos vivos, 69 tenían el disponible inflado, con un exceso de
+    11.042.364,68 VES y 5.880,12 USD. El peor caso creía tener
+    2.505.966,52 disponibles cuando le quedaban 185,71.
+
+    Eso hacía que el FIFO repartiera plata inexistente entre órdenes, y
+    desde que una Vinculación PENDIENTE destraba descuentos (ver
+    ``EngineRunner._abonos``), esas asignaciones fantasma además
+    habilitaban Contado y Diferencial sobre órdenes que nadie pagó.
+
+    Best-effort: un pago sin línea por cobrar legible queda fuera del dict
+    y el llamador conserva su cálculo anterior -- mejor ofrecer de más que
+    ocultar un pago real.
+    """
+    residuales: dict[str, Decimal] = {}
+    p_ids = [int(pid) for pid in pago_ids if pid.isdigit()]
+    if not execute or not p_ids:
+        return residuales
+    try:
+        pagos = execute(
+            "account.payment",
+            "search_read",
+            [[["id", "in", p_ids]]],
+            {"fields": ["id", "move_id", "state"]},
+        )
+        por_move = {
+            p["move_id"][0]: str(p["id"])
+            for p in pagos
+            if p.get("move_id") and p.get("state") != "cancel"
+        }
+        if not por_move:
+            return residuales
+        lineas = execute(
+            "account.move.line",
+            "search_read",
+            [
+                [
+                    ["move_id", "in", list(por_move.keys())],
+                    ["account_id.account_type", "=", "asset_receivable"],
+                ]
+            ],
+            {"fields": ["move_id", "amount_residual_currency", "reconciled"]},
+        )
+    except Exception as e:
+        logger.warning("Error leyendo el residual real de los pagos: %s", e)
+        return residuales
+
+    for linea in lineas:
+        move_ref = linea.get("move_id")
+        pid = por_move.get(move_ref[0]) if move_ref else None
+        if not pid:
+            continue
+        if linea.get("reconciled"):
+            residuales[pid] = Decimal("0")
+            continue
+        # El signo depende de si la línea es débito o crédito; lo que
+        # interesa es la magnitud pendiente.
+        residuales[pid] = abs(parse_decimal_safe(str(linea.get("amount_residual_currency") or "0")))
+    return residuales
+
+
 def pago_monto_usd(monto_raw: Decimal, moneda: str, bcv_rate: Decimal) -> Decimal:
     """Equivalente USD de un monto de pago -- usa la tasa BCV del día del pago
 
@@ -6549,6 +6624,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
 
         # Live Odoo batch verification for reconciled payments and cancelled orders
         reconciled_pagos_set: set[str] = set()
+        residual_odoo: dict[str, Decimal] = {}
         so_states_map = {}
         so_pagada_en_odoo: set[str] = set()
         entrega_valida_set: set[str] = set()
@@ -6561,6 +6637,10 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     str(p.get("pago_id", "")).strip() for p in pagos_rows if p.get("pago_id")
                 ]
                 reconciled_pagos_set = get_reconciled_pago_ids_odoo(execute, p_ids_str)
+                # Cuánto le queda REALMENTE sin aplicar a cada pago según
+                # Odoo -- ver residual_disponible_por_pago: sin esto el
+                # reparto FIFO ofrece plata ya aplicada a facturas.
+                residual_odoo = residual_disponible_por_pago(execute, p_ids_str)
 
                 # tax_today ("Tasa") y amount_ref ("Importe referencia") son
                 # campos propios de este Odoo: la tasa BCV exacta que se
@@ -6752,6 +6832,22 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
             )
             monto_vinculado_usd = linked_pago.get(pid, Decimal("0"))
             saldo_usd = monto_orig_usd - monto_vinculado_usd
+
+            # Tope por el residual REAL de Odoo. Antes el disponible era
+            # solo "monto total - Vinculaciones locales", que ignora lo que
+            # Odoo ya aplicó a facturas: de 260 pagos vivos, 69 salían
+            # inflados (exceso medido: 11.042.364,68 VES + 5.880,12 USD; el
+            # peor creía tener 2.505.966,52 con 185,71 de residual real).
+            # Ver residual_disponible_por_pago para el porqué completo.
+            #
+            # Se escala en proporción en vez de convertir con una tasa
+            # propia: ``monto_orig_usd`` puede venir del ``amount_ref`` que
+            # calculó Odoo con la tasa de ESE pago, así que aplicar otra
+            # tasa al residual mezclaría criterios.
+            residual_raw = residual_odoo.get(pid)
+            if residual_raw is not None and monto_orig_raw > Decimal("0"):
+                disponible_odoo_usd = monto_orig_usd * (residual_raw / monto_orig_raw)
+                saldo_usd = min(saldo_usd, disponible_odoo_usd)
 
             if saldo_usd > Decimal("0.05"):
                 # "vendedor" (a secas) nunca existió como columna real en
@@ -7626,8 +7722,19 @@ def _auto_vincular_fifo_pendientes(repo: Any) -> int:
     Se excluyen las filas "SIN_ORDEN" (dinero sobrante sin orden abierta
     que cubrir -- no hay nada que vincular) y los pagos marcados como
     posible duplicado (requieren juicio humano, no se auto-vinculan).
-    Como quedan en PENDIENTE (Fase 0), una sugerencia equivocada no
-    destraba ningún descuento -- solo se confirma cuando Odoo la reconcilia.
+
+    CUIDADO (auditoría de agosto 2026): este docstring decía que una
+    sugerencia equivocada era inocua "porque queda en PENDIENTE y no
+    destraba ningún descuento". Eso YA NO ES CIERTO -- por decisión de
+    negocio del usuario, una Vinculación PENDIENTE ("en proceso de pago")
+    sí activa Contado y Diferencial (ver ``EngineRunner._abonos``). O sea
+    que lo que esta función auto-vincula cada ciclo del daemon mueve
+    descuentos reales, no solo sugerencias.
+
+    Por eso importa que el disponible de cada pago esté acotado por su
+    residual real en Odoo (ver ``residual_disponible_por_pago``): sin ese
+    tope, el reparto ofrecía plata ya aplicada a facturas y podía destrabar
+    descuentos sobre órdenes que nadie pagó.
     """
     try:
         sugerencias = _get_conciliaciones_sugerencias_sync(None)
