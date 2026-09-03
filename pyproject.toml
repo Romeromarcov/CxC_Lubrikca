@@ -14,7 +14,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=73.9"
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=73"
 pythonpath = ["src"]
 
 [tool.coverage.run]
@@ -26,16 +26,21 @@ source = ["cxc"]
 # financiera -- bandeja, ventas, cobranza, auditoría, los 101 endpoints.
 # El "91,79%" que se reportaba era la cobertura de todo MENOS el archivo
 # donde aparecieron los bugs de esa misma auditoría. Con app.py incluido
-# el número real es 74% (app.py por sí solo: 62%).
+# el número real es 73,08% (app.py por sí solo: ~62%).
 #
 # El umbral queda en el valor real medido, no en uno aspiracional: sirve
 # como trinquete contra retrocesos. Subirlo exige cubrir app.py.
 #
-# El valor exacto es 73,97%, no 74%: el "74%" del reporte es el redondeo
-# que imprime coverage, pero ``--cov-fail-under`` compara contra el número
-# sin redondear, así que un umbral de 74 fallaba siempre -- el CI venía
-# rojo por esto desde que se cambió la métrica. 73.9 conserva el trinquete
-# (cualquier retroceso real lo rompe) sin depender del redondeo.
+# Dos cuidados con el umbral, ambos aprendidos rompiendo el CI:
+#
+# 1. ``--cov-fail-under`` compara contra el valor SIN redondear, no contra
+#    el porcentaje que imprime el reporte. Un umbral igual al número
+#    redondeado falla siempre.
+# 2. La cifra tiene que medirse con la suite HERMÉTICA (ver
+#    ``_entorno_hermetico`` en tests/conftest.py). Antes la cobertura
+#    dependía de si la máquina tenía ``.env``: daba 74,16% en desarrollo y
+#    73,10% en CI, así que un umbral tomado en local condenaba al pipeline
+#    a estar rojo. Hoy da 73,08% en los dos lados.
 
 [tool.coverage.report]
 exclude_lines = [

@@ -1,10 +1,49 @@
 """Fixtures compartidas de la suite."""
 
+import os
 from unittest.mock import patch
 
 import pytest
 
 from cxc.models import set_marca_fallback
+
+# Credenciales de Odoo ficticias para que la suite sea HERMÉTICA.
+#
+# ``AppConfig.from_env()`` exige ODOO_URL/DB/USERNAME/PASSWORD y revienta
+# con KeyError si falta alguna. En una máquina de desarrollo eso no se nota
+# porque hay un ``.env`` que python-dotenv carga solo; en CI no hay ``.env``
+# y 16 tests fallaban con "Falta la variable de entorno requerida:
+# ODOO_URL" -- pasaban en local y fallaban en el pipeline, que es parte de
+# por qué el CI llevaba tanto tiempo en rojo sin que nadie lo mirara
+# (auditoría de agosto 2026).
+#
+# El dominio es ``.test``, un TLD reservado que no resuelve: si algún test
+# intentara conectarse de verdad, falla en vez de tocar un Odoo real.
+_ODOO_ENV_DE_PRUEBA = {
+    "ODOO_URL": "https://odoo.invalido.test",
+    "ODOO_DB": "cxc_test",
+    "ODOO_USERNAME": "tests@cxc.test",
+    "ODOO_PASSWORD": "no-es-una-credencial",
+}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _entorno_hermetico():
+    """Aísla la suite del ``.env`` de la máquina.
+
+    Además de rellenar las credenciales, se anula la carga del ``.env``:
+    ese archivo trae muchas otras variables (listas de precios, ventana de
+    contado, URLs de scraper) que cambian rutas de código, así que la suite
+    daba resultados y cobertura DISTINTOS en una máquina de desarrollo y en
+    CI. Anulándolo, lo que corre en local es exactamente lo que corre en el
+    pipeline.
+    """
+    faltantes = {k: v for k, v in _ODOO_ENV_DE_PRUEBA.items() if not os.environ.get(k)}
+    with (
+        patch("cxc.config._maybe_load_dotenv", lambda: None),
+        patch.dict(os.environ, faltantes),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)
