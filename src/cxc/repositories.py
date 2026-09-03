@@ -255,6 +255,22 @@ class Repository(ABC):
         """
 
     @abstractmethod
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        """Borra Vinculaciones por id. Devuelve cuántas se borraron.
+
+        Agregado en la auditoría de agosto 2026: no existía forma de
+        eliminar una Vinculación en ningún backend, así que las
+        sugerencias automáticas del daemon (``_auto_vincular_fifo_
+        pendientes``) solo podían acumularse o re-apuntarse, nunca
+        descartarse -- ni siquiera cuando se descubrió que salieron de un
+        disponible inflado (ver ``residual_disponible_por_pago``).
+
+        Solo para sugerencias que hay que rehacer: una Vinculación
+        CONCILIADO refleja una reconciliación real de Odoo y no debe
+        borrarse desde acá.
+        """
+
+    @abstractmethod
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]: ...
 
     @abstractmethod
@@ -695,6 +711,13 @@ class InMemoryRepository(Repository):
     def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
         for v in vincs:
             self._vinculaciones[v.vinc_id] = v
+
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        borradas = 0
+        for vid in vinc_ids:
+            if self._vinculaciones.pop(vid, None) is not None:
+                borradas += 1
+        return borradas
 
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         return list(self._descuentos)

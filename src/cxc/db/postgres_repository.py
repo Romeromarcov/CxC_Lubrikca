@@ -470,6 +470,15 @@ class PostgresRepository(Repository):
         with self._engine.begin() as conn:
             _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
 
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        if not vinc_ids:
+            return 0
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                t.vinculaciones.delete().where(t.vinculaciones.c.vinc_id.in_(vinc_ids))
+            )
+        return int(result.rowcount or 0)
+
     # --- Reglas de descuento (config, solo lectura en esta fase) -------------
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         with self._engine.connect() as conn:
