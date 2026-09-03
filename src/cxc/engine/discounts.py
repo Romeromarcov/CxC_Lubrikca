@@ -735,21 +735,21 @@ def _calcular_componentes(
                 for ln in inp.lineas:
                     cajas_linea = _cantidad_efectiva(inp, ln)
                     best_r = None
-                    for r in recompras_activas:
+                    for rc in recompras_activas:
                         marca_ok = (
-                            r.marca == "*"
-                            or r.marca.upper() in ln.resolved_marca.upper()
-                            or ln.resolved_marca.upper() in r.marca.upper()
+                            rc.marca == "*"
+                            or rc.marca.upper() in ln.resolved_marca.upper()
+                            or ln.resolved_marca.upper() in rc.marca.upper()
                         )
                         cat_ok = (
-                            _match_categoria(r.categoria, ln.categoria)
-                            or _match_categoria(r.categoria, ln.presentacion)
-                            or _match_categoria(r.categoria, ln.categoria_madre)
-                            or _match_categoria(r.categoria, getattr(ln, "subcategoria", ""))
+                            _match_categoria(rc.categoria, ln.categoria)
+                            or _match_categoria(rc.categoria, ln.presentacion)
+                            or _match_categoria(rc.categoria, ln.categoria_madre)
+                            or _match_categoria(rc.categoria, getattr(ln, "subcategoria", ""))
                         )
                         ventana_ok = ventana_pago_vigente(
-                            getattr(r, "ventana_pago_tipo", "vencimiento"),
-                            getattr(r, "ventana_pago_dias", 3),
+                            getattr(rc, "ventana_pago_tipo", "vencimiento"),
+                            getattr(rc, "ventana_pago_dias", 3),
                             fecha_orden,
                             fecha_emision=orden_anterior.fecha,
                             fecha_entrega=None,
@@ -759,10 +759,10 @@ def _calcular_componentes(
                             marca_ok
                             and cat_ok
                             and ventana_ok
-                            and r.min_cajas <= cajas_linea <= r.max_cajas
-                            and (best_r is None or r.porcentaje > best_r.porcentaje)
+                            and rc.min_cajas <= cajas_linea <= rc.max_cajas
+                            and (best_r is None or rc.porcentaje > best_r.porcentaje)
                         ):
-                            best_r = r
+                            best_r = rc
                     if best_r is not None:
                         if getattr(best_r, "aplica_a", "linea") == "subtotal":
                             existente = reglas_recompra_subtotal.get(best_r.regla_id)
@@ -886,7 +886,18 @@ def _calcular_componentes(
                 fin_ventana_teorico = fin_ventana_contado(
                     inp.orden.fecha_entrega,
                     inp.engine_config.cash_window_business_days,
-                    inp.feriados_tabla,
+                    # Bug real (auditoría de agosto 2026): acá se pasaba
+                    # ``feriados_tabla`` -- la lista de objetos ``Feriado``
+                    # -- donde va el ``frozenset[date]`` de la property
+                    # ``feriados``. ``es_dia_habil`` evalúa ``d not in
+                    # feriados``, y un ``date`` nunca es igual a un
+                    # ``Feriado``, así que los feriados se ignoraban por
+                    # completo en ESTE camino (el teórico, sin abonos): la
+                    # ventana de contado terminaba antes de tiempo y
+                    # ``contado_proy`` se ponía en cero antes de vencer de
+                    # verdad. El otro call site (ventana con abonos reales)
+                    # siempre pasó ``inp.feriados``, que es lo correcto.
+                    inp.feriados,
                 )
             if inp.fecha_calculo > fin_ventana_teorico:
                 contado_proy = Decimal("0")

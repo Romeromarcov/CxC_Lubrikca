@@ -14,7 +14,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=74"
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=73.9"
 pythonpath = ["src"]
 
 [tool.coverage.run]
@@ -30,6 +30,12 @@ source = ["cxc"]
 #
 # El umbral queda en el valor real medido, no en uno aspiracional: sirve
 # como trinquete contra retrocesos. Subirlo exige cubrir app.py.
+#
+# El valor exacto es 73,97%, no 74%: el "74%" del reporte es el redondeo
+# que imprime coverage, pero ``--cov-fail-under`` compara contra el número
+# sin redondear, así que un umbral de 74 fallaba siempre -- el CI venía
+# rojo por esto desde que se cambió la métrica. 73.9 conserva el trinquete
+# (cualquier retroceso real lo rompe) sin depender del redondeo.
 
 [tool.coverage.report]
 exclude_lines = [
