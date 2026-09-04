@@ -600,6 +600,26 @@ class OdooXmlRpcReader(OdooReader):
         return {k: v[0] for k, v in primeras.items()}
 
     def _facturas_por_origen(self, so_names: list[str]) -> dict[str, str]:
+        """Factura VIGENTE de cada orden.
+
+        Bug real (auditoría de agosto 2026, casos Michele Carfora S00817 y
+        Talleres Leo S00886): una orden puede tener varias facturas cuando
+        se anula la primera con una Nota de Crédito por el total y se
+        vuelve a facturar. Esta función pedía solo ``state = posted`` -- y
+        una factura anulada SIGUE posteada, lo que cambia es su
+        ``payment_state`` a ``reversed`` -- y después colapsaba todas las
+        coincidencias en un dict, quedándose con una arbitraria.
+
+        Resultado medido: 16 de 718 órdenes apuntaban a una factura
+        anulada, entre ellas S00573 (1.362.751), S00479 (1.113.126) y
+        S00294 (1.605.846). El sistema comparaba saldos y descuentos contra
+        un documento que ya no existe comercialmente. Verificado que no era
+        dato viejo: una llamada fresca devolvía igual la factura anulada.
+
+        Ahora se descartan las anuladas y, si quedan varias, gana la más
+        reciente. Una NC PARCIAL no anula: deja la factura en ``not_paid``
+        o ``partial``, así que esa sigue siendo la vigente y no se pierde.
+        """
         if not so_names:
             return {}
         recs = self._search_read(
@@ -609,9 +629,19 @@ class OdooXmlRpcReader(OdooReader):
                 ["move_type", "=", "out_invoice"],
                 ["state", "=", "posted"],
             ],
-            ["id", "invoice_origin"],
+            ["id", "invoice_origin", "payment_state"],
         )
-        return {str(r["invoice_origin"]): str(r["id"]) for r in recs if r.get("invoice_origin")}
+        vigentes: dict[str, int] = {}
+        for r in recs:
+            origen = str(r.get("invoice_origin") or "")
+            if not origen:
+                continue
+            if str(r.get("payment_state") or "") == "reversed":
+                continue  # anulada por NC total
+            fid = int(r["id"])
+            if fid > vigentes.get(origen, 0):
+                vigentes[origen] = fid
+        return {origen: str(fid) for origen, fid in vigentes.items()}
 
     # --- Facturas (espejo inmutable, Fase 0 del plan de consolidación de
     # fuentes) -----------------------------------------------------------------
