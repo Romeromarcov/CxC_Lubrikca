@@ -769,7 +769,7 @@ def _sincronizar_aplicaciones_conciliadas(
     """
     totales = agrupar_aplicaciones(aplicaciones)
     if not totales:
-        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0}
+        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0, "omitidas": 0}
 
     fecha_por_pago: dict[str, date] = {}
     moneda_por_pago: dict[str, Moneda] = {}
@@ -779,9 +779,20 @@ def _sincronizar_aplicaciones_conciliadas(
 
     existentes = {(str(v.pago_id), v.so_id): v for v in repo.all_vinculaciones()}
     tasas_rows = _all_serie_tasas_rows(repo)
-    creadas = corregidas = sin_cambio = 0
+    # ``vinculaciones.pago_id`` es clave foránea contra ``pagos``: una
+    # Vinculación sobre un pago que no esté en el espejo no se puede ni
+    # escribir. Y justamente los pagos que interesan acá son los que el
+    # sync incremental no alcanza -- su ventana delta mira las últimas
+    # 48 h por ``write_date``, y estos los reconcilió Odoo hace meses. El
+    # llamador los rescata con ``pagos_por_id``; si aun así falta alguno,
+    # se salta esa aplicación en vez de tumbar el ciclo entero.
+    en_espejo = {str(p.pago_id) for p in repo.all_pagos()}
+    creadas = corregidas = sin_cambio = omitidas = 0
 
     for (pago_id, so_id), monto in sorted(totales.items()):
+        if pago_id not in en_espejo:
+            omitidas += 1
+            continue
         previa = existentes.get((pago_id, so_id))
         if (
             previa is not None
@@ -833,7 +844,12 @@ def _sincronizar_aplicaciones_conciliadas(
         else:
             corregidas += 1
 
-    return {"creadas": creadas, "corregidas": corregidas, "sin_cambio": sin_cambio}
+    return {
+        "creadas": creadas,
+        "corregidas": corregidas,
+        "sin_cambio": sin_cambio,
+        "omitidas": omitidas,
+    }
 
 
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
@@ -3508,14 +3524,28 @@ def recalculate_all_orders():
             # _sincronizar_aplicaciones_conciliadas.
             try:
                 reader_apps = OdooXmlRpcReader(config.odoo, execute)
-                res_apl = _sincronizar_aplicaciones_conciliadas(
-                    repo, reader_apps.aplicaciones_conciliadas()
-                )
+                aplicaciones = reader_apps.aplicaciones_conciliadas()
+                # Rescate de los pagos que la ventana delta nunca alcanza
+                # (Odoo los reconcilió hace meses). Sin esto la clave
+                # foránea de vinculaciones.pago_id impide escribir su
+                # Vinculación. Ver pagos_por_id.
+                faltantes = {a.pago_id for a in aplicaciones} - {
+                    str(p.pago_id) for p in repo.all_pagos()
+                }
+                if faltantes:
+                    rescatados = reader_apps.pagos_por_id(sorted(faltantes))
+                    if rescatados:
+                        repo.upsert_pagos(rescatados)
+                        print(
+                            f"Pagos conciliados rescatados del histórico: {len(rescatados)}."
+                        )
+                res_apl = _sincronizar_aplicaciones_conciliadas(repo, aplicaciones)
                 if res_apl["creadas"] or res_apl["corregidas"]:
                     print(
                         f"Aplicaciones de Odoo: {res_apl['creadas']} vinculación(es) "
                         f"nueva(s), {res_apl['corregidas']} corregida(s), "
-                        f"{res_apl['sin_cambio']} sin cambio."
+                        f"{res_apl['sin_cambio']} sin cambio, "
+                        f"{res_apl['omitidas']} omitida(s) sin pago en el espejo."
                     )
             except Exception as e_apl:
                 print(f"Error sincronizando aplicaciones de Odoo: {e_apl}", file=sys.stderr)
