@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 from datetime import date
 
@@ -34,18 +35,29 @@ from .price_resolver import PriceResolver
 logger = logging.getLogger("cxc.engine")
 
 
-def fingerprint_lineas(lineas: list[LineaOrden]) -> str:
+def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
     """Huella determinista de las líneas de una orden (agosto 2026, hallazgo
 
     real orden S00792: el teórico quedó mostrando una línea de producto que
     ya no existía y cantidades viejas porque nada disparaba un recálculo
     cuando la orden en sí cambiaba en Odoo, solo cuando faltaba precio en
     una lista -- ver ``VentasTeorico.lineas_fingerprint``). Cambia si Odoo
-    edita cantidades, precios o el set de productos de la orden."""
+    edita cantidades, precios o el set de productos de la orden.
+
+    ``lista_precios`` entra en la huella desde septiembre de 2026, cuando
+    el teorico paso a calcularse contra la lista de NACIMIENTO de la
+    orden (ver ``EngineInputs.pares_listas``). Antes de ese cambio la
+    lista de la orden no influia en el teorico y dejarla fuera era
+    inofensivo -- se verifico contra produccion y quedo documentado. Con
+    el pareo si influye: una orden que cambia de lista en Odoo, sin tocar
+    sus lineas, tiene que recalcular su teorico, y sin esto la huella no
+    se moveria.
+    """
     partes = sorted(
         f"{ln.linea_id}|{ln.producto}|{ln.cantidad}|{ln.precio_unitario}|{ln.descuento}"
         for ln in lineas
     )
+    partes.append(f"__lista__|{str(lista_precios or '').strip()}")
     return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
 
 
@@ -209,6 +221,21 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer listas de precio validas de _Meta: %s", e)
 
+        # Pareo VES<->USD (septiembre 2026): el teorico se compara contra la
+        # lista con la que NACIO la orden y su par de la otra moneda -- ver
+        # EngineInputs.pares_listas. Se guarda como {"id ves": "id usd"} y
+        # aca se expande a las dos direcciones, porque el pareo es simetrico:
+        # una orden nacida en la lista USD toma su teorico VES del par VES.
+        pares_listas: dict[str, str] = {}
+        try:
+            crudo = self._repo.get_config("pricelist_pares")
+            if crudo:
+                for ves_id, usd_id in json.loads(crudo).items():
+                    pares_listas[str(ves_id)] = str(usd_id)
+                    pares_listas[str(usd_id)] = str(ves_id)
+        except Exception as e:
+            logger.warning("Error al leer el pareo de listas de precio: %s", e)
+
         # Tarea 2 (Lista Histórica de Auditoría): sin esto BandejaFacturacion
         # (lo que alimenta /api/ventas) nunca sabia de la excepcion historica
         # y mostraba teorico $0.00 para ordenes sin lista o del periodo
@@ -306,6 +333,7 @@ class EngineRunner:
             descuentos_producto=self._repo.descuentos_producto(),
             valid_ves=valid_ves,
             valid_usd=valid_usd,
+            pares_listas=pares_listas,
             orden_es_historica=orden_es_historica,
             historical_price_map=historical_price_map,
             orden_anterior_cliente=orden_anterior_cliente,
@@ -469,7 +497,9 @@ class EngineRunner:
                 if not entregada_sin_devolver:
                     continue
             existente = existentes.get(o.so_id)
-            fingerprint_actual = fingerprint_lineas(lineas_index.get(o.so_id, []))
+            fingerprint_actual = fingerprint_lineas(
+                lineas_index.get(o.so_id, []), str(o.lista_precios or "")
+            )
             if (
                 existente is not None
                 and not (existente.usa_fallback_ves or existente.usa_fallback_usd)

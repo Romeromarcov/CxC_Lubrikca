@@ -59,8 +59,14 @@ def test_agregar_listas_al_final_no_cambia_el_teorico() -> None:
     septiembre 2026 al final deja intactos los 793 teóricos existentes."""
 
     def _inp(valid_ves, valid_usd):
+        # Orden nacida en la lista 5, sin pareo configurado: el caso de las
+        # 793 ordenes que ya tenian teorico antes de septiembre 2026.
         return SimpleNamespace(
-            valid_ves=valid_ves, valid_usd=valid_usd, orden_es_historica=False
+            valid_ves=valid_ves,
+            valid_usd=valid_usd,
+            orden_es_historica=False,
+            orden=SimpleNamespace(lista_precios="5"),
+            pares_listas={},
         )
 
     antes = _inp(("5", "3", "4"), ("8", "7"))
