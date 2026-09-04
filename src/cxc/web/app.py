@@ -2100,7 +2100,21 @@ def resolve_vendedor_validado(
     orden = ordenes_map.get(so_id) if so_id else None
     vendedor_orden = (orden.vendedor_email if orden else "") or ""
 
-    vendedor = vendedor_cliente or vendedor_orden or "Sin Vendedor"
+    # Regla de negocio del usuario (auditoría de agosto 2026): manda el
+    # vendedor de LA ORDEN, no el de la ficha.
+    #
+    # Antes era al revés (``vendedor_cliente or vendedor_orden``), así que
+    # cuando un cliente cambiaba de vendedor, los pagos de sus órdenes
+    # VIEJAS se le acreditaban al vendedor NUEVO -- el que las vendió
+    # perdía la atribución de forma retroactiva. Medido en producción: 83
+    # de 927 órdenes tienen vendedor distinto al de la ficha, con 16
+    # Vinculaciones encima.
+    #
+    # Con la orden mandando, los dos casos que planteó el usuario caen
+    # solos: si coinciden da lo mismo cuál se use, y si difieren el pago
+    # se queda con quien efectivamente vendió. La ficha solo gobierna
+    # cuando no hay orden (pago huérfano, todavía sin asignar).
+    vendedor = vendedor_orden or vendedor_cliente or "Sin Vendedor"
     v_cliente_norm = vendedor_cliente.strip().lower()
     v_orden_norm = vendedor_orden.strip().lower()
     mismatch = bool(vendedor_cliente and vendedor_orden and v_cliente_norm != v_orden_norm)

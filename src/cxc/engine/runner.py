@@ -377,6 +377,17 @@ class EngineRunner:
         # Órdenes con algún abono -- única vía por la que una orden ya
         # facturada puede tener descuento pendiente de Nota de Crédito.
         so_con_abono = {v.so_id for v in self._repo.all_vinculaciones()}
+        # Órdenes que YA tienen fila de bandeja. Hay que recalcularlas
+        # aunque hoy no califiquen, o la fila vieja queda mintiendo.
+        #
+        # Bug real (auditoría de agosto 2026): si Odoo reconcilia un pago
+        # contra una orden DISTINTA a la que el FIFO había asignado,
+        # ``_resincronizar_vinculaciones_con_odoo`` re-apunta la
+        # Vinculación -- pero la orden que perdió el abono quedaba fuera
+        # del filtro de abajo, así que su fila de bandeja sobrevivía con
+        # el descuento que ya no le corresponde. El descuento terminaba
+        # contado DOS veces: en la orden vieja y en la nueva.
+        so_con_bandeja = {b.so_id for b in self._repo.all_bandeja()}
         # Prefetch UNA sola vez -- ver docstring de build_inputs (bug de
         # rendimiento real, agosto 2026): sin esto, el historial "acumulado"
         # de Volumen hace una query lineas_de_orden por cada orden anterior
@@ -389,7 +400,7 @@ class EngineRunner:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
-            if o.facturada and o.so_id not in so_con_abono:
+            if o.facturada and o.so_id not in so_con_abono and o.so_id not in so_con_bandeja:
                 continue
             resultado = self._calcular(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if resultado is None:
