@@ -1104,6 +1104,30 @@ class OdooXmlRpcReader(OdooReader):
 
         return result
 
+    def pagos_por_id(self, pago_ids: list[str]) -> list[Pago]:
+        """Los pagos indicados, sin pasar por la ventana delta.
+
+        ``changed_pagos`` filtra por ``write_date`` de las últimas 48 h --
+        correcto para el sync incremental, inútil para rescatar un pago
+        que Odoo reconcilió hace meses y nunca entró al espejo. Y hace
+        falta rescatarlo: ``vinculaciones.pago_id`` es una clave foránea
+        contra ``pagos``, así que una Vinculación sobre un pago ausente ni
+        siquiera se puede escribir.
+        """
+        ids = [int(p) for p in pago_ids if str(p).isdigit()]
+        if not ids:
+            return []
+        recs = self._read(
+            self.MODEL_PAGO,
+            sorted(set(ids)),
+            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "move_id"],
+        )
+        vendedores = self._vendedor_por_partner(_ids_of(recs, "partner_id"))
+        for r in recs:
+            pid = _m2o_id(r.get("partner_id"))
+            r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
+        return [map_pago(r) for r in recs]
+
     def aplicaciones_conciliadas(
         self, so_names: list[str] | None = None
     ) -> list[AplicacionConciliada]:

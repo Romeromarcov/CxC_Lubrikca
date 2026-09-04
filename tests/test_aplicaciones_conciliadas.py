@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from cxc.models import (
     AplicacionConciliada,
@@ -40,6 +41,19 @@ from cxc.web.app import (
     _sincronizar_aplicaciones_conciliadas,
     agrupar_aplicaciones,
 )
+
+_TODOS_LOS_PAGOS = {
+    "513",
+    "890",
+    "1224",
+    "1502",
+    "364",
+    "1262",
+    "200",
+    "1206",
+    "777",
+    "1304",
+}
 
 
 def _apl(pago, so, monto, moneda=Moneda.USD, factura="F1", fecha=date(2026, 8, 1)):
@@ -56,12 +70,20 @@ def _apl(pago, so, monto, moneda=Moneda.USD, factura="F1", fecha=date(2026, 8, 1
 class _RepoFalso:
     """Lo mínimo que toca ``_sincronizar_aplicaciones_conciliadas``."""
 
-    def __init__(self, vinculaciones=None):
+    def __init__(self, vinculaciones=None, pagos_en_espejo=None):
         self.vincs = {v.vinc_id: v for v in (vinculaciones or [])}
         self.escritas: list[Vinculacion] = []
+        # None = el espejo tiene todos los pagos que hagan falta.
+        self._pagos = pagos_en_espejo
 
     def all_vinculaciones(self):
         return list(self.vincs.values())
+
+    def all_pagos(self):
+        if self._pagos is None:
+            ids = {v.pago_id for v in self.vincs.values()} | _TODOS_LOS_PAGOS
+            return [SimpleNamespace(pago_id=p) for p in ids]
+        return [SimpleNamespace(pago_id=p) for p in self._pagos]
 
     def update_vinculacion(self, v):
         self.vincs[v.vinc_id] = v
@@ -176,10 +198,8 @@ def test_odoo_corrige_al_fifo_cuando_asigno_de_mas() -> None:
     (225.192,00) cuando Odoo solo le aplicó 54.161,83. En producción los
     38 conflictos van todos en esta dirección."""
     repo = _RepoFalso([_vinc_local("1206", "S00472", "225192.00")])
-    res = _sincronizar_aplicaciones_conciliadas(
-        repo, [_apl("1206", "S00472", "54161.83")]
-    )
-    assert res == {"creadas": 0, "corregidas": 1, "sin_cambio": 0}
+    res = _sincronizar_aplicaciones_conciliadas(repo, [_apl("1206", "S00472", "54161.83")])
+    assert res == {"creadas": 0, "corregidas": 1, "sin_cambio": 0, "omitidas": 0}
     assert repo.escritas[0].monto_aplicado == Decimal("54161.83")
 
 
@@ -221,6 +241,7 @@ def test_sin_aplicaciones_no_escribe_nada() -> None:
         "creadas": 0,
         "corregidas": 0,
         "sin_cambio": 0,
+        "omitidas": 0,
     }
     assert repo.escritas == []
 
@@ -231,5 +252,23 @@ def test_una_ya_conciliada_con_el_mismo_monto_no_se_reescribe() -> None:
     ya = _vinc_local("513", "S00214", "100", estado=EstadoVinculacion.CONCILIADO)
     repo = _RepoFalso([ya])
     res = _sincronizar_aplicaciones_conciliadas(repo, [_apl("513", "S00214", "100")])
-    assert res == {"creadas": 0, "corregidas": 0, "sin_cambio": 1}
+    assert res == {"creadas": 0, "corregidas": 0, "sin_cambio": 1, "omitidas": 0}
     assert repo.escritas == []
+
+
+# --- La clave foránea contra `pagos` -----------------------------------------
+
+
+def test_una_aplicacion_sin_su_pago_en_el_espejo_se_omite() -> None:
+    """``vinculaciones.pago_id`` es clave foránea contra ``pagos``: escribir
+    sobre un pago ausente revienta la transacción y se lleva el ciclo
+    entero por delante. Pasó de verdad al desplegar -- el sync incremental
+    solo mira ``write_date`` de las últimas 48 h, y estos pagos Odoo los
+    reconcilió hace meses. El llamador los rescata con ``pagos_por_id``;
+    esta guarda es para el resto."""
+    repo = _RepoFalso(pagos_en_espejo=["513"])
+    res = _sincronizar_aplicaciones_conciliadas(
+        repo, [_apl("513", "S00214", "100"), _apl("999", "S00300", "50")]
+    )
+    assert res == {"creadas": 1, "corregidas": 0, "sin_cambio": 0, "omitidas": 1}
+    assert [v.pago_id for v in repo.escritas] == ["513"]
