@@ -5029,6 +5029,36 @@ async def get_reporte_saldos(refresh: bool = False):
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
+def sin_datos_teorico(
+    teorico_row: Any, bruta: float | None, precio_base: float = 0.0
+) -> bool:
+    """True si el teórico de esta orden no se pudo calcular.
+
+    Fase 10: ``ventas_teoricos`` aún sin fila para la orden (nunca
+    calculado -- ver ``/api/backfill/ventas-teoricos`` y el daemon), o con
+    fila pero en cero (ej. producto sin precio en ninguna lista/ficha).
+
+    Un teórico en cero significa "no pude calcular", **nunca** "nada que
+    pagar". Bug real reportado por el usuario (septiembre 2026, Bandeja 1
+    de Facturación con órdenes al 0 % de descuento y sin un solo pago --
+    S00368 "Mini Market Las Mercedes" y S00708 "Carlos Ruiz", 6 órdenes por
+    8.641,52): esta guarda exigía ADEMÁS que el precio base real fuera
+    mayor que cero. Cuando el motor no resolvía ningún precio, el teórico y
+    la base quedaban los DOS en cero, la condición no se cumplía, la orden
+    se daba por "con datos", su objetivo de pago quedaba en 0 y
+    ``_estado_pago`` declara "pagada" cualquier objetivo de 0 (``target <=
+    _EPS_PAGO``). La orden salía de CxC activa sin haber recibido nada.
+
+    Una base en cero es la misma señal de "no pude calcular" que un teórico
+    en cero, así que dejó de ser una condición: manda el teórico.
+    ``precio_base`` se conserva en la firma por compatibilidad con los
+    llamadores.
+    """
+    if teorico_row is None or bruta is None:
+        return True
+    return bruta <= 0.005
+
+
 def saldo_priorizacion_cliente(saldos: dict[str, float]) -> float:
     """Cuánto pesa un cliente en la cola de cobro.
 
@@ -12760,18 +12790,7 @@ def _get_ventas_sync(
                 return "pagada"
             return estado
 
-        def _sin_datos_teorico(
-            teorico_row: Any, bruta: float | None, precio_base: float
-        ) -> bool:
-            # Fase 10: ventas_teoricos aún sin fila para esta orden (nunca
-            # calculado -- ver /api/backfill/ventas-teoricos y el daemon).
-            # Extra: incluso con fila, un teórico en 0 mientras el precio
-            # base real sí se calculó es sospechoso (ej. producto sin
-            # precio en NINGUNA lista/ficha) -- se trata igual como "sin
-            # datos" en vez de "nada que pagar".
-            if teorico_row is None or bruta is None:
-                return True
-            return bruta <= 0.005 and precio_base > 0.005
+        _sin_datos_teorico = sin_datos_teorico
 
         items = []
         total_alertas = 0
