@@ -4564,7 +4564,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const alertas = [];
             if (item.posible_duplicado) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
-            if (item.reasignado_por_odoo) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:700;">🔄 Reasignado por Odoo</span>`);
+            // Evento pasado, no estado actual: sin la fecha se leia como
+            // una contradiccion junto a "Pendiente". No lo es -- Odoo pudo
+            // haber aplicado parte del pago a otra orden y el resto seguir
+            // sin conciliar.
+            if (item.reasignado_por_odoo) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:600;">🔄 Odoo lo movió${item.reasignado_fecha ? ` el ${item.reasignado_fecha}` : ''}</span>`);
             const alertasCell = alertas.length ? alertas.join('<br>') : '<span style="color:#94a3b8;">-</span>';
 
             const reciboCell = item.recibido
@@ -4708,7 +4712,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (base.reasignado_por_odoo) {
             html += `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#1e40af;">
-                🔄 <strong>Odoo reasignó este pago.</strong> ${base.reasignado_detalle || ''}
+                🔄 <strong>Odoo movió este pago${base.reasignado_fecha ? ` el ${base.reasignado_fecha}` : ''}.</strong>
+                ${base.reasignado_detalle || ''}
+                <div style="margin-top:0.4rem; opacity:0.85;">Es el registro de un movimiento pasado, no el estado de hoy: el estado actual de cada vinculación se ve más abajo.</div>
             </div>`;
         }
         if (base.posible_duplicado) {
