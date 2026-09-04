@@ -3540,6 +3540,15 @@ def recalculate_all_orders():
         except Exception as e_mp:
             print(f"Error sincronizando métodos de pago: {e_mp}", file=sys.stderr)
 
+        # La vigencia de las listas de precio la manda Odoo -- ver
+        # sincronizar_vigencia_listas.
+        try:
+            n_vig = sincronizar_vigencia_listas(repo, execute)
+            if n_vig:
+                print(f"Vigencia de listas de precio: {n_vig} lista(s) actualizada(s).")
+        except Exception as e_vig:
+            print(f"Error sincronizando vigencia de listas: {e_vig}", file=sys.stderr)
+
         try:
             n_auto_vinc = _auto_vincular_fifo_pendientes(repo)
             if n_auto_vinc:
@@ -5821,6 +5830,52 @@ def set_pricelist_mapeo(mapeo: dict[str, dict[str, Any]], repo=None) -> None:
         repo.set_config("pricelist_mapeo_unificado", json.dumps(mapeo))
     except Exception as e:
         logger.warning("No se pudo guardar el mapeo unificado de listas: %s", e)
+
+
+def sincronizar_vigencia_listas(repo: Any, execute: Any) -> int:
+    """La vigencia de cada lista de precios la manda Odoo, no un tilde local.
+
+    Decision del usuario (septiembre 2026): "la vigencia esta en Odoo". El
+    campo ``vigente`` del mapeo unificado era una marca manual que se
+    ponia una vez y quedaba a la deriva -- cuando en septiembre Odoo
+    archivo las listas viejas (3, 4, 5, 7, 8, 9) y estreno las nuevas
+    (10 a 19), el mapeo siguio declarando vigentes a la 5, la 8 y la 9.
+
+    Se espeja ``product.pricelist.active`` en cada ciclo, igual que
+    ``sincronizar_metodos_pago`` hace con los diarios. Devuelve cuantas
+    listas cambiaron de vigencia.
+
+    Solo alimenta la tabla comparativa de Inventario (via
+    ``get_pricelist_vigente_por_grupo``). El motor de descuentos NO usa
+    este campo: resuelve precios contra las listas configuradas como
+    VES/USD sin mirar vigencia -- ver ``get_valid_pricelists_usd_and_ves``.
+    """
+    if not execute:
+        return 0
+    try:
+        listas = execute(
+            "product.pricelist",
+            "search_read",
+            [[]],
+            {"fields": ["id", "active"], "context": {"active_test": False}},
+        )
+    except Exception as e:
+        logger.warning("No se pudo leer la vigencia de las listas en Odoo: %s", e)
+        return 0
+    if not listas:
+        return 0
+    activa_en_odoo = {str(x["id"]): bool(x.get("active")) for x in listas}
+    mapeo = dict(get_pricelist_mapeo(repo))
+    cambios = 0
+    for pid, entrada in mapeo.items():
+        esperado = activa_en_odoo.get(str(pid))
+        if esperado is None or bool(entrada.get("vigente")) == esperado:
+            continue
+        mapeo[pid] = {**entrada, "vigente": esperado}
+        cambios += 1
+    if cambios:
+        set_pricelist_mapeo(mapeo, repo)
+    return cambios
 
 
 def get_pricelist_vigente_por_grupo(repo=None) -> dict[str, str | None]:
