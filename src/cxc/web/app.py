@@ -11975,12 +11975,19 @@ def _leer_notas_debito_odoo(
 ) -> dict[str, float]:
     """Tarea 3f: notas de débito (N/D) atadas a una factura ya emitida.
 
-    A diferencia de las notas de crédito (``move_type == "out_refund"``,
-    lógica ya existente y reutilizada tal cual), Odoo no marca las N/D con
-    un ``move_type`` propio -- son ``account.move`` con
-    ``move_type == "out_invoice"`` y ``debit_origin_id`` apuntando a la
-    factura original. Se buscan por ese campo, no por ``invoice_origin``
-    (una N/D no necesariamente lo trae).
+    Se buscan por ``debit_origin_id`` (apunta a la factura original), no
+    por ``invoice_origin``, que una N/D no necesariamente trae.
+
+    OJO con el ``move_type``: este docstring afirmaba que las N/D usan
+    ``out_invoice`` porque Odoo no les da un tipo propio. Es falso en esta
+    instancia -- verificado en vivo, usan ``out_debit`` (journal dedicado
+    "Notas de débito clientes"), y el filtro de abajo ya lo corrige desde
+    el bug de la orden S00357. Se deja aclarado acá porque la afirmación
+    vieja invitaba a "arreglar" el filtro en la dirección equivocada.
+
+    A diferencia de una nota de crédito, una N/D AUMENTA lo que el cliente
+    debe: quien la consume la suma al facturado (ver ``total_nd_aplicada``
+    en /api/ventas), nunca la resta.
     """
     nd_by_so: dict[str, float] = {}
     if not execute or not original_invoice_ids:
