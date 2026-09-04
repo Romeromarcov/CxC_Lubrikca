@@ -5029,6 +5029,34 @@ async def get_reporte_saldos(refresh: bool = False):
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
+def saldo_priorizacion_cliente(saldos: dict[str, float]) -> float:
+    """Cuánto pesa un cliente en la cola de cobro.
+
+    Es el mayor entre el saldo contra la **Venta Real** de la orden en Odoo
+    y el saldo contra el **Teórico Neto de la Lista USD** -- las dos únicas
+    referencias que la tarjeta muestra.
+
+    Antes era el máximo de las 4 columnas, y eso traía dos problemas. Uno
+    de presentación: el número cambiaba de significado según el cliente
+    (para SJMG 2012 era el Teórico BS, para otro la Venta Real) y se leía
+    como un quinto monto sin explicación -- el usuario preguntó de dónde
+    salía. Y uno de criterio, que es el que arregla esta función: el
+    Teórico Lista BS terminaba fijando la urgencia de cobro de muchos
+    clientes por ser casi siempre el mayor de los cuatro (verificado: es
+    superior al Teórico USD en las 789 órdenes medibles).
+
+    El Teórico BS existe para auditar y para calcular descuentos, y en el
+    árbol de CxC es el último eslabón de la decisión (decisión del usuario,
+    septiembre 2026) -- no es la cifra con la que se sale a cobrar. La
+    Factura Neta Real queda fuera por la misma razón: es lo ya facturado,
+    no lo que falta cobrar de la orden.
+    """
+    return round(
+        max(float(saldos.get("venta_real") or 0.0), float(saldos.get("teorico_usd") or 0.0)),
+        2,
+    )
+
+
 def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
     """Los 4 saldos pendientes de una orden (mismos campos de ``/api/ventas``),
 
@@ -5315,16 +5343,14 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             c["documentos"].sort(key=lambda d: str(d.get("fecha") or ""))
             # Vendedor(es) y antigüedad máxima -- usados por la grilla de
             # priorización de cobro y los filtros de la tabla por cliente
-            # (Reporte de Saldos). "saldo_priorizacion" es el mismo valor
-            # (máximo de las 4 columnas) que ya determina el orden por
-            # defecto de clientes_list, expuesto explícitamente para no
-            # duplicar el criterio en el frontend.
+            # (Reporte de Saldos). "saldo_priorizacion" determina el
+            # tamaño y el color de cada tarjeta, y el orden por defecto de
+            # clientes_list -- se expone explícitamente para no duplicar el
+            # criterio en el frontend.
             c["vendedor"] = ", ".join(sorted(c.pop("vendedores"))) or "Sin Vendedor"
-            c["saldo_priorizacion"] = round(max(c["saldos"].values(), default=0.0), 2)
+            c["saldo_priorizacion"] = saldo_priorizacion_cliente(c["saldos"])
 
-        clientes_list = sorted(
-            clientes.values(), key=lambda c: -max(c["saldos"].values(), default=0.0)
-        )
+        clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_priorizacion"])
 
         totales: dict[str, Any] = {}
         for k in _CXC_CLIENTE_SALDOS:
