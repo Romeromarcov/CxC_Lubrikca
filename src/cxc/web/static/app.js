@@ -762,10 +762,15 @@ document.addEventListener("DOMContentLoaded", () => {
         card.style.fontSize = `${scale}rem`;
         card.innerHTML = `
             <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
-            <div class="prioridad-monto">${fmt(c.saldo_priorizacion)}</div>
             <div class="prioridad-saldos">
-                <span title="Saldo contra la Venta Real de la orden en Odoo">Real ${fmt((c.saldos || {}).venta_real || 0)}</span>
-                <span title="Saldo contra el Teórico Neto de la Lista USD">Teórico USD ${fmt((c.saldos || {}).teorico_usd || 0)}</span>
+                <div title="Saldo contra la Venta Real de la orden en Odoo">
+                    <span class="prioridad-saldo-label">Orden</span>
+                    <span class="prioridad-saldo-monto">${fmt((c.saldos || {}).venta_real || 0)}</span>
+                </div>
+                <div title="Saldo contra el Teórico Neto de la Lista USD">
+                    <span class="prioridad-saldo-label">Teórico USD</span>
+                    <span class="prioridad-saldo-monto">${fmt((c.saldos || {}).teorico_usd || 0)}</span>
+                </div>
             </div>
             <div class="prioridad-meta">${label} · ${c.dias_vencido_max || 0} días vencido · ${c.vendedor || 'Sin Vendedor'}</div>
         `;

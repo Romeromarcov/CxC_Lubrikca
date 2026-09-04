@@ -878,26 +878,42 @@ body {
     text-overflow: ellipsis;
 }
 
-.prioridad-card .prioridad-monto {
-    font-size: 1.15rem;
-    font-weight: 800;
+/* Los dos saldos que el usuario pidio ver en la tarjeta (septiembre
+   2026): el de la Venta Real de la orden en Odoo y el del Teorico Neto
+   de la Lista USD.
+
+   Antes el titular era `saldo_priorizacion`, el MAYOR de las 4
+   referencias. Se quito a pedido del usuario: no es un saldo propio sino
+   uno de los cuatro elegido automaticamente, asi que cambia de
+   significado segun el cliente y se leia como un quinto monto sin
+   explicacion. Sigue calculandose -- de el dependen el color y el tamano
+   de la tarjeta -- pero ya no se muestra. */
+.prioridad-card .prioridad-saldos {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin: 0.15rem 0;
+}
+
+.prioridad-card .prioridad-saldos > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.prioridad-card .prioridad-saldo-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    opacity: 0.75;
     white-space: nowrap;
 }
 
-/* Los dos saldos que el usuario pidio ver juntos en la tarjeta
-   (septiembre 2026): el de la Venta Real de la orden en Odoo y el del
-   Teorico Neto de la Lista USD. El monto grande de arriba sigue siendo
-   el de priorizacion -- el mayor de las 4 referencias -- porque es el que
-   decide el color y el tamano de la tarjeta. */
-.prioridad-card .prioridad-saldos {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.15rem 0.6rem;
-    font-size: 0.72rem;
-    font-weight: 600;
-    opacity: 0.9;
+.prioridad-card .prioridad-saldo-monto {
+    font-size: 1rem;
+    font-weight: 800;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
-    margin: 0.1rem 0 0.15rem;
 }
 
 .prioridad-card .prioridad-meta {
