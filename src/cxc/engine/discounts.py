@@ -462,10 +462,20 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
     zaneaban a $0) -- se revierte a la lógica original, la única señal
     confiable es ``cantidad_entregada`` (Odoo mismo la neta correctamente
     cuando la devolución sí está aplicada, ver caso real S00146).
+
+    Bug real (reportado por el usuario, septiembre 2026, orden S00952
+    "PROYECTOS Y DESARROLLO TOMTOM"): ``cantidad_entregada`` puede venir
+    NEGATIVA de Odoo cuando la linea se devolvio entera y ademas la orden
+    se edito dejandola en cantidad 0. Esa linea entraba al teorico con
+    cantidad -4 y precio 1.421,75, o sea RESTANDO 5.687,00 -- el teorico de
+    la orden quedaba en 206,88 en vez de 5.893,88, y con el el descuento
+    calculado. Una linea devuelta aporta CERO, nunca un monto en contra:
+    la devolucion ya se refleja en que no se factura, no en un credito
+    sobre las demas lineas.
     """
     if inp.orden.entregada_completa and inp.orden.tiene_devolucion:
-        return linea.cantidad_entregada
-    return linea.cantidad
+        return max(linea.cantidad_entregada, Decimal("0"))
+    return max(linea.cantidad, Decimal("0"))
 
 
 def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
