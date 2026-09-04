@@ -4545,7 +4545,8 @@ def test_e2e_47_resolve_metodo_pago_nombre_batch_journals():
 def test_e2e_48_resolve_vendedor_validado_detecta_cambio_de_vendedor():
     """``resolve_vendedor_validado`` -- el cliente cambió de vendedor desde que
 
-    se creó la orden: se prefiere el vendedor VIGENTE del cliente, y se
+    se creó la orden: el pago se queda con el vendedor de LA ORDEN (quien
+    efectivamente vendió), y se
     marca ``mismatch=True`` para revisión humana (no se autocorrige nada).
     """
     from cxc.web.app import resolve_vendedor_validado
@@ -4567,7 +4568,11 @@ def test_e2e_48_resolve_vendedor_validado_detecta_cambio_de_vendedor():
     }
 
     vendedor, mismatch = resolve_vendedor_validado("C1", "S00001", clientes_map, ordenes_map)
-    assert vendedor == "nuevo@lubrikca.com"
+    # Regla de negocio del usuario (auditoría de agosto 2026): antes ganaba
+    # la ficha del cliente, así que el vendedor NUEVO se quedaba
+    # retroactivamente con los pagos de órdenes que no vendió. Ahora manda
+    # la orden; la discrepancia se sigue marcando para revisión.
+    assert vendedor == "viejo@lubrikca.com"
     assert mismatch is True
 
     # Mismo vendedor en ambos lados -- sin discrepancia.
