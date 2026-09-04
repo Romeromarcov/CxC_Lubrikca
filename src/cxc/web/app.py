@@ -10342,13 +10342,22 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         # reconcilió contra una orden distinta a la Vinculación local (ver
         # _resincronizar_vinculaciones_con_odoo, corre en cada sync). Se
         # SURFACEA acá -- la corrección automática y su auditoría ya existen.
+        # Se conserva la reasignacion MAS RECIENTE de cada pago. Antes se
+        # quedaba con la ultima fila que devolviera la consulta, que no
+        # tiene orden garantizado -- un pago movido dos veces podia mostrar
+        # el detalle del movimiento viejo.
         reasignados_por_pago: dict[str, dict[str, str]] = {}
         if hasattr(repo, "all_auditoria"):
             try:
                 for row in repo.all_auditoria():
                     if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
                         pid = str(row.get("pago_id", "")).strip()
-                        if pid:
+                        if not pid:
+                            continue
+                        previa = reasignados_por_pago.get(pid)
+                        if previa is None or str(row.get("timestamp_audit") or "") >= str(
+                            previa.get("timestamp_audit") or ""
+                        ):
                             reasignados_por_pago[pid] = row
             except Exception as e_aud:
                 logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
@@ -10433,6 +10442,15 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 "tasa_bcv_eur": float(tasa_eur) if tasa_eur is not None else None,
                 "reasignado_por_odoo": reasignado is not None,
                 "reasignado_detalle": reasignado.get("detalle_odoo") if reasignado else None,
+                # Fecha del movimiento. La marca de reasignacion es el
+                # registro de un EVENTO pasado, no el estado de hoy: el
+                # usuario leyo "Reasignado por Odoo" junto a "Pendiente"
+                # como una contradiccion, cuando no lo es (Odoo aplico
+                # parte del pago a otra orden y el resto sigue sin
+                # conciliar). Mostrar cuando paso lo desambigua.
+                "reasignado_fecha": (
+                    str(reasignado.get("timestamp_audit") or "")[:10] if reasignado else None
+                ),
                 "recibido": p_row.get("recibido") == "TRUE",
                 "numero_recibido": p_row.get("numero_recibido") or None,
                 "fecha_recibido": p_row.get("fecha_recibido") or None,
@@ -10762,6 +10780,7 @@ _COBRANZA_COLUMN_LABELS: dict[str, str] = {
     "duplicado_de": "Duplicado De",
     "reasignado_por_odoo": "Reasignado por Odoo",
     "reasignado_detalle": "Detalle Reasignación",
+    "reasignado_fecha": "Fecha Reasignación",
     "metodo_pago_nombre": "Método de Pago",
     "recibido": "Recibido",
     "vendedor_email": "Email Vendedor",
