@@ -1742,12 +1742,18 @@ def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
         meta = repo.all_config()
 
         def _parse(val_str: str, default_val: int) -> list[int]:
+            """Ids separados por coma. Sin coma, UN id -- no un dígito por lista.
+
+            La rama vieja partía un valor sin comas carácter por carácter
+            ("5,3,4" bien, pero "14" -> [1, 4]). Fue inofensivo mientras
+            todas las listas tuvieron un dígito; dejó de serlo el 1 de
+            septiembre de 2026, cuando Odoo estrenó las listas 10 a 19 y
+            cualquier configuración de una sola lista nueva se habría
+            leído como dos listas viejas equivocadas.
+            """
             if not val_str:
                 return [default_val]
-            if "," in val_str:
-                parts = [p.strip() for p in val_str.split(",") if p.strip()]
-            else:
-                parts = [c for c in val_str.strip() if c.isdigit()]
+            parts = [p.strip() for p in val_str.split(",") if p.strip()]
             res = [int(p) for p in parts if p.isdigit()]
             return res if res else [default_val]
 
