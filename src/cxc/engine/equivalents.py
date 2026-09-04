@@ -78,6 +78,17 @@ def es_ruta_bcv_pura(vinculaciones: list[Vinculacion]) -> bool:
     return all(v.tipo_tasa_abono == TipoTasa.BCV for v in vinculaciones)
 
 
+def es_pago_mixto(vinculaciones: list[Vinculacion]) -> bool:
+    """¿La orden se pagó en dólares Y en bolívares a la vez?
+
+    Regla de negocio del usuario (auditoría de septiembre 2026): una orden
+    con abonos en las dos monedas cuenta como USD, y sus abonos en VES se
+    valoran por su equivalente Binance. Ver ``valor_pagado_usd``.
+    """
+    monedas = {v.moneda_abono for v in vinculaciones}
+    return Moneda.USD in monedas and Moneda.VES in monedas
+
+
 def valor_pagado_usd(vinculaciones: list[Vinculacion]) -> Decimal:
     """Σ de los equivalentes USD congelados, cada uno según la ruta del abono.
 

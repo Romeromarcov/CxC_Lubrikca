@@ -821,6 +821,16 @@ def _calcular_componentes(
     contado_proy = Decimal("0")
     regla_contado_dominante: DescuentoMarcaCategoria | None = None
     if contado_evaluable:
+        # Regla de negocio del usuario (auditoría de septiembre 2026): una
+        # orden con abonos en las DOS monedas cuenta como USD, y sus abonos
+        # en bolívares se valoran por su equivalente Binance (ver
+        # ``valor_pagado_usd``). Antes bastaba un solo abono en VES para
+        # volver VES a la orden entera, sin importar la proporción: en
+        # producción eso descalificaba 19 órdenes de toda regla marcada
+        # solo para dólares -- incluido el diferencial cambiario del 35% --
+        # y el caso extremo (S00952) tenía 1.624,41 en dólares contra
+        # 175,83 en bolívares. Solo una orden pagada ÍNTEGRAMENTE en
+        # bolívares se evalúa como VES.
         moneda_pago = "USD"
         if inp.abonos:
             monedas_usadas = {
@@ -828,7 +838,7 @@ def _calcular_componentes(
                 for _, pago in inp.abonos
                 if hasattr(pago, "moneda") and pago.moneda
             }
-            if "VES" in monedas_usadas:
+            if monedas_usadas == {"VES"}:
                 moneda_pago = "VES"
 
         reglas_contado_subtotal: dict[str, Any] = {}
@@ -1096,6 +1106,8 @@ def _calcular_componentes(
     producto_desc = Decimal("0")
     detalle_producto: DescuentoAplicado | None = None
     if descuentos_producto_ok:
+        # Mismo criterio que en Contado: mixto cuenta como USD, solo el
+        # pago íntegramente en bolívares se evalúa como VES.
         moneda_pago_prod = "USD"
         if inp.abonos:
             monedas_usadas_prod = {
@@ -1103,7 +1115,7 @@ def _calcular_componentes(
                 for _, pago in inp.abonos
                 if hasattr(pago, "moneda") and pago.moneda
             }
-            if "VES" in monedas_usadas_prod:
+            if monedas_usadas_prod == {"VES"}:
                 moneda_pago_prod = "VES"
 
         reglas_producto_subtotal: dict[str, Any] = {}
