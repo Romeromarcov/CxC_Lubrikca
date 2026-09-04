@@ -54,6 +54,7 @@ from cxc.engine.reportes_historicos import (
 )
 from cxc.engine.runner import EngineRunner
 from cxc.models import (
+    AplicacionConciliada,
     Cliente,
     EstadoVinculacion,
     LineaOrden,
@@ -712,6 +713,127 @@ def _pagos_bcv_binance_por_orden(
             entry["monto_pagado_usd_binance"] += float(monto_binance) * frac
 
     return result
+
+
+def agrupar_aplicaciones(
+    aplicaciones: list[AplicacionConciliada],
+) -> dict[tuple[str, str], Decimal]:
+    """``(pago_id, so_id)`` -> total aplicado, sumando parciales repetidos.
+
+    Odoo puede partir una misma aplicación en varias filas de
+    ``account.partial.reconcile`` -- pasa cuando el pago se aplica en dos
+    momentos, o cuando media un ajuste cambiario. Caso real: el pago 200
+    aparece dos veces contra la factura de S00638 (190,26 + 128,01 USD), y
+    el 890 dos veces contra la de S00105. Una Vinculación por par, con la
+    suma, o el segundo parcial pisaría al primero.
+    """
+    totales: dict[tuple[str, str], Decimal] = {}
+    for a in aplicaciones:
+        clave = (a.pago_id, a.so_id)
+        totales[clave] = totales.get(clave, Decimal("0")) + a.monto
+    return totales
+
+
+def _sincronizar_aplicaciones_conciliadas(
+    repo: Any, aplicaciones: list[AplicacionConciliada]
+) -> dict[str, Any]:
+    """Refleja en Vinculaciones el reparto que Odoo ya hizo de cada pago.
+
+    Cierra el agujero más grande que tenía el sistema. El sync de pagos
+    filtraba ``is_reconciled = False``, así que un pago desaparecía del
+    espejo justo cuando Odoo terminaba de reconciliarlo. Medido en
+    producción (septiembre 2026) antes de este cambio: 886 pagos
+    conciliados invisibles, 95.939,80 USD y 69.341.862,59 VES repartidos
+    sobre 461 órdenes -- el motor veía menos de un tercio de la cobranza.
+
+    El daño no era dejar de cobrar (Odoo cobraba igual) sino al revés: una
+    orden pagada al 100 % se evaluaba como si estuviera a medio pagar, y
+    las reglas que exigen pago previo no disparaban. El cliente perdía
+    descuentos que sí se había ganado.
+
+    Dos principios, los dos del usuario:
+
+    1. **Odoo manda sobre el monto.** Donde Odoo tiene un parcial para el
+       par (pago, orden), ese monto gana sobre el que puso el FIFO. En
+       producción hay 38 pares donde difieren y los 38 van en la misma
+       dirección -- el FIFO había asignado el pago COMPLETO a una orden
+       cuando Odoo solo le aplicó una parte (el peor: pago 1206 sobre
+       S00472, 225.192,00 locales contra 54.161,83 reales).
+    2. **Donde Odoo no opina, no se toca.** Una orden todavía sin facturar
+       no puede tener parciales -- no hay documento que reconciliar -- así
+       que su Vinculación FIFO se deja intacta, en ``PENDIENTE``. Esta
+       función solo escribe sobre pares que Odoo efectivamente reconcilió.
+
+    Las que sí escribe quedan en ``CONCILIADO``: la reconciliación de Odoo
+    ES la confirmación, no hace falta que otro paso la promueva.
+    """
+    totales = agrupar_aplicaciones(aplicaciones)
+    if not totales:
+        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0}
+
+    fecha_por_pago: dict[str, date] = {}
+    moneda_por_pago: dict[str, Moneda] = {}
+    for a in aplicaciones:
+        fecha_por_pago.setdefault(a.pago_id, a.fecha_pago)
+        moneda_por_pago.setdefault(a.pago_id, a.moneda)
+
+    existentes = {(str(v.pago_id), v.so_id): v for v in repo.all_vinculaciones()}
+    tasas_rows = _all_serie_tasas_rows(repo)
+    creadas = corregidas = sin_cambio = 0
+
+    for (pago_id, so_id), monto in sorted(totales.items()):
+        previa = existentes.get((pago_id, so_id))
+        if (
+            previa is not None
+            and previa.estado == EstadoVinculacion.CONCILIADO
+            and abs(previa.monto_aplicado - monto) <= Decimal("0.01")
+        ):
+            sin_cambio += 1
+            continue
+
+        hora_pago = datetime.combine(fecha_por_pago[pago_id], datetime.min.time())
+        moneda = moneda_por_pago[pago_id]
+        tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
+        tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
+            repo, so_id, hora_pago, tasa_bcv_dia
+        )
+        if moneda == Moneda.USD:
+            equiv_usd_bcv = equiv_usd_binance = monto
+            equiv_ves_bcv = monto * tasa_bcv
+            equiv_ves_binance = monto * tasa_binance
+        else:
+            equiv_usd_bcv = monto / tasa_bcv
+            equiv_usd_binance = monto / tasa_binance
+            equiv_ves_bcv = equiv_ves_binance = monto
+
+        repo.update_vinculacion(
+            Vinculacion(
+                vinc_id=(previa.vinc_id if previa else f"VINC_{pago_id}_{so_id}"),
+                pago_id=pago_id,
+                so_id=so_id,
+                monto_aplicado=monto,
+                hora_pago_confirmada=hora_pago,
+                tasa_bcv_aplicada=tasa_bcv,
+                tasa_binance_aplicada=tasa_binance,
+                es_tasa_heredada=False,
+                equiv_usd_bcv=equiv_usd_bcv,
+                equiv_usd_binance=equiv_usd_binance,
+                equiv_ves_bcv=equiv_ves_bcv,
+                equiv_ves_binance=equiv_ves_binance,
+                confirmado_por="Odoo (reconciliación)",
+                timestamp_registro=datetime.now(),
+                estado=EstadoVinculacion.CONCILIADO,
+                moneda_abono=moneda,
+                tipo_tasa_abono=TipoTasa.BCV,
+                bcv_variante=bcv_variante,
+            )
+        )
+        if previa is None:
+            creadas += 1
+        else:
+            corregidas += 1
+
+    return {"creadas": creadas, "corregidas": corregidas, "sin_cambio": sin_cambio}
 
 
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
@@ -3379,6 +3501,25 @@ def recalculate_all_orders():
             print(f"Error en auto-vinculación FIFO: {e_fifo}", file=sys.stderr)
 
         if execute:
+            # Va ANTES del resync clásico: éste trae el reparto real de
+            # Odoo (montos parciales por par pago/orden) y deja las
+            # Vinculaciones ya en CONCILIADO, así el resync siguiente no
+            # tiene nada que corregirles. Ver
+            # _sincronizar_aplicaciones_conciliadas.
+            try:
+                reader_apps = OdooXmlRpcReader(config.odoo, execute)
+                res_apl = _sincronizar_aplicaciones_conciliadas(
+                    repo, reader_apps.aplicaciones_conciliadas()
+                )
+                if res_apl["creadas"] or res_apl["corregidas"]:
+                    print(
+                        f"Aplicaciones de Odoo: {res_apl['creadas']} vinculación(es) "
+                        f"nueva(s), {res_apl['corregidas']} corregida(s), "
+                        f"{res_apl['sin_cambio']} sin cambio."
+                    )
+            except Exception as e_apl:
+                print(f"Error sincronizando aplicaciones de Odoo: {e_apl}", file=sys.stderr)
+
             try:
                 cambios = _resincronizar_vinculaciones_con_odoo(repo, execute)
                 if cambios:

@@ -30,6 +30,7 @@ from typing import Any
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
 from ..models import (
+    AplicacionConciliada,
     Cliente,
     Entrega,
     EntregaLinea,
@@ -966,10 +967,22 @@ class OdooXmlRpcReader(OdooReader):
         return reembolsos
 
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
+        # Sin filtro por ``is_reconciled``. Estuvo en ``False`` mucho
+        # tiempo y era la causa raíz de que el motor viera menos de un
+        # tercio de la cobranza: en cuanto Odoo terminaba de reconciliar
+        # un pago, el espejo dejaba de traerlo. Medido en producción
+        # (septiembre 2026): 886 pagos conciliados invisibles, 95.939,80
+        # USD y 69.341.862,59 VES sobre 461 órdenes. El efecto no era
+        # dejar de cobrar -- Odoo cobraba igual -- sino que las reglas de
+        # descuento evaluaban esas órdenes como si estuvieran a medio
+        # pagar, y el cliente perdía descuentos que sí se ganó.
+        #
+        # Traerlos no infla el reparto FIFO: ``residual_disponible_por_
+        # pago`` ya consulta ``amount_residual_currency`` en Odoo, y un
+        # pago totalmente reconciliado reporta 0 disponible.
         domain = self._delta(since) + [
             ["payment_type", "=", "inbound"],
             ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
-            ["is_reconciled", "=", False],
         ]
         recs = self._search_read(
             self.MODEL_PAGO,
@@ -1090,6 +1103,124 @@ class OdooXmlRpcReader(OdooReader):
                 result.setdefault(so_name, []).append(p)
 
         return result
+
+    def aplicaciones_conciliadas(
+        self, so_names: list[str] | None = None
+    ) -> list[AplicacionConciliada]:
+        """Cómo repartió Odoo cada pago entre las facturas, con el monto real.
+
+        Fuente: ``account.partial.reconcile``, que es donde Odoo guarda la
+        reconciliación pieza por pieza. Se recorre la cadena
+
+            account.payment → su asiento → su línea por cobrar
+              → partial.reconcile (lado crédito)
+              → línea por cobrar de la factura (lado débito)
+              → account.move → invoice_origin → sale.order
+
+        y de cada partial se toma ``credit_amount_currency``: lo aplicado
+        EN LA MONEDA DEL PAGO.
+
+        Por qué no sirve ``reconciled_invoice_ids`` (lo que usaba
+        ``pagos_conciliados_por_orden``): da la lista de facturas pero no
+        cuánto fue a cada una, así que un pago repartido entre dos órdenes
+        se contaba COMPLETO en las dos. Con ``partial.reconcile`` el
+        reparto cuadra exacto -- verificado contra las 4 órdenes que
+        salían por la regla 5 del árbol de CxC (S00584, S00638, S00105,
+        S00428): los parciales suman 100,0 % del total de cada factura.
+
+        Los asientos de diferencial cambiario también generan partials,
+        pero no tienen ``account.payment`` detrás y quedan fuera por
+        construcción: solo se parte de líneas de pagos reales.
+        """
+        pagos = self._search_read(
+            self.MODEL_PAGO,
+            [
+                ["payment_type", "=", "inbound"],
+                ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+            ],
+            ["id", "move_id", "currency_id", "date"],
+        )
+        por_move: dict[int, dict[str, Any]] = {}
+        for p in pagos:
+            mid = _m2o_id(p.get("move_id"))
+            if mid:
+                por_move[int(mid)] = p
+        if not por_move:
+            return []
+
+        lineas_pago = self._search_read(
+            self.MODEL_MOVE_LINE,
+            [
+                ["move_id", "in", sorted(por_move)],
+                ["account_type", "=", "asset_receivable"],
+            ],
+            ["id", "move_id"],
+        )
+        linea_a_pago: dict[int, dict[str, Any]] = {}
+        for ln in lineas_pago:
+            mid = _m2o_id(ln.get("move_id"))
+            if mid and int(mid) in por_move:
+                linea_a_pago[int(ln["id"])] = por_move[int(mid)]
+        if not linea_a_pago:
+            return []
+
+        partials = self._search_read(
+            "account.partial.reconcile",
+            [["credit_move_id", "in", sorted(linea_a_pago)]],
+            ["credit_move_id", "debit_move_id", "credit_amount_currency"],
+        )
+        if not partials:
+            return []
+
+        deb_ids = sorted({int(_m2o_id(pr["debit_move_id"])) for pr in partials})
+        lineas_fact = self._read(self.MODEL_MOVE_LINE, deb_ids, ["id", "move_id"])
+        linea_a_factura = {
+            int(ln["id"]): int(_m2o_id(ln["move_id"]))
+            for ln in lineas_fact
+            if _m2o_id(ln.get("move_id"))
+        }
+
+        facturas = self._read(
+            self.MODEL_MOVE,
+            sorted(set(linea_a_factura.values())),
+            ["id", "invoice_origin", "move_type", "state"],
+        )
+        factura_a_so = {
+            int(f["id"]): str(f.get("invoice_origin") or "").strip()
+            for f in facturas
+            if f.get("state") == "posted"
+            and f.get("move_type") == "out_invoice"
+            and f.get("invoice_origin")
+        }
+
+        filtro = set(so_names) if so_names is not None else None
+        salida: list[AplicacionConciliada] = []
+        for pr in partials:
+            pago = linea_a_pago.get(int(_m2o_id(pr["credit_move_id"])))
+            if not pago:
+                continue
+            factura_id = linea_a_factura.get(int(_m2o_id(pr["debit_move_id"])))
+            so_id = factura_a_so.get(factura_id) if factura_id else None
+            if not so_id or (filtro is not None and so_id not in filtro):
+                continue
+            monto = _dec(pr.get("credit_amount_currency"))
+            if monto <= 0:
+                continue
+            salida.append(
+                AplicacionConciliada(
+                    pago_id=str(pago["id"]),
+                    so_id=so_id,
+                    factura_id=str(factura_id),
+                    monto=monto,
+                    moneda=(
+                        Moneda.USD
+                        if _m2o_name(pago.get("currency_id")) == "USD"
+                        else Moneda.VES
+                    ),
+                    fecha_pago=_to_datetime(pago.get("date")).date(),
+                )
+            )
+        return salida
 
     def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
         if not partner_ids:
