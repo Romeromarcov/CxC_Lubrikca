@@ -884,6 +884,22 @@ body {
     white-space: nowrap;
 }
 
+/* Los dos saldos que el usuario pidio ver juntos en la tarjeta
+   (septiembre 2026): el de la Venta Real de la orden en Odoo y el del
+   Teorico Neto de la Lista USD. El monto grande de arriba sigue siendo
+   el de priorizacion -- el mayor de las 4 referencias -- porque es el que
+   decide el color y el tamano de la tarjeta. */
+.prioridad-card .prioridad-saldos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.6rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    opacity: 0.9;
+    font-variant-numeric: tabular-nums;
+    margin: 0.1rem 0 0.15rem;
+}
+
 .prioridad-card .prioridad-meta {
     font-size: 0.75rem;
     opacity: 0.85;
