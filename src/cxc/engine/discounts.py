@@ -94,6 +94,19 @@ class EngineInputs:
     # hardcodeado de effective_dating._match_lista (comportamiento previo).
     valid_ves: list[str] = field(default_factory=list)
     valid_usd: list[str] = field(default_factory=list)
+    # Pareo VES<->USD de listas de precios (decisión del usuario,
+    # septiembre 2026). El teórico se compara contra la lista con la que
+    # NACIÓ la orden, no contra una lista global: si nació en "Industrial
+    # 3% VES", su teórico VES sale de esa lista y el USD de su par,
+    # "Industrial 3% USD". Es simétrico -- una orden nacida en la lista
+    # USD toma su teórico VES del par VES.
+    #
+    # Mapa ``id de lista -> id de su par``, en las dos direcciones. Una
+    # lista sin par (o una orden sin lista, como las 54 que perdieron su
+    # pricelist en Odoo) cae a la lista global configurada, que es el
+    # comportamiento anterior -- así una lista nueva en Odoo nunca deja
+    # órdenes sin teórico solo por no estar pareada todavía.
+    pares_listas: dict[str, str] = field(default_factory=dict)
     # Tarea 2 (Lista Histórica de Auditoría): si la orden cae en la
     # excepción histórica, el precio unitario de cada línea sale de este
     # mapa (codigo producto -> precio usd) en vez de la pricelist normal.
@@ -357,20 +370,61 @@ _LISTA_VES_FALLBACK = "BCV"
 _LISTA_USD_HISTORICA = "7"
 
 
+def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
+    """La lista del par que corresponde a la moneda pedida, o None.
+
+    Parte de la lista de NACIMIENTO de la orden. Si esa lista está en el
+    pareo, devuelve la del lado pedido: la propia si ya es de esa moneda,
+    o su par si es de la otra. None cuando la orden no tiene lista, su
+    lista no está pareada, o el par apunta a una lista que no está
+    configurada -- el llamador cae entonces a la lista global.
+    """
+    nacimiento = str(inp.orden.lista_precios or "").strip()
+    if nacimiento not in inp.pares_listas:
+        # Solo las listas PAREADAS mandan sobre la global. Es deliberado:
+        # las viejas (3, 4, 5, 7, 8, 9) quedaron archivadas y sin parear,
+        # y sus ordenes conservan asi el teorico contra la lista global
+        # con la que se calcularon en su momento -- 340 de 793. Sin esta
+        # guarda, una orden nacida en la 3 pasaria a usar la 3 solo
+        # porque la 3 figura entre las listas VES configuradas, y eso
+        # reescribiria historia.
+        return None
+    validas = set(inp.valid_usd if destino_usd else inp.valid_ves)
+    if nacimiento in validas:
+        return nacimiento
+    par = inp.pares_listas[nacimiento]
+    return par if par in validas else None
+
+
 def _lista_usd_activa(inp: EngineInputs) -> str:
-    """Id de pricelist USD vigente, según Configuración (``valid_usd``).
+    """Id de pricelist USD contra la que se calcula el teórico.
+
+    Primero la lista de nacimiento vía el pareo (ver ``_lista_pareada`` y
+    ``EngineInputs.pares_listas``); si no hay par, la primera lista USD
+    configurada, que es el comportamiento anterior.
 
     Para órdenes de la ventana histórica (``orden_es_historica``), la
     lista USD vigente ENTONCES era la 7 ("Pago USD Marzo"), no la lista
-    USD configurada hoy -- ver ``_LISTA_USD_HISTORICA``.
+    USD configurada hoy -- ver ``_LISTA_USD_HISTORICA``. Esa excepción
+    gana sobre el pareo: son órdenes anteriores a que existiera.
     """
     if inp.orden_es_historica:
         return _LISTA_USD_HISTORICA
+    pareada = _lista_pareada(inp, destino_usd=True)
+    if pareada:
+        return pareada
     return inp.valid_usd[0] if inp.valid_usd else _LISTA_USD_FALLBACK
 
 
 def _lista_ves_activa(inp: EngineInputs) -> str:
-    """Id de pricelist VES vigente, según Configuración (``valid_ves``)."""
+    """Id de pricelist VES contra la que se calcula el teórico.
+
+    Misma regla que ``_lista_usd_activa`` del lado VES: la lista de
+    nacimiento vía el pareo, y si no hay par, la primera VES configurada.
+    """
+    pareada = _lista_pareada(inp, destino_usd=False)
+    if pareada:
+        return pareada
     return inp.valid_ves[0] if inp.valid_ves else _LISTA_VES_FALLBACK
 
 

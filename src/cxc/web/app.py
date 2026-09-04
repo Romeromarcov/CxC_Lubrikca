@@ -1771,6 +1771,31 @@ def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
         ]
 
 
+def get_pares_listas(repo) -> dict[str, str]:
+    """Pareo VES<->USD de listas, en las DOS direcciones.
+
+    Se guarda en Configuracion como ``pricelist_pares``, un JSON
+    ``{"id ves": "id usd"}``, y se expande aca a ida y vuelta porque el
+    pareo es simetrico: una orden nacida en la lista USD toma su teorico
+    VES del par VES, igual que al reves.
+
+    Existe porque el teorico dejo de compararse contra una lista global
+    (septiembre 2026, decision del usuario): si la orden nacio en
+    "Industrial 3% VES", su teorico VES sale de esa lista y el USD de su
+    par "Industrial 3% USD". Ver ``EngineInputs.pares_listas``.
+    """
+    pares: dict[str, str] = {}
+    try:
+        crudo = repo.get_config("pricelist_pares")
+        if crudo:
+            for ves_id, usd_id in json.loads(crudo).items():
+                pares[str(ves_id)] = str(usd_id)
+                pares[str(usd_id)] = str(ves_id)
+    except Exception as e:
+        logger.warning("Error leyendo el pareo de listas de precio: %s", e)
+    return pares
+
+
 def resolve_effective_pricelist_price(
     product_tmpl_id: int,
     order_date: date,
@@ -4065,6 +4090,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # Load UI configured pricelist IDs (USD & VES) from _Meta
         usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+        pares_listas = get_pares_listas(repo)
         rules_usd = _get_pricelist_items_fixed(execute, usd_ids)
 
         all_lines = _all_lineas_rows(repo)
@@ -4564,6 +4590,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                         descuentos_producto=all_desc_producto,
                         valid_usd=[str(x) for x in usd_ids],
                         valid_ves=[str(x) for x in ves_ids],
+                        pares_listas=pares_listas,
                         historial_cliente_lineas=[
                             (oh, lh)
                             for oh, lh in historial_por_cliente.get(o.cliente_id, [])
