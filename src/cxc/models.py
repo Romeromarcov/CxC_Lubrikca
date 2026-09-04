@@ -634,6 +634,31 @@ class Vinculacion:
     bcv_variante: str = "USD"
 
 
+@dataclass(frozen=True)
+class AplicacionConciliada:
+    """Un pago aplicado a la factura de una orden, tal como lo hizo Odoo.
+
+    Es la unidad real de la reconciliación: no "el pago 513", sino "los
+    1.782.044,86 del pago 513 que fueron a la factura de S00214". Un mismo
+    pago puede producir varias de estas contra órdenes distintas, y una
+    misma orden puede recibir varias de pagos distintos -- los dos
+    escenarios existen en producción (109 pagos repartidos entre varias
+    facturas; 239 facturas pagadas con varios pagos).
+
+    ``monto`` viene en la moneda del PAGO (``credit_amount_currency`` de
+    ``account.partial.reconcile``), no en la de la factura: es lo que el
+    cliente entregó realmente, que es la cifra con la que trabajan los
+    equivalentes y las reglas de descuento.
+    """
+
+    pago_id: str
+    so_id: str
+    factura_id: str
+    monto: Decimal
+    moneda: Moneda
+    fecha_pago: date
+
+
 # --- 3.10 BandejaFacturacion (salida del motor + trabajo humano) ------------
 @dataclass
 class BandejaFacturacion:
