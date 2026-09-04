@@ -5878,20 +5878,60 @@ def sincronizar_vigencia_listas(repo: Any, execute: Any) -> int:
     return cambios
 
 
-def get_pricelist_vigente_por_grupo(repo=None) -> dict[str, str | None]:
-    """Para cada grupo categoría x moneda, el pricelist_id marcado
+def get_pricelist_referencia_por_grupo(repo=None) -> dict[str, str]:
+    """Lista de referencia elegida a mano para cada grupo categoría x moneda.
 
-    ``vigente: true``, o ``None`` si ninguno lo está todavía. Usado por
-    Inventario para la tabla comparativa -- ahí hace falta UN precio por
-    grupo, no una lista de candidatos como en el motor de descuentos.
+    Se guarda en Configuración como ``pricelist_referencia_por_grupo``, un
+    JSON ``{"industrial_ves": "16", ...}``. Existe porque varias listas
+    pueden estar vigentes a la vez dentro del mismo grupo y hay que elegir
+    UNA como referencia -- en septiembre de 2026 conviven "Industrial 3 %"
+    e "Industrial 4 %" en industrial, y "Pago", "Foránea" y "Maturín" en
+    comercial.
+
+    El criterio con el que se eligieron las actuales es del usuario (la
+    industrial más cara; en comercial, la de Caracas -- la que no dice
+    Maturín ni Foránea), pero **el criterio no vive en el código**: lo que
+    se guarda es el id elegido. Así, cuando Odoo estrene listas nuevas o
+    cambien los nombres, se ajusta la configuración y no hay que tocar
+    ninguna regla de cruce por texto.
+    """
+    try:
+        crudo = repo.get_config("pricelist_referencia_por_grupo") if repo else None
+        if crudo:
+            datos = json.loads(crudo)
+            return {str(k): str(v) for k, v in datos.items() if k in _CLASIFICACION_KEYS and v}
+    except Exception as e:
+        logger.warning("Error leyendo la lista de referencia por grupo: %s", e)
+    return {}
+
+
+def get_pricelist_vigente_por_grupo(repo=None) -> dict[str, str | None]:
+    """Para cada grupo categoría x moneda, la lista de precios de referencia.
+
+    Usado por Inventario para la tabla comparativa -- ahí hace falta UN
+    precio por grupo, no una lista de candidatos como en el motor de
+    descuentos.
+
+    Manda la elección explícita de ``get_pricelist_referencia_por_grupo``,
+    siempre que esa lista siga vigente. Si el grupo no tiene referencia
+    configurada se cae al comportamiento anterior: cualquier lista vigente
+    del grupo. Ese respaldo era ambiguo cuando había más de una vigente
+    --terminaba quedando la última que devolviera el diccionario, o sea la
+    de id más alto por accidente-- y por eso existe ahora la elección
+    explícita; se conserva solo para que un grupo sin configurar no quede
+    sin ninguna referencia.
     """
     mapeo = get_pricelist_mapeo(repo)
+    referencias = get_pricelist_referencia_por_grupo(repo)
     result: dict[str, str | None] = {k: None for k in _CLASIFICACION_KEYS}
+    for grupo, pid in referencias.items():
+        if mapeo.get(pid, {}).get("vigente"):
+            result[grupo] = pid
     for pid, m in mapeo.items():
         cat, mon = m.get("categoria"), m.get("moneda")
         if cat and mon and m.get("vigente"):
             key = f"{cat}_{mon}"
-            if key in result:
+            if key in result and result[key] is None:
                 result[key] = pid
     return result
 
