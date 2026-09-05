@@ -647,36 +647,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Fase 3: aprobación de descuento de sistema (Bandeja 1) -- SOLO ajusta
     // saldos internos de CxC, NUNCA factura ni escribe nada en Odoo.
-    async function aprobarDescuentoSistema(soId, montoSugerido) {
-        const montoStr = prompt(`Monto de descuento a aprobar para ${soId} (USD):`, (montoSugerido || 0).toFixed(2));
-        if (montoStr === null) return;
-        const monto = parseFloat(montoStr);
-        if (isNaN(monto) || monto < 0) {
-            alert("Monto inválido.");
-            return;
-        }
-        const motivo = prompt("Motivo de la aprobación:", "Descuento aprobado en Bandeja de Facturación");
-        if (motivo === null) return;
+    // El "Aprobar Descuento" de la Bandeja 1 se retiró en el rediseño de
+    // septiembre 2026 (decisión del usuario): la aprobación pasa a ser el
+    // acto de facturar en Odoo, y ahí la orden desaparece de la bandeja.
+    // El endpoint /api/facturacion/aprobar-descuento-sistema sigue vivo y
+    // los descuentos ya aprobados se siguen restando de lo pendiente por
+    // aplicar -- solo dejó de haber una vía para crear nuevos desde acá.
 
-        try {
-            const res = await fetch("/api/facturacion/aprobar-descuento-sistema", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ so_id: soId, monto: monto, motivo: motivo }),
-            });
-            if (res.ok) {
-                alert(`✅ Descuento de sistema aprobado para ${soId}.`);
-                loadBandeja();
-            } else {
-                const err = await res.json().catch(() => ({}));
-                alert(`❌ Error al aprobar descuento: ${err.detail || res.statusText}`);
-            }
-        } catch (err) {
-            alert("❌ Error de red al aprobar el descuento.");
-            console.error(err);
-        }
-    }
-    window.aprobarDescuentoSistema = aprobarDescuentoSistema;
 
     // Cuentas por Cobrar agrupadas por cliente (estilo "Aged Receivable" de
     // Odoo) -- fila resumen por cliente, expandible a documentos. Incluye la
@@ -1112,36 +1089,53 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render Tray 1
                 if (bandeja1TableBody) {
                     if (tray1.length === 0) {
-                        bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes pendientes por facturar.</td></tr>';
+                        bandeja1TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay órdenes pendientes por facturar.</td></tr>';
                     } else {
                         bandeja1TableBody.innerHTML = "";
                         tray1.forEach(item => {
                             const row = document.createElement("tr");
                             const isAgent = item.wh_iva_agent ? `<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Agente (${item.wh_iva_rate || 75}%)</span>` : '<span class="state-badge">No</span>';
-                            const descText = item.descuento_aplicar_monto > 0 ? `${fmt(item.descuento_aplicar_monto)} (${(item.descuento_aplicar_pct || 0).toFixed(1)}%)` : '$0.00 (0%)';
-                            const sugerido = item.descuento_aplicar_monto || 0;
-                            const accionHtml = item.descuento_sistema_aprobado != null
-                                ? `<span class="state-badge cierre" style="background:#dcfce7;color:#166534" title="${(item.descuento_sistema_motivo || '').replace(/"/g, '&quot;')}">Descuento aprobado: ${fmt(item.descuento_sistema_aprobado)}</span>
-                                   <button class="btn-primary" style="padding:4px 8px;font-size:0.7rem;margin-left:4px" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Editar</button>`
-                                : `<button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="aprobarDescuentoSistema('${item.so_id}', ${sugerido})">Aprobar Descuento</button>`;
-                            // cxc_confirmado === false: llegó aquí vía "en proceso
-                            // de pago" (Vinculación PENDIENTE, sin reconciliar en
-                            // Odoo todavía) -- antes de facturar es la única señal
-                            // posible, pero se distingue de un pago confirmado.
-                            const enProcesoBadge = item.cxc_confirmado === false
-                                ? ` <span class="state-badge" style="background:#dbeafe;color:#1d4ed8" title="${item.cxc_routing_motivo || ''}">⏳ En proceso de pago</span>`
-                                : '';
+                            const descText = item.descuento_pendiente_por_aplicar > 0
+                                ? `${fmt(item.descuento_pendiente_por_aplicar)} (${((item.descuento_pendiente_por_aplicar / (item.orden_neto_odoo || 1)) * 100).toFixed(1)}%)`
+                                : '$0.00 (0%)';
+
+                            // Estado: por cuál referencia salió de CxC, y si el
+                            // pago está confirmado. Antes de facturar CONCILIADO
+                            // es estructuralmente imposible (Odoo no puede
+                            // reconciliar contra un documento que no existe), así
+                            // que casi todo estará "en proceso de pago" -- que es
+                            // justo lo que hay que poder distinguir.
+                            const REFERENCIA_TXT = {
+                                teorico_usd: "Teórico USD",
+                                teorico_bs: "Teórico BS",
+                                venta_real: "Venta Real",
+                                factura_real: "Factura Neta",
+                                odoo: "Odoo la da por saldada",
+                            };
+                            const refTxt = REFERENCIA_TXT[item.referencia_pago] || "—";
+                            const confirmado = item.pago_confirmado !== false;
+                            const estadoHtml = `<span class="state-badge cierre" style="background:#dcfce7;color:#166534">Pagada</span>
+                                <div style="font-size:0.7rem;opacity:0.85;margin-top:2px">vs ${refTxt}</div>` +
+                                (confirmado
+                                    ? ''
+                                    : `<div style="font-size:0.68rem;color:#1d4ed8" title="${(item.cxc_routing_motivo || '').replace(/"/g, '&quot;')}">⏳ en proceso de pago</div>`);
+
+                            // Sin teórico cumplido (salió por Venta Real, Factura
+                            // Neta u Odoo) no se muestra ninguno: poner uno
+                            // sugeriría que se cumplió y no es así.
+                            const teoricoHtml = item.teorico_neto_referencia != null
+                                ? `<strong>${fmt(item.teorico_neto_referencia)}</strong>`
+                                : '<span style="opacity:0.5">—</span>';
 
                             row.innerHTML = `
                                 <td><strong>${item.so_id}</strong></td>
-                                <td>${item.cliente_nombre || item.so_id}${enProcesoBadge}</td>
+                                <td>${item.cliente_nombre || item.so_id}</td>
                                 <td>${isAgent}</td>
                                 <td>${item.fecha || ''}</td>
-                                <td><strong style="color:#059669">${fmt(item.monto_pagado || item.precio_base || 0)}</strong></td>
-                                <td>${fmt(item.subtotal_neto || item.precio_base || 0)}</td>
-                                <td><strong>${fmt(item.total_motor || 0)}</strong></td>
+                                <td>${fmt(item.orden_neto_odoo || 0)}</td>
+                                <td>${estadoHtml}</td>
+                                <td>${teoricoHtml}</td>
                                 <td><strong style="color:#d97706">${descText}</strong></td>
-                                <td>${accionHtml}</td>
                             `;
                             bandeja1TableBody.appendChild(row);
                         });

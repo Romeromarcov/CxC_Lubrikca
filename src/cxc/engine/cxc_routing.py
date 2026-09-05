@@ -109,6 +109,23 @@ from decimal import Decimal
 from enum import StrEnum
 
 
+class ReferenciaCxC(StrEnum):
+    """Contra qué referencia se dio la orden por pagada.
+
+    Existe para que quien muestre el resultado no tenga que adivinarlo
+    leyendo ``motivo``, que es prosa. Lo pidió el usuario para la Bandeja
+    de Facturación: ahí el teórico que se muestra tiene que ser
+    exactamente aquel por el cual la orden quedó pagada, no uno fijo.
+    """
+
+    TEORICO_USD = "teorico_usd"
+    TEORICO_BS = "teorico_bs"
+    VENTA_REAL = "venta_real"
+    FACTURA_REAL = "factura_real"
+    ODOO = "odoo"
+    NINGUNA = "ninguna"
+
+
 class BandejaDestino(StrEnum):
     FACTURACION_1 = "facturacion_1"
     FACTURACION_2 = "facturacion_2"
@@ -124,6 +141,9 @@ class ClasificacionCxC:
     sale_de_cxc: bool
     bandeja_destino: BandejaDestino | None
     motivo: str
+    # Cuál de las referencias alcanzó -- versión legible por código de lo
+    # que ``motivo`` cuenta en prosa. Ver ``ReferenciaCxC``.
+    referencia: ReferenciaCxC = ReferenciaCxC.NINGUNA
     # False cuando la salida de CxC se decidió por la versión "en proceso
     # de pago" (Vinculación PENDIENTE, aún sin reconciliar en Odoo) en vez
     # de por un pago realmente CONCILIADO. True en cualquier otro caso,
@@ -204,6 +224,7 @@ def clasificar_estado_cxc(
             sale_de_cxc=True,
             bandeja_destino=bandeja,
             motivo="Pagado vs Teórico Lista USD (referencia Binance)",
+            referencia=ReferenciaCxC.TEORICO_USD,
         )
 
     if teorico_bs_pagado and not nacio_en_lista_usd:
@@ -213,6 +234,7 @@ def clasificar_estado_cxc(
             sale_de_cxc=True,
             bandeja_destino=bandeja,
             motivo="Pagado vs Teórico Lista BS (referencia BCV)",
+            referencia=ReferenciaCxC.TEORICO_BS,
         )
 
     if not facturada and venta_real_pagada:
@@ -226,6 +248,7 @@ def clasificar_estado_cxc(
                 "auditoría, no un requisito para facturar una orden ya "
                 "pagada al monto real"
             ),
+            referencia=ReferenciaCxC.VENTA_REAL,
         )
 
     if facturada and factura_real_pagada:
@@ -240,6 +263,7 @@ def clasificar_estado_cxc(
                 "para revisar internamente por qué se facturó con un "
                 "precio/lista por debajo del estándar autorizado"
             ),
+            referencia=ReferenciaCxC.FACTURA_REAL,
         )
 
     if facturada and factura_pagada_confirmada_odoo:
@@ -257,6 +281,7 @@ def clasificar_estado_cxc(
                 "-- a diferencia de la regla de Factura Neta Real, aquí "
                 "el desajuste es de RECONSTRUCCIÓN nuestra, no de precio."
             ),
+            referencia=ReferenciaCxC.ODOO,
         )
 
     if teorico_bs_pagado and nacio_en_lista_usd:
@@ -269,6 +294,7 @@ def clasificar_estado_cxc(
                 "USD -- no alcanza sin el Teórico USD (su referencia "
                 "nativa) también pagado"
             ),
+            referencia=ReferenciaCxC.NINGUNA,
         )
 
     # "En proceso de pago" (segunda pasada, mismo criterio que las reglas
@@ -293,6 +319,7 @@ def clasificar_estado_cxc(
                 "proceso de pago' en Odoo"
             ),
             confirmado=False,
+            referencia=ReferenciaCxC.TEORICO_USD,
         )
 
     if teorico_bs_pagado_incl_pendiente and not nacio_en_lista_usd:
@@ -309,6 +336,7 @@ def clasificar_estado_cxc(
                 "proceso de pago' en Odoo"
             ),
             confirmado=False,
+            referencia=ReferenciaCxC.TEORICO_BS,
         )
 
     if not facturada and venta_real_pagada_incl_pendiente:
@@ -323,6 +351,7 @@ def clasificar_estado_cxc(
                 "señal que existirá -- se envía a facturar igual"
             ),
             confirmado=False,
+            referencia=ReferenciaCxC.VENTA_REAL,
         )
 
     if facturada and factura_real_pagada_incl_pendiente:
@@ -336,6 +365,7 @@ def clasificar_estado_cxc(
                 "proceso de pago' en Odoo"
             ),
             confirmado=False,
+            referencia=ReferenciaCxC.FACTURA_REAL,
         )
 
     return ClasificacionCxC(
@@ -343,4 +373,5 @@ def clasificar_estado_cxc(
         sale_de_cxc=False,
         bandeja_destino=None,
         motivo="Sin pago suficiente contra ninguna referencia -- permanece en CxC activa",
+        referencia=ReferenciaCxC.NINGUNA,
     )
