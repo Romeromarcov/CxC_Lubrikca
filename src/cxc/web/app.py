@@ -38,7 +38,7 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
-from cxc.engine.cxc_routing import BandejaDestino, clasificar_estado_cxc
+from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     valor_pagado_bcv_usd,
@@ -5068,6 +5068,28 @@ def sin_datos_teorico(
     return bruta <= 0.005
 
 
+def _teorico_de_referencia(item: dict[str, Any], referencia: ReferenciaCxC) -> float | None:
+    """El teórico neto (sin impuestos) de la referencia que dio la orden por pagada.
+
+    Pedido del usuario para la Bandeja de Facturación (septiembre 2026):
+    "en el teórico vas a usar el teórico según el cual ya la orden está
+    pagada". Mostrar siempre el mismo teórico haría que la columna no
+    tuviera relación con el motivo por el que la orden salió de cobranza.
+
+    Devuelve ``None`` cuando la orden salió por Venta Real, por Factura
+    Neta Real o por el ``payment_state`` de Odoo: en esos tres casos
+    ningún teórico se cumplió, y poner uno igual sugeriría lo contrario.
+    """
+    clave = {
+        ReferenciaCxC.TEORICO_BS: "ves_neta_teorica",
+        ReferenciaCxC.TEORICO_USD: "usd_neta_teorica",
+    }.get(referencia)
+    if clave is None:
+        return None
+    valor = item.get(clave)
+    return round(float(valor), 2) if valor is not None else None
+
+
 def saldo_priorizacion_cliente(saldos: dict[str, float]) -> float:
     """Cuánto pesa un cliente en la cola de cobro.
 
@@ -7704,6 +7726,29 @@ async def get_bandeja_facturacion():
                         if hasattr(o.fecha, "isoformat")
                         else str(o.fecha),
                         "monto_pagado": abono_para_facturar,
+                        # --- Rediseño pedido por el usuario (septiembre
+                        # 2026). Cuatro cifras, subtotal contra subtotal
+                        # (sin IVA en ninguna de las dos), y el teórico que
+                        # se muestra es AQUEL POR EL CUAL la orden quedó
+                        # pagada -- no uno fijo. Ver ReferenciaCxC.
+                        #
+                        # 1. El neto real de la orden en Odoo
+                        #    (``amount_untaxed``).
+                        "orden_neto_odoo": round(float(item.get("venta_bruta_real") or 0.0), 2),
+                        # 2. Por cuál referencia salió de CxC y si está
+                        #    confirmada. Antes de facturar CONCILIADO es
+                        #    estructuralmente imposible, así que acá casi
+                        #    todo estará "en proceso de pago" -- que es
+                        #    justo lo que hay que poder distinguir.
+                        "referencia_pago": str(clasificacion.referencia),
+                        "pago_confirmado": clasificacion.confirmado,
+                        # 3. El teórico neto de esa misma referencia, ya
+                        #    con sus descuentos y sin impuestos. None
+                        #    cuando la orden salió por Venta Real o por
+                        #    Odoo: ahí ningún teórico se cumplió.
+                        "teorico_neto_referencia": _teorico_de_referencia(
+                            item, clasificacion.referencia
+                        ),
                         "subtotal_neto": round(tot_motor / 1.16, 2) if tot_motor else 0.0,
                         "iva_estimado": (
                             round(tot_motor - tot_motor / 1.16, 2) if tot_motor else 0.0

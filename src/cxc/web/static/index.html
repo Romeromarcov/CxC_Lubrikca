@@ -406,7 +406,7 @@
                 <section class="tray-panel card">
                     <div class="panel-header">
                         <h2>Bandeja 1: Órdenes Pendientes por Facturar</h2>
-                        <p>Órdenes sin facturar pagadas hasta su Subtotal (Agentes de Retención IVA) o Total. Indica el descuento a aplicar al facturar.</p>
+                        <p>Órdenes ya pagadas y todavía sin facturar. Todos los montos son <strong>subtotales netos, sin IVA</strong>, para que sean comparables entre sí. El teórico que se muestra es aquel <strong>por el cual la orden se dio por pagada</strong>. Al facturarse en Odoo, la orden desaparece de esta bandeja.</p>
                     </div>
                     <div class="table-wrapper">
                         <table class="cxc-table">
@@ -416,16 +416,15 @@
                                     <th>Cliente</th>
                                     <th>Agente Ret. IVA</th>
                                     <th>Fecha</th>
-                                    <th>Abono ($)</th>
-                                    <th>Subtotal Neto ($)</th>
-                                    <th>Total Motor ($)</th>
+                                    <th>Orden Neto ($)</th>
+                                    <th>Estado</th>
+                                    <th>Teórico Neto ($)</th>
                                     <th>Descuento a Aplicar ($ / %)</th>
-                                    <th>Acción</th>
                                 </tr>
                             </thead>
                             <tbody id="bandeja1-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes por facturar...</td>
+                                    <td colspan="8" class="table-empty">Cargando órdenes por facturar...</td>
                                 </tr>
                             </tbody>
                         </table>
