@@ -1108,13 +1108,23 @@ document.addEventListener("DOMContentLoaded", () => {
                             const REFERENCIA_TXT = {
                                 teorico_usd: "Teórico USD",
                                 teorico_bs: "Teórico BS",
+                                subtotal_sin_iva: "Subtotal (falta el IVA)",
                                 venta_real: "Venta Real",
                                 factura_real: "Factura Neta",
                                 odoo: "Odoo la da por saldada",
                             };
                             const refTxt = REFERENCIA_TXT[item.referencia_pago] || "—";
                             const confirmado = item.pago_confirmado !== false;
-                            const estadoHtml = `<span class="state-badge cierre" style="background:#dcfce7;color:#166534">Pagada</span>
+                            // La rama del subtotal es la única que llega a
+                            // esta bandeja SIN salir de CxC: el cliente pagó la
+                            // mercancía y todavía debe el IVA, por retener o por
+                            // pagar. Se factura igual para que nazca la
+                            // obligación legal del impuesto.
+                            const soloSubtotal = item.referencia_pago === "subtotal_sin_iva";
+                            const estadoHtml = (soloSubtotal
+                                ? `<span class="state-badge" style="background:#fef9c3;color:#854d0e">Pagada — IVA pendiente</span>`
+                                : `<span class="state-badge cierre" style="background:#dcfce7;color:#166534">Pagada</span>`)
+                                + `
                                 <div style="font-size:0.7rem;opacity:0.85;margin-top:2px">vs ${refTxt}</div>` +
                                 (confirmado
                                     ? ''

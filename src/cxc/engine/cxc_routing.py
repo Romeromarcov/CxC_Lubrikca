@@ -123,6 +123,7 @@ class ReferenciaCxC(StrEnum):
     VENTA_REAL = "venta_real"
     FACTURA_REAL = "factura_real"
     ODOO = "odoo"
+    SUBTOTAL_SIN_IVA = "subtotal_sin_iva"
     NINGUNA = "ninguna"
 
 
@@ -164,6 +165,8 @@ def clasificar_estado_cxc(
     venta_real_pagada_incl_pendiente: bool = False,
     factura_real_pagada_incl_pendiente: bool = False,
     factura_pagada_confirmada_odoo: bool = False,
+    subtotal_pagado: bool = False,
+    subtotal_pagado_incl_pendiente: bool = False,
     tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
@@ -366,6 +369,44 @@ def clasificar_estado_cxc(
             ),
             confirmado=False,
             referencia=ReferenciaCxC.FACTURA_REAL,
+        )
+
+    # Subtotal pagado, IVA no (decisión del usuario, septiembre 2026). Es
+    # el único caso donde "sigue debiendo" y "hay que facturarla" NO son la
+    # misma respuesta, y por eso la única rama que sale con
+    # ``sale_de_cxc=False`` Y un destino de bandeja a la vez.
+    #
+    # El cliente pagó la mercancía y falta el IVA. No facturar lo empeora
+    # por los dos lados:
+    #
+    #   - Si es agente de retención, ese IVA NUNCA se lo va a pagar a
+    #     Lubrikca: lo entera al SENIAT. No es una cuenta por cobrar sino un
+    #     comprobante por recibir, y sin factura no hay retención que hacer.
+    #   - Si es un cliente normal, el IVA sí es deuda real, pero exigible
+    #     solo DESPUÉS de facturar. Retener la factura garantiza que no se
+    #     pague nunca, porque la obligación legal todavía no nació.
+    #
+    # Así que se enruta a facturar y se sigue cobrando: la orden aparece en
+    # Bandeja 1 sin salir de CxC activa, y una vez facturada la recoge la
+    # bandeja de IVA pendiente (que ya distingue agente de no-agente y
+    # sigue el rastro hasta ``account.move.wh_iva``).
+    #
+    # Va al final a propósito: solo aplica cuando NINGUNA de las
+    # referencias completas alcanzó. Una orden que cubre el total con IVA
+    # sale por su rama normal y no llega hasta acá.
+    if not facturada and (subtotal_pagado or subtotal_pagado_incl_pendiente):
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=False,
+            bandeja_destino=BandejaDestino.FACTURACION_1,
+            motivo=(
+                "Pagado el subtotal pero no el IVA -- se envía a facturar "
+                "para que nazca la obligación legal del impuesto, y sigue "
+                "en CxC activa porque ese IVA todavía se debe (por pagar o "
+                "por retener)"
+            ),
+            confirmado=subtotal_pagado,
+            referencia=ReferenciaCxC.SUBTOTAL_SIN_IVA,
         )
 
     return ClasificacionCxC(

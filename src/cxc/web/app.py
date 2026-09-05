@@ -13359,6 +13359,29 @@ def _get_ventas_sync(
             venta_real_pagada_incl_pendiente = (
                 _estado_pago(val_ref_nacimiento_incl_pendiente, target_orden) == "pagada"
             )
+            # Subtotal pagado, IVA no (decisión del usuario, septiembre
+            # 2026): el cliente pagó la mercancía y falta el impuesto, sea
+            # porque va a retenerlo o porque lo debe. Se compara contra el
+            # neto teórico SIN impuestos de la referencia nativa de la
+            # orden, que es la misma base con la que se le vendió.
+            _base_subtotal = (
+                usd_neta_teorica if es_lista_usd_nacimiento else ves_neta_teorica
+            )
+            if _base_subtotal is None or _sin_datos_teorico(
+                teorico_row,
+                usd_bruta_teorica if es_lista_usd_nacimiento else ves_bruta_teorica,
+                precio_base_calculado,
+            ):
+                # Sin teórico calculable se cae al subtotal real de la
+                # orden en Odoo (``amount_untaxed``), que siempre existe.
+                _base_subtotal = venta_bruta_real
+            subtotal_pagado_confirmado = (
+                _estado_pago(val_ref_nacimiento, _base_subtotal) == "pagada"
+            )
+            subtotal_pagado_incl_pendiente = (
+                _estado_pago(val_ref_nacimiento_incl_pendiente, _base_subtotal) == "pagada"
+            )
+
             clasificacion_cxc = clasificar_estado_cxc(
                 so_id=o.so_id,
                 facturada=bool(o.facturada),
@@ -13374,6 +13397,8 @@ def _get_ventas_sync(
                 factura_pagada_confirmada_odoo=facturas_pagadas_confirmadas_odoo_map.get(
                     o.so_id, False
                 ),
+                subtotal_pagado=subtotal_pagado_confirmado,
+                subtotal_pagado_incl_pendiente=subtotal_pagado_incl_pendiente,
             )
 
             # Consolidación pedida por el usuario (agosto 2026): un solo
@@ -13386,6 +13411,15 @@ def _get_ventas_sync(
             # como pagada -- mismo beneficio de la duda del precedente de
             # Odoo (ver cxc_routing.py).
             pagada = clasificacion_cxc.sale_de_cxc
+            # "Pagada -- IVA pendiente" (decisión del usuario, septiembre
+            # 2026): la mercancía está cobrada y falta el impuesto. No es
+            # "pagada" a secas -- ese IVA se debe, por retener o por pagar,
+            # y la orden sigue en CxC activa -- pero tampoco es "sin pagar",
+            # que era lo que se veía antes y escondía que el cliente ya
+            # cumplió con el grueso. Ver la rama SUBTOTAL_SIN_IVA del árbol.
+            iva_pendiente_sin_facturar = (
+                clasificacion_cxc.referencia == ReferenciaCxC.SUBTOTAL_SIN_IVA
+            )
 
             # Saldo CxC: $0 si ya salió de CxC (sin importar por cuál
             # regla, ni si está "confirmado" o "en proceso de pago" -- ya
@@ -13688,6 +13722,7 @@ def _get_ventas_sync(
                     # orden si sigue en CxC. Ver docstring del cálculo
                     # arriba (justo antes de este items.append).
                     "pagada": pagada,
+                    "iva_pendiente_sin_facturar": iva_pendiente_sin_facturar,
                     "saldo_cxc": saldo_cxc,
                 }
             )
@@ -13771,6 +13806,7 @@ _VENTAS_COLUMN_LABELS: dict[str, str] = {
     "usd_bruta_teorica": "Teórica Bruta USD",
     "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
     "pagada": "Pagada",
+    "iva_pendiente_sin_facturar": "Pagada - IVA Pendiente",
     "saldo_cxc": "Saldo CxC",
     "alerta": "Alerta",
     "revisar_motivo": "Motivo Revisión",
