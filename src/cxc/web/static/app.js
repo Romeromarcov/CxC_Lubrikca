@@ -166,7 +166,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
     const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
     const bandejaEnProcesoDePagoTableBody = document.getElementById("bandeja-en-proceso-de-pago-table-body");
-    const bandejaPendientesCerrarTableBody = document.getElementById("bandeja-pendientes-cerrar-table-body");
 
     // User Session & Multi-Page Initialization
     let currentUserSession = null;
@@ -1069,7 +1068,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
             if (bandejaEnProcesoDePagoTableBody) bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td></tr>';
-            if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -1275,9 +1273,3706 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
 
                 // La bandeja "Pendientes por Cerrar" se elimino en
-                // septiembre de 2026: contenia a todas las demas (397 filas,
-                // cero propias) y se armaba con una segunda llamada al arbol
-                // en otro endpoint, con otra tolerancia.
+                // septiembre de 2026: contenia a todas las demas (397 filas
+                // sobre 796 ordenes vivas, cero propias) y se armaba con una
+                // segunda llamada al arbol en otro endpoint, con otra
+                // tolerancia.
+
+                // Badges de conteo en las bandejas colapsables (3 y auditoría de precios)
+                const badge3 = document.getElementById("bandeja3-count-badge");
+                if (badge3) badge3.textContent = String(tray3.length);
+                const badgeAudPrecios = document.getElementById("bandeja-auditoria-precios-count-badge");
+                if (badgeAudPrecios) badgeAudPrecios.textContent = String(tray4.length);
+                const badgeEnProceso = document.getElementById("bandeja-en-proceso-de-pago-count-badge");
+                if (badgeEnProceso) badgeEnProceso.textContent = String(trayEnProceso.length);
+            }
+        } catch (err) {
+            console.error("Error loading bandeja:", err);
+            if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar bandeja 1.</td></tr>';
+            if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
+            if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
+            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
+        }
+    }
+
+    window.guardarTasaBinance = async function(id, esVinculado) {
+        const input = document.querySelector(`.input-tasa-binance[data-vinc="${id}"]`);
+        if (!input) return;
+        const tasa = parseFloat(input.value);
+        if (!tasa || tasa <= 0) {
+            alert("Ingresa una tasa Binance válida.");
+            return;
+        }
+        // Con Vinculación real (pago ya vinculado a una orden): corrige la
+        // Vinculación. Sin ella (pago aún pendiente, "sugerencia sin
+        // confirmar"): guarda la corrección por pago_id -- ver POST
+        // /api/pago/{pago_id}/tasa-binance.
+        const endpoint = esVinculado
+            ? `/api/vinculacion/${id}/tasa-binance`
+            : `/api/pago/${id}/tasa-binance`;
+        try {
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tasa_binance: tasa }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.detail || "No se pudo actualizar la tasa Binance.");
+                return;
+            }
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+        } catch (err) {
+            alert("Error de red al actualizar la tasa Binance.");
+            console.error(err);
+        }
+    };
+
+    window.guardarTipoTasaBcv = async function(vincId) {
+        const select = document.querySelector(`.select-bcv-variante[data-vinc="${vincId}"]`);
+        if (!select) return;
+        try {
+            const res = await fetch(`/api/vinculacion/${vincId}/tasa-bcv-tipo`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ variante: select.value }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.detail || "No se pudo cambiar el tipo de tasa BCV.");
+                return;
+            }
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+        } catch (err) {
+            alert("Error de red al cambiar el tipo de tasa BCV.");
+            console.error(err);
+        }
+    };
+
+    // --- Tab 2: Accounts Receivable Report ---
+    // Reporte de Saldos, agosto 2026: se eliminaron las tablas "Reporte
+    // General" (por orden) y "Mora Crítica" -- reemplazadas por la tabla
+    // por cliente (ver loadReporteCxcCliente) + la grilla de priorización
+    // por color. loadReporte() ahora solo alimenta las tarjetas KPI del
+    // Dashboard (que siguen viniendo de /api/reporte-saldos).
+    async function loadReporte() {
+        try {
+            const res = await fetch("/api/reporte-saldos?refresh=true&t=" + Date.now(), { cache: "no-store" });
+            if (res.ok) {
+                const data = await res.json();
+                const kpis = data.kpis || {};
+                const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+                // Helper to update 4 sub-balances in a KPI card
+                const setKpiSubBalances = (prefix, kpiObj) => {
+                    const obj = kpiObj || { deudor_bcv: 0, desc_bcv: 0, desc_usd: 0, factura_odoo: 0 };
+                    const elDeudorBCV = document.getElementById(`${prefix}-deudor-bcv`);
+                    const elDescBCV = document.getElementById(`${prefix}-desc-bcv`);
+                    const elDescUSD = document.getElementById(`${prefix}-desc-usd`);
+                    const elFacturaOdoo = document.getElementById(`${prefix}-factura-odoo`);
+
+                    if (elDeudorBCV) elDeudorBCV.textContent = fmt(obj.deudor_bcv);
+                    if (elDescBCV) elDescBCV.textContent = fmt(obj.desc_bcv);
+                    if (elDescUSD) elDescUSD.textContent = fmt(obj.desc_usd);
+                    if (elFacturaOdoo) elFacturaOdoo.textContent = fmt(obj.factura_odoo);
+                };
+
+                setKpiSubBalances("kpi-total-general", kpis.total_general);
+                setKpiSubBalances("kpi-total-vencido", kpis.total_vencido);
+                setKpiSubBalances("kpi-vigentes", kpis.vigentes);
+                setKpiSubBalances("kpi-1-30", kpis.vencidas_1_30);
+                setKpiSubBalances("kpi-31-60", kpis.vencidas_31_60);
+                setKpiSubBalances("kpi-61-90", kpis.vencidas_61_90);
+                setKpiSubBalances("kpi-mas-90", kpis.vencidas_mas_90);
+
+                // Attach Click Handlers to Interactive KPI Cards -- las
+                // tarjetas viven en el Dashboard; un clic navega al Reporte
+                // de Saldos y filtra la tabla por cliente por esa antigüedad.
+                document.querySelectorAll(".interactive-kpi").forEach(card => {
+                    if (!card.dataset.listenerAttached) {
+                        card.addEventListener("click", () => {
+                            const targetVal = card.dataset.antiguedad;
+                            const selectEl = document.getElementById("reporte-cliente-antiguedad-filter");
+                            if (selectEl) {
+                                selectEl.value = (selectEl.value === targetVal) ? "*" : targetVal;
+                                if (typeof applyReporteClienteFilters === "function") applyReporteClienteFilters();
+                            }
+                            const currentPath = window.location.pathname.toLowerCase()
+                                .replace(/^\/+|\/+$/g, '').split('/')[0];
+                            if (currentPath !== "reporte") {
+                                history.pushState(null, "", "/reporte");
+                                initCurrentPage();
+                            }
+                        });
+                        card.dataset.listenerAttached = "true";
+                    }
+                });
+            }
+        } catch (err) {
+            console.error("Error cargando KPIs de reporte de saldos:", err);
+        }
+    }
+
+    // ── Página Ventas: teórico (bruta/neta, con y sin impuestos) vs real ──
+    let ventasData = [];
+    // Reintento mientras el backend calcula (ver "calculando" en loadVentas).
+    let ventasRecalculoTimer = null;
+
+    async function loadVentas() {
+        const tbody = document.getElementById("ventas-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Cargando reporte de ventas...</td></tr>';
+            const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
+            if (!res.ok) {
+                tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Error al cargar el reporte de ventas.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            ventasData = data.items || [];
+
+            // El backend avisa que hay un cálculo en vuelo. Sin caché previo
+            // (tras un despliegue o un ciclo de sync con cambios) tarda
+            // varios minutos, y antes se veía una tabla vacía: idéntico a
+            // "no hay ventas". Se muestra el estado real y se reintenta solo.
+            if (ventasRecalculoTimer) { clearTimeout(ventasRecalculoTimer); ventasRecalculoTimer = null; }
+            if (data.calculando && ventasData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="16" class="table-empty">'
+                    + 'Calculando el reporte de ventas… Puede tardar varios minutos '
+                    + 'después de una actualización del sistema. Esta página se '
+                    + 'refresca sola cuando esté listo.</td></tr>';
+                ventasRecalculoTimer = setTimeout(loadVentas, 30000);
+                return;
+            }
+            if (data.calculando) {
+                // Hay datos, pero son los del cálculo anterior.
+                ventasRecalculoTimer = setTimeout(loadVentas, 30000);
+            }
+
+            const kpis = data.kpis || {};
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            setText("ventas-kpi-subtotal-real", fmt(kpis.subtotal_real_total));
+            setText("ventas-kpi-ves-bruta", fmt(kpis.ves_bruta_teorica_total));
+            setText("ventas-kpi-ves-neta-iva", fmt(kpis.ves_neta_teorica_iva_total));
+            setText("ventas-kpi-usd-bruta", fmt(kpis.usd_bruta_teorica_total));
+            setText("ventas-kpi-usd-neta-iva", fmt(kpis.usd_neta_teorica_iva_total));
+            setText("ventas-kpi-neta-real", fmt(kpis.venta_neta_real_total));
+            setText("ventas-kpi-facturado-neto", fmt(kpis.total_facturado_neto_total));
+
+            const ivaPct = ((kpis.iva_rate || 0) * 100).toFixed(0);
+            const igtfInfo = kpis.igtf_activo ? ` · IGTF ${((kpis.igtf_rate || 0) * 100).toFixed(0)}%` : ' · IGTF inactivo';
+            setText("ventas-iva-info", `Tasas de impuesto configuradas: IVA ${ivaPct}%${igtfInfo}`);
+
+            // Poblar filtro de vendedores
+            const vendedorSelect = document.getElementById("ventas-vendedor-filter");
+            if (vendedorSelect) {
+                const currentVal = vendedorSelect.value || "*";
+                const vendedores = [...new Set(ventasData.map(it => it.vendedor).filter(Boolean))].sort();
+                vendedorSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vendedorSelect.appendChild(opt);
+                });
+                vendedorSelect.value = currentVal;
+                if (!vendedorSelect.dataset.listenerAttached) {
+                    vendedorSelect.addEventListener("change", applyVentasFilters);
+                    vendedorSelect.dataset.listenerAttached = "true";
+                }
+            }
+
+            const soloAlertasEl = document.getElementById("ventas-solo-alertas");
+            if (soloAlertasEl && !soloAlertasEl.dataset.listenerAttached) {
+                soloAlertasEl.addEventListener("change", applyVentasFilters);
+                soloAlertasEl.dataset.listenerAttached = "true";
+            }
+
+            const searchEl = document.getElementById("ventas-search");
+            if (searchEl && !searchEl.dataset.listenerAttached) {
+                searchEl.addEventListener("input", applyVentasFilters);
+                searchEl.dataset.listenerAttached = "true";
+            }
+
+            applyVentasFilters();
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">Error de red al cargar el reporte de ventas.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    function applyVentasFilters() {
+        const vendedorVal = document.getElementById("ventas-vendedor-filter")?.value || "*";
+        const soloAlertas = document.getElementById("ventas-solo-alertas")?.checked || false;
+        const searchVal = (document.getElementById("ventas-search")?.value || "").toLowerCase().trim();
+
+        let filtered = ventasData;
+        if (vendedorVal !== "*") {
+            filtered = filtered.filter(it => it.vendedor === vendedorVal);
+        }
+        if (soloAlertas) {
+            filtered = filtered.filter(it => it.alerta);
+        }
+        if (searchVal) {
+            filtered = filtered.filter(it =>
+                (it.so_id || "").toLowerCase().includes(searchVal) ||
+                (it.cliente_nombre || "").toLowerCase().includes(searchVal)
+            );
+        }
+        renderVentasTable(filtered);
+    }
+
+    function descargarVentasExcel() {
+        const vendedorVal = document.getElementById("ventas-vendedor-filter")?.value || "*";
+        const soloAlertas = document.getElementById("ventas-solo-alertas")?.checked || false;
+        const searchVal = (document.getElementById("ventas-search")?.value || "").trim();
+
+        const params = new URLSearchParams();
+        if (vendedorVal !== "*") params.set("vendedor", vendedorVal);
+        if (soloAlertas) params.set("solo_alertas", "true");
+        if (searchVal) params.set("search", searchVal);
+
+        window.location.href = "/api/ventas/excel?" + params.toString();
+    }
+    window.descargarVentasExcel = descargarVentasExcel;
+
+    function renderVentasTable(items) {
+        const tbody = document.getElementById("ventas-table-body");
+        if (!tbody) return;
+        if (!items || items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            return;
+        }
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        tbody.innerHTML = "";
+        items.forEach(item => {
+            const row = document.createElement("tr");
+            if (item.alerta) {
+                row.style.background = "#fef2f2";
+            }
+            if (item.revisar_motivo) {
+                row.style.background = "#fffbeb";
+            }
+            // falta_nc_por_devolucion: acción pendiente concreta (crear la
+            // NC en Odoo), no solo una señal de "revisar" -- badge propio,
+            // más urgente, para que no se confunda con el resto de motivos.
+            const revisarCell = item.falta_nc_por_devolucion
+                ? `<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;cursor:help;" title="${item.revisar_motivo}">📄 Falta NC</span>`
+                : (item.revisar_motivo
+                    ? `<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;cursor:help;" title="${item.revisar_motivo}">🔍 Revisar</span>`
+                    : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">—</span>');
+
+            const naVal = (v) => v != null ? fmt(v) : '—';
+            const facturadaCell = item.facturada
+                ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">✓ Sí</span>'
+                : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>';
+            // Saldo a favor: la empresa le debe al cliente (pagó de más, o
+            // devolvió mercancía ya pagada). Gana sobre los demás estados --
+            // es lo que hay que resolver con ese cliente.
+            const favorCell = item.tiene_saldo_a_favor
+                ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;font-weight:600;" title="La empresa le debe al cliente: pagó de más o devolvió mercancía ya pagada">↩ A favor ${fmt(item.saldo_a_favor)}</span>`
+                : null;
+            // Subtotal pagado y falta el IVA: ni "pagada" ni "pendiente" --
+            // el cliente cumplió con la mercancía y debe el impuesto, por
+            // pagar o por retener. Ver la rama SUBTOTAL_SIN_IVA del árbol.
+            const ivaPendCell = item.iva_pendiente_sin_facturar
+                ? '<span class="state-badge" style="background:#fef9c3;color:#854d0e;font-weight:600;" title="Pagó el subtotal; falta el IVA (por pagar o por retener)">Pagada — IVA pendiente</span>'
+                : null;
+            const pagadaCell = favorCell || ivaPendCell || (item.pagada
+                ? `<span class="state-badge" style="background:#dcfce7;color:#15803d;font-weight:600;" title="${item.cxc_confirmado ? 'Pago conciliado en Odoo' : 'En proceso de pago -- vinculado, aún sin conciliar en Odoo'}">✓ ${item.cxc_confirmado ? 'Pagada' : 'En proceso'}</span>`
+                : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:600;">✗ Pendiente</span>');
+
+            row.innerHTML = `
+                <td><strong>${item.so_id}</strong></td>
+                <td><small>${item.fecha_entrega ?? '—'}</small></td>
+                <td>${item.cliente_nombre}</td>
+                <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
+                <td style="text-align:right">${item.dias_credito ?? 0}</td>
+                <td style="text-align:right" title="Vence: ${item.fecha_vencimiento ?? '—'}">${
+                    (item.dias_vencido || 0) > 0
+                        ? `<strong style="color:#dc2626">${item.dias_vencido} d</strong>`
+                        : '<span style="color:#059669">Vigente</span>'
+                }</td>
+                <td>${facturadaCell}</td>
+                <td><strong>${fmt(item.venta_neta_real)}</strong></td>
+                <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
+                <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                <td><strong style="color:#2563eb;">${naVal(item.usd_neta_teorica_iva)}</strong></td>
+                <td>${pagadaCell}</td>
+                <td><strong style="color:${item.saldo_cxc > 0 ? '#b91c1c' : '#059669'};">${fmt(item.saldo_cxc)}</strong></td>
+                <td>${revisarCell}</td>
+                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
+                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    // ── Modal de detalle de orden (Fase 5) ────────────────────────────────────
+    let _detalleOrdenData = null;
+
+    function _renderDetalleOrdenModo(modo) {
+        const body = document.getElementById("modal-detalle-orden-body");
+        if (!body || !_detalleOrdenData) return;
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+
+        const bloque = _detalleOrdenData[modo];
+        if (!bloque || !bloque.lineas || bloque.lineas.length === 0) {
+            body.innerHTML = '<p class="table-empty">Sin líneas para este modo.</p>';
+            return;
+        }
+        const tieneDescuento = modo === "real_orden" || modo === "real_factura";
+        const esTeorico = modo === "teorico_ves" || modo === "teorico_usd";
+        const listaLabel = bloque.lista_label ? `<p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Lista: ${bloque.lista_label}</p>` : '';
+        const fmtLitros = (v) => new Intl.NumberFormat('es-US', { minimumFractionDigits: 1, maximumFractionDigits: 3 }).format(v || 0);
+
+        let rows = bloque.lineas.map(l => `
+            <tr>
+                <td>${l.producto}</td>
+                <td style="text-align:right">${l.cantidad}</td>
+                <td style="text-align:right">${fmtLitros(l.litros_unitario)} L</td>
+                <td style="text-align:right"><strong>${fmtLitros(l.litros_total)} L</strong></td>
+                <td style="text-align:right">${fmt(l.precio_unitario)}</td>
+                <td style="text-align:right">${fmt(l.subtotal_antes_descuento)}</td>
+                ${tieneDescuento ? `<td style="text-align:right">${fmt(l.descuento_monto)} (${(l.descuento_pct || 0).toFixed(1)}%)</td>` : ''}
+                <td style="text-align:right"><strong>${fmt(l.subtotal_despues_descuento)}</strong></td>
+            </tr>
+        `).join('');
+
+        // Fase 6: el motor no distribuye sus descuentos por línea (los
+        // calcula por grupo/orden) -- para los modos teóricos se muestra un
+        // desglose de CONCEPTOS a nivel de orden (qué reglas aplicaron:
+        // recompra/contado/volumen) en vez de una columna de descuento por
+        // línea, que sería inventada.
+        const conceptos = bloque.conceptos || [];
+        const conceptosHtml = esTeorico
+            ? `<div style="margin-top:1rem;">
+                <h4 style="margin:0 0 0.5rem 0;font-size:0.9rem;">Conceptos de descuento aplicados</h4>
+                ${conceptos.length === 0
+                    ? '<p class="table-empty" style="margin:0;">Ningún concepto de descuento aplica para esta lista.</p>'
+                    : `<ul style="margin:0;padding-left:1.2rem;font-size:0.85rem;">${
+                        conceptos.map(c => `<li>${c.concepto}: <strong>${fmt(c.monto)}</strong></li>`).join('')
+                    }</ul>`}
+              </div>`
+            : '';
+
+        body.innerHTML = `
+            ${listaLabel}
+            <div style="overflow-x:auto;">
+                <table class="cxc-table">
+                    <thead>
+                        <tr>
+                            <th>Producto</th>
+                            <th style="text-align:right">Cantidad</th>
+                            <th style="text-align:right">Litros/Unid.</th>
+                            <th style="text-align:right">Litros Línea</th>
+                            <th style="text-align:right">Precio Unit.</th>
+                            <th style="text-align:right">Subtotal antes Desc.</th>
+                            ${tieneDescuento ? '<th style="text-align:right">Descuento</th>' : ''}
+                            <th style="text-align:right">Subtotal después Desc.</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+            <div style="margin-top:0.75rem;text-align:right;font-size:0.9rem;">
+                ${(tieneDescuento || esTeorico) ? `<div>Descuento total: <strong>${fmt(bloque.descuento_total)}</strong></div>` : ''}
+                <div>Total litros: <strong>${fmtLitros(bloque.litros_total)} L</strong></div>
+                <div>Subtotal: <strong style="font-size:1.05rem;">${fmt(bloque.subtotal)}</strong></div>
+            </div>
+            ${conceptosHtml}
+        `;
+    }
+
+    // Rediseño de Ventas (agosto 2026): la tabla principal se redujo a lo
+    // esencial (orden/cliente/pago) -- todo lo demás que antes vivía como
+    // columna propia (vendedor, teóricos brutos/descuentos por lista,
+    // validación orden/factura, desglose de descuentos, N/C-N/D, montos
+    // pagados por ruta, Diferencia/Alerta) se muestra aquí, en el resumen
+    // del modal de Detalle. Lee del mismo `ventasData` que ya alimenta la
+    // tabla (sin pegarle de nuevo al backend) -- el item ya trae todos
+    // estos campos desde /api/ventas.
+    function _renderDetalleOrdenResumen(item) {
+        const cont = document.getElementById("modal-detalle-orden-resumen");
+        if (!cont) return;
+        if (!item) {
+            cont.innerHTML = "";
+            return;
+        }
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const naVal = (v) => v != null ? fmt(v) : '—';
+        const pctTxt = (p) => p != null ? ` (${(p * 100).toFixed(1)}%)` : '';
+        const descMontoPct = (monto, pct) => `${fmt(monto)}<small style="color:#64748b;">${pctTxt(pct)}</small>`;
+        const valColor = (v) => v === 'ok' ? '#059669' : (v === 'discrepancia_menor' ? '#b45309' : '#b91c1c');
+        const valLabel = (v) => v === 'ok' ? '✓ OK' : (v === 'discrepancia_menor' ? '~ Menor' : '⚠ Discrepancia');
+        const difColor = item.diferencia > 0.05 ? "#b91c1c" : (item.diferencia < -0.05 ? "#0369a1" : "#059669");
+
+        const campo = (label, valorHtml, title) => `
+            <div style="min-width:150px;" ${title ? `title="${title}"` : ''}>
+                <div style="font-size:0.72rem;color:#64748b;text-transform:uppercase;letter-spacing:0.03em;">${label}</div>
+                <div style="font-size:0.9rem;">${valorHtml}</div>
+            </div>`;
+
+        // Saldo por fila -- MISMO target que usa cada estatus_pago_* en el
+        // backend (ver _get_ventas_sync): los teóricos comparan contra su
+        // propia neta+imp (sin restar Desc. Sistema, que solo aplica a lo
+        // real); Real Orden/Real Factura restan Desc. Sistema antes de
+        // comparar. Nunca deben coincidir entre sí -- son 4 referencias
+        // distintas -- por diseño solo UNA de ellas alimenta el "Saldo CxC"
+        // consolidado (ver estrella más abajo).
+        const saldoTeoricoVes = item.ves_neta_teorica_iva != null
+            ? Math.max(0, item.ves_neta_teorica_iva - (item.monto_pagado_bcv || 0)) : null;
+        const saldoTeoricoUsd = item.usd_neta_teorica_iva != null
+            ? Math.max(0, item.usd_neta_teorica_iva - (item.monto_pagado_usd || 0)) : null;
+        const targetOrden = Math.max(0, (item.venta_neta_real || 0) - (item.descuento_aplicado_sistema || 0));
+        const saldoRealOrden = Math.max(0, targetOrden - (item.monto_pagado_factura_odoo || 0));
+        const targetFactura = Math.max(0, (item.total_facturado_neto || 0) - (item.descuento_aplicado_sistema || 0));
+        const saldoRealFactura = item.facturada
+            ? Math.max(0, targetFactura - (item.monto_pagado_factura_odoo || 0)) : null;
+
+        // ¿Cuál de las 4 referencias es la que realmente alimenta el
+        // "Saldo CxC" consolidado de la fila principal? MISMA lógica que
+        // el backend (ver saldo_cxc en app.py): la lista con la que nació
+        // la orden, o Real Factura/Real Orden como fallback si esa lista
+        // no tiene teórico calculado todavía.
+        const esUsdNacimiento = !!item.nacio_en_lista_usd;
+        const netaNativaTeorica = esUsdNacimiento ? item.usd_neta_teorica_iva : item.ves_neta_teorica_iva;
+        const refKey = netaNativaTeorica != null
+            ? (esUsdNacimiento ? 'usd' : 'ves')
+            : (item.facturada ? 'factura' : 'orden');
+        const refBadge = (key) => key === refKey
+            ? ' <span title="Esta es la referencia que alimenta el Saldo CxC consolidado de la orden" style="color:#b45309;">★</span>'
+            : '';
+
+        cont.innerHTML = `
+            <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.85rem 1rem;background:#f8fafc;border-radius:10px;border:1px solid hsl(var(--border-card));margin-bottom:0.25rem;">
+                ${campo('Vendedor', item.vendedor || 'Sin Vendedor')}
+                ${campo('Fecha de orden', item.fecha || '—')}
+                ${campo('Lista aplicada', item.lista_aplicada_label || '—', item.lista_aplicada ?? '')}
+                ${campo('Validación Orden', `<span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span>`)}
+                ${campo('Validación Factura', `<span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span>`)}
+                ${campo('Diferencia', `<strong style="color:${difColor};">${fmt(item.diferencia)}</strong>`, 'Venta teórica (lista aplicada) + IVA − Facturado Neto')}
+                ${item.alerta ? campo('Alerta', '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:700;">⚠️ Facturado de menos</span>') : ''}
+            </div>
+            <div style="overflow-x:auto;margin-bottom:0.25rem;">
+                <table class="cxc-table" style="font-size:0.82rem;">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th style="text-align:right">Bruta</th>
+                            <th style="text-align:right">Desc. Motor</th>
+                            <th style="text-align:right">Neta</th>
+                            <th style="text-align:right">Neta + Imp.</th>
+                            <th style="text-align:right">Pagado</th>
+                            <th style="text-align:right">Saldo</th>
+                            <th style="text-align:right">Estatus</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Teórico VES (BCV)${refBadge('ves')}</td>
+                            <td style="text-align:right">${naVal(item.ves_bruta_teorica)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
+                            <td style="text-align:right">${naVal(item.ves_neta_teorica)}</td>
+                            <td style="text-align:right"><strong>${naVal(item.ves_neta_teorica_iva)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_bcv)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoTeoricoVes)}</strong></td>
+                            <td style="text-align:right">${item.estatus_pago_teorico_ves ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Teórico USD (Binance)${refBadge('usd')}</td>
+                            <td style="text-align:right">${naVal(item.usd_bruta_teorica)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
+                            <td style="text-align:right">${naVal(item.usd_neta_teorica)}</td>
+                            <td style="text-align:right"><strong>${naVal(item.usd_neta_teorica_iva)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_usd)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoTeoricoUsd)}</strong></td>
+                            <td style="text-align:right">${item.estatus_pago_teorico_usd ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Real Orden${refBadge('orden')}</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real - item.descuento_aplicado_orden)}</td>
+                            <td style="text-align:right"><strong>${fmt(item.venta_neta_real)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
+                            <td style="text-align:right"><strong>${fmt(saldoRealOrden)}</strong></td>
+                            <td style="text-align:right">${item.estatus_pago_real_orden ?? '—'}</td>
+                        </tr>
+                        <tr>
+                            <td>Real Factura${refBadge('factura')}</td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos)}</td>
+                            <td style="text-align:right">${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos - item.descuento_aplicado_factura)}</td>
+                            <td style="text-align:right"><strong>${fmt(item.total_facturado_neto)}</strong></td>
+                            <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
+                            <td style="text-align:right"><strong>${naVal(saldoRealFactura)}</strong></td>
+                            <td style="text-align:right">${item.estatus_pago_real_factura ?? '—'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.6rem 1rem;font-size:0.85rem;">
+                ${campo('N/C Aplicada', fmt(item.total_nc_aplicada))}
+                ${campo('N/D Aplicada', fmt(item.total_nd_aplicada))}
+                ${campo('Desc. Pendiente', descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct))}
+                ${campo('Desc. Sistema', descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct), item.descuento_aplicado_sistema_motivo ?? '')}
+                ${campo('Orden Real c/ Desc. Teóricos', `${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}`, 'Cuánto debería costar la orden si se aplicaran TODOS los descuentos que calcula el motor (aplicados o no) -- valor hipotético, no el saldo real')}
+            </div>
+        `;
+    }
+
+    async function abrirModalDetalleOrden(soId) {
+        const modal = document.getElementById("modal-detalle-orden");
+        const titulo = document.getElementById("modal-detalle-orden-titulo");
+        const subtitulo = document.getElementById("modal-detalle-orden-subtitulo");
+        const body = document.getElementById("modal-detalle-orden-body");
+        const modoSelect = document.getElementById("modal-detalle-orden-modo");
+        if (!modal) return;
+
+        titulo.textContent = `Detalle de Orden ${soId}`;
+        subtitulo.textContent = "Cargando...";
+        body.innerHTML = '<p class="table-empty">Cargando líneas...</p>';
+        modal.style.display = "flex";
+        _detalleOrdenData = null;
+        _renderDetalleOrdenResumen(ventasData.find(it => it.so_id === soId));
+
+        try {
+            const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
+            if (!res.ok) {
+                subtitulo.textContent = "";
+                body.innerHTML = '<p class="table-empty">Error al cargar el detalle de la orden.</p>';
+                return;
+            }
+            const data = await res.json();
+            _detalleOrdenData = {
+                real_orden: data.real_orden,
+                real_factura: data.real_factura,
+                teorico_ves: data.teorico_ves,
+                teorico_usd: data.teorico_usd,
+            };
+            subtitulo.textContent = `${data.cliente_nombre || ''} — Lista nacimiento: ${data.lista_nacimiento_label || '—'}`;
+            if (modoSelect) modoSelect.value = "real_orden";
+            _renderDetalleOrdenModo("real_orden");
+        } catch (err) {
+            subtitulo.textContent = "";
+            body.innerHTML = '<p class="table-empty">Error de red al cargar el detalle de la orden.</p>';
+            console.error(err);
+        }
+    }
+
+    function cerrarModalDetalleOrden() {
+        const modal = document.getElementById("modal-detalle-orden");
+        if (modal) modal.style.display = "none";
+        _detalleOrdenData = null;
+        _renderDetalleOrdenResumen(null);
+    }
+
+    window.abrirModalDetalleOrden = abrirModalDetalleOrden;
+    window.cerrarModalDetalleOrden = cerrarModalDetalleOrden;
+
+    const modalDetalleOrdenModoSelect = document.getElementById("modal-detalle-orden-modo");
+    if (modalDetalleOrdenModoSelect) {
+        modalDetalleOrdenModoSelect.addEventListener("change", (e) => {
+            _renderDetalleOrdenModo(e.target.value);
+        });
+    }
+
+    // ── Modal de pagos aplicados a una orden (Fase 6) ─────────────────────────
+    async function abrirModalPagosOrden(soId) {
+        const modal = document.getElementById("modal-pagos-orden");
+        const titulo = document.getElementById("modal-pagos-orden-titulo");
+        const body = document.getElementById("modal-pagos-orden-body");
+        if (!modal) return;
+
+        titulo.textContent = `Pagos de la Orden ${soId}`;
+        body.innerHTML = '<p class="table-empty">Cargando pagos...</p>';
+        modal.style.display = "flex";
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const fmtTasa = (val) => val != null ? new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(val) : '—';
+        // monto_aplicado viene en la moneda ORIGINAL del abono para
+        // Vinculaciones (VES o USD, según moneda_abono) y ya en USD
+        // equivalente para pagos de fuente "odoo" ("USD (equiv.)",
+        // reusando get_live_pagos_conciliados de Cobranza) -- NUNCA asumir
+        // USD ciegamente (bug real: mostraba montos VES con el símbolo $,
+        // ej. "$943,654.40" para un pago que en realidad era Bs.
+        // 943.654,40).
+        const fmtMonto = (val, moneda) => {
+            const num = new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
+            return (moneda || '').toUpperCase().startsWith('USD') ? `$${num}` : `${num} ${moneda || ''}`;
+        };
+        const fuenteBadge = (f) => f === 'odoo'
+            ? '<span class="state-badge" style="background:#e0f2fe;color:#0369a1;">Odoo directo</span>'
+            : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Vinculación</span>';
+
+        try {
+            const res = await fetch(`/api/ventas/${encodeURIComponent(soId)}/detalle`);
+            if (!res.ok) {
+                body.innerHTML = '<p class="table-empty">Error al cargar los pagos de la orden.</p>';
+                return;
+            }
+            const data = await res.json();
+            const pagos = data.pagos || [];
+            const totales = data.pagos_totales || null;
+            if (pagos.length === 0) {
+                body.innerHTML = '<p class="table-empty">Esta orden no tiene pagos vinculados todavía.</p>';
+                return;
+            }
+            const rows = pagos.map(p => `
+                <tr>
+                    <td>${fuenteBadge(p.fuente)}</td>
+                    <td>${p.pago_id}</td>
+                    <td><small>${(p.fecha || '').substring(0, 16).replace('T', ' ') || '—'}</small></td>
+                    <td style="text-align:right">${fmtMonto(p.monto_original, p.moneda_original)}</td>
+                    <td style="text-align:right"><strong>${fmtMonto(p.monto_aplicado, p.moneda_abono)}</strong></td>
+                    <td>${p.tipo_tasa_abono || '—'}</td>
+                    <td style="text-align:right">${fmtTasa(p.tasa_bcv_aplicada)}</td>
+                    <td style="text-align:right">${fmtTasa(p.tasa_binance_aplicada)}</td>
+                    <td style="text-align:right">${p.equiv_usd_bcv != null ? fmt(p.equiv_usd_bcv) : '—'}</td>
+                    <td style="text-align:right">${p.equiv_usd_binance != null ? fmt(p.equiv_usd_binance) : '—'}</td>
+                    <td><small>${p.confirmado_por || '—'}</small></td>
+                    <td><small>${p.estado || '—'}</small></td>
+                </tr>
+            `).join('');
+            const totalesRow = totales ? `
+                <tr style="font-weight:600;background:#f8fafc;">
+                    <td colspan="3">Totales${totales.monedas_originales_mixtas ? ' <small style="font-weight:400;color:#b91c1c;">(monedas originales mixtas, suma referencial)</small>' : ''}</td>
+                    <td style="text-align:right">${new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totales.monto_original || 0)}</td>
+                    <td style="text-align:right">${fmt(totales.monto_aplicado)}</td>
+                    <td colspan="3"></td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_bcv)}</td>
+                    <td style="text-align:right">${fmt(totales.equiv_usd_binance)}</td>
+                    <td colspan="2"></td>
+                </tr>
+            ` : '';
+            body.innerHTML = `
+                <p style="color:#64748b;font-size:0.8rem;margin:0 0 0.5rem 0;">Montos en su moneda original (no se suman entre VES/USD; el total de importe original es referencial si hay monedas mixtas).</p>
+                <div style="overflow-x:auto;">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Fuente</th>
+                                <th>Pago</th>
+                                <th>Fecha</th>
+                                <th style="text-align:right">Importe Original</th>
+                                <th style="text-align:right">Importe Referencia (Odoo)</th>
+                                <th>Ruta</th>
+                                <th style="text-align:right">Tasa BCV</th>
+                                <th style="text-align:right">Tasa Binance</th>
+                                <th style="text-align:right">Equiv. USD BCV</th>
+                                <th style="text-align:right">Equiv. USD Binance</th>
+                                <th>Confirmado por</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}${totalesRow}</tbody>
+                    </table>
+                </div>
+            `;
+        } catch (err) {
+            body.innerHTML = '<p class="table-empty">Error de red al cargar los pagos de la orden.</p>';
+            console.error(err);
+        }
+    }
+
+    function cerrarModalPagosOrden() {
+        const modal = document.getElementById("modal-pagos-orden");
+        if (modal) modal.style.display = "none";
+    }
+
+    window.abrirModalPagosOrden = abrirModalPagosOrden;
+    window.cerrarModalPagosOrden = cerrarModalPagosOrden;
+
+    // ── Bandeja Auditoría de Descuentos y NCs ─────────────────────────────────
+    async function loadAuditoriaDescuentos() {
+        const tbody = document.getElementById("auditoria-descuentos-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando...</td></tr>';
+
+        const tipoVal = document.getElementById("audit-tipo-filter")?.value || "";
+        const estadoVal = document.getElementById("audit-estado-filter")?.value || "";
+        const params = new URLSearchParams();
+        if (tipoVal) params.set("tipo", tipoVal);
+        if (estadoVal) params.set("estado", estadoVal);
+
+        try {
+            const res = await fetch(`/api/auditoria-descuentos?${params.toString()}`);
+            if (!res.ok) {
+                tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar la bandeja de auditoría.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            const items = data.items || [];
+
+            const badge = document.getElementById("audit-count-badge");
+            if (badge) {
+                if (items.length > 0) {
+                    badge.textContent = `${items.length} discrepancia${items.length !== 1 ? 's' : ''}`;
+                    badge.style.display = "inline";
+                } else {
+                    badge.style.display = "none";
+                }
+            }
+            const subtabBadge = document.getElementById("auditoria-subtab-badge-descuentos");
+            if (subtabBadge) subtabBadge.textContent = String(items.length);
+
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669;">✅ Sin discrepancias detectadas</td></tr>';
+                return;
+            }
+
+            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+            const tipoLabel = { descuento_orden: '📋 Desc. Orden', descuento_factura: '🧾 Desc. Factura', nota_credito: '📄 Nota de Crédito' };
+            const estadoBadge = {
+                pendiente: '<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">⏳ Pendiente</span>',
+                revisado: '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">👁 Revisado</span>',
+                aprobado: '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">✅ Aprobado</span>',
+                rechazado: '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">❌ Rechazado</span>',
+            };
+
+            tbody.innerHTML = "";
+            items.forEach(item => {
+                const tr = document.createElement("tr");
+                const dif = parseFloat(item.diferencia_usd || 0);
+                const difColor = dif > 0 ? '#dc2626' : (dif < 0 ? '#d97706' : '#059669');
+                const difIcon = dif > 0 ? '▲' : (dif < 0 ? '▼' : '=');
+                const ts = (item.timestamp_audit || '').substring(0, 16).replace('T', ' ');
+                const auditId = item.audit_id || '';
+                const estado = item.estado || 'pendiente';
+
+                tr.innerHTML = `
+                    <td><strong>${item.so_id || '-'}</strong></td>
+                    <td>${tipoLabel[item.tipo_auditoria] || item.tipo_auditoria || '-'}</td>
+                    <td><strong style="color:#2563eb;">${fmt(item.motor_calcula_usd)}</strong></td>
+                    <td><strong style="color:#475569;">${fmt(item.odoo_registrado_usd)}</strong></td>
+                    <td><strong style="color:${difColor};">${difIcon} ${fmt(Math.abs(dif))}</strong></td>
+                    <td><small style="color:#64748b;" title="${item.detalle_odoo || ''}">${(item.detalle_odoo || '-').substring(0,50)}${(item.detalle_odoo || '').length > 50 ? '…' : ''}</small></td>
+                    <td><small style="color:#64748b;" title="${item.detalle_motor || ''}">${(item.detalle_motor || '-').substring(0,50)}${(item.detalle_motor || '').length > 50 ? '…' : ''}</small></td>
+                    <td>${estadoBadge[estado] || estado}</td>
+                    <td><small>${ts}</small></td>
+                    <td>
+                        ${estado === 'pendiente' ? `
+                        <button onclick="marcarAuditoria('${auditId}','revisado')" style="padding:3px 8px;border-radius:5px;background:#dbeafe;color:#1d4ed8;border:none;cursor:pointer;font-size:0.75rem;margin-bottom:3px;">Marcar Revisado</button>
+                        <button onclick="marcarAuditoria('${auditId}','aprobado')" style="padding:3px 8px;border-radius:5px;background:#dcfce7;color:#15803d;border:none;cursor:pointer;font-size:0.75rem;">Aprobar</button>
+                        ` : `<span style="color:#94a3b8;font-size:0.75rem;">${item.revisado_por || '-'}</span>`}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar la bandeja de auditoría.</td></tr>';
+            console.error("Error loadAuditoriaDescuentos:", err);
+        }
+    }
+
+    // Exposed globally so inline onclick buttons can call it
+    window.marcarAuditoria = async function(auditId, nuevoEstado) {
+        try {
+            const res = await fetch(`/api/auditoria-descuentos/${encodeURIComponent(auditId)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audit_id: auditId, estado: nuevoEstado }),
+            });
+            if (res.ok) {
+                loadAuditoriaDescuentos();
+            } else {
+                const data = await res.json();
+                alert(`Error al actualizar: ${data.detail || res.statusText}`);
+            }
+        } catch (err) {
+            console.error("Error marcarAuditoria:", err);
+        }
+    };
+
+    // Wire up audit filters and refresh button
+    const auditRefreshBtn = document.getElementById("audit-refresh-btn");
+    if (auditRefreshBtn) {
+        auditRefreshBtn.addEventListener("click", loadAuditoriaDescuentos);
+    }
+    ["audit-tipo-filter", "audit-estado-filter"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", loadAuditoriaDescuentos);
+    });
+
+    // Form submit handlers for new discount panels
+    const recompraForm = document.getElementById("recompra-form");
+    if (recompraForm) {
+        recompraForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(recompraForm, ".m2m-rec-marca");
+            const cats = getCategoriaCombinada(recompraForm, "rec");
+            const listas = getM2MCheckedValues(recompraForm, ".m2m-rec-lista");
+            const rawPct = (document.getElementById("cfg-rec-porcentaje")?.value || "0.03").replace(',', '.');
+            const payload = {
+                marca: marcas,
+                categoria: cats,
+                listas_aplicables: listas,
+                porcentaje: parseFloat(rawPct),
+                // "unidades", no "cajas": el desplegable de al lado elige
+                // Unidades / Litros / USD, y ahora admite decimales.
+                min_unidades: parseFloat(document.getElementById("cfg-rec-min-cajas")?.value || 1),
+                max_unidades: parseFloat(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
+                unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
+                vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
+                ventana_pago_tipo: document.getElementById("cfg-rec-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-rec-ventana-dias")?.value || 3)
+            };
+            const editId = recompraForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-recompra/${editId}` : "/api/config/descuentos-recompra";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Regla de recompra actualizada correctamente." : "✅ Regla de recompra registrada correctamente.");
+                    clearEditMode(recompraForm);
+                    loadRecompra();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando recompra:", err);
+                alert("❌ Error de red al guardar regla de recompra.");
+            }
+        });
+    }
+
+    const prontoPagoForm = document.getElementById("pronto-pago-form");
+    if (prontoPagoForm) {
+        prontoPagoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-marca");
+            const cats = getCategoriaCombinada(prontoPagoForm, "pp");
+            const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
+            const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
+            const payload = {
+                ventana_pago_tipo: document.getElementById("cfg-pp-ventana-tipo")?.value || "vencimiento",
+                ventana_pago_dias: parseInt(document.getElementById("cfg-pp-ventana-dias")?.value || 3),
+                marca: marcas,
+                categoria: cats,
+                unidad_medida: document.getElementById("cfg-pp-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-pp-tipo-benef")?.value || "descuento",
+                porcentaje: parseFloat(rawPct),
+                monedas_aplicables: document.getElementById("cfg-pp-monedas")?.value || "*",
+                listas_aplicables: listas,
+                vigencia_desde: document.getElementById("cfg-pp-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-pp-requiere-pago-previo")?.checked ?? true,
+                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-pp-descripcion")?.value || ""
+            };
+            const editId = prontoPagoForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-pronto-pago/${editId}` : "/api/config/descuentos-pronto-pago";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Regla de pronto pago actualizada correctamente." : "✅ Regla de pronto pago registrada correctamente.");
+                    clearEditMode(prontoPagoForm);
+                    loadProntoPago();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando pronto pago:", err);
+                alert("❌ Error de red al registrar pronto pago.");
+            }
+        });
+    }
+
+    // NOTA: existía un segundo listener duplicado de promoForm.submit aquí
+    // (mismos campos, mismo endpoint) -- cada submit creaba DOS reglas de
+    // promoción. Eliminado; el listener real (más completo, con contador de
+    // productos) está más abajo junto a loadExclusiones.
+
+    const productoPromoForm = document.getElementById("producto-promo-form");
+    if (productoPromoForm) {
+        productoPromoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-marca");
+            const cats = getCategoriaCombinada(productoPromoForm, "prod");
+            const listas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-lista");
+            const selProds = Array.from(document.getElementById("cfg-prod-select")?.selectedOptions || []).map(o => o.value).join(",");
+            const rawPct = (document.getElementById("cfg-prod-porcentaje")?.value || "0.05").replace(',', '.');
+            const payload = {
+                productos: selProds || "*",
+                marca: marcas,
+                categoria: cats,
+                min_unidades: parseFloat(document.getElementById("cfg-prod-min")?.value || 0),
+                max_unidades: parseFloat(document.getElementById("cfg-prod-max")?.value || 999999),
+                unidad_medida: document.getElementById("cfg-prod-unidad")?.value || "CAJAS",
+                tipo_beneficio: document.getElementById("cfg-prod-tipo-benef")?.value || "descuento",
+                porcentaje: parseFloat(rawPct),
+                monedas_aplicables: document.getElementById("cfg-prod-monedas")?.value || "*",
+                listas_aplicables: listas,
+                vigencia_desde: document.getElementById("cfg-prod-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-prod-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-prod-descripcion")?.value || ""
+            };
+            const editId = productoPromoForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-producto/${editId}` : "/api/config/descuentos-producto";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Regla de promoción por producto actualizada." : "✅ Regla de promoción por producto registrada.");
+                    clearEditMode(productoPromoForm);
+                    loadProductoPromo();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando descuento producto:", err);
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    const diferencialForm = document.getElementById("diferencial-form");
+    if (diferencialForm) {
+        diferencialForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const listas = getM2MCheckedValues(diferencialForm, ".m2m-dif-lista");
+            const rawPct = (document.getElementById("cfg-dif-porcentaje-fijo")?.value || "0.35").replace(',', '.');
+            const payload = {
+                nombre: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
+                tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
+                tipo_calculo: document.getElementById("cfg-dif-tipo-calculo")?.value || "fijo",
+                porcentaje_fijo: parseFloat(rawPct),
+                marca: "*",
+                categoria: "*",
+                monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
+                listas_aplicables: listas,
+                unidad_medida: "USD",
+                vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
+                activo: true,
+                requiere_pago_previo: document.getElementById("cfg-dif-requiere-pago-previo")?.checked ?? true,
+                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-dif-descripcion")?.value || ""
+            };
+            const editId = diferencialForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-diferencial-cambiario/${editId}` : "/api/config/descuentos-diferencial-cambiario";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Regla de diferencial cambiario actualizada." : "✅ Regla de diferencial cambiario registrada.");
+                    clearEditMode(diferencialForm);
+                    loadDiferencial();
+                    loadDiferencialCandidatos();
+                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando diferencial cambiario:", err);
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    // --- Tab 3: Configuration Panels ---
+    async function loadConfigData() {
+        const loaders = [
+            loadTasasPromedios,
+            loadProntoPago,
+            loadRecompra,
+            loadProductoPromo,
+            loadDiferencial,
+            loadDiferencialCandidatos,
+            loadDiasCredito,
+            loadTasas,
+            loadFeriados,
+            populateBrandsAndCategories,
+            loadCategoriaArbolYPresentaciones,
+            loadDescuentosMarca,
+            loadDescuentosVolumen,
+            loadPromociones,
+            loadExclusiones,
+            loadListasPrecio,
+            loadPricelistMapeo,
+            loadOdooProductos,
+            loadClientesAuditoria,
+            loadSettingsMeta
+        ];
+        // Cada loader pega a un endpoint independiente y pinta su propia
+        // sección del DOM -- no comparten estado entre sí, así que corrían
+        // en serie sin necesidad (Fase 5 del audit de rendimiento, agosto
+        // 2026): 19 round-trips uno detrás del otro podían tardar varios
+        // segundos en abrir Configuración. Promise.allSettled preserva el
+        // aislamiento de errores por loader (uno que falla no frena a los
+        // demás) que ya tenía el try/catch secuencial.
+        const resultados = await Promise.allSettled(
+            loaders.filter((fn) => typeof fn === "function").map((fn) => fn())
+        );
+        resultados.forEach((r, i) => {
+            if (r.status === "rejected") {
+                console.error(`Error ejecutando ${loaders[i].name || 'loader'}:`, r.reason);
+            }
+        });
+    }
+
+    // Load general Settings meta variables
+    async function loadSettingsMeta() {
+        try {
+            const res = await fetch("/api/config/meta");
+            if (res.ok) {
+                const data = await res.json();
+                if (cfgMetaDays) cfgMetaDays.value = data.cash_window_business_days || 3;
+                if (cfgMetaRecompra) cfgMetaRecompra.value = data.descuento_recompra || 0.05;
+                if (cfgMetaMarcaFallback) cfgMetaMarcaFallback.value = data.marca_fallback || "GLOBAL OIL";
+                if (cfgMetaAjusteIndustrial) cfgMetaAjusteIndustrial.value = data.fallback_industrial_ajuste_pct || 0.04;
+            }
+        } catch (err) {
+            console.error("Error loading settings meta:", err);
+        }
+    }
+
+    // Save global settings variables
+    if (settingsForm) {
+        settingsForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                cash_window_business_days: parseInt(cfgMetaDays.value),
+                descuento_recompra: parseFloat(cfgMetaRecompra.value),
+                marca_fallback: (cfgMetaMarcaFallback?.value || "GLOBAL OIL").trim(),
+                fallback_industrial_ajuste_pct: parseFloat(cfgMetaAjusteIndustrial?.value || "0.04")
+            };
+
+            try {
+                const res = await fetch("/api/config/meta", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    alert("✅ Ajustes generales del motor guardados correctamente en Google Sheets.");
+                    loadSettingsMeta();
+                } else {
+                    alert("❌ Error al guardar los ajustes.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al guardar ajustes.");
+                console.error(err);
+            }
+        });
+    }
+
+    async function loadTasas() {
+        if (!tasasTableBody) return;
+        try {
+            tasasTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando tasas...</td></tr>';
+            const res = await fetch("/api/config/tasas");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    tasasTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay tasas registradas.</td></tr>';
+                    return;
+                }
+                
+                tasasTableBody.innerHTML = "";
+                data.forEach(t => {
+                    const row = document.createElement("tr");
+                    const diffBs = t.diferencia_bs !== undefined ? t.diferencia_bs : (t.tasa_binance - t.tasa_bcv);
+                    const diffPct = t.diferencia_pct !== undefined ? t.diferencia_pct : (t.tasa_binance > 0 ? ((diffBs / t.tasa_binance) * 100) : 0);
+                    row.innerHTML = `
+                        <td>${t.timestamp}</td>
+                        <td><strong>${t.tasa_bcv.toFixed(4)} Bs</strong></td>
+                        <td><strong>${t.tasa_binance.toFixed(4)} Bs</strong></td>
+                        <td><strong style="color: #d97706">+Bs. ${diffBs.toFixed(2)} (${diffPct.toFixed(1)}%)</strong></td>
+                    `;
+                    tasasTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Sync Odoo currency rates trigger
+    if (btnSyncOdooRates) {
+        btnSyncOdooRates.addEventListener("click", async () => {
+            btnSyncOdooRates.disabled = true;
+            btnSyncOdooRates.textContent = "Sincronizando...";
+            try {
+                const res = await fetch("/api/config/tasas/sync-odoo", { method: "POST" });
+                if (res.ok) {
+                    const data = await res.json();
+                    alert(`✅ ${data.message}`);
+                    loadTasas();
+                } else {
+                    alert("❌ Error al sincronizar tasas de Odoo.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al sincronizar tasas.");
+                console.error(err);
+            } finally {
+                btnSyncOdooRates.disabled = false;
+                btnSyncOdooRates.textContent = "🔄 Sincronizar Odoo";
+            }
+        });
+    }
+
+    // --- Load Rates Averages & Differential ---
+    async function loadTasasPromedios() {
+        try {
+            const res = await fetch("/api/config/tasas-promedios");
+            if (res.ok) {
+                const d = await res.json();
+                const bcvLbl = document.getElementById("lbl-rate-bcv-actual");
+                const vigLbl = document.getElementById("lbl-rate-binance-vigente");
+                const mLbl = document.getElementById("lbl-rate-binance-manana");
+                const tLbl = document.getElementById("lbl-rate-binance-tarde");
+                const dLbl = document.getElementById("lbl-rate-binance-diario");
+                const diffLbl = document.getElementById("lbl-rate-diferencial-pct");
+
+                if (bcvLbl) bcvLbl.textContent = d.tasa_bcv_actual ? `Bs. ${d.tasa_bcv_actual.toFixed(2)}` : "-";
+                if (vigLbl) vigLbl.textContent = d.tasa_binance_vigente ? `Bs. ${d.tasa_binance_vigente.toFixed(2)}` : "-";
+                if (mLbl) mLbl.textContent = d.tasa_binance_manana ? `Bs. ${d.tasa_binance_manana.toFixed(2)}` : "N/A";
+                if (tLbl) tLbl.textContent = d.tasa_binance_tarde ? `Bs. ${d.tasa_binance_tarde.toFixed(2)}` : "N/A";
+                if (dLbl) dLbl.textContent = d.tasa_binance_diario ? `Bs. ${d.tasa_binance_diario.toFixed(2)}` : "N/A";
+                if (diffLbl) diffLbl.textContent = `${d.diferencial_bcv_binance_pct.toFixed(2)}%`;
+            }
+        } catch (err) {
+            console.error("Error loading tasas promedios:", err);
+        }
+    }
+
+    // Helper for interactive toggle switch
+    async function toggleRuleActive(tabla, reglaId, newActive) {
+        try {
+            const res = await fetch("/api/config/toggle-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: newActive })
+            });
+            if (res.ok) {
+                if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+            } else {
+                alert("❌ Error al cambiar estado de la regla.");
+            }
+        } catch (err) {
+            console.error("Error toggling rule:", err);
+        }
+    }
+    window.toggleReglaActiva = toggleRuleActive;
+
+    window.eliminarRegla = async function(tabla, reglaId) {
+        if (!confirm(`⚠️ ¿Estás seguro de que deseas ELIMINAR permanentemente la regla ${reglaId}?`)) return;
+        try {
+            const res = await fetch("/api/config/eliminar-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("🗑️ " + (data.message || "Regla eliminada permanentemente."));
+                if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
+                if (window.loadDescuentosVolumen) window.loadDescuentosVolumen();
+                if (window.loadDescuentosProntoPago) window.loadDescuentosProntoPago();
+                if (window.loadRecompra) window.loadRecompra();
+                if (window.loadDescuentosProducto) window.loadDescuentosProducto();
+                if (window.loadDescuentosDiferencial) window.loadDescuentosDiferencial();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo eliminar la regla."));
+            }
+        } catch (err) {
+            console.error("Error eliminando regla:", err);
+            alert("❌ Error de red al eliminar la regla.");
+        }
+    };
+
+    // --- Load Pronto Pago Rules ---
+    async function loadProntoPago() {
+        const tbody = document.getElementById("pronto-pago-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando pronto pago...</td></tr>';
+            const res = await fetch("/api/config/descuentos-pronto-pago");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de pronto pago.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosProntoPago")));
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar pronto pago.</td></tr>';
+        }
+    }
+    window.loadDescuentosProntoPago = loadProntoPago;
+
+    // --- Load Recompra Rules ---
+    async function loadRecompra() {
+        const tbody = document.getElementById("recompra-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando reglas de recompra...</td></tr>';
+            const res = await fetch("/api/config/descuentos-recompra");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de recompra.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosRecompra")));
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar recompra.</td></tr>';
+        }
+    }
+    window.loadRecompra = loadRecompra;
+
+    // --- Load Producto Promo Rules ---
+    async function loadProductoPromo() {
+        const tbody = document.getElementById("producto-promo-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando promociones de productos...</td></tr>';
+            const res = await fetch("/api/config/descuentos-producto");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay promociones por producto.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosProducto")));
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar promociones de producto.</td></tr>';
+        }
+    }
+    window.loadDescuentosProducto = loadProductoPromo;
+
+    // --- Load Diferencial Rules ---
+    async function loadDiferencial() {
+        const tbody = document.getElementById("diferencial-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando reglas de diferencial...</td></tr>';
+            const res = await fetch("/api/config/descuentos-diferencial-cambiario");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de diferencial cambiario.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => tbody.appendChild(renderStandardRuleRow(r, "DescuentosDiferencialCambiario")));
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar diferencial cambiario.</td></tr>';
+        }
+    }
+    window.loadDescuentosDiferencial = loadDiferencial;
+
+    // Regla 3: candidatos a cierre de factura (reporte, no automático).
+    async function loadDiferencialCandidatos() {
+        const tbody = document.getElementById("dif-candidatos-table-body");
+        const resumen = document.getElementById("dif-candidatos-resumen");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>';
+            const res = await fetch("/api/diferencial/candidatos-cierre");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            if (!data.habilitado) {
+                if (resumen) resumen.textContent = data.motivo || "Reporte deshabilitado.";
+                tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Reporte deshabilitado -- falta configurar las reglas necesarias.</td></tr>';
+                return;
+            }
+            if (resumen) {
+                resumen.innerHTML = `Diferencial máximo: <strong>${data.diferencial_maximo_pct}%</strong> &middot; ` +
+                    `Diferencial de hoy (BCV vs Binance): <strong>${data.diferencial_hoy_pct}%</strong> &middot; ` +
+                    `Umbral de % pagado para ser candidata: <strong>${data.umbral_pct_pagado}%</strong>`;
+            }
+            if (!data.candidatos || data.candidatos.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay órdenes candidatas hoy.</td></tr>';
+                return;
+            }
+            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+            tbody.innerHTML = "";
+            data.candidatos.forEach(c => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td><strong>${c.so_id}</strong></td>
+                    <td>${c.cliente_nombre || ''}</td>
+                    <td>${fmt(c.teorico_ves)}</td>
+                    <td>${fmt(c.pagado_bcv)}</td>
+                    <td>${c.pct_pagado}%</td>
+                    <td>${fmt(c.monto_candidato_maximo)}</td>
+                    <td><button type="button" class="btn btn-sm btn-secondary" data-so="${c.so_id}" data-max="${c.monto_candidato_maximo}">Aprobar Descuento</button></td>
+                `;
+                tbody.appendChild(row);
+            });
+            tbody.querySelectorAll("button[data-so]").forEach(btn => {
+                btn.addEventListener("click", async () => {
+                    const soId = btn.dataset.so;
+                    const montoMax = btn.dataset.max;
+                    const monto = prompt(`Monto a aprobar para ${soId} (máximo sugerido: $${montoMax}):`, montoMax);
+                    if (monto === null || monto === "") return;
+                    const motivo = prompt("Motivo (ej: cierre de factura por diferencial cambiario):", "Cierre de factura por diferencial cambiario") || "";
+                    try {
+                        const resp = await fetch("/api/facturacion/aprobar-descuento-sistema", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ so_id: soId, monto: parseFloat(monto), motivo, activo: true })
+                        });
+                        const respData = await resp.json();
+                        if (!resp.ok) throw new Error(respData.detail || "Error");
+                        alert(respData.message || "Descuento aprobado.");
+                        loadDiferencialCandidatos();
+                    } catch (err) {
+                        alert("Error al aprobar el descuento: " + err.message);
+                    }
+                });
+            });
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar candidatos.</td></tr>';
+        }
+    }
+    window.loadDiferencialCandidatos = loadDiferencialCandidatos;
+
+    const diasCreditoForm = document.getElementById("dias-credito-form");
+    if (diasCreditoForm) {
+        diasCreditoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const litrosMaxRaw = document.getElementById("cfg-dc-litros-max")?.value;
+            const payload = {
+                regla_id: document.getElementById("cfg-dc-regla-id")?.value || "",
+                litros_minimo: parseFloat(document.getElementById("cfg-dc-litros-min")?.value || 0),
+                litros_maximo: litrosMaxRaw ? parseFloat(litrosMaxRaw) : null,
+                dias_credito_max: parseInt(document.getElementById("cfg-dc-dias-max")?.value || 0),
+                descripcion: document.getElementById("cfg-dc-descripcion")?.value || "",
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/dias-credito-volumen", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Regla de días de crédito registrada.");
+                    diasCreditoForm.reset();
+                    loadDiasCredito();
+                } else {
+                    const err = await res.json();
+                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
+                }
+            } catch (err) {
+                console.error("Error guardando regla de días de crédito:", err);
+                alert("❌ Error de red.");
+            }
+        });
+    }
+
+    async function loadDiasCredito() {
+        const tbody = document.getElementById("dias-credito-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando reglas de días de crédito...</td></tr>';
+            const res = await fetch("/api/config/dias-credito-volumen");
+            if (res.ok) {
+                const rules = await res.json();
+                if (rules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay reglas de días de crédito.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                rules.forEach(r => {
+                    const tr = document.createElement("tr");
+                    const tramo = `${r.litros_minimo}L - ${r.litros_maximo != null ? r.litros_maximo + 'L' : 'sin tope'}`;
+                    tr.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${tramo}</td>
+                        <td>${r.dias_credito_max}</td>
+                        <td><small>${r.descripcion || ''}</small></td>
+                        <td>${r.activo ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">Activo</span>' : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;">Inactivo</span>'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Error al cargar reglas de días de crédito.</td></tr>';
+        }
+    }
+    window.loadDiasCredito = loadDiasCredito;
+
+    async function loadFeriados() {
+        try {
+            feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando feriados...</td></tr>';
+            const res = await fetch("/api/config/feriados");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    feriadosTableBody.innerHTML = '<tr><td colspan="3" class="table-empty">No hay feriados registrados.</td></tr>';
+                    return;
+                }
+                
+                feriadosTableBody.innerHTML = "";
+                data.forEach(f => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${f.fecha}</strong></td>
+                        <td>${f.descripcion}</td>
+                        <td><span class="state-badge">${f.tipo}</span></td>
+                    `;
+                    feriadosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Populate Brands and Categories from Odoo in discount registration dropdowns
+    async function populateBrandsAndCategories() {
+        try {
+            // Prefijos de los 5 formularios de reglas de descuento que usan
+            // checkboxes M2M de marca (antes harcodeados en el HTML).
+            // "dif" (Diferencial Cambiario) no tiene marca/categoría -- se
+            // calcula por abono, no por producto/línea (ver panel-header).
+            const prefixes = ["rec", "pp", "vol", "promo", "prod"];
+
+            const fillM2MBox = (selectorClass, values, valueToLabel) => {
+                const inputs = document.querySelectorAll(selectorClass);
+                if (inputs.length === 0) return;
+                // inputs[0].parentElement es el <label> de ESE checkbox, no el
+                // div contenedor de todo el grupo -- usar ese parent hacía que
+                // el HTML nuevo quedara anidado dentro del primer <label> viejo
+                // (checkboxes desalineados) y dejaba los demás labels viejos
+                // (ej. "SINOCO", "Todas (*)") sueltos sin reemplazar
+                // (duplicados). closest("div") sube hasta el div contenedor real.
+                const parent = inputs[0].closest("div");
+                if (!parent) return;
+                const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
+                const elClass = selectorClass.replace(".", "");
+                let html = values.map(v => {
+                    const checked = currentChecked.includes(v) ? "checked" : "";
+                    return `<label><input type="checkbox" class="${elClass}" value="${v}" ${checked}> ${valueToLabel ? valueToLabel(v) : v}</label>`;
+                }).join(" ");
+                const isTodasChecked = currentChecked.includes("*") || currentChecked.length === 0;
+                html += ` <label><input type="checkbox" class="${elClass}" value="*" ${isTodasChecked ? "checked" : ""}> Todas (*)</label>`;
+                parent.innerHTML = html;
+            };
+
+            // Fetch brands (ya vivas desde Odoo — product.brand)
+            const bRes = await fetch("/api/odoo/marcas");
+            if (bRes.ok) {
+                const brands = await bRes.json();
+                prefixes.forEach(p => fillM2MBox(`.m2m-${p}-marca`, brands));
+            }
+
+            // Fetch products for product promo multiselect
+            const pRes = await fetch("/api/odoo/productos");
+            if (pRes.ok) {
+                const prods = await pRes.json();
+                const prodSel = document.getElementById("cfg-prod-select");
+                if (prodSel) {
+                    prodSel.innerHTML = "";
+                    prods.forEach(p => {
+                        const opt = document.createElement("option");
+                        const code = (p.ref_interna && p.ref_interna !== "N/A") ? p.ref_interna : (p.default_code || p.id);
+                        const name = p.nombre || p.name || `Producto ${p.id}`;
+                        opt.value = code;
+                        opt.textContent = `[${code}] ${name}`;
+                        prodSel.appendChild(opt);
+                    });
+                }
+            }
+        } catch (err) {
+            console.error("Error populating dropdowns:", err);
+        }
+    }
+
+    async function loadDescuentosMarca() {
+        if (!descuentosTableBody) return;
+        try {
+            descuentosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando descuentos...</td></tr>';
+            const res = await fetch("/api/config/descuentos-marca");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    descuentosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay reglas registradas.</td></tr>';
+                    return;
+                }
+
+                descuentosTableBody.innerHTML = "";
+                data.forEach(r => {
+                    const row = document.createElement("tr");
+                    const listasText = formatListasDisplay(r.listas_aplicables);
+                    row.innerHTML = `
+                        <td><strong>${r.regla_id}</strong></td>
+                        <td>${r.marca}</td>
+                        <td>${r.categoria}</td>
+                        <td><span class="state-badge">${r.tipo_descuento}</span></td>
+                        <td><strong>${(r.porcentaje * 100).toFixed(2)}%</strong></td>
+                        <td>${r.vigencia_desde || 'N/A'}</td>
+                        <td>${r.vigencia_hasta || 'N/A'}</td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
+                        <td><span class="semaphore ${r.activo ? 'verde' : 'rojo'}">${r.activo ? 'Activo' : 'Inactivo'}</span></td>
+                    `;
+                    descuentosTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function loadListasPrecio() {
+        if (!listasPrecioTableBody) return;
+        try {
+            listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando listas de precios de Odoo...</td></tr>';
+            // Añadir timestamp para evitar que el browser cachee la respuesta
+            const res = await fetch(`/api/config/listas-precio?_t=${Date.now()}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay listas de precios en Odoo.</td></tr>';
+                    return;
+                }
+
+                listasPrecioTableBody.innerHTML = "";
+                data.forEach(pl => {
+                    const row = document.createElement("tr");
+
+                    // Usar fechas pre-calculadas del servidor (más precisas que buscar en reglas)
+                    const startVal = pl.fecha_desde || "N/A";
+                    const endVal = pl.fecha_hasta || "N/A";
+
+                    row.innerHTML = `
+                        <td><strong>#${pl.id}</strong></td>
+                        <td>${pl.name}</td>
+                        <td><strong>${pl.moneda}</strong></td>
+                        <td><span class="semaphore ${pl.active ? 'verde' : 'rojo'}">${pl.active ? 'Vigente' : 'Archivado'}</span></td>
+                        <td><strong>${pl.reglas.length} reglas</strong></td>
+                        <td>Desde: ${startVal} / Hasta: ${endVal}</td>
+                    `;
+                    listasPrecioTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            listasPrecioTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar listas de precios.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    // Load Odoo Product catalog with USD & VES pricelists prices & litros (Public price removed)
+    async function loadOdooProductos() {
+        if (!productosTableBody) return;
+        try {
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando catálogo de productos Odoo...</td></tr>';
+            const res = await fetch("/api/odoo/productos");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay productos disponibles.</td></tr>';
+                    return;
+                }
+
+                productosTableBody.innerHTML = "";
+                data.forEach(p => {
+                    const row = document.createElement("tr");
+                    const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+                    
+                    row.innerHTML = `
+                        <td><strong>${p.ref_interna}</strong></td>
+                        <td>${p.nombre}</td>
+                        <td><strong>${p.litros ? p.litros.toFixed(2) : "0.00"} L</strong></td>
+                        <td><strong style="color: #059669">${fmt(p.precio_usd)}</strong></td>
+                        <td><strong style="color: #d97706">${fmt(p.precio_ves_usd)}</strong></td>
+                    `;
+                    productosTableBody.appendChild(row);
+                });
+
+                // Populate promotions products select dropdown
+                if (cfgPromoProductos) {
+                    cfgPromoProductos.innerHTML = '';
+                    data.forEach(p => {
+                        const opt = document.createElement("option");
+                        // Bug real (agosto 2026): usar p.nombre/p.id aquí guardaba
+                        // el NOMBRE del producto o el id de product.template (Odoo)
+                        // en la regla -- ninguno de los dos coincide con
+                        // LineaOrden.producto (product.product, el id real que
+                        // compara el motor de descuentos) ni con el que espera el
+                        // backend, dejando la regla de obsequio sin efecto nunca.
+                        // ref_interna (codigo/default_code) es estable y el
+                        // backend lo resuelve al producto_id correcto al guardar.
+                        opt.value = p.ref_interna || p.id;
+                        opt.textContent = `[${p.ref_interna || 'N/A'}] ${p.nombre}`;
+                        cfgPromoProductos.appendChild(opt);
+                    });
+                }
+            } else {
+                productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No se pudieron cargar los productos desde Odoo (Servidor retornó error).</td></tr>';
+            }
+        } catch (err) {
+            productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">Error de red al cargar productos de Odoo.</td></tr>';
+            console.error("Error al cargar productos de Odoo:", err);
+        }
+    }
+
+    // Load Odoo Client Sales stats for recurrence audit
+    async function loadClientesAuditoria() {
+        if (!clientesAuditoriaTableBody) return;
+        try {
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando auditoría de clientes desde Odoo...</td></tr>';
+            const res = await fetch("/api/odoo/clientes-auditoria");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay clientes con estadísticas en Odoo.</td></tr>';
+                    return;
+                }
+
+                clientesAuditoriaTableBody.innerHTML = "";
+                data.forEach(c => {
+                    const row = document.createElement("tr");
+                    const litG = parseFloat(c.litros_global || 0).toLocaleString('es-VE', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+                    const litS = parseFloat(c.litros_sinoco || 0).toLocaleString('es-VE', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+                    row.innerHTML = `
+                        <td><strong>#${c.id}</strong></td>
+                        <td>${c.nombre}</td>
+                        <td>${c.fecha_creacion}</td>
+                        <td><strong style="color: #2563eb">${c.ventas_cantidad}</strong></td>
+                        <td><strong style="color: #059669">${c.ventas_mes_actual || 0}</strong></td>
+                        <td><span style="font-weight: 600; color: #1e293b">${litG} L</span></td>
+                        <td><span style="font-weight: 600; color: #1e293b">${litS} L</span></td>
+                        <td>${c.fecha_ultima_venta}</td>
+                    `;
+                    clientesAuditoriaTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            clientesAuditoriaTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar clientes de Odoo.</td></tr>';
+            console.error(err);
+        }
+    }
+
+    // Save exchange rates
+    tasaForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const payload = {
+            tasa_bcv: parseFloat(cfgTasaBcv.value),
+            tasa_binance: parseFloat(cfgTasaBinance.value)
+        };
+
+        try {
+            const res = await fetch("/api/config/tasas", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("✅ Tasas de cambio manuales cargadas exitosamente.");
+                tasaForm.reset();
+                loadTasas();
+            } else {
+                alert("❌ Error al guardar las tasas.");
+            }
+        } catch (err) {
+            alert("❌ Error de red al registrar tasas.");
+            console.error(err);
+        }
+    });
+
+    // --- Load Master Consolidated Rules Matrix ---
+    async function loadReglasConsolidadas() {
+        const tbody = document.getElementById("reglas-consolidadas-table-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando matriz consolidada de reglas de descuento...</td></tr>';
+        try {
+            const res = await fetch("/api/reglas-descuento");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de descuento registradas.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.forEach(r => {
+                    const row = document.createElement("tr");
+                    
+                    // Format Beneficio
+                    let beneficioText = "";
+                    if (r.tipo_beneficio === "producto" || r.tipo_beneficio === "obsequio") {
+                        beneficioText = `🎁 Obsequio (${r.campos_especiales?.productos || 'Producto'})`;
+                    } else {
+                        const pctVal = (parseFloat(r.porcentaje || 0) * 100).toFixed(2);
+                        beneficioText = `💲 ${pctVal}%`;
+                    }
+
+                    // Format Tramo
+                    const minQ = r.min_unidades !== undefined ? r.min_unidades : 0;
+                    const maxQ = r.max_unidades !== undefined ? r.max_unidades : 999999;
+                    const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
+
+                    // Format Listas
+                    const rawListasCons = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
+                        ? String(r.listas_aplicables)
+                        : "*";
+                    const listasText = rawListasCons === "*" ? "Todas (*)" : (rawListasCons === "LISTAS_VES" ? "Listas VES (Mapeo)" : (rawListasCons === "LISTAS_USD" ? "Listas USD (Mapeo)" : (rawListasCons === "4" ? "Lista USD (#4)" : (rawListasCons === "5" ? "Lista VES (#5)" : rawListasCons))));
+
+                    // Format Campos Especiales
+                    let espArr = [];
+                    if (r.campos_especiales) {
+                        for (const [k, v] of Object.entries(r.campos_especiales)) {
+                            if (v !== null && v !== undefined && v !== "" && v !== 0) {
+                                espArr.push(`<small style="display:block; color:var(--text-muted)"><strong>${k}:</strong> ${v}</small>`);
+                            }
+                        }
+                    }
+                    const espText = espArr.length > 0 ? espArr.join("") : "—";
+
+                    // Format Vigencia
+                    const vigText = `${r.vigencia_desde || 'N/A'}<br><small style="color:var(--text-muted)">hasta ${r.vigencia_hasta || 'Indefinida'}</small>`;
+
+                    // Format Interactive Switch
+                    const switchHtml = `
+                        <label class="switch" style="position:relative; display:inline-block; width:44px; height:22px;">
+                            <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${r.tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
+                            <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:22px;"></span>
+                        </label>
+                        <span style="font-size:0.75rem; font-weight:600; display:block; margin-top:2px; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+                    `;
+
+                    const unidadCons = r.unidad_medida || (r.tipo_regla === "volumen" ? "LITROS" : (r.tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_regla === "diferencial" || r.tipo_diferencial ? "USD" : "UNIDADES"));
+
+                    row.innerHTML = `
+                        <td><strong>${r.tipo_nombre}</strong><br><small style="color:var(--text-muted)">${r.regla_id}</small></td>
+                        <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
+                        <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || '*'}</span></td>
+                        <td><strong>${tramoText}</strong></td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${unidadCons}</span></td>
+                        <td><strong style="color:#059669">${beneficioText}</strong></td>
+                        <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
+                        <td>${vigText}</td>
+                        <td>${espText}</td>
+                        <td>${switchHtml}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar la matriz de reglas.</td></tr>';
+            console.error("Error cargando reglas consolidadas:", err);
+        }
+    }
+    window.loadReglasConsolidadas = loadReglasConsolidadas;
+
+    window.toggleReglaActiva = async function(tabla, reglaId, activo) {
+        try {
+            const res = await fetch("/api/config/toggle-descuento", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabla: tabla, regla_id: reglaId, activo: activo })
+            });
+            if (res.ok) {
+                loadReglasConsolidadas();
+                if (window.loadRecompra) window.loadRecompra();
+                if (window.loadDescuentosProntoPago) window.loadDescuentosProntoPago();
+                if (window.loadDescuentosVolumen) window.loadDescuentosVolumen();
+                if (window.loadPromociones) window.loadPromociones();
+                if (window.loadDescuentosProducto) window.loadDescuentosProducto();
+                if (window.loadDescuentosDiferencial) window.loadDescuentosDiferencial();
+            } else {
+                alert("❌ No se pudo actualizar el estado de la regla.");
+            }
+        } catch (err) {
+            console.error("Error toggle regla:", err);
+            alert("❌ Error de comunicación al alternar estado.");
+        }
+    };
+
+    // Save custom holiday
+    if (feriadoForm) {
+        feriadoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                fecha: cfgFeriadoFecha.value,
+                descripcion: cfgFeriadoDesc.value
+            };
+
+            try {
+                const res = await fetch("/api/config/feriados", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    alert("✅ Feriado registrado correctamente en Google Sheets.");
+                    feriadoForm.reset();
+                    loadFeriados();
+                } else {
+                    alert("❌ Error al guardar el feriado.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar feriado.");
+                console.error(err);
+            }
+        });
+    }
+
+    // Save Brand Discount Rule
+    if (descuentoForm) {
+        descuentoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                marca: cfgDescMarca.value,
+                categoria: cfgDescCat.value,
+                tipo_descuento: cfgDescTipo.value,
+                porcentaje: parseFloat(cfgDescPorcentaje.value),
+                vigencia_desde: cfgDescDesde.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: cfgDescHasta.value || null,
+                listas_aplicables: cfgDescListas.value
+            };
+
+            try {
+                const res = await fetch("/api/config/descuentos-marca", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    alert("✅ Regla de descuento registrada correctamente en Google Sheets.");
+                    descuentoForm.reset();
+                    loadDescuentosMarca();
+                } else {
+                    alert("❌ Error al guardar la regla.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar regla.");
+                console.error(err);
+            }
+        });
+    }
+
+    // Promo tipo beneficio toggle
+    if (cfgPromoTipoBeneficio) {
+        cfgPromoTipoBeneficio.addEventListener("change", () => {
+            const isProducto = cfgPromoTipoBeneficio.value === "producto";
+            if (promoProductosSection) promoProductosSection.style.display = isProducto ? "" : "none";
+            if (promoRegaloTipoSection) promoRegaloTipoSection.style.display = isProducto ? "" : "none";
+            if (promoPorcentajeSection) promoPorcentajeSection.style.display = isProducto ? "none" : "";
+        });
+    }
+
+    // Update product count display
+    if (cfgPromoProductos) {
+        cfgPromoProductos.addEventListener("change", () => {
+            if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
+        });
+    }
+
+    // Buscador de productos en la promoción de obsequio -- filtra las
+    // <option> ya cargadas por nombre/referencia sin volver a pedirlas.
+    if (cfgPromoProductosBuscar && cfgPromoProductos) {
+        cfgPromoProductosBuscar.addEventListener("input", () => {
+            const q = cfgPromoProductosBuscar.value.trim().toLowerCase();
+            Array.from(cfgPromoProductos.options).forEach(opt => {
+                opt.hidden = q.length > 0 && !opt.textContent.toLowerCase().includes(q);
+            });
+        });
+    }
+
+    // --- Helper to extract M2M Checkbox Values ---
+    function getM2MCheckedValues(parentForm, selectorClass) {
+        if (!parentForm) return "*";
+        const cbs = parentForm.querySelectorAll(selectorClass);
+        if (!cbs || cbs.length === 0) return "*";
+        const checked = Array.from(cbs).filter(cb => cb.checked).map(cb => cb.value);
+        const specific = checked.filter(val => val !== "*");
+        if (specific.length > 0) {
+            return specific.join(",");
+        }
+        return "*";
+    }
+
+    // --- Categoría madre -> subcategoría -> presentación (cascada, en vivo desde Odoo) ---
+    window._categoriaArbol = window._categoriaArbol || {};
+    window._presentacionesOdoo = window._presentacionesOdoo || [];
+    const CASCADA_PREFIJOS = ["rec", "pp", "vol", "promo", "prod"];
+
+    function madresChecked(prefix) {
+        return Array.from(document.querySelectorAll(`.m2m-${prefix}-madre:checked`)).map(cb => cb.value);
+    }
+
+    // "Todas (*)" en madre no restringe -- se expande a las madres reales
+    // (Comercial/Industrial) solo para decidir qué subcategorías/
+    // presentaciones mostrar, nunca se manda así al backend (eso lo maneja
+    // getCategoriaCombinada, que ya trata "*" como "sin restricción").
+    function madresEfectivas(prefix) {
+        const checked = madresChecked(prefix);
+        if (checked.length === 0) return [];
+        if (checked.includes("*")) return Object.keys(window._categoriaArbol || {});
+        return checked;
+    }
+
+    function subsChecked(prefix) {
+        return Array.from(document.querySelectorAll(`.m2m-${prefix}-sub:checked`))
+            .map(cb => cb.value)
+            .filter(v => v !== "*");
+    }
+
+    function refreshSubcategorias(prefix) {
+        const box = document.querySelector(`.m2m-${prefix}-sub-box`);
+        if (!box) return;
+        const madres = madresEfectivas(prefix);
+        const prevChecked = subsChecked(prefix);
+        if (madres.length === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>';
+            return;
+        }
+        const subs = new Set();
+        madres.forEach(m => (window._categoriaArbol[m] || []).forEach(s => subs.add(s)));
+        let html = Array.from(subs).sort().map(s => {
+            const checked = prevChecked.includes(s) ? "checked" : "";
+            return `<label><input type="checkbox" class="m2m-${prefix}-sub" value="${s}" ${checked}> ${s}</label>`;
+        }).join(" ");
+        html += ` <label><input type="checkbox" class="m2m-${prefix}-sub" value="*"> Todas (*)</label>`;
+        box.innerHTML = html;
+        box.querySelectorAll(`.m2m-${prefix}-sub`).forEach(cb => {
+            cb.addEventListener("change", () => refreshPresentaciones(prefix));
+        });
+    }
+
+    function refreshPresentaciones(prefix) {
+        const box = document.querySelector(`.m2m-${prefix}-pres-box`);
+        if (!box) return;
+        const madres = madresEfectivas(prefix);
+        const subs = subsChecked(prefix);
+        const prevChecked = Array.from(document.querySelectorAll(`.m2m-${prefix}-pres:checked`)).map(cb => cb.value);
+        if (madres.length === 0) {
+            box.innerHTML = '<small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>';
+            return;
+        }
+        const matches = window._presentacionesOdoo.filter(p => {
+            if (!madres.includes(p.madre)) return false;
+            if (subs.length > 0 && !subs.includes(p.subcategoria)) return false;
+            return true;
+        });
+        const valores = new Set(matches.map(p => p.presentacion));
+        let html;
+        if (valores.size === 0) {
+            html = '<small style="color:var(--text-muted)">Sin presentaciones registradas para esta selección.</small>';
+        } else {
+            html = Array.from(valores).sort().map(v => {
+                const checked = prevChecked.includes(v) ? "checked" : "";
+                return `<label><input type="checkbox" class="m2m-${prefix}-pres" value="${v}" ${checked}> ${v}</label>`;
+            }).join(" ");
+        }
+        html += ` <label><input type="checkbox" class="m2m-${prefix}-pres" value="*"> Todas (*)</label>`;
+        box.innerHTML = html;
+    }
+
+    async function loadCategoriaArbolYPresentaciones() {
+        try {
+            const [rArbol, rPres] = await Promise.all([
+                fetch("/api/odoo/categorias-arbol"),
+                fetch("/api/odoo/presentaciones"),
+            ]);
+            if (rArbol.ok) window._categoriaArbol = await rArbol.json();
+            if (rPres.ok) window._presentacionesOdoo = await rPres.json();
+        } catch (err) {
+            console.error("Error cargando árbol de categorías/presentaciones:", err);
+        }
+        CASCADA_PREFIJOS.forEach(prefix => {
+            refreshSubcategorias(prefix);
+            refreshPresentaciones(prefix);
+            document.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => {
+                cb.addEventListener("change", () => {
+                    refreshSubcategorias(prefix);
+                    refreshPresentaciones(prefix);
+                });
+            });
+        });
+    }
+    window.loadCategoriaArbolYPresentaciones = loadCategoriaArbolYPresentaciones;
+
+    // Combina madre + subcategoría + presentación elegidos en el campo
+    // `categoria` (CSV) que ya consume el motor (_match_categoria hace OR
+    // contra categoria/categoria_madre/subcategoria/presentacion). Si se
+    // eligió subcategoría/presentación (más específico), NO se agrega la
+    // madre también -- agregarla ampliaría el match a TODA la madre y
+    // anularía el propósito de elegir algo más específico.
+    function getCategoriaCombinada(form, prefix) {
+        const madres = getM2MCheckedValues(form, `.m2m-${prefix}-madre`);
+        const subs = getM2MCheckedValues(form, `.m2m-${prefix}-sub`);
+        const pres = getM2MCheckedValues(form, `.m2m-${prefix}-pres`);
+        const especificos = [];
+        if (subs && subs !== "*") especificos.push(subs);
+        if (pres && pres !== "*") especificos.push(pres);
+        if (especificos.length > 0) return especificos.join(",");
+        if (madres && madres !== "*") return madres;
+        return "*";
+    }
+
+    // --- Helper to Render Standardized 10-Column Rule Row ---
+    window._reglasCache = window._reglasCache || {};
+
+    function renderStandardRuleRow(r, tabla) {
+        window._reglasCache[`${tabla}::${r.regla_id}`] = r;
+        const row = document.createElement("tr");
+        
+        let beneficioText = "";
+        if (r.tipo_beneficio === "producto" || r.tipo_beneficio === "obsequio") {
+            beneficioText = `🎁 Obsequio (${r.productos || r.campos_especiales?.productos || 'Producto'})`;
+        } else {
+            const val = r.porcentaje !== undefined ? r.porcentaje : (r.porcentaje_fijo !== undefined ? r.porcentaje_fijo : (r.valor !== undefined ? r.valor : 0));
+            const pctVal = (parseFloat(val || 0) * 100).toFixed(2);
+            beneficioText = `💲 ${pctVal}%`;
+        }
+
+        // min_cajas/max_cajas se unificaron en min_unidades/max_unidades
+        // (migración c9e1f2a3b4d5). Quedan litros_minimo y compra_minima como
+        // respaldo: volumen conserva el primero y primera compra usa el
+        // segundo como su criterio real.
+        const minQ = r.min_unidades !== undefined ? r.min_unidades : (r.litros_minimo !== undefined ? r.litros_minimo : (r.compra_minima !== undefined ? r.compra_minima : 0));
+        const maxQ = r.max_unidades !== undefined ? r.max_unidades : 999999;
+        const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
+
+        const rawListasStd = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
+            ? String(r.listas_aplicables)
+            : "*";
+        const listasText = formatListasDisplay(rawListasStd);
+
+        let espArr = [];
+        const VENTANA_PAGO_LABELS = { entrega: "Entrega", emision: "Emisión", vencimiento: "Vencimiento", no_aplica: "No aplica" };
+        if (r.ventana_pago_tipo && r.ventana_pago_tipo !== "no_aplica") {
+            espArr.push(`Ventana Pago: ${VENTANA_PAGO_LABELS[r.ventana_pago_tipo] || r.ventana_pago_tipo} +${r.ventana_pago_dias || 0}d`);
+        }
+        if (r.tipo_evaluacion) espArr.push(`Eval: ${r.tipo_evaluacion} (${r.dias_evaluacion || 0}d)`);
+        if (r.descuento_fallback) espArr.push(`Fallback: ${(parseFloat(r.descuento_fallback)*100).toFixed(2)}%`);
+        if (r.regalo_tipo) espArr.push(`Modo: ${r.regalo_tipo}`);
+        if (r.monedas_aplicables && r.monedas_aplicables !== "*") espArr.push(`Monedas: ${r.monedas_aplicables}`);
+        if (r.tipo_diferencial) espArr.push(`Tipo: ${r.tipo_diferencial}`);
+
+        const espText = espArr.length > 0 ? espArr.join(" | ") : "—";
+        const vigText = `${r.vigencia_desde || 'N/A'}<br><small style="color:var(--text-muted)">hasta ${r.vigencia_hasta || 'Indefinida'}</small>`;
+
+        const actionsHtml = `
+            <div style="display:flex; align-items:center; gap:8px;">
+                <div>
+                    <label class="switch" style="position:relative; display:inline-block; width:38px; height:20px;">
+                        <input type="checkbox" ${r.activo ? 'checked' : ''} onchange="window.toggleReglaActiva('${tabla}', '${r.regla_id}', this.checked)" style="opacity:0; width:0; height:0;">
+                        <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:${r.activo ? '#10b981' : '#ef4444'}; transition:.3s; border-radius:20px;"></span>
+                    </label>
+                    <span style="font-size:0.7rem; font-weight:600; display:block; text-align:center; color:${r.activo ? '#10b981' : '#ef4444'}">${r.activo ? 'ACTIVA' : 'INACTIVA'}</span>
+                </div>
+                <button type="button" class="btn btn-sm" onclick="window.editarRegla('${tabla}', '${r.regla_id}')" style="background:#e0f2fe; color:#0369a1; border:1px solid #7dd3fc; padding:4px 8px; border-radius:6px; font-size:0.8rem; cursor:pointer;" title="Editar esta regla">✏️</button>
+                <button type="button" class="btn btn-sm" onclick="window.eliminarRegla('${tabla}', '${r.regla_id}')" style="background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; padding:4px 8px; border-radius:6px; font-size:0.8rem; cursor:pointer;" title="Eliminar regla permanentemente">🗑️</button>
+            </div>
+        `;
+
+        let unidadStd = r.unidad_medida;
+        if (!unidadStd || String(unidadStd).trim() === "" || String(unidadStd) === "undefined") {
+            const minVal = parseFloat(r.min_unidades !== undefined ? r.min_unidades : r.litros_minimo || 0);
+            if (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen") {
+                unidadStd = (minVal >= 500 || (r.regla_id && String(r.regla_id).includes("FID_"))) ? "LITROS" : "UNIDADES";
+            } else if (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial) {
+                unidadStd = "USD";
+            } else {
+                unidadStd = "UNIDADES";
+            }
+        }
+
+        row.innerHTML = `
+            <td><strong>${r.regla_id || 'REGLA'}</strong><br><small style="color:var(--text-muted)">${r.nombre || tabla}</small></td>
+            <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${r.marca || '*'}</span></td>
+            <td><span class="state-badge" style="background:#fef3c7; color:#92400e; font-weight:600;">${r.categoria || r.categorias_aplica || '*'}</span></td>
+            <td><strong>${tramoText}</strong></td>
+            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${unidadStd}</span></td>
+            <td><strong style="color:#059669">${beneficioText}</strong></td>
+            <td><span class="state-badge" style="background:#f3f4f6; color:#374151;">${listasText}</span></td>
+            <td>${vigText}</td>
+            <td><small style="color:var(--text-muted)">${espText}</small></td>
+            <td>${actionsHtml}</td>
+        `;
+        return row;
+    }
+
+    // --- Edición de reglas existentes (antes solo se podían crear/eliminar/desactivar) ---
+    function setM2MChecked(form, selectorClass, valueStr) {
+        const raw = (valueStr === undefined || valueStr === null || String(valueStr).trim() === "")
+            ? "*" : String(valueStr).trim();
+        const values = raw.split(",").map(v => v.trim());
+        form.querySelectorAll(selectorClass).forEach(cb => {
+            cb.checked = values.includes(cb.value);
+        });
+    }
+
+    function setFieldValue(id, value) {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = value;
+    }
+
+    function setEditMode(form, reglaId) {
+        form.dataset.editRegla = reglaId;
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn) {
+            if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+            btn.textContent = `💾 Actualizar Regla ${reglaId}`;
+        }
+        let cancelBtn = form.querySelector(".btn-cancelar-edicion");
+        if (!cancelBtn && btn) {
+            cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn btn-sm btn-cancelar-edicion";
+            cancelBtn.style.cssText = "margin-left:8px; background:#f3f4f6; color:#374151; border:1px solid #d1d5db; padding:8px 14px; border-radius:6px; cursor:pointer;";
+            cancelBtn.textContent = "✖ Cancelar edición";
+            cancelBtn.onclick = () => clearEditMode(form);
+            btn.after(cancelBtn);
+        }
+        if (cancelBtn) cancelBtn.style.display = "inline-block";
+    }
+
+    function clearEditMode(form) {
+        delete form.dataset.editRegla;
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+        const cancelBtn = form.querySelector(".btn-cancelar-edicion");
+        if (cancelBtn) cancelBtn.style.display = "none";
+        form.reset();
+    }
+
+    // Reconstruye la selección madre/subcategoría/presentación a partir del
+    // CSV guardado en `categoria` -- infiere a qué madre pertenece cada
+    // valor específico (subcategoría o presentación) cruzando contra el
+    // árbol/presentaciones ya cargados, para poder marcar los checkboxes en
+    // cascada al editar una regla existente.
+    function prefillCategoriaCascada(form, prefix, categoriaCSV) {
+        const valores = String(categoriaCSV || "*").split(",").map(v => v.trim()).filter(Boolean);
+        form.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => { cb.checked = false; });
+        if (valores.length === 0 || valores.includes("*")) {
+            refreshSubcategorias(prefix);
+            refreshPresentaciones(prefix);
+            return;
+        }
+        const madresDirectas = valores.filter(v => v === "Comercial" || v === "Industrial");
+        const otros = valores.filter(v => !madresDirectas.includes(v));
+        const madresInferidas = new Set(madresDirectas);
+        otros.forEach(v => {
+            Object.entries(window._categoriaArbol || {}).forEach(([madre, subs]) => {
+                if (subs.includes(v)) madresInferidas.add(madre);
+            });
+            (window._presentacionesOdoo || []).forEach(p => {
+                if (p.presentacion === v) madresInferidas.add(p.madre);
+            });
+        });
+        form.querySelectorAll(`.m2m-${prefix}-madre`).forEach(cb => {
+            cb.checked = madresInferidas.has(cb.value);
+        });
+        refreshSubcategorias(prefix);
+        refreshPresentaciones(prefix);
+        document.querySelectorAll(`.m2m-${prefix}-sub`).forEach(cb => {
+            if (otros.includes(cb.value)) cb.checked = true;
+        });
+        document.querySelectorAll(`.m2m-${prefix}-pres`).forEach(cb => {
+            if (otros.includes(cb.value)) cb.checked = true;
+        });
+    }
+
+    function prefillRecompra(r, reglaId) {
+        setM2MChecked(recompraForm, ".m2m-rec-marca", r.marca);
+        prefillCategoriaCascada(recompraForm, "rec", r.categoria);
+        setM2MChecked(recompraForm, ".m2m-rec-lista", r.listas_aplicables);
+        setFieldValue("cfg-rec-min-cajas", r.min_unidades ?? 2);
+        setFieldValue("cfg-rec-max-cajas", r.max_unidades ?? 4);
+        setFieldValue("cfg-rec-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-rec-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-rec-porcentaje", r.porcentaje ?? 0.03);
+        setFieldValue("cfg-rec-ventana-tipo", r.ventana_pago_tipo || "vencimiento");
+        setFieldValue("cfg-rec-ventana-dias", r.ventana_pago_dias ?? 3);
+        setFieldValue("cfg-rec-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-rec-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-rec-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-rec-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-rec-descripcion", r.descripcion || "");
+        setEditMode(recompraForm, reglaId);
+        recompraForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillProntoPago(r, reglaId) {
+        setM2MChecked(prontoPagoForm, ".m2m-pp-marca", r.marca);
+        prefillCategoriaCascada(prontoPagoForm, "pp", r.categoria);
+        setM2MChecked(prontoPagoForm, ".m2m-pp-lista", r.listas_aplicables);
+        setFieldValue("cfg-pp-ventana-tipo", r.ventana_pago_tipo || "entrega");
+        setFieldValue("cfg-pp-ventana-dias", r.ventana_pago_dias ?? 3);
+        setFieldValue("cfg-pp-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-pp-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-pp-porcentaje", r.porcentaje ?? 0.05);
+        setFieldValue("cfg-pp-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-pp-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-pp-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-pp-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-pp-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-pp-descripcion", r.descripcion || "");
+        setEditMode(prontoPagoForm, reglaId);
+        prontoPagoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillVolumen(r, reglaId) {
+        setM2MChecked(descuentoVolumenForm, ".m2m-vol-marca", r.marca);
+        prefillCategoriaCascada(descuentoVolumenForm, "vol", r.categoria);
+        setM2MChecked(descuentoVolumenForm, ".m2m-vol-lista", r.listas_aplicables);
+        if (cfgDescVolLitros) cfgDescVolLitros.value = r.litros_minimo ?? r.min_unidades ?? 0;
+        setFieldValue("cfg-desc-vol-max", r.max_unidades ?? 999999);
+        if (cfgDescVolPorcentaje) cfgDescVolPorcentaje.value = r.porcentaje ?? 0.05;
+        setFieldValue("cfg-desc-vol-tipo-eval", r.tipo_evaluacion || "orden");
+        setFieldValue("cfg-desc-vol-dias-eval", r.dias_evaluacion ?? 30);
+        setFieldValue("cfg-desc-vol-unidad", r.unidad_medida || "UNIDADES");
+        setFieldValue("cfg-desc-vol-tipo-benef", r.tipo_beneficio || "descuento");
+        if (cfgDescVolDesde) cfgDescVolDesde.value = r.vigencia_desde || "";
+        if (cfgDescVolHasta) cfgDescVolHasta.value = r.vigencia_hasta || "";
+        const rpp = document.getElementById("cfg-desc-vol-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-desc-vol-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-desc-vol-descripcion", r.descripcion || "");
+        setEditMode(descuentoVolumenForm, reglaId);
+        descuentoVolumenForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillPromo(r, reglaId) {
+        setM2MChecked(promoForm, ".m2m-promo-marca", r.marca);
+        prefillCategoriaCascada(promoForm, "promo", r.categoria || r.categorias_aplica);
+        setM2MChecked(promoForm, ".m2m-promo-lista", r.listas_aplicables);
+        setFieldValue("cfg-promo-tipo-beneficio", r.tipo_beneficio || "producto");
+        if (r.productos) {
+            const skus = String(r.productos).split(",").map(s => s.trim());
+            Array.from(document.getElementById("cfg-promo-productos")?.options || []).forEach(o => {
+                o.selected = skus.includes(o.value);
+            });
+        }
+        setFieldValue("cfg-promo-compra-minima", r.compra_minima ?? 0);
+        setFieldValue("cfg-promo-max", r.max_unidades ?? 999999);
+        setFieldValue("cfg-promo-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-promo-regalo-tipo", r.regalo_tipo || "solo_uno");
+        setFieldValue("cfg-promo-fallback", r.descuento_fallback ?? 0.02);
+        setFieldValue("cfg-promo-valor", r.valor ?? 0);
+        setFieldValue("cfg-promo-solo-primera", r.solo_primera_compra ? "true" : "false");
+        setFieldValue("cfg-promo-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-promo-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-promo-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-promo-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-promo-descripcion", r.descripcion || "");
+        setEditMode(promoForm, reglaId);
+        promoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillProducto(r, reglaId) {
+        setM2MChecked(productoPromoForm, ".m2m-prod-marca", r.marca);
+        prefillCategoriaCascada(productoPromoForm, "prod", r.categoria);
+        setM2MChecked(productoPromoForm, ".m2m-prod-lista", r.listas_aplicables);
+        if (r.productos) {
+            const skus = String(r.productos).split(",").map(s => s.trim());
+            Array.from(document.getElementById("cfg-prod-select")?.options || []).forEach(o => {
+                o.selected = skus.includes(o.value);
+            });
+        }
+        setFieldValue("cfg-prod-min", r.min_unidades ?? 0);
+        setFieldValue("cfg-prod-max", r.max_unidades ?? 999999);
+        setFieldValue("cfg-prod-unidad", r.unidad_medida || "CAJAS");
+        setFieldValue("cfg-prod-tipo-benef", r.tipo_beneficio || "descuento");
+        setFieldValue("cfg-prod-porcentaje", r.porcentaje ?? 0.05);
+        setFieldValue("cfg-prod-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-prod-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-prod-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-prod-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-prod-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-prod-descripcion", r.descripcion || "");
+        setEditMode(productoPromoForm, reglaId);
+        productoPromoForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function prefillDiferencial(r, reglaId) {
+        setM2MChecked(diferencialForm, ".m2m-dif-lista", r.listas_aplicables);
+        setFieldValue("cfg-dif-nombre", r.nombre || "Diferencial Cambiario");
+        setFieldValue("cfg-dif-tipo-diferencial", r.tipo_diferencial || "fijo_35_ves_usd");
+        setFieldValue("cfg-dif-tipo-calculo", r.tipo_calculo || "fijo");
+        setFieldValue("cfg-dif-porcentaje-fijo", r.porcentaje_fijo ?? 0.35);
+        setFieldValue("cfg-dif-monedas", r.monedas_aplicables || "*");
+        setFieldValue("cfg-dif-desde", r.vigencia_desde || "");
+        setFieldValue("cfg-dif-hasta", r.vigencia_hasta || "");
+        const rpp = document.getElementById("cfg-dif-requiere-pago-previo");
+        if (rpp) rpp.checked = !!r.requiere_pago_previo;
+        setFieldValue("cfg-dif-aplica-a", r.aplica_a || "linea");
+        setFieldValue("cfg-dif-descripcion", r.descripcion || "");
+        setEditMode(diferencialForm, reglaId);
+        diferencialForm.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    window.editarRegla = function (tabla, reglaId) {
+        const r = window._reglasCache[`${tabla}::${reglaId}`];
+        if (!r) {
+            alert("No se encontró la regla en caché -- recarga Configuración e intenta de nuevo.");
+            return;
+        }
+        const prefillers = {
+            "DescuentosRecompra": prefillRecompra,
+            "DescuentosProntoPago": prefillProntoPago,
+            "DescuentosMarcaCategoria": prefillProntoPago,
+            "DescuentosVolumen": prefillVolumen,
+            "PromocionPrimeraCompra": prefillPromo,
+            "DescuentosProducto": prefillProducto,
+            "DescuentosDiferencialCambiario": prefillDiferencial,
+        };
+        const fn = prefillers[tabla];
+        if (!fn) {
+            alert(`Edición no soportada todavía para: ${tabla}`);
+            return;
+        }
+        fn(r, reglaId);
+    };
+
+    // Load Promociones Primera Compra
+    const TIPO_LABELS = {
+        "primera_compra": "Primera Compra", "recurrencia": "Recompra",
+        "contado": "Pronto Pago", "volumen": "Volumen", "bcv_completo": "Diferencial BCV"
+    };
+
+    async function loadPromociones() {
+        if (!promosTableBody) return;
+        try {
+            promosTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando promociones...</td></tr>';
+            const res = await fetch("/api/config/promociones");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    promosTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay promociones registradas.</td></tr>';
+                    return;
+                }
+                promosTableBody.innerHTML = "";
+                data.forEach(p => promosTableBody.appendChild(renderStandardRuleRow(p, "PromocionPrimeraCompra")));
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+    window.loadPromociones = loadPromociones;
+
+    // Save Promotion Rule
+    if (promoForm) {
+        promoForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
+            const cats = getCategoriaCombinada(promoForm, "promo");
+            const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
+            const tipoBenef = cfgPromoTipoBeneficio.value;
+            const productosSeleccionados = tipoBenef === "producto"
+                ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
+                : "";
+
+            const payload = {
+                tipo_beneficio: tipoBenef,
+                productos: productosSeleccionados,
+                valor: tipoBenef === "porcentaje" ? parseFloat(cfgPromoValor.value || 0) : 1,
+                compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
+                descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
+                regalo_tipo: cfgPromoRegaloTipo.value,
+                categorias_aplica: cats,
+                marca: marcas,
+                listas_aplicables: listas,
+                unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
+                vigencia_desde: cfgPromoDesde.value,
+                vigencia_hasta: cfgPromoHasta.value || null,
+                requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
+            };
+            const editId = promoForm.dataset.editRegla;
+            const url = editId ? `/api/config/promociones/${editId}` : "/api/config/promociones";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Promoción actualizada exitosamente." : "✅ Promoción registrada exitosamente.");
+                    clearEditMode(promoForm);
+                    if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = "0";
+                    loadPromociones();
+                    loadReglasConsolidadas();
+                } else {
+                    const err = await res.json();
+                    alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar promoción.");
+                console.error(err);
+            }
+        });
+    }
+
+    // Load Exclusiones
+    async function loadExclusiones() {
+        if (!excluisionesTableBody) return;
+        try {
+            excluisionesTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando exclusiones...</td></tr>';
+            const res = await fetch("/api/config/exclusiones");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    excluisionesTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay exclusiones configuradas.</td></tr>';
+                    return;
+                }
+                excluisionesTableBody.innerHTML = "";
+                data.forEach(exc => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${TIPO_LABELS[exc.regla_tipo_a] || exc.regla_tipo_a}</strong></td>
+                        <td style="text-align:center">⟷</td>
+                        <td><strong>${TIPO_LABELS[exc.regla_tipo_b] || exc.regla_tipo_b}</strong></td>
+                        <td><span class="semaphore ${exc.activo ? 'verde' : 'rojo'}">${exc.activo ? 'Activa' : 'Inactiva'}</span></td>
+                    `;
+                    excluisionesTableBody.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Save Exclusion Rule
+    if (exclusionForm) {
+        exclusionForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            if (cfgExclTipoA.value === cfgExclTipoB.value) {
+                alert("⚠️ Los dos descuentos no pueden ser el mismo tipo.");
+                return;
+            }
+            const payload = {
+                regla_tipo_a: cfgExclTipoA.value,
+                regla_tipo_b: cfgExclTipoB.value,
+                activo: true
+            };
+            try {
+                const res = await fetch("/api/config/exclusiones", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Exclusión registrada correctamente.");
+                    exclusionForm.reset();
+                    loadExclusiones();
+                } else {
+                    const err = await res.json();
+                    alert("❌ Error: " + (err.detail || "Error al registrar la exclusión."));
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar exclusión.");
+                console.error(err);
+            }
+        });
+    }
+
+    // Load Volume Discount Rules
+    async function loadDescuentosVolumen() {
+        if (!descuentosVolumenTableBody) return;
+        try {
+            descuentosVolumenTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando descuentos por volumen...</td></tr>';
+            const res = await fetch("/api/config/descuentos-volumen");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.length === 0) {
+                    descuentosVolumenTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay reglas de volumen registradas.</td></tr>';
+                    return;
+                }
+                descuentosVolumenTableBody.innerHTML = "";
+                data.forEach(r => descuentosVolumenTableBody.appendChild(renderStandardRuleRow(r, "DescuentosVolumen")));
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
+    window.loadDescuentosVolumen = loadDescuentosVolumen;
+
+    // Save Volume Discount Rule
+    if (descuentoVolumenForm) {
+        descuentoVolumenForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const marcas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-marca");
+            const cats = getCategoriaCombinada(descuentoVolumenForm, "vol");
+            const listas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-lista");
+            const minQty = parseFloat(cfgDescVolLitros.value || 0);
+            const payload = {
+                marca: marcas,
+                categoria: cats,
+                listas_aplicables: listas,
+                litros_minimo: minQty,
+                min_unidades: minQty,
+                max_unidades: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
+                porcentaje: parseFloat(cfgDescVolPorcentaje.value || 0.05),
+                tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
+                dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
+                unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "UNIDADES",
+                tipo_beneficio: document.getElementById("cfg-desc-vol-tipo-benef")?.value || "descuento",
+                vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
+                vigencia_hasta: cfgDescVolHasta.value || null,
+                requiere_pago_previo: document.getElementById("cfg-desc-vol-requiere-pago-previo")?.checked || false,
+                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea",
+                descripcion: document.getElementById("cfg-desc-vol-descripcion")?.value || ""
+            };
+            const editId = descuentoVolumenForm.dataset.editRegla;
+            const url = editId ? `/api/config/descuentos-volumen/${editId}` : "/api/config/descuentos-volumen";
+            const method = editId ? "PUT" : "POST";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert(editId ? "✅ Regla de volumen actualizada exitosamente." : "✅ Regla de volumen registrada exitosamente.");
+                    clearEditMode(descuentoVolumenForm);
+                    loadDescuentosVolumen();
+                    loadReglasConsolidadas();
+                } else {
+                    alert("❌ Error al registrar la regla de volumen.");
+                }
+            } catch (err) {
+                alert("❌ Error de red al registrar regla de volumen.");
+                console.error(err);
+            }
+        });
+    }
+
+    window.generarReciboSeleccionados = async function() {
+        const checked = Array.from(document.querySelectorAll(".check-cobranza-item:checked")).map(cb => cb.value);
+        if (checked.length === 0) {
+            alert("⚠️ Por favor selecciona al menos un pago para generar el Recibo de Entrega.");
+            return;
+        }
+
+        try {
+            const res = await fetch("/api/cobranza/marcar-recibido", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ pago_ids: checked })
+            });
+
+            if (!res.ok) throw new Error("Error registrando entrega de recibo");
+            const data = await res.json();
+
+            // Populate printable receipt preview
+            document.getElementById("recibo-num-1").textContent = data.numero_recibido;
+            document.getElementById("recibo-num-2").textContent = data.numero_recibido;
+            document.getElementById("recibo-fecha-1").textContent = `Fecha: ${data.fecha_recibido}`;
+            document.getElementById("recibo-fecha-2").textContent = `Fecha: ${data.fecha_recibido}`;
+            
+            const firstPago = data.pagos[0] || {};
+            const vendedorName = firstPago.vendedor || "Vendedor";
+            document.getElementById("recibo-vendedor-1").textContent = vendedorName;
+            document.getElementById("recibo-vendedor-2").textContent = vendedorName;
+            document.getElementById("recibo-cajero-1").textContent = data.recibido_por;
+            document.getElementById("recibo-cajero-2").textContent = data.recibido_por;
+
+            document.getElementById("recibo-entregado-firma-1").textContent = `Firma: ${vendedorName}`;
+            document.getElementById("recibo-entregado-firma-2").textContent = `Firma: ${vendedorName}`;
+            document.getElementById("recibo-recibido-firma-1").textContent = `Firma: ${data.recibido_por}`;
+            document.getElementById("recibo-recibido-firma-2").textContent = `Firma: ${data.recibido_por}`;
+
+            const rowsHtml = data.pagos.map(p => `
+                <tr>
+                    <td><strong>${p.pago_id}</strong></td>
+                    <td>${p.fecha || '-'}</td>
+                    <td>${p.metodo_pago || 'Efectivo'} (${p.referencia || 'S/R'})</td>
+                    <td><strong>${p.moneda || 'USD'} ${parseFloat(p.monto || 0).toFixed(2)}</strong></td>
+                    <td>Bs. ${parseFloat(p.tasa_bcv || 0).toFixed(2)}</td>
+                    <td><strong>$${parseFloat(p.equivalente_bcv_usd || p.monto || 0).toFixed(2)}</strong></td>
+                    <td>${p.so_id || 'Pendiente'}</td>
+                </tr>
+            `).join('');
+
+            document.getElementById("recibo-items-1").innerHTML = rowsHtml;
+            document.getElementById("recibo-items-2").innerHTML = rowsHtml;
+
+            document.getElementById("recibo-modal").style.display = "flex";
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+        } catch (err) {
+            alert("❌ Error: " + err.message);
+            console.error(err);
+        }
+    };
+
+    window.cerrarReciboModal = function() {
+        document.getElementById("recibo-modal").style.display = "none";
+    };
+
+    // REPORTE DIARIO DE VENTAS Y COBRANZA
+    async function loadReporteDiario() {
+        const vTbody = document.getElementById("diario-ventas-table-body");
+        const cTbody = document.getElementById("diario-cobranza-table-body");
+        if (!vTbody || !cTbody) return;
+
+        vTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de ventas...</td></tr>';
+        cTbody.innerHTML = '<tr><td colspan="4" class="table-empty">Cargando reporte de cobranza...</td></tr>';
+
+        const vendedorSel = document.getElementById("dashboard-vendedor-filter");
+        const fechaDesdeEl = document.getElementById("dashboard-fecha-desde");
+        const fechaHastaEl = document.getElementById("dashboard-fecha-hasta");
+        const vendedorVal = vendedorSel && vendedorSel.value !== "*" ? vendedorSel.value : "";
+        const fechaDesdeVal = fechaDesdeEl ? fechaDesdeEl.value : "";
+        const fechaHastaVal = fechaHastaEl ? fechaHastaEl.value : "";
+
+        const params = new URLSearchParams();
+        if (vendedorVal) params.set("vendedor", vendedorVal);
+        if (fechaDesdeVal) params.set("fecha_desde", fechaDesdeVal);
+        if (fechaHastaVal) params.set("fecha_hasta", fechaHastaVal);
+
+        try {
+            const res = await fetch("/api/reporte/diario?" + params.toString());
+            if (!res.ok) throw new Error("Error consultando reporte diario");
+            const data = await res.json();
+
+            // Ventas
+            if (data.ventas_diarias.length === 0) {
+                vTbody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay registros de ventas.</td></tr>';
+            } else {
+                vTbody.innerHTML = data.ventas_diarias.map(v => `
+                    <tr>
+                        <td><strong>${v.fecha}</strong></td>
+                        <td>${v.ordenes_count} órds.</td>
+                        <td><strong style="color:#2563eb">$${v.total_usd.toLocaleString('es-VE', {minimumFractionDigits:2})}</strong></td>
+                        <td><strong style="color:#059669">${v.litros_totales.toLocaleString('es-VE', {minimumFractionDigits:1})} L</strong></td>
+                    </tr>
+                `).join('');
+            }
+
+            // Cobranza
+            if (data.cobranza_diaria.length === 0) {
+                cTbody.innerHTML = '<tr><td colspan="4" class="table-empty">No hay registros de cobranza.</td></tr>';
+            } else {
+                cTbody.innerHTML = data.cobranza_diaria.map(c => {
+                    const monedaStr = Object.entries(c.por_moneda).map(([m, val]) => `${m}: ${val.toFixed(2)}`).join(' | ');
+                    const metodoStr = Object.entries(c.por_metodo).map(([m, val]) => `${m}: $${val.toFixed(2)}`).join(' | ');
+                    return `
+                        <tr>
+                            <td><strong>${c.fecha}</strong></td>
+                            <td><strong style="color:#2563eb">$${c.total_eq_bcv.toLocaleString('es-VE', {minimumFractionDigits:2})}</strong></td>
+                            <td><small>${monedaStr}</small></td>
+                            <td><small>${metodoStr}</small></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Acumulados Hoy / Mes / Trimestre / Año
+            const r = data.resumen || {};
+            const fmtUsd = (val) => `$${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;
+            const fmtL = (val) => `${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:1})} L`;
+            const fmtBs = (val) => `Bs. ${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;
+            ["hoy", "mes", "trimestre", "anio"].forEach(periodo => {
+                const vEl = document.getElementById(`dash-ventas-${periodo}-usd`);
+                const lEl = document.getElementById(`dash-ventas-${periodo}-litros`);
+                const cEl = document.getElementById(`dash-cobranza-${periodo}-usd`);
+                const vesEl = document.getElementById(`dash-cobranza-${periodo}-ves`);
+                const metodosEl = document.getElementById(`dash-cobranza-${periodo}-metodos`);
+                const ventas = (r.ventas || {})[periodo] || {};
+                const cobranza = (r.cobranza || {})[periodo] || {};
+                if (vEl) vEl.textContent = fmtUsd(ventas.total_usd);
+                if (lEl) lEl.textContent = fmtL(ventas.litros);
+                if (cEl) cEl.textContent = fmtUsd(cobranza.total_eq_bcv);
+                if (vesEl) vesEl.textContent = `${fmtBs(cobranza.ves_monto)} (${fmtUsd(cobranza.ves_eq_usd)})`;
+                if (metodosEl) {
+                    const porMetodo = cobranza.por_metodo || {};
+                    const entries = Object.entries(porMetodo).sort((a, b) => b[1] - a[1]);
+                    metodosEl.innerHTML = entries.length === 0
+                        ? '<span style="color:#94a3b8;">Sin desglose por método.</span>'
+                        : entries.map(([metodo, monto]) => `<div style="display:flex; justify-content:space-between;"><span>${metodo}:</span> <strong>${fmtUsd(monto)}</strong></div>`).join('');
+                }
+            });
+
+            // Filtro de Vendedor (poblar dropdown una sola vez)
+            if (vendedorSel && data.vendedores && !vendedorSel.dataset.populated) {
+                const currentVal = vendedorSel.value || "*";
+                data.vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vendedorSel.appendChild(opt);
+                });
+                vendedorSel.value = currentVal;
+                vendedorSel.dataset.populated = "true";
+            }
+
+            if (vendedorSel && !vendedorSel.dataset.listenerAttached) {
+                vendedorSel.addEventListener("change", loadReporteDiario);
+                vendedorSel.dataset.listenerAttached = "true";
+            }
+            [fechaDesdeEl, fechaHastaEl].forEach(el => {
+                if (el && !el.dataset.listenerAttached) {
+                    el.addEventListener("change", loadReporteDiario);
+                    el.dataset.listenerAttached = "true";
+                }
+            });
+            const clearBtn = document.getElementById("dashboard-filter-clear");
+            if (clearBtn && !clearBtn.dataset.listenerAttached) {
+                clearBtn.addEventListener("click", () => {
+                    if (vendedorSel) vendedorSel.value = "*";
+                    if (fechaDesdeEl) fechaDesdeEl.value = "";
+                    if (fechaHastaEl) fechaHastaEl.value = "";
+                    loadReporteDiario();
+                });
+                clearBtn.dataset.listenerAttached = "true";
+            }
+        } catch (err) {
+            console.error("Error cargando reporte diario:", err);
+        }
+    }
+
+    // --- MAPEO UNIFICADO DE LISTAS DE PRECIO (agosto 2026) -- reemplaza los
+    // 2 mapeos separados (USD/VES para el motor, Industrial/Comercial solo
+    // consulta) que existían antes: una sola tabla, un solo endpoint, sin
+    // dos fuentes de verdad para la misma lista de precios.
+    window.loadPricelistMapeo = async function() {
+        const body = document.getElementById("pricelist-mapeo-table-body");
+        if (!body) return;
+
+        try {
+            body.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando...</td></tr>';
+            const [plRes, mapRes] = await Promise.all([
+                fetch('/api/config/listas-precio'),
+                fetch('/api/config/pricelist-mapeo')
+            ]);
+            const pricelists = await plRes.json();
+            const mapData = await mapRes.json();
+            const mapeo = mapData.mapeo || {};
+
+            const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
+            if (histCheckbox) {
+                histCheckbox.checked = mapData.historical_pricelist_enabled !== false;
+            }
+
+            if (!Array.isArray(pricelists) || pricelists.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" class="table-empty">No se encontraron listas de precios en Odoo.</td></tr>';
+                return;
+            }
+
+            body.innerHTML = pricelists.map(pl => {
+                const fila = mapeo[String(pl.id)] || { moneda: "", categoria: "", vigente: false };
+                const estado = pl.active === false
+                    ? '<span style="color:#dc2626; font-weight:700;" title="Lista archivada en Odoo -- sus precios pueden estar congelados">⚠ Archivada</span>'
+                    : '<span style="color:#059669;">✓ Vigente en Odoo</span>';
+                return `
+                    <tr data-pricelist-id="${pl.id}">
+                        <td><strong>#${pl.id}</strong> ${pl.name} (${pl.moneda})</td>
+                        <td>${estado}</td>
+                        <td>
+                            <select class="pm-moneda" style="padding:0.3rem;">
+                                <option value="" ${fila.moneda === "" ? "selected" : ""}>—</option>
+                                <option value="usd" ${fila.moneda === "usd" ? "selected" : ""}>USD</option>
+                                <option value="ves" ${fila.moneda === "ves" ? "selected" : ""}>VES</option>
+                            </select>
+                        </td>
+                        <td>
+                            <select class="pm-categoria" style="padding:0.3rem;">
+                                <option value="" ${fila.categoria === "" ? "selected" : ""}>—</option>
+                                <option value="industrial" ${fila.categoria === "industrial" ? "selected" : ""}>Industrial</option>
+                                <option value="comercial" ${fila.categoria === "comercial" ? "selected" : ""}>Comercial</option>
+                            </select>
+                        </td>
+                        <td style="text-align:center;">
+                            <input type="checkbox" class="pm-vigente" ${fila.vigente ? "checked" : ""}>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            // Dynamically populate M2M Listas checkboxes in all rule forms.
+            const ruleFormListContainers = [
+                { selector: ".m2m-rec-lista", parent: "m2m-rec-listas-box" },
+                { selector: ".m2m-pp-lista", parent: "m2m-pp-listas-box" },
+                { selector: ".m2m-vol-lista", parent: "m2m-vol-listas-box" },
+                { selector: ".m2m-promo-lista", parent: "m2m-promo-listas-box" },
+                { selector: ".m2m-prod-lista", parent: "m2m-prod-listas-box" },
+                { selector: ".m2m-dif-lista", parent: "m2m-dif-listas-box" }
+            ];
+
+            ruleFormListContainers.forEach(cfg => {
+                const elClass = cfg.selector.replace('.', '');
+                const inputs = document.querySelectorAll(cfg.selector);
+                if (inputs.length > 0) {
+                    const parent = inputs[0].parentElement?.parentElement || document.getElementById(cfg.parent);
+                    if (parent) {
+                        // Solo los checks de mapeo (por vigencia VES/USD) + Todas --
+                        // se quitaron los checks de listas individuales harcodeadas
+                        // (#3, #4, #5...) por pedido explícito: las listas concretas
+                        // cambian con el tiempo, el mapeo por vigencia ya resuelve
+                        // cuál aplica en cada momento.
+                        const currentChecked = Array.from(inputs).filter(i => i.checked).map(i => i.value);
+                        const esListaEspecificaVieja = currentChecked.some(
+                            v => v !== 'LISTAS_VES' && v !== 'LISTAS_USD' && v !== '*'
+                        );
+                        const isVesChecked = currentChecked.includes('LISTAS_VES')
+                            || (elClass === 'm2m-dif-lista' && currentChecked.length === 0);
+                        const isUsdChecked = currentChecked.includes('LISTAS_USD');
+                        const isTodasChecked = currentChecked.includes('*') || esListaEspecificaVieja;
+
+                        let html = `<label><input type="checkbox" class="${elClass}" value="LISTAS_VES" ${isVesChecked ? 'checked' : ''}> Listas VES (Mapeo)</label> `;
+                        html += `<label><input type="checkbox" class="${elClass}" value="LISTAS_USD" ${isUsdChecked ? 'checked' : ''}> Listas USD (Mapeo)</label> `;
+                        html += `<label><input type="checkbox" class="${elClass}" value="*" ${isTodasChecked ? 'checked' : ''}> Todas (*)</label>`;
+                        parent.innerHTML = html;
+                    }
+                }
+            });
+        } catch (err) {
+            console.error("Error cargando mapeo de listas:", err);
+            body.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
+        }
+    };
+
+    window.savePricelistMapeo = async function(event) {
+        if (event) event.preventDefault();
+        const rows = document.querySelectorAll("#pricelist-mapeo-table-body tr[data-pricelist-id]");
+        const mapeo = {};
+        rows.forEach(row => {
+            const pid = row.dataset.pricelistId;
+            mapeo[pid] = {
+                moneda: row.querySelector(".pm-moneda")?.value || "",
+                categoria: row.querySelector(".pm-categoria")?.value || "",
+                vigente: row.querySelector(".pm-vigente")?.checked || false,
+            };
+        });
+
+        const hayUsd = Object.values(mapeo).some(f => f.moneda === "usd");
+        const hayVes = Object.values(mapeo).some(f => f.moneda === "ves");
+        if (!hayUsd && !hayVes) {
+            alert("⚠️ Debes marcar al menos una lista con Moneda USD y una con VES.");
+            return;
+        }
+
+        // Aviso (no bloqueante) si dos listas activas comparten el mismo
+        // grupo Categoría+Moneda y ambas están "Vigente" -- ambiguo para
+        // Inventario, que espera UNA vigente por grupo.
+        const vigentesPorGrupo = {};
+        Object.values(mapeo).forEach(f => {
+            if (f.categoria && f.moneda && f.vigente) {
+                const key = `${f.categoria}_${f.moneda}`;
+                vigentesPorGrupo[key] = (vigentesPorGrupo[key] || 0) + 1;
+            }
+        });
+        const gruposDuplicados = Object.entries(vigentesPorGrupo).filter(([, n]) => n > 1).map(([k]) => k);
+        if (gruposDuplicados.length > 0) {
+            if (!confirm(`⚠️ Hay más de una lista "Vigente" en el mismo grupo (${gruposDuplicados.join(", ")}). Inventario usará una cualquiera de ellas. ¿Guardar de todas formas?`)) {
+                return;
+            }
+        }
+
+        const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
+        const histEnabled = histCheckbox ? histCheckbox.checked : true;
+
+        try {
+            const res = await fetch('/api/config/pricelist-mapeo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mapeo, historical_pricelist_enabled: histEnabled })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Mapeo de listas guardado exitosamente.");
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo guardar."));
+            }
+        } catch (err) {
+            console.error("Error guardando mapeo de listas:", err);
+            alert("❌ Error de red al guardar la configuración.");
+        }
+    };
+
+    // --- INVENTARIO (Fase D, agosto 2026) ---
+    let _inventarioCatalogoData = [];
+
+    function _renderInventarioCatalogo(filtro) {
+        const body = document.getElementById("inventario-catalogo-table-body");
+        if (!body) return;
+        const f = (filtro || "").trim().toLowerCase();
+        const filas = f
+            ? _inventarioCatalogoData.filter(p =>
+                (p.codigo || "").toLowerCase().includes(f) || (p.nombre || "").toLowerCase().includes(f))
+            : _inventarioCatalogoData;
+
+        if (filas.length === 0) {
+            body.innerHTML = '<tr><td colspan="7" class="table-empty">No hay productos que coincidan.</td></tr>';
+            return;
+        }
+        body.innerHTML = filas.map(p => `
+            <tr>
+                <td><strong>${p.codigo || 'N/A'}</strong></td>
+                <td>${p.nombre}</td>
+                <td>${p.marca || '—'}</td>
+                <td>${p.presentacion || '—'}</td>
+                <td>${(p.litros || 0).toFixed(2)} L</td>
+                <td>${(p.peso || 0).toFixed(2)}</td>
+                <td>${p.unidades_por_paleta > 0 ? p.unidades_por_paleta : '—'}</td>
+            </tr>
+        `).join('');
+    }
+
+    const _inventarioComparativoCargado = { industrial: false, comercial: false };
+
+    window.switchInventarioSubtab = function(name) {
+        document.querySelectorAll(".subtab-btn[data-inv-subtab]").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.invSubtab === name);
+        });
+        document.querySelectorAll(".subtab-panel[data-inv-subtab-panel]").forEach(panel => {
+            panel.style.display = (panel.dataset.invSubtabPanel === name) ? "block" : "none";
+        });
+        if (!_inventarioComparativoCargado[name]) {
+            _loadInventarioComparativo(name);
+        }
+    };
+
+    async function _loadInventarioComparativo(categoria) {
+        const header = document.getElementById(`inventario-comparativo-${categoria}-header`);
+        const body = document.getElementById(`inventario-comparativo-${categoria}-body`);
+        if (!body) return;
+        const fmt = (v) => v == null ? '—' : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
+        try {
+            const res = await fetch(`/api/inventario/comparativo?categoria=${categoria}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Error al cargar');
+
+            _inventarioComparativoCargado[categoria] = true;
+            if (header) {
+                const usdTxt = data.usd_lista_id ? `Lista #${data.usd_lista_id} (USD)` : 'sin lista USD vigente asignada';
+                const vesTxt = data.ves_lista_id ? `Lista #${data.ves_lista_id} (VES)` : 'sin lista VES vigente asignada';
+                header.textContent = `Comparando: ${usdTxt} vs. ${vesTxt} -- precios con IVA (${(data.iva_rate * 100).toFixed(0)}%) incluido.`;
+            }
+            if (data.items.length === 0) {
+                body.innerHTML = '<tr><td colspan="4" class="table-empty">Sin productos con precio en las listas vigentes de esta categoría -- revisa el Mapeo de Listas en Configuración.</td></tr>';
+                return;
+            }
+            body.innerHTML = data.items.map(it => `
+                <tr>
+                    <td><strong>${it.codigo || 'N/A'}</strong></td>
+                    <td>${it.nombre}</td>
+                    <td>${fmt(it.precio_usd_con_iva)}</td>
+                    <td>${fmt(it.precio_ves_con_iva)}</td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            console.error(`Error cargando comparativo Inventario (${categoria}):`, err);
+            if (header) header.textContent = 'Error al cargar.';
+            body.innerHTML = '<tr><td colspan="4" class="table-empty" style="color:#dc2626;">Error de red al cargar el comparativo.</td></tr>';
+        }
+    }
+
+    window.loadInventario = async function() {
+        const catalogoBody = document.getElementById("inventario-catalogo-table-body");
+        if (!catalogoBody && !document.getElementById("inventario-comparativo-industrial-body")) return;
+
+        // Sub-pestaña activa (default "industrial") + catálogo se cargan en paralelo.
+        _inventarioComparativoCargado.industrial = false;
+        _inventarioComparativoCargado.comercial = false;
+        const activeSubtab = document.querySelector(".subtab-btn[data-inv-subtab].active")?.dataset.invSubtab || "industrial";
+        _loadInventarioComparativo(activeSubtab);
+
+        if (catalogoBody) {
+            try {
+                const res = await fetch('/api/inventario/catalogo');
+                _inventarioCatalogoData = await res.json();
+                _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value);
+            } catch (err) {
+                console.error("Error cargando catálogo de Inventario:", err);
+                catalogoBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
+            }
+        }
+    };
+
+    const _inventarioSearchEl = document.getElementById("inventario-catalogo-search");
+    if (_inventarioSearchEl) {
+        _inventarioSearchEl.addEventListener("input", () => _renderInventarioCatalogo(_inventarioSearchEl.value));
+    }
+
+    // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
+    let currentSugerenciasList = [];
+
+    window.aprobarSugerenciaIndividual = async function(pago_id, so_id, monto_sugerido) {
+        if (!confirm(`¿Confirmar asociación de $${monto_sugerido.toFixed(2)} del Pago ${pago_id} a la Orden ${so_id}?`)) return;
+
+        try {
+            const res = await fetch('/api/vincular', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pago_id: pago_id,
+                    so_id: so_id,
+                    monto_aplicado: monto_sugerido
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Vinculación completada con éxito.");
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+                loadKPIs();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo vincular."));
+            }
+        } catch (err) {
+            console.error("Error al vincular sugerencia:", err);
+            alert("❌ Error de red.");
+        }
+    };
+
+    window.cerrarPagoHuerfano = async function(pago_id) {
+        const motivo = prompt(`¿Por qué se cierra el pago ${pago_id} a favor de la empresa?\n(Sin orden abierta del cliente para aplicarlo -- esto NO crea ningún ajuste contable en Odoo, solo lo marca como resuelto acá)`, "Sin orden abierta del cliente -- cerrado a favor de la empresa");
+        if (motivo === null) return; // cancelado
+
+        try {
+            const res = await fetch('/api/conciliaciones/cerrar-pago-huerfano', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pago_id: pago_id, motivo: motivo || undefined })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("✅ Pago cerrado a favor de la empresa.");
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+                loadKPIs();
+            } else {
+                alert("❌ Error: " + (data.detail || "No se pudo cerrar el pago."));
+            }
+        } catch (err) {
+            console.error("Error al cerrar pago huérfano:", err);
+            alert("❌ Error de red.");
+        }
+    };
+
+    // COBRANZA UNIFICADA -- reemplaza las 4 tablas históricas (Pagos
+    // Pendientes por Asociar, Mapa de Conciliación, Pagos Conciliados y el
+    // registro de Cobranza) con una sola fuente de datos (/api/cobranza/pagos)
+    // y una sola tabla. Reusa TAL CUAL las acciones ya existentes
+    // (aprobarSugerenciaIndividual, abrirModalVincularManual, cerrarPagoHuerfano,
+    // generarReciboSeleccionados/toggleAllCobranza)
+    // -- currentSugerenciasList se repuebla acá con los pendientes de la
+    // tabla unificada (con alias de campos para que esas funciones, que
+    // esperan el esquema viejo de /api/conciliaciones/sugerencias, sigan
+    // funcionando sin tocarlas.
+    let cobranzaUnificadaData = [];
+
+    async function loadCobranzaUnificado() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const vSelect = document.getElementById("cobranza-vendedor-filter");
+        if (!tbody) return;
+
+        tbody.innerHTML = '<tr><td colspan="12" class="table-empty">Cargando pagos (pendientes, vinculados y conciliados en Odoo)...</td></tr>';
+        try {
+            const res = await fetch("/api/cobranza/pagos");
+            if (!res.ok) throw new Error("Error al obtener los pagos");
+            cobranzaUnificadaData = await res.json();
+
+            if (vSelect) {
+                const curVal = vSelect.value;
+                const vendedores = [...new Set(cobranzaUnificadaData.map(i => i.vendedor || "Sin Vendedor"))].sort();
+                vSelect.innerHTML = '<option value="*">Todos los Vendedores</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    vSelect.appendChild(opt);
+                });
+                vSelect.value = curVal || "*";
+            }
+
+            ["cobranza-vendedor-filter", "cobranza-estado-filter", "cobranza-moneda-filter",
+             "cobranza-solo-duplicados", "cobranza-solo-alertas", "cobranza-sort"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !el.dataset.wired) {
+                    el.addEventListener("change", renderCobranzaUnificado);
+                    el.dataset.wired = "1";
+                }
+            });
+            const searchEl = document.getElementById("cobranza-search");
+            if (searchEl && !searchEl.dataset.wired) {
+                searchEl.addEventListener("input", renderCobranzaUnificado);
+                searchEl.dataset.wired = "1";
+            }
+
+            renderCobranzaUnificado();
+            renderCobranzaCerrados();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="12" class="table-empty danger">Error cargando pagos: ${err.message}</td></tr>`;
+            console.error(err);
+        }
+    }
+    window.loadCobranzaUnificado = loadCobranzaUnificado;
+
+    function descargarCobranzaExcel() {
+        const params = new URLSearchParams();
+        const selVend = (document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
+        const selEstado = (document.getElementById("cobranza-estado-filter") || {}).value || "*";
+        const selMoneda = (document.getElementById("cobranza-moneda-filter") || {}).value || "*";
+        const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
+        const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
+        const search = ((document.getElementById("cobranza-search") || {}).value || "").trim();
+
+        if (selVend !== "*") params.set("vendedor", selVend);
+        if (selEstado !== "*") params.set("estado", selEstado);
+        if (selMoneda !== "*") params.set("moneda", selMoneda);
+        if (soloDup) params.set("solo_duplicados", "true");
+        if (soloAlertas) params.set("solo_alertas", "true");
+        if (search) params.set("search", search);
+
+        window.location.href = "/api/cobranza/pagos/excel?" + params.toString();
+    }
+    window.descargarCobranzaExcel = descargarCobranzaExcel;
+
+    function renderCobranzaUnificado() {
+        const tbody = document.getElementById("cobranza-table-body");
+        const countBadge = document.getElementById("badge-cobranza-count");
+        if (!tbody) return;
+
+        const selVend = (document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
+        const selEstado = (document.getElementById("cobranza-estado-filter") || {}).value || "*";
+        const selMoneda = (document.getElementById("cobranza-moneda-filter") || {}).value || "*";
+        const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
+        const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
+        const search = ((document.getElementById("cobranza-search") || {}).value || "").trim().toLowerCase();
+        const sortBy = (document.getElementById("cobranza-sort") || {}).value || "pago_fecha_desc";
+
+        // "Cerrados a favor de la empresa" tienen su propia bandeja (ver
+        // sección debajo) -- no se muestran en la tabla principal.
+        let filtered = cobranzaUnificadaData.filter(i => i.estado !== "cerrado_empresa");
+        if (selVend !== "*") filtered = filtered.filter(i => (i.vendedor || "Sin Vendedor") === selVend);
+        if (selEstado !== "*") filtered = filtered.filter(i => i.estado === selEstado);
+        if (selMoneda !== "*") filtered = filtered.filter(i => i.moneda_pago === selMoneda);
+        if (soloDup) filtered = filtered.filter(i => i.posible_duplicado);
+        if (soloAlertas) filtered = filtered.filter(i => i.reasignado_por_odoo);
+        if (search) {
+            filtered = filtered.filter(i => [i.pago_id, i.numero_pago_odoo, i.cliente_nombre, i.so_id]
+                .some(v => v && String(v).toLowerCase().includes(search)));
+        }
+
+        const sorters = {
+            pago_fecha_asc: (a, b) => (a.pago_fecha || "").localeCompare(b.pago_fecha || ""),
+            pago_fecha_desc: (a, b) => (b.pago_fecha || "").localeCompare(a.pago_fecha || ""),
+            monto_desc: (a, b) => (b.monto_pago_bcv_usd || b.monto_pago_original || 0) - (a.monto_pago_bcv_usd || a.monto_pago_original || 0),
+            cliente_asc: (a, b) => (a.cliente_nombre || "").localeCompare(b.cliente_nombre || ""),
+        };
+        filtered = [...filtered].sort(sorters[sortBy] || sorters.pago_fecha_desc);
+
+        if (countBadge) countBadge.textContent = `${filtered.length} Pagos`;
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos para el filtro seleccionado.</td></tr>';
+            currentSugerenciasList = [];
+            return;
+        }
+
+        // currentSugerenciasList repuebla el array que ya consumen
+        // aprobarSugerenciaIndividual/abrirModalVincularManual/aprobarSugerenciasSeleccionadas
+        // -- alias de campos hacia el esquema viejo que esas funciones esperan.
+        currentSugerenciasList = filtered
+            .filter(i => i.estado === "pendiente")
+            .map(i => ({
+                ...i,
+                saldo_pago: i.monto_por_aplicar,
+                saldo_pago_original: i.monto_pago_original,
+                monto_pago: i.monto_pago_bcv_usd,
+                monto_pago_binance: i.monto_pago_binance_usd,
+            }));
+        const idxByPagoSug = {};
+        currentSugerenciasList.forEach((it, idx) => { idxByPagoSug[it.sugerencia_id] = idx; });
+
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        const pagoCounts = {};
+        filtered.forEach(i => { pagoCounts[i.pago_id] = (pagoCounts[i.pago_id] || 0) + 1; });
+        const pagoSeen = {};
+
+        const estadoBadge = {
+            pendiente: '<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:700;">⏳ Pendiente</span>',
+            vinculado_local: '<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">🔗 Vinculado</span>',
+            conciliado_odoo: '<span class="badge" style="background:#dcfce7; color:#166534; font-weight:700;">✓ Conciliado (Odoo)</span>',
+        };
+
+        tbody.innerHTML = filtered.map(item => {
+            const total = pagoCounts[item.pago_id];
+            pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
+            const pagoCell = `<strong>${item.pago_id}</strong>`
+                + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
+                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} órdenes -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${total}</small>` : '');
+
+            const montoCell = item.moneda_pago === "VES"
+                ? `Bs. ${Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`
+                : fmt(item.monto_pago_original);
+            const tasasCell = `
+                <span style="font-size:0.72rem; color:#2563eb; display:block;">BCV: ${fmt(item.monto_pago_bcv_usd)}</span>
+                <span style="font-size:0.72rem; color:#d97706; display:block;">Binance: ${fmt(item.monto_pago_binance_usd)}</span>
+                <span style="font-size:0.72rem; color:#7c3aed; display:block;">EUR: ${fmt(item.monto_pago_eur)}</span>`;
+
+            const ordenCell = item.so_id
+                ? `<span class="badge blue">${item.so_id}</span>` + (item.factura_id ? `<br><small>${item.factura_id}</small>` : '')
+                : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`;
+
+            const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`;
+
+            const alertas = [];
+            if (item.posible_duplicado) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
+            // Evento pasado, no estado actual: sin la fecha se leia como
+            // una contradiccion junto a "Pendiente". No lo es -- Odoo pudo
+            // haber aplicado parte del pago a otra orden y el resto seguir
+            // sin conciliar.
+            if (item.reasignado_por_odoo) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:600;">🔄 Odoo lo movió${item.reasignado_fecha ? ` el ${item.reasignado_fecha}` : ''}</span>`);
+            const alertasCell = alertas.length ? alertas.join('<br>') : '<span style="color:#94a3b8;">-</span>';
+
+            const reciboCell = item.recibido
+                ? `<span class="semaphore green" title="Entregado a Administración">✓ Recibido</span>`
+                : `<span class="semaphore yellow">⏳ Pendiente</span>`;
+
+            const tieneSugerencia = !!item.so_id;
+            const sugIdx = idxByPagoSug[item.sugerencia_id];
+            let accionesExtra = '';
+            let checkboxCell = '<td></td>';
+            if (item.estado === "pendiente") {
+                if (tieneSugerencia && !item.posible_duplicado && sugIdx !== undefined) {
+                    // Aprobación masiva retirada (pedido del usuario,
+                    // 2026-08-22): Auto-FIFO (daemon) ya vincula estas
+                    // filas automáticamente cada ciclo -- el botón "Bulk"
+                    // solo aprobaba EXACTAMENTE este mismo subconjunto
+                    // (con so_id, no duplicado), nunca los casos que sí
+                    // requieren juicio humano (duplicados, sin orden). El
+                    // botón individual "✓ Vincular" sigue para quien no
+                    // quiera esperar al siguiente ciclo.
+                    accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
+                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden</button>`;
+                } else if (sugIdx !== undefined) {
+                    accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`
+                        + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
+                }
+            }
+            // Independiente del estado (corrección del usuario,
+            // 2026-08-22): un pago YA reportado se puede recibir/generar
+            // recibo aunque todavía esté "pendiente" de vincular a una
+            // orden -- puede_marcar_recibido ya viene así calculado desde
+            // el backend para filas "pendiente" también, el checkbox no
+            // debe depender de a qué rama de vinculación cayó la fila.
+            if (item.puede_marcar_recibido) {
+                checkboxCell = `<td style="text-align:center;"><input type="checkbox" class="check-cobranza-item" value="${item.pago_id}" data-vendedor="${item.vendedor || ''}"></td>`;
+            }
+
+            return `
+                <tr>
+                    ${checkboxCell}
+                    <td>${pagoCell}</td>
+                    <td>${item.pago_fecha || '-'}</td>
+                    <td>${item.cliente_nombre || '-'}</td>
+                    <td>${vendedorCell}</td>
+                    <td>${montoCell}</td>
+                    <td>${tasasCell}</td>
+                    <td>${ordenCell}</td>
+                    <td>${estadoBadge[item.estado] || item.estado}</td>
+                    <td>${alertasCell}</td>
+                    <td>${reciboCell}</td>
+                    <td>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <button class="btn btn-sm btn-secondary" onclick="abrirModalDetallePago('${item.pago_id}')" style="padding:3px 8px; font-size:0.75rem;">👁️ Detalle</button>
+                            ${accionesExtra}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+    window.renderCobranzaUnificado = renderCobranzaUnificado;
+
+    // Bandeja "Cerrados a Favor de la Empresa" -- pagos huérfanos marcados
+    // como resueltos (ver cerrarPagoHuerfano). Antes eran invisibles fuera
+    // del filtro de exclusión de "pendientes"; ahora tienen su propia vista,
+    // sourced del mismo payload unificado (sin endpoint nuevo).
+    function renderCobranzaCerrados() {
+        const tbody = document.getElementById("cobranza-cerrados-table-body");
+        const countBadge = document.getElementById("badge-cobranza-cerrados-count");
+        if (!tbody) return;
+
+        const cerrados = cobranzaUnificadaData.filter(i => i.estado === "cerrado_empresa");
+        if (countBadge) countBadge.textContent = `${cerrados.length} Pagos`;
+
+        if (cerrados.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay pagos cerrados a favor de la empresa.</td></tr>';
+            return;
+        }
+
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        tbody.innerHTML = cerrados.map(item => `
+            <tr>
+                <td><strong>${item.pago_id}</strong></td>
+                <td>${item.cliente_nombre || '-'}</td>
+                <td>${item.moneda_pago === 'VES'
+                    ? 'Bs. ' + Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })
+                    : fmt(item.monto_pago_original)}</td>
+                <td>${item.cerrado_motivo || '-'}</td>
+                <td>${item.cerrado_por || item.confirmado_por || '-'}</td>
+                <td>${(item.cerrado_timestamp || '').slice(0, 19).replace('T', ' ') || '-'}</td>
+            </tr>
+        `).join('');
+    }
+    window.renderCobranzaCerrados = renderCobranzaCerrados;
+
+    window.toggleAllCobranza = function(el) {
+        document.querySelectorAll(".check-cobranza-item").forEach(cb => cb.checked = el.checked);
+    };
+
+    window.abrirModalDetallePago = function(pago_id) {
+        const modal = document.getElementById("modal-detalle-pago");
+        const body = document.getElementById("modal-detalle-pago-body");
+        if (!modal || !body) return;
+        const filas = cobranzaUnificadaData.filter(i => i.pago_id === pago_id);
+        if (filas.length === 0) return;
+        const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
+        const base = filas[0];
+
+        const campo = (icon, label, valor) => `<div style="margin-bottom:0.5rem;"><span style="font-size:0.75rem; color:#64748b; display:block;">${icon ? icon + ' ' : ''}${label}</span><strong>${valor ?? '-'}</strong></div>`;
+
+        // Tarjeta tasa + equivalente SIEMPRE emparejados (pedido explícito
+        // del usuario) -- una por cada una de las 3 rutas de conversión.
+        const tarjetaTasa = (icon, nombre, color, tasa, equiv) => `
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:0.75rem 1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:#64748b; font-weight:600; margin-bottom:0.35rem;">${icon} ${nombre}</div>
+                <div style="font-size:1.05rem; font-weight:700; color:${color};">${tasa != null ? tasa.toFixed(4) : '-'}</div>
+                <div style="border-top:1px dashed #e2e8f0; margin:0.4rem 0;"></div>
+                <div style="font-size:0.7rem; color:#94a3b8;">Equivalente</div>
+                <div style="font-size:0.95rem; font-weight:600; color:#0f172a;">${fmt(equiv)}</div>
+            </div>`;
+
+        let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:0.5rem 1rem; margin-bottom:1rem;">
+            ${campo('🆔', 'Pago ID', base.pago_id)}
+            ${campo('🧾', 'N° Pago Odoo', base.numero_pago_odoo)}
+            ${campo('📅', 'Fecha', base.pago_fecha)}
+            ${campo('👤', 'Cliente', base.cliente_nombre)}
+            ${campo('🧑‍💼', 'Vendedor', base.vendedor)}
+            ${campo('💳', 'Método de Pago', base.metodo_pago)}
+            ${campo('💰', 'Monto Original', (base.moneda_pago === 'VES' ? 'Bs. ' + Number(base.monto_pago_original).toLocaleString('es-VE', {minimumFractionDigits:2}) : fmt(base.monto_pago_original)))}
+            ${campo('📌', 'Estado', base.estado)}
+            ${campo('📥', 'Origen', base.origen)}
+            ${campo('✅', 'Confirmado Por', base.confirmado_por)}
+            ${campo('🧾', 'Recibido', base.recibido ? `Sí (${base.numero_recibido || ''}, ${base.fecha_recibido || ''}, ${base.recibido_por || ''})` : 'No')}
+        </div>`;
+
+        html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:0.75rem; margin-bottom:1rem;">
+            ${tarjetaTasa('🏦', 'Tasa BCV', '#0369a1', base.tasa_bcv, base.monto_pago_bcv_usd)}
+            ${tarjetaTasa('🟡', 'Tasa Binance', '#b45309', base.tasa_binance, base.monto_pago_binance_usd)}
+            ${tarjetaTasa('💶', 'Tasa BCV-EUR', '#7c3aed', base.tasa_bcv_eur, base.monto_pago_eur)}
+        </div>`;
+
+        if (base.reasignado_por_odoo) {
+            html += `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#1e40af;">
+                🔄 <strong>Odoo movió este pago${base.reasignado_fecha ? ` el ${base.reasignado_fecha}` : ''}.</strong>
+                ${base.reasignado_detalle || ''}
+                <div style="margin-top:0.4rem; opacity:0.85;">Es el registro de un movimiento pasado, no el estado de hoy: el estado actual de cada vinculación se ve más abajo.</div>
+            </div>`;
+        }
+        if (base.posible_duplicado) {
+            html += `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#b91c1c;">
+                ⚠️ <strong>Posible duplicado</strong> de: ${(base.duplicado_de || []).join(', ')}
+            </div>`;
+        }
+
+        if (base.puede_editar_tasas && (base.vinc_id || base.pago_id)) {
+            // Sin vinc_id (pago aún pendiente, "sugerencia sin confirmar"):
+            // se guarda en pagos_tasa_binance_override por pago_id -- ver
+            // POST /api/pago/{pago_id}/tasa-binance. Con vinc_id (pago ya
+            // vinculado a una orden): se corrige la Vinculación real.
+            const targetId = base.vinc_id || base.pago_id;
+            const esVinculado = !!base.vinc_id;
+            html += `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
+                <label style="font-weight:700; font-size:0.85rem; display:block; margin-bottom:0.5rem;">Editar Tasas Aplicadas</label>
+                <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+                    <input type="number" step="0.0001" class="input-tasa-binance" data-vinc="${targetId}" data-es-vinculado="${esVinculado}" value="${base.tasa_binance ?? ''}" placeholder="Tasa Binance" style="width:120px; padding:4px 6px; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTasaBinance('${targetId}', ${esVinculado})" style="padding:4px 10px; font-size:0.75rem;">Guardar Binance</button>
+                </div>
+                ${esVinculado ? `
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <select class="select-bcv-variante" data-vinc="${targetId}" style="padding:4px 6px; font-size:0.8rem;">
+                        <option value="USD">BCV USD</option>
+                        <option value="EUR">BCV EUR</option>
+                    </select>
+                    <button class="btn btn-sm btn-secondary" onclick="guardarTipoTasaBcv('${targetId}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Variante BCV</button>
+                </div>` : ''}
+            </div>`;
+        }
+
+        // Pedido explícito del usuario (2026-08-22): editar a qué orden y
+        // con qué monto aplica un pago YA vinculado, mientras Odoo no lo
+        // haya conciliado todavía -- "Odoo prevalece" una vez conciliado,
+        // ya no se edita a mano (ver PUT /api/vinculacion/{vinc_id}/editar).
+        if (base.vinc_id && base.estado !== 'conciliado_odoo') {
+            html += `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
+                <label style="font-weight:700; font-size:0.85rem; display:block; margin-bottom:0.5rem;">✏️ Editar Orden y Monto Aplicado</label>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <select id="edit-vinc-so-select" data-vinc="${base.vinc_id}" data-cliente="${base.cliente_id}" style="min-width:220px; padding:4px 6px; font-size:0.8rem;">
+                        <option value="${base.so_id || ''}">${base.so_id || 'Cargando órdenes...'}</option>
+                    </select>
+                    <input type="number" step="0.01" id="edit-vinc-monto" value="${base.monto_aplicado ?? ''}" placeholder="Monto aplicado" style="width:140px; padding:4px 6px; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="guardarEdicionVinculacion('${base.vinc_id}')" style="padding:4px 10px; font-size:0.75rem;">Guardar Cambios</button>
+                </div>
+            </div>`;
+        }
+
+        html += `<h3 style="margin:1rem 0 0.5rem;">📋 Reparto / Órdenes y Facturas</h3>
+            <div style="overflow-x:auto;">
+            <table class="cxc-table"><thead><tr>
+                <th>Orden</th><th>Factura</th><th>Monto Aplicado</th><th>Por Aplicar</th>
+                <th>Saldo Teórico BS</th><th>Saldo Teórico USD</th>
+                <th>Saldo Venta Real</th><th>Saldo Factura (Odoo)</th>
+            </tr></thead><tbody>`;
+        filas.forEach(f => {
+            html += `<tr>
+                <td>${f.so_id || '-'}</td>
+                <td>${f.factura_id || '-'}</td>
+                <td>${fmt(f.monto_aplicado)}</td>
+                <td>${fmt(f.monto_por_aplicar)}</td>
+                <td>${fmt(f.so_saldo_teorico_bs)}</td>
+                <td>${fmt(f.so_saldo_teorico_usd)}</td>
+                <td>${fmt(f.so_saldo_pendiente)}</td>
+                <td>${fmt(f.factura_saldo_odoo)}</td>
+            </tr>`;
+        });
+        html += `</tbody></table></div>`;
+
+        body.innerHTML = html;
+        const bcvVarianteSelect = body.querySelector(`.select-bcv-variante[data-vinc="${base.vinc_id}"]`);
+        if (bcvVarianteSelect && base.bcv_variante) bcvVarianteSelect.value = base.bcv_variante;
+
+        // Poblar el selector de "Editar Orden" con las órdenes reales del
+        // cliente -- la orden actual siempre queda como primera opción
+        // (aunque ya no aparezca "pendiente" en Odoo) para que el campo
+        // nunca se quede vacío ni pierda el valor actual mientras carga.
+        const editSoSelect = document.getElementById("edit-vinc-so-select");
+        if (editSoSelect && base.cliente_id) {
+            fetch(`/api/ordenes-pendientes/${base.cliente_id}`)
+                .then(res => res.ok ? res.json() : [])
+                .then(orders => {
+                    const actual = base.so_id || '';
+                    const vistas = new Set();
+                    let opts = '';
+                    if (actual) {
+                        opts += `<option value="${actual}">${actual} (orden actual)</option>`;
+                        vistas.add(actual);
+                    }
+                    orders.forEach(o => {
+                        if (vistas.has(o.so_id)) return;
+                        vistas.add(o.so_id);
+                        opts += `<option value="${o.so_id}">${o.so_id} - ${o.fecha} (Saldo: ${new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(o.saldo_pendiente)})</option>`;
+                    });
+                    editSoSelect.innerHTML = opts || `<option value="${actual}">${actual}</option>`;
+                    editSoSelect.value = actual;
+                })
+                .catch(err => console.error("Error cargando órdenes para editar vinculación:", err));
+        }
+
+        modal.style.display = "flex";
+    };
+
+    window.guardarEdicionVinculacion = async function(vincId) {
+        const soSelect = document.getElementById("edit-vinc-so-select");
+        const montoInput = document.getElementById("edit-vinc-monto");
+        if (!soSelect || !montoInput) return;
+        const so_id = soSelect.value;
+        const monto_aplicado = parseFloat(montoInput.value);
+        if (!so_id || !monto_aplicado || monto_aplicado <= 0) {
+            alert("Selecciona una orden e indica un monto válido.");
+            return;
+        }
+        try {
+            const res = await fetch(`/api/vinculacion/${vincId}/editar`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ so_id, monto_aplicado })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                alert("✅ Vinculación editada. Recálculo en segundo plano iniciado.");
+                cerrarModalDetallePago();
+                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+            } else {
+                alert(`❌ ${data.detail || "Error al editar la vinculación."}`);
+            }
+        } catch (err) {
+            console.error("Error editando vinculación:", err);
+            alert("❌ Error al editar la vinculación.");
+        }
+    };
+
+    window.cerrarModalDetallePago = function() {
+        const modal = document.getElementById("modal-detalle-pago");
+        if (modal) modal.style.display = "none";
+    };
+
+    // Initial Load for Dashboard
+    loadTasasPromedios();
+    
+    // --- Load Auditoría Data & Invoice Residual Discrepancies ---
+    // Paginación real de "Operaciones Conformes" (antes se cortaba a las
+    // primeras 100 filas sin forma de ver el resto) -- 50 filas por página.
+    let conformesFullList = [];
+    let conformesPage = 1;
+    const CONFORMES_PAGE_SIZE = 50;
+
+    function renderConformesPage() {
+        const bodyConformes = document.getElementById("conformes-table-body");
+        const pagerEl = document.getElementById("conformes-pager");
+        if (!bodyConformes) return;
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
+
+        if (conformesFullList.length === 0) {
+            bodyConformes.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes cargadas.</td></tr>';
+            if (pagerEl) pagerEl.innerHTML = "";
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(conformesFullList.length / CONFORMES_PAGE_SIZE));
+        conformesPage = Math.min(Math.max(1, conformesPage), totalPages);
+        const start = (conformesPage - 1) * CONFORMES_PAGE_SIZE;
+        const pageItems = conformesFullList.slice(start, start + CONFORMES_PAGE_SIZE);
+
+        bodyConformes.innerHTML = pageItems.map(c => `
+            <tr>
+                <td><strong>${escapeHtml(c.so_id)}</strong></td>
+                <td>${escapeHtml(c.factura_id)}</td>
+                <td>${escapeHtml(c.cliente_nombre)}</td>
+                <td><small>${c.fecha ? c.fecha.substring(0, 10) : ''}</small></td>
+                <td>${fmt(c.monto_original)}</td>
+                <td>${fmt(c.descuentos_aplicados)}</td>
+                <td><strong style="color:#059669;">${fmt(c.monto_neto_conciliado)}</strong></td>
+                <td><span class="state-badge cierre" style="background:#dcfce7; color:#15803d; font-weight:600;">${escapeHtml(c.estado)}</span></td>
+            </tr>
+        `).join('');
+
+        if (pagerEl) {
+            pagerEl.innerHTML = `
+                <button type="button" class="btn-secondary" id="conformes-prev-btn" ${conformesPage <= 1 ? 'disabled' : ''}>← Anterior</button>
+                <span>Página ${conformesPage} de ${totalPages} (${conformesFullList.length} operaciones conformes)</span>
+                <button type="button" class="btn-secondary" id="conformes-next-btn" ${conformesPage >= totalPages ? 'disabled' : ''}>Siguiente →</button>
+            `;
+            const prevBtn = document.getElementById("conformes-prev-btn");
+            const nextBtn = document.getElementById("conformes-next-btn");
+            if (prevBtn) prevBtn.addEventListener("click", () => { conformesPage -= 1; renderConformesPage(); });
+            if (nextBtn) nextBtn.addEventListener("click", () => { conformesPage += 1; renderConformesPage(); });
+        }
+    }
+
+    async function loadAuditoria() {
+        const bodyDisc = document.getElementById("discrepancias-table-body");
+        const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
+        const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
+        const bodyConformes = document.getElementById("conformes-table-body");
+        const bodyResidual = document.getElementById("pagos-residual-table-body");
+        const bodyAjustesHuerfanos = document.getElementById("ajustes-cambio-huerfanos-table-body");
+        const bodyImporteLocal = document.getElementById("pagos-importe-local-table-body");
+        const bodySobreaplicadas = document.getElementById("vinculaciones-sobreaplicadas-table-body");
+        const bodyTasaImplausible = document.getElementById("vinculaciones-tasa-implausible-table-body");
+        const bodyDevolucionNoReflejada = document.getElementById("devolucion-no-reflejada-table-body");
+
+        const elKpiConformes = document.getElementById("audit-kpi-conformes");
+        const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
+        const elKpiAceptadas = document.getElementById("audit-kpi-aceptadas");
+        const elKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
+
+        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
+
+        try {
+            if (bodyDisc) bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
+            if (bodyFacturas) bodyFacturas.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando discrepancias con facturas Odoo...</td></tr>';
+
+            const res = await fetch("/api/auditoria");
+            if (res.ok) {
+                const data = await res.json();
+                
+                const conformes = data.operaciones_conformes || [];
+                const discrepancias = data.discrepancias || [];
+                const discFacturas = data.discrepancias_facturas_odoo || [];
+                const aceptadas = data.anomalias_aceptadas || [];
+                const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
+                const ajustesHuerfanos = data.ajustes_cambio_huerfanos || [];
+                const pagosImporteLocal = data.pagos_importe_local_desincronizado || [];
+                const vinculacionesSobreaplicadas = data.vinculaciones_sobreaplicadas || [];
+                const vinculacionesTasaImplausible = data.vinculaciones_tasa_implausible || [];
+                const devolucionNoReflejada = data.devolucion_no_reflejada_en_cantidad || [];
+
+                if (elKpiConformes) elKpiConformes.textContent = conformes.length;
+                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
+                if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
+
+                const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
+                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length + pagosResidual.length);
+                const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
+                if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length + conformes.length);
+
+                const montoTotDisc = discrepancias.reduce((acc, x) => acc + (x.diferencia_monto || 0), 0) + discFacturas.reduce((acc, x) => acc + (x.diferencia || 0), 0);
+                if (elKpiMontoDiscrepancia) elKpiMontoDiscrepancia.textContent = fmt(montoTotDisc);
+
                 // Render Discrepancias de Precios / Reglas
                 if (bodyDisc) {
                     if (discrepancias.length === 0) {
