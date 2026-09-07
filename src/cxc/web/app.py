@@ -968,7 +968,28 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         monto_odoo = parse_decimal_safe(str(conciliado.get("monto_original") or "0"))
         moneda_odoo = str(conciliado.get("moneda") or "USD").upper()
         fecha_odoo_str = conciliado.get("fecha_pago") or ""
-        cambio_monto = monto_odoo > 0 and abs(monto_odoo - v.monto_aplicado) > Decimal("0.01")
+        # ``monto_original`` es el monto COMPLETO del pago. Comparar contra
+        # él solo tiene sentido cuando la Vinculación representa el pago
+        # entero, que era el único caso posible antes de septiembre 2026.
+        #
+        # Desde que ``_sincronizar_aplicaciones_conciliadas`` escribe el
+        # reparto REAL de Odoo (``account.partial.reconcile``), una
+        # Vinculación puede representar solo una PARTE del pago, y entonces
+        # esta comparación la "corrige" inflándola al total. Bug real
+        # detectado al revisar la Bandeja 2: el pago 982 (30.748,20) que
+        # Odoo repartió entre S00555 (20.517,27), S00328 (6.062,81),
+        # S00357 (3.082,01) y dos notas de débito terminó con los 30.748,20
+        # COMPLETOS en cada una de las tres órdenes -- 92.244,60 de cobranza
+        # inventada a partir de un pago de 30.748,20.
+        #
+        # La reconciliación de Odoo ya es la fuente autoritativa del monto,
+        # así que estas Vinculaciones no se tocan por monto acá.
+        viene_de_reparto_odoo = v.confirmado_por == "Odoo (reconciliación)"
+        cambio_monto = (
+            not viene_de_reparto_odoo
+            and monto_odoo > 0
+            and abs(monto_odoo - v.monto_aplicado) > Decimal("0.01")
+        )
         cambio_moneda = moneda_odoo and moneda_odoo != str(v.moneda_abono.value).upper()
         cambio_fecha = (
             fecha_odoo_str and fecha_odoo_str != v.hora_pago_confirmada.date().isoformat()
