@@ -7892,44 +7892,73 @@ async def get_bandeja_facturacion():
                 # error -- NC pendiente y retencion de IVA solo aplican a
                 # ordenes ya facturadas en Odoo.
                 if clasificacion.bandeja_destino == BandejaDestino.FACTURACION_2:
-                    # Bandeja 2 (nuevo criterio, Sección 5 del Manual): pagado
-                    # vs algún teórico Y ya facturada -- pendiente ajustes
-                    # (diferencial cambiario o pronto pago). Antes se usaba
-                    # "tiene NC calculada por el motor > 0.01" como criterio
-                    # de entrada, un concepto distinto (ver docstring del
-                    # endpoint); si el motor sí calculó una NC pendiente, se
-                    # sigue mostrando aquí como dato adicional (nc_monto).
+                    # Bandeja 2, rediseñada con la misma estructura que la 1
+                    # (pedido del usuario, septiembre 2026): órdenes YA
+                    # facturadas y pagadas contra algún teórico, a las que
+                    # hay que emitirles una Nota de Crédito para llevar lo
+                    # facturado a lo pagado.
                     #
-                    # Fase 3 (auditoría del ciclo CxC, agosto 2026): esta
-                    # misma condición de entrada mezclaba DOS motivos
-                    # distintos bajo un solo texto genérico -- "diferencial
-                    # cambiario / pronto pago" (nada por aprobar, es la
-                    # tolerancia normal del motor) vs. "el cliente ya pagó
-                    # lo que corresponde con el descuento teórico aplicado,
-                    # pero ese descuento todavía no existe como NC en Odoo"
-                    # (escenarios 1.3-1.7 y sus espejos en USD/lista nativa
-                    # del análisis). Se separan en dos listas usando la
-                    # misma cifra dinámica de `/api/ventas` ("Fase 6",
-                    # `descuento_pendiente_aplicar` -- ya neta lo que Odoo/
-                    # NC/sistema ya cubrieron) en vez de crear un cálculo
-                    # paralelo.
-                    descuento_pend = float(item.get("descuento_pendiente_aplicar") or 0.0)
-                    if descuento_pend > 0.05:
+                    # El monto de esa NC es ``descuento_pendiente_aplicar``,
+                    # no la diferencia cruda factura-pagado (decisión del
+                    # usuario, opción B). La diferencia cruda incluye lo que
+                    # el cliente simplemente no pagó: en producción supera a
+                    # lo que las reglas justifican en 88 de 168 órdenes con
+                    # brecha, por 6.267,07 -- eso es saldo por cobrar, no
+                    # descuento, y perdonarlo por NC sería regalarlo.
+                    #
+                    # ``descuento_pendiente_aplicar`` ya netea los cuatro
+                    # caminos por los que un descuento pudo materializarse:
+                    # el documento (orden o factura), las NC ya emitidas, el
+                    # descuento aprobado a mano, y la rebaja hecha
+                    # directamente en el precio.
+                    #
+                    # Antes esta bandeja mostraba ``ncs_calculadas`` sola,
+                    # que es solo una parte del descuento del motor: en
+                    # S00719 mostraba 38,73 cuando el motor había calculado
+                    # 949,61.
+                    #
+                    # Se unifican acá las dos listas que antes se separaban
+                    # ("descuentos pendientes por aprobar" vs "notas de
+                    # crédito pendientes"): con este criterio son lo mismo,
+                    # y tener dos bandejas para el mismo trabajo obligaba a
+                    # mirar en dos lados.
+                    nc_subtotal = float(item.get("descuento_pendiente_aplicar") or 0.0)
+                    if nc_subtotal > 0.05:
                         detalles_b = b.descuentos_detalle if b else []
-                        es_diferencial = any(d.origen == "bcv_completo" for d in detalles_b)
-                        descuentos_pendientes_aprobar.append(
+                        fact_sub = float(item.get("total_facturado_antes_impuestos") or 0.0)
+                        # La tasa real de ESTA factura, no una constante: si
+                        # el cliente retuvo IVA o la factura mezcla tasas,
+                        # el cociente lo refleja. 1,16 solo como respaldo.
+                        fact_con_iva = float(item.get("total_facturado_con_impuestos") or 0.0)
+                        factor_iva = (
+                            fact_con_iva / fact_sub if fact_sub > 0 and fact_con_iva > 0 else 1.16
+                        )
+                        notas_credito_pendientes.append(
                             {
                                 "so_id": o.so_id,
                                 "cliente_nombre": c_name,
                                 "factura_id": o.factura_id or "Odoo",
-                                "monto_pagado": abono,
-                                "descuento_pendiente_aplicar": round(descuento_pend, 2),
-                                "descuento_pendiente_pct": round(
-                                    descuento_pend / monto_orig * 100.0, 2
-                                )
-                                if monto_orig > 0
+                                "fecha": o.fecha.isoformat()
+                                if hasattr(o.fecha, "isoformat")
+                                else str(o.fecha),
+                                # Subtotal facturado, neto de NC/ND.
+                                "factura_neta_subtotal": round(fact_sub, 2),
+                                # Por cuál referencia salió de CxC y si el
+                                # pago está confirmado -- misma información
+                                # que la Bandeja 1.
+                                "referencia_pago": str(clasificacion.referencia),
+                                "pago_confirmado": clasificacion.confirmado,
+                                "teorico_neto_referencia": _teorico_de_referencia(
+                                    item, clasificacion.referencia
+                                ),
+                                # La NC en subtotal y con IVA: la nota de
+                                # crédito es gravable y arrastra su porción
+                                # de impuesto (aclaración del usuario).
+                                "nc_subtotal": round(nc_subtotal, 2),
+                                "nc_con_iva": round(nc_subtotal * factor_iva, 2),
+                                "nc_porcentaje": round(nc_subtotal / fact_sub * 100.0, 2)
+                                if fact_sub > 0
                                 else 0.0,
-                                "incluye_diferencial_cambiario": es_diferencial,
                                 "descuentos_detalle": [
                                     {
                                         "origen": d.origen,
@@ -7938,32 +7967,10 @@ async def get_bandeja_facturacion():
                                     }
                                     for d in detalles_b
                                 ],
-                                "estado": "Pendiente Aprobar Descuento / NC",
-                                "cxc_routing_motivo": clasificacion.motivo,
-                            }
-                        )
-                    else:
-                        nc_calc = float(b.ncs_calculadas) if b else 0.0
-                        detalles_b = b.descuentos_detalle if b else []
-                        detalle_nc = next(
-                            (d for d in detalles_b if d.origen == "primera_compra"), None
-                        )
-                        concepto = (
-                            detalle_nc.descripcion
-                            if detalle_nc
-                            else "Pendiente ajuste (diferencial cambiario o pronto pago)"
-                        )
-                        notas_credito_pendientes.append(
-                            {
-                                "so_id": o.so_id,
-                                "cliente_nombre": c_name,
-                                "factura_id": o.factura_id or "Odoo",
-                                "monto_pagado": abono,
-                                "nc_monto": nc_calc,
-                                "nc_porcentaje": (nc_calc / monto_orig * 100.0)
-                                if monto_orig > 0
-                                else 0.0,
-                                "concepto": concepto,
+                                # Rebaja ya concedida en el precio, y el
+                                # excedente que ninguna regla justifica.
+                                "rebaja_en_precio": item.get("rebaja_en_precio"),
+                                "venta_bajo_lista": item.get("venta_bajo_lista"),
                                 "cxc_routing_motivo": clasificacion.motivo,
                             }
                         )
@@ -13267,8 +13274,50 @@ def _get_ventas_sync(
             )
             pendiente_tras_documento = max(0.0, float(motor_total_descuentos) - aplicado_documento)
             pendiente_tras_nc = max(0.0, pendiente_tras_documento - total_nc_aplicada)
+            #   4. Descuento metido DIRECTAMENTE EN EL PRECIO de la factura.
+            #      Es el tercer canal por el que Lubrikca materializa un
+            #      descuento, y el único que Odoo no deja leer: no hay un
+            #      campo que lo declare -- solo se ve comparando el
+            #      subtotal facturado contra el precio de lista.
+            #
+            #      Exigencia del usuario (septiembre 2026): "no dar
+            #      descuentos de más ni de menos, y tener en cuenta los
+            #      descuentos que se hicieron directamente en el precio".
+            #      Sin esto el motor volvía a otorgar por Nota de Crédito
+            #      algo que la factura ya había concedido.
+            #
+            #      Medido antes de este arreglo: 200 órdenes facturadas por
+            #      debajo de su teórico bruto con la rebaja sin declarar,
+            #      28.902,67 en total. En 26 de ellas la rebaja oculta
+            #      COINCIDE con el descuento que el motor quería dar --
+            #      S00457 es el caso desnudo: 410,80 ocultos contra 410,80
+            #      del motor, que es exactamente el 35 % del diferencial
+            #      cambiario. Emitir esa NC le daba el 35 % dos veces.
+            _nace_usd = str(o.lista_precios) in usd_ids_str and not es_historica_map.get(
+                o.so_id, False
+            )
+            bruto_nativo_teorico = usd_bruta_teorica if _nace_usd else ves_bruta_teorica
+            base_facturada_sin_iva = (
+                total_facturado_antes_impuestos if tiene_factura else venta_bruta_real
+            )
+            rebaja_en_precio = (
+                max(
+                    0.0,
+                    float(bruto_nativo_teorico) - base_facturada_sin_iva - aplicado_documento,
+                )
+                if bruto_nativo_teorico
+                else 0.0
+            )
+            pendiente_tras_precio = max(0.0, pendiente_tras_nc - rebaja_en_precio)
             descuento_pendiente_aplicar = round(
-                max(0.0, pendiente_tras_nc - descuento_aplicado_sistema), 2
+                max(0.0, pendiente_tras_precio - descuento_aplicado_sistema), 2
+            )
+            # Cuando la rebaja del precio SUPERA lo que el motor justifica,
+            # el excedente no es un descuento neteado: es una venta por
+            # debajo de lista sin regla que la sustente. Se expone aparte
+            # para que se revise, en vez de desaparecer dentro de un max(0).
+            venta_bajo_lista = round(
+                max(0.0, rebaja_en_precio - float(motor_total_descuentos)), 2
             )
 
             # Puntos 5-6 (agosto 2026, aprobado por el usuario): nueva columna
@@ -13791,6 +13840,10 @@ def _get_ventas_sync(
                     # Saldo a favor del cliente -- la empresa le debe. Ver
                     # el cálculo más arriba (caso S00372).
                     "saldo_a_favor": saldo_a_favor,
+                    # Rebaja hecha en el precio de la factura (tercer canal)
+                    # y el excedente que ninguna regla justifica.
+                    "rebaja_en_precio": round(rebaja_en_precio, 2),
+                    "venta_bajo_lista": venta_bajo_lista,
                     "tiene_saldo_a_favor": tiene_saldo_a_favor,
                     # Fase 4: estatus de pago -- "pagada"/"parcial"/"sin_pago"
                     # (+ "sin_factura" en real_factura si aún no hay factura).
@@ -13935,6 +13988,8 @@ _VENTAS_COLUMN_LABELS: dict[str, str] = {
     "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
     "pagada": "Pagada",
     "saldo_a_favor": "Saldo a Favor del Cliente",
+    "rebaja_en_precio": "Descuento ya Aplicado en el Precio",
+    "venta_bajo_lista": "Vendido Bajo Lista (sin regla)",
     "iva_pendiente_sin_facturar": "Pagada - IVA Pendiente",
     "saldo_cxc": "Saldo CxC",
     "alerta": "Alerta",

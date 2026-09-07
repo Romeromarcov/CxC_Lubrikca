@@ -918,12 +918,22 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
         # informativo. Acá Odoo está apagado (``_connect`` -> None), o sea
         # la NC del obsequio todavía NO se emitió: los $45 SÍ están
         # pendientes de aprobar/emitir.
-        pend = data["descuentos_pendientes_aprobar"]
+        # Rediseño de septiembre 2026: las dos listas se unificaron en
+        # ``notas_credito_pendientes`` -- con el criterio del usuario son
+        # el mismo trabajo, y tener dos bandejas obligaba a mirar en dos
+        # lados. ``descuentos_pendientes_aprobar`` queda vacía.
+        assert data["descuentos_pendientes_aprobar"] == []
+        pend = data["notas_credito_pendientes"]
         assert len(pend) == 1
         assert pend[0]["so_id"] == "SO_NC"
-        assert pend[0]["descuento_pendiente_aplicar"] == 45.0
+        # El monto de la NC es lo que falta aplicar, no ``ncs_calculadas``
+        # sola: esa es solo una parte del descuento del motor.
+        assert pend[0]["nc_subtotal"] == 45.0
+        # Y se expone también con IVA, porque la nota de crédito es
+        # gravable y arrastra su porción de impuesto.
+        assert pend[0]["nc_con_iva"] == pytest.approx(45.0 * 1.16, abs=0.05)
         # El concepto real de la NC (no un texto genérico) sigue expuesto,
-        # ahora vía el detalle del motor.
+        # vía el detalle del motor.
         assert [d["descripcion"] for d in pend[0]["descuentos_detalle"]] == [
             "NC obsequio (Aceite 20W50 Caja)"
         ]
@@ -1283,10 +1293,15 @@ def test_e2e_14e_bandeja_descuentos_pendientes_aprobar_separada_de_nc():
         res = client.get("/api/bandeja")
         assert res.status_code == 200
         data = res.json()
-        pend_ids = {item["so_id"]: item for item in data["descuentos_pendientes_aprobar"]}
-        assert "SO_F3" in pend_ids
-        assert pend_ids["SO_F3"]["descuento_pendiente_aplicar"] == pytest.approx(20.0, abs=0.05)
-        assert "SO_F3" not in {i["so_id"] for i in data["notas_credito_pendientes"]}
+        # Rediseño de septiembre 2026: esta orden ya NO se separa en una
+        # bandeja aparte. Antes había dos listas -- "descuentos pendientes
+        # por aprobar" y "notas de crédito pendientes" -- que con el
+        # criterio del usuario resultaron ser el mismo trabajo. Se
+        # unificaron en ``notas_credito_pendientes``.
+        assert data["descuentos_pendientes_aprobar"] == []
+        nc_ids = {item["so_id"]: item for item in data["notas_credito_pendientes"]}
+        assert "SO_F3" in nc_ids
+        assert nc_ids["SO_F3"]["nc_subtotal"] == pytest.approx(20.0, abs=0.05)
 
 
 def test_e2e_14f_ventas_retencion_confirmada_reduce_saldo_igual_que_nc():
