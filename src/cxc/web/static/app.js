@@ -167,7 +167,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
     const bandejaEnProcesoDePagoTableBody = document.getElementById("bandeja-en-proceso-de-pago-table-body");
     const bandejaPendientesCerrarTableBody = document.getElementById("bandeja-pendientes-cerrar-table-body");
-    const bandejaDescuentosPendientesTableBody = document.getElementById("bandeja-descuentos-pendientes-table-body");
 
     // User Session & Multi-Page Initialization
     let currentUserSession = null;
@@ -1071,7 +1070,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
             if (bandejaEnProcesoDePagoTableBody) bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td></tr>';
             if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td></tr>';
-            if (bandejaDescuentosPendientesTableBody) bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td></tr>';
 
             const res = await fetch("/api/bandeja");
             if (res.ok) {
@@ -1085,7 +1083,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray4 = data.auditoria_precios || [];
                 const trayEnProceso = data.en_proceso_de_pago || [];
                 const tray5 = data.pendientes_por_cerrar || [];
-                const trayDescPend = data.descuentos_pendientes_aprobar || [];
 
                 // Render Tray 1
                 if (bandeja1TableBody) {
@@ -1161,46 +1158,51 @@ document.addEventListener("DOMContentLoaded", () => {
                         bandeja2TableBody.innerHTML = "";
                         tray2.forEach(item => {
                             const row = document.createElement("tr");
+                            // Misma lectura que la Bandeja 1: por cuál
+                            // referencia salió de CxC y si el pago está
+                            // confirmado.
+                            const REF2 = {
+                                teorico_usd: "Teórico USD",
+                                teorico_bs: "Teórico BS",
+                                venta_real: "Venta Real",
+                                factura_real: "Factura Neta",
+                                odoo: "Odoo la da por saldada",
+                                subtotal_sin_iva: "Subtotal (falta el IVA)",
+                            };
+                            const estado2 = `<span class="state-badge cierre" style="background:#dcfce7;color:#166534">Pagada</span>
+                                <div style="font-size:0.7rem;opacity:0.85;margin-top:2px">vs ${REF2[item.referencia_pago] || "—"}</div>`
+                                + (item.pago_confirmado === false
+                                    ? `<div style="font-size:0.68rem;color:#1d4ed8" title="${(item.cxc_routing_motivo || '').replace(/"/g, '&quot;')}">⏳ en proceso de pago</div>`
+                                    : '');
+                            const teorico2 = item.teorico_neto_referencia != null
+                                ? `<strong>${fmt(item.teorico_neto_referencia)}</strong>`
+                                : '<span style="opacity:0.5">—</span>';
+                            // La N/C es gravable: se muestra el subtotal y,
+                            // debajo, el total con su impuesto.
+                            const nc2 = `<strong style="color:#dc2626">${fmt(item.nc_subtotal || 0)} (${(item.nc_porcentaje || 0).toFixed(1)}%)</strong>`
+                                + `<div style="font-size:0.7rem;opacity:0.85">con IVA ${fmt(item.nc_con_iva || 0)}</div>`
+                                + (item.venta_bajo_lista > 0.05
+                                    ? `<div style="font-size:0.68rem;color:#b45309" title="Se facturó por debajo de la lista sin una regla que lo sustente">⚠ bajo lista ${fmt(item.venta_bajo_lista)}</div>`
+                                    : '');
                             row.innerHTML = `
                                 <td><strong>${item.so_id}</strong></td>
                                 <td>${item.cliente_nombre || item.so_id}</td>
                                 <td><span class="state-badge">${item.factura_id || 'Odoo'}</span></td>
-                                <td><strong style="color:#059669">${fmt(item.monto_pagado || 0)}</strong></td>
-                                <td><strong style="color:#dc2626">${fmt(item.nc_monto || item.total_descuentos || 0)}</strong></td>
-                                <td><strong style="color:#dc2626">${(item.nc_porcentaje || 0).toFixed(1)}%</strong></td>
-                                <td>${item.concepto || 'Obsequio / Descuento'}</td>
-                                <td><span class="state-badge abiertas" title="La emisión de N/C se hace directamente en Odoo; esta bandeja es de seguimiento, no de acción">Pendiente en Odoo</span></td>
+                                <td>${item.fecha || ''}</td>
+                                <td>${fmt(item.factura_neta_subtotal || 0)}</td>
+                                <td>${estado2}</td>
+                                <td>${teorico2}</td>
+                                <td>${nc2}</td>
                             `;
                             bandeja2TableBody.appendChild(row);
                         });
                     }
                 }
 
-                // Render Tray "Descuentos Pendientes por Aprobar" (Fase 3, auditoría del ciclo CxC)
-                if (bandejaDescuentosPendientesTableBody) {
-                    if (trayDescPend.length === 0) {
-                        bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay descuentos pendientes por aprobar.</td></tr>';
-                    } else {
-                        bandejaDescuentosPendientesTableBody.innerHTML = "";
-                        trayDescPend.forEach(item => {
-                            const row = document.createElement("tr");
-                            const detalle = (item.descuentos_detalle || [])
-                                .map(d => `${d.descripcion}: ${fmt(d.monto)}`)
-                                .join("; ");
-                            row.innerHTML = `
-                                <td><strong>${item.so_id}</strong></td>
-                                <td>${item.cliente_nombre || item.so_id}</td>
-                                <td><span class="state-badge">${item.factura_id || 'Odoo'}</span></td>
-                                <td><strong style="color:#059669">${fmt(item.monto_pagado || 0)}</strong></td>
-                                <td><strong style="color:#d97706">${fmt(item.descuento_pendiente_aplicar || 0)} (${(item.descuento_pendiente_pct || 0).toFixed(1)}%)</strong></td>
-                                <td>${item.incluye_diferencial_cambiario ? '<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Sí</span>' : 'No'}</td>
-                                <td style="font-size:0.8rem">${detalle || '-'}</td>
-                            `;
-                            bandejaDescuentosPendientesTableBody.appendChild(row);
-                        });
-                    }
-                }
-
+                // La bandeja "Descuentos Pendientes por Aprobar" se fusionó
+                // dentro de la Bandeja 2 en septiembre de 2026: con el
+                // criterio del usuario son el mismo trabajo, y tenerlas
+                // separadas obligaba a mirar en dos lados.
                 // Render Tray 3
                 if (bandeja3TableBody) {
                     if (tray3.length === 0) {
@@ -1310,7 +1312,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
             if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
             if (bandejaPendientesCerrarTableBody) bandejaPendientesCerrarTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar pendientes por cerrar.</td></tr>';
-            if (bandejaDescuentosPendientesTableBody) bandejaDescuentosPendientesTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar descuentos pendientes por aprobar.</td></tr>';
         }
     }
 

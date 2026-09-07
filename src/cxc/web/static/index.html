@@ -434,8 +434,8 @@
                 <!-- BANDEJA 2: Órdenes Facturadas Pendientes por Nota de Crédito -->
                 <section class="tray-panel card">
                     <div class="panel-header">
-                        <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
-                        <p>Órdenes ya facturadas, pagadas vs algún teórico, sin descuento real pendiente -- solo diferencial cambiario o pronto pago (tolerancia normal del motor, nada que aprobar aquí).</p>
+                        <h2>Bandeja 2: Notas de Crédito por Emitir</h2>
+                        <p>Órdenes ya facturadas y pagadas, a las que hay que emitirles una Nota de Crédito para llevar lo facturado a lo pagado. Todos los montos son <strong>subtotales netos, sin IVA</strong>; la N/C se muestra también con impuesto porque es gravable. El monto ya descuenta lo que se aplicó por la orden, la factura, una N/C previa o una rebaja en el precio. Al emitirla en Odoo, la orden desaparece de esta bandeja.</p>
                     </div>
                     <div class="table-wrapper">
                         <table class="cxc-table">
@@ -444,11 +444,11 @@
                                     <th>Orden (SO)</th>
                                     <th>Cliente</th>
                                     <th>Factura Odoo</th>
-                                    <th>Abono ($)</th>
-                                    <th>Monto N/C ($)</th>
-                                    <th>% N/C</th>
-                                    <th>Concepto N/C</th>
+                                    <th>Fecha</th>
+                                    <th>Factura Neta ($)</th>
                                     <th>Estado</th>
+                                    <th>Teórico Neto ($)</th>
+                                    <th>N/C a Emitir ($ / %)</th>
                                 </tr>
                             </thead>
                             <tbody id="bandeja2-table-body">
@@ -461,32 +461,7 @@
                 </section>
 
                 <!-- BANDEJA "DESCUENTOS PENDIENTES POR APROBAR" (Fase 3, auditoría del ciclo CxC) -->
-                <section class="tray-panel card" style="border-left: 5px solid #d97706;">
-                    <div class="panel-header">
-                        <h2>Descuentos Pendientes por Aprobar</h2>
-                        <p>Órdenes facturadas donde el cliente ya pagó lo que corresponde con el descuento teórico del motor, pero ese descuento todavía no existe como NC en Odoo -- hay que aprobarlo y materializarlo allá.</p>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Abono ($)</th>
-                                    <th>Descuento Pendiente ($ / %)</th>
-                                    <th>Incluye Diferencial</th>
-                                    <th>Detalle</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-descuentos-pendientes-table-body">
-                                <tr>
-                                    <td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                
 
                 <!-- BANDEJA "PENDIENTES POR CERRAR" (movida desde Reporte de Saldos) -->
                 <section class="tray-panel card" style="border-left: 5px solid #94a3b8;">
