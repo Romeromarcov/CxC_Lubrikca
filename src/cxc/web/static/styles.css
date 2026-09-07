@@ -888,6 +888,21 @@ body {
    significado segun el cliente y se leia como un quinto monto sin
    explicacion. Sigue calculandose -- de el dependen el color y el tamano
    de la tarjeta -- pero ya no se muestra. */
+/* Saldo a favor: la empresa le debe al cliente (pago de mas, o devolvio
+   mercancia ya pagada). Va aparte de los otros saldos a proposito -- no se
+   compensa solo contra lo que el cliente si debe en otras ordenes, son dos
+   conversaciones distintas. */
+.prioridad-card .prioridad-favor {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.55);
+    margin-bottom: 0.15rem;
+    display: inline-block;
+    font-variant-numeric: tabular-nums;
+}
+
 .prioridad-card .prioridad-saldos {
     display: flex;
     flex-direction: column;
