@@ -739,6 +739,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.style.fontSize = `${scale}rem`;
         card.innerHTML = `
             <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
+            ${(c.tiene_saldo_a_favor ? `<div class="prioridad-favor" title="La empresa le debe al cliente: pagó de más o devolvió mercancía ya pagada">↩ A favor ${fmt(c.saldo_a_favor)}</div>` : "")}
             <div class="prioridad-saldos">
                 <div title="Saldo contra la Venta Real de la orden en Odoo">
                     <span class="prioridad-saldo-label">Orden</span>
@@ -1586,9 +1587,21 @@ document.addEventListener("DOMContentLoaded", () => {
             const facturadaCell = item.facturada
                 ? '<span class="state-badge" style="background:#dcfce7;color:#15803d;">✓ Sí</span>'
                 : '<span class="state-badge" style="background:#f1f5f9;color:#64748b;">Sin facturar</span>';
-            const pagadaCell = item.pagada
+            // Saldo a favor: la empresa le debe al cliente (pagó de más, o
+            // devolvió mercancía ya pagada). Gana sobre los demás estados --
+            // es lo que hay que resolver con ese cliente.
+            const favorCell = item.tiene_saldo_a_favor
+                ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;font-weight:600;" title="La empresa le debe al cliente: pagó de más o devolvió mercancía ya pagada">↩ A favor ${fmt(item.saldo_a_favor)}</span>`
+                : null;
+            // Subtotal pagado y falta el IVA: ni "pagada" ni "pendiente" --
+            // el cliente cumplió con la mercancía y debe el impuesto, por
+            // pagar o por retener. Ver la rama SUBTOTAL_SIN_IVA del árbol.
+            const ivaPendCell = item.iva_pendiente_sin_facturar
+                ? '<span class="state-badge" style="background:#fef9c3;color:#854d0e;font-weight:600;" title="Pagó el subtotal; falta el IVA (por pagar o por retener)">Pagada — IVA pendiente</span>'
+                : null;
+            const pagadaCell = favorCell || ivaPendCell || (item.pagada
                 ? `<span class="state-badge" style="background:#dcfce7;color:#15803d;font-weight:600;" title="${item.cxc_confirmado ? 'Pago conciliado en Odoo' : 'En proceso de pago -- vinculado, aún sin conciliar en Odoo'}">✓ ${item.cxc_confirmado ? 'Pagada' : 'En proceso'}</span>`
-                : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:600;">✗ Pendiente</span>';
+                : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:600;">✗ Pendiente</span>');
 
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>

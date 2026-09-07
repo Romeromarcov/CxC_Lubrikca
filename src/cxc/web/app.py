@@ -5038,6 +5038,77 @@ async def get_reporte_saldos(refresh: bool = False):
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
+def venta_real_neta_de_devolucion(
+    orden: Any, lineas: list[Any], bruta_odoo: float
+) -> float:
+    """Subtotal real de la orden, restando lo que el cliente devolvió.
+
+    Pedido del usuario (septiembre 2026): "al implementar la regla resta las
+    devoluciones parciales también, no solo si el cliente devuelve toda la
+    orden".
+
+    ``amount_untaxed`` de Odoo NO neta la devolución: sigue contando la
+    mercancía que volvió al almacén. Verificado en S00628 -- el tambor
+    SINOCO (815,11) figura en el total aunque su ``qty_delivered`` volvió a
+    0 y existe el picking de retorno ``ALM/STOR/00132``. El teórico sí la
+    resta desde siempre (``_cantidad_efectiva`` usa la cantidad entregada),
+    así que las dos referencias del árbol de CxC medían cosas distintas.
+
+    Cuando la orden tiene devolución, la base pasa a ser lo realmente
+    entregado. En una orden que Odoo ya modificó después del retorno,
+    entregado y pedido coinciden y el resultado es idéntico al de antes --
+    10 de las 23 órdenes con devolución están así, que es el caso más común
+    ("se devuelven unas cosas y luego la orden se modifica y se le incluye
+    lo nuevo").
+
+    Sin devolución registrada se devuelve el monto de Odoo tal cual:
+    Lubrikca factura antes de despachar, así que una orden sin entregar
+    todavía es perfectamente cobrable y su ``qty_delivered`` en 0 no
+    significa nada.
+    """
+    if not getattr(orden, "tiene_devolucion", False) or not lineas:
+        return bruta_odoo
+    entregado = sum(
+        float(max(Decimal(str(getattr(ln, "cantidad_entregada", 0) or 0)), Decimal("0")))
+        * float(getattr(ln, "precio_unitario", 0) or 0)
+        for ln in lineas
+    )
+    return round(entregado, 2)
+
+
+def orden_devuelta_por_completo(
+    orden: Any, lineas: list[Any], tiene_abonos: bool = False
+) -> bool:
+    """True si el cliente devolvió TODA la mercancía y no pagó nada.
+
+    Reportado por el usuario (septiembre 2026) al ver tres órdenes de "Mini
+    Market Las Mercedes" en la Bandeja de Facturación: "no están pagadas, y
+    además eso fue una devolución, el cliente devolvió la mercancía".
+
+    Una orden así no es una venta ni una deuda: la mercancía volvió al
+    almacén y no hay nada que cobrar ni que facturar. Se reconoce por sus
+    tres señales juntas -- entregada completa, con devolución registrada, y
+    TODAS sus líneas con cantidad entregada en cero o menos (la devolución
+    ya netó lo despachado). En Odoo se ve como un ``incoming`` en "done"
+    encima del ``outgoing`` original.
+
+    Medido en producción antes de este cambio: 4 órdenes (S00620, S00098 y
+    S00368 de Mini Market, y S00708 de Carlos Ruiz) por 7.829,04 que
+    figuraban como cuentas por cobrar sin que nadie debiera nada.
+
+    ``tiene_abonos`` es la salvaguarda: si el cliente SÍ pagó y después
+    devolvió, no hay que esconder la orden -- ahí el saldo va al revés y es
+    la empresa la que le debe un reembolso. Ese caso sigue visible.
+    """
+    if tiene_abonos or not lineas:
+        return False
+    entregada = getattr(orden, "entregada_completa", False)
+    devuelta = getattr(orden, "tiene_devolucion", False)
+    if not (entregada and devuelta):
+        return False
+    return all(float(getattr(ln, "cantidad_entregada", 0) or 0) <= 0 for ln in lineas)
+
+
 def sin_datos_teorico(
     teorico_row: Any, bruta: float | None, precio_base: float = 0.0
 ) -> bool:
@@ -5287,6 +5358,12 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     "documentos": [],
                     "vendedores": set(),
                     "dias_vencido_max": 0,
+                    # Lo que la empresa le debe al cliente (pagó de más, o
+                    # devolvió mercancía ya pagada). No es un saldo negativo
+                    # de los otros: va aparte para que no se compense solo
+                    # contra lo que sí debe en otras órdenes -- son dos
+                    # conversaciones distintas con el cliente.
+                    "saldo_a_favor": 0.0,
                 },
             )
 
@@ -5331,6 +5408,7 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             for k, v in saldos_orden.items():
                 if v is not None:
                     c["saldos"][k] += v
+            c["saldo_a_favor"] += float(item.get("saldo_a_favor") or 0.0)
 
             factura_id = (o.factura_id if o else None) or None
             factura_numero = facturas_numero_map.get(factura_id) if factura_id else None
@@ -5409,6 +5487,8 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             # clientes_list -- se expone explícitamente para no duplicar el
             # criterio en el frontend.
             c["vendedor"] = ", ".join(sorted(c.pop("vendedores"))) or "Sin Vendedor"
+            c["saldo_a_favor"] = round(c.get("saldo_a_favor", 0.0), 2)
+            c["tiene_saldo_a_favor"] = c["saldo_a_favor"] > 0.05
             c["saldo_priorizacion"] = saldo_priorizacion_cliente(c["saldos"])
 
         clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_priorizacion"])
@@ -12939,6 +13019,12 @@ def _get_ventas_sync(
             entrega_valida = o.so_id in entrega_valida_set
             if orden_excluida(o, live_state=live_state, entrega_valida=entrega_valida):
                 continue
+            # Devuelta entera y sin pagar: no es venta ni deuda -- ver
+            # orden_devuelta_por_completo.
+            if orden_devuelta_por_completo(
+                o, lineas_por_so.get(o.so_id, []), tiene_abonos=bool(vincs_por_so.get(o.so_id))
+            ):
+                continue
             if vendedor and vendedor.strip().lower() != str(o.vendedor_email or "").strip().lower():
                 continue
             if user and user["rol"] == "ventas":
@@ -12984,7 +13070,16 @@ def _get_ventas_sync(
             if venta_bruta_real is None:
                 # Sin conexión a Odoo: estimar el subtotal a partir del total con IVA.
                 venta_bruta_real = monto_orig / (1 + iva_rate) if iva_rate > -1 else monto_orig
-            venta_neta_real = monto_orig
+            # Se resta lo devuelto: `amount_total` de Odoo no lo neta, y el
+            # teórico sí -- sin esto las dos referencias del árbol de CxC
+            # miden cosas distintas. Ver venta_real_neta_de_devolucion.
+            _lineas_o = lineas_por_so.get(o.so_id, [])
+            venta_bruta_real = venta_real_neta_de_devolucion(o, _lineas_o, venta_bruta_real)
+            venta_neta_real = (
+                round(venta_bruta_real * (1 + iva_rate), 2)
+                if o.tiene_devolucion and _lineas_o
+                else monto_orig
+            )
 
             # Bug real reportado por el usuario (agosto 2026, tras el fix
             # del fallback de precios): "Diferencia" seguía mostrando el
@@ -13257,6 +13352,7 @@ def _get_ventas_sync(
             )
 
             target_orden = max(0.0, venta_neta_real - descuento_aplicado_sistema)
+
             estatus_pago_real_orden = _estado_pago_display(
                 val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden
             )
@@ -13364,6 +13460,25 @@ def _get_ventas_sync(
             # porque va a retenerlo o porque lo debe. Se compara contra el
             # neto teórico SIN impuestos de la referencia nativa de la
             # orden, que es la misma base con la que se le vendió.
+            # Saldo a FAVOR del cliente: pagó más de lo que la orden vale
+            # hoy. Pedido del usuario (septiembre 2026) a raíz de S00372,
+            # devuelta por completo pero con un abono encima -- ahí el saldo
+            # va al revés y es la empresa la que debe un reembolso.
+            #
+            # La devolución es la causa habitual (el monto real se netea de
+            # lo devuelto, ver venta_real_neta_de_devolucion) pero no la
+            # única: también aparece por un pago duplicado o por uno que
+            # Odoo reasignó a otra orden. Por eso se calcula siempre, no
+            # solo cuando hay devolución.
+            #
+            # Se compara contra lo CONCILIADO y contra el documento de
+            # referencia (la factura si existe, si no la orden), con la
+            # misma tolerancia que el resto de los estados de pago: un
+            # excedente de centavos es redondeo, no un saldo a favor.
+            base_saldo_favor = target_factura if tiene_factura else target_orden
+            saldo_a_favor = round(max(0.0, val_ref_nacimiento - base_saldo_favor), 2)
+            tiene_saldo_a_favor = saldo_a_favor > _EPS_PAGO
+
             _base_subtotal = (
                 usd_neta_teorica if es_lista_usd_nacimiento else ves_neta_teorica
             )
@@ -13664,6 +13779,10 @@ def _get_ventas_sync(
                         desc_sistema_row["motivo"] if desc_sistema_row else None
                     ),
                     "saldo_pendiente_cxc": saldo_pendiente_cxc,
+                    # Saldo a favor del cliente -- la empresa le debe. Ver
+                    # el cálculo más arriba (caso S00372).
+                    "saldo_a_favor": saldo_a_favor,
+                    "tiene_saldo_a_favor": tiene_saldo_a_favor,
                     # Fase 4: estatus de pago -- "pagada"/"parcial"/"sin_pago"
                     # (+ "sin_factura" en real_factura si aún no hay factura).
                     # Ver docstring del endpoint para la selección BCV/Binance
@@ -13806,6 +13925,7 @@ _VENTAS_COLUMN_LABELS: dict[str, str] = {
     "usd_bruta_teorica": "Teórica Bruta USD",
     "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
     "pagada": "Pagada",
+    "saldo_a_favor": "Saldo a Favor del Cliente",
     "iva_pendiente_sin_facturar": "Pagada - IVA Pendiente",
     "saldo_cxc": "Saldo CxC",
     "alerta": "Alerta",
