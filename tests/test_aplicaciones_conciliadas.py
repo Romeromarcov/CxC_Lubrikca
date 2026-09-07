@@ -272,3 +272,43 @@ def test_una_aplicacion_sin_su_pago_en_el_espejo_se_omite() -> None:
     )
     assert res == {"creadas": 1, "corregidas": 0, "sin_cambio": 0, "omitidas": 1}
     assert [v.pago_id for v in repo.escritas] == ["513"]
+
+
+# --- El resync clasico no debe inflar los parciales ---------------------------
+
+
+def test_una_vinculacion_de_reparto_no_se_infla_al_monto_total_del_pago() -> None:
+    """Bug real detectado al revisar la Bandeja 2 (septiembre 2026).
+
+    ``_resincronizar_vinculaciones_con_odoo`` corre DESPUÉS de esta sincro
+    y compara el monto de cada Vinculación contra ``monto_original``, que es
+    el monto COMPLETO del pago. Eso valía cuando una Vinculación siempre
+    representaba el pago entero; desde que se escribe el reparto real de
+    Odoo puede representar solo una parte, y la comparación la "corregía"
+    inflándola al total.
+
+    El pago 982 (30.748,20) que Odoo repartió entre S00555 (20.517,27),
+    S00328 (6.062,81), S00357 (3.082,01) y dos notas de débito terminó con
+    los 30.748,20 COMPLETOS en cada una de las tres órdenes: 92.244,60 de
+    cobranza inventada a partir de un pago de 30.748,20.
+
+    Se fija acá el reparto que esta función escribe; la guarda que impide
+    que el resync lo pise vive en ``_recalcular_desde_conciliado`` y se
+    reconoce por ``confirmado_por``.
+    """
+    apps = [
+        _apl("982", "S00555", "20517.27"),
+        _apl("982", "S00328", "6062.81"),
+        _apl("982", "S00357", "3082.01"),
+    ]
+    repo = _RepoFalso(pagos_en_espejo=["982"])
+    _sincronizar_aplicaciones_conciliadas(repo, apps)
+    por_so = {v.so_id: v.monto_aplicado for v in repo.escritas}
+    assert por_so == {
+        "S00555": Decimal("20517.27"),
+        "S00328": Decimal("6062.81"),
+        "S00357": Decimal("3082.01"),
+    }
+    assert sum(por_so.values()) < Decimal("30748.20")
+    # La marca por la que el resync las reconoce y no las toca.
+    assert {v.confirmado_por for v in repo.escritas} == {"Odoo (reconciliación)"}
