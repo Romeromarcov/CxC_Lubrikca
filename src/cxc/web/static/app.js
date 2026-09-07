@@ -2619,6 +2619,8 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) throw new Error("HTTP " + res.status);
             const data = await res.json();
             if (!data.habilitado) {
+                const badgeOff = document.getElementById("bandeja4-count-badge");
+                if (badgeOff) badgeOff.textContent = "0";
                 if (resumen) resumen.textContent = data.motivo || "Reporte deshabilitado.";
                 tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Reporte deshabilitado -- falta configurar las reglas necesarias.</td></tr>';
                 return;
@@ -2628,6 +2630,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     `Diferencial de hoy (BCV vs Binance): <strong>${data.diferencial_hoy_pct}%</strong> &middot; ` +
                     `Umbral de % pagado para ser candidata: <strong>${data.umbral_pct_pagado}%</strong>`;
             }
+            const badge4 = document.getElementById("bandeja4-count-badge");
+            if (badge4) badge4.textContent = String((data.candidatos || []).length);
             if (!data.candidatos || data.candidatos.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay órdenes candidatas hoy.</td></tr>';
                 return;

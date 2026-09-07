@@ -463,49 +463,12 @@
                 <!-- BANDEJA "DESCUENTOS PENDIENTES POR APROBAR" (Fase 3, auditoría del ciclo CxC) -->
                 
 
-                <!-- BANDEJA "PENDIENTES POR CERRAR" (movida desde Reporte de Saldos) -->
-                
 
-                <!-- BANDEJA "CANDIDATOS A CIERRE DE FACTURA" (Regla 3 de Diferencial Cambiario -- movida
-                     desde Configuración: es un reporte de trabajo diario de Facturación, no una tarea de
-                     configuración, y Configuración tiene permisos más restringidos que Facturación. -->
-                <details class="tray-panel card" style="border-left: 5px solid #2563eb;">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">🎯 Candidatos a Cierre de Factura (Diferencial Cambiario)</h2>
-                        <p style="margin:0.25rem 0 0">
-                            NO es un descuento automático -- lista órdenes candidatas según el diferencial de mercado del día
-                            (BCV vs Binance) comparado contra el diferencial máximo configurado en Configuración &gt; Descuentos &gt;
-                            Diferencial Cambiario. Gerencia decide manualmente cuánto otorgar por orden; verificar en Odoo antes
-                            de aprobar. Clic para expandir.
-                        </p>
-                    </summary>
-                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>SO</th>
-                                    <th>Cliente</th>
-                                    <th>Teórico VES</th>
-                                    <th>Pagado (eq. BCV)</th>
-                                    <th>% Pagado</th>
-                                    <th>Monto Candidato Máximo</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="dif-candidatos-table-body">
-                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
-                            </tbody>
-                        </table>
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 3: Facturas Pendientes por Comprobante de IVA <span id="bandeja3-count-badge" class="state-badge"></span></h2>
+                        <p>Facturas de clientes Agentes de Retención donde la base imponible ya fue cobrada y falta el comprobante de IVA. Una factura que Odoo ya da por saldada no aparece acá: lo que falte es diferencia cambiaria, no impuesto por cobrar.</p>
                     </div>
-                </details>
-
-                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA (colapsable, consulta poco frecuente) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención) <span id="bandeja3-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA. Clic para expandir.</p>
-                    </summary>
                     <div class="table-wrapper" style="margin-top:1rem">
                         <table class="cxc-table">
                             <thead>
@@ -526,68 +489,42 @@
                             </tbody>
                         </table>
                     </div>
-                </details>
+                </section>
 
-                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (colapsable, consulta poco frecuente) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">Bandeja de Auditoría de Precios <span id="bandeja-auditoria-precios-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 4: Candidatos a Cierre de Factura (Diferencial Cambiario) <span id="bandeja4-count-badge" class="state-badge"></span></h2>
+                        <p>NO es un descuento automático. Lista órdenes que no cubrieron su teórico pero quedaron cerca, según el diferencial de mercado del día (BCV vs Binance) contra el máximo configurado. Gerencia decide manualmente cuánto otorgar; verificar en Odoo antes de aprobar. Al emitir la N/C o aprobar el descuento, la orden sale de esta lista.</p>
+                    </div>
+                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
+                    <div class="table-wrapper">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Orden (SO)</th>
+                                    <th>SO</th>
                                     <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
+                                    <th>Teórico VES</th>
+                                    <th>Pagado (eq. BCV)</th>
+                                    <th>% Pagado</th>
+                                    <th>Monto Candidato Máximo</th>
+                                    <th></th>
                                 </tr>
                             </thead>
-                            <tbody id="bandeja-auditoria-precios-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
-                                </tr>
+                            <tbody id="dif-candidatos-table-body">
+                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
                             </tbody>
                         </table>
                     </div>
-                </details>
+                </section>
+                
 
-                <!-- EN PROCESO DE PAGO (colapsable, solo visibilidad -- ya salió de CxC) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Facturada</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-en-proceso-de-pago-table-body">
-                                <tr>
-                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
+                
+
+                
+
+                
+
+                
             </div>
         </div>
 
@@ -1006,6 +943,67 @@
         <!-- PESTAÑA 4: AUDITORÍA DE COBROS Y PRECIOS -->
         <div id="tab-auditoria" class="tab-panel">
             <div class="auditoria-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+<!-- BANDEJA DE AUDITORÍA DE PRECIOS (colapsable, consulta poco frecuente) -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">Bandeja de Auditoría de Precios <span id="bandeja-auditoria-precios-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-auditoria-precios-table-body">
+                                <tr>
+                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+
+<!-- EN PROCESO DE PAGO (colapsable, solo visibilidad -- ya salió de CxC) -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Facturada</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-en-proceso-de-pago-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+
                 <!-- KPIs Resumen de Auditoría -->
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
                     <div class="kpi-card card">
