@@ -1690,8 +1690,6 @@ class ProntoPagoRequest(BaseModel):
     ventana_pago_tipo: str = "entrega"
     ventana_pago_dias: int = 3
     porcentaje: float = 0.05
-    min_cantidad: float | None = 0.0
-    max_cantidad: float | None = 999999.0
     unidad_medida: str | None = "CAJAS"
     tipo_beneficio: str | None = "descuento"
     monedas_aplicables: str = "*"
@@ -1708,8 +1706,8 @@ class VolumenRequest(BaseModel):
     marca: str = "*"
     categoria: str = "*"
     litros_minimo: float = 0.0
-    min_cantidad: float | None = None
-    max_cantidad: float = 999999.0
+    min_unidades: float | None = None
+    max_unidades: float = 999999.0
     unidad_medida: str = "LITROS"
     porcentaje: float = 0.05
     tipo_evaluacion: str = "orden"
@@ -1887,8 +1885,8 @@ class RecompraRequest(BaseModel):
     categoria: str = "CAJA"
     listas_aplicables: str = "*"
     porcentaje: float = 0.03
-    min_cajas: int = 2
-    max_cajas: int = 4
+    min_unidades: float = 2.0
+    max_unidades: float = 4.0
     unidad_medida: str | None = "CAJAS"
     tipo_beneficio: str | None = "descuento"
     vigencia_desde: str = ""
@@ -1905,8 +1903,8 @@ class ProductoPromoRequest(BaseModel):
     productos: str = "*"
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: float | None = 0.0
-    max_cantidad: float | None = 999999.0
+    min_unidades: float | None = 0.0
+    max_unidades: float | None = 999999.0
     unidad_medida: str | None = "CAJAS"
     tipo_beneficio: str | None = "descuento"
     porcentaje: float = 0.05
@@ -1930,8 +1928,6 @@ class DiferencialCambiarioRequest(BaseModel):
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
     unidad_medida: str | None = "USD"
-    min_cantidad: float | None = 0.0
-    max_cantidad: float | None = 999999.0
     vigencia_desde: str = ""
     vigencia_hasta: str | None = None
     activo: bool = True
@@ -9019,7 +9015,7 @@ async def get_config_promociones():
                 "marca": getattr(p, "marca", "*"),
                 "categoria": getattr(p, "categorias_aplica", "Comercial"),
                 "listas_aplicables": getattr(p, "listas_aplicables", "*"),
-                "max_cantidad": float(getattr(p, "max_cantidad", 999999)),
+                "max_unidades": float(getattr(p, "max_unidades", 999999)),
                 "unidad_medida": getattr(p, "unidad_medida", "CAJAS"),
                 "valor": str(p.valor),
                 "compra_minima": str(p.compra_minima),
@@ -9265,8 +9261,8 @@ async def get_todas_reglas_descuento():
                     "regla_id": r.regla_id,
                     "marca": getattr(r, "marca", "GLOBAL OIL"),
                     "categoria": getattr(r, "categoria", "CAJA"),
-                    "min_cantidad": float(getattr(r, "min_cantidad", getattr(r, "min_cajas", 2))),
-                    "max_cantidad": float(getattr(r, "max_cantidad", getattr(r, "max_cajas", 4))),
+                    "min_unidades": float(getattr(r, "min_unidades", 0)),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                     "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                     "porcentaje": float(r.porcentaje),
@@ -9293,8 +9289,8 @@ async def get_todas_reglas_descuento():
                     "regla_id": r.regla_id,
                     "marca": r.marca,
                     "categoria": r.categoria,
-                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "min_unidades": float(getattr(r, "min_unidades", 0)),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": getattr(r, "unidad_medida", "USD"),
                     "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                     "porcentaje": float(r.porcentaje),
@@ -9314,7 +9310,7 @@ async def get_todas_reglas_descuento():
 
         # 3. Volumen
         for r in repo.descuentos_volumen():
-            min_q = getattr(r, "min_cantidad", None)
+            min_q = getattr(r, "min_unidades", None)
             if min_q is None or float(min_q) == 0:
                 min_q = getattr(r, "litros_minimo", 0)
             u_med = str(getattr(r, "unidad_medida", "") or "").strip()
@@ -9323,7 +9319,7 @@ async def get_todas_reglas_descuento():
                     "LITROS"
                     if (
                         float(r.litros_minimo) > 0
-                        and (getattr(r, "min_cantidad", None) is None or float(r.min_cantidad) == 0)
+                        and (getattr(r, "min_unidades", None) is None or float(r.min_unidades) == 0)
                     )
                     else "CAJAS"
                 )
@@ -9335,8 +9331,8 @@ async def get_todas_reglas_descuento():
                     "regla_id": r.regla_id,
                     "marca": r.marca,
                     "categoria": r.categoria,
-                    "min_cantidad": float(min_q),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "min_unidades": float(min_q),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": u_med,
                     "porcentaje": float(r.porcentaje),
                     "listas_aplicables": r.listas_aplicables,
@@ -9364,10 +9360,10 @@ async def get_todas_reglas_descuento():
                     "categoria": getattr(
                         r, "categoria", getattr(r, "categorias_aplica", "Comercial")
                     ),
-                    "min_cantidad": float(
-                        getattr(r, "min_cantidad", getattr(r, "compra_minima", 3))
+                    "min_unidades": float(
+                        getattr(r, "min_unidades", getattr(r, "compra_minima", 3))
                     ),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                     "tipo_beneficio": r.tipo_beneficio,
                     "porcentaje": float(r.valor)
@@ -9397,8 +9393,8 @@ async def get_todas_reglas_descuento():
                     "regla_id": r.regla_id,
                     "marca": r.marca,
                     "categoria": r.categoria,
-                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "min_unidades": float(getattr(r, "min_unidades", 0)),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                     "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                     "porcentaje": float(r.porcentaje),
@@ -9425,8 +9421,8 @@ async def get_todas_reglas_descuento():
                     "regla_id": r.regla_id,
                     "marca": getattr(r, "marca", "*"),
                     "categoria": getattr(r, "categoria", "*"),
-                    "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "min_unidades": float(getattr(r, "min_unidades", 0)),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": getattr(r, "unidad_medida", "USD"),
                     "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                     "porcentaje": float(r.porcentaje_fijo),
@@ -9464,8 +9460,8 @@ async def get_config_pronto_pago():
                 "categoria": r.categoria,
                 "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
                 "ventana_pago_dias": getattr(r, "ventana_pago_dias", 3),
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "min_unidades": float(getattr(r, "min_unidades", 0)),
+                "max_unidades": float(getattr(r, "max_unidades", 999999)),
                 "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                 "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
@@ -9497,16 +9493,12 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
 
         regla_id = f"PP_{uuid.uuid4().hex[:8].upper()}"
-        min_q = Decimal(str(req.min_cantidad or 0))
-        max_q = Decimal(str(req.max_cantidad or 999999))
         rule = DescuentoProntoPago(
             regla_id=regla_id,
             marca=req.marca,
             categoria=req.categoria,
             ventana_pago_tipo=req.ventana_pago_tipo,
             ventana_pago_dias=req.ventana_pago_dias,
-            min_cantidad=min_q,
-            max_cantidad=max_q,
             unidad_medida=req.unidad_medida or "CAJAS",
             tipo_beneficio=req.tipo_beneficio or "descuento",
             porcentaje=Decimal(str(req.porcentaje)),
@@ -9538,16 +9530,12 @@ async def put_config_pronto_pago(regla_id: str, req: ProntoPagoRequest):
 
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
-        min_q = Decimal(str(req.min_cantidad or 0))
-        max_q = Decimal(str(req.max_cantidad or 999999))
         rule = DescuentoProntoPago(
             regla_id=regla_id,
             marca=req.marca,
             categoria=req.categoria,
             ventana_pago_tipo=req.ventana_pago_tipo,
             ventana_pago_dias=req.ventana_pago_dias,
-            min_cantidad=min_q,
-            max_cantidad=max_q,
             unidad_medida=req.unidad_medida or "CAJAS",
             tipo_beneficio=req.tipo_beneficio or "descuento",
             porcentaje=Decimal(str(req.porcentaje)),
@@ -9579,8 +9567,8 @@ async def get_config_volumen():
         res = []
         for r in rules:
             min_q = (
-                r.min_cantidad
-                if (getattr(r, "min_cantidad", None) is not None and float(r.min_cantidad) > 0)
+                r.min_unidades
+                if (getattr(r, "min_unidades", None) is not None and float(r.min_unidades) > 0)
                 else getattr(r, "litros_minimo", 0)
             )
             u_med = str(getattr(r, "unidad_medida", "") or "").strip()
@@ -9594,8 +9582,8 @@ async def get_config_volumen():
                     "marca": r.marca,
                     "categoria": r.categoria,
                     "litros_minimo": float(r.litros_minimo),
-                    "min_cantidad": float(min_q),
-                    "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                    "min_unidades": float(min_q),
+                    "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": u_med,
                     "porcentaje": float(r.porcentaje),
                     "tipo_evaluacion": r.tipo_evaluacion,
@@ -9628,8 +9616,8 @@ async def post_config_volumen(req: VolumenRequest):
 
         regla_id = f"VOL_{uuid.uuid4().hex[:8].upper()}"
         min_q = (
-            Decimal(str(req.min_cantidad))
-            if req.min_cantidad is not None
+            Decimal(str(req.min_unidades))
+            if req.min_unidades is not None
             else Decimal(str(req.litros_minimo))
         )
         rule = DescuentoVolumen(
@@ -9637,8 +9625,8 @@ async def post_config_volumen(req: VolumenRequest):
             marca=req.marca,
             categoria=req.categoria,
             litros_minimo=Decimal(str(req.litros_minimo)),
-            min_cantidad=min_q,
-            max_cantidad=Decimal(str(req.max_cantidad)),
+            min_unidades=min_q,
+            max_unidades=Decimal(str(req.max_unidades)),
             unidad_medida=req.unidad_medida,
             porcentaje=Decimal(str(req.porcentaje)),
             tipo_evaluacion=req.tipo_evaluacion,
@@ -9671,8 +9659,8 @@ async def put_config_volumen(regla_id: str, req: VolumenRequest):
         v_desde = date.fromisoformat(req.vigencia_desde) if req.vigencia_desde else date.today()
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
         min_q = (
-            Decimal(str(req.min_cantidad))
-            if req.min_cantidad is not None
+            Decimal(str(req.min_unidades))
+            if req.min_unidades is not None
             else Decimal(str(req.litros_minimo))
         )
         rule = DescuentoVolumen(
@@ -9680,8 +9668,8 @@ async def put_config_volumen(regla_id: str, req: VolumenRequest):
             marca=req.marca,
             categoria=req.categoria,
             litros_minimo=Decimal(str(req.litros_minimo)),
-            min_cantidad=min_q,
-            max_cantidad=Decimal(str(req.max_cantidad)),
+            min_unidades=min_q,
+            max_unidades=Decimal(str(req.max_unidades)),
             unidad_medida=req.unidad_medida,
             porcentaje=Decimal(str(req.porcentaje)),
             tipo_evaluacion=req.tipo_evaluacion,
@@ -9715,8 +9703,8 @@ async def get_config_recompra():
                 "marca": getattr(r, "marca", "GLOBAL OIL"),
                 "categoria": getattr(r, "categoria", "CAJA"),
                 "porcentaje": float(r.porcentaje),
-                "min_cajas": getattr(r, "min_cajas", 2),
-                "max_cajas": getattr(r, "max_cajas", 4),
+                "min_unidades": getattr(r, "min_unidades", 2),
+                "max_unidades": getattr(r, "max_unidades", 4),
                 "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                 "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "listas_aplicables": getattr(r, "listas_aplicables", "*"),
@@ -9753,8 +9741,8 @@ async def post_config_recompra(req: RecompraRequest):
             marca=req.marca,
             categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
-            min_cajas=req.min_cajas,
-            max_cajas=req.max_cajas,
+            min_unidades=Decimal(str(req.min_unidades)),
+            max_unidades=Decimal(str(req.max_unidades)),
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
@@ -9789,8 +9777,8 @@ async def put_config_recompra(regla_id: str, req: RecompraRequest):
             marca=req.marca,
             categoria=req.categoria,
             porcentaje=Decimal(str(req.porcentaje)),
-            min_cajas=req.min_cajas,
-            max_cajas=req.max_cajas,
+            min_unidades=Decimal(str(req.min_unidades)),
+            max_unidades=Decimal(str(req.max_unidades)),
             listas_aplicables=req.listas_aplicables,
             vigencia_desde=v_desde,
             vigencia_hasta=v_hasta,
@@ -9822,8 +9810,8 @@ async def get_config_producto():
                 "productos": r.productos,
                 "marca": r.marca,
                 "categoria": r.categoria,
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "min_unidades": float(getattr(r, "min_unidades", 0)),
+                "max_unidades": float(getattr(r, "max_unidades", 999999)),
                 "unidad_medida": getattr(r, "unidad_medida", "CAJAS"),
                 "tipo_beneficio": getattr(r, "tipo_beneficio", "descuento"),
                 "porcentaje": float(r.porcentaje),
@@ -9929,8 +9917,8 @@ async def get_config_diferencial():
                 "marca": getattr(r, "marca", "*"),
                 "categoria": getattr(r, "categoria", "*"),
                 "unidad_medida": getattr(r, "unidad_medida", "USD"),
-                "min_cantidad": float(getattr(r, "min_cantidad", 0)),
-                "max_cantidad": float(getattr(r, "max_cantidad", 999999)),
+                "min_unidades": float(getattr(r, "min_unidades", 0)),
+                "max_unidades": float(getattr(r, "max_unidades", 999999)),
                 "monedas_aplicables": r.monedas_aplicables,
                 "listas_aplicables": r.listas_aplicables,
                 "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,

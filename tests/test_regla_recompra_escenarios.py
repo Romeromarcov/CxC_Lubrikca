@@ -121,12 +121,12 @@ def test_recompra_fuera_de_la_ventana_de_pago_no_aplica():
 
 
 def test_recompra_fuera_del_tramo_de_cajas_no_aplica():
-    regla = _regla(min_cajas=20, max_cajas=50)
+    regla = _regla(min_unidades=20, max_unidades=50)
     assert calcular_factura(_inp([regla], cantidad="10")).total_descuentos == Decimal("0.00")
 
 
 def test_recompra_en_el_borde_del_tramo_aplica():
-    regla = _regla(min_cajas=10, max_cajas=10)
+    regla = _regla(min_unidades=10, max_unidades=10)
     assert calcular_factura(_inp([regla], cantidad="10")).total_descuentos == Decimal("50.00")
 
 
@@ -186,15 +186,15 @@ def test_varios_tramos_gana_el_de_mayor_porcentaje_aplicable():
 
     alcanzan la misma línea gana la más generosa.
     """
-    tramo1 = _regla("REC_TRAMO1", min_cajas=2, max_cajas=20, porcentaje="0.03")
-    tramo2 = _regla("REC_TRAMO2", min_cajas=5, max_cajas=999999, porcentaje="0.05")
+    tramo1 = _regla("REC_TRAMO1", min_unidades=2, max_unidades=20, porcentaje="0.03")
+    tramo2 = _regla("REC_TRAMO2", min_unidades=5, max_unidades=999999, porcentaje="0.05")
     assert calcular_factura(_inp([tramo1, tramo2])).total_descuentos == Decimal("50.00")
 
 
 def test_tramo_correcto_segun_la_cantidad():
     """Con 3 cajas solo aplica el tramo 2-4, no el de 5 o más."""
-    tramo1 = _regla("REC_TRAMO1", min_cajas=2, max_cajas=4, porcentaje="0.03")
-    tramo2 = _regla("REC_TRAMO2", min_cajas=5, max_cajas=999999, porcentaje="0.05")
+    tramo1 = _regla("REC_TRAMO1", min_unidades=2, max_unidades=4, porcentaje="0.03")
+    tramo2 = _regla("REC_TRAMO2", min_unidades=5, max_unidades=999999, porcentaje="0.05")
     # 3 x 100 = 300 de base, 3%.
     assert calcular_factura(
         _inp([tramo1, tramo2], cantidad="3")

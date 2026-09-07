@@ -378,8 +378,6 @@ class DescuentoProntoPago:
     regla_id: str
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "USD"
     tipo_beneficio: str = "descuento"
     # "Ventana de pago" (reemplaza "Días de gracia"): desde cuándo se
@@ -418,8 +416,8 @@ class DescuentoVolumen:
     categoria: str = "*"
     litros_minimo: Decimal = Decimal("0")
     porcentaje: Decimal = Decimal("0.05")
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
+    min_unidades: Decimal = Decimal("0")
+    max_unidades: Decimal = Decimal("999999")
     unidad_medida: str = "UNIDADES"
     tipo_beneficio: str = "descuento"
     tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
@@ -449,8 +447,6 @@ class PromocionPrimeraCompra:
     categorias_aplica: str = "Comercial"
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
-    min_cantidad: Decimal = Decimal("3")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     listas_aplicables: str = "*"
     solo_primera_compra: bool = (
@@ -471,10 +467,12 @@ class DescuentoRecompra:
     regla_id: str
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
-    min_cajas: int = 2
-    max_cajas: int = 4
-    min_cantidad: Decimal = Decimal("2")
-    max_cantidad: Decimal = Decimal("4")
+    # Rango en el que aplica la regla, en la unidad de ``unidad_medida``
+    # (Unidades / Litros / USD). Reemplaza a min_cajas/max_cajas, que eran
+    # enteros y no admitían litros ni dólares con decimales -- ver la
+    # migración c9e1f2a3b4d5.
+    min_unidades: Decimal = Decimal("2")
+    max_unidades: Decimal = Decimal("4")
     unidad_medida: str = "CAJAS"
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.03")
@@ -527,8 +525,8 @@ class DescuentoProducto:
     productos: str = "*"  # CSV de SKUs/IDs de producto o '*'
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
+    min_unidades: Decimal = Decimal("0")
+    max_unidades: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.05")
@@ -555,8 +553,6 @@ class DescuentoDiferencialCambiario:
     porcentaje_fijo: Decimal = Decimal("0.35")
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "USD"
     tipo_beneficio: str = "descuento"
     monedas_aplicables: str = "*"

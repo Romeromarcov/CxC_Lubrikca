@@ -2130,8 +2130,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 categoria: cats,
                 listas_aplicables: listas,
                 porcentaje: parseFloat(rawPct),
-                min_cajas: parseInt(document.getElementById("cfg-rec-min-cajas")?.value || 1),
-                max_cajas: parseInt(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
+                // "unidades", no "cajas": el desplegable de al lado elige
+                // Unidades / Litros / USD, y ahora admite decimales.
+                min_unidades: parseFloat(document.getElementById("cfg-rec-min-cajas")?.value || 1),
+                max_unidades: parseFloat(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
                 unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
                 tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
                 vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
@@ -2181,8 +2183,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 ventana_pago_dias: parseInt(document.getElementById("cfg-pp-ventana-dias")?.value || 3),
                 marca: marcas,
                 categoria: cats,
-                min_cantidad: parseFloat(document.getElementById("cfg-pp-min")?.value || 0),
-                max_cantidad: parseFloat(document.getElementById("cfg-pp-max")?.value || 999999),
                 unidad_medida: document.getElementById("cfg-pp-unidad")?.value || "CAJAS",
                 tipo_beneficio: document.getElementById("cfg-pp-tipo-benef")?.value || "descuento",
                 porcentaje: parseFloat(rawPct),
@@ -2238,8 +2238,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 productos: selProds || "*",
                 marca: marcas,
                 categoria: cats,
-                min_cantidad: parseFloat(document.getElementById("cfg-prod-min")?.value || 0),
-                max_cantidad: parseFloat(document.getElementById("cfg-prod-max")?.value || 999999),
+                min_unidades: parseFloat(document.getElementById("cfg-prod-min")?.value || 0),
+                max_unidades: parseFloat(document.getElementById("cfg-prod-max")?.value || 999999),
                 unidad_medida: document.getElementById("cfg-prod-unidad")?.value || "CAJAS",
                 tipo_beneficio: document.getElementById("cfg-prod-tipo-benef")?.value || "descuento",
                 porcentaje: parseFloat(rawPct),
@@ -2293,8 +2293,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
                 listas_aplicables: listas,
                 unidad_medida: "USD",
-                min_cantidad: 0,
-                max_cantidad: 999999,
                 vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
                 activo: true,
@@ -3069,8 +3067,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
 
                     // Format Tramo
-                    const minQ = r.min_cantidad !== undefined ? r.min_cantidad : 0;
-                    const maxQ = r.max_cantidad !== undefined ? r.max_cantidad : 999999;
+                    const minQ = r.min_unidades !== undefined ? r.min_unidades : 0;
+                    const maxQ = r.max_unidades !== undefined ? r.max_unidades : 999999;
                     const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
 
                     // Format Listas
@@ -3391,8 +3389,12 @@ document.addEventListener("DOMContentLoaded", () => {
             beneficioText = `💲 ${pctVal}%`;
         }
 
-        const minQ = r.min_cantidad !== undefined ? r.min_cantidad : (r.min_cajas !== undefined ? r.min_cajas : (r.litros_minimo !== undefined ? r.litros_minimo : (r.compra_minima !== undefined ? r.compra_minima : 0)));
-        const maxQ = r.max_cantidad !== undefined ? r.max_cantidad : (r.max_cajas !== undefined ? r.max_cajas : 999999);
+        // min_cajas/max_cajas se unificaron en min_unidades/max_unidades
+        // (migración c9e1f2a3b4d5). Quedan litros_minimo y compra_minima como
+        // respaldo: volumen conserva el primero y primera compra usa el
+        // segundo como su criterio real.
+        const minQ = r.min_unidades !== undefined ? r.min_unidades : (r.litros_minimo !== undefined ? r.litros_minimo : (r.compra_minima !== undefined ? r.compra_minima : 0));
+        const maxQ = r.max_unidades !== undefined ? r.max_unidades : 999999;
         const tramoText = (maxQ >= 99999) ? `>= ${minQ}` : `${minQ} a ${maxQ}`;
 
         const rawListasStd = (r.listas_aplicables !== undefined && r.listas_aplicables !== null && String(r.listas_aplicables).trim() !== "" && String(r.listas_aplicables) !== "undefined")
@@ -3430,7 +3432,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         let unidadStd = r.unidad_medida;
         if (!unidadStd || String(unidadStd).trim() === "" || String(unidadStd) === "undefined") {
-            const minVal = parseFloat(r.min_cantidad !== undefined ? r.min_cantidad : r.litros_minimo || 0);
+            const minVal = parseFloat(r.min_unidades !== undefined ? r.min_unidades : r.litros_minimo || 0);
             if (tabla === "DescuentosVolumen" || r.tipo_regla === "volumen") {
                 unidadStd = (minVal >= 500 || (r.regla_id && String(r.regla_id).includes("FID_"))) ? "LITROS" : "UNIDADES";
             } else if (tabla === "DescuentosDiferencialCambiario" || r.tipo_regla === "bcv_completo" || r.tipo_diferencial) {
@@ -3540,8 +3542,8 @@ document.addEventListener("DOMContentLoaded", () => {
         setM2MChecked(recompraForm, ".m2m-rec-marca", r.marca);
         prefillCategoriaCascada(recompraForm, "rec", r.categoria);
         setM2MChecked(recompraForm, ".m2m-rec-lista", r.listas_aplicables);
-        setFieldValue("cfg-rec-min-cajas", r.min_cajas ?? 2);
-        setFieldValue("cfg-rec-max-cajas", r.max_cajas ?? 4);
+        setFieldValue("cfg-rec-min-cajas", r.min_unidades ?? 2);
+        setFieldValue("cfg-rec-max-cajas", r.max_unidades ?? 4);
         setFieldValue("cfg-rec-unidad", r.unidad_medida || "CAJAS");
         setFieldValue("cfg-rec-tipo-benef", r.tipo_beneficio || "descuento");
         setFieldValue("cfg-rec-porcentaje", r.porcentaje ?? 0.03);
@@ -3563,8 +3565,6 @@ document.addEventListener("DOMContentLoaded", () => {
         setM2MChecked(prontoPagoForm, ".m2m-pp-lista", r.listas_aplicables);
         setFieldValue("cfg-pp-ventana-tipo", r.ventana_pago_tipo || "entrega");
         setFieldValue("cfg-pp-ventana-dias", r.ventana_pago_dias ?? 3);
-        setFieldValue("cfg-pp-min", r.min_cantidad ?? 0);
-        setFieldValue("cfg-pp-max", r.max_cantidad ?? 999999);
         setFieldValue("cfg-pp-unidad", r.unidad_medida || "CAJAS");
         setFieldValue("cfg-pp-tipo-benef", r.tipo_beneficio || "descuento");
         setFieldValue("cfg-pp-porcentaje", r.porcentaje ?? 0.05);
@@ -3583,8 +3583,8 @@ document.addEventListener("DOMContentLoaded", () => {
         setM2MChecked(descuentoVolumenForm, ".m2m-vol-marca", r.marca);
         prefillCategoriaCascada(descuentoVolumenForm, "vol", r.categoria);
         setM2MChecked(descuentoVolumenForm, ".m2m-vol-lista", r.listas_aplicables);
-        if (cfgDescVolLitros) cfgDescVolLitros.value = r.litros_minimo ?? r.min_cantidad ?? 0;
-        setFieldValue("cfg-desc-vol-max", r.max_cantidad ?? 999999);
+        if (cfgDescVolLitros) cfgDescVolLitros.value = r.litros_minimo ?? r.min_unidades ?? 0;
+        setFieldValue("cfg-desc-vol-max", r.max_unidades ?? 999999);
         if (cfgDescVolPorcentaje) cfgDescVolPorcentaje.value = r.porcentaje ?? 0.05;
         setFieldValue("cfg-desc-vol-tipo-eval", r.tipo_evaluacion || "orden");
         setFieldValue("cfg-desc-vol-dias-eval", r.dias_evaluacion ?? 30);
@@ -3612,7 +3612,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
         setFieldValue("cfg-promo-compra-minima", r.compra_minima ?? 0);
-        setFieldValue("cfg-promo-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-promo-max", r.max_unidades ?? 999999);
         setFieldValue("cfg-promo-unidad", r.unidad_medida || "CAJAS");
         setFieldValue("cfg-promo-regalo-tipo", r.regalo_tipo || "solo_uno");
         setFieldValue("cfg-promo-fallback", r.descuento_fallback ?? 0.02);
@@ -3638,8 +3638,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 o.selected = skus.includes(o.value);
             });
         }
-        setFieldValue("cfg-prod-min", r.min_cantidad ?? 0);
-        setFieldValue("cfg-prod-max", r.max_cantidad ?? 999999);
+        setFieldValue("cfg-prod-min", r.min_unidades ?? 0);
+        setFieldValue("cfg-prod-max", r.max_unidades ?? 999999);
         setFieldValue("cfg-prod-unidad", r.unidad_medida || "CAJAS");
         setFieldValue("cfg-prod-tipo-benef", r.tipo_beneficio || "descuento");
         setFieldValue("cfg-prod-porcentaje", r.porcentaje ?? 0.05);
@@ -3872,8 +3872,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 categoria: cats,
                 listas_aplicables: listas,
                 litros_minimo: minQty,
-                min_cantidad: minQty,
-                max_cantidad: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
+                min_unidades: minQty,
+                max_unidades: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
                 porcentaje: parseFloat(cfgDescVolPorcentaje.value || 0.05),
                 tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
                 dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
