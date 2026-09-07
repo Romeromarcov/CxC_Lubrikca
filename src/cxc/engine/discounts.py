@@ -1795,7 +1795,18 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         precio_base_calculado=q2(comp.precio_base),
         descuentos_detalle=detalle,
         total_descuentos=q2(total_descuentos),
-        ncs_calculadas=q2(comp.nc),
+        # ``final_nc``, no ``comp.nc``: el valor DESPUÉS de aplicar las
+        # exclusiones entre reglas. Bug encontrado en la verificación de
+        # escenarios (septiembre 2026): cuando una exclusión anulaba el
+        # descuento de primera compra --pasa cuando dispara Recompra, que
+        # lo excluye-- el detalle no se emitía (usa ``final_nc``) pero este
+        # campo seguía reportando el valor previo. El resultado era una NC
+        # que la pantalla no podía justificar con ningún renglón.
+        #
+        # ``total_motor`` nunca estuvo mal: ``neto`` ya usaba ``final_nc``.
+        # Medido en producción: 7 filas de 724, por 28,50 en total, todas
+        # con Recompra activa.
+        ncs_calculadas=q2(final_nc),
         total_motor=q2(neto),
         requiere_revision=requiere_revision,
         candidata_a_cierre=candidata,
