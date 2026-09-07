@@ -158,3 +158,23 @@ def _reset_vendedor_por_partner_cache():
     _app_module._VENDEDOR_POR_PARTNER_CACHE.clear()
     yield
     _app_module._VENDEDOR_POR_PARTNER_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _cache_de_tasas_limpio():
+    """El caché de TasasHistoricasAuditoria no debe cruzarse entre tests.
+
+    ``get_rate_for_datetime`` cachea esa tabla por proceso (ver
+    ``_tasas_historicas_cacheadas``) para no consultarla una vez por pago
+    -- ese N+1 hacía que la página de Auditoría tardara ~18 minutos. Pero
+    en la suite cada test monta su propio repo falso, y sin limpiar el
+    caché un test heredaba las tasas del anterior: dos pasaban aislados y
+    fallaban en conjunto.
+    """
+    from cxc.web import app as _app
+
+    _app._TASAS_HIST_CACHE["rows"] = None
+    _app._TASAS_HIST_CACHE["ts"] = 0.0
+    yield
+    _app._TASAS_HIST_CACHE["rows"] = None
+    _app._TASAS_HIST_CACHE["ts"] = 0.0
