@@ -10087,6 +10087,24 @@ def calcular_candidatos_cierre_diferencial(
     for item in ventas_items:
         if item.get("nacio_en_lista_usd"):
             continue
+        # Un cierre ya materializado deja de ser un candidato. Son las dos
+        # vías por las que este diferencial se concede: emitir la Nota de
+        # Crédito en Odoo, o aprobar el descuento de sistema desde la
+        # bandeja (POST /api/facturacion/aprobar-descuento-sistema).
+        #
+        # Bug encontrado al validar la salida de las bandejas (septiembre
+        # 2026, a pedido del usuario: "valida que al generar la NC en Odoo
+        # salga de ambas bandejas"). La Bandeja 2 sí las suelta porque
+        # ``descuento_pendiente_aplicar`` resta la NC; este reporte no
+        # miraba ninguna de las dos, y como su condición es
+        # ``pagado / teórico >= umbral`` -- dos cifras que la NC no mueve --
+        # la orden quedaba listada para siempre. Medido: 8 órdenes con la
+        # NC ya emitida seguían apareciendo, entre ellas S00079, que había
+        # pagado el 116 % de su teórico y recibido 548,45 de NC.
+        if float(item.get("total_nc_aplicada") or 0.0) > 0.05:
+            continue
+        if float(item.get("descuento_aplicado_sistema") or 0.0) > 0.05:
+            continue
         teorico_ves = float(item.get("ves_neta_teorica_iva") or 0.0)
         if teorico_ves <= 0:
             continue
