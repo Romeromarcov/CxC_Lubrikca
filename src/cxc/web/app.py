@@ -1995,6 +1995,38 @@ def _all_serie_tasas_rows(repo) -> list[dict]:
     return [serde.serie_to_row(f) for f in repo.all_serie_tasas()]
 
 
+# Fechas de SerieTasas ya parseadas, por texto. La misma marca de tiempo se
+# reparseaba una vez por cada consulta de tasa: con 919 filas de serie y
+# 1.466 Vinculaciones, el detector de sobreaplicadas hacía 1,35 millones de
+# ``strptime`` y tardaba ~18 minutos, dejando la pagina de Auditoria sin
+# cargar. Los textos se repiten, asi que memorizarlos convierte cada parseo
+# en una busqueda de diccionario.
+#
+# El volumen aparecio en septiembre de 2026, cuando la sincronizacion de
+# pagos conciliados llevo las Vinculaciones de 270 a 1.466: el detector ya
+# era cuadratico, solo que con poco volumen no se notaba.
+_SERIE_TS_CACHE: dict[str, datetime | None] = {}
+
+
+def _parsear_ts_serie(ts_str: str) -> datetime | None:
+    cacheado = _SERIE_TS_CACHE.get(ts_str)
+    if cacheado is not None or ts_str in _SERIE_TS_CACHE:
+        return cacheado
+    limpio = ts_str.replace("T", " ")
+    if "." in limpio:
+        limpio = limpio.split(".")[0]
+    parsed: datetime | None
+    try:
+        parsed = datetime.strptime(limpio, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        try:
+            parsed = datetime.strptime(limpio[:16], "%Y-%m-%d %H:%M")
+        except Exception:
+            parsed = None
+    _SERIE_TS_CACHE[ts_str] = parsed
+    return parsed
+
+
 def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
     closest_row = None
     min_diff = None
@@ -2003,16 +2035,9 @@ def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
         ts_str = r.get("timestamp")
         if not ts_str:
             continue
-        try:
-            ts_str = ts_str.replace("T", " ")
-            if "." in ts_str:
-                ts_str = ts_str.split(".")[0]
-            row_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            try:
-                row_dt = datetime.strptime(ts_str[:16], "%Y-%m-%d %H:%M")
-            except Exception:
-                continue
+        row_dt = _parsear_ts_serie(ts_str)
+        if row_dt is None:
+            continue
 
         diff = abs((dt - row_dt).total_seconds())
         if min_diff is None or diff < min_diff:
@@ -2020,6 +2045,43 @@ def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
             closest_row = r
 
     return closest_row
+
+
+# TasasHistoricasAuditoria cacheada por proceso. La tabla se siembra con un
+# script y no cambia durante una corrida, pero ``get_rate_for_datetime`` la
+# leia de la base EN CADA LLAMADA -- y se la llama una vez por pago.
+#
+# Con 1.466 Vinculaciones eso son ~1.400 consultas contra Railway por cada
+# carga de la pagina de Auditoria: medido con cProfile, 34 consultas para
+# solo 40 Vinculaciones costaban 32 segundos, casi todo esperando la red.
+# Proyectado al total, el detector de sobreaplicadas tardaba ~18 minutos y
+# la pagina no llegaba a cargar.
+#
+# El volumen aparecio en septiembre de 2026, cuando la sincronizacion de
+# pagos conciliados llevo las Vinculaciones de 270 a 1.466: el N+1 ya
+# estaba, solo que con poco volumen no se notaba.
+_TASAS_HIST_CACHE: dict[str, Any] = {"rows": None, "ts": 0.0}
+_TASAS_HIST_TTL = 300.0
+
+
+def _tasas_historicas_cacheadas(repo: Any) -> list[dict[str, str]]:
+    ahora = time.time()
+    if (
+        _TASAS_HIST_CACHE["rows"] is not None
+        and ahora - float(_TASAS_HIST_CACHE["ts"]) < _TASAS_HIST_TTL
+    ):
+        filas: list[dict[str, str]] = _TASAS_HIST_CACHE["rows"]
+        return filas
+    try:
+        filas = repo.all_tasas_historicas_auditoria()
+    except Exception as e_hist:
+        logger.warning(
+            "Error leyendo TasasHistoricasAuditoria en get_rate_for_datetime: %s", e_hist
+        )
+        filas = []
+    _TASAS_HIST_CACHE["rows"] = filas
+    _TASAS_HIST_CACHE["ts"] = ahora
+    return filas
 
 
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
@@ -2048,13 +2110,7 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
                 closest_row.get("tasa_binance")
             )
 
-    try:
-        hist_rows = repo.all_tasas_historicas_auditoria()
-    except Exception as e_hist:
-        logger.warning(
-            "Error leyendo TasasHistoricasAuditoria en get_rate_for_datetime: %s", e_hist
-        )
-        hist_rows = []
+    hist_rows = _tasas_historicas_cacheadas(repo)
     bcv_hist = get_bcv_usd_rate_for_date(dt.date(), hist_rows)
     binance_hist = get_binance_rate_for_date(dt.date(), hist_rows)
     if bcv_hist is not None and binance_hist is not None:
