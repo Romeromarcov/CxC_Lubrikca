@@ -120,6 +120,18 @@ class EngineInputs:
     # OTRA orden) -- ``discounts.py`` se queda puro, sin tocar el repo.
     orden_anterior_cliente: OrdenVenta | None = None
     orden_anterior_cliente_vincs: list[Vinculacion] = field(default_factory=list)
+    # Objetivo de pago de esa orden anterior para el gate de Recompra:
+    # su TEÓRICO neto de descuentos y con impuestos, en la referencia con
+    # la que nació (decisión del usuario, septiembre 2026 -- "debe estar
+    # pagada contra su teórico, que posteriormente debe coincidir con lo
+    # facturado en Odoo con sus notas de crédito").
+    #
+    # Antes se exigía el ``amount_total`` crudo de Odoo, que es el precio
+    # de lista SIN los descuentos que el cliente sí se ganó: de 382
+    # órdenes anteriores con abono, solo 120 lo alcanzaban, y la mediana de
+    # las que no llegaban era 71,8 %. None = sin teórico calculado, y el
+    # gate cae al ``monto_total`` como antes.
+    orden_anterior_objetivo: Decimal | None = None
     # Diferencial Cambiario, regla "Equiparar" (agosto 2026): True si el
     # CLIENTE de esta orden tiene, en Odoo, algún pago sin aplicar/conciliar
     # contra ninguna factura ("pago huérfano" -- mismo concepto que ya usa
@@ -760,8 +772,8 @@ def _calcular_componentes(
                         regla_id="REC_LEGACY",
                         marca="*",
                         categoria="*",
-                        min_cajas=1,
-                        max_cajas=9999,
+                        min_unidades=Decimal("1"),
+                        max_unidades=Decimal("9999"),
                         porcentaje=regla.valor,
                         vigencia_desde=regla.vigencia_desde,
                         vigencia_hasta=regla.vigencia_hasta,
@@ -788,17 +800,46 @@ def _calcular_componentes(
                     if inp.orden_anterior_cliente_vincs
                     else Decimal("0")
                 )
-                pagada_completo = pagado_anterior >= orden_anterior.monto_total - _EPS
+                # El MENOR entre su teórico y lo que Odoo le facturó
+                # (decisión del usuario, septiembre 2026, opción B).
+                #
+                # El teórico solo no alcanza: hay 50 órdenes cuyo teórico
+                # queda POR ENCIMA de lo facturado, y exigirlo le negaría la
+                # recompra a un cliente que pagó todo lo que se le cobró.
+                # Esa discrepancia entre teórico y factura es algo a
+                # auditar aparte -- se vendió por debajo de lista, o el
+                # teórico está mal -- no un motivo para quitarle el
+                # descuento a quien no tuvo nada que ver.
+                #
+                # Y el ``monto_total`` solo tampoco: es el precio de lista
+                # SIN los descuentos que el cliente sí se ganó, y dejaba
+                # afuera a 33 órdenes que habían pagado su teórico completo.
+                candidatos = [orden_anterior.monto_total]
+                if inp.orden_anterior_objetivo is not None:
+                    candidatos.append(inp.orden_anterior_objetivo)
+                objetivo_anterior = min(candidatos)
+                pagada_completo = pagado_anterior >= objetivo_anterior - _EPS
 
             if orden_anterior is not None and pagada_completo:
                 recompra_monto = Decimal("0")
                 # Reglas en modo "subtotal" se deduplican por regla_id: el %
                 # se aplica UNA sola vez sobre precio_base, sin importar
                 # cuántas líneas matcheen esa misma regla.
+                # Los tramos miran el TOTAL de la orden, no cada línea
+                # (decisión del usuario, septiembre 2026). Antes el tramo se
+                # elegía con la cantidad de UNA línea: una orden con tres
+                # líneas de 2 cajas (6 en total) caía en el Tramo 1 (3 %)
+                # en vez del Tramo 2 (5 %), porque ninguna línea sola
+                # llegaba a 5.
+                #
+                # El total se cuenta por regla, sumando solo las líneas que
+                # esa regla matchea por marca/categoría -- una regla acotada
+                # a una marca no debe sumar cajas de otras.
                 reglas_recompra_subtotal: dict[str, Any] = {}
+                lineas_por_regla: dict[str, list[Any]] = {}
+                total_por_regla: dict[str, Decimal] = {}
+                reglas_por_id = {rc.regla_id: rc for rc in recompras_activas}
                 for ln in inp.lineas:
-                    cajas_linea = _cantidad_efectiva(inp, ln)
-                    best_r = None
                     for rc in recompras_activas:
                         marca_ok = (
                             rc.marca == "*"
@@ -819,21 +860,28 @@ def _calcular_componentes(
                             fecha_entrega=None,
                             dias_credito=orden_anterior.dias_credito,
                         )
-                        if (
-                            marca_ok
-                            and cat_ok
-                            and ventana_ok
-                            and rc.min_cajas <= cajas_linea <= rc.max_cajas
-                            and (best_r is None or rc.porcentaje > best_r.porcentaje)
-                        ):
-                            best_r = rc
-                    if best_r is not None:
-                        if getattr(best_r, "aplica_a", "linea") == "subtotal":
-                            existente = reglas_recompra_subtotal.get(best_r.regla_id)
-                            if existente is None or best_r.porcentaje > existente.porcentaje:
-                                reglas_recompra_subtotal[best_r.regla_id] = best_r
-                        else:
-                            recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
+                        if marca_ok and cat_ok and ventana_ok:
+                            lineas_por_regla.setdefault(rc.regla_id, []).append(ln)
+                            total_por_regla[rc.regla_id] = total_por_regla.get(
+                                rc.regla_id, Decimal("0")
+                            ) + _cantidad_efectiva(inp, ln)
+
+                # De las reglas cuyo total cae dentro de su tramo, gana la de
+                # mayor porcentaje -- mismo criterio que antes, ahora
+                # decidido una vez por orden en vez de una por línea.
+                mejor = None
+                for regla_id, total in total_por_regla.items():
+                    rc = reglas_por_id[regla_id]
+                    if rc.min_unidades <= total <= rc.max_unidades and (
+                        mejor is None or rc.porcentaje > mejor.porcentaje
+                    ):
+                        mejor = rc
+                if mejor is not None:
+                    if getattr(mejor, "aplica_a", "linea") == "subtotal":
+                        reglas_recompra_subtotal[mejor.regla_id] = mejor
+                    else:
+                        for ln in lineas_por_regla.get(mejor.regla_id, []):
+                            recompra_monto += _precio_linea(inp, ln, lista) * mejor.porcentaje
 
                 for regla_subtotal in reglas_recompra_subtotal.values():
                     recompra_monto += precio_base * regla_subtotal.porcentaje
@@ -1087,24 +1135,24 @@ def _calcular_componentes(
 
         unidad = str(r.unidad_medida or "").upper()
         is_liters_rule = (unidad == "LITROS") or (
-            r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
+            r.litros_minimo > 0 and (r.min_unidades is None or r.min_unidades == 0)
         )
         if is_liters_rule:
             if litros_eval < r.litros_minimo:
                 continue
         else:
             val_eval = cajas_eval if cajas_eval > 0 else litros_eval
-            thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
+            thresh = r.min_unidades if (r.min_unidades and r.min_unidades > 0) else r.litros_minimo
             if val_eval < thresh:
                 continue
-            if r.max_cantidad and r.max_cantidad < 999999 and val_eval > r.max_cantidad:
+            if r.max_unidades and r.max_unidades < 999999 and val_eval > r.max_unidades:
                 continue
 
         if r.porcentaje <= 0:
             continue
 
         unidad_tag = "L" if unidad == "LITROS" else " Unid"
-        min_tag = r.litros_minimo if unidad == "LITROS" else r.min_cantidad
+        min_tag = r.litros_minimo if unidad == "LITROS" else r.min_unidades
         tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
         candidatas_vol.append(
             {

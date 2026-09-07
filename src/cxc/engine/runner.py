@@ -13,6 +13,8 @@ import hashlib
 import json
 import logging
 from datetime import date
+from decimal import Decimal
+from typing import Any
 
 from ..models import (
     BandejaFacturacion,
@@ -59,6 +61,46 @@ def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str
     )
     partes.append(f"__lista__|{str(lista_precios or '').strip()}")
     return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
+
+
+# IVA venezolano, misma constante que usa /api/ventas para el teorico.
+_IVA_TEORICO = Decimal("0.16")
+
+
+def _objetivo_teorico(
+    repo: Any, orden: OrdenVenta | None, valid_usd: list[str]
+) -> Decimal | None:
+    """Cuanto tenia que pagar esa orden segun su TEORICO, con impuestos.
+
+    Es el objetivo del gate de Recompra desde septiembre de 2026 (decision
+    del usuario): la orden anterior cuenta como pagada cuando cubrio su
+    teorico, no el `amount_total` crudo de Odoo -- ese es el precio de
+    lista SIN los descuentos que el cliente si se gano.
+
+    Se toma el teorico de la referencia con la que NACIO la orden (USD si
+    su lista es USD, VES si no), neto de sus descuentos y con impuestos,
+    para compararlo contra `valor_pagado_usd`, que ya viene en dolares.
+
+    None si la orden no tiene teorico calculado todavia: el llamador cae
+    entonces al `monto_total`, que es el comportamiento anterior.
+    """
+    if orden is None:
+        return None
+    try:
+        fila = next(
+            (t for t in repo.all_ventas_teoricos() if t.so_id == orden.so_id), None
+        )
+    except Exception:
+        return None
+    if fila is None:
+        return None
+    es_usd = str(orden.lista_precios or "").strip() in set(valid_usd)
+    bruto = fila.teorico_usd if es_usd else fila.teorico_ves
+    desc = fila.descuentos_teorico_usd if es_usd else fila.descuentos_teorico_ves
+    neto = bruto - desc
+    if neto <= 0:
+        return None
+    return Decimal(neto) * (Decimal("1") + _IVA_TEORICO)
 
 
 class EngineRunner:
@@ -337,6 +379,9 @@ class EngineRunner:
             orden_es_historica=orden_es_historica,
             historical_price_map=historical_price_map,
             orden_anterior_cliente=orden_anterior_cliente,
+            orden_anterior_objetivo=_objetivo_teorico(
+                self._repo, orden_anterior_cliente, valid_usd
+            ),
             orden_anterior_cliente_vincs=orden_anterior_cliente_vincs,
             historial_cliente_lineas=historial_cliente_lineas,
         )
