@@ -8035,7 +8035,21 @@ async def get_bandeja_facturacion():
                 #    todavia, un error del cliente, o un pago incompleto
                 #    real). Se distingue con `es_agente_retencion` para que
                 #    la UI no lo etiquete como una retencion normal.
-                if not item.get("wh_iva_aplicado"):
+                # Si Odoo ya da la factura por saldada, no hay comprobante
+                # que pedir: lo que falte es diferencia cambiaria que Odoo
+                # asentó por su cuenta, no un IVA por cobrar.
+                #
+                # Bug real encontrado al validar esta bandeja (septiembre
+                # 2026, a pedido del usuario: "que no pida retención o IVA
+                # de una factura que está pagada al 100 % incluyendo los
+                # impuestos"). De 33 facturas con ``amount_residual`` en 0,
+                # 10 entraban igual porque nuestro cálculo veía un resto de
+                # entre 3,01 y 264,58 que Odoo no tiene -- los asientos de
+                # Exchange Difference saldan la factura pero no son
+                # ``account.payment``, así que ``valor_pagado_*`` no los
+                # cuenta. Mismo criterio que la regla 5 del árbol de CxC:
+                # ante la duda manda Odoo.
+                if not item.get("wh_iva_aplicado") and not item.get("factura_saldada_odoo"):
                     monto_factura_real = float(item.get("total_facturado_neto") or 0.0) or tot_motor
                     subtotal_est = monto_factura_real / 1.16
                     iva_total_est = monto_factura_real - subtotal_est
@@ -8070,21 +8084,18 @@ async def get_bandeja_facturacion():
                             }
                         )
 
-        # Bandeja "Pendientes por Cerrar": reusa el mismo cálculo de
-        # /api/reporte-saldos (saldo_minimo_pendientes, misma fuente única
-        # de verdad -- ver clasificar_estado_cxc) en vez de recalcularlo
-        # aquí; evita una quinta implementación paralela del criterio
-        # "ya pagada, falta cerrar en Odoo" que podría divergir con el
-        # tiempo (mismo problema que ya se corrigió en get_auditoria).
-        # Best-effort: si el cálculo pesado de reporte-saldos falla (Odoo
-        # caído, etc.), las otras 4 bandejas de este endpoint no deben
-        # romperse por eso -- se muestra esta lista vacía en su lugar.
-        try:
-            reporte_data = await asyncio.to_thread(_get_reporte_saldos_sync, False)
-            pendientes_por_cerrar = reporte_data.get("saldo_minimo_pendientes", [])
-        except Exception as e_pc:
-            logger.warning("No se pudo cargar 'Pendientes por Cerrar' en /api/bandeja: %s", e_pc)
-            pendientes_por_cerrar = []
+        # La bandeja "Pendientes por Cerrar" se elimino en septiembre de
+        # 2026, y con ella la llamada a /api/reporte-saldos que la
+        # alimentaba. Entraba con `clasificacion_cxc.sale_de_cxc` -- la
+        # MISMA condicion que decide todos los destinos de bandeja -- asi
+        # que contenia a todas las demas: medido sobre 796 ordenes vivas,
+        # 397 filas de las cuales CERO eran propias.
+        #
+        # Ademas se armaba en OTRO endpoint, con una segunda llamada al
+        # arbol y una tolerancia distinta ($1 en vez de $0,05): dos
+        # implementaciones paralelas del mismo criterio que podian divergir
+        # sin que nada lo avisara. Sacarla ahorra tambien ese recalculo
+        # pesado en cada carga de la bandeja.
 
         return {
             "ordenes_por_facturar": ordenes_por_facturar,
@@ -8098,7 +8109,6 @@ async def get_bandeja_facturacion():
             "iva_pendiente_agentes": iva_pendiente_agentes,
             "auditoria_precios": auditoria_precios,
             "en_proceso_de_pago": en_proceso_de_pago,
-            "pendientes_por_cerrar": pendientes_por_cerrar,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -13840,6 +13850,11 @@ def _get_ventas_sync(
                     # Saldo a favor del cliente -- la empresa le debe. Ver
                     # el cálculo más arriba (caso S00372).
                     "saldo_a_favor": saldo_a_favor,
+                    # ``payment_state`` en vivo de Odoo: la factura ya está
+                    # saldada allá aunque nuestra reconstrucción no llegue.
+                    "factura_saldada_odoo": facturas_pagadas_confirmadas_odoo_map.get(
+                        o.so_id, False
+                    ),
                     # Rebaja hecha en el precio de la factura (tercer canal)
                     # y el excedente que ninguna regla justifica.
                     "rebaja_en_precio": round(rebaja_en_precio, 2),
@@ -13988,6 +14003,7 @@ _VENTAS_COLUMN_LABELS: dict[str, str] = {
     "usd_neta_teorica_iva": "Teórica Neta USD + Imp.",
     "pagada": "Pagada",
     "saldo_a_favor": "Saldo a Favor del Cliente",
+    "factura_saldada_odoo": "Factura Saldada en Odoo",
     "rebaja_en_precio": "Descuento ya Aplicado en el Precio",
     "venta_bajo_lista": "Vendido Bajo Lista (sin regla)",
     "iva_pendiente_sin_facturar": "Pagada - IVA Pendiente",
