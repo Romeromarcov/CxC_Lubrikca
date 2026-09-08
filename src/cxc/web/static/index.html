@@ -2362,13 +2362,12 @@
                         </div>
 
                         <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo de Cálculo</label>
-                                <select id="cfg-dif-tipo-calculo" required>
-                                    <option value="fijo">Porcentaje Fijo</option>
-                                    <option value="variable">Diferencial Variable (Dinamico)</option>
-                                </select>
-                            </div>
+                            <!-- "Tipo de Cálculo" se quitó del formulario: era un
+                                 segundo selector para lo mismo que "Tipo de
+                                 Diferencial", y el motor solo lee ese. Se podía
+                                 poner "Porcentaje Fijo" en una regla
+                                 "equiparar_binance" y no pasaba nada. Ahora se
+                                 deriva al guardar; la columna se conserva. -->
                             <div class="form-group" style="flex:1">
                                 <label>Porcentaje Fijo (%) (si aplica)</label>
                                 <input type="number" id="cfg-dif-porcentaje-fijo" step="0.0001" value="0.35">
