@@ -74,10 +74,36 @@ def _inp(reglas=(), *, abonos=(), lista=LISTA_VES, huerfanos=False):
 
 
 def test_regla_fijo_aplica_con_pago_100_pct_usd():
+    """El 35 % es un TECHO, no un monto plano.
+
+    Cambio de regla aprobado por el usuario (septiembre 2026) tras revisar
+    S00010: la rama fija concedía ``precio_base * 0,35`` sin restar nada,
+    mientras la rama "equiparar" sí medía el hueco real. Esa asimetría
+    daba el diferencial encima de descuentos ya concedidos -- de 168
+    órdenes con diferencial fijo ($39.312,33), 73 ($27.450,01) ya traían
+    el descuento dado en el precio.
+
+    Acá la lista VES vale 1.000 y el cliente pagó 800 en dólares, que es
+    exactamente el teórico USD: el hueco a cerrar es 200, no 350. El 35 %
+    (350) sigue siendo el máximo, pero no se puede descontar por debajo de
+    lo que el cliente pagó -- eso sería el sobre-descuento que la regla
+    busca evitar.
+
+    En producción la brecha estructural entre las dos listas ronda el 35 %,
+    así que el techo casi siempre coincide con el hueco; solo muerde cuando
+    el precio ya venía rebajado.
+    """
     bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd()))
 
-    # 35% sobre los 1000 de la lista VES.
-    assert bandeja.total_descuentos == Decimal("350.00")
+    assert bandeja.total_descuentos == Decimal("200.00")
+
+
+def test_el_35_pct_sigue_siendo_el_tope_cuando_el_hueco_es_mayor():
+    """Si el cliente pagó poco por encima del teórico USD, el hueco supera
+    el 35 % y manda el techo -- que es el caso normal en producción."""
+    bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("801")))
+
+    assert bandeja.total_descuentos == Decimal("199.00")
 
 
 def test_regla_fijo_no_aplica_si_el_pago_no_cubre_el_teorico_usd():
@@ -144,8 +170,11 @@ def test_regla_inactiva_no_aplica():
 
 def test_vigencia_arranca_hoy_si_aplica():
     regla = _regla("fijo_35_ves_usd", desde=date(2026, 6, 1))
+    # 200 = hueco real (1.000 de lista - 800 pagados), topado al 35 %.
+    # Estas pruebas verifican la VIGENCIA, no el monto: el cálculo lo cubre
+    # test_regla_fijo_aplica_con_pago_100_pct_usd.
     assert calcular_factura(_inp([regla], abonos=_abono_usd())).total_descuentos == Decimal(
-        "350.00"
+        "200.00"
     )
 
 
@@ -161,8 +190,11 @@ def test_vigencia_vencida_ayer_no_aplica():
 
 def test_vigencia_termina_hoy_si_aplica():
     regla = _regla("fijo_35_ves_usd", hasta=date(2026, 6, 1))
+    # 200 = hueco real (1.000 de lista - 800 pagados), topado al 35 %.
+    # Estas pruebas verifican la VIGENCIA, no el monto: el cálculo lo cubre
+    # test_regla_fijo_aplica_con_pago_100_pct_usd.
     assert calcular_factura(_inp([regla], abonos=_abono_usd())).total_descuentos == Decimal(
-        "350.00"
+        "200.00"
     )
 
 

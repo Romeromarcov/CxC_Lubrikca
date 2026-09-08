@@ -390,9 +390,59 @@ def test_diferencial_regla1_fijo_pago_100pct_usd() -> None:
     )
     res = calcular_factura(inp)
     bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
+    # El 35 % pasó a ser un TECHO, no un monto plano (cambio de regla
+    # aprobado por el usuario, septiembre 2026, tras revisar S00010). Acá
+    # las dos listas valen lo mismo (P1@BCV = P1@USD = 100) y el cliente
+    # pagó los 100 completos: no queda hueco que cerrar, así que no hay
+    # diferencial. Con la brecha estructural real (~35 % entre lista VES y
+    # lista USD) el techo y el hueco coinciden y el descuento sale entero
+    # -- eso lo cubre test_diferencial_fijo_se_topa_al_hueco_real.
+    assert bcv == []
+    # Y sin descuento no hay nada que revisar: requiere_revision se
+    # levantaba justamente por el diferencial.
+    assert res.requiere_revision is False
+
+
+def test_diferencial_fijo_se_topa_al_hueco_real() -> None:
+    """Con brecha entre listas, el diferencial sale hasta cerrar el hueco.
+
+    Misma orden que arriba pero con la lista USD a 65 (la brecha real de
+    producción): el cliente paga los 65 del teórico USD sobre una lista VES
+    de 100, así que el hueco es 35 -- que además coincide con el techo del
+    35 %.
+    """
+    from cxc.models import DescuentoDiferencialCambiario
+
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo_usd = b.metodo("MU", moneda=Moneda.USD, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="65",
+        moneda_abono=Moneda.USD,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="36.0",
+        tasa_binance="40.0",
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo_usd)],
+        resolver=_resolver(**{"P1@BCV": "100", "P1@USD": "65"}),
+        valid_ves=["BCV"],
+        valid_usd=["USD"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
+                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.35"),
+            )
+        ],
+    )
+    res = calcular_factura(inp)
+    bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
     assert len(bcv) == 1
-    assert bcv[0].monto == Decimal("35.00")  # 35% de 100
-    assert res.requiere_revision is True
+    assert bcv[0].monto == Decimal("35.00")
 
 
 def test_diferencial_regla1_no_aplica_con_pago_mixto_sin_regla_equiparar() -> None:
