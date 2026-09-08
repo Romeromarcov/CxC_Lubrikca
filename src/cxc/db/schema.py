@@ -273,6 +273,19 @@ descuentos_pronto_pago = Table(
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -300,6 +313,19 @@ descuentos_volumen = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
@@ -324,6 +350,19 @@ promocion_primera_compra = Table(
     Column("categoria", String, nullable=False, server_default="CAJA"),
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("solo_primera_compra", Boolean, nullable=False, server_default="false"),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
@@ -348,6 +387,19 @@ descuentos_recompra = Table(
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("porcentaje", PCT, nullable=False, server_default="0.03"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -373,6 +425,19 @@ descuentos_producto = Table(
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -396,6 +461,19 @@ descuentos_diferencial_cambiario = Table(
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
