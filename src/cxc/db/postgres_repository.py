@@ -74,7 +74,6 @@ _META_LAST_SYNC = "last_sync"
 _DIFERENCIAL_DEFAULTS = [
     DescuentoDiferencialCambiario(
         regla_id="DIF_35_VES",
-        nombre="35% Fijo VES a USD",
         tipo_diferencial="fijo_35_ves_usd",
         tipo_calculo="fijo",
         porcentaje_fijo=Decimal("0.35"),
@@ -84,7 +83,6 @@ _DIFERENCIAL_DEFAULTS = [
     ),
     DescuentoDiferencialCambiario(
         regla_id="DIF_EQUIPARAR",
-        nombre="Equiparar Binance N/C",
         tipo_diferencial="equiparar_binance",
         tipo_calculo="variable",
         porcentaje_fijo=Decimal("0"),
@@ -94,7 +92,6 @@ _DIFERENCIAL_DEFAULTS = [
     ),
     DescuentoDiferencialCambiario(
         regla_id="DIF_CANDIDATOS_CIERRE",
-        nombre="Candidatos a Cierre de Factura (reporte)",
         tipo_diferencial="candidato_cierre_factura",
         tipo_calculo="variable",
         porcentaje_fijo=Decimal("0"),
@@ -1465,7 +1462,6 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         regla_id=r.regla_id,
         marca=r.marca,
         categoria=r.categoria,
-        litros_minimo=r.litros_minimo,
         porcentaje=r.porcentaje,
         min_unidades=r.min_unidades,
         max_unidades=r.max_unidades,
@@ -1511,7 +1507,6 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
 def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
     return DescuentoDiferencialCambiario(
         regla_id=r.regla_id,
-        nombre=r.nombre,
         tipo_diferencial=r.tipo_diferencial,
         tipo_calculo=r.tipo_calculo,
         porcentaje_fijo=r.porcentaje_fijo,

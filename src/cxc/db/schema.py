@@ -302,8 +302,9 @@ descuentos_volumen = Table(
     Column("regla_id", String, primary_key=True),
     Column("marca", String, nullable=False, server_default="*"),
     Column("categoria", String, nullable=False, server_default="*"),
-    Column("litros_minimo", MONEY, nullable=False, server_default="0"),
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
+    # El tramo va siempre en min/max_unidades; unidad_medida dice en qué se
+    # cuenta. ``litros_minimo`` era el mismo dato con otro nombre.
     Column("min_unidades", MONEY, nullable=False, server_default="0"),
     Column("max_unidades", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="UNIDADES"),
@@ -451,7 +452,9 @@ descuentos_diferencial_cambiario = Table(
     "descuentos_diferencial_cambiario",
     metadata,
     Column("regla_id", String, primary_key=True),
-    Column("nombre", String, nullable=False, server_default=""),
+    # ``nombre`` se fusionó con ``descripcion``, el campo que ya tienen
+    # todas las demás reglas: era el mismo dato con dos nombres y solo
+    # esta tabla cargaba los dos.
     Column("tipo_diferencial", String, nullable=False, server_default="fijo_35_ves_usd"),
     Column("tipo_calculo", String, nullable=False, server_default="fijo"),
     Column("porcentaje_fijo", PCT, nullable=False, server_default="0.35"),

@@ -190,7 +190,6 @@ def test_detalle_teorico_conceptos_muestra_reglas_que_aplican_por_lista() -> Non
             regla_id="VOL_USD",
             marca="Sinoco",
             categoria="Comercial",
-            litros_minimo=Decimal("0"),
             min_unidades=Decimal("1"),
             max_unidades=Decimal("999"),
             unidad_medida="CAJAS",

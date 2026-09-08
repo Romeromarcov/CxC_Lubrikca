@@ -9563,7 +9563,9 @@ async def post_config_promociones(req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_promocion_primera_compra(promo)
@@ -9599,7 +9601,9 @@ async def put_config_promociones(regla_id: str, req: PromocionRequest):
             solo_primera_compra=req.solo_primera_compra,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_promocion_primera_compra(promo)
@@ -9866,7 +9870,7 @@ async def get_todas_reglas_descuento():
                     "vigencia_desde": r.vigencia_desde.isoformat() if r.vigencia_desde else None,
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "campos_especiales": {
-                        "nombre": r.nombre,
+                        "nombre": r.descripcion,
                         "tipo_diferencial": r.tipo_diferencial,
                         "tipo_calculo": r.tipo_calculo,
                         "monedas_aplicables": r.monedas_aplicables,
@@ -9944,7 +9948,9 @@ async def post_config_pronto_pago(req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_pronto_pago(rule)
@@ -9981,7 +9987,9 @@ async def put_config_pronto_pago(regla_id: str, req: ProntoPagoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_pronto_pago(rule)
@@ -10072,7 +10080,9 @@ async def post_config_volumen(req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -10115,7 +10125,9 @@ async def put_config_volumen(regla_id: str, req: VolumenRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_volumen(rule)
@@ -10291,7 +10303,9 @@ async def post_config_producto(req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_producto(rule)
@@ -10325,7 +10339,9 @@ async def put_config_producto(regla_id: str, req: ProductoPromoRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_producto(rule)
@@ -10385,7 +10401,6 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
         regla_id = f"DIF_{uuid.uuid4().hex[:8].upper()}"
         rule = DescuentoDiferencialCambiario(
             regla_id=regla_id,
-            nombre=req.nombre,
             tipo_diferencial=req.tipo_diferencial,
             tipo_calculo=req.tipo_calculo,
             porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
@@ -10395,7 +10410,9 @@ async def post_config_diferencial(req: DiferencialCambiarioRequest):
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_diferencial_cambiario(rule)
@@ -10419,7 +10436,6 @@ async def put_config_diferencial(regla_id: str, req: DiferencialCambiarioRequest
         v_hasta = date.fromisoformat(req.vigencia_hasta) if req.vigencia_hasta else None
         rule = DescuentoDiferencialCambiario(
             regla_id=regla_id,
-            nombre=req.nombre,
             tipo_diferencial=req.tipo_diferencial,
             tipo_calculo=req.tipo_calculo,
             porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
@@ -10429,7 +10445,9 @@ async def put_config_diferencial(regla_id: str, req: DiferencialCambiarioRequest
             vigencia_hasta=v_hasta,
             activo=req.activo,
             requiere_pago_previo=req.requiere_pago_previo,
-            descripcion=req.descripcion,
+            # El formulario todavía manda "nombre" (el input se llama
+            # cfg-dif-nombre); los dos campos se fusionaron en descripcion.
+            descripcion=req.descripcion or req.nombre,
             aplica_a=req.aplica_a,
         )
         repo.append_descuento_diferencial_cambiario(rule)

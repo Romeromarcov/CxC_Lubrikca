@@ -211,11 +211,17 @@ def descuento_volumen(
     hasta: date | None = None,
     requiere_pago_previo: bool = False,
 ) -> DescuentoVolumen:
+    # ``litros_minimo`` desapareció del modelo: el tramo vive en
+    # min/max_unidades y ``unidad_medida`` dice en qué se cuenta. El
+    # parámetro se conserva con su nombre viejo para no tocar los call
+    # sites, y se traduce a una regla de LITROS -- que es lo que estas
+    # pruebas siempre quisieron decir.
     return DescuentoVolumen(
         regla_id=regla_id,
         marca=marca,
         categoria=categoria,
-        litros_minimo=Decimal(litros_minimo),
+        min_unidades=Decimal(litros_minimo),
+        unidad_medida="LITROS",
         porcentaje=Decimal(porcentaje),
         vigencia_desde=desde,
         vigencia_hasta=hasta,

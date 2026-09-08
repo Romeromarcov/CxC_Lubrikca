@@ -123,7 +123,8 @@ def test_descuentos_volumen_append_y_lectura(repo: Repository) -> None:
         regla_id="VOL_TEST",
         marca="Sinoco",
         categoria="*",
-        litros_minimo=Decimal("100"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("100"),
         porcentaje=Decimal("0.05"),
         vigencia_desde=date(2026, 1, 1),
         requiere_pago_previo=False,
@@ -168,7 +169,6 @@ def test_descuentos_producto_append_y_lectura(repo: Repository) -> None:
 def test_descuentos_diferencial_cambiario_append_y_lectura(repo: Repository) -> None:
     regla = DescuentoDiferencialCambiario(
         regla_id="DIF_TEST",
-        nombre="Diferencial de prueba",
         vigencia_desde=date(2026, 1, 1),
     )
     repo.append_descuento_diferencial_cambiario(regla)
@@ -220,7 +220,8 @@ def test_delete_regla_y_set_regla_activo_sobre_volumen(repo: Repository) -> None
         regla_id="VOL_DEL",
         marca="Sinoco",
         categoria="*",
-        litros_minimo=Decimal("50"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("50"),
         porcentaje=Decimal("0.02"),
         vigencia_desde=date(2026, 1, 1),
     )

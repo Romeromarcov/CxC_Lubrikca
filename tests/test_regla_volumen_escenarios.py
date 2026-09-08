@@ -23,10 +23,11 @@ PROD = "1033"
 
 def _regla_litros(regla_id="VOL_L", *, marca="*", categoria="*", litros="100", pct="0.05",
                   desde=date(2026, 1, 1), hasta=None):
+    # El umbral vive en min_unidades y unidad_medida dice que son litros;
+    # ya no hay un segundo campo que ponerlo en cero.
     r = b.descuento_volumen(regla_id, marca=marca, categoria=categoria, litros_minimo=litros,
                             porcentaje=pct, desde=desde, hasta=hasta)
     r.unidad_medida = "LITROS"
-    r.min_unidades = Decimal("0")
     return r
 
 

@@ -382,7 +382,6 @@ def test_diferencial_regla1_fijo_pago_100pct_usd() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             )
@@ -433,7 +432,6 @@ def test_diferencial_fijo_se_topa_al_hueco_real() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             )
@@ -471,7 +469,6 @@ def test_diferencial_regla1_no_aplica_con_pago_mixto_sin_regla_equiparar() -> No
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             )
@@ -934,7 +931,8 @@ def test_descuento_por_volumen_litros() -> None:
         regla_id="VOL1",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
     )
@@ -1035,7 +1033,8 @@ def test_descuento_volumen_aplica_a_subtotal() -> None:
         regla_id="VOL_SUBTOTAL_1",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         aplica_a="subtotal",
@@ -1082,7 +1081,8 @@ def test_descuento_volumen_subtotal_no_duplica_entre_grupos() -> None:
         regla_id="VOL_WILDCARD",
         marca="*",
         categoria="*",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         aplica_a="subtotal",
@@ -1429,13 +1429,11 @@ def test_diferencial_regla2_equiparar_sin_exceder_tope() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.50"),
             ),
             DescuentoDiferencialCambiario(
                 regla_id="DIF_EQ",
-                nombre="Equiparar",
                 tipo_diferencial="equiparar_binance",
             ),
         ],
@@ -1493,12 +1491,11 @@ def test_diferencial_regla2_equiparar_topada_al_diferencial_maximo() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             ),
             DescuentoDiferencialCambiario(
-                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+                regla_id="DIF_EQ", tipo_diferencial="equiparar_binance"
             ),
         ],
     )
@@ -1546,12 +1543,11 @@ def test_diferencial_regla2_bloqueada_por_pago_huerfano() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.50"),
             ),
             DescuentoDiferencialCambiario(
-                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+                regla_id="DIF_EQ", tipo_diferencial="equiparar_binance"
             ),
         ],
         cliente_tiene_pagos_huerfanos=True,
@@ -1745,7 +1741,8 @@ def test_conceptos_descuento_teorico_respeta_listas_aplicables() -> None:
         regla_id="VOL_USD_ONLY",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         listas_aplicables="USD",
@@ -1890,7 +1887,7 @@ def test_descuento_por_volumen_acumulado_suma_historial_del_cliente() -> None:
         regla_id="VOL_ACUM",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="acumulado",
@@ -1938,7 +1935,7 @@ def test_descuento_por_volumen_acumulado_respeta_ventana_dias_evaluacion() -> No
         regla_id="VOL_ACUM2",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="acumulado",
@@ -1980,7 +1977,7 @@ def test_descuento_por_volumen_orden_ignora_historial() -> None:
         regla_id="VOL_ORDEN",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="orden",
