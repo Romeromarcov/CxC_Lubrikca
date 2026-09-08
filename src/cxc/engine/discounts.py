@@ -1022,11 +1022,22 @@ def _calcular_componentes(
         # fecha de cálculo, mismo criterio que ya usaba la proyección.
         fechas_abono_contado = [v.hora_pago_confirmada.date() for v, _ in inp.abonos]
         fecha_ventana = max(fechas_abono_contado) if fechas_abono_contado else inp.fecha_calculo
+        # Antes esto decía "if inp.orden.fecha_entrega is None or
+        # ventana_pago_vigente(...)", y esa guarda SALTEABA la ventana
+        # entera: una orden sin fecha de entrega conservaba el descuento de
+        # contado por tarde que pagara. Era redundante además de dañina,
+        # porque ``limite_ventana_pago`` ya cae solo a la fecha de emisión
+        # (``base = fecha_entrega or fecha_emision``) -- que es exactamente
+        # lo que pidió el usuario: "si no tiene fecha de entrega [...] que
+        # utilice la fecha de la orden".
+        #
+        # Medido contra producción: 141 órdenes de 941 (15 %) no tienen
+        # fecha de entrega, y ninguna recibe hoy descuento de contado, así
+        # que quitar la guarda no mueve un peso -- cierra un hueco latente.
         descuentos_en_ventana = [
             r
             for r in descuentos_ok
-            if inp.orden.fecha_entrega is None
-            or ventana_pago_vigente(
+            if ventana_pago_vigente(
                 getattr(r, "ventana_pago_tipo", "entrega"),
                 getattr(r, "ventana_pago_dias", 3),
                 fecha_ventana,

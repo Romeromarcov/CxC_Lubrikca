@@ -11896,6 +11896,53 @@ def _detectar_vinculaciones_tasa_implicita_implausible(
     return resultado
 
 
+def _detectar_entregada_sin_fecha_de_entrega(
+    ordenes: list[Any], lineas_por_so: dict[str, list[Any]]
+) -> list[dict[str, Any]]:
+    """Órdenes con mercancía entregada pero sin fecha de entrega en Odoo.
+
+    Pedido del usuario (septiembre 2026): "si no tiene fecha de entrega que
+    valide si los productos fueron entregados, si sí, que utilice la fecha
+    de la orden. Aunque si fueron entregados obligatoriamente debe tener
+    fecha de entrega, hay que validar eso".
+
+    Importa porque la fecha de entrega es la base de la ventana de pago:
+    sin ella, el motor cae a la fecha de la orden, que puede ser bastante
+    anterior y recortar la ventana que al cliente realmente le
+    correspondía. Y al revés, hasta hoy la ausencia de fecha SALTEABA la
+    ventana por completo.
+
+    Medido contra producción: 141 órdenes de 941 no tienen fecha de
+    entrega, pero solo 4 de ellas tienen mercancía efectivamente entregada
+    ($44.427,64) -- esas cuatro son las que hay que corregir en Odoo. Una
+    es S00010 de TERA.
+    """
+    resultado: list[dict[str, Any]] = []
+    for o in ordenes:
+        if getattr(o, "fecha_entrega", None):
+            continue
+        entregado = sum(
+            float(getattr(ln, "cantidad_entregada", 0) or 0)
+            for ln in lineas_por_so.get(o.so_id, [])
+        )
+        if entregado <= 0:
+            continue
+        resultado.append(
+            {
+                "so_id": o.so_id,
+                "cliente_id": str(getattr(o, "cliente_id", "")),
+                "fecha_orden": str(getattr(o, "fecha", "")),
+                "unidades_entregadas": round(entregado, 2),
+                "monto_orden": round(float(getattr(o, "monto_total", 0) or 0), 2),
+                "detalle": (
+                    "Tiene mercancía entregada pero Odoo no registra fecha de entrega. "
+                    "La ventana de pago se está midiendo desde la fecha de la orden."
+                ),
+            }
+        )
+    return resultado
+
+
 def _detectar_devolucion_no_reflejada_en_cantidad(
     ordenes: list[OrdenVenta],
     lineas: list[LineaOrden],
@@ -12697,6 +12744,12 @@ async def get_auditoria():
         vinculaciones_tasa_implausible = _detectar_vinculaciones_tasa_implicita_implausible(
             vincs, tasas_rows
         )
+        _lineas_por_so: dict[str, list[Any]] = {}
+        for _ln in repo.all_lineas():
+            _lineas_por_so.setdefault(_ln.so_id, []).append(_ln)
+        entregadas_sin_fecha = _detectar_entregada_sin_fecha_de_entrega(
+            list(repo.all_ordenes()), _lineas_por_so
+        )
         devolucion_no_reflejada = _detectar_devolucion_no_reflejada_en_cantidad(
             ordenes, repo.all_lineas(), repo.all_catalogo()
         )
@@ -12713,6 +12766,7 @@ async def get_auditoria():
             ("ajustes", ajustes_cambio_huerfanos, "ajuste_cambio_huerfano"),
             ("importe", pagos_importe_local_desincronizado, "importe_local_desincronizado"),
             ("saldo", discrepancias_facturas_odoo, "saldo_deudor_motor_vs_odoo"),
+            ("entrega", entregadas_sin_fecha, "entregada_sin_fecha_de_entrega"),
         ):
             _pend, _acep = separar_discrepancias_aceptadas(_lista, _tipo, aceptadas_map)
             _lista[:] = _pend
@@ -12737,6 +12791,10 @@ async def get_auditoria():
             # devolución que Odoo reflejó en precio $0 sin bajar la
             # cantidad entregada (caso real SO 00133, 12 órdenes corregidas).
             "devolucion_no_reflejada_en_cantidad": devolucion_no_reflejada,
+            # Ver _detectar_entregada_sin_fecha_de_entrega -- la fecha de
+            # entrega es la base de la ventana de pago, y sin ella el motor
+            # la mide desde la fecha de la orden.
+            "entregadas_sin_fecha_de_entrega": entregadas_sin_fecha,
             # Ver _detectar_pagos_con_residual_sin_aplicar -- pagos con un
             # remanente sin conciliar en su propia línea de CxC, invisible
             # en Ventas/Cobranza/Reporte de Saldos porque la FACTURA ya
