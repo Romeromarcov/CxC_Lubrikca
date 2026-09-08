@@ -1542,11 +1542,51 @@ def _calcular_componentes(
             todos_usd_puro = all(v.moneda_abono == Moneda.USD for v in vincs)
 
             # Regla 1: fijo, pago 100% USD, orden pagada según teórico USD.
+            #
+            # El 35 % es un TECHO, no un monto plano. Antes era
+            # ``precio_base * diferencial_maximo`` sin restar nada, mientras
+            # la rama "equiparar" de abajo sí calculaba el hueco real y
+            # descontaba los otros descuentos. Esa asimetría concedía el
+            # diferencial encima de lo que ya se había dado.
+            #
+            # Medido contra producción: de las 168 órdenes con diferencial
+            # fijo ($39.312,33), en 73 ($27.450,01) el descuento YA estaba
+            # dado en el precio de la orden -- $13.757,47 de rebaja. El caso
+            # que lo destapó lo trajo el usuario mirando S00010: $11.789,05
+            # de diferencial sobre una orden que ya traía $4.234,30
+            # rebajados en el precio, y donde el cliente había pagado la
+            # factura entera.
+            #
+            # El hueco se mide contra el precio REAL de la orden (el que
+            # tiene la línea), no contra el de la lista: la diferencia entre
+            # ambos es precisamente el descuento que ya se concedió al
+            # facturar. Sin fijarse en qué lista nació el precio -- el
+            # usuario aclaró que las listas viejas se usaron para VES y USD
+            # indistintamente, así que el id de lista no lo dice.
             monto_fijo = Decimal("0")
             if todos_usd_puro:
                 pagado_usd = valor_pagado_usd(vincs)
                 if pagado_usd >= (precio_target_usd or Decimal("0")) - _EPS:
-                    monto_fijo = precio_base * diferencial_maximo
+                    techo_fijo = precio_base * diferencial_maximo
+                    otros_desc_fijo = nc + pct_recompra + contado_proy + volumen_desc
+                    precio_real_orden = sum(
+                        (
+                            _cantidad_efectiva(inp, ln) * ln.precio_unitario
+                            for ln in inp.lineas
+                        ),
+                        Decimal("0"),
+                    )
+                    # Sin líneas con precio propio no hay con qué medir el
+                    # hueco: "no sé" no es "cero", así que se conserva el
+                    # comportamiento anterior en vez de anular el descuento.
+                    if precio_real_orden <= 0:
+                        monto_fijo = techo_fijo
+                    else:
+                        gap_fijo = max(
+                            Decimal("0"),
+                            precio_real_orden - otros_desc_fijo - pagado_usd,
+                        )
+                        monto_fijo = min(techo_fijo, gap_fijo)
 
             # Regla 2: "equiparar", pago mixto/Binance, sin huérfanos.
             monto_equiparar = Decimal("0")
