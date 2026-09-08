@@ -736,7 +736,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.style.fontSize = `${scale}rem`;
         card.innerHTML = `
             <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
-            ${(c.tiene_saldo_a_favor ? `<div class="prioridad-favor" title="La empresa le debe al cliente: pagó de más o devolvió mercancía ya pagada">↩ A favor ${fmt(c.saldo_a_favor)}</div>` : "")}
+            ${(c.tiene_saldo_a_favor ? `<div class="prioridad-favor" title="Plata del cliente que no está cobrando esta deuda: pagó de más, devolvió mercancía ya pagada, o tiene un pago sin asignar a ninguna orden">↩ A favor ${fmt((c.saldo_a_favor || 0) + (c.saldo_pendiente_por_aplicar || 0))}${(c.saldo_pendiente_por_aplicar > 0.05 ? ` <small style="font-weight:400;">(${fmt(c.saldo_pendiente_por_aplicar)} por aplicar)</small>` : "")}</div>` : "")}
             <div class="prioridad-saldos">
                 <div title="Saldo contra la Venta Real de la orden en Odoo">
                     <span class="prioridad-saldo-label">Orden</span>
@@ -1542,7 +1542,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // devolvió mercancía ya pagada). Gana sobre los demás estados --
             // es lo que hay que resolver con ese cliente.
             const favorCell = item.tiene_saldo_a_favor
-                ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;font-weight:600;" title="La empresa le debe al cliente: pagó de más o devolvió mercancía ya pagada">↩ A favor ${fmt(item.saldo_a_favor)}</span>`
+                ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;font-weight:600;" title="Plata del cliente que no está cobrando esta deuda: pagó de más, devolvió mercancía ya pagada, o tiene un pago sin asignar a ninguna orden. Lo 'por aplicar' lo asigna el FIFO cuando haya una orden contra la cual aplicarlo.">↩ A favor ${fmt((item.saldo_a_favor || 0) + (item.saldo_pendiente_por_aplicar || 0))}${(item.saldo_pendiente_por_aplicar > 0.05 ? ` · ${fmt(item.saldo_pendiente_por_aplicar)} por aplicar` : "")}</span>`
                 : null;
             // Subtotal pagado y falta el IVA: ni "pagada" ni "pendiente" --
             // el cliente cumplió con la mercancía y debe el impuesto, por
@@ -5049,13 +5049,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 // cliente TERA, agosto 2026).
                 if (bodyResidual) {
                     if (pagosResidual.length === 0) {
-                        bodyResidual.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
+                        bodyResidual.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
                     } else {
                         const fmtVesRes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
                         bodyResidual.innerHTML = pagosResidual.map(p => `
                             <tr>
                                 <td><strong>${escapeHtml(p.pago_id)}</strong></td>
                                 <td>${escapeHtml(p.numero_pago_odoo)}</td>
+                                <td>${escapeHtml(p.cliente_nombre || '—')}</td>
+                                <td>${p.clase === 'remanente'
+                                    ? '<span class="state-badge" style="background:#ecfdf5;color:#059669;font-weight:600;">Saldo a favor</span>'
+                                    : '<span class="state-badge" style="background:#fef2f2;color:#dc2626;font-weight:600;">Sin aplicar</span>'}</td>
                                 <td><strong style="color:#dc2626;">${(p.moneda || 'USD').toUpperCase() === 'VES' ? fmtVesRes(p.residual_sin_aplicar_usd) : fmt(p.residual_sin_aplicar_usd)}</strong></td>
                                 <td><span class="state-badge">${escapeHtml(p.moneda || 'USD')}</span></td>
                                 <td>${btnAceptarDiscrepancia(p)}</td>

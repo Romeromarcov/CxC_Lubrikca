@@ -5511,6 +5511,16 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 pago_saldo_max[pid] = saldo
                 pago_info[pid] = s
 
+        # Remanente sin aplicar por cliente, tomado del mismo dedup por
+        # pago que el reporte ya construyo. Incluye los pagos que el FIFO
+        # muestra "sin orden" (sugerencia_id ..._SIN_ORDEN): son justamente
+        # los que esperan una orden contra la cual aplicarse.
+        pendiente_por_cliente: dict[str, float] = {}
+        for pid, saldo in pago_saldo_max.items():
+            cid = str((pago_info.get(pid) or {}).get("cliente_id") or "").strip()
+            if cid and saldo > 0.05:
+                pendiente_por_cliente[cid] = pendiente_por_cliente.get(cid, 0.0) + saldo
+
         clientes: dict[str, dict[str, Any]] = {}
 
         def _cliente_row(cliente_id: str, cliente_nombre: str) -> dict[str, Any]:
@@ -5529,6 +5539,21 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     # contra lo que sí debe en otras órdenes -- son dos
                     # conversaciones distintas con el cliente.
                     "saldo_a_favor": 0.0,
+                    # Plata del cliente que YA entro pero todavia no esta
+                    # asignada a ninguna orden. Decision del usuario
+                    # (septiembre 2026): "en cobranza deberia aparecer ese
+                    # saldo como pendiente por aplicar, y el fifo lo asigna
+                    # cuando haya una orden contra la cual aplicarlo. Hasta
+                    # tanto aparece como saldo a favor en los reportes de
+                    # cxc".
+                    #
+                    # NO se resta de saldo_priorizacion a proposito: el FIFO
+                    # ya ofrece este mismo remanente en Cobranza, asi que
+                    # descontarlo aqui lo contaria dos veces (una como
+                    # credito y otra cuando se aplique). Se muestra para que
+                    # cobranza sepa que antes de perseguir al cliente hay
+                    # plata suya sin asignar.
+                    "saldo_pendiente_por_aplicar": 0.0,
                 },
             )
 
@@ -5653,7 +5678,15 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             # criterio en el frontend.
             c["vendedor"] = ", ".join(sorted(c.pop("vendedores"))) or "Sin Vendedor"
             c["saldo_a_favor"] = round(c.get("saldo_a_favor", 0.0), 2)
-            c["tiene_saldo_a_favor"] = c["saldo_a_favor"] > 0.05
+            c["saldo_pendiente_por_aplicar"] = round(
+                pendiente_por_cliente.get(c["cliente_id"], 0.0), 2
+            )
+            # El cliente aparece "con saldo a favor" por cualquiera de las
+            # dos vias: pago de mas sobre una orden concreta, o plata suya
+            # que entro y todavia no se asigno a ninguna.
+            c["tiene_saldo_a_favor"] = (
+                c["saldo_a_favor"] > 0.05 or c["saldo_pendiente_por_aplicar"] > 0.05
+            )
             c["saldo_priorizacion"] = saldo_priorizacion_cliente(c["saldos"])
 
         clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_priorizacion"])
@@ -11355,7 +11388,7 @@ def _detectar_pagos_con_residual_sin_aplicar(
             "account.payment",
             "read",
             [pago_ids],
-            {"fields": ["id", "name", "move_id", "state"]},
+            {"fields": ["id", "name", "move_id", "state", "partner_id"]},
         )
     except Exception as e:
         logger.warning("Error leyendo pagos para residual sin aplicar: %s", e)
@@ -11380,6 +11413,7 @@ def _detectar_pagos_con_residual_sin_aplicar(
                     "id",
                     "move_id",
                     "amount_residual_currency",
+                    "amount_currency",
                     "reconciled",
                     "currency_id",
                 ]
@@ -11401,6 +11435,7 @@ def _detectar_pagos_con_residual_sin_aplicar(
         # Bs (~$8.400) figuraba como "-$1.934.804,05". Y el umbral de 0,05 se
         # aplicaba tambien a bolivares, donde equivale a 0,0002 dolares: no
         # filtraba nada. Ahora cada moneda se compara contra su propio umbral.
+        total_linea = parse_decimal_safe(str(line.get("amount_currency") or "0"))
         moneda_ref = line.get("currency_id")
         moneda = str(moneda_ref[1]) if moneda_ref else "USD"
         umbral = tolerancia_usd
@@ -11419,6 +11454,16 @@ def _detectar_pagos_con_residual_sin_aplicar(
                 "numero_pago_odoo": pago.get("name"),
                 "residual_sin_aplicar_usd": round(float(residual), 2),
                 "moneda": moneda,
+                "cliente_nombre": (pago.get("partner_id") or [0, ""])[1],
+                # Un residual que vale el pago ENTERO no es un remanente:
+                # es un pago que nadie aplico todavia. Se separan porque se
+                # accionan distinto -- ver el filtro en get_auditoria.
+                "clase": (
+                    "remanente"
+                    if abs(total_linea) > Decimal("0.01")
+                    and abs(residual) / abs(total_linea) <= Decimal("0.995")
+                    else "sin_aplicar"
+                ),
             }
         )
     return resultado
@@ -12041,6 +12086,25 @@ async def get_auditoria():
         pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
             execute, pago_ids_int
         )
+        # Un pago ENTERO sin aplicar que nuestro motor YA tiene vinculado no
+        # es un hallazgo de auditoria: es el estado "En Proceso de Pago" que
+        # Cobranza ya muestra -- el motor lo cuenta como cobrado y lo unico
+        # pendiente es que Odoo lo reconcilie. Medido contra produccion:
+        # de 252 residuales, 170 ($54.666,04) eran exactamente eso, y
+        # tapaban los 65 que si hay que accionar.
+        #
+        # Quedan dos casos, ambos accionables:
+        #   · remanente  -- sobro plata de un pago aplicado. Es saldo a
+        #     favor del cliente; el FIFO lo asigna cuando aparezca una orden
+        #     (54 casos, $1.278,64).
+        #   · sin aplicar e invisible -- ni Odoo lo aplico ni el motor lo
+        #     tiene vinculado: plata que no esta en ningun lado (11, $414,38).
+        _pagos_vinculados = {str(v.pago_id) for v in repo.all_vinculaciones()}
+        pagos_residual_sin_aplicar = [
+            r
+            for r in pagos_residual_sin_aplicar
+            if r.get("clase") == "remanente" or str(r.get("pago_id")) not in _pagos_vinculados
+        ]
         # Pedido explícito del usuario: la misma validación también para
         # pagos ENVIADOS (a proveedores), no solo recibidos -- esos nunca
         # están en nuestro espejo local (solo rastreamos CxC), así que se
