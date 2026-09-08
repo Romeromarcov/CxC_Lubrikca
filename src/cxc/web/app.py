@@ -7936,6 +7936,7 @@ async def get_bandeja_facturacion():
 
         ordenes_por_facturar = []
         notas_credito_pendientes = []
+        descuentos_no_otorgados_b = get_repo().all_descuentos_no_otorgados()
         descuentos_pendientes_aprobar = []
         iva_pendiente_agentes = []
         auditoria_precios = []
@@ -8173,7 +8174,13 @@ async def get_bandeja_facturacion():
                     # y tener dos bandejas para el mismo trabajo obligaba a
                     # mirar en dos lados.
                     nc_subtotal = float(item.get("descuento_pendiente_aplicar") or 0.0)
-                    if nc_subtotal > 0.05:
+                    # Marcada como "no se le otorgo el descuento": no hay
+                    # nota de credito que emitir. Decision del usuario --
+                    # el descuento se asume comprometido por defecto y esto
+                    # son las excepciones. Caso TERA: pagaron completo y no
+                    # se les dio descuento, asi que emitirles una NC seria
+                    # regalarles plata. Ver schema.descuentos_no_otorgados.
+                    if nc_subtotal > 0.05 and o.so_id not in descuentos_no_otorgados_b:
                         detalles_b = b.descuentos_detalle if b else []
                         fact_sub = float(item.get("total_facturado_antes_impuestos") or 0.0)
                         # La tasa real de ESTA factura, no una constante: si
