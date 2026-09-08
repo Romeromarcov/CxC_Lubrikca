@@ -1104,7 +1104,7 @@
                     <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
                         <div class="panel-header">
                             <h2>Pagos con Residual sin Aplicar</h2>
-                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Pagos donde Odoo aún registra un saldo sin conciliar en la línea contable del propio pago -- invisible en Ventas/Cobranza porque la factura ya cerró en $0. Revisar y aplicar manualmente en Odoo si corresponde.</p>
+                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Dos casos accionables. <strong>Saldo a favor</strong>: sobró plata de un pago ya aplicado -- el cliente tiene crédito y el FIFO lo asigna cuando aparezca una orden contra la cual aplicarlo; mientras tanto figura como saldo a favor en los reportes de CxC. <strong>Sin aplicar</strong>: ni Odoo lo aplicó ni el motor lo tiene vinculado, así que esa plata no está contada en ningún lado. Los pagos enteros que el motor ya vinculó NO salen aquí: esos son "En Proceso de Pago" y viven en Cobranza.</p>
                         </div>
 
                         <div class="table-wrapper large-table">
@@ -1113,7 +1113,7 @@
                                     <tr>
                                         <th>Pago ID</th>
                                         <th>N° Pago Odoo</th>
-                                        <th>Residual sin Aplicar ($)</th>
+                                        <th>Cliente</th><th>Clase</th><th>Residual sin Aplicar</th>
                                     <th>Moneda</th><th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-residual-table-body">
