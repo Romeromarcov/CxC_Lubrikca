@@ -5557,6 +5557,26 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 },
             )
 
+        # El saldo a favor se acumula ANTES del filtro de CxC: una orden que
+        # ya salio (pagada) es justamente donde queda el remanente, y si se
+        # saltea aqui el credito del cliente nunca se ve. Ver la regla del
+        # remanente en get_ventas.
+        favor_por_cliente: dict[str, float] = {}
+        nombre_por_cliente: dict[str, str] = {}
+        for item in ventas_data["items"]:
+            _favor = float(item.get("saldo_a_favor") or 0.0)
+            if _favor > 0.05:
+                # Las filas de Ventas traen cliente_nombre pero no
+                # cliente_id; el id sale de la orden, que es la clave con la
+                # que este reporte agrupa.
+                _orden = ordenes_map.get(item["so_id"])
+                _cid = str(getattr(_orden, "cliente_id", "") or "").strip()
+                if _cid:
+                    favor_por_cliente[_cid] = favor_por_cliente.get(_cid, 0.0) + _favor
+                    nombre_por_cliente.setdefault(
+                        _cid, str(item.get("cliente_nombre") or "").strip()
+                    )
+
         for item in ventas_data["items"]:
             if item.get("sale_de_cxc"):
                 continue
@@ -5598,7 +5618,8 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             for k, v in saldos_orden.items():
                 if v is not None:
                     c["saldos"][k] += v
-            c["saldo_a_favor"] += float(item.get("saldo_a_favor") or 0.0)
+            # (el saldo a favor se toma de favor_por_cliente, que si mira
+            # las ordenes ya salidas de CxC -- ver arriba)
 
             factura_id = (o.factura_id if o else None) or None
             factura_numero = facturas_numero_map.get(factura_id) if factura_id else None
@@ -5677,7 +5698,7 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             # clientes_list -- se expone explícitamente para no duplicar el
             # criterio en el frontend.
             c["vendedor"] = ", ".join(sorted(c.pop("vendedores"))) or "Sin Vendedor"
-            c["saldo_a_favor"] = round(c.get("saldo_a_favor", 0.0), 2)
+            c["saldo_a_favor"] = round(favor_por_cliente.get(c["cliente_id"], 0.0), 2)
             c["saldo_pendiente_por_aplicar"] = round(
                 pendiente_por_cliente.get(c["cliente_id"], 0.0), 2
             )
@@ -5688,6 +5709,27 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                 c["saldo_a_favor"] > 0.05 or c["saldo_pendiente_por_aplicar"] > 0.05
             )
             c["saldo_priorizacion"] = saldo_priorizacion_cliente(c["saldos"])
+
+        # Un cliente cuyas ordenes salieron TODAS de CxC no tenia fila en
+        # este reporte, asi que su credito quedaba invisible justo en el
+        # caso mas claro: pago todo y le sobro. Se le crea la fila con
+        # deuda cero -- ordena al final porque saldo_priorizacion es 0, y
+        # la empresa ve que le debe algo a ese cliente.
+        for _cid, _favor in favor_por_cliente.items():
+            if _favor <= 0.05 or _cid in clientes:
+                continue
+            # OrdenVenta solo guarda cliente_id; el nombre viene de la
+            # fila de Ventas de la que salio el credito.
+            _nombre = nombre_por_cliente.get(_cid) or f"Cliente {_cid}"
+            _fila = _cliente_row(_cid, _nombre)
+            _fila["saldo_a_favor"] = round(_favor, 2)
+            _fila["saldo_pendiente_por_aplicar"] = round(
+                pendiente_por_cliente.get(_cid, 0.0), 2
+            )
+            _fila["tiene_saldo_a_favor"] = True
+            _fila["vendedor"] = "Sin Vendedor"
+            _fila["saldo_priorizacion"] = 0.0
+            _fila.pop("vendedores", None)
 
         clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_priorizacion"])
 
@@ -13811,9 +13853,6 @@ def _get_ventas_sync(
             # referencia (la factura si existe, si no la orden), con la
             # misma tolerancia que el resto de los estados de pago: un
             # excedente de centavos es redondeo, no un saldo a favor.
-            base_saldo_favor = target_factura if tiene_factura else target_orden
-            saldo_a_favor = round(max(0.0, val_ref_nacimiento - base_saldo_favor), 2)
-            tiene_saldo_a_favor = saldo_a_favor > _EPS_PAGO
 
             _base_subtotal = (
                 usd_neta_teorica if es_lista_usd_nacimiento else ves_neta_teorica
@@ -13851,6 +13890,59 @@ def _get_ventas_sync(
                 subtotal_pagado=subtotal_pagado_confirmado,
                 subtotal_pagado_incl_pendiente=subtotal_pagado_incl_pendiente,
             )
+
+            # El remanente se mide contra el saldo neto con el que quedo
+            # PAGADA la orden, no contra el bruto facturado. Regla del
+            # usuario (septiembre 2026), con su propio ejemplo: orden de
+            # $100, descuento del 15%, debio pagar $85 y pago $90 -- se le
+            # emite la NC por $15 (eso es el descuento, va por su canal) y
+            # los $5 quedan a favor para su siguiente compra.
+            #
+            # No hay doble conteo: la NC BAJA la factura a $85, asi que
+            # medir el remanente contra $85 cuenta ese descuento una sola
+            # vez. Comparar contra el bruto ($100) era lo que lo tapaba:
+            # una orden que pago $50,00 contra un teorico de $48,59
+            # reportaba saldo a favor $0,00 en vez de $1,41.
+            #
+            # Medido contra produccion: 331 ordenes tienen excedente sobre
+            # su propia referencia por $49.912,97, de los cuales $5.432,14
+            # ya los explica el descuento calculado y $16.214,77 son de
+            # ordenes con NC todavia pendiente en Bandeja 2 (ahi el credito
+            # se hace firme recien cuando se emita la NC). Quedan $11.408,52
+            # en 134 ordenes que no figuraban en ninguna bandeja. La mayoria
+            # es chica -- 80 de 245 casos son de $10 o menos, mediana
+            # $20,15 -- que es el redondeo y los descuentos que describio el
+            # usuario, pero hay cola larga (Grano Agregado $2.834,40).
+            base_saldo_favor = target_factura if tiene_factura else target_orden
+            # El teorico solo sirve de referencia si la orden EFECTIVAMENTE
+            # salio de CxC. Una orden que cubre su teorico USD pero sigue
+            # debiendo por su referencia de nacimiento no tiene nada a
+            # favor: todavia debe. Sin esta guarda el credito subia a
+            # $55.067,76 contra los $49.912,97 realmente medidos, porque
+            # acreditaba ordenes que no habian salido.
+            candidatos_ref = [base_saldo_favor]
+            if clasificacion_cxc.sale_de_cxc:
+                candidatos_ref += [
+                    v
+                    for v in (
+                        usd_neta_teorica_iva if teorico_usd_pagado_confirmado else None,
+                        ves_neta_teorica_iva if teorico_bs_pagado_confirmado else None,
+                    )
+                    if v is not None and v > 0.01
+                ]
+            referencia_salida = min(v for v in candidatos_ref if v > 0.01) if any(
+                v > 0.01 for v in candidatos_ref
+            ) else base_saldo_favor
+            saldo_a_favor = round(max(0.0, val_ref_nacimiento - referencia_salida), 2)
+            # Parte del credito que todavia depende de que se emita la NC:
+            # mientras la nota no se corte, la factura sigue en bruto y ese
+            # tramo no es plata que el cliente pueda usar aun. Se expone
+            # aparte para no prometer un credito que todavia no existe.
+            saldo_a_favor_requiere_nc = round(
+                min(saldo_a_favor, max(0.0, descuento_pendiente_aplicar)), 2
+            )
+            saldo_a_favor_firme = round(max(0.0, saldo_a_favor - saldo_a_favor_requiere_nc), 2)
+            tiene_saldo_a_favor = saldo_a_favor > _EPS_PAGO
 
             # Consolidación pedida por el usuario (agosto 2026): un solo
             # campo "pagada" (sí/no, nunca "depende de cuál mires") en vez
@@ -14118,6 +14210,8 @@ def _get_ventas_sync(
                     # Saldo a favor del cliente -- la empresa le debe. Ver
                     # el cálculo más arriba (caso S00372).
                     "saldo_a_favor": saldo_a_favor,
+                    "saldo_a_favor_firme": saldo_a_favor_firme,
+                    "saldo_a_favor_requiere_nc": saldo_a_favor_requiere_nc,
                     # ``payment_state`` en vivo de Odoo: la factura ya está
                     # saldada allá aunque nuestra reconstrucción no llegue.
                     "factura_saldada_odoo": facturas_pagadas_confirmadas_odoo_map.get(
