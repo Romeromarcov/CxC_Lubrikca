@@ -128,21 +128,41 @@ def test_regla_equiparar_no_aplica_si_el_cliente_tiene_pagos_huerfanos():
     assert bandeja.total_descuentos == Decimal("0.00")
 
 
-def test_regla_equiparar_sin_la_regla_fijo_no_tiene_tope_y_no_aplica():
-    """El % de la Regla 1 es también el TOPE de la Regla 2: sin esa fila
+def test_una_sola_regla_ya_cubre_el_pago_en_bolivares():
+    """Antes hacían falta DOS filas: la del 35 % ponía el tope y la de
+    "equiparar" habilitaba el caso VES. Con la unificación (septiembre
+    2026, a pedido del usuario) una sola regla con tope configurado cubre
+    los dos caminos, así que el tipo_diferencial dejó de decidir nada.
 
-    vigente no hay diferencial de ningún tipo.
-    """
+    1.000 de lista menos 888,89 de lo pagado valorado a BCV = 111,11, por
+    debajo del tope de 350."""
     bandeja = calcular_factura(_inp([_regla("equiparar_binance")], abonos=_abono_ves()))
+
+    assert bandeja.total_descuentos == Decimal("111.11")
+
+
+def test_una_regla_con_el_tope_en_cero_no_otorga_nada():
+    """El tope sale de ``porcentaje_fijo``, editable desde Configuración ->
+    Diferencial Cambiario. En cero, no hay descuento que dar."""
+    bandeja = calcular_factura(
+        _inp([_regla("fijo_35_ves_usd", pct="0")], abonos=_abono_ves())
+    )
 
     assert bandeja.total_descuentos == Decimal("0.00")
 
 
 def test_regla_equiparar_ausente_no_aplica_con_pago_ves():
-    """Solo la Regla 1 configurada y un pago mixto/VES: nada que otorgar."""
+    """Una sola regla configurada YA alcanza para un pago en bolívares.
+
+    Antes hacían falta las dos filas: la del 35 % ponía el tope y la de
+    "equiparar" habilitaba el caso VES. Con la unificación (septiembre
+    2026) una regla con tope configurado cubre los dos caminos, así que
+    este escenario ahora sí otorga: 1.000 de lista menos 888,89 de lo
+    pagado valorado a BCV = 111,11, por debajo del tope de 350.
+    """
     bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_ves()))
 
-    assert bandeja.total_descuentos == Decimal("0.00")
+    assert bandeja.total_descuentos == Decimal("111.11")
 
 
 def test_sin_abonos_no_hay_diferencial_ni_en_el_teorico():

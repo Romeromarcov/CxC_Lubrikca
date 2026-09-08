@@ -31,7 +31,6 @@ from ..models import (
     Feriado,
     LineaOrden,
     MetodoPago,
-    Moneda,
     OrdenVenta,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
@@ -1530,95 +1529,80 @@ def _calcular_componentes(
                 inp.valid_usd or None,
             )
         ]
-        regla_max = next(
-            (r for r in reglas_dif_vigentes if r.tipo_diferencial == "fijo_35_ves_usd"), None
-        )
-        regla_equiparar_activa = any(
-            r.tipo_diferencial == "equiparar_binance" for r in reglas_dif_vigentes
+        # UNA sola regla, no dos ramas. El usuario lo pidió tras ver que ya
+        # eran la misma cosa (septiembre 2026): "¿cuál es ahora la
+        # diferencia entre la regla de equiparar y la regla del 35 %?
+        # ¿pueden unificarse?".
+        #
+        # Lo eran. Las dos preguntaban "¿el pago cubre el teórico USD?" y
+        # las dos cerraban el hueco hasta lo pagado, topado al mismo
+        # porcentaje. Lo que las separaba era ``todos_usd_puro`` -- si TODOS
+        # los abonos estaban registrados con moneda USD -- y ese criterio es
+        # frágil: el usuario aclaró que los pagos se registran en VES y que
+        # el equivalente a las tres tasas se calcula solo. Que la regla
+        # dependa de en qué casilla quedó el billete es justo lo que produjo
+        # el caso S00010.
+        #
+        # Además el sustraendo ya era el mismo en la práctica:
+        # ``valor_pagado_usd`` elige el equivalente según
+        # ``tipo_tasa_abono``, que en producción vale BCV en el 100 % de las
+        # 1.467 vinculaciones, o sea que devolvía siempre ``equiv_usd_bcv``
+        # -- exactamente lo que usa ``valor_pagado_bcv_usd``.
+        #
+        # La regla unificada:
+        #   · cobertura medida a BINANCE, el tipo de cambio que menos
+        #     favorece al cliente. Para un pago en dólares las dos
+        #     valoraciones son el monto nominal, así que la vieja rama fija
+        #     entra sin cambiar.
+        #   · hueco medido contra el precio REAL de la línea y contra lo que
+        #     el pago vale en los términos de la factura (BCV).
+        #   · la guarda de pagos huérfanos, que antes solo cubría a la rama
+        #     "equiparar", vale ahora para las dos: es control de calidad
+        #     del dato, no una distinción de negocio.
+        #
+        # El TOPE sale de ``porcentaje_fijo`` de la regla, editable desde
+        # Configuración -> Diferencial Cambiario. Hoy es 0,35.
+        reglas_dif_aplicables = [
+            r
+            for r in reglas_dif_vigentes
+            if r.tipo_diferencial in ("fijo_35_ves_usd", "equiparar_binance")
+        ]
+        regla_max = max(
+            reglas_dif_aplicables, key=lambda r: r.porcentaje_fijo, default=None
         )
 
-        if regla_max is not None:
+        if regla_max is not None and not inp.cliente_tiene_pagos_huerfanos:
             diferencial_maximo = regla_max.porcentaje_fijo
-            todos_usd_puro = all(v.moneda_abono == Moneda.USD for v in vincs)
-
-            # Regla 1: fijo, pago 100% USD, orden pagada según teórico USD.
-            #
-            # El 35 % es un TECHO, no un monto plano. Antes era
-            # ``precio_base * diferencial_maximo`` sin restar nada, mientras
-            # la rama "equiparar" de abajo sí calculaba el hueco real y
-            # descontaba los otros descuentos. Esa asimetría concedía el
-            # diferencial encima de lo que ya se había dado.
-            #
-            # Medido contra producción: de las 168 órdenes con diferencial
-            # fijo ($39.312,33), en 73 ($27.450,01) el descuento YA estaba
-            # dado en el precio de la orden -- $13.757,47 de rebaja. El caso
-            # que lo destapó lo trajo el usuario mirando S00010: $11.789,05
-            # de diferencial sobre una orden que ya traía $4.234,30
-            # rebajados en el precio, y donde el cliente había pagado la
-            # factura entera.
-            #
-            # El hueco se mide contra el precio REAL de la orden (el que
-            # tiene la línea), no contra el de la lista: la diferencia entre
-            # ambos es precisamente el descuento que ya se concedió al
-            # facturar. Sin fijarse en qué lista nació el precio -- el
-            # usuario aclaró que las listas viejas se usaron para VES y USD
-            # indistintamente, así que el id de lista no lo dice.
-            monto_fijo = Decimal("0")
-            if todos_usd_puro:
-                pagado_usd = valor_pagado_usd(vincs)
-                if pagado_usd >= (precio_target_usd or Decimal("0")) - _EPS:
-                    techo_fijo = precio_base * diferencial_maximo
-                    otros_desc_fijo = nc + pct_recompra + contado_proy + volumen_desc
-                    precio_real_orden = sum(
-                        (
-                            _cantidad_efectiva(inp, ln) * ln.precio_unitario
-                            for ln in inp.lineas
-                        ),
-                        Decimal("0"),
-                    )
-                    # Sin líneas con precio propio no hay con qué medir el
-                    # hueco: "no sé" no es "cero", así que se conserva el
-                    # comportamiento anterior en vez de anular el descuento.
-                    if precio_real_orden <= 0:
-                        monto_fijo = techo_fijo
-                    else:
-                        gap_fijo = max(
-                            Decimal("0"),
-                            precio_real_orden - otros_desc_fijo - pagado_usd,
-                        )
-                        monto_fijo = min(techo_fijo, gap_fijo)
-
-            # Regla 2: "equiparar", pago mixto/Binance, sin huérfanos.
-            monto_equiparar = Decimal("0")
             if (
-                regla_equiparar_activa
-                and not todos_usd_puro
-                and not inp.cliente_tiene_pagos_huerfanos
+                diferencial_maximo > 0
+                and valor_pagado_binance_usd(vincs)
+                >= (precio_target_usd or Decimal("0")) - _EPS
             ):
-                val_binance = valor_pagado_binance_usd(vincs)
-                val_bcv = valor_pagado_bcv_usd(vincs)
-                if (
-                    val_binance >= (precio_target_usd or Decimal("0")) - _EPS
-                    and precio_base > val_bcv
-                ):
-                    otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-                    gap = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
-                    monto_equiparar = min(gap, precio_base * diferencial_maximo)
-
-            diferencial_cambiario = max(monto_fijo, monto_equiparar)
-            if diferencial_cambiario > 0:
-                if monto_fijo >= monto_equiparar:
-                    pct_str = f"{diferencial_maximo * 100:.1f}%"
-                    desc_str = f"Diferencial Cambiario fijo ({pct_str}, pago 100% USD)"
-                else:
-                    monto_str = q2(diferencial_cambiario)
-                    desc_str = f"Diferencial Cambiario - Equiparación (${monto_str})"
-                detalle_diferencial = DescuentoAplicado(
-                    origen="bcv_completo",
-                    descripcion=desc_str,
-                    monto=q2(diferencial_cambiario),
-                    regla_id=getattr(regla_max, "regla_id", "") or "",
+                techo = precio_base * diferencial_maximo
+                otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
+                pagado_en_factura = valor_pagado_bcv_usd(vincs)
+                precio_real_orden = sum(
+                    (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
+                    Decimal("0"),
                 )
+                # Sin líneas con precio propio no hay con qué medir el hueco:
+                # "no sé" no es "cero", así que manda el precio de lista.
+                base_hueco = precio_real_orden if precio_real_orden > 0 else precio_base
+                hueco = max(Decimal("0"), base_hueco - otros_desc_pre - pagado_en_factura)
+                diferencial_cambiario = min(techo, hueco)
+                if diferencial_cambiario > 0:
+                    pct_str = f"{diferencial_maximo * 100:.1f}%"
+                    detalle_diferencial = DescuentoAplicado(
+                        origen="bcv_completo",
+                        descripcion=(
+                            f"Diferencial Cambiario (tope {pct_str}, "
+                            f"hueco hasta lo pagado)"
+                        ),
+                        monto=q2(diferencial_cambiario),
+                        regla_id=getattr(regla_max, "regla_id", "") or "",
+                        porcentaje=diferencial_maximo,
+                        base=q2(base_hueco),
+                    )
 
     return _Componentes(
         precio_base=precio_base,
