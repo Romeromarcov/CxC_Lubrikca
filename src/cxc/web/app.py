@@ -8241,6 +8241,62 @@ async def get_bandeja_facturacion():
                     # y tener dos bandejas para el mismo trabajo obligaba a
                     # mirar en dos lados.
                     nc_subtotal = float(item.get("descuento_pendiente_aplicar") or 0.0)
+
+                    # TECHO DURO: nunca se puede acreditar mas que la brecha
+                    # real entre lo FACTURADO y lo PAGADO. Es la definicion
+                    # misma de esta bandeja -- "llevar lo facturado a lo
+                    # pagado" -- y hasta ahora no se respetaba.
+                    #
+                    # Es la garantia que pidio el usuario: "necesito
+                    # garantizar al 100% que un descuento no se sugiera 2
+                    # veces, validar si se aplico directo en el precio, si
+                    # fue en la linea, etc". El techo funciona sin importar
+                    # POR QUE CANAL se dio el descuento:
+                    #
+                    #   · si ya se dio en el PRECIO, la factura salio mas
+                    #     baja, el cliente la pago completa y la brecha es
+                    #     cero -> no hay NC que emitir.
+                    #   · si se dio en la LINEA o por una NC previa, igual:
+                    #     bajo el facturado y la brecha lo refleja.
+                    #   · si NO se dio, la factura quedo en bruto, el
+                    #     cliente pago el monto con descuento y la brecha es
+                    #     exactamente el descuento -> la NC sale completa.
+                    #
+                    # El caso que lo destapo lo trajo el usuario mirando
+                    # S00010 (TERA): el sistema le sugeria una NC de
+                    # $3.949,79 cuando la brecha era de -$0,52 -- habian
+                    # pagado la factura entera porque "a esa orden en
+                    # especial se le aplico el 35% directamente en el
+                    # precio" (rebaja_en_precio $4.234,30). Medido contra
+                    # produccion: 92 de 215 ordenes sugerian mas que su
+                    # brecha, por $22.393,84 en total.
+                    #
+                    # No se puede resolver mirando la lista de precios: el
+                    # usuario aclaro que las listas viejas "se usaron para
+                    # VES y USD indistintamente en el pasado", asi que el id
+                    # de lista no dice en que moneda nacio el precio. La
+                    # brecha si.
+                    # El techo solo aplica si SABEMOS cuanto se facturo. Sin
+                    # ese dato no hay brecha que calcular, y "no se" no es
+                    # "cero" -- tratarlo como cero vaciaba la bandeja entera
+                    # cuando Odoo no responde (lo detectaron los e2e 13 y
+                    # 14e, que corren con la conexion apagada).
+                    _facturado_neto = float(item.get("total_facturado_neto") or 0.0)
+                    brecha_facturado_pagado = round(
+                        _facturado_neto - float(item.get("monto_pagado_usd") or 0.0), 2
+                    )
+                    if _facturado_neto <= 0.05:
+                        pass
+                    elif brecha_facturado_pagado <= 0.05:
+                        nc_subtotal = 0.0
+                    else:
+                        # La brecha viene CON impuesto; el descuento se
+                        # calcula sobre el subtotal, asi que se compara en
+                        # la misma unidad antes de topar.
+                        _fs = float(item.get("total_facturado_antes_impuestos") or 0.0)
+                        _fc = float(item.get("total_facturado_con_impuestos") or 0.0)
+                        _iva = _fc / _fs if _fs > 0 and _fc > 0 else 1.16
+                        nc_subtotal = min(nc_subtotal, brecha_facturado_pagado / _iva)
                     # Marcada como "no se le otorgo el descuento": no hay
                     # nota de credito que emitir. Decision del usuario --
                     # el descuento se asume comprometido por defecto y esto
