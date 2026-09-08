@@ -593,6 +593,49 @@ class PostgresRepository(Repository):
             )
         return bool(result.rowcount)
 
+    def all_descuentos_no_otorgados(self) -> dict[str, dict[str, str]]:
+        """``so_id`` -> quién marcó que ese descuento NO se le dio al cliente.
+
+        Ver ``schema.descuentos_no_otorgados``: el descuento se asume
+        comprometido por defecto y esto registra las excepciones.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.descuentos_no_otorgados)).all()
+        return {
+            r.so_id: {
+                "so_id": r.so_id,
+                "motivo": r.motivo,
+                "marcado_por": r.marcado_por,
+                "timestamp_marcado": r.timestamp_marcado,
+            }
+            for r in rows
+        }
+
+    def append_descuento_no_otorgado(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.descuentos_no_otorgados,
+                [
+                    {
+                        "so_id": row["so_id"],
+                        "motivo": row.get("motivo", ""),
+                        "marcado_por": row.get("marcado_por", ""),
+                        "timestamp_marcado": row.get("timestamp_marcado", ""),
+                    }
+                ],
+                ["so_id"],
+            )
+
+    def delete_descuento_no_otorgado(self, so_id: str) -> None:
+        """Revierte la marca: el descuento vuelve a contar como comprometido."""
+        with self._engine.begin() as conn:
+            conn.execute(
+                t.descuentos_no_otorgados.delete().where(
+                    t.descuentos_no_otorgados.c.so_id == so_id
+                )
+            )
+
     def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.discrepancias_aceptadas)).all()

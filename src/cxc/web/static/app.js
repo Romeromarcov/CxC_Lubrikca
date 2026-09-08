@@ -736,6 +736,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.style.fontSize = `${scale}rem`;
         card.innerHTML = `
             <div class="prioridad-cliente" title="${c.cliente_nombre || c.cliente_id}">${c.cliente_nombre || c.cliente_id}</div>
+            ${(c.descuento_comprometido > 0.05 ? `<div class="prioridad-favor" style="background:#fffbeb;color:#92400e;" title="Descuento que el vendedor ya le prometió al cliente. Administración todavía no emitió la nota de crédito, así que la factura en Odoo sigue en bruto -- pero no hay que salir a cobrar ese monto.">Cobrable ${fmt(c.saldo_cobrable)} · facturado ${fmt(c.saldo_priorizacion)} <small style="font-weight:400;">(NC pendiente ${fmt(c.descuento_comprometido)})</small></div>` : "")}
             ${(c.tiene_saldo_a_favor ? `<div class="prioridad-favor" title="Plata del cliente que no está cobrando esta deuda: pagó de más, devolvió mercancía ya pagada, o tiene un pago sin asignar a ninguna orden">↩ A favor ${fmt((c.saldo_a_favor || 0) + (c.saldo_pendiente_por_aplicar || 0))}${(c.saldo_pendiente_por_aplicar > 0.05 ? ` <small style="font-weight:400;">(${fmt(c.saldo_pendiente_por_aplicar)} por aplicar)</small>` : "")}</div>` : "")}
             <div class="prioridad-saldos">
                 <div title="Saldo contra la Venta Real de la orden en Odoo">

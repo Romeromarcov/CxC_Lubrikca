@@ -5554,6 +5554,11 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     # cobranza sepa que antes de perseguir al cliente hay
                     # plata suya sin asignar.
                     "saldo_pendiente_por_aplicar": 0.0,
+                    # Descuento que el vendedor ya le prometio al cliente y
+                    # que administracion todavia no instrumento con una nota
+                    # de credito. Baja lo que se sale a cobrar sin tocar los
+                    # libros: en Odoo la factura sigue en bruto.
+                    "descuento_comprometido": 0.0,
                 },
             )
 
@@ -5618,6 +5623,10 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             for k, v in saldos_orden.items():
                 if v is not None:
                     c["saldos"][k] += v
+            # Solo cuentan las ordenes que TODAVIA estan en cobranza: una
+            # que ya salio no suma al saldo a perseguir, asi que restarle
+            # su descuento seria descontar dos veces.
+            c["descuento_comprometido"] += float(item.get("descuento_comprometido") or 0.0)
             # (el saldo a favor se toma de favor_por_cliente, que si mira
             # las ordenes ya salidas de CxC -- ver arriba)
 
@@ -5708,7 +5717,21 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             c["tiene_saldo_a_favor"] = (
                 c["saldo_a_favor"] > 0.05 or c["saldo_pendiente_por_aplicar"] > 0.05
             )
+            c["descuento_comprometido"] = round(c.get("descuento_comprometido", 0.0), 2)
             c["saldo_priorizacion"] = saldo_priorizacion_cliente(c["saldos"])
+            # Lo que realmente hay que salir a cobrar. Decision del usuario
+            # (septiembre 2026): el descuento ya prometido no debe inflar la
+            # cuenta por cobrar "por un tramite administrativo que debe
+            # hacer el dpto de administracion". Medido contra produccion:
+            # $14.482,08 en 154 ordenes, 5,8% de los $251.380,75 que se
+            # perseguian.
+            #
+            # saldo_priorizacion se conserva -- es lo que dice la factura, y
+            # el cobrador necesita ver las dos cifras para explicarle al
+            # cliente por que se le cobra menos de lo que dice el papel.
+            c["saldo_cobrable"] = round(
+                max(0.0, c["saldo_priorizacion"] - c["descuento_comprometido"]), 2
+            )
 
         # Un cliente cuyas ordenes salieron TODAS de CxC no tenia fila en
         # este reporte, asi que su credito quedaba invisible justo en el
@@ -5729,9 +5752,13 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             _fila["tiene_saldo_a_favor"] = True
             _fila["vendedor"] = "Sin Vendedor"
             _fila["saldo_priorizacion"] = 0.0
+            _fila["descuento_comprometido"] = 0.0
+            _fila["saldo_cobrable"] = 0.0
             _fila.pop("vendedores", None)
 
-        clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_priorizacion"])
+        # Ordena por lo COBRABLE: perseguir por el bruto pone arriba a
+        # clientes cuyo saldo es en buena parte un descuento ya prometido.
+        clientes_list = sorted(clientes.values(), key=lambda c: -c["saldo_cobrable"])
 
         totales: dict[str, Any] = {}
         for k in _CXC_CLIENTE_SALDOS:
@@ -13071,6 +13098,10 @@ def _get_ventas_sync(
         today_ventas = date.today()
 
         ordenes = repo.all_ordenes()
+        # Excepciones: ordenes cuyo descuento NO se le prometio al cliente.
+        # Ver schema.descuentos_no_otorgados -- el descuento se asume
+        # comprometido por defecto y esto son las excepciones marcadas.
+        descuentos_no_otorgados = repo.all_descuentos_no_otorgados()
         bandeja_map = {b.so_id: b for b in repo.all_bandeja()}
         # Fase 10: los teóricos VES/USD viven en su propia tabla (fija, NO
         # se recalcula cada ciclo y SÍ cubre órdenes facturadas -- ver
@@ -14164,6 +14195,30 @@ def _get_ventas_sync(
                     # orden real (junto a venta_bruta_real/venta_neta_real en
                     # la UI), no solo al final de la tabla.
                     "descuento_pendiente_aplicar": descuento_pendiente_aplicar,
+                    # El descuento se asume COMPROMETIDO con el cliente
+                    # mientras nadie marque lo contrario. Decision del
+                    # usuario (septiembre 2026): "casi siempre los
+                    # vendedores dan el descuento al cliente, lo que pasa
+                    # es que por seguridad yo no permito que modifiquen en
+                    # Odoo los precios ni apliquen descuentos
+                    # directamente". Asi la cuenta por cobrar deja de
+                    # inflarse por un tramite administrativo pendiente:
+                    # $14.482,08 en 154 ordenes, 5,8% de la cartera.
+                    #
+                    # Los libros no se tocan -- en Odoo la factura sigue en
+                    # bruto hasta que administracion emita la NC.
+                    "descuento_comprometido": (
+                        0.0
+                        if o.so_id in descuentos_no_otorgados
+                        else descuento_pendiente_aplicar
+                    ),
+                    "descuento_no_otorgado": o.so_id in descuentos_no_otorgados,
+                    "descuento_no_otorgado_por": descuentos_no_otorgados.get(o.so_id, {}).get(
+                        "marcado_por", ""
+                    ),
+                    "descuento_no_otorgado_motivo": descuentos_no_otorgados.get(o.so_id, {}).get(
+                        "motivo", ""
+                    ),
                     "descuento_pendiente_aplicar_pct": _pct(
                         descuento_pendiente_aplicar, precio_base_calculado
                     ),
@@ -14969,6 +15024,53 @@ async def post_aceptar_discrepancia(req: AceptarDiscrepanciaRequest):
                 "Si los datos que la originaron cambian, vuelve a aparecer."
             ),
         }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class MarcarDescuentoNoOtorgadoRequest(BaseModel):
+    """Marca que a ESTA orden no se le prometio el descuento del motor.
+
+    El descuento se asume comprometido por defecto -- decision del usuario:
+    "casi siempre los vendedores dan el descuento al cliente" -- asi que
+    esto registra la excepcion. El caso que lo motivo es TERA: el motor le
+    calcula $3.949,79 entre S00010 y S00584 pero "a ellos no se les dio ese
+    descuento, pagaron completo y ya".
+    """
+
+    so_id: str
+    motivo: str = ""
+    marcado_por: str = "Dirección / Administración"
+    # False revierte la marca: el descuento vuelve a contar como
+    # comprometido y a bajar la cuenta por cobrar.
+    no_otorgado: bool = True
+
+
+@app.post("/api/ventas/descuento-no-otorgado")
+async def post_descuento_no_otorgado(req: MarcarDescuentoNoOtorgadoRequest):
+    try:
+        repo = get_repo()
+        if req.no_otorgado:
+            repo.append_descuento_no_otorgado(
+                {
+                    "so_id": req.so_id,
+                    "motivo": req.motivo,
+                    "marcado_por": req.marcado_por,
+                    "timestamp_marcado": datetime.now().isoformat(),
+                }
+            )
+            msg = (
+                f"{req.so_id}: el descuento deja de contar como comprometido. "
+                "Vuelve a la cuenta por cobrar y no genera nota de crédito."
+            )
+        else:
+            repo.delete_descuento_no_otorgado(req.so_id)
+            msg = (
+                f"{req.so_id}: el descuento vuelve a contar como comprometido "
+                "y baja de la cuenta por cobrar."
+            )
+        return {"status": "success", "message": msg}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
