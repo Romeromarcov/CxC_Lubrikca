@@ -75,3 +75,55 @@ def test_sin_valores_sigue_dando_una_huella_estable() -> None:
     a = huella_discrepancia("x", "S1", {})
     assert a == huella_discrepancia("x", "S1", {})
     assert a != huella_discrepancia("x", "S2", {})
+
+
+# --- El filtro genérico que cubre los siete detectores ----------------------
+
+
+def test_los_seis_detectores_mudos_ahora_se_pueden_aceptar() -> None:
+    """Hasta hoy solo UN detector consultaba las aceptaciones. Los otros
+    seis mostraban su hallazgo para siempre."""
+    from cxc.web.app import separar_discrepancias_aceptadas
+
+    item = {"so_id": "S00133", "diferencia": 264.58, "detalle": "texto"}
+    pend, acep = separar_discrepancias_aceptadas([dict(item)], "tasa_implausible", {})
+    assert len(pend) == 1 and not acep
+    huella = pend[0]["huella"]
+
+    aceptadas = {pend[0]["discrepancia_id"]: {"huella": huella, "aprobado_por": "Auditor"}}
+    pend2, acep2 = separar_discrepancias_aceptadas([dict(item)], "tasa_implausible", aceptadas)
+    assert not pend2
+    assert acep2[0]["aceptada_por"] == "Auditor"
+
+
+def test_si_el_monto_cambia_la_discrepancia_reabre() -> None:
+    from cxc.web.app import separar_discrepancias_aceptadas
+
+    base = {"so_id": "S00133", "diferencia": 264.58}
+    pend, _ = separar_discrepancias_aceptadas([dict(base)], "tasa_implausible", {})
+    aceptadas = {pend[0]["discrepancia_id"]: {"huella": pend[0]["huella"], "aprobado_por": "A"}}
+
+    movido = {"so_id": "S00133", "diferencia": 3000.00}
+    pend2, acep2 = separar_discrepancias_aceptadas([movido], "tasa_implausible", aceptadas)
+    assert len(pend2) == 1 and not acep2
+    assert pend2[0]["reabierta"] is True
+
+
+def test_el_texto_no_entra_en_la_huella_pero_el_numero_si() -> None:
+    """Reescribir la descripción no reabre; mover el monto sí."""
+    from cxc.web.app import separar_discrepancias_aceptadas
+
+    a, _ = separar_discrepancias_aceptadas([{"so_id": "S1", "monto": 10.0, "d": "uno"}], "t", {})
+    b, _ = separar_discrepancias_aceptadas([{"so_id": "S1", "monto": 10.0, "d": "otro"}], "t", {})
+    assert a[0]["huella"] == b[0]["huella"]
+
+
+def test_cada_detector_tiene_su_propio_espacio_de_ids() -> None:
+    """La misma orden con la misma cifra en dos detectores distintos son
+    dos discrepancias: aceptar una no puede tapar la otra."""
+    from cxc.web.app import separar_discrepancias_aceptadas
+
+    a, _ = separar_discrepancias_aceptadas([{"so_id": "S1", "monto": 10.0}], "tasa", {})
+    b, _ = separar_discrepancias_aceptadas([{"so_id": "S1", "monto": 10.0}], "devolucion", {})
+    assert a[0]["discrepancia_id"] != b[0]["discrepancia_id"]
+    assert a[0]["huella"] != b[0]["huella"]

@@ -1100,11 +1100,11 @@
                                         <th>Saldo Residual Factura Odoo ($)</th>
                                         <th>Diferencia ($)</th>
                                         <th>Causa Probable / Diagnóstico</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="discrepancias-facturas-table-body">
                                     <tr>
-                                        <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
+                                        <td colspan="10" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1124,11 +1124,11 @@
                                         <th>Pago ID</th>
                                         <th>N° Pago Odoo</th>
                                         <th>Residual sin Aplicar ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-residual-table-body">
                                     <tr>
-                                        <td colspan="3" class="table-empty">No hay pagos con residual sin aplicar.</td>
+                                        <td colspan="4" class="table-empty">No hay pagos con residual sin aplicar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1151,11 +1151,11 @@
                                         <th>Residual (Bs.)</th>
                                         <th>Fecha</th>
                                         <th>Referencia</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="ajustes-cambio-huerfanos-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
+                                        <td colspan="7" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1177,11 +1177,11 @@
                                         <th>Importe Local (Bs.)</th>
                                         <th>Monto en Asiento (Bs.)</th>
                                         <th>Diferencia (Bs.)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-importe-local-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay pagos con importe local desincronizado.</td>
+                                        <td colspan="6" class="table-empty">No hay pagos con importe local desincronizado.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1202,11 +1202,11 @@
                                         <th>Monto Pago ($)</th>
                                         <th>Total Vinculado ($)</th>
                                         <th>Exceso ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-sobreaplicadas-table-body">
                                     <tr>
-                                        <td colspan="4" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
+                                        <td colspan="5" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1228,11 +1228,11 @@
                                         <th>Orden (SO)</th>
                                         <th>Tasa Implícita</th>
                                         <th>Tasa Real (fecha del abono)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-tasa-implausible-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
+                                        <td colspan="6" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1255,11 +1255,11 @@
                                         <th>Cant. Entregada</th>
                                         <th>Faltante</th>
                                         <th>Valor Potencial ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="devolucion-no-reflejada-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
+                                        <td colspan="7" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1357,19 +1357,9 @@
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
-                                    <tr>
-                                        <th>ID Anomalía</th>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Tipo de Anomalía</th>
-                                        <th>Discrepancia ($)</th>
-                                        <th>Motivo de Aceptación</th>
-                                        <th>Aprobado Por</th>
-                                        <th>Fecha Revisión</th>
-                                    </tr>
+                                    <tr><th>ID</th><th>Orden</th><th>Factura</th><th>Tipo de discrepancia</th><th>Qué se aceptó</th><th>Motivo</th><th>Quién la aceptó</th><th>Cuándo</th><th>Huella</th></tr>
                                 </thead>
-                                <tbody id="anomalias-aceptadas-table-body">
+                                <tbody id="discrepancias-aceptadas-table-body">
                                     <tr>
                                         <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
                                     </tr>
