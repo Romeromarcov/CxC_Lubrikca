@@ -57,7 +57,6 @@ def test_descuentos_serde_roundtrip():
 
     dif = DescuentoDiferencialCambiario(
         regla_id="DIF1",
-        nombre="35% Fijo",
         tipo_diferencial="fijo_35_ves_usd",
         tipo_calculo="fijo",
         porcentaje_fijo=Decimal("0.35"),

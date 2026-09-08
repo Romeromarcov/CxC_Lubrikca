@@ -30,7 +30,6 @@ def _regla(tipo="fijo_35_ves_usd", *, regla_id=None, pct="0.35", activo=True,
            desde=date(2026, 1, 1), hasta=None, listas="LISTAS_VES"):
     return DescuentoDiferencialCambiario(
         regla_id=regla_id or f"DIF_{tipo}",
-        nombre=tipo,
         tipo_diferencial=tipo,
         porcentaje_fijo=Decimal(pct),
         listas_aplicables=listas,

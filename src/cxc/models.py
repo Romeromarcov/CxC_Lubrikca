@@ -420,8 +420,14 @@ class DescuentoVolumen:
     regla_id: str
     marca: str = "*"
     categoria: str = "*"
-    litros_minimo: Decimal = Decimal("0")
     porcentaje: Decimal = Decimal("0.05")
+    # El tramo va SIEMPRE en este par, y ``unidad_medida`` dice en qué se
+    # cuenta (UNIDADES / LITROS / USD). Antes convivía con
+    # ``litros_minimo``, que era el mismo dato con otro nombre: el
+    # formulario escribía los dos y el motor los desempataba con una
+    # cascada de fallbacks. En producción los 5 registros tenían el mismo
+    # valor en ambos, así que el duplicado solo agregaba formas de
+    # equivocarse. Ver migración de unificación de nombres.
     min_unidades: Decimal = Decimal("0")
     max_unidades: Decimal = Decimal("999999")
     unidad_medida: str = "UNIDADES"
@@ -561,7 +567,10 @@ class DescuentoProducto:
 @dataclass
 class DescuentoDiferencialCambiario:
     regla_id: str
-    nombre: str
+    # ``nombre`` se fusionó con ``descripcion`` (el campo común a todas las
+    # reglas): eran el mismo dato con dos nombres, y solo esta tabla tenía
+    # los dos. Al migrar, el nombre viejo pasó a descripcion donde estaba
+    # vacía -- DIF_35_VES conservó así "35% Fijo VES a USD".
     tipo_diferencial: str = (
         "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     )

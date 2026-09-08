@@ -2245,7 +2245,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const listas = getM2MCheckedValues(diferencialForm, ".m2m-dif-lista");
             const rawPct = (document.getElementById("cfg-dif-porcentaje-fijo")?.value || "0.35").replace(',', '.');
             const payload = {
-                nombre: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
+                // El campo se llamaba "nombre" solo en esta tabla; ahora usa
+                // "descripcion", el que ya tienen todas las demás reglas.
+                descripcion: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
                 tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
                 // Se DERIVA de tipo_diferencial en vez de elegirse aparte: el
                 // motor solo lee tipo_diferencial, así que un segundo
@@ -3630,7 +3632,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function prefillDiferencial(r, reglaId) {
         setM2MChecked(diferencialForm, ".m2m-dif-lista", r.listas_aplicables);
-        setFieldValue("cfg-dif-nombre", r.nombre || "Diferencial Cambiario");
+        setFieldValue("cfg-dif-nombre", r.descripcion || "Diferencial Cambiario");
         setFieldValue("cfg-dif-tipo-diferencial", r.tipo_diferencial || "fijo_35_ves_usd");
         setFieldValue("cfg-dif-porcentaje-fijo", r.porcentaje_fijo ?? 0.35);
         setFieldValue("cfg-dif-monedas", r.monedas_aplicables || "*");

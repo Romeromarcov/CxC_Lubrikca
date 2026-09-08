@@ -1267,17 +1267,23 @@ def _calcular_componentes(
                 litros_eval += lh.cantidad * vol_unit_h
                 cajas_eval += lh.cantidad
 
+        # El tramo sale SIEMPRE de min/max_unidades y ``unidad_medida`` dice
+        # en qué se cuenta. Antes había un segundo campo, ``litros_minimo``,
+        # con el mismo dato: el formulario escribía los dos y acá había que
+        # desempatarlos con una cascada de fallbacks -- "es regla de litros
+        # si la unidad dice LITROS, o si litros_minimo tiene algo y
+        # min_unidades no". En producción los 5 registros tenían el mismo
+        # valor en ambos, así que el duplicado solo agregaba formas de
+        # equivocarse. Ver la migración de unificación de nombres.
         unidad = str(r.unidad_medida or "").upper()
-        is_liters_rule = (unidad == "LITROS") or (
-            r.litros_minimo > 0 and (r.min_unidades is None or r.min_unidades == 0)
-        )
-        if is_liters_rule:
-            if litros_eval < r.litros_minimo:
+        if unidad == "LITROS":
+            if litros_eval < r.min_unidades:
+                continue
+            if r.max_unidades and r.max_unidades < 999999 and litros_eval > r.max_unidades:
                 continue
         else:
             val_eval = cajas_eval if cajas_eval > 0 else litros_eval
-            thresh = r.min_unidades if (r.min_unidades and r.min_unidades > 0) else r.litros_minimo
-            if val_eval < thresh:
+            if val_eval < r.min_unidades:
                 continue
             if r.max_unidades and r.max_unidades < 999999 and val_eval > r.max_unidades:
                 continue
@@ -1286,7 +1292,7 @@ def _calcular_componentes(
             continue
 
         unidad_tag = "L" if unidad == "LITROS" else " Unid"
-        min_tag = r.litros_minimo if unidad == "LITROS" else r.min_unidades
+        min_tag = r.min_unidades
         tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
         candidatas_vol.append(
             {

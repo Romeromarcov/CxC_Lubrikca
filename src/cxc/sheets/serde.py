@@ -409,7 +409,6 @@ def producto_from_row(r: Mapping[str, str]) -> DescuentoProducto:
 def diferencial_to_row(d: DescuentoDiferencialCambiario) -> Row:
     return {
         "regla_id": d.regla_id,
-        "nombre": d.nombre,
         "tipo_diferencial": d.tipo_diferencial,
         "tipo_calculo": d.tipo_calculo,
         "porcentaje_fijo": str(d.porcentaje_fijo),
@@ -430,7 +429,6 @@ def diferencial_from_row(r: Mapping[str, str]) -> DescuentoDiferencialCambiario:
     default_monedas = "USD" if tipo_dif == "fijo_35_ves_usd" else "*"
     return DescuentoDiferencialCambiario(
         regla_id=r.get("regla_id", "DIF_DEFAULT"),
-        nombre=r.get("nombre", "Descuento Diferencial Cambiario"),
         tipo_diferencial=tipo_dif,
         tipo_calculo=r.get("tipo_calculo", "fijo"),
         porcentaje_fijo=p_dec(r.get("porcentaje_fijo", "0.35")),
@@ -506,7 +504,6 @@ def desc_volumen_to_row(d: DescuentoVolumen) -> Row:
         "regla_id": d.regla_id,
         "marca": d.marca,
         "categoria": d.categoria,
-        "litros_minimo": str(d.litros_minimo),
         "porcentaje": str(d.porcentaje),
         "min_unidades": str(d.min_unidades),
         "max_unidades": str(d.max_unidades),
@@ -526,7 +523,6 @@ def desc_volumen_from_row(r: Mapping[str, str]) -> DescuentoVolumen:
         regla_id=r.get("regla_id", "VOL_DEFAULT"),
         marca=r.get("marca", "*"),
         categoria=r.get("categoria", "*"),
-        litros_minimo=p_dec(r.get("litros_minimo", "0")),
         porcentaje=p_pct(r.get("porcentaje", "0")),
         min_unidades=p_dec(r.get("min_cantidad", r.get("litros_minimo", "0"))),
         max_unidades=p_dec(r.get("max_cantidad", "999999")),
