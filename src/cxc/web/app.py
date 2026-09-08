@@ -4053,6 +4053,10 @@ def _get_reporte_saldos_sync(refresh: bool = False):
     try:
         repo = get_repo()
         ordenes = repo.all_ordenes()
+        # Excepciones: ordenes cuyo descuento NO se le prometio al cliente.
+        # Este saldo es el que consume el FIFO, asi que la marca tiene que
+        # llegar hasta aca. Ver schema.descuentos_no_otorgados.
+        descuentos_no_otorgados_saldos = repo.all_descuentos_no_otorgados()
         # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real
         # para decidir si una orden está saldada.
         vincs = [v for v in repo.all_vinculaciones() if v.estado == EstadoVinculacion.CONCILIADO]
@@ -4751,6 +4755,15 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             # trackear aquí un subtotal separado por lista VES/USD. Los NCs
             # de Odoo (`ncs_odoo_monto_usd`) NO llevan este ajuste -- ya son
             # documentos reales con impuesto incluido (`amount_total`).
+            # Una orden marcada como "no se le otorgo el descuento" no debe
+            # ver su saldo deudor reducido por ese descuento. Importa mas de
+            # lo que parece: este saldo es contra el que consume el FIFO
+            # (ver _get_saldos_reales_por_so_sync), asi que sin esta guarda
+            # el reparto seguiria dando la orden por saldada con menos plata
+            # de la que realmente hay que cobrar, y la sacaria de CxC.
+            # Ver schema.descuentos_no_otorgados -- caso TERA.
+            if o.so_id in descuentos_no_otorgados_saldos:
+                total_descuentos_monto = 0.0
             descuentos_motor_con_iva = total_descuentos_monto * (1 + float(config.engine.iva_rate))
             saldo_con_descuento_bcv = max(
                 0.0, saldo_deudor_bcv - descuentos_motor_con_iva - ncs_odoo_monto_usd
