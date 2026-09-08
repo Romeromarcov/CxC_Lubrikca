@@ -11375,7 +11375,15 @@ def _detectar_pagos_con_residual_sin_aplicar(
                     ["account_id.account_type", "=", "asset_receivable"],
                 ]
             ],
-            {"fields": ["id", "move_id", "amount_residual_currency", "reconciled"]},
+            {
+                "fields": [
+                    "id",
+                    "move_id",
+                    "amount_residual_currency",
+                    "reconciled",
+                    "currency_id",
+                ]
+            },
         )
     except Exception as e:
         logger.warning("Error leyendo líneas de CxC de pagos para residual sin aplicar: %s", e)
@@ -11386,7 +11394,19 @@ def _detectar_pagos_con_residual_sin_aplicar(
         if line.get("reconciled"):
             continue
         residual = parse_decimal_safe(str(line.get("amount_residual_currency") or "0"))
-        if abs(residual) <= tolerancia_usd:
+        # ``amount_residual_currency`` viene en la moneda de la linea, NO en
+        # dolares. Medido contra produccion: de 293 lineas con residual, 158
+        # estaban en VES (mediana 23.762 Bs) y 135 en USD (mediana $100). Se
+        # mostraban todas con signo "$", asi que un residual de 1.934.804,05
+        # Bs (~$8.400) figuraba como "-$1.934.804,05". Y el umbral de 0,05 se
+        # aplicaba tambien a bolivares, donde equivale a 0,0002 dolares: no
+        # filtraba nada. Ahora cada moneda se compara contra su propio umbral.
+        moneda_ref = line.get("currency_id")
+        moneda = str(moneda_ref[1]) if moneda_ref else "USD"
+        umbral = tolerancia_usd
+        if moneda.upper() in ("VES", "BS", "VEF"):
+            umbral = tolerancia_usd * Decimal("100")
+        if abs(residual) <= umbral:
             continue
         move_ref = line.get("move_id")
         move_id = move_ref[0] if move_ref else None
@@ -11398,6 +11418,7 @@ def _detectar_pagos_con_residual_sin_aplicar(
                 "pago_id": str(pago["id"]),
                 "numero_pago_odoo": pago.get("name"),
                 "residual_sin_aplicar_usd": round(float(residual), 2),
+                "moneda": moneda,
             }
         )
     return resultado
