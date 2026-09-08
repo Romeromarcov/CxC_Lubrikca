@@ -8285,9 +8285,35 @@ async def get_bandeja_facturacion():
                     brecha_facturado_pagado = round(
                         _facturado_neto - float(item.get("monto_pagado_usd") or 0.0), 2
                     )
+                    # Y el segundo techo, que el usuario definió como regla
+                    # general (septiembre 2026): "el motor debe equiparar lo
+                    # facturado al neto teórico con el que quedó pagada la
+                    # orden, si lo facturado es menor al neto teórico no
+                    # sugiere aplicar nada, porque estarían dando un sobre
+                    # descuento sobre algo que se facturó por debajo de lo
+                    # que debió ser, y eso pasa a auditoría, pero lo que ya
+                    # se facturó así queda porque fue el compromiso con el
+                    # cliente, salvo que se haga una Nota de débito, pero ya
+                    # eso es parte de administración a través de Odoo".
+                    #
+                    # Una orden facturada POR DEBAJO de su teórico ya
+                    # entregó el descuento (y de más). Acreditarle una NC
+                    # encima sería descontar dos veces sobre una base que
+                    # ya estaba corta. Esas órdenes salen de esta bandeja y
+                    # se ven en Auditoría, en "Facturado por Debajo de lo
+                    # Debido", que es donde se decide si corresponde una
+                    # nota de DÉBITO -- eso lo hace administración en Odoo,
+                    # no el motor.
+                    _teorico_ref_nc = _teorico_de_referencia(item, clasificacion.referencia)
+                    facturado_bajo_teorico = (
+                        _teorico_ref_nc is not None
+                        and _facturado_neto > 0.05
+                        and _facturado_neto < float(_teorico_ref_nc) - 0.05
+                    )
+
                     if _facturado_neto <= 0.05:
                         pass
-                    elif brecha_facturado_pagado <= 0.05:
+                    elif facturado_bajo_teorico or brecha_facturado_pagado <= 0.05:
                         nc_subtotal = 0.0
                     else:
                         # La brecha viene CON impuesto; el descuento se

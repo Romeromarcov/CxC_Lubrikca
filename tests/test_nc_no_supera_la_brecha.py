@@ -88,3 +88,53 @@ def test_una_brecha_de_centavos_no_dispara_una_nota() -> None:
 def test_el_techo_nunca_agranda_el_descuento() -> None:
     """Si el motor calculó poco, la brecha grande no lo infla."""
     assert _nc_sugerida(descuento_motor=5.0, facturado=1000.0, pagado=0.0) == 5.0
+
+
+# --- Segundo techo: facturado por debajo del teórico -----------------------
+#
+# Regla general del usuario (septiembre 2026), textual: "el motor debe
+# equiparar lo facturado al neto teórico con el que quedó pagada la orden,
+# si lo facturado es menor al neto teórico no sugiere aplicar nada, porque
+# estarían dando un sobre descuento sobre algo que se facturó por debajo de
+# lo que debió ser, y eso pasa a auditoría, pero lo que ya se facturó así
+# queda porque fue el compromiso con el cliente, salvo que se haga una Nota
+# de débito, pero ya eso es parte de administración a través de Odoo".
+
+
+def _nc_con_teorico(
+    descuento_motor: float,
+    facturado: float,
+    pagado: float,
+    teorico_neto: float | None,
+    iva: float = _IVA,
+) -> float:
+    if facturado <= 0.05:
+        return descuento_motor  # sin dato de factura no se topa nada
+    if teorico_neto is not None and facturado < teorico_neto - 0.05:
+        return 0.0
+    return _nc_sugerida(descuento_motor, facturado, pagado, iva)
+
+
+def test_facturar_por_debajo_del_teorico_no_genera_nota_de_credito() -> None:
+    """Ya se entregó el descuento -- y de más -- al facturar corto."""
+    assert _nc_con_teorico(15.0, facturado=80.0, pagado=60.0, teorico_neto=100.0) == 0.0
+
+
+def test_facturar_por_encima_del_teorico_si_admite_la_nota() -> None:
+    """El caso normal: se facturó en bruto y el cliente pagó el neto."""
+    assert _nc_con_teorico(15.0, facturado=116.0, pagado=98.6, teorico_neto=100.0) == 15.0
+
+
+def test_facturar_justo_al_teorico_no_es_facturar_por_debajo() -> None:
+    assert _nc_con_teorico(5.0, facturado=100.0, pagado=94.2, teorico_neto=100.0) == 5.0
+
+
+def test_sin_teorico_calculado_manda_solo_la_brecha() -> None:
+    """No se puede exigir una comparación contra un número que no existe."""
+    assert _nc_con_teorico(15.0, facturado=116.0, pagado=98.6, teorico_neto=None) == 15.0
+
+
+def test_los_dos_techos_actuan_juntos() -> None:
+    """Facturado por encima del teórico pero pagado completo: la brecha
+    manda y tampoco hay nota."""
+    assert _nc_con_teorico(15.0, facturado=116.0, pagado=116.0, teorico_neto=100.0) == 0.0
