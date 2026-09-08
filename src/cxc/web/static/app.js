@@ -164,7 +164,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const bandeja1TableBody = document.getElementById("bandeja1-table-body");
     const bandeja2TableBody = document.getElementById("bandeja2-table-body");
     const bandeja3TableBody = document.getElementById("bandeja3-table-body");
-    const bandejaAuditoriaPreciosTableBody = document.getElementById("bandeja-auditoria-precios-table-body");
     const bandejaEnProcesoDePagoTableBody = document.getElementById("bandeja-en-proceso-de-pago-table-body");
 
     // User Session & Multi-Page Initialization
@@ -1066,7 +1065,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por facturar...</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
-            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td></tr>';
             if (bandejaEnProcesoDePagoTableBody) bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td></tr>';
 
             const res = await fetch("/api/bandeja");
@@ -1078,7 +1076,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 const tray1 = data.ordenes_por_facturar || (Array.isArray(data) ? data.filter(x => !x.facturada) : []);
                 const tray2 = data.notas_credito_pendientes || (Array.isArray(data) ? data.filter(x => x.ncs_calculadas > 0) : []);
                 const tray3 = data.iva_pendiente_agentes || [];
-                const tray4 = data.auditoria_precios || [];
                 const trayEnProceso = data.en_proceso_de_pago || [];
 
                 // Render Tray 1
@@ -1222,30 +1219,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
-                // Render Tray 4 (Bandeja de Auditoría de Precios)
-                if (bandejaAuditoriaPreciosTableBody) {
-                    if (tray4.length === 0) {
-                        bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes en auditoría de precios.</td></tr>';
-                    } else {
-                        bandejaAuditoriaPreciosTableBody.innerHTML = "";
-                        tray4.forEach(item => {
-                            const row = document.createElement("tr");
-                            row.innerHTML = `
-                                <td><strong>${item.so_id}</strong></td>
-                                <td>${item.cliente_nombre || item.so_id}</td>
-                                <td>${item.fecha || ''}</td>
-                                <td>${item.lista_aplicada_label || ''}</td>
-                                <td>${item.ves_neta_teorica_iva != null ? fmt(item.ves_neta_teorica_iva) : '-'}</td>
-                                <td>${item.usd_neta_teorica_iva != null ? fmt(item.usd_neta_teorica_iva) : '-'}</td>
-                                <td>${item.venta_neta_real != null ? fmt(item.venta_neta_real) : '-'}</td>
-                                <td><strong style="color:#dc2626">${item.total_facturado_neto != null ? fmt(item.total_facturado_neto) : '-'}</strong></td>
-                                <td>${item.motivo || ''}</td>
-                            `;
-                            bandejaAuditoriaPreciosTableBody.appendChild(row);
-                        });
-                    }
-                }
-
                 // Render Tray "En Proceso de Pago" (precedente de Odoo citado por
                 // el usuario -- ya salió de CxC, falta la conciliación bancaria)
                 if (bandejaEnProcesoDePagoTableBody) {
@@ -1281,8 +1254,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Badges de conteo en las bandejas colapsables (3 y auditoría de precios)
                 const badge3 = document.getElementById("bandeja3-count-badge");
                 if (badge3) badge3.textContent = String(tray3.length);
-                const badgeAudPrecios = document.getElementById("bandeja-auditoria-precios-count-badge");
-                if (badgeAudPrecios) badgeAudPrecios.textContent = String(tray4.length);
                 const badgeEnProceso = document.getElementById("bandeja-en-proceso-de-pago-count-badge");
                 if (badgeEnProceso) badgeEnProceso.textContent = String(trayEnProceso.length);
             }
@@ -1291,7 +1262,6 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar bandeja 1.</td></tr>';
             if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar bandeja 2.</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar bandeja 3.</td></tr>';
-            if (bandejaAuditoriaPreciosTableBody) bandejaAuditoriaPreciosTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Error al cargar auditoría de precios.</td></tr>';
         }
     }
 
@@ -4921,7 +4891,7 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadAuditoria() {
         const bodyDisc = document.getElementById("discrepancias-table-body");
         const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
-        const bodyAceptadas = document.getElementById("anomalias-aceptadas-table-body");
+        const bodyAceptadas = document.getElementById("discrepancias-aceptadas-table-body");
         const bodyConformes = document.getElementById("conformes-table-body");
         const bodyResidual = document.getElementById("pagos-residual-table-body");
         const bodyAjustesHuerfanos = document.getElementById("ajustes-cambio-huerfanos-table-body");
@@ -4957,7 +4927,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const conformes = data.operaciones_conformes || [];
                 const discrepancias = data.discrepancias || [];
                 const discFacturas = data.discrepancias_facturas_odoo || [];
-                const aceptadas = data.anomalias_aceptadas || [];
+                const aceptadas = data.discrepancias_aceptadas || [];
                 const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
                 const ajustesHuerfanos = data.ajustes_cambio_huerfanos || [];
                 const pagosImporteLocal = data.pagos_importe_local_desincronizado || [];
@@ -4972,7 +4942,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
                 if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length + pagosResidual.length);
                 const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
-                if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length + conformes.length);
+                if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length);
 
                 const montoTotDisc = discrepancias.reduce((acc, x) => acc + (x.diferencia_monto || 0), 0) + discFacturas.reduce((acc, x) => acc + (x.diferencia || 0), 0);
                 if (elKpiMontoDiscrepancia) elKpiMontoDiscrepancia.textContent = fmt(montoTotDisc);
@@ -4995,7 +4965,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong style="color:#dc2626;">${fmt(d.diferencia_monto)}</strong></td>
                                 <td>${(d.diferencia_porcentaje || 0).toFixed(1)}%</td>
                                 <td>
-                                    <button class="btn btn-secondary" onclick="aceptarAnomalia('${d.anomalia_id}', '${d.so_id}', '${d.tipo}')" style="padding:0.25rem 0.6rem; font-size:0.75rem;">Aceptar Anomalía</button>
+                                    ${btnAceptarDiscrepancia(d)}
                                 </td>
                             </tr>
                         `).join('');
@@ -5018,6 +4988,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong style="color:#0369a1;">${fmt(d.saldo_factura_odoo)}</strong></td>
                                 <td><strong style="color:#dc2626;">${fmt(d.diferencia)}</strong></td>
                                 <td><span style="font-size:0.78rem; color:#475569;">${escapeHtml(d.causa_probable)}</span></td>
+                                <td>${btnAceptarDiscrepancia(d)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5026,19 +4997,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render Anomalías Aceptadas
                 if (bodyAceptadas) {
                     if (aceptadas.length === 0) {
-                        bodyAceptadas.innerHTML = '<tr><td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td></tr>';
+                        bodyAceptadas.innerHTML = '<tr><td colspan="9" class="table-empty">No hay discrepancias aceptadas en el historial.</td></tr>';
                     } else {
                         bodyAceptadas.innerHTML = aceptadas.map(a => `
                             <tr>
-                                <td><small><code>${escapeHtml(a.anomalia_id)}</code></small></td>
-                                <td><strong>${escapeHtml(a.so_id)}</strong></td>
-                                <td>${escapeHtml(a.factura_id)}</td>
-                                <td>${escapeHtml(a.cliente_nombre)}</td>
-                                <td><span class="state-badge">${escapeHtml(a.tipo)}</span></td>
-                                <td><strong>${fmt(a.diferencia_monto)}</strong></td>
-                                <td><small>${escapeHtml(a.justificacion || 'Aprobado sin comentario')}</small></td>
-                                <td><small>${escapeHtml(a.aceptada_por)}</small></td>
-                                <td><small>${a.fecha_aceptacion ? a.fecha_aceptacion.substring(0, 10) : '-'}</small></td>
+                                <td><small><code>${escapeHtml(a.discrepancia_id || '')}</code></small></td>
+                                <td><strong>${escapeHtml(a.so_id || '')}</strong></td>
+                                <td>${escapeHtml(a.factura_id || 'N/A')}</td>
+                                <td><span class="state-badge">${escapeHtml(a.tipo_discrepancia || '')}</span></td>
+                                <td><small>${escapeHtml(a.detalle || a.detalle_aceptado || 'Sin detalle registrado')}</small></td>
+                                <td><small>${escapeHtml(a.motivo_aceptacion || '')}</small></td>
+                                <td><small><strong>${escapeHtml(a.aprobado_por || '')}</strong></small></td>
+                                <td><small>${a.timestamp_aprobacion ? a.timestamp_aprobacion.substring(0, 16).replace('T', ' ') : '-'}</small></td>
+                                <td><small><code style="font-size:0.68rem; color:#64748b;">${escapeHtml(a.huella || '')}</code></small></td>
                             </tr>
                         `).join('');
                     }
@@ -5063,6 +5034,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong>${escapeHtml(p.pago_id)}</strong></td>
                                 <td>${escapeHtml(p.numero_pago_odoo)}</td>
                                 <td><strong style="color:#dc2626;">${fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                                <td>${btnAceptarDiscrepancia(p)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5085,6 +5057,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td><strong style="color:#dc2626;">${fmtVes(a.residual_ves)}</strong></td>
                                 <td><small>${a.fecha ? String(a.fecha).substring(0, 10) : ''}</small></td>
                                 <td><small title="${escapeHtml(a.ref)}" style="color:#64748b;">${escapeHtml((a.ref || '').substring(0, 60))}${(a.ref || '').length > 60 ? '…' : ''}</small></td>
+                                <td>${btnAceptarDiscrepancia(a)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5106,6 +5079,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${fmtVes(p.importe_local_ves)}</td>
                                 <td>${fmtVes(p.monto_asiento_ves)}</td>
                                 <td><strong style="color:#dc2626;">${fmtVes(p.diferencia_ves)}</strong></td>
+                                <td>${btnAceptarDiscrepancia(p)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5124,6 +5098,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${fmt(v.monto_pago_usd)}</td>
                                 <td>${fmt(v.total_vinculado_usd)}</td>
                                 <td><strong style="color:#dc2626;">${fmt(v.exceso_usd)}</strong></td>
+                                <td>${btnAceptarDiscrepancia(v)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5143,6 +5118,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${escapeHtml(v.so_id)}</td>
                                 <td><strong style="color:#dc2626;">${(v.tasa_implicita || 0).toFixed(4)}</strong></td>
                                 <td>${(v.tasa_real || 0).toFixed(4)} <small style="color:#94a3b8;">(${(v.diferencia_pct || 0).toFixed(1)}% off)</small></td>
+                                <td>${btnAceptarDiscrepancia(v)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5164,6 +5140,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${d.cantidad_entregada}</td>
                                 <td><strong style="color:#dc2626;">${d.faltante}</strong></td>
                                 <td>${fmt(d.valor_potencial_afectado)}</td>
+                                <td>${btnAceptarDiscrepancia(d)}</td>
                             </tr>
                         `).join('');
                     }
@@ -5192,17 +5169,40 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
             if (!res.ok) {
-                if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar órdenes con alerta.</td></tr>';
+                if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar órdenes con alerta.</td></tr>';
                 return;
             }
             const data = await res.json();
-            const alertas = (data.items || []).filter(it => it.alerta);
+            // Las dos bandejas de precios se fusionaron: medían casi las
+            // mismas órdenes (39 de 41 coincidían en producción), pero
+            // cada una veía algo que la otra no. En vez de borrar una y
+            // perder esos casos, se unen y la columna Criterio dice cuál
+            // de los dos disparó.
+            let porPrecio = new Set();
+            try {
+                const resB = await fetch("/api/bandeja?t=" + Date.now(), { cache: "no-store" });
+                if (resB.ok) {
+                    const dataB = await resB.json();
+                    porPrecio = new Set((dataB.auditoria_precios || []).map(x => x.so_id));
+                }
+            } catch (e) { /* si /api/bandeja falla, queda solo el criterio de venta */ }
+
+            const porItem = new Map();
+            for (const it of (data.items || [])) {
+                if (it.alerta || porPrecio.has(it.so_id)) {
+                    const criterios = [];
+                    if (it.alerta) criterios.push("facturado &lt; teórico");
+                    if (porPrecio.has(it.so_id)) criterios.push("cubre factura, ningún teórico");
+                    porItem.set(it.so_id, Object.assign({}, it, { criterios: criterios.join(" + ") }));
+                }
+            }
+            const alertas = Array.from(porItem.values());
             if (kpiEl) kpiEl.textContent = String(alertas.length);
             const badgeAlertas = document.getElementById("auditoria-subtab-badge-alertas");
             if (badgeAlertas) badgeAlertas.textContent = String(alertas.length);
             if (!tbody) return;
             if (alertas.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ No hay órdenes facturadas por debajo de lo debido.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="table-empty" style="color:#059669">✅ No hay órdenes facturadas por debajo de lo debido.</td></tr>';
                 return;
             }
             tbody.innerHTML = alertas.map(it => `
@@ -5214,10 +5214,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>${fmt((it.total_facturado_neto || 0) + (it.diferencia || 0))}</td>
                     <td>${fmt(it.total_facturado_neto)}</td>
                     <td><strong style="color:#b91c1c;">${fmt(it.diferencia)}</strong></td>
+                    <td><small style="color:#7f1d1d;">${it.criterios || ''}</small></td>
                 </tr>
             `).join('');
         } catch (err) {
-            if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar órdenes con alerta.</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar órdenes con alerta.</td></tr>';
             console.error(err);
         }
     }
@@ -5235,23 +5236,54 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     };
 
-    window.aceptarAnomalia = async function(anomaliaId, soId, tipo) {
-        const just = prompt(`Justificación para aceptar la anomalía (${soId} - ${tipo}):`, "Aceptado por gerencia");
-        if (just === null) return;
+    // El boton de "aceptar" que va en las SIETE bandejas de discrepancias.
+    // Manda la huella que el servidor ya calculo y puso en la fila: es la
+    // unica forma de que la aceptacion tape exactamente la discrepancia
+    // que el usuario esta viendo. Ver separar_discrepancias_aceptadas.
+    window.btnAceptarDiscrepancia = function(item) {
+        if (!item || !item.discrepancia_id) return '';
+        const reabierta = item.reabierta
+            ? '<span class="state-badge" style="background:#fef3c7; color:#92400e; margin-right:0.35rem;" title="Se acepto antes, pero los montos cambiaron">reabierta</span>'
+            : '';
+        const payload = encodeURIComponent(JSON.stringify({
+            discrepancia_id: item.discrepancia_id,
+            so_id: String(item.so_id || ''),
+            factura_id: String(item.factura_id || 'N/A'),
+            tipo_discrepancia: String(item.tipo_discrepancia || ''),
+            huella: String(item.huella || ''),
+            detalle: String(item.detalle || item.causa_probable || '')
+        }));
+        return reabierta + `<button class="btn btn-secondary" onclick="aceptarDiscrepancia('${payload}')" style="padding:0.25rem 0.6rem; font-size:0.75rem;">Aceptar</button>`;
+    };
+
+    window.aceptarDiscrepancia = async function(payloadJson) {
+        const base = JSON.parse(decodeURIComponent(payloadJson));
+        const motivo = prompt(
+            `Motivo para aceptar esta discrepancia (${base.so_id} - ${base.tipo_discrepancia}):
+
+` +
+            `Sale de su bandeja y pasa al historial. Si los montos que la originaron cambian, vuelve a aparecer.`,
+            "Revisado y aceptado en auditoría");
+        if (motivo === null) return;
+        const quien = prompt("¿Quién la acepta?", "Dirección / Auditor");
+        if (quien === null) return;
         try {
-            const res = await fetch("/api/auditoria/aceptar-anomalia", {
+            const res = await fetch("/api/auditoria/aceptar-discrepancia", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ anomalia_id: anomaliaId, justificacion: just })
+                body: JSON.stringify(Object.assign({}, base, {
+                    motivo_aceptacion: motivo, aprobado_por: quien
+                }))
             });
             if (res.ok) {
-                alert("✅ Anomalía aceptada e incluida en el historial de auditoría.");
+                const data = await res.json();
+                alert("✅ " + (data.message || "Discrepancia aceptada."));
                 loadAuditoria();
             } else {
-                alert("❌ Error al aceptar la anomalía.");
+                alert("❌ Error al aceptar la discrepancia.");
             }
         } catch (err) {
-            console.error("Error aceptando anomalía:", err);
+            console.error("Error aceptando discrepancia:", err);
         }
     };
 

@@ -615,13 +615,22 @@ bandeja_auditoria = Table(
 )
 
 # --- AnomaliasAceptadas (waivers de discrepancias de facturación) ----------
-anomalias_aceptadas = Table(
-    "anomalias_aceptadas",
+discrepancias_aceptadas = Table(
+    "discrepancias_aceptadas",
     metadata,
-    Column("anomalia_id", String, primary_key=True),
+    Column("discrepancia_id", String, primary_key=True),
     Column("so_id", String, nullable=False, index=True),
     Column("factura_id", String, nullable=False, server_default=""),
-    Column("tipo_anomalia", String, nullable=False, server_default=""),
+    Column("tipo_discrepancia", String, nullable=False, server_default=""),
+    # Huella de los valores que DEFINEN la discrepancia. Aceptarla la
+    # silencia solo mientras esos valores no cambien: si cambian, el
+    # detector la vuelve a mostrar como una discrepancia nueva en vez de
+    # dejarla tapada por una aceptación vieja. Ver ``huella_discrepancia``
+    # y la migración d4f5a6b7c8e9.
+    Column("huella", String, nullable=False, server_default=""),
+    # Qué decía exactamente la discrepancia cuando se aceptó -- la
+    # trazabilidad que pidió el usuario, junto con quién la aceptó.
+    Column("detalle", Text, nullable=False, server_default=""),
     Column("motivo_aceptacion", String, nullable=False, server_default=""),
     Column("aprobado_por", String, nullable=False, server_default=""),
     Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),

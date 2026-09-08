@@ -593,15 +593,17 @@ class PostgresRepository(Repository):
             )
         return bool(result.rowcount)
 
-    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
+    def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
         with self._engine.connect() as conn:
-            rows = conn.execute(select(t.anomalias_aceptadas)).all()
+            rows = conn.execute(select(t.discrepancias_aceptadas)).all()
         return [
             {
-                "anomalia_id": r.anomalia_id,
+                "discrepancia_id": r.discrepancia_id,
                 "so_id": r.so_id,
                 "factura_id": r.factura_id,
-                "tipo_anomalia": r.tipo_anomalia,
+                "tipo_discrepancia": r.tipo_discrepancia,
+                "huella": r.huella,
+                "detalle": r.detalle,
                 "motivo_aceptacion": r.motivo_aceptacion,
                 "aprobado_por": r.aprobado_por,
                 "timestamp_aprobacion": r.timestamp_aprobacion.isoformat(),
@@ -609,25 +611,29 @@ class PostgresRepository(Repository):
             for r in rows
         ]
 
-    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
+    def append_discrepancia_aceptada(self, row: dict[str, str]) -> None:
         with self._engine.begin() as conn:
             _upsert(
                 conn,
-                t.anomalias_aceptadas,
+                t.discrepancias_aceptadas,
                 [
                     {
-                        "anomalia_id": row["anomalia_id"],
+                        "discrepancia_id": row["discrepancia_id"],
                         "so_id": row.get("so_id", ""),
                         "factura_id": row.get("factura_id", ""),
-                        "tipo_anomalia": row.get("tipo_anomalia", ""),
+                        "tipo_discrepancia": row.get("tipo_discrepancia", ""),
+                        "huella": row.get("huella", ""),
+                        "detalle": row.get("detalle", ""),
                         "motivo_aceptacion": row.get("motivo_aceptacion", ""),
                         "aprobado_por": row.get("aprobado_por", ""),
                         "timestamp_aprobacion": datetime.fromisoformat(
                             row["timestamp_aprobacion"]
-                        ),
+                        )
+                        if row.get("timestamp_aprobacion")
+                        else datetime.now(),
                     }
                 ],
-                ["anomalia_id"],
+                ["discrepancia_id"],
             )
 
     def all_auditoria(self) -> list[dict[str, Any]]:

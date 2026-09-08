@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import logging
@@ -5180,6 +5181,97 @@ def orden_devuelta_por_completo(
     if not (entregada and devuelta):
         return False
     return all(float(getattr(ln, "cantidad_entregada", 0) or 0) <= 0 for ln in lineas)
+
+
+def huella_discrepancia(tipo: str, so_id: str, valores: dict[str, Any]) -> str:
+    """Huella de los valores que DEFINEN una discrepancia.
+
+    Aceptar una discrepancia la saca de su bandeja y la manda a la de
+    aceptadas. Pero sin una huella esa aceptación la silenciaría PARA
+    SIEMPRE, aunque después cambiaran los datos que la originaron: si se
+    acepta una diferencia de 264,58 y mañana esa orden pasa a diferir en
+    3.000, la aceptación vieja la seguiría tapando. Ese es justamente el
+    "caso oculto" que el usuario no quiere (septiembre 2026).
+
+    Con la huella el detector compara: si coincide, la discrepancia sigue
+    aceptada y no reaparece; si cambió, vuelve a mostrarse como una
+    discrepancia NUEVA, con su monto nuevo, y hay que decidirla de nuevo.
+
+    Mismo patrón que ``VentasTeorico.lineas_fingerprint`` usa para saber si
+    un teórico quedó desactualizado.
+
+    Los montos se redondean a dos decimales antes de entrar en la huella:
+    sin eso, un cambio de redondeo en la última cifra reabriría una
+    discrepancia que en la práctica es la misma.
+    """
+    partes = [f"tipo={tipo}", f"so={so_id}"]
+    for clave in sorted(valores):
+        v = valores[clave]
+        if isinstance(v, int | float | Decimal):
+            v = f"{float(v):.2f}"
+        partes.append(f"{clave}={v}")
+    crudo = "|".join(partes)
+    return hashlib.sha256(crudo.encode("utf-8")).hexdigest()[:16]
+
+
+def id_discrepancia(tipo: str, item: dict[str, Any]) -> str:
+    """Identificador estable de una discrepancia dentro de su detector."""
+    ref = str(item.get("so_id") or item.get("pago_id") or item.get("factura_id") or "")
+    return f"DISC_{tipo}_{ref}"
+
+
+def _valores_de_huella(item: dict[str, Any]) -> dict[str, Any]:
+    """Los campos NUMÉRICOS de una discrepancia -- su magnitud.
+
+    Son los que definen si sigue siendo la misma: una descripción puede
+    reescribirse sin que nada cambie, pero si el monto se mueve es otra
+    discrepancia y hay que volver a decidirla.
+    """
+    return {
+        k: v
+        for k, v in item.items()
+        if isinstance(v, int | float | Decimal) and not isinstance(v, bool)
+    }
+
+
+def separar_discrepancias_aceptadas(
+    items: list[dict[str, Any]], tipo: str, aceptadas: dict[str, dict[str, str]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Divide un detector en (pendientes, aceptadas), respetando la huella.
+
+    Antes solo UNO de los siete detectores consultaba las aceptaciones: los
+    otros seis mostraban su hallazgo para siempre, sin forma de darlo por
+    revisado. El usuario lo pidió explícitamente -- "que permita aceptar
+    discrepancias, para no tener que estar revisando siempre todo de
+    nuevo".
+
+    Una aceptación vale mientras la discrepancia no cambie. Si la huella
+    guardada no coincide con la de hoy, el hallazgo vuelve a la lista de
+    pendientes con su valor nuevo: aceptar 264,58 no puede seguir tapando
+    una orden que hoy difiere en 3.000. Ver ``huella_discrepancia``.
+    """
+    pendientes: list[dict[str, Any]] = []
+    ya_aceptadas: list[dict[str, Any]] = []
+    for item in items:
+        did = id_discrepancia(tipo, item)
+        item["discrepancia_id"] = did
+        item["tipo_discrepancia"] = tipo
+        huella = huella_discrepancia(tipo, str(item.get("so_id") or ""), _valores_de_huella(item))
+        item["huella"] = huella
+        registro = aceptadas.get(did)
+        if registro is not None and registro.get("huella") == huella:
+            item["aceptada_por"] = registro.get("aprobado_por", "")
+            item["aceptada_en"] = registro.get("timestamp_aprobacion", "")
+            item["motivo_aceptacion"] = registro.get("motivo_aceptacion", "")
+            item["detalle_aceptado"] = registro.get("detalle", "")
+            ya_aceptadas.append(item)
+            continue
+        if registro is not None:
+            # Se acepto antes, pero los numeros cambiaron: reabre.
+            item["reabierta"] = True
+            item["huella_aceptada"] = registro.get("huella", "")
+        pendientes.append(item)
+    return pendientes, ya_aceptadas
 
 
 def sin_datos_teorico(
@@ -11956,8 +12048,8 @@ async def get_auditoria():
         )
 
         # Load accepted anomalies from Google Sheets
-        anomalias_aceptadas_rows = repo.all_anomalias_aceptadas()
-        aceptadas_map = {r.get("anomalia_id"): r for r in anomalias_aceptadas_rows}
+        discrepancias_aceptadas_rows = repo.all_discrepancias_aceptadas()
+        aceptadas_map = {r.get("discrepancia_id"): r for r in discrepancias_aceptadas_rows}
         lines_by_so = {}
         for r in lines_rows:
             so = r.get("so_id", "")
@@ -12333,19 +12425,19 @@ async def get_auditoria():
 
         # Separate into pending discrepancies and accepted anomalies
         discrepancias_pendientes = []
-        anomalias_aceptadas = []
+        discrepancias_aceptadas = []
 
         for item in raw_discrepancias:
             tipo_clean = item["tipo"].replace(" ", "_").upper()
-            anomalia_id = f"ANOM_{item['so_id']}_{tipo_clean}_{item['factura_id']}"
-            item["anomalia_id"] = anomalia_id
+            discrepancia_id = f"DISC_{item['so_id']}_{tipo_clean}_{item['factura_id']}"
+            item["discrepancia_id"] = discrepancia_id
 
-            if anomalia_id in aceptadas_map:
-                ac_rec = aceptadas_map[anomalia_id]
+            if discrepancia_id in aceptadas_map:
+                ac_rec = aceptadas_map[discrepancia_id]
                 item["motivo_aceptacion"] = ac_rec.get("motivo_aceptacion", "Revisado y Aceptado")
                 item["aprobado_por"] = ac_rec.get("aprobado_por", "Dirección")
                 item["timestamp_aprobacion"] = ac_rec.get("timestamp_aprobacion", "")
-                anomalias_aceptadas.append(item)
+                discrepancias_aceptadas.append(item)
             else:
                 discrepancias_pendientes.append(item)
 
@@ -12406,11 +12498,28 @@ async def get_auditoria():
             ordenes, repo.all_lineas(), repo.all_catalogo()
         )
 
+        # Los seis detectores que hasta ahora no se podian aceptar pasan por
+        # el mismo filtro: lo aceptado sale de su lista y entra al historial,
+        # y si la discrepancia cambia de magnitud vuelve sola. Ver
+        # separar_discrepancias_aceptadas.
+        for _clave, _lista, _tipo in (
+            ("sobreaplicadas", vinculaciones_sobreaplicadas, "vinculacion_sobreaplicada"),
+            ("tasa", vinculaciones_tasa_implausible, "tasa_implausible"),
+            ("devolucion", devolucion_no_reflejada, "devolucion_no_reflejada"),
+            ("residual", pagos_residual_sin_aplicar, "pago_residual_sin_aplicar"),
+            ("ajustes", ajustes_cambio_huerfanos, "ajuste_cambio_huerfano"),
+            ("importe", pagos_importe_local_desincronizado, "importe_local_desincronizado"),
+            ("saldo", discrepancias_facturas_odoo, "saldo_deudor_motor_vs_odoo"),
+        ):
+            _pend, _acep = separar_discrepancias_aceptadas(_lista, _tipo, aceptadas_map)
+            _lista[:] = _pend
+            discrepancias_aceptadas.extend(_acep)
+
         return {
             "operaciones_conformes": operaciones_conformes,
             "discrepancias": discrepancias_pendientes,
             "discrepancias_facturas_odoo": discrepancias_facturas_odoo,
-            "anomalias_aceptadas": anomalias_aceptadas,
+            "discrepancias_aceptadas": discrepancias_aceptadas,
             "venta_bruta_teorica_auditoria": venta_bruta_teorica_auditoria,
             # Ver _detectar_vinculaciones_sobreaplicadas -- Vinculaciones
             # que entre todas suman más de lo que el pago realmente vale
@@ -12444,7 +12553,7 @@ async def get_auditoria():
             "resumen_auditoria": {
                 "total_conformes": len(operaciones_conformes),
                 "total_discrepancias": len(discrepancias_pendientes),
-                "total_aceptadas": len(anomalias_aceptadas),
+                "total_aceptadas": len(discrepancias_aceptadas),
                 "monto_discrepancia_total": round(
                     sum(d["diferencia_monto"] for d in discrepancias_pendientes), 2
                 ),
@@ -14653,32 +14762,53 @@ async def get_ventas_detalle(so_id: str):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-class AceptarAnomaliaRequest(BaseModel):
-    anomalia_id: str
+class AceptarDiscrepanciaRequest(BaseModel):
+    discrepancia_id: str
     so_id: str
     factura_id: str = "N/A"
-    tipo_anomalia: str
+    tipo_discrepancia: str
     motivo_aceptacion: str = "Revisado y Aceptado en Auditoría"
     aprobado_por: str = "Dirección / Auditor"
+    # Valores que definían la discrepancia al momento de aceptarla. De acá
+    # sale la huella: si mañana cambian, la discrepancia vuelve a
+    # aparecer en vez de quedar tapada por esta aceptación. Ver
+    # ``huella_discrepancia``.
+    valores: dict[str, Any] = {}
+    # La huella que el servidor ya calculó y envió en la fila. Tiene
+    # prioridad sobre ``valores``: es la única forma de garantizar que la
+    # aceptación tape exactamente la discrepancia que el usuario vio. Si
+    # el cliente recompusiera los valores por su cuenta -- otro orden,
+    # otro redondeo, un campo de más -- la huella no coincidiría y la
+    # discrepancia reaparecería al instante, aceptada y visible a la vez.
+    huella: str = ""
+    # Texto de lo que se aceptó, para que el historial diga QUÉ se aceptó
+    # y no solo de qué tipo era.
+    detalle: str = ""
 
 
-@app.post("/api/auditoria/aceptar-anomalia")
-async def post_aceptar_anomalia(req: AceptarAnomaliaRequest):
+@app.post("/api/auditoria/aceptar-discrepancia")
+async def post_aceptar_discrepancia(req: AceptarDiscrepanciaRequest):
     try:
         repo = get_repo()
         row = {
-            "anomalia_id": req.anomalia_id,
+            "discrepancia_id": req.discrepancia_id,
             "so_id": req.so_id,
             "factura_id": req.factura_id,
-            "tipo_anomalia": req.tipo_anomalia,
+            "tipo_discrepancia": req.tipo_discrepancia,
+            "huella": req.huella
+            or huella_discrepancia(req.tipo_discrepancia, req.so_id, req.valores or {}),
+            "detalle": req.detalle,
             "motivo_aceptacion": req.motivo_aceptacion,
             "aprobado_por": req.aprobado_por,
             "timestamp_aprobacion": datetime.now().isoformat(),
         }
-        repo.append_anomalia_aceptada(row)
+        repo.append_discrepancia_aceptada(row)
         return {
             "status": "success",
-            "message": "Anomalía aceptada y movida al historial de revisiones.",
+            "message": (
+                "Discrepancia aceptada: sale de su bandeja y pasa al historial. "
+                "Si los datos que la originaron cambian, vuelve a aparecer."
+            ),
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)

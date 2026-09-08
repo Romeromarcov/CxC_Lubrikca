@@ -848,6 +848,39 @@
             </div>
         </div>
 
+<!-- EN PROCESO DE PAGO -- vive en Cobranza, no en Auditoria: son ordenes
+     cuyo pago YA esta vinculado y solo falta que Odoo lo reconcilie. Es
+     seguimiento de cobranza, no un hallazgo que auditar. -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Facturada</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-en-proceso-de-pago-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+
         <!-- PESTAÑA: VENTAS (teórico vs real, por orden) -->
         <div id="tab-ventas" class="tab-panel">
             <div class="ventas-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -943,66 +976,9 @@
         <!-- PESTAÑA 4: AUDITORÍA DE COBROS Y PRECIOS -->
         <div id="tab-auditoria" class="tab-panel">
             <div class="auditoria-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-<!-- BANDEJA DE AUDITORÍA DE PRECIOS (colapsable, consulta poco frecuente) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">Bandeja de Auditoría de Precios <span id="bandeja-auditoria-precios-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-auditoria-precios-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
 
-<!-- EN PROCESO DE PAGO (colapsable, solo visibilidad -- ya salió de CxC) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Facturada</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-en-proceso-de-pago-table-body">
-                                <tr>
-                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
+
+
 
                 <!-- KPIs Resumen de Auditoría -->
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
@@ -1015,7 +991,7 @@
                         <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
                     </div>
                     <div class="kpi-card card">
-                        <span class="kpi-label">Anomalías Aceptadas</span>
+                        <span class="kpi-label">Discrepancias Aceptadas</span>
                         <span class="kpi-value" style="color: #2563eb" id="audit-kpi-aceptadas">0</span>
                     </div>
                     <div class="kpi-card card">
@@ -1043,7 +1019,7 @@
                         Alertas de Venta <span class="subtab-badge" id="auditoria-subtab-badge-alertas">0</span>
                     </button>
                     <button type="button" class="subtab-btn" data-subtab="historico" onclick="switchAuditoriaSubtab('historico')">
-                        Histórico Conforme <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
+                        Aceptadas <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
                     </button>
                 </div>
 
@@ -1100,11 +1076,11 @@
                                         <th>Saldo Residual Factura Odoo ($)</th>
                                         <th>Diferencia ($)</th>
                                         <th>Causa Probable / Diagnóstico</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="discrepancias-facturas-table-body">
                                     <tr>
-                                        <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
+                                        <td colspan="10" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1124,11 +1100,11 @@
                                         <th>Pago ID</th>
                                         <th>N° Pago Odoo</th>
                                         <th>Residual sin Aplicar ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-residual-table-body">
                                     <tr>
-                                        <td colspan="3" class="table-empty">No hay pagos con residual sin aplicar.</td>
+                                        <td colspan="4" class="table-empty">No hay pagos con residual sin aplicar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1151,11 +1127,11 @@
                                         <th>Residual (Bs.)</th>
                                         <th>Fecha</th>
                                         <th>Referencia</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="ajustes-cambio-huerfanos-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
+                                        <td colspan="7" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1177,11 +1153,11 @@
                                         <th>Importe Local (Bs.)</th>
                                         <th>Monto en Asiento (Bs.)</th>
                                         <th>Diferencia (Bs.)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-importe-local-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay pagos con importe local desincronizado.</td>
+                                        <td colspan="6" class="table-empty">No hay pagos con importe local desincronizado.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1202,11 +1178,11 @@
                                         <th>Monto Pago ($)</th>
                                         <th>Total Vinculado ($)</th>
                                         <th>Exceso ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-sobreaplicadas-table-body">
                                     <tr>
-                                        <td colspan="4" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
+                                        <td colspan="5" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1228,11 +1204,11 @@
                                         <th>Orden (SO)</th>
                                         <th>Tasa Implícita</th>
                                         <th>Tasa Real (fecha del abono)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-tasa-implausible-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
+                                        <td colspan="6" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1255,11 +1231,11 @@
                                         <th>Cant. Entregada</th>
                                         <th>Faltante</th>
                                         <th>Valor Potencial ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="devolucion-no-reflejada-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
+                                        <td colspan="7" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1321,9 +1297,9 @@
                     <section class="auditoria-panel card" id="auditoria-ventas-alertas-panel" style="border-left: 5px solid #dc2626;">
                         <div class="panel-header" style="margin-bottom: 1rem;">
                             <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
-                                <span>⚠️</span> Órdenes con Alerta: Facturado por Debajo de lo Debido
+                                <span>⚠️</span> Facturado por Debajo de lo Debido
                             </h2>
-                            <p style="color: #7f1d1d;">Órdenes YA facturadas cuyo total facturado neto quedó por debajo de la venta neta teórica + impuestos que calcula el motor -- posible faltante de facturación o descuento indebido. Ver también la página Ventas para el histórico completo.</p>
+                            <p style="color: #7f1d1d;">Une los dos criterios que antes vivían en bandejas separadas: facturado neto por debajo del teórico del motor, y pago que cubre la factura real pero ningún teórico (sospecha de lista o precio por debajo del autorizado). Se medían casi las mismas órdenes -- 39 de 41 coincidían -- y la columna Criterio dice cuál disparó. Ver también la página Ventas para el histórico completo.</p>
                         </div>
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
@@ -1336,7 +1312,7 @@
                                         <th>Venta Neta Teórica + Imp.</th>
                                         <th>Facturado Neto</th>
                                         <th>Faltante</th>
-                                    </tr>
+                                    <th>Criterio</th></tr>
                                 </thead>
                                 <tbody id="auditoria-ventas-alertas-body">
                                     <tr><td colspan="7" class="table-empty">Cargando órdenes con alerta...</td></tr>
@@ -1350,26 +1326,16 @@
                 <div class="subtab-panel" data-subtab-panel="historico" style="display:none; flex-direction:column; gap:1.5rem;">
                     <section class="auditoria-panel card">
                         <div class="panel-header">
-                            <h2>Anomalías Aceptadas y Revisadas (Historial Aprobado)</h2>
-                            <p>Registro de discrepancias ya auditadas y aceptadas por dirección/ventas que no serán modificadas en Odoo</p>
+                            <h2>Discrepancias Aceptadas (Historial con Trazabilidad)</h2>
+                            <p>Qué se aceptó, con qué motivo, quién la aceptó y cuándo. La aceptación vale mientras los montos no cambien: si cambian, la discrepancia vuelve a su bandeja marcada como reabierta.</p>
                         </div>
 
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
-                                    <tr>
-                                        <th>ID Anomalía</th>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Tipo de Anomalía</th>
-                                        <th>Discrepancia ($)</th>
-                                        <th>Motivo de Aceptación</th>
-                                        <th>Aprobado Por</th>
-                                        <th>Fecha Revisión</th>
-                                    </tr>
+                                    <tr><th>ID</th><th>Orden</th><th>Factura</th><th>Tipo de discrepancia</th><th>Qué se aceptó</th><th>Motivo</th><th>Quién la aceptó</th><th>Cuándo</th><th>Huella</th></tr>
                                 </thead>
-                                <tbody id="anomalias-aceptadas-table-body">
+                                <tbody id="discrepancias-aceptadas-table-body">
                                     <tr>
                                         <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
                                     </tr>
@@ -1378,35 +1344,7 @@
                         </div>
                     </section>
 
-                    <section class="auditoria-panel card">
-                        <div class="panel-header">
-                            <h2>Operaciones Conformes y Conciliadas (100% Correctas)</h2>
-                            <p>Órdenes y facturas procesadas en estricta conformidad con las listas de precios y reglas del motor</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Fecha</th>
-                                        <th>Monto Original ($)</th>
-                                        <th>Dctos Aplicados ($)</th>
-                                        <th>Monto Neto Conciliado ($)</th>
-                                        <th>Estado Auditoría</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="conformes-table-body">
-                                    <tr>
-                                        <td colspan="8" class="table-empty">Cargando operaciones conformes...</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div id="conformes-pager" class="table-pager"></div>
-                    </section>
+                    
                 </div>
             </div>
         </div>
