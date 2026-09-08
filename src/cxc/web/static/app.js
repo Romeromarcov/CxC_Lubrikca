@@ -2241,7 +2241,13 @@ document.addEventListener("DOMContentLoaded", () => {
             const payload = {
                 nombre: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
                 tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
-                tipo_calculo: document.getElementById("cfg-dif-tipo-calculo")?.value || "fijo",
+                // Se DERIVA de tipo_diferencial en vez de elegirse aparte: el
+                // motor solo lee tipo_diferencial, así que un segundo
+                // selector para el mismo concepto era una trampa -- se podía
+                // poner "fijo" en una regla "equiparar_binance" y no pasaba
+                // nada. Se conserva la columna para no romper lo histórico.
+                tipo_calculo: (document.getElementById("cfg-dif-tipo-diferencial")?.value
+                    === "fijo_35_ves_usd") ? "fijo" : "variable",
                 porcentaje_fijo: parseFloat(rawPct),
                 marca: "*",
                 categoria: "*",
@@ -3617,7 +3623,6 @@ document.addEventListener("DOMContentLoaded", () => {
         setM2MChecked(diferencialForm, ".m2m-dif-lista", r.listas_aplicables);
         setFieldValue("cfg-dif-nombre", r.nombre || "Diferencial Cambiario");
         setFieldValue("cfg-dif-tipo-diferencial", r.tipo_diferencial || "fijo_35_ves_usd");
-        setFieldValue("cfg-dif-tipo-calculo", r.tipo_calculo || "fijo");
         setFieldValue("cfg-dif-porcentaje-fijo", r.porcentaje_fijo ?? 0.35);
         setFieldValue("cfg-dif-monedas", r.monedas_aplicables || "*");
         setFieldValue("cfg-dif-desde", r.vigencia_desde || "");

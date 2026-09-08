@@ -497,26 +497,16 @@ class DescuentoRecompra:
     ventana_pago_dias: int = 3
 
 
-# --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------
-@dataclass
-class DescuentoFidelizacion:
-    regla_id: str
-    nombre: str
-    marca: str = "*"
-    min_litros_acumulados: Decimal = Decimal("0")
-    porcentaje: Decimal = Decimal("0.05")
-    categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
-    unidad_medida: str = "LITROS"
-    tipo_beneficio: str = "descuento"
-    listas_aplicables: str = "*"
-    ventana_dias: int = 90
-    vigencia_desde: date = date(2026, 1, 1)
-    vigencia_hasta: date | None = None
-    activo: bool = True
-    # Fidelización depende de litros acumulados, no de pagos.
-    requiere_pago_previo: bool = False
+# --- 3.7g Fidelización -------------------------------------------------------
+# Hubo aquí un dataclass ``DescuentoFidelizacion`` que estaba MUERTO: sin
+# tabla en el esquema, sin método de repositorio y sin una sola lectura en
+# el motor. Las reglas de fidelidad reales de producción
+# (FID_SINOCO_5000L, FID_GLOBAL_2500L) viven en ``descuentos_volumen`` con
+# ``tipo_evaluacion="acumulado"``, que sí está cableado por completo.
+# Se eliminó al auditar el cableado de todas las reglas (septiembre 2026,
+# a pedido del usuario): un modelo de configuración que nadie lee invita a
+# creer que se puede configurar algo que en realidad no hace nada.
+# Ver tests/test_cableado_reglas.py.
 
 
 # --- 3.7e DescuentoProducto (configurable, promoción específica por producto) -
@@ -550,7 +540,12 @@ class DescuentoDiferencialCambiario:
     tipo_diferencial: str = (
         "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     )
-    tipo_calculo: str = "fijo"  # 'fijo' | 'variable'
+    # DERIVADO de ``tipo_diferencial``, que es el único que el motor lee.
+    # Existía como un segundo selector en Configuración para el mismo
+    # concepto, así que se podía guardar "fijo" en una regla
+    # ``equiparar_binance`` sin que pasara nada. Se quitó del formulario;
+    # la columna se conserva por lo histórico y se completa al guardar.
+    tipo_calculo: str = "fijo"  # 'fijo' | 'variable' -- derivado
     porcentaje_fijo: Decimal = Decimal("0.35")
     marca: str = "*"
     categoria: str = "*"
