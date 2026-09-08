@@ -615,6 +615,29 @@ bandeja_auditoria = Table(
 )
 
 # --- AnomaliasAceptadas (waivers de discrepancias de facturación) ----------
+# Órdenes donde el descuento que calcula el motor NO se le prometió al
+# cliente, así que no debe bajar la cuenta por cobrar ni terminar en una
+# nota de crédito.
+#
+# Decisión del usuario (septiembre 2026): el descuento se asume
+# COMPROMETIDO por defecto -- "casi siempre los vendedores dan el
+# descuento al cliente" -- y las excepciones se marcan a mano. El caso que
+# lo motivó es TERA: el motor le calcula $3.949,79 en S00010 y S00584,
+# pero "a ellos no se les dio ese descuento, pagaron completo y ya".
+#
+# Existe porque el usuario no permite que los vendedores toquen precios ni
+# descuentos en Odoo (hay desajustes históricos, intencionales o no), así
+# que el descuento vive en el motor hasta que administración emita la NC.
+descuentos_no_otorgados = Table(
+    "descuentos_no_otorgados",
+    metadata,
+    Column("so_id", String, primary_key=True),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("marcado_por", String, nullable=False, server_default=""),
+    Column("timestamp_marcado", String, nullable=False, server_default=""),
+)
+
+
 discrepancias_aceptadas = Table(
     "discrepancias_aceptadas",
     metadata,
