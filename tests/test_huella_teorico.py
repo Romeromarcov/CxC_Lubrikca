@@ -69,3 +69,21 @@ def test_la_lista_no_se_confunde_con_una_linea() -> None:
     con_lista = fingerprint_lineas([_linea("L1", producto="15")], "")
     sin_lista = fingerprint_lineas([_linea("L1", producto="")], "15")
     assert con_lista != sin_lista
+
+
+def test_la_version_del_desglose_invalida_lo_ya_calculado() -> None:
+    """Al agregar ``regla_id`` al detalle, las 387 filas de descuento en
+    producción quedaron con la columna vacía: la huella solo miraba líneas
+    y lista, así que nada invalidaba lo ya guardado y el campo nuevo no se
+    llenaba nunca. ``VERSION_DESGLOSE_MOTOR`` entra en la huella para que
+    un cambio en la FORMA del resultado dispare el recálculo."""
+    from cxc.engine import runner
+
+    original = runner.VERSION_DESGLOSE_MOTOR
+    try:
+        huella_antes = fingerprint_lineas(_LINEAS, "15")
+        runner.VERSION_DESGLOSE_MOTOR = "99"
+        assert fingerprint_lineas(_LINEAS, "15") != huella_antes
+    finally:
+        runner.VERSION_DESGLOSE_MOTOR = original
+    assert fingerprint_lineas(_LINEAS, "15") == huella_antes

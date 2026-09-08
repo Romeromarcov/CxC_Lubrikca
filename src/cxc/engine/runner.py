@@ -37,6 +37,22 @@ from .price_resolver import PriceResolver
 logger = logging.getLogger("cxc.engine")
 
 
+# Versión del DESGLOSE que produce el motor. Entra en la huella para que
+# un cambio en la FORMA del resultado dispare el recálculo de las órdenes
+# ya guardadas, aunque sus líneas y su lista no hayan cambiado.
+#
+# Sin esto, agregar un campo nuevo al detalle lo deja vacío para siempre
+# en todo lo histórico: la huella solo miraba líneas y lista, así que nada
+# invalidaba lo ya calculado. Pasó al agregar ``regla_id`` (septiembre
+# 2026, pedido del usuario para poder auditar de qué regla viene cada
+# descuento): las 387 filas de descuento en producción quedaron con la
+# columna vacía hasta forzar el recálculo por acá.
+#
+# Súbela cuando cambie QUÉ se guarda del cálculo, no cuando cambie el
+# monto -- eso ya lo cubren las líneas y la lista.
+VERSION_DESGLOSE_MOTOR = "2"
+
+
 def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
     """Huella determinista de las líneas de una orden (agosto 2026, hallazgo
 
@@ -60,6 +76,7 @@ def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str
         for ln in lineas
     )
     partes.append(f"__lista__|{str(lista_precios or '').strip()}")
+    partes.append(f"__motor__|{VERSION_DESGLOSE_MOTOR}")
     return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
 
 

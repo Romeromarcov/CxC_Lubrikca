@@ -532,6 +532,16 @@ descuento_aplicado = Table(
     Column("origen", String, nullable=False),
     Column("descripcion", String, nullable=False, server_default=""),
     Column("monto", MONEY, nullable=False),
+    # Qué regla produjo el descuento. Sin esto no se puede auditar el
+    # motor: el detalle solo decía el origen ("volumen") y con cinco
+    # reglas de volumen activas era imposible saber cuál lo dio. Lo pidió
+    # el usuario al revisar el caso TERA. Ver migración a4c2e8f10d3b.
+    Column("regla_id", String, nullable=False, server_default=""),
+    Column("porcentaje", MONEY, nullable=True),
+    Column("base", MONEY, nullable=True),
+    # JSON con el desglose cuando intervino más de una regla (volumen y
+    # producto apilan varias): por cada una, id, porcentaje y aporte.
+    Column("componentes", Text, nullable=False, server_default=""),
 )
 
 # --- 3.11 Conciliacion (computada) -------------------------------------------

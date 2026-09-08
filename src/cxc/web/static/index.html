@@ -420,7 +420,7 @@
                                     <th>Estado</th>
                                     <th>Teórico Neto ($)</th>
                                     <th>Descuento a Aplicar ($ / %)</th>
-                                </tr>
+                                <th>Detalle</th></tr>
                             </thead>
                             <tbody id="bandeja1-table-body">
                                 <tr>
@@ -2831,5 +2831,18 @@
     </footer>
 
     <script src="/static/app.js?v=20260825_2"></script>
+
+        <!-- Detalle de reglas: de qué regla viene cada peso del descuento
+             sugerido. Antes el motor solo guardaba el "origen" y con cinco
+             reglas de volumen activas no se podía auditar. -->
+        <div id="modal-detalle-reglas" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:1000; align-items:center; justify-content:center; padding:1rem;">
+            <div class="card" style="max-width:900px; width:100%; max-height:85vh; overflow:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <h3 style="margin:0;">Desglose del descuento por regla</h3>
+                    <button class="btn btn-secondary" onclick="cerrarDetalleReglas()" style="padding:0.3rem 0.7rem;">✕</button>
+                </div>
+                <div id="modal-detalle-reglas-body"></div>
+            </div>
+        </div>
 </body>
 </html>

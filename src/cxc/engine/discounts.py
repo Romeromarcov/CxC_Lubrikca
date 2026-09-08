@@ -630,6 +630,7 @@ def _evaluar_promociones_producto(
                     origen="primera_compra",
                     descripcion=f"NC obsequio conjunto ({', '.join(lista_prod)})",
                     monto=q2(nc),
+                    regla_id=getattr(best_promo, "regla_id", ""),
                 )
         else:  # "solo_uno"
             gifted_in_lines = any(
@@ -651,19 +652,25 @@ def _evaluar_promociones_producto(
                         origen="primera_compra",
                         descripcion=f"NC obsequio ({best_line.producto})",
                         monto=q2(nc),
+                        regla_id=getattr(best_promo, "regla_id", ""),
                     )
     else:
         pct_general = Decimal("0.0")
+        # Qué regla puso el porcentaje. Vacío cuando el 2% sale del
+        # fallback de primera compra, que no viene de ninguna regla
+        # configurada -- distinguirlo es justamente lo que permite auditar
+        # si un descuento lo otorgó una regla o un valor por defecto.
+        regla_pct_general = ""
         if promos_activas:
-            pcts = []
+            pcts: list[tuple[Decimal, str]] = []
             for p in promos_activas:
-                if p.tipo_beneficio == "porcentaje":
-                    pcts.append(p.valor)
-                else:
-                    pcts.append(p.descuento_fallback)
-            pct_general = max(pcts) if pcts else Decimal("0.0")
+                valor_p = p.valor if p.tipo_beneficio == "porcentaje" else p.descuento_fallback
+                pcts.append((valor_p, getattr(p, "regla_id", "")))
+            if pcts:
+                pct_general, regla_pct_general = max(pcts, key=lambda x: x[0])
             if pct_general == 0 and fallback_industrial:
                 pct_general = Decimal("0.02")
+                regla_pct_general = ""
         elif fallback_industrial:
             pct_general = Decimal("0.02")
 
@@ -674,6 +681,8 @@ def _evaluar_promociones_producto(
                     origen="primera_compra",
                     descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
                     monto=q2(nc),
+                    regla_id=regla_pct_general,
+                    porcentaje=pct_general,
                 )
         elif fallback_industrial:
             nc = (
@@ -689,6 +698,8 @@ def _evaluar_promociones_producto(
                     origen="primera_compra",
                     descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
                     monto=q2(nc),
+                    regla_id=regla_pct_general,
+                    porcentaje=pct_general,
                 )
 
     return nc, detalle_nc
@@ -876,15 +887,44 @@ def _calcular_componentes(
                         mejor is None or rc.porcentaje > mejor.porcentaje
                     ):
                         mejor = rc
+                componentes_recompra: list[dict[str, Any]] = []
                 if mejor is not None:
                     if getattr(mejor, "aplica_a", "linea") == "subtotal":
                         reglas_recompra_subtotal[mejor.regla_id] = mejor
                     else:
-                        for ln in lineas_por_regla.get(mejor.regla_id, []):
-                            recompra_monto += _precio_linea(inp, ln, lista) * mejor.porcentaje
+                        base_rec = sum(
+                            (
+                                _precio_linea(inp, ln, lista)
+                                for ln in lineas_por_regla.get(mejor.regla_id, [])
+                            ),
+                            Decimal("0"),
+                        )
+                        aporte_rec = base_rec * mejor.porcentaje
+                        recompra_monto += aporte_rec
+                        componentes_recompra.append(
+                            {
+                                "regla_id": mejor.regla_id,
+                                "descripcion": "Recompra por línea",
+                                "monto": str(q2(aporte_rec)),
+                                "porcentaje": str(mejor.porcentaje),
+                                "base": str(q2(base_rec)),
+                                "alcance": "línea",
+                            }
+                        )
 
                 for regla_subtotal in reglas_recompra_subtotal.values():
-                    recompra_monto += precio_base * regla_subtotal.porcentaje
+                    aporte_rs = precio_base * regla_subtotal.porcentaje
+                    recompra_monto += aporte_rs
+                    componentes_recompra.append(
+                        {
+                            "regla_id": regla_subtotal.regla_id,
+                            "descripcion": "Recompra sobre subtotal",
+                            "monto": str(q2(aporte_rs)),
+                            "porcentaje": str(regla_subtotal.porcentaje),
+                            "base": str(q2(precio_base)),
+                            "alcance": "subtotal de la orden",
+                        }
+                    )
 
                 if recompra_monto > 0:
                     pct_recompra = recompra_monto
@@ -892,6 +932,12 @@ def _calcular_componentes(
                         origen="recurrencia",
                         descripcion="Recompra recurrencia",
                         monto=q2(recompra_monto),
+                        componentes=componentes_recompra,
+                        regla_id=(
+                            str(componentes_recompra[0]["regla_id"])
+                            if len(componentes_recompra) == 1
+                            else ""
+                        ),
                     )
 
         # Promociones "Recurrente" (solo_primera_compra=False, ej. 12+1)
@@ -1213,9 +1259,24 @@ def _calcular_componentes(
         else:
             candidatas_linea.append(c)
 
+    # Cada regla que aporta queda registrada con su id, su porcentaje y lo
+    # que puso en monto: es el desglose que pidió el usuario para poder
+    # auditar de dónde sale el descuento (caso TERA, volumen).
+    componentes_vol: list[dict[str, Any]] = []
     for regla_subtotal, tag in reglas_vol_subtotal.values():
-        volumen_desc += precio_base * regla_subtotal.porcentaje
+        aporte = precio_base * regla_subtotal.porcentaje
+        volumen_desc += aporte
         detalles_vol.append(tag)
+        componentes_vol.append(
+            {
+                "regla_id": getattr(regla_subtotal, "regla_id", ""),
+                "descripcion": tag,
+                "monto": str(q2(aporte)),
+                "porcentaje": str(regla_subtotal.porcentaje),
+                "base": str(q2(precio_base)),
+                "alcance": "subtotal de la orden",
+            }
+        )
 
     # Reglas "línea": la MÁS ESPECÍFICA gana las líneas que le hacen match;
     # una regla más general (ej. toda "Industrial") solo cobra sobre las
@@ -1231,8 +1292,19 @@ def _calcular_componentes(
         subt_libre = sum((_precio_linea(inp, ln, lista) for ln in lineas_libres), Decimal("0"))
         if subt_libre <= 0:
             continue
-        volumen_desc += subt_libre * c["regla"].porcentaje
+        aporte_linea = subt_libre * c["regla"].porcentaje
+        volumen_desc += aporte_linea
         detalles_vol.append(c["tag"])
+        componentes_vol.append(
+            {
+                "regla_id": getattr(c["regla"], "regla_id", ""),
+                "descripcion": c["tag"],
+                "monto": str(q2(aporte_linea)),
+                "porcentaje": str(c["regla"].porcentaje),
+                "base": str(q2(subt_libre)),
+                "alcance": f"{len(lineas_libres)} línea(s)",
+            }
+        )
         lineas_reclamadas.update(ln.linea_id for ln in lineas_libres)
 
     if volumen_desc > 0:
@@ -1240,6 +1312,21 @@ def _calcular_componentes(
             origen="volumen",
             descripcion="Dcto volumen " + ", ".join(detalles_vol),
             monto=q2(volumen_desc),
+            # Con una sola regla el id va directo; con varias, el desglose
+            # queda en componentes y el id de arriba se deja vacío para no
+            # atribuirle todo el monto a una de ellas.
+            regla_id=(
+                str(componentes_vol[0]["regla_id"]) if len(componentes_vol) == 1 else ""
+            ),
+            porcentaje=(
+                Decimal(str(componentes_vol[0]["porcentaje"]))
+                if len(componentes_vol) == 1
+                else None
+            ),
+            base=(
+                Decimal(str(componentes_vol[0]["base"])) if len(componentes_vol) == 1 else None
+            ),
+            componentes=componentes_vol,
         )
         # Volumen <-> Recompra es el único par que se resuelve aquí y no por
         # el criterio general de "gana el de mayor valor": volumen anula la
@@ -1269,6 +1356,7 @@ def _calcular_componentes(
 
         reglas_producto_subtotal: dict[str, Any] = {}
         detalles_prod = []
+        componentes_prod: list[dict[str, Any]] = []
         for ln in inp.lineas:
             d_prod = descuento_producto_vigente(
                 descuentos_producto_ok,
@@ -1287,18 +1375,50 @@ def _calcular_componentes(
                     if existente is None or d_prod.porcentaje > existente.porcentaje:
                         reglas_producto_subtotal[d_prod.regla_id] = d_prod
                 else:
-                    producto_desc += _precio_linea(inp, ln, lista) * d_prod.porcentaje
+                    base_ln = _precio_linea(inp, ln, lista)
+                    aporte_ln = base_ln * d_prod.porcentaje
+                    producto_desc += aporte_ln
                     detalles_prod.append(f"{ln.producto}: {d_prod.porcentaje * 100}%")
+                    componentes_prod.append(
+                        {
+                            "regla_id": getattr(d_prod, "regla_id", ""),
+                            "descripcion": f"{ln.producto}",
+                            "monto": str(q2(aporte_ln)),
+                            "porcentaje": str(d_prod.porcentaje),
+                            "base": str(q2(base_ln)),
+                            "alcance": "línea",
+                        }
+                    )
 
         for regla_subtotal in reglas_producto_subtotal.values():
-            producto_desc += precio_base * regla_subtotal.porcentaje
+            aporte_sub = precio_base * regla_subtotal.porcentaje
+            producto_desc += aporte_sub
             detalles_prod.append(f"{regla_subtotal.regla_id}: {regla_subtotal.porcentaje * 100}%")
+            componentes_prod.append(
+                {
+                    "regla_id": regla_subtotal.regla_id,
+                    "descripcion": regla_subtotal.regla_id,
+                    "monto": str(q2(aporte_sub)),
+                    "porcentaje": str(regla_subtotal.porcentaje),
+                    "base": str(q2(precio_base)),
+                    "alcance": "subtotal de la orden",
+                }
+            )
 
         if producto_desc > 0:
             detalle_producto = DescuentoAplicado(
                 origen="producto",
                 descripcion="Dcto producto " + ", ".join(detalles_prod),
                 monto=q2(producto_desc),
+                regla_id=(
+                    str(componentes_prod[0]["regla_id"]) if len(componentes_prod) == 1 else ""
+                ),
+                porcentaje=(
+                    Decimal(str(componentes_prod[0]["porcentaje"]))
+                    if len(componentes_prod) == 1
+                    else None
+                ),
+                componentes=componentes_prod,
             )
 
     lista_usd_name = _lista_usd_activa(inp)
@@ -1405,6 +1525,7 @@ def _calcular_componentes(
                     origen="bcv_completo",
                     descripcion=desc_str,
                     monto=q2(diferencial_cambiario),
+                    regla_id=getattr(regla_max, "regla_id", "") or "",
                 )
 
     return _Componentes(
@@ -1741,6 +1862,8 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     if final_contado > 0:
         detalle.append(
             DescuentoAplicado(
+                regla_id=getattr(comp.regla_contado_dominante, "regla_id", "") or "",
+                porcentaje=getattr(comp.regla_contado_dominante, "porcentaje", None),
                 origen="contado",
                 descripcion=(
                     "contado por marca/categoría"

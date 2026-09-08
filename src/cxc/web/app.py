@@ -8081,6 +8081,22 @@ async def get_bandeja_facturacion():
                     {
                         "so_id": o.so_id,
                         "cliente_nombre": c_name,
+                        # Mismo desglose por regla que la Bandeja 2, para el
+                        # botón de detalle que pidió el usuario.
+                        "descuentos_detalle": [
+                            {
+                                "origen": d.origen,
+                                "descripcion": d.descripcion,
+                                "monto": float(d.monto),
+                                "regla_id": d.regla_id,
+                                "porcentaje": (
+                                    float(d.porcentaje) if d.porcentaje is not None else None
+                                ),
+                                "base": float(d.base) if d.base is not None else None,
+                                "componentes": d.componentes,
+                            }
+                            for d in (b.descuentos_detalle if b else [])
+                        ],
                         "wh_iva_agent": wh_agent,
                         "wh_iva_rate": wh_rate,
                         "fecha": o.fecha.isoformat()
@@ -8229,11 +8245,24 @@ async def get_bandeja_facturacion():
                                 "nc_porcentaje": round(nc_subtotal / fact_sub * 100.0, 2)
                                 if fact_sub > 0
                                 else 0.0,
+                                # De qué regla viene cada peso del descuento
+                                # sugerido. Pedido del usuario (septiembre
+                                # 2026): "colocar un botón de detalle donde
+                                # te muestre ese porcentaje que sugiere
+                                # aplicar de dcto de qué reglas viene".
                                 "descuentos_detalle": [
                                     {
                                         "origen": d.origen,
                                         "descripcion": d.descripcion,
                                         "monto": float(d.monto),
+                                        "regla_id": d.regla_id,
+                                        "porcentaje": (
+                                            float(d.porcentaje)
+                                            if d.porcentaje is not None
+                                            else None
+                                        ),
+                                        "base": float(d.base) if d.base is not None else None,
+                                        "componentes": d.componentes,
                                     }
                                     for d in detalles_b
                                 ],
