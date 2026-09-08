@@ -4900,10 +4900,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const bodyTasaImplausible = document.getElementById("vinculaciones-tasa-implausible-table-body");
         const bodyDevolucionNoReflejada = document.getElementById("devolucion-no-reflejada-table-body");
 
-        const elKpiConformes = document.getElementById("audit-kpi-conformes");
-        const elKpiDiscrepancias = document.getElementById("audit-kpi-discrepancias");
-        const elKpiAceptadas = document.getElementById("audit-kpi-aceptadas");
-        const elKpiMontoDiscrepancia = document.getElementById("audit-kpi-monto-discrepancia");
 
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
         const escapeHtml = (str) => {
@@ -4935,17 +4931,43 @@ document.addEventListener("DOMContentLoaded", () => {
                 const vinculacionesTasaImplausible = data.vinculaciones_tasa_implausible || [];
                 const devolucionNoReflejada = data.devolucion_no_reflejada_en_cantidad || [];
 
-                if (elKpiConformes) elKpiConformes.textContent = conformes.length;
-                if (elKpiDiscrepancias) elKpiDiscrepancias.textContent = discrepancias.length + discFacturas.length + pagosResidual.length;
-                if (elKpiAceptadas) elKpiAceptadas.textContent = aceptadas.length;
+                // Cada KPI mide UNA cosa y se puede abrir. El numero grande
+                // cuenta ORDENES (o pagos), no filas: la bandeja de precios
+                // emite una fila por producto, asi que 430 filas eran 223
+                // ordenes y el conteo de filas no le decia nada a nadie.
+                const setKpi = (id, valor, sub) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = valor;
+                    const elSub = document.getElementById(id + "-sub");
+                    if (elSub) elSub.textContent = sub || "";
+                };
+                const ordenesDisc = new Set(discrepancias.map(d => d.so_id)).size;
+                const montoDisc = discrepancias.reduce((a, x) => a + (x.diferencia_monto || 0), 0);
+                setKpi("audit-kpi-discrepancias", String(ordenesDisc),
+                       `${discrepancias.length} hallazgos · ${fmt(montoDisc)} en brechas de precio`);
+
+                const montoSaldos = discFacturas.reduce((a, x) => a + Math.abs(x.diferencia || 0), 0);
+                setKpi("audit-kpi-saldos", String(new Set(discFacturas.map(d => d.so_id)).size),
+                       `${fmt(montoSaldos)} de diferencia contra Odoo`);
+
+                const resUsd = pagosResidual.filter(p => (p.moneda || 'USD').toUpperCase() !== 'VES');
+                const resVes = pagosResidual.length - resUsd.length;
+                const montoResUsd = resUsd.reduce((a, x) => a + Math.abs(x.residual_sin_aplicar_usd || 0), 0);
+                setKpi("audit-kpi-residual", String(pagosResidual.length),
+                       `${fmt(montoResUsd)} en USD · ${resVes} pagos en Bs`);
+
+                const reabiertas = [].concat(discrepancias, discFacturas, pagosResidual,
+                                             vinculacionesSobreaplicadas, vinculacionesTasaImplausible,
+                                             devolucionNoReflejada, ajustesHuerfanos)
+                                     .filter(x => x && x.reabierta).length;
+                setKpi("audit-kpi-aceptadas", String(aceptadas.length),
+                       reabiertas > 0 ? `${reabiertas} reabiertas: cambiaron los montos` : "ninguna reabierta");
 
                 const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
-                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(discrepancias.length + discFacturas.length + pagosResidual.length);
+                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(ordenesDisc);
                 const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
                 if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length);
 
-                const montoTotDisc = discrepancias.reduce((acc, x) => acc + (x.diferencia_monto || 0), 0) + discFacturas.reduce((acc, x) => acc + (x.diferencia || 0), 0);
-                if (elKpiMontoDiscrepancia) elKpiMontoDiscrepancia.textContent = fmt(montoTotDisc);
 
                 // Render Discrepancias de Precios / Reglas
                 if (bodyDisc) {
@@ -5027,13 +5049,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 // cliente TERA, agosto 2026).
                 if (bodyResidual) {
                     if (pagosResidual.length === 0) {
-                        bodyResidual.innerHTML = '<tr><td colspan="3" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
+                        bodyResidual.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
                     } else {
+                        const fmtVesRes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
                         bodyResidual.innerHTML = pagosResidual.map(p => `
                             <tr>
                                 <td><strong>${escapeHtml(p.pago_id)}</strong></td>
                                 <td>${escapeHtml(p.numero_pago_odoo)}</td>
-                                <td><strong style="color:#dc2626;">${fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                                <td><strong style="color:#dc2626;">${(p.moneda || 'USD').toUpperCase() === 'VES' ? fmtVesRes(p.residual_sin_aplicar_usd) : fmt(p.residual_sin_aplicar_usd)}</strong></td>
+                                <td><span class="state-badge">${escapeHtml(p.moneda || 'USD')}</span></td>
                                 <td>${btnAceptarDiscrepancia(p)}</td>
                             </tr>
                         `).join('');
