@@ -4764,6 +4764,38 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             # Ver schema.descuentos_no_otorgados -- caso TERA.
             if o.so_id in descuentos_no_otorgados_saldos:
                 total_descuentos_monto = 0.0
+            # La cuenta por cobrar NACE CON LA ENTREGA. Criterio del usuario
+            # (septiembre 2026): "la orden, si no ha sido entregada no es
+            # susceptible de cobro". Este saldo es el que consume el FIFO,
+            # así que si no se aplica acá el reparto puede asignarle un pago
+            # a mercancía que nunca salió del depósito.
+            #
+            # La excepción que él mismo señaló se respeta con ``abono_bcv``:
+            # "puede pasar el caso de que se registra primero el pago y
+            # luego la entrega o la misma orden". Si ya entró dinero, la
+            # orden sigue contando.
+            #
+            # Ojo con el dato: unas líneas más arriba, ``cantidad_entregada``
+            # vacía cae a ``cantidad`` (el pedido). Ese respaldo es
+            # deliberado para el CÁLCULO del monto, pero no sirve para
+            # responder "¿se entregó algo?", así que acá se mira el campo
+            # crudo y un vacío cuenta como cero.
+            # Y la guarda solo aplica si REALMENTE sabemos qué se entregó.
+            # Sin líneas cargadas no hay dato, y "no sé" no es "no se
+            # entregó": tratar la ausencia como cero dejaba en cero el saldo
+            # de cualquier orden cuyas líneas no se hubieran leído todavía,
+            # y el FIFO se quedaba sin nada que repartir (lo detectaron los
+            # e2e 29 y 46, que arman órdenes sin ese campo).
+            entregado_crudo = sum(
+                float(ln.get("cantidad_entregada") or 0) for ln in (order_lines or [])
+            )
+            hay_dato_de_entrega = bool(order_lines) and any(
+                ln.get("cantidad_entregada") not in (None, "", "None") for ln in order_lines
+            )
+            if hay_dato_de_entrega and entregado_crudo <= 0.005 and abono_bcv <= 0.005:
+                saldo_deudor_bcv = 0.0
+                saldo_deudor_lista_usd = 0.0
+
             descuentos_motor_con_iva = total_descuentos_monto * (1 + float(config.engine.iva_rate))
             saldo_con_descuento_bcv = max(
                 0.0, saldo_deudor_bcv - descuentos_motor_con_iva - ncs_odoo_monto_usd
@@ -5597,6 +5629,12 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
 
         for item in ventas_data["items"]:
             if item.get("sale_de_cxc"):
+                continue
+            # La cuenta por cobrar nace con la entrega: una orden tomada y
+            # no despachada no es susceptible de cobro. Ver
+            # "cobrable_por_entrega" en get_ventas -- ya contempla la
+            # excepción del pago registrado antes de la entrega.
+            if not item.get("cobrable_por_entrega", True):
                 continue
 
             desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
@@ -13514,9 +13552,12 @@ def _get_ventas_sync(
             if o.tiene_devolucion:
                 revisar_motivos.append("Devolución registrada (total o parcial)")
             lineas_o = lineas_por_so.get(o.so_id, [])
+            cant_entregada_orden = sum(
+                float(ln.cantidad_entregada or 0) for ln in lineas_o
+            )
             if lineas_o:
                 cant_pedida = sum(float(ln.cantidad) for ln in lineas_o)
-                cant_entregada = sum(float(ln.cantidad_entregada) for ln in lineas_o)
+                cant_entregada = cant_entregada_orden
                 if cant_entregada > cant_pedida + 0.005:
                     revisar_motivos.append(
                         f"Entrega de más ({cant_entregada:.2f} entregado "
@@ -14351,6 +14392,35 @@ def _get_ventas_sync(
                     "saldo_pendiente_cxc": saldo_pendiente_cxc,
                     # Saldo a favor del cliente -- la empresa le debe. Ver
                     # el cálculo más arriba (caso S00372).
+                    # La cuenta por cobrar NACE CON LA ENTREGA. Criterio del
+                    # usuario (septiembre 2026): "la orden, si no ha sido
+                    # entregada no es susceptible de cobro". No se le puede
+                    # cobrar a un cliente mercancía que no recibió.
+                    #
+                    # La excepción que él mismo señaló -- "puede pasar el
+                    # caso de que se registra primero el pago y luego la
+                    # entrega o la misma orden, pero son muy contadas
+                    # excepciones" -- se respeta: si la orden YA tiene
+                    # dinero aplicado, sigue siendo visible en cobranza
+                    # aunque no se haya despachado.
+                    #
+                    # Medido contra producción: de 941 órdenes, 161 no
+                    # tienen nada entregado y solo 6 llegaban a Ventas; de
+                    # esas, 4 sumaban $6.542,45 a la cartera sin estar
+                    # facturadas ni tener un pago. Las otras 2 (S00372 y
+                    # S00161) tienen la cantidad en cero por una DEVOLUCIÓN,
+                    # no por falta de despacho, y ya habían salido de CxC.
+                    # Solo se declara NO cobrable cuando de verdad sabemos
+                    # que no se entregó nada. Sin líneas cargadas no hay
+                    # dato, y "no sé" no es "no se entregó" -- tratar la
+                    # ausencia como cero sacaba de la cartera órdenes cuyas
+                    # líneas todavía no se habían leído.
+                    "cobrable_por_entrega": bool(
+                        not lineas_o
+                        or cant_entregada_orden > 0.005
+                        or val_ref_nacimiento > _EPS_PAGO
+                    ),
+                    "unidades_entregadas": round(cant_entregada_orden, 2),
                     "saldo_a_favor": saldo_a_favor,
                     "saldo_a_favor_firme": saldo_a_favor_firme,
                     "saldo_a_favor_requiere_nc": saldo_a_favor_requiere_nc,
