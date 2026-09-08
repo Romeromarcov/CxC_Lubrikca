@@ -1446,7 +1446,11 @@ def test_diferencial_regla2_equiparar_sin_exceder_tope() -> None:
     assert res.requiere_revision is True
     assert res.total_descuentos == Decimal("22.11")
     assert res.total_motor == Decimal("36.35")
-    assert any("Equiparación" in d.descripcion for d in res.descuentos_detalle)
+    # El texto dice "Diferencial Cambiario (tope X%, hueco hasta lo
+    # pagado)" desde que las dos ramas se unificaron en una sola regla
+    # (septiembre 2026). Los montos de arriba son los mismos que antes de
+    # unificar, que es lo que importa.
+    assert any("Diferencial Cambiario" in d.descripcion for d in res.descuentos_detalle)
 
 
 def test_diferencial_regla2_equiparar_topada_al_diferencial_maximo() -> None:

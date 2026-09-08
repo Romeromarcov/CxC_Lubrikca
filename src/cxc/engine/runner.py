@@ -50,7 +50,7 @@ logger = logging.getLogger("cxc.engine")
 #
 # Súbela cuando cambie QUÉ se guarda del cálculo, no cuando cambie el
 # monto -- eso ya lo cubren las líneas y la lista.
-VERSION_DESGLOSE_MOTOR = "5"
+VERSION_DESGLOSE_MOTOR = "6"
 
 
 def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
