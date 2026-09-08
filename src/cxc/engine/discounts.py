@@ -669,8 +669,21 @@ def _evaluar_promociones_producto(
             if pcts:
                 pct_general, regla_pct_general = max(pcts, key=lambda x: x[0])
             if pct_general == 0 and fallback_industrial:
+                # El 2% NO es un valor inventado: es el ``descuento_fallback``
+                # que lleva la propia regla de primera compra, y el usuario
+                # confirmó (septiembre 2026) que es "el único fallback de 2%
+                # autorizado/registrado". Así que se atribuye a esa regla en
+                # vez de reportarse como "sin regla" -- si no, el desglose
+                # haría parecer que el motor regala un 2% que nadie configuró.
                 pct_general = Decimal("0.02")
-                regla_pct_general = ""
+                regla_pct_general = next(
+                    (
+                        getattr(p, "regla_id", "")
+                        for p in promos_activas
+                        if getattr(p, "descuento_fallback", None) == Decimal("0.02")
+                    ),
+                    getattr(promos_activas[0], "regla_id", "") if promos_activas else "",
+                )
         elif fallback_industrial:
             pct_general = Decimal("0.02")
 
