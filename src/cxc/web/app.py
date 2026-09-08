@@ -13891,53 +13891,33 @@ def _get_ventas_sync(
                 subtotal_pagado_incl_pendiente=subtotal_pagado_incl_pendiente,
             )
 
-            # El remanente se mide contra el saldo neto con el que quedo
-            # PAGADA la orden, no contra el bruto facturado. Regla del
-            # usuario (septiembre 2026), con su propio ejemplo: orden de
-            # $100, descuento del 15%, debio pagar $85 y pago $90 -- se le
-            # emite la NC por $15 (eso es el descuento, va por su canal) y
-            # los $5 quedan a favor para su siguiente compra.
+            # El remanente se mide contra LO QUE EL CLIENTE DEBIO PAGAR:
+            # la factura neta menos todo el descuento que le corresponde.
+            # Regla del usuario (septiembre 2026), con su ejemplo: orden de
+            # $100, descuento del 15%, debio pagar $85 y pago $90 -- la NC
+            # por $15 va por su canal y los $5 quedan a favor.
             #
-            # No hay doble conteo: la NC BAJA la factura a $85, asi que
-            # medir el remanente contra $85 cuenta ese descuento una sola
-            # vez. Comparar contra el bruto ($100) era lo que lo tapaba:
-            # una orden que pago $50,00 contra un teorico de $48,59
-            # reportaba saldo a favor $0,00 en vez de $1,41.
+            # NO se compara contra el teorico de la lista USD. Ese fue un
+            # error mio y costo caro: para una orden facturada en bolivares
+            # el teorico USD esta estructuralmente ~35% por debajo (la
+            # brecha entre las dos listas), asi que producia credito de la
+            # nada. Medido contra produccion: de $55.067,76 que reportaba
+            # asi, $33.422,61 (61%) excedian lo que el descuento de esa
+            # misma orden podia justificar. El peor caso, S00458, mostraba
+            # $4.524,15 a favor con un descuento del 1% sobre una factura
+            # de $21.142,96 -- el descuento no daba para mas de $159.
             #
-            # Medido contra produccion: 331 ordenes tienen excedente sobre
-            # su propia referencia por $49.912,97, de los cuales $5.432,14
-            # ya los explica el descuento calculado y $16.214,77 son de
-            # ordenes con NC todavia pendiente en Bandeja 2 (ahi el credito
-            # se hace firme recien cuando se emita la NC). Quedan $11.408,52
-            # en 134 ordenes que no figuraban en ninguna bandeja. La mayoria
-            # es chica -- 80 de 245 casos son de $10 o menos, mediana
-            # $20,15 -- que es el redondeo y los descuentos que describio el
-            # usuario, pero hay cola larga (Grano Agregado $2.834,40).
+            # La brecha entre dos listas de precios no es plata del cliente.
             base_saldo_favor = target_factura if tiene_factura else target_orden
-            # El teorico solo sirve de referencia si la orden EFECTIVAMENTE
-            # salio de CxC. Una orden que cubre su teorico USD pero sigue
-            # debiendo por su referencia de nacimiento no tiene nada a
-            # favor: todavia debe. Sin esta guarda el credito subia a
-            # $55.067,76 contra los $49.912,97 realmente medidos, porque
-            # acreditaba ordenes que no habian salido.
-            candidatos_ref = [base_saldo_favor]
-            if clasificacion_cxc.sale_de_cxc:
-                candidatos_ref += [
-                    v
-                    for v in (
-                        usd_neta_teorica_iva if teorico_usd_pagado_confirmado else None,
-                        ves_neta_teorica_iva if teorico_bs_pagado_confirmado else None,
-                    )
-                    if v is not None and v > 0.01
-                ]
-            referencia_salida = min(v for v in candidatos_ref if v > 0.01) if any(
-                v > 0.01 for v in candidatos_ref
-            ) else base_saldo_favor
-            saldo_a_favor = round(max(0.0, val_ref_nacimiento - referencia_salida), 2)
-            # Parte del credito que todavia depende de que se emita la NC:
-            # mientras la nota no se corte, la factura sigue en bruto y ese
-            # tramo no es plata que el cliente pueda usar aun. Se expone
-            # aparte para no prometer un credito que todavia no existe.
+            referencia_debio_pagar = max(
+                0.0, base_saldo_favor - max(0.0, descuento_pendiente_aplicar)
+            )
+            saldo_a_favor = round(
+                max(0.0, val_ref_nacimiento - referencia_debio_pagar), 2
+            )
+            # El tramo que todavia depende de que administracion emita la
+            # nota: hasta que la NC no baje la factura, ese credito no
+            # existe en los libros. Se expone aparte para no prometerlo.
             saldo_a_favor_requiere_nc = round(
                 min(saldo_a_favor, max(0.0, descuento_pendiente_aplicar)), 2
             )
