@@ -391,7 +391,12 @@ class DescuentoProntoPago:
     ventana_pago_dias: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"
-    listas_aplicables: str = "*"  # "4", "5", "*"
+    listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""  # "4", "5", "*"
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -426,6 +431,11 @@ class DescuentoVolumen:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     activo: bool = True
     # Descuento por volumen depende de la cantidad de la orden, no de pagos.
     requiere_pago_previo: bool = False
@@ -450,6 +460,11 @@ class PromocionPrimeraCompra:
     categoria: str = "CAJA"
     unidad_medida: str = "CAJAS"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     solo_primera_compra: bool = (
         False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
     )
@@ -478,6 +493,11 @@ class DescuentoRecompra:
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.03")
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -523,6 +543,11 @@ class DescuentoProducto:
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -553,6 +578,11 @@ class DescuentoDiferencialCambiario:
     tipo_beneficio: str = "descuento"
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True

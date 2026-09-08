@@ -2084,6 +2084,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 marca: marcas,
                 categoria: cats,
                 listas_aplicables: listas,
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-rec-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-rec-monedas-excluidas")?.value || "",
                 porcentaje: parseFloat(rawPct),
                 // "unidades", no "cajas": el desplegable de al lado elige
                 // Unidades / Litros / USD, y ahora admite decimales.
@@ -2200,6 +2203,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 porcentaje: parseFloat(rawPct),
                 monedas_aplicables: document.getElementById("cfg-prod-monedas")?.value || "*",
                 listas_aplicables: listas,
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-prod-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-prod-monedas-excluidas")?.value || "",
                 vigencia_desde: document.getElementById("cfg-prod-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
                 activo: true,
@@ -2253,6 +2259,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 categoria: "*",
                 monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
                 listas_aplicables: listas,
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-dif-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-dif-monedas-excluidas")?.value || "",
                 unidad_medida: "USD",
                 vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
                 vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
@@ -3706,6 +3715,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 categorias_aplica: cats,
                 marca: marcas,
                 listas_aplicables: listas,
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-promo-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-promo-monedas-excluidas")?.value || "",
                 unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
                 vigencia_desde: cfgPromoDesde.value,
                 vigencia_hasta: cfgPromoHasta.value || null,
@@ -3835,6 +3847,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 marca: marcas,
                 categoria: cats,
                 listas_aplicables: listas,
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-vol-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-vol-monedas-excluidas")?.value || "",
+                // Prohibicion explicita: gana sobre listas_aplicables.
+                listas_excluidas: document.getElementById("cfg-vol-listas-excluidas")?.value || "",
+                monedas_excluidas: document.getElementById("cfg-vol-monedas-excluidas")?.value || "",
                 litros_minimo: minQty,
                 min_unidades: minQty,
                 max_unidades: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),

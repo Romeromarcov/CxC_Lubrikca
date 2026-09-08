@@ -1656,6 +1656,21 @@
                                         <label><input type="checkbox" class="m2m-rec-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-rec-lista" value="*"> Todas (*)</label>
                                     </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-rec-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-rec-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1795,6 +1810,21 @@
                                         <label><input type="checkbox" class="m2m-pp-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-pp-lista" value="*"> Todas (*)</label>
                                     </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-pp-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-pp-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1932,6 +1962,21 @@
                                         <label><input type="checkbox" class="m2m-vol-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-vol-lista" value="*"> Todas (*)</label>
                                     </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-vol-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-vol-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2066,6 +2111,21 @@
                                         <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-promo-lista" value="*"> Todas (*)</label>
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-promo-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-promo-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
                                     </div>
                                 </div>
                             </div>
@@ -2224,6 +2284,21 @@
                                         <label><input type="checkbox" class="m2m-prod-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-prod-lista" value="*"> Todas (*)</label>
                                     </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-prod-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-prod-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2341,6 +2416,21 @@
                                         <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
                                         <label><input type="checkbox" class="m2m-dif-lista" value="*"> Todas (*)</label>
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.6rem">
+                                        <label>Nunca aplicar a <small style="font-weight:400;opacity:.75">(prohibición explícita: gana sobre lo de arriba)</small></label>
+                                        <select id="cfg-dif-listas-excluidas">
+                                            <option value="">— no excluir ninguna —</option>
+                                            <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                            <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                        </select>
+                                        <select id="cfg-dif-monedas-excluidas" style="margin-top:0.4rem">
+                                            <option value="">— no excluir ninguna moneda —</option>
+                                            <option value="USD">Nunca si el pago fue en USD</option>
+                                            <option value="VES">Nunca si el pago fue en VES</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:none">
                                     </div>
                                 </div>
                             </div>
