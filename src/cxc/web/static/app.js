@@ -1082,7 +1082,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render Tray 1
                 if (bandeja1TableBody) {
                     if (tray1.length === 0) {
-                        bandeja1TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay órdenes pendientes por facturar.</td></tr>';
+                        bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes pendientes por facturar.</td></tr>';
                     } else {
                         bandeja1TableBody.innerHTML = "";
                         tray1.forEach(item => {
@@ -1139,6 +1139,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${estadoHtml}</td>
                                 <td>${teoricoHtml}</td>
                                 <td><strong style="color:#d97706">${descText}</strong></td>
+                                <td>${btnDetalleReglas(item)}</td>
                             `;
                             bandeja1TableBody.appendChild(row);
                         });
@@ -1188,7 +1189,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${estado2}</td>
                                 <td>${teorico2}</td>
                                 <td>${nc2}</td>
-                                <td>${btnDescuentoNoOtorgado(item, 'loadBandeja')}</td>
+                                <td>${btnDetalleReglas(item)} ${btnDescuentoNoOtorgado(item, 'loadBandeja')}</td>
                             `;
                             bandeja2TableBody.appendChild(row);
                         });
@@ -5277,6 +5278,80 @@ document.addEventListener("DOMContentLoaded", () => {
     // en producción): en Ventas están las 152 órdenes sin pagar cuyo
     // descuento infla la cuenta por cobrar ($14.675,59), y en la Bandeja 2
     // las 216 ya pagadas que esperan la nota de crédito.
+    // ── Detalle de reglas: de dónde viene el descuento sugerido ───────────
+    // Pedido del usuario (septiembre 2026): "me gustaría ver en el detalle
+    // de la orden cómo cada regla se aplica en monto y en %". Antes el
+    // motor no registraba QUÉ regla producía cada descuento -- solo el
+    // origen ("volumen") -- y con cinco reglas de volumen activas era
+    // imposible auditar de dónde salía el monto. Ahora cada componente
+    // trae su regla_id, su porcentaje y su base.
+    window.verDetalleReglas = function(soId, detalleJson) {
+        let detalle = [];
+        try { detalle = JSON.parse(decodeURIComponent(detalleJson)) || []; } catch (e) { detalle = []; }
+        const fmt2 = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
+        const pct = (v) => (v === null || v === undefined) ? '—' : (v * 100).toFixed(2) + '%';
+        const esc = (t) => String(t === null || t === undefined ? '' : t)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        let filas = '';
+        let total = 0;
+        for (const d of detalle) {
+            total += (d.monto || 0);
+            const comps = (d.componentes && d.componentes.length) ? d.componentes : null;
+            if (comps) {
+                // Un descuento que suma varias reglas: se abre una fila por
+                // regla, que es lo que permite auditarlo.
+                filas += `<tr style="background:#f8fafc;"><td colspan="5"><strong>${esc(d.origen)}</strong> — ${esc(d.descripcion)} · total <strong>${fmt2(d.monto)}</strong></td></tr>`;
+                for (const c of comps) {
+                    filas += `<tr>
+                        <td style="padding-left:1.5rem;">${esc(d.origen)}</td>
+                        <td><code>${esc(c.regla_id) || '<em style="opacity:.6">sin regla</em>'}</code></td>
+                        <td>${esc(c.descripcion)}${c.alcance ? ` <small style="opacity:.7">(${esc(c.alcance)})</small>` : ''}</td>
+                        <td style="text-align:right">${pct(c.porcentaje !== undefined && c.porcentaje !== null ? Number(c.porcentaje) : null)}</td>
+                        <td style="text-align:right"><strong>${fmt2(Number(c.monto))}</strong>${c.base ? `<div style="font-size:.7rem;opacity:.7">sobre ${fmt2(Number(c.base))}</div>` : ''}</td>
+                    </tr>`;
+                }
+            } else {
+                filas += `<tr>
+                    <td>${esc(d.origen)}</td>
+                    <td><code>${esc(d.regla_id) || '<em style="opacity:.6">sin regla</em>'}</code></td>
+                    <td>${esc(d.descripcion)}</td>
+                    <td style="text-align:right">${pct(d.porcentaje)}</td>
+                    <td style="text-align:right"><strong>${fmt2(d.monto)}</strong>${d.base ? `<div style="font-size:.7rem;opacity:.7">sobre ${fmt2(d.base)}</div>` : ''}</td>
+                </tr>`;
+            }
+        }
+        if (!filas) filas = '<tr><td colspan="5" class="table-empty">Esta orden no tiene descuentos calculados por el motor.</td></tr>';
+
+        const cont = document.getElementById("modal-detalle-reglas-body");
+        if (cont) {
+            cont.innerHTML = `
+                <p style="margin:0 0 0.75rem;color:#475569;font-size:0.85rem;">
+                    Orden <strong>${esc(soId)}</strong> — de dónde sale el descuento que el motor sugiere.
+                    Una fila por regla: si dice <em>sin regla</em>, el monto no viene de ninguna regla configurada.
+                </p>
+                <div class="table-wrapper"><table class="cxc-table">
+                    <thead><tr><th>Origen</th><th>Regla</th><th>Detalle</th><th style="text-align:right">%</th><th style="text-align:right">Monto</th></tr></thead>
+                    <tbody>${filas}</tbody>
+                    <tfoot><tr><td colspan="4" style="text-align:right"><strong>Total sugerido</strong></td><td style="text-align:right"><strong>${fmt2(total)}</strong></td></tr></tfoot>
+                </table></div>`;
+        }
+        const modal = document.getElementById("modal-detalle-reglas");
+        if (modal) modal.style.display = "flex";
+    };
+
+    window.cerrarDetalleReglas = function() {
+        const modal = document.getElementById("modal-detalle-reglas");
+        if (modal) modal.style.display = "none";
+    };
+
+    window.btnDetalleReglas = function(item) {
+        const det = item && item.descuentos_detalle ? item.descuentos_detalle : [];
+        if (!det.length) return '<span style="opacity:.5;font-size:.75rem">sin reglas</span>';
+        const payload = encodeURIComponent(JSON.stringify(det));
+        return `<button class="btn btn-secondary" onclick="verDetalleReglas('${item.so_id}', '${payload}')" style="padding:0.25rem 0.6rem;font-size:0.75rem;" title="Ver de qué reglas viene el descuento sugerido">Detalle</button>`;
+    };
+
     window.btnDescuentoNoOtorgado = function(item, recargar) {
         if (!item || !item.so_id) return '';
         if (item.descuento_no_otorgado) {

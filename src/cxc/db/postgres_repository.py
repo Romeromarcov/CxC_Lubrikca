@@ -15,6 +15,7 @@ nativa -- no hace falta ningún truco adicional.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -1054,6 +1055,14 @@ class PostgresRepository(Repository):
                                 "origen": d.origen,
                                 "descripcion": d.descripcion,
                                 "monto": d.monto,
+                                "regla_id": d.regla_id,
+                                "porcentaje": d.porcentaje,
+                                "base": d.base,
+                                "componentes": (
+                                    json.dumps(d.componentes, default=str)
+                                    if d.componentes
+                                    else ""
+                                ),
                             }
                             for d in b.descuentos_detalle
                         ],
@@ -1699,7 +1708,15 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
 
 
 def _row_to_descuento_aplicado(r: Any) -> DescuentoAplicado:
-    return DescuentoAplicado(origen=r.origen, descripcion=r.descripcion, monto=r.monto)
+    return DescuentoAplicado(
+        origen=r.origen,
+        descripcion=r.descripcion,
+        monto=r.monto,
+        regla_id=getattr(r, "regla_id", "") or "",
+        porcentaje=getattr(r, "porcentaje", None),
+        base=getattr(r, "base", None),
+        componentes=json.loads(getattr(r, "componentes", "") or "[]"),
+    )
 
 
 def _row_to_ventas_teorico(r: Any) -> VentasTeorico:

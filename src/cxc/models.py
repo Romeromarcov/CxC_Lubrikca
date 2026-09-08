@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 
 class Moneda(StrEnum):
@@ -717,11 +718,32 @@ class VentasTeorico:
 
 @dataclass
 class DescuentoAplicado:
-    """Un componente del desglose de descuentos (apilamiento aditivo)."""
+    """Un componente del desglose de descuentos (apilamiento aditivo).
+
+    ``regla_id`` existe porque sin él no se puede auditar el motor. Lo pidió
+    el usuario (septiembre 2026) al revisar por qué TERA recibía un
+    descuento de volumen que nadie le otorgó: el detalle solo guardaba el
+    ``origen`` ("volumen"), y con cinco reglas de volumen activas era
+    imposible decir cuál de ellas lo produjo sin recalcular a mano.
+
+    ``componentes`` cubre el caso de un descuento que suma VARIAS reglas
+    -- volumen y producto apilan una regla por línea o por subtotal -- y
+    lleva, por cada una, su id, su porcentaje y lo que aportó en monto.
+    """
 
     origen: str  # 'recurrencia' | 'contado' | 'bcv_completo'
     descripcion: str
     monto: Decimal
+    # La regla que lo produjo. Vacío solo cuando el descuento no nace de
+    # una regla configurada (ej. el 2% de primera compra por defecto).
+    regla_id: str = ""
+    # Porcentaje que aplicó esa regla, como fracción (0.1204 = 12,04 %).
+    porcentaje: Decimal | None = None
+    # Monto sobre el que se calculó el porcentaje.
+    base: Decimal | None = None
+    # Desglose cuando intervino más de una regla: cada entrada trae
+    # regla_id, descripcion, monto, porcentaje y base.
+    componentes: list[dict[str, Any]] = field(default_factory=list)
 
 
 # --- 3.11 Conciliacion (computada por la pieza 5) ---------------------------
