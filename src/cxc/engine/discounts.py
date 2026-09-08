@@ -1002,8 +1002,36 @@ def _calcular_componentes(
         # y el caso extremo (S00952) tenía 1.624,41 en dólares contra
         # 175,83 en bolívares. Solo una orden pagada ÍNTEGRAMENTE en
         # bolívares se evalúa como VES.
+        # Y lo que decide no es la moneda del BILLETE sino el CAMINO por el
+        # que se está evaluando la orden. El usuario lo definió así
+        # (septiembre 2026): "siempre hay dos caminos posibles, ambos se
+        # fijan en USD. uno es pagando en VES a la tasa del BCV y el otro es
+        # pagando en USD en cualquiera de sus formas o en VES a la tasa
+        # Binance".
+        #
+        # ``pura_bcv`` ES ese camino: True cuando se evalúa la lista VES
+        # contra la tasa BCV, False cuando se evalúa la lista USD contra
+        # Binance. Un pago en bolívares valorado a Binance pertenece al
+        # camino USD -- le rinde menos al cliente, que es justamente el
+        # resguardo que el usuario pidió desde el principio: una orden no
+        # puede salir por el teórico USD sin que el pago haya sido en USD o
+        # su equivalente Binance.
+        #
+        # Antes esto miraba solo la moneda de los abonos, así que una orden
+        # pagada íntegramente en bolívares quedaba marcada "VES" en los DOS
+        # caminos y no podía matchear ninguna regla con
+        # monedas_aplicables=USD, ni siquiera evaluándose contra la lista
+        # USD a tasa Binance.
+        #
+        # Alcance real, medido DESPUÉS de escribir el arreglo: de las 216
+        # órdenes pagadas solo en bolívares, las 216 van por ruta BCV y
+        # ninguna por Binance, así que hoy esto no mueve un peso -- cierra
+        # un hueco latente. (Yo le había reportado al usuario que esas 216
+        # perdían el descuento; era falso: en ruta BCV la moneda "VES" es
+        # la correcta y las reglas VES sí les aplican -- 14 de ellas tienen
+        # contado, 12 por PP_AE86B6D6 al 20 % y 2 por PP_DF33F50E al 15 %.)
         moneda_pago = "USD"
-        if inp.abonos:
+        if pura_bcv and inp.abonos:
             monedas_usadas = {
                 pago.moneda.value
                 for _, pago in inp.abonos
