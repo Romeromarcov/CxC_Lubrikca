@@ -283,19 +283,19 @@ def test_exclusiones_guardar_y_actualizar_par_invertido(repo: Repository) -> Non
 # --- Anomalías aceptadas ------------------------------------------------------
 
 
-def test_anomalias_aceptadas_append_y_lectura(repo: Repository) -> None:
-    assert repo.all_anomalias_aceptadas() == []
-    repo.append_anomalia_aceptada(
+def test_discrepancias_aceptadas_append_y_lectura(repo: Repository) -> None:
+    assert repo.all_discrepancias_aceptadas() == []
+    repo.append_discrepancia_aceptada(
         {
-            "anomalia_id": "ANOM_SO1_DESCUENTO_ORDEN_F1",
+            "discrepancia_id": "ANOM_SO1_DESCUENTO_ORDEN_F1",
             "motivo_aceptacion": "Revisado y aceptado",
             "aprobado_por": "Dirección",
             "timestamp_aprobacion": "2026-01-01T00:00:00",
         }
     )
-    rows = repo.all_anomalias_aceptadas()
+    rows = repo.all_discrepancias_aceptadas()
     assert len(rows) == 1
-    assert rows[0]["anomalia_id"] == "ANOM_SO1_DESCUENTO_ORDEN_F1"
+    assert rows[0]["discrepancia_id"] == "ANOM_SO1_DESCUENTO_ORDEN_F1"
 
 
 # --- Tasas históricas de auditoría -------------------------------------------
