@@ -1064,7 +1064,7 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadBandeja() {
         try {
             if (bandeja1TableBody) bandeja1TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por facturar...</td></tr>';
-            if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
+            if (bandeja2TableBody) bandeja2TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando órdenes pendientes por nota de crédito...</td></tr>';
             if (bandeja3TableBody) bandeja3TableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando facturas pendientes por IVA...</td></tr>';
             if (bandejaEnProcesoDePagoTableBody) bandejaEnProcesoDePagoTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td></tr>';
 
@@ -1148,7 +1148,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render Tray 2
                 if (bandeja2TableBody) {
                     if (tray2.length === 0) {
-                        bandeja2TableBody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay órdenes pendientes por Nota de Crédito.</td></tr>';
+                        bandeja2TableBody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay órdenes pendientes por Nota de Crédito.</td></tr>';
                     } else {
                         bandeja2TableBody.innerHTML = "";
                         tray2.forEach(item => {
@@ -1188,6 +1188,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${estado2}</td>
                                 <td>${teorico2}</td>
                                 <td>${nc2}</td>
+                                <td>${btnDescuentoNoOtorgado(item, 'loadBandeja')}</td>
                             `;
                             bandeja2TableBody.appendChild(row);
                         });
@@ -1788,7 +1789,8 @@ document.addEventListener("DOMContentLoaded", () => {
             <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.6rem 1rem;font-size:0.85rem;">
                 ${campo('N/C Aplicada', fmt(item.total_nc_aplicada))}
                 ${campo('N/D Aplicada', fmt(item.total_nd_aplicada))}
-                ${campo('Desc. Pendiente', descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct))}
+                ${campo('Desc. Pendiente', descMontoPct(item.descuento_pendiente_aplicar, item.descuento_pendiente_aplicar_pct)
+                    + (item.descuento_pendiente_aplicar > 0.05 ? `<div style="margin-top:4px">${btnDescuentoNoOtorgado(item, 'loadVentas')}</div>` : ''))}
                 ${campo('Desc. Sistema', descMontoPct(item.descuento_aplicado_sistema, item.descuento_aplicado_sistema_pct), item.descuento_aplicado_sistema_motivo ?? '')}
                 ${campo('Orden Real c/ Desc. Teóricos', `${fmt(item.orden_real_subtotal_teoricos)}${item.orden_real_subtotal_teoricos_bloqueado ? ' 🔒' : ''}`, 'Cuánto debería costar la orden si se aplicaran TODOS los descuentos que calcula el motor (aplicados o no) -- valor hipotético, no el saldo real')}
             </div>
@@ -5269,6 +5271,60 @@ document.addEventListener("DOMContentLoaded", () => {
     // Manda la huella que el servidor ya calculo y puso en la fila: es la
     // unica forma de que la aceptacion tape exactamente la discrepancia
     // que el usuario esta viendo. Ver separar_discrepancias_aceptadas.
+    // "No se le otorgó el descuento" -- la excepción a la regla de que el
+    // descuento se asume comprometido con el cliente. Vive en dos lados
+    // porque son conjuntos DISTINTOS de órdenes (cero solapamiento medido
+    // en producción): en Ventas están las 152 órdenes sin pagar cuyo
+    // descuento infla la cuenta por cobrar ($14.675,59), y en la Bandeja 2
+    // las 216 ya pagadas que esperan la nota de crédito.
+    window.btnDescuentoNoOtorgado = function(item, recargar) {
+        if (!item || !item.so_id) return '';
+        if (item.descuento_no_otorgado) {
+            const quien = (item.descuento_no_otorgado_por || '').replace(/"/g, '&quot;');
+            const motivo = (item.descuento_no_otorgado_motivo || '').replace(/"/g, '&quot;');
+            return `<span class="state-badge" style="background:#fef2f2;color:#991b1b;font-weight:600;" title="Marcada por ${quien}. Motivo: ${motivo || 'sin motivo'}">Sin descuento</span>
+                <button class="btn btn-secondary" onclick="marcarDescuentoNoOtorgado('${item.so_id}', false, '${recargar}')" style="padding:0.2rem 0.5rem;font-size:0.7rem;margin-left:0.3rem;">Reactivar</button>`;
+        }
+        return `<button class="btn btn-secondary" onclick="marcarDescuentoNoOtorgado('${item.so_id}', true, '${recargar}')" style="padding:0.25rem 0.6rem;font-size:0.75rem;" title="El descuento deja de bajar la cuenta por cobrar y no genera nota de crédito">No se otorgó</button>`;
+    };
+
+    window.marcarDescuentoNoOtorgado = async function(soId, noOtorgado, recargar) {
+        let motivo = '';
+        let quien = '';
+        if (noOtorgado) {
+            motivo = prompt(
+                `${soId} — ¿por qué NO se le otorgó el descuento?
+
+` +
+                `El monto vuelve a la cuenta por cobrar y la orden deja de pedir nota de crédito.`,
+                "El cliente pagó completo, no se le ofreció descuento");
+            if (motivo === null) return;
+            quien = prompt("¿Quién lo marca?", "Dirección / Administración");
+            if (quien === null) return;
+        } else if (!confirm(`${soId}: el descuento vuelve a contar como comprometido y baja de la cuenta por cobrar. ¿Confirmas?`)) {
+            return;
+        }
+        try {
+            const res = await fetch("/api/ventas/descuento-no-otorgado", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    so_id: soId, no_otorgado: noOtorgado,
+                    motivo: motivo, marcado_por: quien || "Dirección / Administración"
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                alert("✅ " + (data.message || "Listo."));
+                if (typeof window[recargar] === "function") window[recargar]();
+            } else {
+                alert("❌ No se pudo registrar el cambio.");
+            }
+        } catch (err) {
+            console.error("Error marcando descuento no otorgado:", err);
+        }
+    };
+
     window.btnAceptarDiscrepancia = function(item) {
         if (!item || !item.discrepancia_id) return '';
         const reabierta = item.reabierta
