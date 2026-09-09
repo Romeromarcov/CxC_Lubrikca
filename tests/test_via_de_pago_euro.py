@@ -221,3 +221,55 @@ def test_la_funcion_del_motor_sigue_intacta() -> None:
 
     vincs = [_Vinc("16606.59", "37.66")]
     assert valor_pagado_bcv_usd(vincs) == Decimal("37.66")
+
+
+# --- Los días que la serie no tiene ----------------------------------------
+#
+# A ``TasasHistoricasAuditoria`` le faltan 4 días de calendario
+# (2026-08-14, 08-15, 08-31 y 09-07) y dos de ellos son fechas de abono de
+# órdenes históricas: el pago 1624 de la orden S00058 y el 1714 de la
+# S00078. Sin tasa euro esos abonos caían al BCV-USD y se acreditaban un
+# ~16 % de más.
+#
+# La solución no es rellenar esos cuatro días a mano: es buscar el último
+# día publicado antes, que además es cómo funciona la tasa. El BCV publica
+# una tasa que rige hasta la siguiente, y los datos lo confirman -- de los
+# 60 fines de semana cargados, los 60 repiten exactamente la del viernes.
+# Buscar hacia atrás cubre también el hueco que aparezca mañana.
+
+
+def _con_huecos(monkeypatch, disponibles: dict[str, Decimal]) -> None:
+    monkeypatch.setattr(app, "get_bcv_euro_rate_for_datetime", lambda _d, _r: None)
+    monkeypatch.setattr(
+        app, "get_eur_rate_for_date", lambda f, _r: disponibles.get(f.isoformat())
+    )
+
+
+def test_un_dia_ausente_toma_la_ultima_tasa_publicada(monkeypatch) -> None:
+    """El pago 1624: 67.493,05 Bs el lunes 2026-08-31, día que no está en
+    la tabla. Rige la del viernes 28, que es 922,6912."""
+    _con_huecos(monkeypatch, {"2026-08-28": Decimal("922.6912")})
+    eq = abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], [])
+    assert round(eq, 2) == Decimal("73.15")
+
+
+def test_el_dia_exacto_gana_sobre_el_anterior(monkeypatch) -> None:
+    _con_huecos(
+        monkeypatch,
+        {"2026-08-31": Decimal("929.0908"), "2026-08-28": Decimal("922.6912")},
+    )
+    eq = abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], [])
+    assert round(eq, 2) == round(Decimal("67493.05") / Decimal("929.0908"), 2)
+
+
+def test_no_se_busca_indefinidamente_hacia_atras(monkeypatch) -> None:
+    """Si no hay tasa en una semana, lo que falta es la carga y no un
+    feriado: mejor devolver None y quedarse en BCV-USD que acreditar con
+    una tasa de hace un mes."""
+    _con_huecos(monkeypatch, {"2026-07-01": Decimal("900.00")})
+    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], []) is None
+
+
+def test_el_borde_de_la_semana_todavia_cuenta(monkeypatch) -> None:
+    _con_huecos(monkeypatch, {"2026-08-24": Decimal("922.6912")})
+    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], []) is not None

@@ -7199,6 +7199,12 @@ def _productos_despachados_desde_espejo(
     return result
 
 
+# Cuántos días hacia atrás se acepta buscar la tasa BCV-Euro. Una semana
+# cubre un feriado largo sin llegar a tapar un hueco real de la serie: si
+# no hay tasa en 7 días, la que falta es la carga, no el feriado.
+_DIAS_ATRAS_TASA_EURO = 7
+
+
 def abono_cxc_en_euros(
     monto_ves: Decimal,
     fecha_pago: date,
@@ -7242,7 +7248,23 @@ def abono_cxc_en_euros(
             # 20-feb al 12-mar: para estas órdenes la única fuente con euro
             # es siempre el histórico. Sin esta caída la vía euro nunca se
             # activaba -- llevaba meses muerta por eso.
-            tasa = get_eur_rate_for_date(fecha_pago, hist_rows)
+            # Día exacto y, si no está, el último día publicado antes.
+            #
+            # No es una licencia: es cómo funciona la tasa. El BCV publica
+            # una tasa que rige hasta que publica la siguiente, y los datos
+            # lo confirman solos -- de los 60 fines de semana con tasa
+            # cargada, los 60 repiten exactamente la del viernes.
+            #
+            # Hace falta porque a la tabla le faltan 4 días de calendario
+            # (2026-08-14, 08-15, 08-31 y 09-07) y dos de ellos son
+            # justamente fechas de abono de órdenes históricas. Sin esto
+            # esos abonos caían al BCV-USD y se acreditaban ~16 % de más.
+            # Buscar hacia atrás también cubre el hueco que aparezca
+            # mañana, cosa que rellenar estos cuatro días a mano no haría.
+            for atras in range(_DIAS_ATRAS_TASA_EURO + 1):
+                tasa = get_eur_rate_for_date(fecha_pago - timedelta(days=atras), hist_rows)
+                if tasa and tasa > Decimal("0"):
+                    break
     except Exception as e:
         logger.warning("Sin tasa euro para el abono del %s: %s", fecha_pago, e)
         return None
