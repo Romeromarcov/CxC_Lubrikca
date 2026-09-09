@@ -16,8 +16,21 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from cxc.web import app
 from cxc.web.app import _pagos_odoo_por_orden
 from tests.builders import orden
+
+
+def _serie(**por_dia: float) -> list[dict]:
+    """Filas de ``SerieTasas`` como las lee el código real.
+
+    Antes estos tests pasaban un ``{fecha: tasa}`` y un ``last_bcv_val``,
+    que era el mapa casero que la función se armaba con SOLO ``SerieTasas``
+    -- la fuente incompleta que provocaba el descuadre contra Odoo. Ahora
+    recibe la serie cruda y resuelve la tasa con ``tasa_bcv_de_dia``, que
+    cae a ``TasasHistoricasAuditoria`` cuando el día no está.
+    """
+    return [{"timestamp": f"{d} 12:00:00", "tasa_bcv": str(t)} for d, t in por_dia.items()]
 
 
 def _factura(
@@ -36,7 +49,7 @@ def _factura(
 
 
 def test_sin_execute_devuelve_vacio():
-    assert _pagos_odoo_por_orden(None, [], {}, {}, {}, {}, 0.0) == {}
+    assert _pagos_odoo_por_orden(None, [], {}, {}, {}, []) == {}
 
 
 def test_ruta_principal_account_payment_usd():
@@ -58,8 +71,7 @@ def test_ruta_principal_account_payment_usd():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="500", amount_residual="0")]},
         {"SO1": orden("SO1", monto_total="500")},
-        {},
-        0.0,
+        [],
     )
     assert result == {
         "SO1": {
@@ -88,8 +100,7 @@ def test_ruta_principal_account_payment_ves_usa_tasa_bcv():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="500", amount_residual="0", currency="VES")]},
         {"SO1": orden("SO1", monto_total="500")},
-        {"2026-06-10": 36.0},
-        30.0,
+        _serie(**{"2026-06-10": 36.0}),
     )
     # abono_bcv y abono_binance salen IGUALES para VES -- ver docstring
     # de la función (Odoo no distingue la ruta de pago a nivel de
@@ -108,8 +119,7 @@ def test_fallback_sin_pago_reconciliado_usa_amount_total_menos_residual_usd():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="800", amount_residual="300")]},
         {"SO1": orden("SO1", monto_total="800")},
-        {},
-        0.0,
+        [],
     )
     assert result["SO1"]["abono_bcv"] == Decimal("500")
     assert result["SO1"]["abono_binance"] == Decimal("500")
@@ -120,7 +130,7 @@ def test_fallback_ves_usa_ratio_amount_total_vs_monto_orden_usd():
 
     monto_total en USD > 0, el fallback infiere la tasa efectiva como
     amount_total_ves / monto_total_usd de la orden, en vez de usar
-    rates_map -- ver rama ``if order_usd_total > 0 and tot > 0``.
+    la serie de tasas -- ver rama ``if order_usd_total > 0 and tot > 0``.
     """
 
     def fake_execute(model, method, args, kwargs=None):
@@ -132,8 +142,7 @@ def test_fallback_ves_usa_ratio_amount_total_vs_monto_orden_usd():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="18000", amount_residual="9000", currency="VES")]},
         {"SO1": orden("SO1", monto_total="500")},
-        {"2026-06-01": 99.0},  # no debería usarse -- hay ratio directo
-        30.0,
+        _serie(**{"2026-06-01": 99.0}),  # no debería usarse -- hay ratio directo
     )
     # effective_rate = 18000 / 500 = 36; paid_inv = 18000-9000 = 9000 VES
     # -> 9000/36 = 250 USD
@@ -141,11 +150,13 @@ def test_fallback_ves_usa_ratio_amount_total_vs_monto_orden_usd():
     assert result["SO1"]["abono_binance"] == Decimal("250")
 
 
-def test_fallback_ves_sin_ratio_usa_rates_map_por_fecha_de_factura():
-    """Sin monto_total en la orden (o factura en 0), cae a rates_map por
+def test_fallback_ves_sin_ratio_usa_la_tasa_de_la_fecha_de_factura():
+    """Sin monto_total en la orden (o factura en 0), convierte con la tasa
 
-    fecha de la factura, y a ``last_bcv_val`` si esa fecha no está en
-    rates_map."""
+    BCV de la fecha de la factura. Antes se buscaba en un mapa armado solo
+    con ``SerieTasas`` y, si el día no estaba, se usaba la ÚLTIMA tasa de
+    la serie -- la de hoy -- que era el bug: toda factura anterior al
+    arranque del scraper se convertía a la tasa actual."""
 
     def fake_execute(model, method, args, kwargs=None):
         return []
@@ -165,8 +176,7 @@ def test_fallback_ves_sin_ratio_usa_rates_map_por_fecha_de_factura():
             ]
         },
         {"SO1": orden("SO1", monto_total="0")},
-        {"2026-06-01": 36.0},
-        30.0,
+        _serie(**{"2026-06-01": 36.0}),
     )
     assert result["SO1"]["abono_bcv"] == Decimal("100")
 
@@ -181,8 +191,7 @@ def test_error_al_consultar_account_payment_no_propaga_y_sigue_al_fallback():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="800", amount_residual="300")]},
         {"SO1": orden("SO1", monto_total="800")},
-        {},
-        0.0,
+        [],
     )
     assert result["SO1"]["abono_bcv"] == Decimal("500")
 
@@ -197,7 +206,58 @@ def test_ordenes_sin_pago_no_aparecen_en_el_resultado():
         {101: "SO1"},
         {"SO1": [_factura(amount_total="500", amount_residual="500")]},
         {"SO1": orden("SO1", monto_total="500")},
-        {},
-        0.0,
+        [],
     )
     assert result == {}
+
+
+def test_una_factura_vieja_no_se_convierte_a_la_tasa_de_hoy(monkeypatch):
+    """El bug de los 4.289,57 (septiembre 2026).
+
+    ``SerieTasas`` la escribe el scraper horario y en producción arranca el
+    2026-07-25. Las facturas arrancan el 2026-02-01. El mapa casero que se
+    armaba con esa sola tabla no tenía los días viejos y caía a la ÚLTIMA
+    tasa de la serie -- la de HOY, siempre más alta -- así que el residual
+    en dólares de toda factura anterior salía de menos.
+
+    Acá la serie solo tiene julio y la factura es de junio: si la función
+    volviera a caer a "la última que haya", daría 3600/820 = 4,39 en vez de
+    los 100 que corresponden a la tasa de su propio día.
+    """
+
+    def fake_execute(model, method, args, kwargs=None):
+        return []
+
+    # Sin el día exacto en SerieTasas, la tasa sale de
+    # TasasHistoricasAuditoria. Se sirve desde acá para que el test no
+    # dependa de la base: ``get_repo`` solo se pasa como argumento.
+    monkeypatch.setattr(app, "get_repo", lambda: None)
+    monkeypatch.setattr(
+        app,
+        "_tasas_historicas_cacheadas",
+        lambda _repo: [
+            {
+                "fecha": "2026-06-01",
+                "tasa_bcv_usd": "36.0",
+                "tasa_binance_promedio_diario": "38.0",
+            }
+        ],
+    )
+    result = _pagos_odoo_por_orden(
+        fake_execute,
+        [101],
+        {101: "SO1"},
+        {
+            "SO1": [
+                _factura(
+                    amount_total="3600",
+                    amount_residual="0",
+                    currency="VES",
+                    invoice_date="2026-06-01",
+                )
+            ]
+        },
+        {"SO1": orden("SO1", monto_total="0")},
+        _serie(**{"2026-07-25": 820.10}),
+    )
+    assert result["SO1"]["abono_bcv"] == Decimal("100")
