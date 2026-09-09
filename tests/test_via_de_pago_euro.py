@@ -30,7 +30,7 @@ from datetime import date
 from decimal import Decimal
 
 from cxc.models import Moneda
-from cxc.web import app
+from cxc.rates import Tasas
 from cxc.web.app import abono_cxc_en_euros
 
 BCV_USD = Decimal("440.9657")
@@ -38,45 +38,44 @@ BCV_EUR = Decimal("510.49")
 DIA = date(2026, 3, 12)
 
 
-def _preparar(monkeypatch, euro: Decimal | None) -> None:
-    # SerieTasas arranca el 2026-07-25 en producción: para la ventana
-    # histórica (20-feb a 12-mar) nunca tiene el euro. Por eso la vía
-    # llevaba meses muerta.
-    monkeypatch.setattr(app, "get_bcv_euro_rate_for_datetime", lambda _d, _r: None)
-    monkeypatch.setattr(app, "get_eur_rate_for_date", lambda _f, _r: euro)
+def _tasas(**por_dia: str) -> Tasas:
+    """Un histórico con solo los días indicados, como el que resuelve la
+    tasa euro en producción."""
+    return Tasas(
+        historicas=[
+            {"fecha": f, "tasa_bcv_usd": str(BCV_USD), "tasa_bcv_euro": e}
+            for f, e in por_dia.items()
+        ]
+    )
 
 
-def test_el_abono_se_acredita_al_euro(monkeypatch) -> None:
+def test_el_abono_se_acredita_al_euro() -> None:
     """Pago 17 real: 16.606,59 Bs del 2026-03-12 sobre la orden S00020."""
-    _preparar(monkeypatch, BCV_EUR)
-    assert round(abono_cxc_en_euros(Decimal("16606.59"), DIA, [], []), 2) == Decimal("32.53")
+    eq = abono_cxc_en_euros(Decimal("16606.59"), DIA, _tasas(**{"2026-03-12": "510.49"}))
+    assert round(eq, 2) == Decimal("32.53")
 
 
-def test_al_euro_se_acredita_menos_que_al_dolar(monkeypatch) -> None:
+def test_al_euro_se_acredita_menos_que_al_dolar() -> None:
     """El sentido económico y el signo del cambio: el euro está por encima
     del dólar, así que el mismo bolívar vale menos dólares y la cuenta por
     cobrar sube."""
-    _preparar(monkeypatch, BCV_EUR)
     abono = Decimal("16606.59")
-    al_euro = abono_cxc_en_euros(abono, DIA, [], [])
+    al_euro = abono_cxc_en_euros(abono, DIA, _tasas(**{"2026-03-12": "510.49"}))
     assert al_euro < abono / BCV_USD
 
 
-def test_sin_euro_en_ninguna_fuente_devuelve_none(monkeypatch) -> None:
+def test_sin_euro_en_ninguna_fuente_devuelve_none() -> None:
     """None es "no pude", no "cero". Quien llama sigue con el BCV-USD; si
     esto devolviera 0 se estaría dando por no cobrado un abono real."""
-    _preparar(monkeypatch, None)
-    assert abono_cxc_en_euros(Decimal("16606.59"), DIA, [], []) is None
+    assert abono_cxc_en_euros(Decimal("16606.59"), DIA, Tasas()) is None
 
 
-def test_un_euro_en_cero_tampoco_es_una_tasa(monkeypatch) -> None:
-    _preparar(monkeypatch, Decimal("0"))
-    assert abono_cxc_en_euros(Decimal("16606.59"), DIA, [], []) is None
+def test_un_euro_en_cero_tampoco_es_una_tasa() -> None:
+    assert abono_cxc_en_euros(Decimal("16606.59"), DIA, Tasas()) is None
 
 
-def test_un_abono_en_cero_no_produce_equivalente(monkeypatch) -> None:
-    _preparar(monkeypatch, BCV_EUR)
-    assert abono_cxc_en_euros(Decimal("0"), DIA, [], []) is None
+def test_un_abono_en_cero_no_produce_equivalente() -> None:
+    assert abono_cxc_en_euros(Decimal("0"), DIA, _tasas(**{"2026-03-12": "510.49"})) is None
 
 
 def test_el_equivalente_bcv_no_es_asunto_de_esta_funcion() -> None:
@@ -186,30 +185,29 @@ class _Vinc:
         self.hora_pago_confirmada = datetime(2026, 3, 12)
 
 
-def test_el_valor_pagado_en_euros_usa_la_tasa_euro(monkeypatch) -> None:
+def test_el_valor_pagado_en_euros_usa_la_tasa_euro() -> None:
     from cxc.web.app import valor_pagado_bcv_usd_en_euros
 
-    _preparar(monkeypatch, BCV_EUR)
     vincs = [_Vinc("16606.59", "37.66")]
-    assert round(valor_pagado_bcv_usd_en_euros(vincs, [], []), 2) == Decimal("32.53")
+    total = valor_pagado_bcv_usd_en_euros(vincs, _tasas(**{"2026-03-12": "510.49"}))
+    assert round(total, 2) == Decimal("32.53")
 
 
-def test_un_abono_en_dolares_no_se_toca(monkeypatch) -> None:
+def test_un_abono_en_dolares_no_se_toca() -> None:
     """La vía euro es para bolívares. Un abono en USD ya está en dólares."""
     from cxc.web.app import valor_pagado_bcv_usd_en_euros
 
-    _preparar(monkeypatch, BCV_EUR)
     vincs = [_Vinc("70.00", "70.00", moneda=Moneda.USD)]
-    assert valor_pagado_bcv_usd_en_euros(vincs, [], []) == Decimal("70.00")
+    total = valor_pagado_bcv_usd_en_euros(vincs, _tasas(**{"2026-03-12": "510.49"}))
+    assert total == Decimal("70.00")
 
 
-def test_sin_tasa_euro_se_conserva_el_equivalente_congelado(monkeypatch) -> None:
+def test_sin_tasa_euro_se_conserva_el_equivalente_congelado() -> None:
     """No se pierde el abono por no tener la tasa: queda el BCV-USD."""
     from cxc.web.app import valor_pagado_bcv_usd_en_euros
 
-    _preparar(monkeypatch, None)
     vincs = [_Vinc("16606.59", "37.66")]
-    assert valor_pagado_bcv_usd_en_euros(vincs, [], []) == Decimal("37.66")
+    assert valor_pagado_bcv_usd_en_euros(vincs, Tasas()) == Decimal("37.66")
 
 
 def test_la_funcion_del_motor_sigue_intacta() -> None:
@@ -238,38 +236,32 @@ def test_la_funcion_del_motor_sigue_intacta() -> None:
 # Buscar hacia atrás cubre también el hueco que aparezca mañana.
 
 
-def _con_huecos(monkeypatch, disponibles: dict[str, Decimal]) -> None:
-    monkeypatch.setattr(app, "get_bcv_euro_rate_for_datetime", lambda _d, _r: None)
-    monkeypatch.setattr(
-        app, "get_eur_rate_for_date", lambda f, _r: disponibles.get(f.isoformat())
-    )
-
-
-def test_un_dia_ausente_toma_la_ultima_tasa_publicada(monkeypatch) -> None:
+def test_un_dia_ausente_toma_la_ultima_tasa_publicada() -> None:
     """El pago 1624: 67.493,05 Bs el lunes 2026-08-31, día que no está en
     la tabla. Rige la del viernes 28, que es 922,6912."""
-    _con_huecos(monkeypatch, {"2026-08-28": Decimal("922.6912")})
-    eq = abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], [])
+    eq = abono_cxc_en_euros(
+        Decimal("67493.05"), date(2026, 8, 31), _tasas(**{"2026-08-28": "922.6912"})
+    )
     assert round(eq, 2) == Decimal("73.15")
 
 
-def test_el_dia_exacto_gana_sobre_el_anterior(monkeypatch) -> None:
-    _con_huecos(
-        monkeypatch,
-        {"2026-08-31": Decimal("929.0908"), "2026-08-28": Decimal("922.6912")},
+def test_el_dia_exacto_gana_sobre_el_anterior() -> None:
+    eq = abono_cxc_en_euros(
+        Decimal("67493.05"),
+        date(2026, 8, 31),
+        _tasas(**{"2026-08-31": "929.0908", "2026-08-28": "922.6912"}),
     )
-    eq = abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], [])
     assert round(eq, 2) == round(Decimal("67493.05") / Decimal("929.0908"), 2)
 
 
-def test_no_se_busca_indefinidamente_hacia_atras(monkeypatch) -> None:
+def test_no_se_busca_indefinidamente_hacia_atras() -> None:
     """Si no hay tasa en una semana, lo que falta es la carga y no un
     feriado: mejor devolver None y quedarse en BCV-USD que acreditar con
     una tasa de hace un mes."""
-    _con_huecos(monkeypatch, {"2026-07-01": Decimal("900.00")})
-    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], []) is None
+    lejano = _tasas(**{"2026-07-01": "900.00"})
+    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), lejano) is None
 
 
-def test_el_borde_de_la_semana_todavia_cuenta(monkeypatch) -> None:
-    _con_huecos(monkeypatch, {"2026-08-24": Decimal("922.6912")})
-    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), [], []) is not None
+def test_el_borde_de_la_semana_todavia_cuenta() -> None:
+    borde = _tasas(**{"2026-08-24": "922.6912"})
+    assert abono_cxc_en_euros(Decimal("67493.05"), date(2026, 8, 31), borde) is not None

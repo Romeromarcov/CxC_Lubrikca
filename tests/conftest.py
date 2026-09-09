@@ -173,8 +173,11 @@ def _cache_de_tasas_limpio():
     """
     from cxc.web import app as _app
 
-    _app._TASAS_HIST_CACHE["rows"] = None
-    _app._TASAS_HIST_CACHE["ts"] = 0.0
+    # ``invalidar_tasas`` limpia los DOS cachés de tasas: el del histórico
+    # y el del objeto ``Tasas`` ya indexado (septiembre 2026). Cuando se
+    # agregó el segundo sin limpiarlo acá, dos tests e2e volvieron a
+    # fallar solo en conjunto -- exactamente el mismo síntoma que este
+    # fixture existía para evitar.
+    _app.invalidar_tasas()
     yield
-    _app._TASAS_HIST_CACHE["rows"] = None
-    _app._TASAS_HIST_CACHE["ts"] = 0.0
+    _app.invalidar_tasas()
