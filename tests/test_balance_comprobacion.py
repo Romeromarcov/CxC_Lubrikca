@@ -392,3 +392,51 @@ def test_el_desfase_de_un_dia_era_el_descuadre() -> None:
     nuestra = {"2026-08-21": 784.6633}
     oficial = {"2026-08-21": 779.9522, "2026-08-22": 784.6633}
     assert nuestra["2026-08-21"] == oficial["2026-08-22"]
+
+
+# --- La tasa que Odoo estampa, documento por documento ---------------------
+#
+# Pedido del usuario: "validar que la tasa que odoo esta reportando en los
+# pagos y las facturas se corresponda con la tasa correcta de ese dia".
+#
+# Ya existía para facturas; faltaba para pagos. La diferencia con la
+# partida de totales es que aquella dice CUÁNTO se desvía el conjunto y
+# esta dice CUÁLES documentos y con qué tasa, que es lo que sirve para ir
+# a corregirlos en Odoo.
+
+
+def _tasa_divergente(nominal_ves: float, ref_usd: float, oficial: float) -> bool:
+    return abs((nominal_ves / ref_usd) / oficial - 1.0) > 0.02
+
+
+def test_un_pago_con_la_tasa_correcta_no_se_reporta() -> None:
+    """Pago 1387: 13.931.659,64 Bs por 18.226,84 USD da 764,35, que es
+    exactamente la oficial del BCV de ese día."""
+    assert _tasa_divergente(13931659.64, 18226.84, 764.3486) is False
+
+
+def test_el_redondeo_de_amount_ref_no_dispara_la_alarma() -> None:
+    """Odoo guarda ``amount_ref`` con dos decimales; en un abono chico eso
+    mueve centésimas de punto, no puntos."""
+    assert _tasa_divergente(1000.00, 1.27, 787.40) is False
+
+
+def test_el_desfase_de_un_dia_no_dispara_la_alarma() -> None:
+    """Un día de corrimiento son décimas de punto y quedan bajo el umbral;
+    si no, la partida marcaría medio libro cada vez que el BCV se mueve."""
+    assert _tasa_divergente(13931659.64, 18166.14, 764.3486) is False
+
+
+def test_una_tasa_realmente_distinta_si_se_reporta() -> None:
+    """Lo que la partida existe para atrapar: un abono de agosto convertido
+    con una tasa de julio (742,23 contra los 794,99 que correspondían)."""
+    assert _tasa_divergente(1000000.00, 1347.29, 794.9917) is True
+
+
+def test_un_abono_en_euros_no_es_una_tasa_mal_puesta() -> None:
+    """Pago 199: 39.678,80 Bs por 70 $ da 566,84, que es el BCV del EURO de
+    ese día. Divergería contra el dólar (483,87), pero su tasa está bien:
+    solo es otra moneda, y por eso se descarta antes de reportar."""
+    estampada = 39678.80 / 70.0
+    assert _tasa_divergente(39678.80, 70.0, 483.8695) is True
+    assert abs(estampada / 566.84 - 1.0) < 0.01
