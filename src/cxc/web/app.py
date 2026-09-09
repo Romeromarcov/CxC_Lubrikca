@@ -12414,6 +12414,13 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
         o = ordenes_afectadas.get(ln.so_id)
         if o is None:
             continue
+        # Una línea que no pidió nada no puede tener un faltante de
+        # despacho. En producción hay dos así (S00952 y S00925): cantidad 0
+        # y cantidad_entregada NEGATIVA, o sea líneas creadas solo para
+        # registrar la devolución. El detector las leía como "faltan 4" y
+        # "faltan 10" unidades que nunca se pidieron.
+        if ln.cantidad <= 0:
+            continue
         if ln.cantidad_entregada >= ln.cantidad:
             continue
         # Líneas de ajuste "Descuento" (precio_unitario negativo, no
@@ -14891,6 +14898,28 @@ def _get_ventas_sync(
                     # orden si sigue en CxC. Ver docstring del cálculo
                     # arriba (justo antes de este items.append).
                     "pagada": pagada,
+                    # Estado visible de la orden. Existe para que Ventas no
+                    # diga algo distinto al Reporte de Saldos y al reporte
+                    # por cliente, que es la invariante que declara el
+                    # comentario de ``pagada`` unas líneas arriba.
+                    #
+                    # La regla "la cuenta por cobrar nace con la entrega"
+                    # la rompió: esas dos vistas excluyen las órdenes sin
+                    # despachar, y Ventas las seguía mostrando como deuda
+                    # pendiente. No son ni "pagada" ni "sin pagar" -- son
+                    # una venta tomada que todavía no genera cobro.
+                    "estado_cobro": (
+                        "pagada"
+                        if pagada
+                        else (
+                            "pendiente_entrega"
+                            if not bool(
+                                (cant_entregada_orden > 0.005)
+                                or (val_ref_nacimiento > _EPS_PAGO)
+                            )
+                            else "por_cobrar"
+                        )
+                    ),
                     "iva_pendiente_sin_facturar": iva_pendiente_sin_facturar,
                     "saldo_cxc": saldo_cxc,
                 }
