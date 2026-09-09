@@ -13051,7 +13051,18 @@ async def get_balance_comprobacion():
                         "account.move",
                         "read",
                         [ids_fact],
-                        {"fields": ["amount_total", "amount_residual", "state", "move_type"]},
+                        {
+                            "fields": [
+                                "amount_total",
+                                "amount_residual",
+                                # El saldo por cobrar YA en dólares, calculado
+                                # por Odoo. Sin esto no había forma de
+                                # comparar las dos vistas en la misma unidad.
+                                "amount_residual_usd",
+                                "state",
+                                "move_type",
+                            ]
+                        },
                     )
                     if ids_fact
                     else []
@@ -13076,15 +13087,21 @@ async def get_balance_comprobacion():
                 # contra lo que el Reporte de Saldos muestra por ese mismo
                 # concepto. Son las dos respuestas a "cuánto debe esa
                 # factura" y no pueden diferir.
-                # Acá NO se comparan montos: el residual de Odoo está en la
-                # moneda de cada factura (casi todas en bolívares) y el
-                # reporte lo trae a dólares con la tasa de SU día. Convertir
-                # todo a una tasa única daría una diferencia del 25 % que no
-                # es un error de conteo sino de qué tasa se usó, y una
-                # partida que siempre falla por diseño no sirve de nada.
+                # Odoo SÍ expone el saldo por cobrar en dólares:
+                # ``amount_residual_usd`` ("Importe adeudado Ref."). Con eso
+                # las dos vistas se comparan en la misma unidad, que era lo
+                # que faltaba -- antes esta partida enfrentaba 60.368,21 USD
+                # contra 65.162.339,64 VES y no probaba nada.
                 #
-                # Lo que sí es verificable, y es lo que importa: que las dos
-                # vistas coincidan en QUÉ facturas siguen debiendo.
+                # Lo que queda de diferencia es de TASA, no de conteo: el
+                # reporte convierte el residual con la serie BCV de la fecha
+                # de la factura (ver rates_map) y Odoo usa la suya. Por eso
+                # la tolerancia es porcentual: una desviación chica es la
+                # tasa, una grande es que alguien dejó de contar algo.
+                #
+                # Se comparan solo las facturas de las órdenes que el
+                # reporte lista; el universo de Odoo incluye facturas de
+                # órdenes ya cobradas, que el reporte excluye a propósito.
                 residual_odoo = sum(
                     float(m.get("amount_residual") or 0.0) for m in vivas_f.values()
                 )
@@ -13100,6 +13117,33 @@ async def get_balance_comprobacion():
                     and num(i, "saldo_factura_odoo") > 0.05
                 }
                 solo_reporte = con_saldo_reporte - con_residual_odoo
+                # Las facturas de las órdenes que el reporte efectivamente
+                # lista -- el universo comparable.
+                ordenes_rep = {o.so_id: o for o in repo_bal.all_ordenes()}
+                ids_comparables = {
+                    int(ordenes_rep[str(i["so_id"])].factura_id)
+                    for i in saldos_items.values()
+                    if str(i["so_id"]) in ordenes_rep
+                    and str(ordenes_rep[str(i["so_id"])].factura_id or "").isdigit()
+                }
+                odoo_usd = sum(
+                    float(m.get("amount_residual_usd") or 0.0)
+                    for mid, m in vivas_f.items()
+                    if mid in ids_comparables
+                )
+                rep_usd = sum(num(i, "saldo_factura_odoo") for i in saldos_items.values())
+                partida(
+                    "Saldo por cobrar en USD de lo facturado",
+                    "Reporte de Saldos",
+                    rep_usd,
+                    "amount_residual_usd en Odoo",
+                    odoo_usd,
+                    f"Sobre {len(ids_comparables)} facturas de las órdenes que el "
+                    "reporte lista. La diferencia que quede es de TASA: el "
+                    "reporte convierte con la serie BCV de la fecha de cada "
+                    "factura y Odoo con la suya.",
+                    tolerancia=max(50.0, odoo_usd * 0.01),
+                )
                 partida(
                     "Facturas por cobrar: el reporte contra Odoo",
                     "esperado",
@@ -13107,9 +13151,9 @@ async def get_balance_comprobacion():
                     "el reporte da por cobrar facturas que Odoo ya saldó",
                     float(len(solo_reporte)),
                     f"Odoo tiene {len(con_residual_odoo)} facturas con residual "
-                    f"({residual_odoo:,.2f} en su moneda); el reporte muestra "
-                    f"{len(con_saldo_reporte)} con saldo. Los montos no se "
-                    "comparan porque están en monedas y tasas distintas.",
+                    f"({residual_odoo:,.2f} en su moneda, {odoo_usd:,.2f} USD en "
+                    f"las comparables); el reporte muestra {len(con_saldo_reporte)} "
+                    "con saldo.",
                 )
             except Exception as e:
                 logger.warning("No se pudo comparar la facturación contra Odoo: %s", e)
