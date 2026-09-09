@@ -2184,6 +2184,45 @@ def tasa_bcv_de_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
     return float(get_rate_for_datetime(dia, serie_rows)[0] or 0.0)
 
 
+def residual_usd_de_factura(inv: dict, fecha_orden: str, serie_rows: list[dict]) -> float:
+    """Saldo por cobrar de una factura, en dólares.
+
+    Criterio del usuario (septiembre 2026): "la tasa nuestra del sistema
+    para el caso tanto de las facturas como los pagos, deberíamos usar la
+    tasa de Odoo, que es la que vale, y solo valida que coincida con el BCV
+    de ese día".
+
+    Así que manda ``amount_residual_usd``, que es lo que Odoo mismo dice
+    que le deben en dólares. Es la cifra contable de la empresa: si el
+    reporte discrepa de ella, el que está mal es el reporte. Convertir por
+    nuestra cuenta solo agregaba una tasa más que podía divergir, y de
+    hecho divergía.
+
+    Nuestra serie queda de respaldo para cuando Odoo no da el campo (una
+    factura vieja sin el custom field poblado, o Odoo caído y sirviendo el
+    espejo). Y "sin dato" NO es cero: si Odoo no lo trae y tampoco hay
+    tasa, se devuelve el residual en bolívares sin convertir antes que
+    inventar una conversión -- quien llama ya trata el 0 como "no debe
+    nada", que sería falso.
+
+    La coincidencia entre la tasa implícita de Odoo y nuestro BCV del día
+    no se pierde: se verifica aparte, en el balance de comprobación.
+    """
+    res_val = float(inv.get("amount_residual") or 0.0)
+    odoo_usd = inv.get("amount_residual_usd")
+    if odoo_usd is not None:
+        try:
+            return float(odoo_usd)
+        except (TypeError, ValueError):
+            pass
+    curr = inv.get("currency_id")
+    c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
+    if c_name != "VES":
+        return res_val
+    tasa = tasa_bcv_de_dia(str(inv.get("invoice_date") or fecha_orden)[:10], serie_rows)
+    return res_val / tasa if tasa > 0 else res_val
+
+
 def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     """Tasa BCV-USD oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
 
@@ -3955,7 +3994,19 @@ def _pagos_odoo_por_orden(
                         ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                     ]
                 ],
-                {"fields": ["id", "amount", "currency_id", "date", "reconciled_invoice_ids"]},
+                # ``amount_ref`` ("Importe referencia") es el equivalente en
+                # dólares que calcula Odoo. Mismo criterio que en las
+                # facturas: manda su cifra, no la nuestra.
+                {
+                    "fields": [
+                        "id",
+                        "amount",
+                        "amount_ref",
+                        "currency_id",
+                        "date",
+                        "reconciled_invoice_ids",
+                    ]
+                },
             )
             for p in payments_raw:
                 p_amt = Decimal(str(p.get("amount") or "0"))
@@ -3966,6 +4017,12 @@ def _pagos_odoo_por_orden(
                     else "USD"
                 )
                 p_date = str(p.get("date") or "")[:10]
+                p_ref_raw = p.get("amount_ref")
+                p_ref = (
+                    Decimal(str(p_ref_raw))
+                    if p_ref_raw not in (None, False, "")
+                    else None
+                )
 
                 rec_invs = p.get("reconciled_invoice_ids", [])
                 matched_sos = set()
@@ -4002,7 +4059,14 @@ def _pagos_odoo_por_orden(
                     if p_curr == "USD":
                         p_bcv = p_amt
                         p_bin = p_amt
+                    elif p_ref is not None:
+                        # Lo que Odoo dice que valió ese pago en dólares.
+                        p_bcv = p_ref
+                        p_bin = p_ref
                     else:
+                        # Respaldo: Odoo no trajo el campo. Ojo que una tasa
+                        # ausente NO puede resolverse como cero -- eso sería
+                        # dar por cobrado nada; se deja el nominal.
                         rate_bcv = tasa_bcv_de_dia(p_date, serie_rows)
                         p_bcv = (
                             p_amt / Decimal(str(rate_bcv))
@@ -4276,6 +4340,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             overlay = estado_pago_map.get(fid, {})
             merged = dict(d)
             merged["amount_residual"] = overlay.get("amount_residual", 0.0)
+            merged["amount_residual_usd"] = overlay.get("amount_residual_usd")
             merged["payment_state"] = overlay.get("payment_state", "")
             so = merged["invoice_origin"]
             if merged["move_type"] == "out_refund":
@@ -4681,15 +4746,9 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 inv_names_list = []
                 for inv in inv_list:
                     inv_names_list.append(str(inv.get("name", "")))
-                    res_val = float(inv.get("amount_residual", 0.0))
-                    curr = inv.get("currency_id")
-                    c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
-                    inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
-                    rate = tasa_bcv_de_dia(inv_dt, tasas_rows)
-                    if c_name == "VES" and rate > 0:
-                        tot_res_usd += res_val / rate
-                    else:
-                        tot_res_usd += res_val
+                    tot_res_usd += residual_usd_de_factura(
+                        inv, o.fecha.isoformat(), tasas_rows
+                    )
                 saldo_factura_odoo = max(0.0, float(tot_res_usd))
                 factura_odoo_nombre = ", ".join(inv_names_list)
             else:
@@ -6863,6 +6922,7 @@ def _facturas_dicts_desde_espejo(repo, so_names: set[str] | list[str]) -> list[d
                 "invoice_origin": so,
                 "amount_total": float(f.monto_total),
                 "amount_residual": None,
+                "amount_residual_usd": None,
                 "currency_id": [0, f.moneda],
                 "invoice_date": f.fecha.isoformat(),
                 "move_type": f.move_type,
@@ -6889,7 +6949,14 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
             "account.move",
             "read",
             [invoice_ids],
-            {"fields": ["id", "payment_state", "amount_residual"]},
+            # ``amount_residual_usd`` ("Importe adeudado Ref.") es el saldo
+            # por cobrar YA en dólares, calculado por Odoo con SU tasa.
+            # Criterio del usuario (septiembre 2026): "la tasa nuestra del
+            # sistema para el caso tanto de las facturas como los pagos,
+            # deberíamos usar la tasa de Odoo, que es la que vale". Es
+            # mutable igual que ``amount_residual``, así que viaja por la
+            # misma consulta en vivo.
+            {"fields": ["id", "payment_state", "amount_residual", "amount_residual_usd"]},
         )
         return {int(r["id"]): r for r in recs}
     except Exception as e:
@@ -12832,6 +12899,39 @@ async def get_balance_comprobacion():
         saldos_items = {str(i["so_id"]): i for i in (saldos.get("items") or [])}
         saldos_min = {str(i["so_id"]) for i in (saldos.get("saldo_minimo_pendientes") or [])}
 
+        # Sin datos no hay balance: un balance verde sobre la nada miente.
+        #
+        # Error real (septiembre 2026). ``_get_ventas_sync`` devuelve
+        # ``{"items": [], "calculando": True}`` cuando ya hay un cálculo en
+        # vuelo y todavía no hay caché -- que es exactamente el estado tras
+        # cada despliegue, porque el despliegue invalida el caché y el
+        # primero que abre la página dispara el recálculo (~10 min con los
+        # cachés de Odoo fríos).
+        #
+        # El balance no se daba cuenta y armaba sus 22 partidas contra una
+        # lista vacía: las 17 de monto daban 0,00 contra 0,00 y salían en
+        # VERDE, y las dos de bandeja contaban TODAS sus filas como error
+        # (3 y 129) porque la búsqueda del so_id fallaba siempre. O sea que
+        # la página reportaba a la vez un falso verde y un falso rojo.
+        #
+        # Es la misma trampa de siempre: "sin datos" no es "cero". La regla
+        # acá es que el balance se abstiene y lo dice, en vez de opinar.
+        if ventas.get("calculando") or not items:
+            return {
+                "partidas": [],
+                "total": 0,
+                "cuadran": 0,
+                "descuadres": 0,
+                "evaluable": False,
+                "motivo": (
+                    "Ventas todavía se está recalculando, así que no hay contra "
+                    "qué comparar. Tras un despliegue o un sync que detecte "
+                    "cambios el recálculo tarda varios minutos. Volvé a abrir "
+                    "esta pestaña cuando Ventas cargue."
+                ),
+                "calculado_en": datetime.now().isoformat(),
+            }
+
         def num(d: Any, k: str) -> float:
             try:
                 return float(d.get(k) or 0.0)
@@ -12937,6 +13037,12 @@ async def get_balance_comprobacion():
         # 4. Facturación no puede contradecir a Ventas.
         b1 = bandeja.get("ordenes_por_facturar") or []
         b2 = bandeja.get("notas_credito_pendientes") or []
+        # Solo se juzgan las órdenes que Ventas efectivamente conoce. Una
+        # que no esté en ``items`` no es un error de Facturación: es que no
+        # tenemos con qué opinar, y contarla como descuadre fue justo lo
+        # que produjo el falso rojo de 3 y 129.
+        b1 = [x for x in b1 if str(x["so_id"]) in items]
+        b2 = [x for x in b2 if str(x["so_id"]) in items]
         partida(
             "Bandeja 1 con órdenes que Ventas no da por cobradas",
             "esperado",
@@ -13196,6 +13302,7 @@ async def get_balance_comprobacion():
                 solo_reporte = con_saldo_reporte - con_residual_odoo
                 # Las facturas de las órdenes que el reporte efectivamente
                 # lista -- el universo comparable.
+                serie_bal_f = _all_serie_tasas_rows(repo_bal)
                 ordenes_rep = {o.so_id: o for o in repo_bal.all_ordenes()}
                 ids_comparables = {
                     int(ordenes_rep[str(i["so_id"])].factura_id)
@@ -13220,6 +13327,47 @@ async def get_balance_comprobacion():
                     "tasa BCV de la fecha de cada factura; lo que quede es el "
                     "desfase de un día entre la serie de Odoo y la nuestra.",
                     tolerancia=max(50.0, odoo_usd * 0.01),
+                )
+                # Y la otra mitad del criterio: "solo valida que coincida
+                # con el BCV de ese día".
+                #
+                # Ahora que los montos salen de Odoo, su tasa dejó de ser
+                # una opinión más y pasó a ser la que mueve la cuenta por
+                # cobrar. Esta partida es la que vigila que esa tasa sea la
+                # del BCV: por cada factura en bolívares se despeja la tasa
+                # implícita (residual en VES / residual en USD) y se compara
+                # contra nuestro BCV del día de la factura.
+                #
+                # Un día de desfase es normal -- Odoo publica la tasa con la
+                # fecha del asiento y nosotros con la del día -- así que se
+                # cuentan solo las que se pasan del 2 %.
+                divergentes: list[str] = []
+                for mid, m in vivas_f.items():
+                    if mid not in ids_comparables:
+                        continue
+                    ves = abs(float(m.get("amount_residual") or 0.0))
+                    usd = abs(float(m.get("amount_residual_usd") or 0.0))
+                    if ves <= 0.05 or usd <= 0.05:
+                        continue
+                    nuestra = tasa_bcv_de_dia(
+                        str(m.get("invoice_date") or "")[:10], serie_bal_f
+                    )
+                    if nuestra <= 0:
+                        continue
+                    if abs((ves / usd) / nuestra - 1.0) > 0.02:
+                        divergentes.append(str(m.get("name") or mid))
+                partida(
+                    "La tasa de Odoo coincide con el BCV del día",
+                    "esperado",
+                    0.0,
+                    "facturas con más de 2 % de desviación",
+                    float(len(divergentes)),
+                    "Los saldos en dólares se toman de Odoo, así que su tasa "
+                    "es la que manda; acá se verifica que sea la del BCV. Se "
+                    "despeja la tasa implícita de cada factura en bolívares "
+                    "(residual VES / residual USD) contra nuestro BCV de su "
+                    "fecha."
+                    + (f" Divergen: {', '.join(divergentes[:5])}." if divergentes else ""),
                 )
                 partida(
                     "Facturas por cobrar: el reporte contra Odoo",
@@ -13500,6 +13648,7 @@ async def get_auditoria():
             overlay = estado_pago_map.get(fid, {})
             merged = dict(d)
             merged["amount_residual"] = overlay.get("amount_residual", 0.0)
+            merged["amount_residual_usd"] = overlay.get("amount_residual_usd")
             merged["payment_state"] = overlay.get("payment_state", "")
             so = merged["invoice_origin"]
             invoices_by_so.setdefault(so, []).append(merged)
@@ -13744,17 +13893,9 @@ async def get_auditoria():
                 inv_names_list = []
                 for inv in inv_list:
                     inv_names_list.append(str(inv.get("name", "")))
-                    res_val = float(inv.get("amount_residual", 0.0))
-                    curr = inv.get("currency_id")
-                    c_name_inv = (
-                        curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
+                    tot_res_usd += residual_usd_de_factura(
+                        inv, o.fecha.isoformat(), tasas_rows
                     )
-                    inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
-                    rate = tasa_bcv_de_dia(inv_dt, tasas_rows)
-                    if c_name_inv == "VES" and rate > 0:
-                        tot_res_usd += res_val / rate
-                    else:
-                        tot_res_usd += res_val
 
                 saldo_factura_odoo = max(0.0, float(tot_res_usd))
                 factura_nombre = ", ".join(inv_names_list)

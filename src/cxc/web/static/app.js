@@ -5296,6 +5296,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             const data = await res.json();
+            // El balance se abstiene cuando Ventas todavía se está
+            // recalculando (tras cada despliegue tarda varios minutos). Sin
+            // esto la tabla mostraba 17 partidas en verde comparando 0,00
+            // contra 0,00 y dos en rojo con TODAS sus filas: un falso verde
+            // y un falso rojo a la vez.
+            if (data.evaluable === false) {
+                if (resumen) {
+                    resumen.textContent = "Todavía no se puede calcular";
+                    resumen.style.color = "#b45309";
+                }
+                body.innerHTML = `<tr><td colspan="6" class="table-empty">${esc(data.motivo || "Sin datos suficientes para cuadrar.")}</td></tr>`;
+                return;
+            }
             if (resumen) {
                 const ok = data.descuadres === 0;
                 resumen.textContent = ok

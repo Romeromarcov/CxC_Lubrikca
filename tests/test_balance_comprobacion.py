@@ -246,3 +246,79 @@ def test_el_equivalente_bcv_de_los_pagos_contra_odoo() -> None:
 def test_un_dia_con_la_tasa_cambiada_si_descuadra() -> None:
     """Lo que la partida existe para atrapar."""
     assert _partida(358878.75, 320000.00, tolerancia=max(200.0, 320000.0 * 0.005)) is False
+
+
+# --- Sin datos no hay balance ----------------------------------------------
+#
+# Error real (septiembre 2026), reportado por el usuario con una captura:
+# "tu reportaste que los 22 partidas cuadraban, y la UI me reporta 2
+# discrepancias". Ninguna de las dos lecturas era buena.
+#
+# ``_get_ventas_sync`` devuelve ``{"items": [], "calculando": True}``
+# mientras hay un recálculo en vuelo y todavía no hay caché -- el estado
+# normal tras cada despliegue. El balance no lo miraba y armaba sus
+# partidas contra una lista vacía: las de monto daban 0,00 contra 0,00 y
+# salían verdes, y las de bandeja contaban TODAS sus filas como error
+# porque la búsqueda del so_id fallaba siempre.
+#
+# "Sin datos" no es "cero", y un balance verde sobre la nada es peor que
+# no tener balance.
+
+
+def _evaluable(ventas: dict) -> bool:
+    return not (ventas.get("calculando") or not (ventas.get("items") or []))
+
+
+def test_el_balance_se_abstiene_mientras_ventas_recalcula() -> None:
+    assert _evaluable({"items": [], "calculando": True}) is False
+
+
+def test_el_balance_se_abstiene_si_ventas_viene_vacio() -> None:
+    """Aunque nadie haya marcado ``calculando``: sin órdenes no hay nada
+    que cuadrar, y decir que cuadra sería mentir."""
+    assert _evaluable({"items": []}) is False
+
+
+def test_con_datos_el_balance_si_evalua() -> None:
+    assert _evaluable({"items": [{"so_id": "S00001"}]}) is True
+
+
+def test_una_bandeja_no_descuadra_por_ordenes_que_ventas_no_conoce() -> None:
+    """El falso rojo de la captura: 3 y 129 descuadres.
+
+    Una orden que Facturación lista pero Ventas todavía no cargó no es un
+    error de Facturación -- es que no hay con qué opinar."""
+    items = {"S00001": {"sale_de_cxc": True}}
+    bandeja = [{"so_id": "S00001"}, {"so_id": "S00999"}]
+    juzgables = [x for x in bandeja if str(x["so_id"]) in items]
+    assert len(juzgables) == 1
+    assert sum(1 for x in juzgables if not items[x["so_id"]]["sale_de_cxc"]) == 0
+
+
+# --- La tasa la pone Odoo, y se valida contra el BCV -----------------------
+#
+# Criterio del usuario: "la tasa nuestra del sistema para el caso tanto de
+# las facturas como los pagos, deberíamos usar la tasa de Odoo, que es la
+# que vale, y solo valida que coincida con el BCV de ese día".
+
+
+def _tasa_diverge(residual_ves: float, residual_usd: float, bcv: float) -> bool:
+    return abs((residual_ves / residual_usd) / bcv - 1.0) > 0.02
+
+
+def test_la_tasa_de_odoo_coincide_con_nuestro_bcv() -> None:
+    """La factura 00000525, que fue la que destapó todo: 1.340.030,18 VES
+    y 1.829,45 USD dan 732,48, contra nuestro BCV de ese día, 732,4787."""
+    assert _tasa_diverge(1340030.18, 1829.45, 732.4787) is False
+
+
+def test_un_dia_de_desfase_no_se_reporta() -> None:
+    """Odoo fecha la tasa por el asiento y nosotros por el día; medio
+    punto de diferencia es eso, no un error."""
+    assert _tasa_diverge(1340030.18, 1829.45, 735.00) is False
+
+
+def test_una_tasa_realmente_cambiada_si_se_reporta() -> None:
+    """El caso que la partida existe para atrapar: convertir una factura
+    de julio con la tasa de septiembre (820,10 contra 732,48)."""
+    assert _tasa_diverge(1340030.18, 1829.45, 820.10) is True
