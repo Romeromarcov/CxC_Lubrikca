@@ -1496,6 +1496,229 @@
                 </section>
 
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
+                <!-- FORMULARIO ÚNICO DE REGLAS (paso 4 del plan de unificación).
+                     Reemplaza a los seis formularios por tabla, que ofrecían
+                     cada uno solo su propio subconjunto de campos: no se podía
+                     armar un descuento por producto con ventana de pago, aunque
+                     el motor lo soporta. Los 37 campos son un núcleo común más
+                     un bloque corto por tipo -- el desplegable decide cuál. -->
+                <section class="card" id="regla-unificada-panel" style="border-left:5px solid #1f6f5c;">
+                    <div class="panel-header" style="margin-bottom:1rem;">
+                        <h2>Nueva regla de descuento</h2>
+                        <p>Un solo formulario para los seis tipos. Elige el tipo y aparecen
+                           sus campos propios; lo de arriba vale para todas.</p>
+                    </div>
+                    <form id="form-regla-unificada" onsubmit="return false;">
+
+                        <div class="form-group">
+                            <label>Tipo de regla</label>
+                            <select id="ru-tipo" onchange="cambiarTipoRegla()">
+                                <option value="contado">Pronto pago (contado)</option>
+                                <option value="volumen">Volumen / fidelidad</option>
+                                <option value="recompra">Recompra</option>
+                                <option value="promocion">Promoción / primera compra</option>
+                                <option value="diferencial">Diferencial cambiario</option>
+                                <option value="credito">Días de crédito</option>
+                            </select>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">Identidad y alcance</h3>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:2">
+                                <label>Descripción</label>
+                                <input type="text" id="ru-descripcion" placeholder="Ej: 8% contado Global Oil caja">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Id (vacío = nueva)</label>
+                                <input type="text" id="ru-regla-id" placeholder="automático">
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Marca</label>
+                                <input type="text" id="ru-marca" value="*" placeholder="* = todas">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Categoría</label>
+                                <input type="text" id="ru-categoria" value="*" placeholder="* = todas">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad de medida</label>
+                                <select id="ru-unidad">
+                                    <option value="UNIDADES">Unidades</option>
+                                    <option value="CAJAS">Cajas</option>
+                                    <option value="LITROS">Litros</option>
+                                    <option value="USD">USD</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Vigente desde</label>
+                                <input type="date" id="ru-desde">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Hasta <small style="font-weight:400;opacity:.7">(vacío = sin fin)</small></label>
+                                <input type="date" id="ru-hasta">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Activa</label>
+                                <input type="checkbox" id="ru-activo" checked>
+                            </div>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">A quién aplica</h3>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Listas permitidas</label>
+                                <select id="ru-listas">
+                                    <option value="*">Todas</option>
+                                    <option value="LISTAS_VES">Solo listas VES</option>
+                                    <option value="LISTAS_USD">Solo listas USD</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Nunca aplicar a <small style="font-weight:400;opacity:.7">(gana sobre lo anterior)</small></label>
+                                <select id="ru-listas-excluidas">
+                                    <option value="">— no excluir —</option>
+                                    <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                    <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Nunca si el pago fue en</label>
+                                <select id="ru-monedas-excluidas">
+                                    <option value="">— ninguna —</option>
+                                    <option value="USD">USD</option>
+                                    <option value="VES">VES</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Ventana de pago</label>
+                                <select id="ru-ventana-tipo">
+                                    <option value="no_aplica">No aplica</option>
+                                    <option value="entrega">Desde la entrega</option>
+                                    <option value="emision">Desde la emisión</option>
+                                    <option value="vencimiento">Desde el vencimiento</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Días de margen</label>
+                                <input type="number" id="ru-ventana-dias" value="0" min="0">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Frecuencia</label>
+                                <select id="ru-frecuencia">
+                                    <option value="recurrente">Recurrente</option>
+                                    <option value="una_vez">Una sola vez por cliente</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Requiere pago previo</label>
+                                <input type="checkbox" id="ru-pago-previo">
+                            </div>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">El beneficio</h3>
+
+                        <div class="ru-bloque" data-tipos="contado volumen recompra">
+                            <div class="form-group" style="max-width:220px">
+                                <label>Porcentaje <small style="font-weight:400;opacity:.7">(0.08 = 8 %)</small></label>
+                                <input type="number" id="ru-porcentaje" step="0.0001" value="0.05">
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="volumen recompra credito">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Desde (mínimo)</label>
+                                    <input type="number" id="ru-min" step="0.0001" value="0">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Hasta (máximo)</label>
+                                    <input type="number" id="ru-max" step="0.0001" value="999999">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="volumen">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Se evalúa</label>
+                                    <select id="ru-evaluacion">
+                                        <option value="orden">Por orden</option>
+                                        <option value="acumulado">Acumulado del cliente</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Días de la ventana acumulada</label>
+                                    <input type="number" id="ru-dias-eval" value="30" min="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="promocion">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:2">
+                                    <label>Productos de regalo <small style="font-weight:400;opacity:.7">(ids separados por coma)</small></label>
+                                    <input type="text" id="ru-productos" placeholder="1033,1022">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Tipo de regalo</label>
+                                    <select id="ru-regalo">
+                                        <option value="solo_uno">Solo uno</option>
+                                        <option value="conjunto">Conjunto</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Cantidad de regalo</label>
+                                    <input type="number" id="ru-valor" step="0.01" value="1">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Compra mínima</label>
+                                    <input type="number" id="ru-compra-minima" step="0.01" value="0">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Descuento si no alcanza</label>
+                                    <input type="number" id="ru-fallback" step="0.0001" value="0">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="diferencial">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Tipo</label>
+                                    <select id="ru-tipo-dif">
+                                        <option value="fijo_35_ves_usd">Diferencial (cierra el hueco hasta lo pagado)</option>
+                                        <option value="candidato_cierre_factura">Candidatos a cierre (reporte, no descuento)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Tope máximo <small style="font-weight:400;opacity:.7">(0.35 = 35 %)</small></label>
+                                    <input type="number" id="ru-tope" step="0.0001" value="0.35">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="credito">
+                            <div class="form-group" style="max-width:220px">
+                                <label>Días de crédito máximos</label>
+                                <input type="number" id="ru-dias-credito" value="30" min="0">
+                            </div>
+                        </div>
+
+                        <div style="margin-top:1.2rem; display:flex; gap:.6rem; align-items:center;">
+                            <button class="btn btn-primary" onclick="guardarReglaUnificada()">Guardar regla</button>
+                            <span id="ru-mensaje" style="font-size:.85rem;"></span>
+                        </div>
+                    </form>
+                </section>
+
                 <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
                     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                         <div>
