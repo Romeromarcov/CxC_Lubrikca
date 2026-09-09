@@ -3233,7 +3233,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- Categoría madre -> subcategoría -> presentación (cascada, en vivo desde Odoo) ---
     window._categoriaArbol = window._categoriaArbol || {};
     window._presentacionesOdoo = window._presentacionesOdoo || [];
-    const CASCADA_PREFIJOS = ["rec", "pp", "vol", "promo", "prod"];
+    const CASCADA_PREFIJOS = ["rec", "pp", "vol", "promo", "prod", "ru"];
 
     function madresChecked(prefix) {
         return Array.from(document.querySelectorAll(`.m2m-${prefix}-madre:checked`)).map(cb => cb.value);
@@ -3309,14 +3309,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadCategoriaArbolYPresentaciones() {
         try {
-            const [rArbol, rPres] = await Promise.all([
+            const [rArbol, rPres, rMarcas] = await Promise.all([
                 fetch("/api/odoo/categorias-arbol"),
                 fetch("/api/odoo/presentaciones"),
+                fetch("/api/odoo/marcas"),
             ]);
             if (rArbol.ok) window._categoriaArbol = await rArbol.json();
             if (rPres.ok) window._presentacionesOdoo = await rPres.json();
+            // Las marcas del catálogo de Odoo (product.brand), para que el
+            // formulario único no dependa de una lista escrita a mano.
+            if (rMarcas.ok) window._marcasOdoo = await rMarcas.json();
         } catch (err) {
             console.error("Error cargando árbol de categorías/presentaciones:", err);
+        }
+        const cajaMarcas = document.querySelector(".m2m-ru-marca-box");
+        if (cajaMarcas && Array.isArray(window._marcasOdoo) && window._marcasOdoo.length) {
+            const previas = Array.from(document.querySelectorAll(".m2m-ru-marca:checked")).map(c => c.value);
+            cajaMarcas.innerHTML = window._marcasOdoo.map(m =>
+                `<label><input type="checkbox" class="m2m-ru-marca" value="${m}" ${previas.includes(m) ? "checked" : ""}> ${m}</label>`
+            ).join(" ") + ` <label><input type="checkbox" class="m2m-ru-marca" value="*" ${previas.length && !previas.includes("*") ? "" : "checked"}> Todas (*)</label>`;
         }
         CASCADA_PREFIJOS.forEach(prefix => {
             refreshSubcategorias(prefix);
@@ -5433,8 +5444,8 @@ document.addEventListener("DOMContentLoaded", () => {
             tipo_regla: tipo,
             regla_id: v("ru-regla-id", ""),
             descripcion: v("ru-descripcion", ""),
-            marca: v("ru-marca", "*"),
-            categoria: v("ru-categoria", "*"),
+            marca: getM2MCheckedValues(document.getElementById("form-regla-unificada"), ".m2m-ru-marca") || "*",
+            categoria: getCategoriaCombinada(document.getElementById("form-regla-unificada"), "ru"),
             unidad_medida: v("ru-unidad", "UNIDADES"),
             vigencia_desde: v("ru-desde", ""),
             vigencia_hasta: v("ru-hasta", ""),

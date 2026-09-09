@@ -1533,23 +1533,43 @@
                                 <input type="text" id="ru-regla-id" placeholder="automático">
                             </div>
                         </div>
+                        <!-- Marca, categoría y presentación NO son texto libre: salen
+                             de Odoo, igual que en los formularios por tipo. Un campo
+                             libre acá invita a escribir "Sinoco" donde el catálogo dice
+                             "SINOCO" y la regla no matchea nunca. La cascada
+                             madre -> subcategoría -> presentación es la misma que ya
+                             usan Pronto Pago y las demás. -->
                         <div class="form-group-row">
                             <div class="form-group" style="flex:1">
-                                <label>Marca</label>
-                                <input type="text" id="ru-marca" value="*" placeholder="* = todas">
+                                <label>Marcas</label>
+                                <div class="m2m-ru-marca-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                    <label><input type="checkbox" class="m2m-ru-marca" value="*" checked> Todas (*)</label>
+                                </div>
                             </div>
                             <div class="form-group" style="flex:1">
-                                <label>Categoría</label>
-                                <input type="text" id="ru-categoria" value="*" placeholder="* = todas">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de medida</label>
+                                <label>Unidad del tramo</label>
                                 <select id="ru-unidad">
-                                    <option value="UNIDADES">Unidades</option>
-                                    <option value="CAJAS">Cajas</option>
+                                    <option value="UNIDADES">Unidades / cajas</option>
                                     <option value="LITROS">Litros</option>
-                                    <option value="USD">USD</option>
                                 </select>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1.6">
+                                <label title="La madre filtra qué subcategorías y presentaciones se ofrecen debajo">Categoría madre</label>
+                                <div class="m2m-ru-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="Comercial"> Comercial</label>
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="Industrial"> Industrial</label>
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="*"> Todas (*)</label>
+                                </div>
+                                <label style="display:block; margin-top:8px;" title="Solo las subcategorías reales de Odoo dentro de la madre elegida">Subcategoría</label>
+                                <div class="m2m-ru-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
+                                    <small style="color:var(--text-muted)">Elige una categoría madre para ver sus subcategorías.</small>
+                                </div>
+                                <label style="display:block; margin-top:8px;" title="Envase real (1X6, Tambor, Paila) -- hay reglas que aplican por presentación, no por categoría">Presentación</label>
+                                <div class="m2m-ru-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
+                                    <small style="color:var(--text-muted)">Elige una categoría madre para ver sus presentaciones.</small>
+                                </div>
                             </div>
                         </div>
                         <div class="form-group-row">
