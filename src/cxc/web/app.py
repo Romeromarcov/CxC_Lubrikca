@@ -7323,6 +7323,56 @@ _SALDOS_REALES_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
 _SALDOS_REALES_CACHE_TTL = 60.0
 
 
+_SALIDAS_CXC_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
+_SALIDAS_CXC_CACHE_TTL = 60.0
+
+
+def _get_salidas_cxc_sync() -> set[str] | None:
+    """Órdenes que YA salieron de Cuentas por Cobrar, según el árbol de CxC.
+
+    El reparto FIFO decide a qué orden aplicar un pago mirando
+    ``_get_saldos_reales_por_so_sync``, que mide el saldo deudor contra la
+    referencia BCV. Pero el árbol de CxC saca una orden cuando cubre
+    CUALQUIERA de sus referencias, y la más frecuente es el Teórico Lista
+    USD -- que es ~35 % menor. Resultado: una orden pagada contra su
+    teórico USD sigue mostrando saldo en BCV, y el FIFO la ofrecía como
+    destino.
+
+    Medido contra producción durante la auditoría: 19 sugerencias sobre
+    ordenes que Ventas da por pagadas, por $5.891,49 -- y el daemon las
+    auto-vincula, así que no eran sugerencias sino aplicaciones hechas.
+
+    Se cachea 60 s con el mismo criterio que los saldos: el daemon corre
+    cada 5 minutos y paga el cálculo una vez por ciclo.
+
+    Devuelve ``None`` si no se pudo calcular, para que quien llama distinga
+    "no sé" de "ninguna salió" -- tratar el error como conjunto vacío
+    volvería a ofrecer todo.
+    """
+    import time
+
+    now_ts = time.time()
+    cached = _SALIDAS_CXC_CACHE["data"]
+    if cached is not None and now_ts - float(_SALIDAS_CXC_CACHE["timestamp"]) < (
+        _SALIDAS_CXC_CACHE_TTL
+    ):
+        return set(cached)
+    try:
+        data = asyncio.run(get_ventas(vendedor=None, cxc_session=None))
+    except RuntimeError:
+        # Ya hay un loop corriendo (llamada desde un endpoint async).
+        return None
+    except Exception as e:
+        logger.warning("No se pudo determinar qué órdenes salieron de CxC: %s", e)
+        return None
+    salidas = {
+        str(i["so_id"]) for i in (data.get("items") or []) if i.get("sale_de_cxc")
+    }
+    _SALIDAS_CXC_CACHE["data"] = salidas
+    _SALIDAS_CXC_CACHE["timestamp"] = now_ts
+    return salidas
+
+
 def _get_saldos_reales_por_so_sync() -> dict[str, float] | None:
     """``so_id`` -> saldo real pendiente, EXACTAMENTE el mismo cálculo que
 
@@ -7752,6 +7802,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 )
 
         saldos_reales = _get_saldos_reales_por_so_sync()
+        salidas_cxc = _get_salidas_cxc_sync()
 
         open_orders_by_client = {}
         for o in ordenes:
@@ -7775,6 +7826,13 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 # ese reporte -- no se ofrece como destino.
                 saldo_real = saldos_reales.get(o.so_id)
                 if saldo_real is None or saldo_real <= 0.05:
+                    continue
+                # Y tampoco se ofrece una orden que el árbol de CxC ya dio
+                # por saldada. El saldo de arriba se mide contra BCV; el
+                # árbol saca la orden cuando cubre CUALQUIERA de sus
+                # referencias, y la más frecuente es el Teórico USD, ~35 %
+                # menor. Ver _get_salidas_cxc_sync.
+                if salidas_cxc is not None and o.so_id in salidas_cxc:
                     continue
                 saldo = Decimal(str(saldo_real))
             else:
@@ -12414,6 +12472,13 @@ def _detectar_devolucion_no_reflejada_en_cantidad(
         o = ordenes_afectadas.get(ln.so_id)
         if o is None:
             continue
+        # Una línea que no pidió nada no puede tener un faltante de
+        # despacho. En producción hay dos así (S00952 y S00925): cantidad 0
+        # y cantidad_entregada NEGATIVA, o sea líneas creadas solo para
+        # registrar la devolución. El detector las leía como "faltan 4" y
+        # "faltan 10" unidades que nunca se pidieron.
+        if ln.cantidad <= 0:
+            continue
         if ln.cantidad_entregada >= ln.cantidad:
             continue
         # Líneas de ajuste "Descuento" (precio_unitario negativo, no
@@ -14891,6 +14956,28 @@ def _get_ventas_sync(
                     # orden si sigue en CxC. Ver docstring del cálculo
                     # arriba (justo antes de este items.append).
                     "pagada": pagada,
+                    # Estado visible de la orden. Existe para que Ventas no
+                    # diga algo distinto al Reporte de Saldos y al reporte
+                    # por cliente, que es la invariante que declara el
+                    # comentario de ``pagada`` unas líneas arriba.
+                    #
+                    # La regla "la cuenta por cobrar nace con la entrega"
+                    # la rompió: esas dos vistas excluyen las órdenes sin
+                    # despachar, y Ventas las seguía mostrando como deuda
+                    # pendiente. No son ni "pagada" ni "sin pagar" -- son
+                    # una venta tomada que todavía no genera cobro.
+                    "estado_cobro": (
+                        "pagada"
+                        if pagada
+                        else (
+                            "pendiente_entrega"
+                            if not bool(
+                                (cant_entregada_orden > 0.005)
+                                or (val_ref_nacimiento > _EPS_PAGO)
+                            )
+                            else "por_cobrar"
+                        )
+                    ),
                     "iva_pendiente_sin_facturar": iva_pendiente_sin_facturar,
                     "saldo_cxc": saldo_cxc,
                 }

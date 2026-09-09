@@ -124,3 +124,54 @@ def test_una_cantidad_entregada_negativa_no_resta_de_las_demas() -> None:
 
 def test_sin_lineas_se_respeta_el_monto_de_odoo() -> None:
     assert venta_real_neta_de_devolucion(_orden(), [], 500.0) == 500.0
+
+
+def test_una_linea_que_no_pidio_nada_no_es_un_faltante_de_despacho() -> None:
+    """Falso positivo real del detector de devoluciones no reflejadas.
+
+    En producción hay dos líneas así -- S00952 y S00925 -- con
+    ``cantidad = 0`` y ``cantidad_entregada`` NEGATIVA: se crearon solo
+    para registrar la devolución. El detector las leía como "faltan 4" y
+    "faltan 10" unidades que nunca se pidieron, y las sumaba a los 112
+    hallazgos de la bandeja.
+    """
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from cxc.web.app import _detectar_devolucion_no_reflejada_en_cantidad
+
+    orden = SimpleNamespace(so_id="S00952", tiene_devolucion=True)
+    linea_solo_devolucion = SimpleNamespace(
+        so_id="S00952",
+        linea_id="2505",
+        producto="0141",
+        nombre="HIDRAGLOB AW/ISO 46",
+        cantidad=Decimal("0"),
+        cantidad_entregada=Decimal("-4"),
+        precio_unitario=Decimal("100"),
+    )
+    assert _detectar_devolucion_no_reflejada_en_cantidad(
+        [orden], [linea_solo_devolucion], []
+    ) == []
+
+
+def test_un_faltante_real_se_sigue_reportando() -> None:
+    """La contracara: pidió 10, se entregaron 6, faltan 4."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from cxc.web.app import _detectar_devolucion_no_reflejada_en_cantidad
+
+    orden = SimpleNamespace(so_id="S00133", tiene_devolucion=True)
+    linea = SimpleNamespace(
+        so_id="S00133",
+        linea_id="1",
+        producto="0877",
+        nombre="SS EXTRA PROTECCION",
+        cantidad=Decimal("10"),
+        cantidad_entregada=Decimal("6"),
+        precio_unitario=Decimal("100"),
+    )
+    r = _detectar_devolucion_no_reflejada_en_cantidad([orden], [linea], [])
+    assert len(r) == 1
+    assert float(r[0]["faltante"]) == 4.0
