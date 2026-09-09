@@ -2942,6 +2942,18 @@ document.addEventListener("DOMContentLoaded", () => {
                         cfgPromoProductos.appendChild(opt);
                     });
                 }
+
+                // El mismo catálogo para el formulario único.
+                const selRU = document.getElementById("ru-productos");
+                if (selRU) {
+                    selRU.innerHTML = '';
+                    data.forEach(p => {
+                        const opt = document.createElement("option");
+                        opt.value = p.ref_interna || p.id;
+                        opt.textContent = `[${p.ref_interna || 'N/A'}] ${p.nombre}`;
+                        selRU.appendChild(opt);
+                    });
+                }
             } else {
                 productosTableBody.innerHTML = '<tr><td colspan="5" class="table-empty">No se pudieron cargar los productos desde Odoo (Servidor retornó error).</td></tr>';
             }
@@ -3203,6 +3215,26 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cfgPromoProductos) {
         cfgPromoProductos.addEventListener("change", () => {
             if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = cfgPromoProductos.selectedOptions.length;
+        });
+    }
+
+    // Buscador y contador del selector de productos del formulario único
+    // -- misma mecánica que el de la promoción: filtra las <option> ya
+    // cargadas sin volver a pedirlas.
+    const selProdRU = document.getElementById("ru-productos");
+    const buscarProdRU = document.getElementById("ru-productos-buscar");
+    if (selProdRU) {
+        selProdRU.addEventListener("change", () => {
+            const c = document.getElementById("ru-productos-count");
+            if (c) c.textContent = selProdRU.selectedOptions.length;
+        });
+    }
+    if (buscarProdRU && selProdRU) {
+        buscarProdRU.addEventListener("input", () => {
+            const q = buscarProdRU.value.trim().toLowerCase();
+            Array.from(selProdRU.options).forEach(opt => {
+                opt.hidden = q.length > 0 && !opt.textContent.toLowerCase().includes(q);
+            });
         });
     }
 
@@ -5462,7 +5494,9 @@ document.addEventListener("DOMContentLoaded", () => {
             max_unidades: num("ru-max", 999999),
             tipo_evaluacion: v("ru-evaluacion", "orden"),
             dias_evaluacion: num("ru-dias-eval", 30),
-            productos: v("ru-productos", ""),
+            productos: Array.from(
+                document.getElementById("ru-productos")?.selectedOptions || []
+            ).map(o => o.value).join(","),
             regalo_tipo: v("ru-regalo", "solo_uno"),
             valor: num("ru-valor", 0),
             compra_minima: num("ru-compra-minima", 0),

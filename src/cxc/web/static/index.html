@@ -1681,9 +1681,15 @@
 
                         <div class="ru-bloque" data-tipos="promocion">
                             <div class="form-group-row">
+                                <!-- Selector del catálogo, no texto libre: el motor
+                                     compara contra la referencia interna del producto,
+                                     y un id tipeado a mano deja la regla sin efecto
+                                     sin que nadie se entere. Mismo patrón que ya usa
+                                     la promoción de obsequio. -->
                                 <div class="form-group" style="flex:2">
-                                    <label>Productos de regalo <small style="font-weight:400;opacity:.7">(ids separados por coma)</small></label>
-                                    <input type="text" id="ru-productos" placeholder="1033,1022">
+                                    <label>Productos de regalo <small style="font-weight:400;opacity:.7">(<span id="ru-productos-count">0</span> seleccionados)</small></label>
+                                    <input type="text" id="ru-productos-buscar" placeholder="Buscar por nombre o referencia..." style="margin-bottom:6px">
+                                    <select id="ru-productos" multiple style="min-height:90px"></select>
                                 </div>
                                 <div class="form-group" style="flex:1">
                                     <label>Tipo de regalo</label>
