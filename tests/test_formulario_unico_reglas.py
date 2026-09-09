@@ -50,6 +50,7 @@ def _cliente_y_repo():
         ("contado", "append_descuento_pronto_pago"),
         ("volumen", "append_descuento_volumen"),
         ("recompra", "append_descuento_recompra"),
+        ("producto", "append_descuento_producto"),
         ("promocion", "append_promocion_primera_compra"),
         ("diferencial", "append_descuento_diferencial_cambiario"),
         ("credito", "upsert_regla_dias_credito_volumen"),
@@ -139,3 +140,66 @@ def test_una_fecha_invalida_no_revienta() -> None:
             json={**_BASE, "tipo_regla": "contado", "vigencia_desde": "no-es-fecha"},
         )
     assert res.status_code == 200
+
+
+def test_el_tramo_en_usd_se_rechaza_en_vez_de_comparar_dolares_contra_cajas() -> None:
+    """Paso 0 del análisis de tramos en USD.
+
+    El motor lee ``unidad_medida`` en un solo lugar y solo pregunta si dice
+    LITROS; todo lo demás cae a la rama que compara contra un conteo de
+    cajas. Con la unidad en USD y un tramo cargado, comparaba DÓLARES
+    contra CAJAS en silencio. Hoy no muerde porque las 10 reglas con unidad
+    USD tienen el tramo en 0-999999, pero el formulario único permite
+    combinarlos.
+    """
+    client, repo = _cliente_y_repo()
+    with patch("cxc.web.app.get_repo", return_value=repo):
+        res = client.post(
+            "/api/config/regla",
+            json={
+                **_BASE,
+                "tipo_regla": "volumen",
+                "unidad_medida": "USD",
+                "min_unidades": 2000,
+                "max_unidades": 5000,
+            },
+        )
+    assert res.status_code == 400
+    assert "USD" in res.text
+    assert not repo.append_descuento_volumen.called
+
+
+def test_la_unidad_usd_sin_tramo_sigue_permitida() -> None:
+    """Las 7 reglas de contado y las 3 de diferencial la usan así."""
+    client, repo = _cliente_y_repo()
+    with patch("cxc.web.app.get_repo", return_value=repo):
+        res = client.post(
+            "/api/config/regla",
+            json={**_BASE, "tipo_regla": "contado", "unidad_medida": "USD"},
+        )
+    assert res.status_code == 200
+
+
+def test_el_tipo_calculo_del_diferencial_se_deriva() -> None:
+    """Nunca se elige aparte: el motor solo lee tipo_diferencial, y un
+    segundo selector para lo mismo era una trampa."""
+    client, repo = _cliente_y_repo()
+    with patch("cxc.web.app.get_repo", return_value=repo):
+        client.post(
+            "/api/config/regla",
+            json={**_BASE, "tipo_regla": "diferencial", "tipo_diferencial": "fijo_35_ves_usd"},
+        )
+    assert repo.append_descuento_diferencial_cambiario.call_args[0][0].tipo_calculo == "fijo"
+
+
+def test_el_descuento_por_producto_no_queda_afuera() -> None:
+    """Era la única de las siete familias sin rama en el formulario único.
+    La tabla y el motor la soportan desde siempre; hoy no hay reglas
+    cargadas en producción, y por eso el hueco pasaba desapercibido."""
+    client, repo = _cliente_y_repo()
+    with patch("cxc.web.app.get_repo", return_value=repo):
+        client.post(
+            "/api/config/regla",
+            json={**_BASE, "tipo_regla": "producto", "productos": "1033,1022"},
+        )
+    assert repo.append_descuento_producto.call_args[0][0].productos == "1033,1022"
