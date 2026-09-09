@@ -2115,9 +2115,11 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
     ninguna fuente tiene NADA (no debería pasar tras la siembra inicial),
     usa la fila de ``SerieTasas`` más cercana aunque sea de otro día.
     """
-    repo = get_repo()
+    # El repo se resuelve tarde y solo si hace falta: cuando quien llama ya
+    # trae las filas de SerieTasas y ahí está el día exacto, esta función no
+    # toca la base.
     if rows is None:
-        rows = _all_serie_tasas_rows(repo)
+        rows = _all_serie_tasas_rows(get_repo())
 
     fecha_str = dt.date().isoformat()
     if rows:
@@ -2127,7 +2129,7 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
                 closest_row.get("tasa_binance")
             )
 
-    hist_rows = _tasas_historicas_cacheadas(repo)
+    hist_rows = _tasas_historicas_cacheadas(get_repo())
     bcv_hist = get_bcv_usd_rate_for_date(dt.date(), hist_rows)
     binance_hist = get_binance_rate_for_date(dt.date(), hist_rows)
     if bcv_hist is not None and binance_hist is not None:
@@ -2146,6 +2148,40 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
         fecha_str,
     )
     return Decimal("36.5"), Decimal("38.0")
+
+
+def tasa_bcv_de_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
+    """Tasa BCV del día ``fecha_iso`` (``YYYY-MM-DD``), con la política buena.
+
+    Existe por un error real (septiembre 2026). El Reporte de Saldos se
+    armaba su propio ``rates_map`` con SOLO ``SerieTasas`` y, cuando el día
+    no estaba, caía a la ÚLTIMA tasa de la serie -- es decir, a la de hoy.
+    ``SerieTasas`` la escribe el scraper horario y en producción arranca el
+    2026-07-25: 40 días. Las facturas arrancan el 2026-02-01: 216 días. O
+    sea que toda factura anterior al 25 de julio se convertía a dólares con
+    la tasa ACTUAL, siempre más alta, y el reporte siempre daba de menos.
+
+    Se veía como un descuadre de 4.289,57 contra ``amount_residual_usd`` de
+    Odoo, y durante un rato lo atribuí a que Odoo usara otra tasa. No: la
+    factura 00000525 da 1.340.030,18 VES / 1.829,45 USD = 732,48, y nuestra
+    tasa del 2026-07-17 es 732,4787. Coinciden al centavo. Lo que estaba
+    mal era de qué tabla se leía.
+
+    ``get_rate_for_datetime`` ya implementaba la política correcta --
+    ``SerieTasas`` si tiene el día exacto, si no ``TasasHistoricasAuditoria``,
+    que cubre la serie entera -- solo que el reporte no la llamaba. Esta
+    función es la fachada por fecha en texto, que es como la tienen los
+    llamadores (``invoice_date`` de Odoo).
+
+    Devuelve 0.0 si la fecha no se puede parsear, para que quien llama
+    decida qué hacer: convertir con una tasa inventada es peor que no
+    convertir.
+    """
+    try:
+        dia = datetime.fromisoformat(str(fecha_iso)[:10])
+    except (TypeError, ValueError):
+        return 0.0
+    return float(get_rate_for_datetime(dia, serie_rows)[0] or 0.0)
 
 
 def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
@@ -3870,8 +3906,7 @@ def _pagos_odoo_por_orden(
     inv_id_to_so: dict[int, str],
     invoices_by_so: dict[str, list[dict]],
     ordenes_map: dict[str, OrdenVenta],
-    rates_map: dict[str, float],
-    last_bcv_val: float,
+    serie_rows: list[dict],
 ) -> dict[str, dict[str, Any]]:
     """Pagos por orden en equivalente USD, calculados directo contra Odoo --
 
@@ -3968,7 +4003,7 @@ def _pagos_odoo_por_orden(
                         p_bcv = p_amt
                         p_bin = p_amt
                     else:
-                        rate_bcv = rates_map.get(p_date, last_bcv_val)
+                        rate_bcv = tasa_bcv_de_dia(p_date, serie_rows)
                         p_bcv = (
                             p_amt / Decimal(str(rate_bcv))
                             if rate_bcv and float(rate_bcv) > 0
@@ -4009,7 +4044,7 @@ def _pagos_odoo_por_orden(
                     if order_usd_total > Decimal("0") and tot > Decimal("0"):
                         effective_rate = tot / order_usd_total
                     else:
-                        rate_val = rates_map.get(inv_dt, last_bcv_val)
+                        rate_val = tasa_bcv_de_dia(inv_dt, serie_rows)
                         effective_rate = (
                             Decimal(str(rate_val))
                             if rate_val and float(rate_val) > 0
@@ -4211,14 +4246,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # Read rates series to convert VES invoice residual to USD
         tasas_rows = _all_serie_tasas_rows(repo)
-        rates_map = {}
-        for r in tasas_rows:
-            ts = str(r.get("timestamp", ""))[:10]
-            tbcv = r.get("tasa_bcv")
-            if ts and tbcv:
-                with contextlib.suppress(Exception):
-                    rates_map[ts] = float(tbcv)
-        last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
         # Fase 4 (plan de consolidación de fuentes, agosto 2026): montos e
         # identidad de facturas/NC ahora vienen del espejo Factura (que ya
@@ -4305,8 +4332,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             inv_id_to_so,
             invoices_by_so,
             ordenes_map,
-            rates_map,
-            last_bcv_val,
+            tasas_rows,
         )
         for so_name, p_odoo in pagos_odoo.items():
             existing = pagos_by_so.get(so_name, {})
@@ -4659,7 +4685,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     curr = inv.get("currency_id")
                     c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
                     inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
-                    rate = rates_map.get(inv_dt, last_bcv_val)
+                    rate = tasa_bcv_de_dia(inv_dt, tasas_rows)
                     if c_name == "VES" and rate > 0:
                         tot_res_usd += res_val / rate
                     else:
@@ -4739,7 +4765,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     nc_curr[1] if isinstance(nc_curr, list | tuple) and len(nc_curr) > 1 else "USD"
                 )
                 nc_dt = str(nc.get("invoice_date") or o.fecha.isoformat())[:10]
-                nc_rate = rates_map.get(nc_dt, last_bcv_val)
+                nc_rate = tasa_bcv_de_dia(nc_dt, tasas_rows)
                 if nc_c_name == "VES" and nc_rate > 0:
                     ncs_odoo_monto_usd += nc_tot / nc_rate
                 else:
@@ -13141,11 +13167,14 @@ async def get_balance_comprobacion():
                 # que faltaba -- antes esta partida enfrentaba 60.368,21 USD
                 # contra 65.162.339,64 VES y no probaba nada.
                 #
-                # Lo que queda de diferencia es de TASA, no de conteo: el
-                # reporte convierte el residual con la serie BCV de la fecha
-                # de la factura (ver rates_map) y Odoo usa la suya. Por eso
-                # la tolerancia es porcentual: una desviación chica es la
-                # tasa, una grande es que alguien dejó de contar algo.
+                # Acá salieron 4.289,57 de descuadre, y el diagnóstico
+                # fue al revés de lo que parecía: NO era que Odoo usara otra
+                # tasa. El reporte convertía con un mapa armado solo con
+                # ``SerieTasas`` (40 días) y caía a la tasa de HOY para todo
+                # lo anterior -- ver ``tasa_bcv_de_dia``. Con la serie
+                # completa las dos vistas coinciden. La tolerancia sigue
+                # siendo porcentual porque un día de desfase entre la serie
+                # de Odoo y la nuestra es normal y no significa nada.
                 #
                 # Se comparan solo las facturas de las órdenes que el
                 # reporte lista; el universo de Odoo incluye facturas de
@@ -13187,9 +13216,9 @@ async def get_balance_comprobacion():
                     "amount_residual_usd en Odoo",
                     odoo_usd,
                     f"Sobre {len(ids_comparables)} facturas de las órdenes que el "
-                    "reporte lista. La diferencia que quede es de TASA: el "
-                    "reporte convierte con la serie BCV de la fecha de cada "
-                    "factura y Odoo con la suya.",
+                    "reporte lista. Ambos lados convierten el residual con la "
+                    "tasa BCV de la fecha de cada factura; lo que quede es el "
+                    "desfase de un día entre la serie de Odoo y la nuestra.",
                     tolerancia=max(50.0, odoo_usd * 0.01),
                 )
                 partida(
@@ -13485,14 +13514,6 @@ async def get_auditoria():
 
         # Read rates series to convert VES invoice residual to USD
         tasas_rows = _all_serie_tasas_rows(repo)
-        rates_map = {}
-        for r in tasas_rows:
-            ts = str(r.get("timestamp", ""))[:10]
-            tbcv = r.get("tasa_bcv")
-            if ts and tbcv:
-                with contextlib.suppress(Exception):
-                    rates_map[ts] = float(tbcv)
-        last_bcv_val = list(rates_map.values())[-1] if rates_map else 742.23
 
         # Load payments map by SO for net debt comparison.
         # Suma TODAS las vinculaciones (sin filtrar por estado), igual que
@@ -13729,7 +13750,7 @@ async def get_auditoria():
                         curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
                     )
                     inv_dt = str(inv.get("invoice_date") or o.fecha.isoformat())[:10]
-                    rate = rates_map.get(inv_dt, last_bcv_val)
+                    rate = tasa_bcv_de_dia(inv_dt, tasas_rows)
                     if c_name_inv == "VES" and rate > 0:
                         tot_res_usd += res_val / rate
                     else:
