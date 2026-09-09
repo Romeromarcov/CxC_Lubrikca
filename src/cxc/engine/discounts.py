@@ -390,6 +390,12 @@ _LISTA_VES_FALLBACK = "BCV"
 # de HOY (id 8) en vez de la vigente para esa fecha.
 _LISTA_USD_HISTORICA = "7"
 
+# Id del 2 % de primera compra que aplica cuando no hay ninguna promoción
+# configurada a la fecha de la orden. No es una regla de la tabla: es el
+# respaldo histórico, y tiene nombre propio para que el desglose lo diga en
+# vez de mostrarlo como "sin regla".
+_REGLA_FALLBACK_INDUSTRIAL = "FALLBACK_PRIMERA_COMPRA_INDUSTRIAL_2PCT"
+
 
 def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
     """La lista del par que corresponde a la moneda pedida, o None.
@@ -793,7 +799,18 @@ def _evaluar_promociones_producto(
                     getattr(promos_activas[0], "regla_id", "") if promos_activas else "",
                 )
         elif fallback_industrial:
+            # Sin NINGUNA promoción configurada a esa fecha. Es el
+            # comportamiento histórico documentado de "primera compra sin
+            # promos", y aplica solo a líneas Industrial.
+            #
+            # Se etiqueta con un id propio en vez de dejarlo en blanco: el
+            # desglose decía "sin regla", que se lee como "el motor regala
+            # un 2 % que nadie configuró". Medido: 28 órdenes por $1.077,32,
+            # TODAS entre el 26-feb y el 26-mar -- anteriores al 01-abr, que
+            # es cuando arrancan las dos promociones reales. O sea que el
+            # respaldo hizo exactamente lo suyo.
             pct_general = Decimal("0.02")
+            regla_pct_general = _REGLA_FALLBACK_INDUSTRIAL
 
         if promos_activas:
             nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general

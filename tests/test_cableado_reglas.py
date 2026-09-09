@@ -87,3 +87,19 @@ def test_la_auditoria_cubre_todas_las_reglas() -> None:
     assert len(modelos) >= 9, f"solo se encontraron {len(modelos)} modelos de regla"
     for esperado in ("DescuentoVolumen", "DescuentoProntoPago", "PromocionPrimeraCompra"):
         assert esperado in modelos
+
+
+def test_el_fallback_de_primera_compra_tiene_id_propio() -> None:
+    """El 2 % que aplica sin ninguna promoción configurada no es "sin regla".
+
+    Encontrado en la auditoría exhaustiva: 28 componentes de descuento
+    salían del desglose sin regla identificada, lo que se lee como "el
+    motor regala un 2 % que nadie configuró". Son $1.077,32 en órdenes
+    TODAS entre el 26-feb y el 26-mar -- anteriores al 01-abr, que es
+    cuando arrancan las dos promociones reales. O sea que el respaldo
+    histórico hizo exactamente lo suyo, pero el desglose no lo decía.
+    """
+    from cxc.engine.discounts import _REGLA_FALLBACK_INDUSTRIAL
+
+    assert _REGLA_FALLBACK_INDUSTRIAL
+    assert "FALLBACK" in _REGLA_FALLBACK_INDUSTRIAL
