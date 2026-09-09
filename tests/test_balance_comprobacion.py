@@ -322,3 +322,39 @@ def test_una_tasa_realmente_cambiada_si_se_reporta() -> None:
     """El caso que la partida existe para atrapar: convertir una factura
     de julio con la tasa de septiembre (820,10 contra 732,48)."""
     assert _tasa_diverge(1340030.18, 1829.45, 820.10) is True
+
+
+# --- Los abonos en euros ---------------------------------------------------
+#
+# Al ubicar el descuadre de −91,27 de la partida de pagos aparecieron dos
+# poblaciones distintas, y solo una era "tasa":
+#
+#   · 465 pagos con −117,74: el desfase de un día. Odoo fecha la tasa por
+#     el asiento y nosotros por el día. No es un error.
+#   · 5 pagos con +26,47: se cobraron en EUROS. Odoo los convirtió con la
+#     tasa BCV del euro, ~16 % por encima del dólar. El memo de uno lo dice
+#     con todas las letras: "Tasa € el abono de 70$".
+#
+# Convertirlos a BCV-USD los hacía ver como tasa mal cargada cuando la
+# tasa está perfecta: solo es otra moneda. Se detectan por la tasa
+# implícita del propio pago, no por una lista fija de ids.
+
+
+def _es_abono_en_euros(monto_ves: float, ref_usd: float, bcv: float, eur: float) -> bool:
+    implicita = monto_ves / ref_usd
+    return abs(implicita / eur - 1.0) < 0.01 and abs(implicita / bcv - 1.0) >= 0.01
+
+
+def test_reconoce_un_abono_cobrado_en_euros() -> None:
+    """Pago 199, del 2026-04-24: 39.678,80 Bs por 70 $ da 566,84, que es
+    clavado el BCV del euro de ese día y no el del dólar (483,87)."""
+    assert _es_abono_en_euros(39678.80, 70.0, 483.8695, 566.84) is True
+
+
+def test_un_abono_normal_no_se_confunde_con_uno_en_euros() -> None:
+    assert _es_abono_en_euros(1340030.18, 1829.45, 732.4787, 850.0) is False
+
+
+def test_el_desfase_de_un_dia_tampoco_se_confunde() -> None:
+    """El grupo grande: 764,35 contra 766,86 es medio punto, no un euro."""
+    assert _es_abono_en_euros(13931659.64, 18226.84, 766.8603, 890.0) is False

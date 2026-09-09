@@ -13439,8 +13439,10 @@ async def get_balance_comprobacion():
                 # la tasa cambiada, el descuadre aparece acá y en ningún otro
                 # lado.
                 serie_bal = _all_serie_tasas_rows(repo_bal)
+                hist_bal = _tasas_historicas_cacheadas(repo_bal)
                 vivos_por_id = {int(x["id"]): x for x in vivos}
                 eq_nuestro = eq_odoo = 0.0
+                en_euros = 0
                 for p in pagos:
                     if not str(p.pago_id).isdigit():
                         continue
@@ -13449,12 +13451,33 @@ async def get_balance_comprobacion():
                         continue
                     moneda = str(getattr(p, "moneda", "") or "USD").upper().replace("MONEDA.", "")
                     monto = float(getattr(p, "monto", 0.0) or 0.0)
+                    ref_p = float(m_pago.get("amount_ref") or 0.0)
                     if moneda == "VES":
                         tasa_p = float(get_rate_for_datetime(p.fecha_pago, serie_bal)[0] or 0.0)
-                        eq_nuestro += monto / tasa_p if tasa_p > 0 else 0.0
+                        # Un puñado de abonos se cobraron en EUROS y Odoo los
+                        # convirtió con la tasa BCV del euro, ~16 % por
+                        # encima del dólar. Convertirlos a BCV-USD los hacía
+                        # aparecer como "tasa mal cargada" cuando la tasa
+                        # está perfecta -- solo es otra moneda. Se detectan
+                        # por la tasa implícita del propio pago, no por una
+                        # lista fija, así que el que aparezca mañana también
+                        # queda cubierto.
+                        eur = get_eur_rate_for_date(p.fecha_pago.date(), hist_bal)
+                        implicita = monto / ref_p if ref_p > 0 else 0.0
+                        if (
+                            eur
+                            and implicita > 0
+                            and tasa_p > 0
+                            and abs(implicita / float(eur) - 1.0) < 0.01
+                            and abs(implicita / tasa_p - 1.0) >= 0.01
+                        ):
+                            en_euros += 1
+                            eq_nuestro += monto / float(eur)
+                        else:
+                            eq_nuestro += monto / tasa_p if tasa_p > 0 else 0.0
                     else:
                         eq_nuestro += monto
-                    eq_odoo += float(m_pago.get("amount_ref") or 0.0)
+                    eq_odoo += ref_p
                 partida(
                     "Pagos: equivalente BCV contra Odoo",
                     "nuestra serie de tasas",
@@ -13464,7 +13487,15 @@ async def get_balance_comprobacion():
                     f"Los {len(vivos_por_id)} pagos vivos llevados a dólares con "
                     "la tasa BCV de su propia fecha. Un descuadre acá es una "
                     "tasa mal cargada, no un pago que falte: los importes "
-                    "nominales ya cuadran en la partida anterior.",
+                    "nominales ya cuadran en la partida anterior. Lo que "
+                    "queda es el desfase de un día -- Odoo fecha la tasa por "
+                    "el asiento y nosotros por el día."
+                    + (
+                        f" {en_euros} abonos se cobraron en euros y se "
+                        "convierten con la tasa BCV del euro."
+                        if en_euros
+                        else ""
+                    ),
                     tolerancia=max(200.0, eq_odoo * 0.005),
                 )
 
