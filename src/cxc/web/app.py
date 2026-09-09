@@ -5275,10 +5275,41 @@ def huella_discrepancia(tipo: str, so_id: str, valores: dict[str, Any]) -> str:
     return hashlib.sha256(crudo.encode("utf-8")).hexdigest()[:16]
 
 
+# Campos que IDENTIFICAN una fila dentro de su detector, sin decir nada de
+# su magnitud. Van en el id; los montos van en la huella.
+_CLAVES_IDENTIDAD_DISCREPANCIA = (
+    "linea_id",
+    "producto_codigo",
+    "producto",
+    "move_name",
+    "numero_pago_odoo",
+    "factura_id",
+)
+
+
 def id_discrepancia(tipo: str, item: dict[str, Any]) -> str:
-    """Identificador estable de una discrepancia dentro de su detector."""
+    """Identificador estable de una discrepancia concreta.
+
+    El par (tipo, orden) NO alcanza: una misma orden puede tener varios
+    hallazgos del mismo tipo -- un precio por debajo de lista en cada
+    producto, por ejemplo. Medido durante la auditoría: 113 ids repetidos,
+    y aceptar uno de ellos tapaba a todos sus hermanos.
+
+    Se agregan los campos de IDENTIDAD de la fila (línea, producto, asiento,
+    pago), no sus montos. El id tiene que sobrevivir a un cambio de cifras
+    para que ``separar_discrepancias_aceptadas`` pueda reconocer que ESTA
+    discrepancia ya se había aceptado y ahora cambió -- si el id se moviera
+    con el monto, la aceptación previa no se encontraría y el hallazgo
+    volvería como nuevo, sin marca de "reabierta".
+    """
     ref = str(item.get("so_id") or item.get("pago_id") or item.get("factura_id") or "")
-    return f"DISC_{tipo}_{ref}"
+    partes = [
+        str(item[k]).strip()
+        for k in _CLAVES_IDENTIDAD_DISCREPANCIA
+        if item.get(k) not in (None, "", "N/A")
+    ]
+    sufijo = "_" + "_".join(partes) if partes else ""
+    return f"DISC_{tipo}_{ref}{sufijo}"
 
 
 def _valores_de_huella(item: dict[str, Any]) -> dict[str, Any]:
@@ -5314,11 +5345,19 @@ def separar_discrepancias_aceptadas(
     pendientes: list[dict[str, Any]] = []
     ya_aceptadas: list[dict[str, Any]] = []
     for item in items:
-        did = id_discrepancia(tipo, item)
-        item["discrepancia_id"] = did
-        item["tipo_discrepancia"] = tipo
-        huella = huella_discrepancia(tipo, str(item.get("so_id") or ""), _valores_de_huella(item))
+        # Un detector puede emitir hallazgos de tipos distintos sobre la
+        # MISMA línea -- "Precio Inferior a Lista" y "Descuento Manual No
+        # Explicado" conviven en 8 líneas reales. Si los dos comparten el
+        # tipo genérico del detector, comparten id, y aceptar uno tapa el
+        # otro. Cuando la fila trae su propio ``tipo``, ese manda.
+        tipo_fila = str(item.get("tipo") or "").strip() or tipo
+        item["tipo_discrepancia"] = tipo_fila
+        huella = huella_discrepancia(
+            tipo_fila, str(item.get("so_id") or ""), _valores_de_huella(item)
+        )
         item["huella"] = huella
+        did = id_discrepancia(tipo_fila, item)
+        item["discrepancia_id"] = did
         registro = aceptadas.get(did)
         if registro is not None and registro.get("huella") == huella:
             item["aceptada_por"] = registro.get("aprobado_por", "")
@@ -13000,6 +13039,8 @@ async def get_auditoria():
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
+                            "linea_id": str(ln.get("linea_id") or ln.get("id") or ""),
+                            "producto_codigo": str(ln.get("producto") or ""),
                             "tipo": "Precio Inferior a Lista",
                             "detalle": detalle_precio,
                             "esperado": float(price_official * qty),
@@ -13043,6 +13084,8 @@ async def get_auditoria():
                             "factura_id": o.factura_id or "N/A",
                             "cliente_nombre": c_name,
                             "vendedor": o.vendedor_email or "N/A",
+                            "linea_id": str(ln.get("linea_id") or ln.get("id") or ""),
+                            "producto_codigo": str(ln.get("producto") or ""),
                             "tipo": "Descuento Manual No Explicado",
                             "detalle": detalle_disc,
                             "esperado": float(price_order * qty),
@@ -13179,19 +13222,15 @@ async def get_auditoria():
         discrepancias_pendientes = []
         discrepancias_aceptadas = []
 
-        for item in raw_discrepancias:
-            tipo_clean = item["tipo"].replace(" ", "_").upper()
-            discrepancia_id = f"DISC_{item['so_id']}_{tipo_clean}_{item['factura_id']}"
-            item["discrepancia_id"] = discrepancia_id
-
-            if discrepancia_id in aceptadas_map:
-                ac_rec = aceptadas_map[discrepancia_id]
-                item["motivo_aceptacion"] = ac_rec.get("motivo_aceptacion", "Revisado y Aceptado")
-                item["aprobado_por"] = ac_rec.get("aprobado_por", "Dirección")
-                item["timestamp_aprobacion"] = ac_rec.get("timestamp_aprobacion", "")
-                discrepancias_aceptadas.append(item)
-            else:
-                discrepancias_pendientes.append(item)
+        # Esta bandeja tenía su propio camino de aceptación, anterior a la
+        # huella: aceptar una discrepancia la silenciaba para siempre
+        # aunque el monto cambiara después. Pasa por el mismo filtro que
+        # las otras seis para que la aceptación valga solo mientras los
+        # números no se muevan. Eran 426 hallazgos sin huella.
+        discrepancias_pendientes, _aceptadas_precios = separar_discrepancias_aceptadas(
+            raw_discrepancias, "precio_o_descuento", aceptadas_map
+        )
+        discrepancias_aceptadas.extend(_aceptadas_precios)
 
         # Tarea 4 (venta bruta teórica derivada, VES/USD): a/b/c del diseño
         # -- Fase 10: lee de ventas_teoricos (tabla fija, cubre también
