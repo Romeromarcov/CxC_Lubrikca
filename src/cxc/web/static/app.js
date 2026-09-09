@@ -4082,6 +4082,25 @@ document.addEventListener("DOMContentLoaded", () => {
     // consulta) que existían antes: una sola tabla, un solo endpoint, sin
     // dos fuentes de verdad para la misma lista de precios.
     window.loadPricelistMapeo = async function() {
+        // Aviso de cobertura: tramos donde un grupo se queda sin lista de
+        // referencia. Antes había que salir a buscarlos a mano -- el hueco
+        // de USD entre el 1 y el 6 de abril lo encontró el usuario leyendo
+        // la tabla.
+        const pintarHuecos = (huecos) => {
+            const caja = document.getElementById("pricelist-huecos");
+            if (!caja) return;
+            if (!huecos || !huecos.length) {
+                caja.innerHTML = '<div style="color:#059669; font-size:0.85rem;">✓ Todos los períodos están cubiertos: no hay días sin lista de referencia.</div>';
+                return;
+            }
+            caja.innerHTML = huecos.map(h => `
+                <div style="background:#fef3c7; border-left:3px solid #b45309; padding:0.5rem 0.75rem; margin-bottom:0.4rem; font-size:0.85rem;">
+                    <strong>${h.desde} a ${h.hasta}</strong> — sin referencia
+                    <strong>${h.moneda}</strong> para ${h.categoria}.
+                    <div style="opacity:.8; font-size:0.8rem;">${h.detalle}</div>
+                </div>`).join('');
+        };
+
         const body = document.getElementById("pricelist-mapeo-table-body");
         if (!body) return;
 
@@ -4093,6 +4112,7 @@ document.addEventListener("DOMContentLoaded", () => {
             ]);
             const pricelists = await plRes.json();
             const mapData = await mapRes.json();
+            pintarHuecos(mapData.huecos_cobertura);
             const mapeo = mapData.mapeo || {};
 
             const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");

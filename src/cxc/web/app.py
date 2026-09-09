@@ -7055,6 +7055,58 @@ def get_pricelist_clasificacion(repo=None) -> dict[str, list[str]]:
     return result
 
 
+def huecos_de_cobertura(mapeo: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    """Tramos donde un grupo se queda SIN lista de referencia.
+
+    Lo pidió el usuario (septiembre 2026): "revisa que no queden periodos
+    vacios, por ejemplo en USD no hay nada entre el 1 y el 6 de abril".
+    Ese hueco era real -- la lista 7 cerraba el 01-abr y la 8 abría el
+    06-abr -- y una orden de esos días se quedaba sin referencia USD.
+
+    Solo se reportan los grupos que EXISTEN: no tiene sentido avisar que
+    no había lista industrial en marzo si tampoco había órdenes
+    industriales. Y la Lista Histórica de Auditoría cuenta como cobertura
+    aunque no sea una pricelist de Odoo.
+    """
+    from collections import defaultdict
+
+    grupos: dict[tuple[str, str], list[tuple[str, str, str]]] = defaultdict(list)
+    for lista_id, info in (mapeo or {}).items():
+        desde = str(info.get("desde") or "")
+        if not desde:
+            continue
+        moneda = str(info.get("moneda") or "").lower()
+        categoria = str(info.get("categoria") or "").lower()
+        if moneda not in ("ves", "usd") or not categoria:
+            continue
+        grupos[(categoria, moneda)].append((desde, str(info.get("hasta") or ""), str(lista_id)))
+
+    huecos: list[dict[str, str]] = []
+    for (categoria, moneda), tramos in grupos.items():
+        tramos.sort()
+        for k in range(len(tramos) - 1):
+            hasta = tramos[k][1]
+            if not hasta:
+                continue  # abierto: cubre lo que sigue
+            siguiente = tramos[k + 1][0]
+            fin = date.fromisoformat(hasta)
+            ini = date.fromisoformat(siguiente)
+            if (ini - fin).days > 1:
+                huecos.append(
+                    {
+                        "categoria": categoria,
+                        "moneda": moneda.upper(),
+                        "desde": (fin + timedelta(days=1)).isoformat(),
+                        "hasta": (ini - timedelta(days=1)).isoformat(),
+                        "detalle": (
+                            f"Entre la lista {tramos[k][2]} y la {tramos[k + 1][2]} no hay "
+                            f"referencia {moneda.upper()} para {categoria}."
+                        ),
+                    }
+                )
+    return sorted(huecos, key=lambda h: h["desde"])
+
+
 @app.get("/api/config/pricelist-mapeo")
 async def get_config_pricelist_mapeo():
     """Mapeo UNIFICADO (moneda/categoría/vigente por lista) -- reemplaza
@@ -7066,8 +7118,12 @@ async def get_config_pricelist_mapeo():
     """
     try:
         repo = get_repo()
+        _mapeo = get_pricelist_mapeo(repo)
         return {
-            "mapeo": get_pricelist_mapeo(repo),
+            "mapeo": _mapeo,
+            # Tramos sin lista de referencia -- la pantalla los muestra
+            # arriba de la tabla para que no haya que salir a buscarlos.
+            "huecos_cobertura": huecos_de_cobertura(_mapeo),
             "historical_pricelist_enabled": is_historical_pricelist_enabled(repo),
         }
     except Exception as e:
