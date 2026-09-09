@@ -2150,44 +2150,6 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
     return Decimal("36.5"), Decimal("38.0")
 
 
-def tasa_bcv_al_abrir_el_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
-    """Primera captura horaria de ``SerieTasas`` de ese día, o 0.0.
-
-    Existe para comparar peras con peras contra Odoo, y NO para convertir
-    montos -- eso lo sigue haciendo ``tasa_bcv_de_dia``.
-
-    El BCV publica la tasa nueva al final del día, así que durante toda la
-    jornada laboral rige todavía la anterior. Odoo estampa en cada asiento
-    la tasa vigente en ese momento, o sea la de la mañana;
-    ``TasasHistoricasAuditoria`` guarda la oficial del día, o sea la de la
-    noche. Enfrentar una contra otra medía el horario de publicación del
-    BCV, no un desacuerdo entre los sistemas.
-
-    Verificado contra producción: de los 148 pagos en bolívares cuyo día
-    tiene serie horaria, 135 coinciden con la PRIMERA captura del día
-    (casi siempre las 06:00) y solo 8 con la última.
-
-    Devuelve 0.0 cuando ese día no tiene captura horaria -- el scraper
-    arranca el 2026-07-25, así que para los pagos anteriores no hay dato
-    intradía y quien llama debe quedarse con la tasa diaria.
-    """
-    dia = str(fecha_iso)[:10]
-    if not dia:
-        return 0.0
-    candidatas = [
-        (str(r.get("timestamp", "")), r.get("tasa_bcv"))
-        for r in serie_rows
-        if str(r.get("timestamp", ""))[:10] == dia and r.get("tasa_bcv")
-    ]
-    if not candidatas:
-        return 0.0
-    candidatas.sort()
-    try:
-        return float(candidatas[0][1])
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def tasa_bcv_de_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
     """Tasa BCV del día ``fecha_iso`` (``YYYY-MM-DD``), con la política buena.
 
@@ -13661,14 +13623,19 @@ async def get_balance_comprobacion():
                     monto = float(getattr(p, "monto", 0.0) or 0.0)
                     ref_p = float(m_pago.get("amount_ref") or 0.0)
                     if moneda == "VES":
-                        # La tasa de la MAÑANA, que es la que Odoo estampa
-                        # -- ver ``tasa_bcv_al_abrir_el_dia``. Si ese día no
-                        # tiene captura horaria (todo lo anterior al
-                        # 2026-07-25) se usa la diaria y la diferencia que
-                        # eso deja se reporta abajo, sin maquillarla.
-                        tasa_p = tasa_bcv_al_abrir_el_dia(
-                            p.fecha_pago.date().isoformat(), serie_bal
-                        )
+                        # La tasa oficial del BCV para esa fecha valor,
+                        # leída del histórico -- que desde septiembre 2026
+                        # está alineado al 100 % con las series que publica
+                        # el BCV (147 de 147 días, en USD y en EUR).
+                        #
+                        # Se lee el histórico directo y no ``tasa_bcv_de_dia``
+                        # a propósito: esa función prefiere la captura de
+                        # ``SerieTasas`` del mismo día, que es el valor
+                        # intradía crudo y de noche ya trae la tasa de
+                        # MAÑANA. Para auditar contra Odoo lo que sirve es la
+                        # oficial del día.
+                        tasa_dec = get_bcv_usd_rate_for_date(p.fecha_pago.date(), hist_bal)
+                        tasa_p = float(tasa_dec or 0.0)
                         sin_intradia += 0 if tasa_p > 0 else 1
                         if tasa_p <= 0:
                             tasa_p = float(
@@ -13708,13 +13675,13 @@ async def get_balance_comprobacion():
                     "la tasa BCV de su propia fecha. Un descuadre acá es una "
                     "tasa mal cargada, no un pago que falte: los importes "
                     "nominales ya cuadran en la partida anterior. Se compara "
-                    "con la tasa de la MAÑANA, que es la que Odoo estampa: el "
-                    "BCV publica la nueva al cierre, así que durante la "
-                    "jornada rige la anterior."
+                    "con la tasa oficial del BCV de esa fecha valor: el BCV "
+                    "calcula la tasa al cierre y la publica con fecha valor "
+                    "del día siguiente, así que la que rige hoy es la que él "
+                    "publicó ayer."
                     + (
-                        f" Quedan {sin_intradia} pagos sin captura horaria de "
-                        "su día (el scraper arranca el 2026-07-25) y esos van "
-                        "con la tasa diaria."
+                        f" Quedan {sin_intradia} pagos cuyo día no está en el "
+                        "histórico oficial; esos van con la serie del scraper."
                         if sin_intradia
                         else ""
                     )
