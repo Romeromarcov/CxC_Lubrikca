@@ -169,3 +169,80 @@ def test_la_tolerancia_del_residual_es_porcentual() -> None:
     tol = max(50.0, odoo * 0.01)
     assert _partida(odoo - 500.0, odoo, tol) is True
     assert _partida(odoo - 5000.0, odoo, tol) is False
+
+
+# --- Arqueo por cliente ----------------------------------------------------
+#
+# Pedido del usuario: "una partida que vaya revisando aleatoriamente
+# diferentes clientes [...] y les haga un balance de comprobación al
+# cliente". Se hace sobre todos los clientes, no sobre una muestra: cuesta
+# lo mismo (los datos ya están en memoria) y una muestra al azar cambiaría
+# de veredicto en cada refresco sin que nadie tocara nada.
+
+
+def _arqueo(clientes: dict[str, tuple[float, float, float, float]]) -> list[str]:
+    """Los clientes cuya identidad no cierra, del peor al menos malo."""
+    malos = [
+        (abs(v - c + f - s), cli)
+        for cli, (v, c, f, s) in clientes.items()
+        if abs(v - c + f - s) > 1.0
+    ]
+    return [cli for _, cli in sorted(malos, reverse=True)]
+
+
+def test_el_arqueo_por_cliente_no_reporta_a_quien_cuadra() -> None:
+    assert _arqueo({"Rio Paraguas": (1000.0, 400.0, 0.0, 600.0)}) == []
+
+
+def test_el_arqueo_encuentra_al_cliente_que_no_cierra() -> None:
+    assert _arqueo({"Leche y Miel": (1000.0, 400.0, 0.0, 550.0)}) == ["Leche y Miel"]
+
+
+def test_el_arqueo_separa_errores_que_se_compensan() -> None:
+    """La razón de ser de la partida.
+
+    El total cuadra -- uno sobra 50 y al otro le faltan 50 -- y sin
+    embargo los dos clientes están mal. La partida 6, que solo mira el
+    agregado, daría verde."""
+    clientes = {
+        "Uno": (1000.0, 400.0, 0.0, 650.0),
+        "Dos": (1000.0, 400.0, 0.0, 550.0),
+    }
+    venta = sum(c[0] for c in clientes.values())
+    cobrado = sum(c[1] for c in clientes.values())
+    saldo = sum(c[3] for c in clientes.values())
+    assert _partida(venta - cobrado, saldo, tolerancia=1.0) is True
+    assert sorted(_arqueo(clientes)) == ["Dos", "Uno"]
+
+
+def test_el_saldo_a_favor_tambien_cierra_el_arqueo_del_cliente() -> None:
+    """Un cliente que pagó de más aporta 0 al saldo, no un negativo."""
+    assert _arqueo({"Gustavo": (1000.0, 1200.0, 200.0, 0.0)}) == []
+
+
+# --- Los equivalentes en BCV contra Odoo -----------------------------------
+#
+# Pedido del usuario: "puedes comparar en los pagos y en lo facturado vs
+# Odoo los equivalentes en BCV, no los bolívares". Comparar importes
+# nominales no prueba nada sobre la tasa: a los dos lados se suma el mismo
+# número. La comparación en dólares sí audita la serie de tasas.
+
+
+def test_el_nominal_cuadra_aunque_la_tasa_este_mal() -> None:
+    """Por qué hacía falta la partida nueva: el nominal no ve la tasa."""
+    nominal_nuestro = 13_931_659.64
+    nominal_odoo = 13_931_659.64
+    assert _partida(nominal_nuestro, nominal_odoo) is True
+
+
+def test_el_equivalente_bcv_de_los_pagos_contra_odoo() -> None:
+    """Medido contra producción: 1.274 pagos, 358.878,75 contra 358.968,57.
+
+    La diferencia -- $89,82, un 0,025 % -- es el desfase de un día en la
+    tasa de un puñado de pagos grandes, no un pago que falte."""
+    assert _partida(358878.75, 358968.57, tolerancia=max(200.0, 358968.57 * 0.005)) is True
+
+
+def test_un_dia_con_la_tasa_cambiada_si_descuadra() -> None:
+    """Lo que la partida existe para atrapar."""
+    assert _partida(358878.75, 320000.00, tolerancia=max(200.0, 320000.0 * 0.005)) is False

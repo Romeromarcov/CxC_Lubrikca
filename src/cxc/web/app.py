@@ -13003,6 +13003,54 @@ async def get_balance_comprobacion():
                 tolerancia=1.0,
             )
 
+        # 6b. La misma identidad, pero cliente por cliente.
+        #
+        # Pedido del usuario: "una partida que vaya revisando aleatoriamente
+        # diferentes clientes [...] y les haga un balance de comprobación al
+        # cliente". Se hace sobre TODOS los clientes en vez de una muestra al
+        # azar: los datos ya están en memoria, así que no cuesta más, y una
+        # muestra distinta en cada refresco haría que la partida cambiara de
+        # veredicto sin que nadie hubiera tocado nada.
+        #
+        # No es redundante con la partida 6. Un total puede cuadrar con
+        # errores que se compensan -- un cliente de más contra otro de
+        # menos -- y esta es la partida que los separa. Por eso lo que
+        # reporta es la CANTIDAD de clientes descuadrados, no un monto.
+        for etiqueta, campo_venta, campo_pago, campo_saldo in referencias:
+            por_cliente: dict[str, list[float]] = {}
+            for so, i in items.items():
+                if so not in por_cobrar_ventas:
+                    continue
+                cli = str(i.get("cliente_nombre") or "sin cliente")
+                v = num(i, campo_venta)
+                if campo_venta == "venta_neta_real":
+                    v -= num(i, "descuento_aplicado_sistema")
+                p = num(i, campo_pago)
+                acc = por_cliente.setdefault(cli, [0.0, 0.0, 0.0, 0.0])
+                acc[0] += v
+                acc[1] += p
+                acc[2] += float(_saldos_4_columnas_item(i)[campo_saldo] or 0.0)
+                acc[3] += max(0.0, p - v)
+            descuadrados = sorted(
+                (
+                    (abs(a[0] - a[1] + a[3] - a[2]), cli)
+                    for cli, a in por_cliente.items()
+                    if abs(a[0] - a[1] + a[3] - a[2]) > 1.0
+                ),
+                reverse=True,
+            )
+            peores = "; ".join(f"{c} ({d:,.2f})" for d, c in descuadrados[:3])
+            partida(
+                f"Arqueo por cliente — {etiqueta}",
+                "esperado",
+                0.0,
+                "clientes descuadrados",
+                float(len(descuadrados)),
+                f"{len(por_cliente)} clientes arqueados con la misma identidad "
+                "de la partida anterior."
+                + (f" Los peores: {peores}." if peores else " Todos cuadran."),
+            )
+
         # 7. Contra Odoo, que es la fuente externa de la verdad.
         try:
             execute = _connect(AppConfig.from_env().odoo)
@@ -13178,7 +13226,10 @@ async def get_balance_comprobacion():
                         "account.payment",
                         "read",
                         [ids_pago],
-                        {"fields": ["amount", "state", "currency_id"]},
+                        # ``amount_ref`` es el equivalente en dólares que
+                        # lleva Odoo: la unidad en la que el usuario pidió
+                        # comparar los pagos.
+                        {"fields": ["amount", "state", "currency_id", "amount_ref"]},
                     )
                     if ids_pago
                     else []
@@ -13195,6 +13246,51 @@ async def get_balance_comprobacion():
                     f"USD {total_usd:,.2f}.",
                     tolerancia=5.0,
                 )
+                # El mismo universo de pagos, pero en dólares.
+                #
+                # Pedido del usuario: "puedes comparar en los pagos y en lo
+                # facturado vs Odoo los equivalentes en BCV, no los
+                # bolívares". La partida de arriba suma un pago en VES y uno
+                # en USD como si fueran la misma unidad, y cuadra igual
+                # aunque la tasa esté mal: a los dos lados se está sumando el
+                # mismo nominal.
+                #
+                # Odoo lleva su propio equivalente en ``amount_ref``
+                # ("Importe referencia"). Convertir cada pago en bolívares
+                # con NUESTRA serie y comparar el total contra el suyo audita
+                # la serie de tasas entera, día por día: si un día quedó con
+                # la tasa cambiada, el descuadre aparece acá y en ningún otro
+                # lado.
+                serie_bal = _all_serie_tasas_rows(repo_bal)
+                vivos_por_id = {int(x["id"]): x for x in vivos}
+                eq_nuestro = eq_odoo = 0.0
+                for p in pagos:
+                    if not str(p.pago_id).isdigit():
+                        continue
+                    m_pago = vivos_por_id.get(int(p.pago_id))
+                    if not m_pago:
+                        continue
+                    moneda = str(getattr(p, "moneda", "") or "USD").upper().replace("MONEDA.", "")
+                    monto = float(getattr(p, "monto", 0.0) or 0.0)
+                    if moneda == "VES":
+                        tasa_p = float(get_rate_for_datetime(p.fecha_pago, serie_bal)[0] or 0.0)
+                        eq_nuestro += monto / tasa_p if tasa_p > 0 else 0.0
+                    else:
+                        eq_nuestro += monto
+                    eq_odoo += float(m_pago.get("amount_ref") or 0.0)
+                partida(
+                    "Pagos: equivalente BCV contra Odoo",
+                    "nuestra serie de tasas",
+                    eq_nuestro,
+                    "amount_ref en Odoo",
+                    eq_odoo,
+                    f"Los {len(vivos_por_id)} pagos vivos llevados a dólares con "
+                    "la tasa BCV de su propia fecha. Un descuadre acá es una "
+                    "tasa mal cargada, no un pago que falte: los importes "
+                    "nominales ya cuadran en la partida anterior.",
+                    tolerancia=max(200.0, eq_odoo * 0.005),
+                )
+
                 # El equivalente BCV se congela por vinculación al momento de
                 # aplicar; su suma tiene que dar lo mismo que convertir el
                 # pago entero, o hay una vinculación con la tasa cambiada.
