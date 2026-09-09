@@ -50,7 +50,7 @@ logger = logging.getLogger("cxc.engine")
 #
 # Súbela cuando cambie QUÉ se guarda del cálculo, no cuando cambie el
 # monto -- eso ya lo cubren las líneas y la lista.
-VERSION_DESGLOSE_MOTOR = "6"
+VERSION_DESGLOSE_MOTOR = "7"
 
 
 def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
@@ -295,6 +295,26 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer el pareo de listas de precio: %s", e)
 
+        # Vigencia de cada lista: {"id": {"moneda", "desde", "hasta"}}. Con
+        # esto el teórico de una orden se compara contra las listas que
+        # regían EL DÍA QUE NACIÓ, no contra las de hoy -- ver
+        # ``listas_vigentes_en``.
+        vigencias_listas: dict[str, dict[str, str]] = {}
+        try:
+            crudo_map = self._repo.get_config("pricelist_mapeo_unificado")
+            if crudo_map:
+                for lista_id, info in json.loads(crudo_map).items():
+                    if not isinstance(info, dict):
+                        continue
+                    vigencias_listas[str(lista_id)] = {
+                        "moneda": str(info.get("moneda") or ""),
+                        "categoria": str(info.get("categoria") or ""),
+                        "desde": str(info.get("desde") or ""),
+                        "hasta": str(info.get("hasta") or ""),
+                    }
+        except Exception as e:
+            logger.warning("Error al leer la vigencia de las listas de precio: %s", e)
+
         # Tarea 2 (Lista Histórica de Auditoría): sin esto BandejaFacturacion
         # (lo que alimenta /api/ventas) nunca sabia de la excepcion historica
         # y mostraba teorico $0.00 para ordenes sin lista o del periodo
@@ -391,6 +411,7 @@ class EngineRunner:
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
             descuentos_producto=self._repo.descuentos_producto(),
             valid_ves=valid_ves,
+            vigencias_listas=vigencias_listas,
             valid_usd=valid_usd,
             pares_listas=pares_listas,
             orden_es_historica=orden_es_historica,

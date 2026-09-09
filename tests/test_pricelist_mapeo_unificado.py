@@ -216,7 +216,16 @@ def test_post_endpoint_ignora_moneda_o_categoria_invalidas():
             json={"mapeo": {"1": {"moneda": "eur", "categoria": "rara", "vigente": True}}},
         )
     assert res.status_code == 200
-    assert res.json()["mapeo"]["1"] == {"moneda": "", "categoria": "", "vigente": True}
+    # "desde"/"hasta" se agregaron para que el teórico se compare contra
+    # las listas que regían el día que nació la orden. Vacíos acá: el POST
+    # de la prueba no los manda.
+    assert res.json()["mapeo"]["1"] == {
+        "moneda": "",
+        "categoria": "",
+        "vigente": True,
+        "desde": "",
+        "hasta": "",
+    }
 
 
 def test_set_pricelist_mapeo_actualiza_cache_y_config():

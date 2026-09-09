@@ -106,6 +106,16 @@ class EngineInputs:
     # comportamiento anterior -- así una lista nueva en Odoo nunca deja
     # órdenes sin teórico solo por no estar pareada todavía.
     pares_listas: dict[str, str] = field(default_factory=dict)
+    # Vigencia de cada lista de precios: {"id": {"moneda", "desde", "hasta"}}.
+    # Sirve para responder "¿cuál era la lista VES y cuál la USD el día que
+    # nació ESTA orden?" -- ver ``listas_vigentes_en``.
+    #
+    # Regla del usuario (septiembre 2026): "para todos los periodos hay al
+    # menos una lista para pagos en VES y otra lista para pagos en USD
+    # [...] calcular los teóricos en función de la fecha en la que se generó
+    # la orden (la fecha inicial porque a veces hay órdenes que se tienen
+    # que modificar, pero deben mantener su lista original)".
+    vigencias_listas: dict[str, dict[str, str]] = field(default_factory=dict)
     # Tarea 2 (Lista Histórica de Auditoría): si la orden cae en la
     # excepción histórica, el precio unitario de cada línea sale de este
     # mapa (codigo producto -> precio usd) en vez de la pricelist normal.
@@ -407,6 +417,86 @@ def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
     return par if par in validas else None
 
 
+def _lista_vigente_al_nacer(inp: EngineInputs, *, destino_usd: bool) -> str | None:
+    """La lista de esa moneda que regía el día que nació la orden.
+
+    ``None`` sin vigencias configuradas o sin fecha en la orden -- ahí manda
+    el respaldo del llamador. La guarda de la fecha existe porque varias
+    pruebas arman la orden con un objeto mínimo.
+    """
+    vigencias = getattr(inp, "vigencias_listas", None)
+    if not vigencias:
+        return None
+    fecha = getattr(inp.orden, "fecha", None)
+    if not isinstance(fecha, date):
+        return None
+    ves, usd = listas_vigentes_en(fecha, vigencias, _categoria_de_nacimiento(inp))
+    return usd if destino_usd else ves
+
+
+def _categoria_de_nacimiento(inp: EngineInputs) -> str:
+    """"comercial" / "industrial" según la lista con la que nació la orden.
+
+    Vacío si no se sabe -- ahí la búsqueda de vigencia no filtra por grupo.
+    """
+    vigencias = getattr(inp, "vigencias_listas", None) or {}
+    info = vigencias.get(str(getattr(inp.orden, "lista_precios", "") or "").strip())
+    return str((info or {}).get("categoria") or "")
+
+
+def listas_vigentes_en(
+    fecha: date, vigencias: dict[str, dict[str, str]], categoria: str = ""
+) -> tuple[str | None, str | None]:
+    """(lista VES, lista USD) que regían en ``fecha``, según la vigencia
+    configurada de cada lista.
+
+    Cada entrada trae ``moneda`` ("ves"/"usd") y el rango ``desde``/``hasta``
+    en ISO; un extremo vacío es abierto. Si varias listas de la misma moneda
+    cubren la fecha -- los períodos se solapan en los datos reales, porque
+    una lista nueva convive un tiempo con la anterior -- gana la que arrancó
+    más tarde, que es la vigente.
+
+    ``categoria`` ("comercial" / "industrial") acota la búsqueda al grupo de
+    la orden. Sin eso, en agosto de 2026 la lista 9 ("Industrial 3%", que
+    arrancó el 11-ago) le ganaba a la 5 ("Precio USD Pago VES") solo por ser
+    más nueva -- y no son períodos sucesivos, son grupos distintos que
+    conviven.
+
+    Devuelve ``None`` del lado que no tenga ninguna: el llamador decide el
+    respaldo en vez de que esta función invente una lista.
+    """
+    cat = (categoria or "").strip().lower()
+    mejor: dict[str, tuple[str, str]] = {}
+    for lista_id, info in (vigencias or {}).items():
+        moneda = str(info.get("moneda") or "").lower()
+        if moneda not in ("ves", "usd"):
+            continue
+        if cat and str(info.get("categoria") or "").strip().lower() != cat:
+            continue
+        desde = str(info.get("desde") or "")
+        hasta = str(info.get("hasta") or "")
+        # Una lista sin fecha de inicio NO es candidata. Sin esta guarda una
+        # lista a medio configurar se lleva toda la historia: con
+        # ``desde`` vacío el rango es abierto hacia atrás, así que las
+        # listas de septiembre (que aún no tenían órdenes cuando se cargó
+        # la vigencia) ganaban fechas de marzo. El respaldo del llamador es
+        # mejor que una referencia inventada.
+        if not desde:
+            continue
+        iso = fecha.isoformat()
+        if iso < desde:
+            continue
+        if hasta and iso > hasta:
+            continue
+        previo = mejor.get(moneda)
+        if previo is None or desde > previo[1]:
+            mejor[moneda] = (str(lista_id), desde)
+    return (
+        mejor["ves"][0] if "ves" in mejor else None,
+        mejor["usd"][0] if "usd" in mejor else None,
+    )
+
+
 def _lista_usd_activa(inp: EngineInputs) -> str:
     """Id de pricelist USD contra la que se calcula el teórico.
 
@@ -424,6 +514,13 @@ def _lista_usd_activa(inp: EngineInputs) -> str:
     pareada = _lista_pareada(inp, destino_usd=True)
     if pareada:
         return pareada
+    # Sin par configurado, la referencia es la lista USD que REGÍA el día
+    # que nació la orden -- no la primera de la lista de configuradas, que
+    # es la de hoy y compara una orden de marzo contra precios de
+    # septiembre. Ver ``listas_vigentes_en``.
+    usd_vigente = _lista_vigente_al_nacer(inp, destino_usd=True)
+    if usd_vigente:
+        return usd_vigente
     return inp.valid_usd[0] if inp.valid_usd else _LISTA_USD_FALLBACK
 
 
@@ -436,6 +533,9 @@ def _lista_ves_activa(inp: EngineInputs) -> str:
     pareada = _lista_pareada(inp, destino_usd=False)
     if pareada:
         return pareada
+    ves_vigente = _lista_vigente_al_nacer(inp, destino_usd=False)
+    if ves_vigente:
+        return ves_vigente
     return inp.valid_ves[0] if inp.valid_ves else _LISTA_VES_FALLBACK
 
 
