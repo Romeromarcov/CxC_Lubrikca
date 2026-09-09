@@ -134,3 +134,38 @@ def test_un_equivalente_mayor_que_el_nominal_es_una_tasa_mal_congelada() -> None
     equiv_usd_imposible = 40000.0
     assert equiv_usd_plausible < monto_ves
     assert equiv_usd_imposible > monto_ves
+
+
+def test_el_saldo_por_cobrar_de_lo_facturado_si_se_puede_saber_en_usd() -> None:
+    """Odoo expone ``amount_residual_usd`` ("Importe adeudado Ref.").
+
+    Con ese campo las dos vistas se comparan en la misma unidad, que era lo
+    que faltaba: antes la partida enfrentaba 60.368,21 USD del Reporte de
+    Saldos contra 65.162.339,64 VES de ``amount_residual`` y no probaba
+    nada.
+
+    Medido contra producción sobre las 229 facturas comparables:
+
+        Reporte de Saldos            60.368,21
+        amount_residual_usd (Odoo)   64.657,78
+        diferencia                    4.289,57   (6,6 %)
+
+    La diferencia es de TASA, no de conteo -- el reporte convierte con la
+    serie BCV de la fecha de cada factura y Odoo con la suya -- y por eso
+    la tolerancia es porcentual: una desviación chica es la tasa, una
+    grande es que alguien dejó de contar algo.
+    """
+    rep = 60368.21
+    odoo = 64657.78
+    tolerancia = max(50.0, odoo * 0.01)
+    assert not _partida(rep, odoo, tolerancia)
+    # Con las dos vistas usando la misma tasa, sí cuadraría.
+    assert _partida(odoo, odoo, tolerancia)
+
+
+def test_la_tolerancia_del_residual_es_porcentual() -> None:
+    """Un piso fijo no sirve: la cartera crece y la deriva de tasa con ella."""
+    odoo = 64657.78
+    tol = max(50.0, odoo * 0.01)
+    assert _partida(odoo - 500.0, odoo, tol) is True
+    assert _partida(odoo - 5000.0, odoo, tol) is False
