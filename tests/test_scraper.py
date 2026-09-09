@@ -268,3 +268,59 @@ def test_cierre_de_dia_22h_persiste_promedio_definitivo() -> None:
     assert row["fecha"] == "2026-08-06"
     assert Decimal(row["tasa_binance_promedio_diario"]) == fila.tasa_binance_diario
     assert "cierre de día" in row["fuente"]
+
+
+# --- El cierre de día guarda la tasa de la APERTURA -------------------------
+#
+# Bug real (septiembre 2026), encontrado contrastando contra las series
+# oficiales del BCV. El BCV calcula la tasa al final del día y la publica
+# con FECHA VALOR del día siguiente -- sus archivos lo dicen en la
+# cabecera: "Fecha Operación: 08/09/2026, Fecha Valor: 09/09/2026". La
+# tasa que el cierre de las 22:00 captura no rige hoy: rige mañana.
+#
+# Guardarla bajo la fecha de hoy corría la serie un día entero. Medido: 24
+# días de agosto y septiembre quedaron desplazados, todos cumpliendo
+# ``nuestra[D] == oficial[D+1]``, mientras que los 114 días sembrados desde
+# Odoo (que sí van por fecha valor) coincidían 113.
+#
+# La que rige hoy es la que estaba vigente al abrir, o sea la primera
+# captura de la jornada. El promedio de Binance no se toca: ese sí es de
+# hoy y no tiene fecha valor.
+
+
+def _historica(repo: InMemoryRepository, fecha: str) -> dict[str, str] | None:
+    for r in repo.all_tasas_historicas_auditoria():
+        if str(r.get("fecha")) == fecha:
+            return r
+    return None
+
+
+def _bcv_html(tasa: str) -> str:
+    """La página del BCV con la tasa pedida, en su formato (coma decimal)."""
+    plantilla = (FIXTURES / "bcv_page.html").read_text(encoding="utf-8")
+    return plantilla.replace("36,50", tasa.replace(".", ","))
+
+
+def test_el_cierre_guarda_la_tasa_de_la_apertura() -> None:
+    """El 2026-08-21 real: toda la jornada rigió 779,9522 y al cierre el BCV
+    publicó 784,6633, que es la tasa del 22. La fila del 21 debe decir
+    779,9522."""
+    repo = InMemoryRepository()
+    alerter = CollectingAlerter()
+    buy, sell = _load("binance_buy.json"), _load("binance_sell.json")
+
+    def post(url, payload, timeout=None):
+        return sell if payload.get("tradeType") == "SELL" else buy
+
+    for hora, tasa in ((6, "779.9522"), (12, "779.9522"), (22, "784.6633")):
+        RatesScraper(
+            repo,
+            BinanceClient(_binance_config(), post=post),
+            BcvClient(_bcv_config(), get=lambda _u, _timeout=None, _t=tasa: _bcv_html(_t)),
+            alerter,
+            ScraperPolicy(fail_alert_threshold=3),
+        ).run(datetime(2026, 8, 21, hora, 0))
+
+    fila = _historica(repo, "2026-08-21")
+    assert fila is not None
+    assert fila["tasa_bcv_usd"].startswith("779.95")

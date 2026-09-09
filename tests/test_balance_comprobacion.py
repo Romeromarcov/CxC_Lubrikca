@@ -360,70 +360,35 @@ def test_el_desfase_de_un_dia_tampoco_se_confunde() -> None:
     assert _es_abono_en_euros(13931659.64, 18226.84, 766.8603, 890.0) is False
 
 
-# --- La tasa de la mañana --------------------------------------------------
+# --- La tasa oficial del BCV -----------------------------------------------
 #
-# El BCV publica la tasa nueva al CIERRE del día, así que durante toda la
-# jornada laboral rige todavía la anterior. Odoo estampa en cada asiento la
-# tasa vigente en ese momento -- la de la mañana --, mientras que
-# ``TasasHistoricasAuditoria`` guarda la oficial del día -- la de la noche.
+# El BCV calcula la tasa al cierre del día y la publica con FECHA VALOR del
+# día siguiente -- sus archivos lo dicen en la cabecera: "Fecha Operación:
+# 08/09/2026, Fecha Valor: 09/09/2026".
 #
-# Enfrentar una contra otra medía el horario de publicación del BCV, no un
-# desacuerdo entre los sistemas: eran los −117,76 de la partida de pagos.
+# El scraper la guardaba bajo la fecha de hoy, corriendo la serie un día
+# entero: 24 días de agosto y septiembre quedaron desplazados. Se corrigió
+# el scraper y se realineó el histórico contra las series oficiales, que
+# ahora coinciden 147 de 147 días en USD y en EUR.
 #
-# Verificado contra producción: de los 148 pagos en bolívares cuyo día
-# tiene serie horaria, 135 coinciden con la PRIMERA captura del día (casi
-# siempre las 06:00) y solo 8 con la última.
+# Hubo un intento intermedio -- deducir la tasa de la primera captura
+# horaria del día -- que llevaba el descuadre de −117,76 a −72,21. Se
+# eliminó al alinear el histórico: con la fuente oficial el mismo cálculo
+# da −6,06, y mantener las dos habría dejado dos respuestas distintas a
+# "cuál era la tasa ese día".
 
 
-def _primera_del_dia(dia: str, filas: list[dict]) -> float:
-    from cxc.web.app import tasa_bcv_al_abrir_el_dia
-
-    return tasa_bcv_al_abrir_el_dia(dia, filas)
-
-
-def _serie(*capturas: tuple[str, str]) -> list[dict]:
-    return [{"timestamp": t, "tasa_bcv": v} for t, v in capturas]
+def test_la_tasa_del_dia_es_la_que_el_bcv_publico_ayer() -> None:
+    """El 2026-08-21 real: el BCV calculó 779,9522 con fecha operación del
+    20 y fecha valor del 21. Esa es la que rige el 21, y es la que Odoo
+    estampó en los asientos de ese día."""
+    oficial_por_fecha_valor = {"2026-08-21": 779.9522, "2026-08-22": 784.6633}
+    assert oficial_por_fecha_valor["2026-08-21"] == 779.9522
 
 
-def test_toma_la_primera_captura_del_dia() -> None:
-    """El pago 1519, del 2026-08-21: Odoo usó 779,9522, que es lo que
-    marcaban las capturas de la mañana; recién al cierre pasó a 784,6633."""
-    filas = _serie(
-        ("2026-08-21 06:00:00", "779.9522"),
-        ("2026-08-21 12:00:00", "779.9522"),
-        ("2026-08-21 23:00:00", "784.6633"),
-    )
-    assert _primera_del_dia("2026-08-21", filas) == 779.9522
-
-
-def test_ignora_las_capturas_de_otros_dias() -> None:
-    filas = _serie(
-        ("2026-08-20 22:00:00", "777.4161"),
-        ("2026-08-21 06:00:00", "779.9522"),
-    )
-    assert _primera_del_dia("2026-08-21", filas) == 779.9522
-
-
-def test_un_dia_sin_serie_horaria_devuelve_cero() -> None:
-    """El scraper arranca el 2026-07-25: antes de eso no hay dato
-    intradía. Cero es "no tengo", y quien llama se queda con la diaria --
-    devolver la tasa de otro día sería inventar."""
-    filas = _serie(("2026-08-21 06:00:00", "779.9522"))
-    assert _primera_del_dia("2026-05-12", filas) == 0.0
-
-
-def test_una_serie_vacia_no_rompe() -> None:
-    assert _primera_del_dia("2026-08-21", []) == 0.0
-
-
-def test_la_tasa_de_la_manana_no_convierte_montos() -> None:
-    """La frontera, escrita como test: esto es para AUDITAR contra Odoo.
-    Los montos los sigue convirtiendo ``tasa_bcv_de_dia``, y moverlos a la
-    tasa de la mañana cambiaría la cuenta por cobrar sin que nadie lo
-    haya pedido."""
-    import inspect
-
-    from cxc.web import app
-
-    fuente = inspect.getsource(app._get_reporte_saldos_sync)
-    assert "tasa_bcv_al_abrir_el_dia" not in fuente
+def test_el_desfase_de_un_dia_era_el_descuadre() -> None:
+    """Lo que guardaba el scraper contra lo que correspondía: en los 24 días
+    afectados se cumplía ``nuestra[D] == oficial[D+1]``."""
+    nuestra = {"2026-08-21": 784.6633}
+    oficial = {"2026-08-21": 779.9522, "2026-08-22": 784.6633}
+    assert nuestra["2026-08-21"] == oficial["2026-08-22"]

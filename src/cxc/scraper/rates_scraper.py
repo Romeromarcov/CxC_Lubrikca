@@ -127,11 +127,47 @@ class RatesScraper:
             capturas_ok = sum(1 for s in rows_today if s.capturada_ok) + (
                 1 if fila.capturada_ok else 0
             )
+            # La tasa BCV del día es la de la APERTURA, no la de este cierre.
+            #
+            # Bug real (septiembre 2026, encontrado contrastando contra las
+            # series oficiales del BCV). El BCV calcula la tasa al final del
+            # día y la publica con FECHA VALOR del día siguiente -- sus
+            # propios archivos lo dicen en la cabecera: "Fecha Operación:
+            # 08/09/2026, Fecha Valor: 09/09/2026". Así que la tasa que este
+            # cierre acaba de capturar no rige hoy: rige mañana.
+            #
+            # Guardarla bajo la fecha de hoy corría la serie un día entero.
+            # Se midió: 24 días de agosto y septiembre quedaron desplazados,
+            # todos cumpliendo ``nuestra[D] == oficial[D+1]``, mientras que
+            # los 114 días sembrados desde Odoo (que sí van por fecha valor)
+            # coincidían 113. Eso desalineaba cada conversión de bolívares
+            # contra lo que Odoo tenía estampado en el asiento.
+            #
+            # La que SÍ rige hoy es la que estaba vigente al abrir -- la que
+            # el BCV publicó en el cierre de ayer -- o sea la primera captura
+            # de la jornada. Si hoy no hubo captura de apertura (el scraper
+            # se cayó) se usa la de este cierre: es la que había, y taparlo
+            # con un vacío sería peor.
+            #
+            # El promedio de Binance NO se toca: ese sí es de hoy, se calcula
+            # con las capturas de 6:00 a 22:00 y no tiene fecha valor.
+            aperturas = [
+                s
+                for s in sorted(rows_today, key=lambda r: r.timestamp)
+                if getattr(s, "tasa_bcv", None)
+            ]
+            de_apertura = aperturas[0] if aperturas else None
+            bcv_del_dia = de_apertura.tasa_bcv if de_apertura else fila.tasa_bcv
+            euro_del_dia = (
+                de_apertura.tasa_bcv_euro
+                if de_apertura and getattr(de_apertura, "tasa_bcv_euro", None)
+                else fila.tasa_bcv_euro
+            )
             self._repo.upsert_tasa_historica_auditoria(
                 {
                     "fecha": now.date().isoformat(),
-                    "tasa_bcv_usd": str(fila.tasa_bcv) if fila.tasa_bcv else "",
-                    "tasa_bcv_euro": str(fila.tasa_bcv_euro) if fila.tasa_bcv_euro else "",
+                    "tasa_bcv_usd": str(bcv_del_dia) if bcv_del_dia else "",
+                    "tasa_bcv_euro": str(euro_del_dia) if euro_del_dia else "",
                     "tasa_binance_promedio_diario": str(fila.tasa_binance_diario),
                     "diferencial_bcv_binance_pct": (
                         str(fila.diferencial_bcv_binance_pct)
@@ -141,7 +177,12 @@ class RatesScraper:
                     "fuente": "scraper (cierre de día, promedio definitivo)",
                     "notas": (
                         f"Promedio Binance definitivo {now.date().isoformat()}: "
-                        f"{capturas_ok} captura(s) reales de 6:00 a 22:00."
+                        f"{capturas_ok} captura(s) reales de 6:00 a 22:00. "
+                        + (
+                            "BCV de la apertura (fecha valor de hoy)."
+                            if de_apertura
+                            else "Sin captura de apertura: BCV de este cierre."
+                        )
                     ),
                 }
             )
