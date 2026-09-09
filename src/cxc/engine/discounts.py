@@ -468,6 +468,15 @@ def listas_vigentes_en(
     cat = (categoria or "").strip().lower()
     mejor: dict[str, tuple[str, str]] = {}
     for lista_id, info in (vigencias or {}).items():
+        # La Lista Histórica de Auditoría figura en el mapeo para que el
+        # período quede completo y visible en Configuración, pero NO es una
+        # pricelist de Odoo: no se puede resolver un precio contra ella. Su
+        # id no es numérico, y por eso se saltea acá. Las órdenes de esa
+        # ventana las atiende ``orden_es_historica``, que toma el precio VES
+        # de ``precio_bcv_euro`` y el USD de la lista 7 -- ver
+        # ``_precio_unitario_linea`` y ``historical_pricing``.
+        if not str(lista_id).strip().isdigit():
+            continue
         moneda = str(info.get("moneda") or "").lower()
         if moneda not in ("ves", "usd"):
             continue
