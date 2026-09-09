@@ -12942,6 +12942,246 @@ async def get_balance_comprobacion():
             tolerancia=5.0,
         )
 
+        # 6. La identidad de fondo: VENTA - COBRADO = POR COBRAR.
+        #
+        # Planteada por el usuario: "en teoría mis ventas - lo cobrado = por
+        # cobrar". Se verifica por cada referencia, que es como el sistema
+        # mide la venta.
+        #
+        # No cierra exacta a propósito, y el residuo tiene nombre: los
+        # saldos se calculan con ``max(0, venta - pagado)``, así que una
+        # orden pagada de más aporta 0 en vez de un negativo. Ese recorte es
+        # el saldo a favor del cliente. La identidad completa es:
+        #
+        #     venta - cobrado + saldo a favor = por cobrar
+        #
+        # Si no cuadra ni con ese ajuste, hay un pago que no se está
+        # restando o una venta que no se está contando.
+        referencias = (
+            (
+                "Venta Real",
+                "venta_neta_real",
+                "monto_pagado_factura_odoo_incl_pendiente",
+                "venta_real",
+            ),
+            (
+                "Teórico BS",
+                "ves_neta_teorica_iva",
+                "pagado_teorico_bcv_incl_pendiente",
+                "teorico_bs",
+            ),
+            (
+                "Teórico USD",
+                "usd_neta_teorica_iva",
+                "pagado_teorico_binance_incl_pendiente",
+                "teorico_usd",
+            ),
+        )
+        for etiqueta, campo_venta, campo_pago, campo_saldo in referencias:
+            venta = cobrado = saldo = favor = 0.0
+            for so, i in items.items():
+                if so not in por_cobrar_ventas:
+                    continue
+                v = num(i, campo_venta)
+                if campo_venta == "venta_neta_real":
+                    v -= num(i, "descuento_aplicado_sistema")
+                p = num(i, campo_pago)
+                venta += v
+                cobrado += p
+                saldo += float(_saldos_4_columnas_item(i)[campo_saldo] or 0.0)
+                # Lo que el recorte a cero se comió en esta orden.
+                favor += max(0.0, p - v)
+            partida(
+                f"Ventas − cobrado = por cobrar — {etiqueta}",
+                "venta − cobrado + saldo a favor",
+                venta - cobrado + favor,
+                "por cobrar",
+                saldo,
+                f"Venta {venta:,.2f} − cobrado {cobrado:,.2f}. Saldo a favor "
+                f"absorbido: {favor:,.2f} — sin ese ajuste la identidad no "
+                "cierra, porque el saldo nunca baja de cero.",
+                tolerancia=1.0,
+            )
+
+        # 7. Contra Odoo, que es la fuente externa de la verdad.
+        try:
+            execute = _connect(AppConfig.from_env().odoo)
+        except Exception as e:
+            logger.warning("Sin conexión a Odoo para el balance: %s", e)
+            execute = None
+
+        if execute:
+            repo_bal = get_repo()
+
+            # 7a. Las órdenes: el espejo local contra sale.order.
+            try:
+                ordenes_repo = {o.so_id: o for o in repo_bal.all_ordenes()}
+                nombres = sorted(so for so in items if so in ordenes_repo)
+                odoo_ordenes = execute(
+                    "sale.order",
+                    "search_read",
+                    [[["name", "in", nombres]]],
+                    {"fields": ["name", "amount_total", "state"]},
+                )
+                vivas_o = [o for o in odoo_ordenes if o.get("state") != "cancel"]
+                encontradas = {str(o["name"]) for o in vivas_o}
+                partida(
+                    "Ventas reales (órdenes) contra Odoo",
+                    "espejo local",
+                    sum(
+                        float(ordenes_repo[so].monto_total or 0.0)
+                        for so in nombres
+                        if so in encontradas
+                    ),
+                    "sale.order en Odoo",
+                    sum(float(o.get("amount_total") or 0.0) for o in vivas_o),
+                    f"{len(vivas_o)} órdenes vivas en Odoo de {len(nombres)} en el "
+                    "espejo. Se comparan solo las que existen en ambos lados.",
+                    tolerancia=5.0,
+                )
+            except Exception as e:
+                logger.warning("No se pudo comparar las órdenes contra Odoo: %s", e)
+
+            # 7b. La facturación: lo facturado y lo que Odoo da por cobrar.
+            try:
+                facturas = repo_bal.all_facturas()
+                ids_fact = [int(f.factura_id) for f in facturas if str(f.factura_id).isdigit()]
+                odoo_fact = (
+                    execute(
+                        "account.move",
+                        "read",
+                        [ids_fact],
+                        {"fields": ["amount_total", "amount_residual", "state", "move_type"]},
+                    )
+                    if ids_fact
+                    else []
+                )
+                vivas_f = {
+                    int(m["id"]): m for m in odoo_fact if m.get("state") not in ("cancel", "draft")
+                }
+                partida(
+                    "Facturado contra Odoo",
+                    "espejo local",
+                    sum(
+                        float(f.monto_total or 0.0)
+                        for f in facturas
+                        if str(f.factura_id).isdigit() and int(f.factura_id) in vivas_f
+                    ),
+                    "account.move en Odoo",
+                    sum(float(m.get("amount_total") or 0.0) for m in vivas_f.values()),
+                    f"{len(vivas_f)} facturas publicadas de {len(facturas)} en el espejo.",
+                    tolerancia=5.0,
+                )
+                # Lo que Odoo considera pendiente de cobro en sus facturas,
+                # contra lo que el Reporte de Saldos muestra por ese mismo
+                # concepto. Son las dos respuestas a "cuánto debe esa
+                # factura" y no pueden diferir.
+                # Acá NO se comparan montos: el residual de Odoo está en la
+                # moneda de cada factura (casi todas en bolívares) y el
+                # reporte lo trae a dólares con la tasa de SU día. Convertir
+                # todo a una tasa única daría una diferencia del 25 % que no
+                # es un error de conteo sino de qué tasa se usó, y una
+                # partida que siempre falla por diseño no sirve de nada.
+                #
+                # Lo que sí es verificable, y es lo que importa: que las dos
+                # vistas coincidan en QUÉ facturas siguen debiendo.
+                residual_odoo = sum(
+                    float(m.get("amount_residual") or 0.0) for m in vivas_f.values()
+                )
+                con_residual_odoo = {
+                    mid
+                    for mid, m in vivas_f.items()
+                    if abs(float(m.get("amount_residual") or 0.0)) > 0.05
+                }
+                con_saldo_reporte = {
+                    int(i["factura_id"])
+                    for i in saldos_items.values()
+                    if str(i.get("factura_id") or "").isdigit()
+                    and num(i, "saldo_factura_odoo") > 0.05
+                }
+                solo_reporte = con_saldo_reporte - con_residual_odoo
+                partida(
+                    "Facturas por cobrar: el reporte contra Odoo",
+                    "esperado",
+                    0.0,
+                    "el reporte da por cobrar facturas que Odoo ya saldó",
+                    float(len(solo_reporte)),
+                    f"Odoo tiene {len(con_residual_odoo)} facturas con residual "
+                    f"({residual_odoo:,.2f} en su moneda); el reporte muestra "
+                    f"{len(con_saldo_reporte)} con saldo. Los montos no se "
+                    "comparan porque están en monedas y tasas distintas.",
+                )
+            except Exception as e:
+                logger.warning("No se pudo comparar la facturación contra Odoo: %s", e)
+
+            # 7c. Los pagos: por diario, en su moneda y en su equivalente BCV.
+            try:
+                pagos = repo_bal.all_pagos()
+                vincs = repo_bal.all_vinculaciones()
+                por_diario: dict[str, dict[str, float]] = {}
+                for p in pagos:
+                    d = str(getattr(p, "metodo_pago", "") or "sin diario")
+                    fila = por_diario.setdefault(d, {"VES": 0.0, "USD": 0.0})
+                    moneda = str(getattr(p, "moneda", "") or "USD").upper().replace("MONEDA.", "")
+                    fila[moneda if moneda in fila else "USD"] += float(
+                        getattr(p, "monto", 0.0) or 0.0
+                    )
+                total_ves = sum(f["VES"] for f in por_diario.values())
+                total_usd = sum(f["USD"] for f in por_diario.values())
+                ids_pago = [int(p.pago_id) for p in pagos if str(p.pago_id).isdigit()]
+                odoo_pagos = (
+                    execute(
+                        "account.payment",
+                        "read",
+                        [ids_pago],
+                        {"fields": ["amount", "state", "currency_id"]},
+                    )
+                    if ids_pago
+                    else []
+                )
+                vivos = [p for p in odoo_pagos if p.get("state") != "cancel"]
+                partida(
+                    "Pagos: importe en su moneda contra Odoo",
+                    "espejo local (VES + USD)",
+                    total_ves + total_usd,
+                    "account.payment en Odoo",
+                    sum(float(p.get("amount") or 0.0) for p in vivos),
+                    f"{len(vivos)} pagos vivos en Odoo de {len(pagos)} en el espejo, "
+                    f"repartidos en {len(por_diario)} diarios. VES {total_ves:,.2f} + "
+                    f"USD {total_usd:,.2f}.",
+                    tolerancia=5.0,
+                )
+                # El equivalente BCV se congela por vinculación al momento de
+                # aplicar; su suma tiene que dar lo mismo que convertir el
+                # pago entero, o hay una vinculación con la tasa cambiada.
+                eq_bcv = sum(float(getattr(v, "equiv_usd_bcv", 0.0) or 0.0) for v in vincs)
+                aplicado = sum(float(getattr(v, "monto_aplicado", 0.0) or 0.0) for v in vincs)
+                # Comparar la suma del equivalente contra la del nominal no
+                # prueba nada: el nominal mezcla bolívares y dólares. Lo que
+                # sí es una regla dura es que el equivalente en dólares de un
+                # abono NUNCA puede superar su monto nominal en bolívares --
+                # eso solo pasa con una tasa mal congelada.
+                mal_congeladas = [
+                    v
+                    for v in vincs
+                    if str(getattr(v, "moneda_abono", "")).upper().endswith("VES")
+                    and float(getattr(v, "equiv_usd_bcv", 0.0) or 0.0)
+                    > float(getattr(v, "monto_aplicado", 0.0) or 0.0)
+                ]
+                partida(
+                    "Pagos en bolívares: equivalente BCV plausible",
+                    "esperado",
+                    0.0,
+                    "vinculaciones con equivalente mayor que el nominal",
+                    float(len(mal_congeladas)),
+                    f"Suma de equivalentes: {eq_bcv:,.2f} USD sobre "
+                    f"{aplicado:,.2f} nominales (mezcla de monedas). Un "
+                    "equivalente en dólares por encima del monto en bolívares "
+                    "significa una tasa mal congelada.",
+                )
+            except Exception as e:
+                logger.warning("No se pudieron comparar los pagos contra Odoo: %s", e)
+
         descuadres = [p for p in partidas if not p["cuadra"]]
         return {
             "partidas": partidas,
