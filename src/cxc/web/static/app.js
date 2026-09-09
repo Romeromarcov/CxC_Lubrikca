@@ -286,6 +286,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadReporte === "function") loadReporte();
                 if (typeof loadReporteCxcCliente === "function") loadReporteCxcCliente();
             } else if (path === "auditoria") {
+                if (typeof loadBalanceComprobacion === "function") loadBalanceComprobacion();
                 if (typeof loadAuditoria === "function") loadAuditoria();
                 if (typeof loadAuditoriaVentasAlertas === "function") loadAuditoriaVentasAlertas();
             } else if (path === "inventario") {
@@ -5278,6 +5279,47 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadAuditoria = loadAuditoria;
+
+    // Balance de comprobación: enfrenta dos páginas por partida y dice si
+    // cuadran. Lo pidió el usuario para poder auditar que todo cierre sin
+    // ir comparando pantallas a mano.
+    async function loadBalanceComprobacion() {
+        const body = document.getElementById("balance-comprobacion-body");
+        const resumen = document.getElementById("balance-resumen");
+        if (!body) return;
+        const fmt = (v) => new Intl.NumberFormat('es-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v || 0);
+        const esc = (t) => String(t ?? '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        try {
+            const res = await fetch("/api/auditoria/balance-comprobacion?t=" + Date.now(), { cache: "no-store" });
+            if (!res.ok) {
+                body.innerHTML = '<tr><td colspan="6" class="table-empty">No se pudo calcular el balance.</td></tr>';
+                return;
+            }
+            const data = await res.json();
+            if (resumen) {
+                const ok = data.descuadres === 0;
+                resumen.textContent = ok
+                    ? `✓ ${data.cuadran} de ${data.total} partidas cuadran`
+                    : `${data.descuadres} de ${data.total} no cuadran`;
+                resumen.style.color = ok ? "#059669" : "#dc2626";
+            }
+            body.innerHTML = (data.partidas || []).map(p => `
+                <tr style="${p.cuadra ? '' : 'background:#fef2f2;'}">
+                    <td>${p.cuadra ? '<span style="color:#059669">✓</span>' : '<span style="color:#dc2626">✕</span>'}
+                        <strong>${esc(p.concepto)}</strong>
+                        ${p.nota ? `<div style="font-size:.75rem;opacity:.75">${esc(p.nota)}</div>` : ''}</td>
+                    <td><small>${esc(p.izquierda.vista)}</small></td>
+                    <td style="text-align:right">${fmt(p.izquierda.valor)}</td>
+                    <td><small>${esc(p.derecha.vista)}</small></td>
+                    <td style="text-align:right">${fmt(p.derecha.valor)}</td>
+                    <td style="text-align:right; font-weight:600; color:${p.cuadra ? '#64748b' : '#dc2626'}">${fmt(p.diferencia)}</td>
+                </tr>`).join('');
+        } catch (err) {
+            body.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al calcular el balance.</td></tr>';
+            console.error("Error en el balance de comprobación:", err);
+        }
+    }
+    window.loadBalanceComprobacion = loadBalanceComprobacion;
 
     async function loadAuditoriaVentasAlertas() {
         const tbody = document.getElementById("auditoria-ventas-alertas-body");

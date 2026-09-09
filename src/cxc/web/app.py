@@ -5167,7 +5167,39 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
 @app.get("/api/reporte-saldos")
 async def get_reporte_saldos(refresh: bool = False):
-    return await asyncio.to_thread(_get_reporte_saldos_sync, refresh)
+    datos = await asyncio.to_thread(_get_reporte_saldos_sync, refresh)
+
+    # Una orden que el árbol de CxC ya dio por cobrada no puede seguir
+    # figurando con saldo. El saldo de este reporte se mide contra la
+    # referencia BCV, pero el árbol saca la orden cuando cubre CUALQUIERA
+    # de sus referencias -- y la más frecuente es el Teórico USD, ~35 %
+    # menor. Resultado: 19 órdenes por $8.278,15 (2,9 % de la cartera
+    # reportada) aparecían como deuda estando cobradas, y un cobrador salía
+    # a perseguirlas.
+    #
+    # Es el mismo criterio que ya aplica el reparto FIFO desde la auditoría
+    # de septiembre 2026 (ver _get_salidas_cxc_sync). Se hace acá, en el
+    # envoltorio async, porque adentro del cálculo sincrónico no se puede
+    # esperar a get_ventas.
+    #
+    # Si no se pudo determinar quién salió, no se filtra nada: "no sé" no
+    # es "todas cobradas", y vaciar el reporte sería mucho peor que
+    # mostrar de más.
+    try:
+        ventas = await get_ventas(vendedor=None, cxc_session=None)
+        cobradas = {
+            str(i["so_id"]) for i in (ventas.get("items") or []) if i.get("sale_de_cxc")
+        }
+    except Exception as e:
+        logger.warning("No se pudo excluir las órdenes ya cobradas del reporte: %s", e)
+        return datos
+    if not cobradas or not isinstance(datos, dict):
+        return datos
+    for clave in ("items", "saldo_minimo_pendientes"):
+        filas = datos.get(clave)
+        if isinstance(filas, list):
+            datos[clave] = [f for f in filas if str(f.get("so_id")) not in cobradas]
+    return datos
 
 
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
@@ -12743,6 +12775,186 @@ async def get_reporte_recuperacion_julio(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.get("/api/auditoria/balance-comprobacion")
+async def get_balance_comprobacion():
+    """Balance de comprobación: ¿las páginas dicen todas lo mismo?
+
+    Pedido del usuario (septiembre 2026): "no debería haber discrepancia
+    entre las páginas. todas tienen que cuadrar como un balance de
+    comprobación [...] si puedes diseñar algún tipo de balance de
+    comprobación en la página de auditoría que ayude a auditar si todas las
+    páginas están cuadrando correctamente sería bueno".
+
+    Cada partida compara dos vistas que DEBEN coincidir y dice si cuadran.
+    No calcula nada nuevo: llama a los mismos endpoints que ve el usuario,
+    para que un descuadre acá sea el mismo descuadre que él vería mirando
+    dos pantallas.
+
+    La fuente única de la verdad sobre si una orden está cobrada es el
+    árbol de CxC (``clasificar_estado_cxc``); la de cuánto falta cobrar es
+    ``_saldos_4_columnas_item``. Toda partida que no cuadre significa que
+    alguien dejó de usar una de esas dos.
+    """
+    try:
+        ventas = await get_ventas(vendedor=None, cxc_session=None)
+        cliente = await get_reporte_cxc_cliente(cxc_session=None)
+        bandeja = await get_bandeja_facturacion()
+        saldos = await get_reporte_saldos()
+
+        items = {str(i["so_id"]): i for i in (ventas.get("items") or [])}
+        clientes = cliente.get("clientes") or []
+        saldos_items = {str(i["so_id"]): i for i in (saldos.get("items") or [])}
+        saldos_min = {str(i["so_id"]) for i in (saldos.get("saldo_minimo_pendientes") or [])}
+
+        def num(d: Any, k: str) -> float:
+            try:
+                return float(d.get(k) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        partidas: list[dict[str, Any]] = []
+
+        def partida(
+            concepto: str,
+            izq_nombre: str,
+            izq: float,
+            der_nombre: str,
+            der: float,
+            nota: str = "",
+            tolerancia: float = 0.5,
+        ) -> None:
+            dif = round(izq - der, 2)
+            partidas.append(
+                {
+                    "concepto": concepto,
+                    "izquierda": {"vista": izq_nombre, "valor": round(izq, 2)},
+                    "derecha": {"vista": der_nombre, "valor": round(der, 2)},
+                    "diferencia": dif,
+                    "cuadra": abs(dif) <= tolerancia,
+                    "nota": nota,
+                }
+            )
+
+        # 1. Órdenes cobradas: el árbol decide, y las tres vistas lo acatan.
+        pagadas_ventas = sum(1 for i in items.values() if i.get("sale_de_cxc"))
+        pagadas_no_en_saldos = sum(
+            1
+            for so, i in items.items()
+            if i.get("sale_de_cxc") and so in saldos_items
+        )
+        partida(
+            "Órdenes cobradas que el Reporte de Saldos sigue listando",
+            "Ventas: cobradas",
+            0.0,
+            "de esas, con saldo en el Reporte",
+            float(pagadas_no_en_saldos),
+            "Una orden que salió de CxC no debería aparecer con saldo. "
+            f"Ventas da {pagadas_ventas} por cobradas.",
+        )
+
+        # 2. Órdenes por cobrar: Ventas vs el Reporte (sus dos listas).
+        por_cobrar_ventas = {
+            so
+            for so, i in items.items()
+            if not i.get("sale_de_cxc") and i.get("estado_cobro") != "pendiente_entrega"
+        }
+        faltantes = por_cobrar_ventas - set(saldos_items) - saldos_min
+        partida(
+            "Órdenes por cobrar que el Reporte de Saldos no lista",
+            "Ventas: por cobrar",
+            0.0,
+            "sin fila en el Reporte",
+            float(len(faltantes)),
+            f"Ventas cuenta {len(por_cobrar_ventas)} por cobrar.",
+        )
+
+        # 3. El monto por cobrar sale de la misma función en las dos vistas.
+        #
+        # La comparación se hace contra los DOCUMENTOS tipo orden del
+        # reporte, no contra su total por cliente: ese total está NETO de
+        # los pagos huérfanos, que son un crédito del cliente y no
+        # pertenecen a ninguna orden. Compararlo contra la suma por orden
+        # daba un falso descuadre de $23.673,56 -- que es justamente lo que
+        # suman esos créditos.
+        docs_orden: dict[str, float] = {"venta_real": 0.0, "teorico_usd": 0.0}
+        docs_credito: dict[str, float] = {"venta_real": 0.0, "teorico_usd": 0.0}
+        for c in clientes:
+            for d in c.get("documentos") or []:
+                destino = docs_orden if d.get("tipo") == "orden" else docs_credito
+                for k in destino:
+                    valor = (d.get("saldos") or {}).get(k)
+                    if valor is not None:
+                        destino[k] += float(valor)
+
+        for clave, etiqueta in (("venta_real", "Venta Real"), ("teorico_usd", "Teórico USD")):
+            campo = "por_cobrar_real" if clave == "venta_real" else "por_cobrar_teorico_usd"
+            partida(
+                f"Por cobrar — {etiqueta}",
+                "Ventas (suma por orden)",
+                sum(num(i, campo) for so, i in items.items() if so in por_cobrar_ventas),
+                "Reporte por Cliente (órdenes)",
+                docs_orden[clave],
+                "Las dos salen de _saldos_4_columnas_item; deben ser el mismo número.",
+                tolerancia=1.0,
+            )
+            partida(
+                f"Cuadre interno del Reporte por Cliente — {etiqueta}",
+                "órdenes + créditos del cliente",
+                docs_orden[clave] + docs_credito[clave],
+                "total por cliente",
+                sum(num(c["saldos"], clave) for c in clientes),
+                "El total está neto de los pagos huérfanos, que no pertenecen "
+                "a ninguna orden.",
+                tolerancia=1.0,
+            )
+
+        # 4. Facturación no puede contradecir a Ventas.
+        b1 = bandeja.get("ordenes_por_facturar") or []
+        b2 = bandeja.get("notas_credito_pendientes") or []
+        partida(
+            "Bandeja 1 con órdenes que Ventas no da por cobradas",
+            "esperado",
+            0.0,
+            "encontradas",
+            float(sum(1 for x in b1 if not items.get(str(x["so_id"]), {}).get("sale_de_cxc"))),
+            "Solo se factura lo ya cobrado.",
+        )
+        partida(
+            "Bandeja 2 con órdenes que Ventas no da por facturadas",
+            "esperado",
+            0.0,
+            "encontradas",
+            float(sum(1 for x in b2 if not items.get(str(x["so_id"]), {}).get("facturada"))),
+            "La nota de crédito exige factura.",
+        )
+
+        # 5. El crédito del cliente no puede vivir solo en una vista.
+        favor_ventas = sum(num(i, "saldo_a_favor") for i in items.values())
+        favor_cliente = sum(num(c, "saldo_a_favor") for c in clientes)
+        partida(
+            "Saldo a favor de clientes",
+            "Ventas",
+            favor_ventas,
+            "Reporte por Cliente",
+            favor_cliente,
+            "El reporte por cliente agrega lo que Ventas calcula por orden. "
+            "La tolerancia cubre el redondeo de cientos de filas.",
+            tolerancia=5.0,
+        )
+
+        descuadres = [p for p in partidas if not p["cuadra"]]
+        return {
+            "partidas": partidas,
+            "total": len(partidas),
+            "cuadran": len(partidas) - len(descuadres),
+            "descuadres": len(descuadres),
+            "calculado_en": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/auditoria")
 async def get_auditoria():
     try:
@@ -14892,7 +15104,33 @@ def _get_ventas_sync(
                     "descuento_aplicado_sistema_motivo": (
                         desc_sistema_row["motivo"] if desc_sistema_row else None
                     ),
+                    # OJO con el nombre: no es un saldo, es el OBJETIVO a
+                    # cobrar -- lo facturado neto (o la orden neta si no hay
+                    # factura) menos el descuento aprobado a mano. No resta
+                    # los pagos. El estatus de pago compara los abonos
+                    # CONTRA este número; leerlo como "lo que falta" da la
+                    # orden entera aunque esté cobrada.
+                    #
+                    # Se conserva la clave por compatibilidad y se publica
+                    # el nombre honesto al lado.
                     "saldo_pendiente_cxc": saldo_pendiente_cxc,
+                    "objetivo_cobro_cxc": saldo_pendiente_cxc,
+                    # LO QUE FALTA COBRAR, que es otra pregunta. Sale de
+                    # _saldos_4_columnas_item, la misma función que alimenta
+                    # el Reporte de Saldos y el reporte por cliente, para
+                    # que las tres páginas respondan lo mismo.
+                    #
+                    # Son DOS valores y no uno, por decisión del usuario
+                    # (septiembre 2026): "la idea era tener un valor
+                    # unificado [...] pero es muy difícil, y ahí creo que
+                    # debe aplicar es el criterio de como se muestra en el
+                    # reporte de saldos, dos valores, el saldo de la orden
+                    # real y el saldo del teórico USD, que son los dos más
+                    # plausibles de suceder uno u otro". Cuál de los dos se
+                    # cobra depende de cómo termine pagando el cliente, y
+                    # eso no se sabe hasta que paga.
+                    "por_cobrar_real": None,
+                    "por_cobrar_teorico_usd": None,
                     # Saldo a favor del cliente -- la empresa le debe. Ver
                     # el cálculo más arriba (caso S00372).
                     # La cuenta por cobrar NACE CON LA ENTREGA. Criterio del
@@ -15033,6 +15271,19 @@ def _get_ventas_sync(
             item_actual["dias_vencido"] = dias_venc
 
         items.sort(key=lambda it: str(it["so_id"]), reverse=True)
+
+        # LO QUE FALTA COBRAR, desde la MISMA función que alimenta el
+        # Reporte de Saldos y el reporte por cliente. Se llena acá, con el
+        # item ya armado, porque _saldos_4_columnas_item lee campos que se
+        # calculan a lo largo de todo el bucle.
+        #
+        # Que las tres páginas salgan del mismo cálculo es lo que permite
+        # que cuadren: es el criterio del balance de comprobación de
+        # Auditoría (ver /api/auditoria/balance-comprobacion).
+        for _it in items:
+            _s = _saldos_4_columnas_item(_it)
+            _it["por_cobrar_real"] = round(float(_s["venta_real"] or 0.0), 2)
+            _it["por_cobrar_teorico_usd"] = round(float(_s["teorico_usd"] or 0.0), 2)
 
         res = {
             "items": items,

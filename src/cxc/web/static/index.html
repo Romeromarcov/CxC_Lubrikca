@@ -982,6 +982,32 @@
 
 
 
+                <!-- Balance de comprobación: ¿todas las páginas dicen lo mismo?
+                     Pedido del usuario: "no debería haber discrepancia entre las
+                     páginas, todas tienen que cuadrar como un balance de
+                     comprobación". Cada partida enfrenta dos vistas que deben
+                     coincidir; un descuadre acá es el mismo que él vería
+                     mirando dos pantallas. -->
+                <section class="card" id="balance-comprobacion-panel" style="border-left:5px solid #1f6f5c;">
+                    <div class="panel-header" style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center; gap:1rem;">
+                        <div>
+                            <h2 style="margin:0;">Balance de comprobación</h2>
+                            <p style="margin:.15rem 0 0;">Cada partida compara dos páginas que deben decir lo mismo. Si algo no cuadra, la diferencia está acá.</p>
+                        </div>
+                        <span id="balance-resumen" style="font-weight:600; white-space:nowrap;"></span>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr><th>Partida</th><th>Vista A</th><th style="text-align:right">Valor</th><th>Vista B</th><th style="text-align:right">Valor</th><th style="text-align:right">Diferencia</th></tr>
+                            </thead>
+                            <tbody id="balance-comprobacion-body">
+                                <tr><td colspan="6" class="table-empty">Cargando balance de comprobación...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- KPIs de Auditoría. Cada tarjeta mide UNA sola cosa.
                      Antes "Discrepancias Pendientes" sumaba tres bandejas que
                      no comparten unidad -- filas de precio por producto (430),
