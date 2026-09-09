@@ -4450,14 +4450,15 @@ def test_e2e_46_get_eur_rate_for_date_lookup_dia_exacto():
 
     lookup por día EXACTO en TasasHistoricasAuditoria, sin caer a otro día.
     """
-    from cxc.web.app import get_eur_rate_for_date
+    from cxc.rates import Tasas
 
     rows = [
         {"fecha": "2026-03-17", "tasa_bcv_euro": "500.0"},
         {"fecha": "2026-03-18", "tasa_bcv_euro": "520.642"},
     ]
-    assert get_eur_rate_for_date(date(2026, 3, 18), rows) == Decimal("520.642")
-    assert get_eur_rate_for_date(date(2026, 3, 19), rows) is None
+    tasas = Tasas(historicas=rows)
+    assert tasas.bcv_eur(date(2026, 3, 18), arrastrar=False) == Decimal("520.642")
+    assert tasas.bcv_eur(date(2026, 3, 19), arrastrar=False) is None
 
 
 def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():

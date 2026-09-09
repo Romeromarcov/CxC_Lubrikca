@@ -653,6 +653,7 @@ def _pagos_bcv_binance_por_orden(
     cambia ``get_live_pagos_conciliados``/``_pagos_odoo_por_orden`` --
     esas dos siguen sin prorratear, por diseño, documentado ahí.
     """
+    tasas_inyectadas = Tasas(historicas=hist_rows, serie=tasas_rows)
     result: dict[str, dict[str, float]] = {}
     if not execute or not invoice_ids_all:
         return result
@@ -699,9 +700,10 @@ def _pagos_bcv_binance_por_orden(
             bcv_normal, tasa_binance = get_rate_for_datetime(fecha_dt, tasas_rows)
             tasa_bcv = bcv_normal
             if any(es_historica_map.get(so, False) for so in sos):
-                tasa_eur = get_bcv_euro_rate_for_datetime(fecha_dt, tasas_rows)
-                if not tasa_eur or tasa_eur <= Decimal("0"):
-                    tasa_eur = get_eur_rate_for_date(fecha_dt.date(), hist_rows)
+                # Con las series que recibe por parámetro, no con las
+                # cacheadas: esta función se testea inyectándoselas, y
+                # mandarla al caché global la volvería imposible de fijar.
+                tasa_eur = tasas_inyectadas.bcv_eur(fecha_dt, arrastrar=False)
                 if tasa_eur and tasa_eur > Decimal("0"):
                     tasa_bcv = tasa_eur
             monto_bcv = amt / tasa_bcv if tasa_bcv > Decimal("0") else Decimal("0")
@@ -2102,6 +2104,49 @@ def _tasas_historicas_cacheadas(repo: Any) -> list[dict[str, str]]:
     return filas
 
 
+_TASAS_CACHE: dict[str, Any] = {"tasas": None, "ts": 0.0}
+
+
+def tasas_vigentes(repo: Any = None) -> Tasas:
+    """Las tasas ya indexadas, una sola vez por ventana de caché.
+
+    El punto de entrada único para preguntar por una tasa. Antes cada
+    consumidor cargaba las series por su cuenta: 25 lecturas de
+    ``SerieTasas`` -- que no tenía caché -- y 13 del histórico, repartidas
+    por todo ``app.py``, cada una decidiendo aparte su fuente y su
+    fallback. La política vive en ``cxc.rates.Tasas``; esto es el acceso.
+
+    Comparte TTL con ``_tasas_historicas_cacheadas`` porque las dos series
+    cambian con la misma cadencia: el scraper escribe una vez por hora.
+    ``invalidar_tasas()`` existe para los tests y para después de tocar la
+    tabla a mano.
+    """
+    ahora = time.time()
+    cacheada = _TASAS_CACHE["tasas"]
+    if cacheada is not None and ahora - float(_TASAS_CACHE["ts"]) < _TASAS_HIST_TTL:
+        tasas_ok: Tasas = cacheada
+        return tasas_ok
+    repo = repo or get_repo()
+    try:
+        serie = _all_serie_tasas_rows(repo)
+    except Exception as e:
+        logger.warning("Error leyendo SerieTasas para las tasas vigentes: %s", e)
+        serie = []
+    tasas = Tasas(historicas=_tasas_historicas_cacheadas(repo), serie=serie)
+    _TASAS_CACHE["tasas"] = tasas
+    _TASAS_CACHE["ts"] = ahora
+    return tasas
+
+
+def invalidar_tasas() -> None:
+    """Olvida las tasas cacheadas. Para tests y para después de corregir la
+    tabla a mano -- si no, la corrección no se ve hasta que vence el TTL."""
+    _TASAS_CACHE["tasas"] = None
+    _TASAS_CACHE["ts"] = 0.0
+    _TASAS_HIST_CACHE["rows"] = None
+    _TASAS_HIST_CACHE["ts"] = 0.0
+
+
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     """Tasa BCV/Binance más cercana a ``dt``.
 
@@ -2220,113 +2265,6 @@ def residual_usd_de_factura(inv: dict, fecha_orden: str, serie_rows: list[dict])
         return res_val
     tasa = tasa_bcv_de_dia(str(inv.get("invoice_date") or fecha_orden)[:10], serie_rows)
     return res_val / tasa if tasa > 0 else res_val
-
-
-def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
-    """Tasa BCV-USD oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
-
-    Mismo criterio que ``get_binance_rate_for_date``/``get_eur_rate_for_date``
-    (lookup por día exacto, sin caer a otro día).
-
-    Delega en ``cxc.rates.Tasas``, donde vive la política de precedencia
-    unificada. Se conserva ``arrastrar=False`` -- el día EXACTO, sin caer a
-    otro -- porque es la semántica que estos llamadores ya tenían y
-    cambiarla movería montos. El arrastre es el default del módulo y lo
-    usan los llamadores nuevos que sí lo quieren.
-    """
-    return Tasas(historicas=rows).bcv_usd(fecha, arrastrar=False)
-
-
-def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
-    """Tasa BCV-EUR (SerieTasa.tasa_bcv_euro) más cercana a `dt`, MISMO DÍA.
-
-    None si no hay ninguna fila con esa columna capturada ESE día (huérfana
-    en la mayoría de los despliegues -- el scraper la captura pero nada la
-    usaba; o simplemente ``dt`` cae fuera de la ventana que cubre el
-    scraper en vivo, ver guardia de fecha abajo), o si la fila más cercana
-    falla la guardia de plausibilidad (ver abajo) -- en ese caso quien
-    llama debe caer al fallback de ``TasasHistoricasAuditoria``
-    (``get_eur_rate_for_date``).
-
-    Guardia de fecha (bug real, agosto 2026, encontrado auditando una N/C de
-    marzo): sin este chequeo, para cualquier ``dt`` anterior a que el
-    scraper empezara a capturar EUR (2026-07-31), "la fila más cercana"
-    terminaba siendo la primera fila disponible del scraper -- semanas o
-    MESES después de ``dt`` -- y esa fila ganaba silenciosamente sobre el
-    fallback correcto de ``TasasHistoricasAuditoria`` (que sí busca por día
-    exacto) porque esta función solo devolvía ``None`` si no había NINGUNA
-    fila con la columna capturada en TODO el historial, nunca por estar
-    lejos en el tiempo. Mismo criterio que ``get_rate_for_datetime`` (línea
-    ~1147): la fila más cercana solo cuenta si es del mismo día que ``dt``.
-
-    Guardia de plausibilidad (bug real, agosto 2026): ``OdooBcvClient``
-    (fuente del scraper hasta este fix) lee la tasa EUR de
-    ``res.currency.rate`` en Odoo, que llevaba congelada desde 2026-07-07
-    (casi un mes) mientras BCV-USD sí se actualizaba a diario -- el scraper
-    repetía fielmente ese valor viejo hora tras hora en ``SerieTasas`` sin
-    ninguna señal de error. Empíricamente EUR/BCV-USD nunca baja de ~1.05
-    en los datos reales de esta serie (BCV siempre devalúa más rápido que
-    EUR en términos relativos); una fila cuyo ratio cae por debajo de ese
-    piso es casi con certeza una tasa EUR estancada, no real.
-    """
-    candidatas = [r for r in rows if parse_decimal_safe(r.get("tasa_bcv_euro", "0")) > Decimal("0")]
-    closest_row = _closest_serie_row(dt, candidatas)
-    if not closest_row:
-        return None
-    if str(closest_row.get("timestamp", ""))[:10] != dt.date().isoformat():
-        return None
-    tasa_eur = parse_decimal_safe(closest_row.get("tasa_bcv_euro"))
-    tasa_bcv_fila = parse_decimal_safe(closest_row.get("tasa_bcv", "0"))
-    if tasa_bcv_fila > Decimal("0"):
-        ratio = tasa_eur / tasa_bcv_fila
-        if ratio < Decimal("1.05"):
-            return None
-    return tasa_eur
-
-
-def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
-    """Tasa Binance promedio del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
-
-    A diferencia de ``get_rate_for_datetime`` (que busca la fila de
-    ``SerieTasas`` más cercana en el tiempo, sin tope de un mismo día -- si
-    esa hoja tiene un hueco alrededor de la fecha buscada, puede devolver la
-    tasa de OTRO día en silencio), esta función NO cae a un día distinto:
-    Odoo no tiene noción de tasa Binance, así que la única fuente confiable
-    para una fecha puntual es el histórico diario ya sembrado
-    (``scripts/cargar_tasas_historicas.py``). Devuelve ``None`` si ese día
-    no tiene fila -- quien llama decide el fallback.
-
-    Delega en ``cxc.rates.Tasas``, donde vive la política de precedencia
-    unificada. Binance nunca se arrastra de otro día: se mueve todo el día
-    y el promedio de ayer no describe hoy.
-    """
-    return Tasas(historicas=rows).binance(fecha)
-
-
-def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
-    """Tasa BCV-EUR oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
-
-    Mismo criterio que ``get_binance_rate_for_date`` (lookup por día exacto,
-    sin caer a otro día): la tabla ya trae ``tasa_bcv_euro`` (Odoo
-    ``res.currency.rate``, sembrado por ``scripts/cargar_tasas_historicas.py``).
-    Devuelve ``None`` si ese día no tiene fila -- quien llama decide el fallback.
-
-    Guardia de plausibilidad (bug real, agosto 2026, pedida por el
-    usuario): MISMO criterio que ya usa ``get_bcv_euro_rate_for_datetime``
-    (ratio EUR/BCV-USD >= 1.05, EUR nunca es más barato que BCV-USD en la
-    serie real) -- pero esta función no la tenía, así que un día sembrado
-    con ``tasa_bcv_euro`` corrupto/igual al BCV (dato de origen dañado, no
-    detectable por "> 0") se devolvía sin más, produciendo tarjetas "Tasa
-    BCV" y "Tasa BCV-EUR" idénticas en la UI. Se compara contra el
-    ``tasa_bcv_usd`` de la MISMA fila (mismo día), no uno buscado aparte.
-
-    Delega en ``cxc.rates.Tasas``, donde viven ahora tanto la política de
-    precedencia como ese piso de plausibilidad. Se conserva el día EXACTO
-    (``arrastrar=False``) porque es la semántica que estos llamadores ya
-    tenían y cambiarla movería montos; el arrastre es el default del
-    módulo y lo usan los llamadores nuevos que sí lo quieren.
-    """
-    return Tasas(historicas=rows).bcv_eur(fecha, arrastrar=False)
 
 
 def resolve_metodo_pago_nombre(execute: Any) -> dict[int, str]:
@@ -3979,7 +3917,7 @@ def _pagos_odoo_por_orden(
     # Órdenes de la lista histórica: las únicas que pueden tomar la vía de
     # pago en euros (criterio del usuario, "por ahora").
     so_ids_historicas = so_ids_en_ventana_historica(get_repo(), ordenes_map.values())
-    hist_rows_euro = _tasas_historicas_cacheadas(get_repo()) if so_ids_historicas else []
+    tasas_euro = tasas_vigentes(get_repo())
 
     payments_by_so: dict[str, dict[str, Any]] = {}
     if invoice_ids_all:
@@ -4084,9 +4022,7 @@ def _pagos_odoo_por_orden(
                         except (TypeError, ValueError):
                             f_pago = None
                         if f_pago is not None:
-                            p_eur = abono_cxc_en_euros(
-                                p_amt, f_pago, serie_rows, hist_rows_euro
-                            )
+                            p_eur = abono_cxc_en_euros(p_amt, f_pago, tasas_euro)
                             if p_eur is not None:
                                 # Los DOS, a diferencia del camino de
                                 # Vinculaciones (donde solo cambia el
@@ -4285,8 +4221,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # Órdenes de la lista histórica: las únicas que pueden tomar la vía
         # de pago en euros (criterio del usuario, "por ahora").
         so_ids_historicas = so_ids_en_ventana_historica(repo, ordenes)
-        hist_rows_euro = _tasas_historicas_cacheadas(repo) if so_ids_historicas else []
-        serie_rows_euro = _all_serie_tasas_rows(repo) if so_ids_historicas else []
+        tasas_euro = tasas_vigentes(repo)
 
         # Compute payments per SO from manual Vinculaciones (Google Sheets)
         pagos_by_so = {}
@@ -4309,10 +4244,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             # diferencia del camino de Odoo, donde los dos salen iguales).
             if v.moneda_abono == Moneda.VES and str(v.so_id) in so_ids_historicas:
                 eq_eur = abono_cxc_en_euros(
-                    v.monto_aplicado,
-                    v.hora_pago_confirmada.date(),
-                    serie_rows_euro,
-                    hist_rows_euro,
+                    v.monto_aplicado, v.hora_pago_confirmada.date(), tasas_euro
                 )
                 if eq_eur is not None:
                     eq_bcv = eq_eur
@@ -7193,17 +7125,8 @@ def _productos_despachados_desde_espejo(
     return result
 
 
-# Cuántos días hacia atrás se acepta buscar la tasa BCV-Euro. Una semana
-# cubre un feriado largo sin llegar a tapar un hueco real de la serie: si
-# no hay tasa en 7 días, la que falta es la carga, no el feriado.
-_DIAS_ATRAS_TASA_EURO = 7
-
-
 def abono_cxc_en_euros(
-    monto_ves: Decimal,
-    fecha_pago: date,
-    serie_rows: list[dict],
-    hist_rows: list[dict],
+    monto_ves: Decimal, fecha_pago: date, tasas: Tasas
 ) -> Decimal | None:
     """Equivalente en dólares de un abono en bolívares, a tasa BCV-Euro.
 
@@ -7225,52 +7148,24 @@ def abono_cxc_en_euros(
     equivalente Binance, que tampoco se compara contra Odoo porque Odoo no
     conoce esa tasa.
 
-    Devuelve None cuando no hay tasa euro para esa fecha en NINGUNA de las
-    dos fuentes. None significa "no pude", no "cero": quien llama debe
-    seguir con la tasa BCV-USD en vez de acreditar nada.
+    Devuelve None cuando no hay tasa euro para esa fecha. None significa
+    "no pude", no "cero": quien llama debe seguir con la tasa BCV-USD en
+    vez de acreditar nada.
 
-    Las dos series llegan ya cargadas: esto corre una vez por abono y
-    releerlas acá era una consulta a la base por pago.
+    El arrastre al último día publicado lo resuelve ``Tasas`` -- antes esta
+    función se lo hacía a mano con un bucle propio, que es justo la clase
+    de duplicación que el módulo vino a eliminar.
     """
     if monto_ves <= Decimal("0"):
         return None
-    try:
-        momento = datetime.combine(fecha_pago, datetime.min.time())
-        tasa = get_bcv_euro_rate_for_datetime(momento, serie_rows)
-        if not tasa or tasa <= Decimal("0"):
-            # SerieTasas arranca el 2026-07-25 y la ventana histórica va del
-            # 20-feb al 12-mar: para estas órdenes la única fuente con euro
-            # es siempre el histórico. Sin esta caída la vía euro nunca se
-            # activaba -- llevaba meses muerta por eso.
-            # Día exacto y, si no está, el último día publicado antes.
-            #
-            # No es una licencia: es cómo funciona la tasa. El BCV publica
-            # una tasa que rige hasta que publica la siguiente, y los datos
-            # lo confirman solos -- de los 60 fines de semana con tasa
-            # cargada, los 60 repiten exactamente la del viernes.
-            #
-            # Hace falta porque a la tabla le faltan 4 días de calendario
-            # (2026-08-14, 08-15, 08-31 y 09-07) y dos de ellos son
-            # justamente fechas de abono de órdenes históricas. Sin esto
-            # esos abonos caían al BCV-USD y se acreditaban ~16 % de más.
-            # Buscar hacia atrás también cubre el hueco que aparezca
-            # mañana, cosa que rellenar estos cuatro días a mano no haría.
-            for atras in range(_DIAS_ATRAS_TASA_EURO + 1):
-                tasa = get_eur_rate_for_date(fecha_pago - timedelta(days=atras), hist_rows)
-                if tasa and tasa > Decimal("0"):
-                    break
-    except Exception as e:
-        logger.warning("Sin tasa euro para el abono del %s: %s", fecha_pago, e)
-        return None
+    tasa = tasas.bcv_eur(fecha_pago)
     if not tasa or tasa <= Decimal("0"):
         return None
     return monto_ves / tasa
 
 
 def valor_pagado_bcv_usd_en_euros(
-    vinculaciones: list[Vinculacion],
-    serie_rows: list[dict],
-    hist_rows: list[dict],
+    vinculaciones: list[Vinculacion], tasas: Tasas
 ) -> Decimal:
     """``valor_pagado_bcv_usd`` pero acreditando los abonos en bolívares a
     la tasa BCV-Euro -- la vía de pago de las órdenes de la lista histórica.
@@ -7285,7 +7180,7 @@ def valor_pagado_bcv_usd_en_euros(
         eq = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
         if v.moneda_abono == Moneda.VES:
             en_eur = abono_cxc_en_euros(
-                v.monto_aplicado, v.hora_pago_confirmada.date(), serie_rows, hist_rows
+                v.monto_aplicado, v.hora_pago_confirmada.date(), tasas
             )
             if en_eur is not None:
                 eq = en_eur
@@ -7343,8 +7238,14 @@ def resolver_tasa_bcv_vinculacion(
     if not orden_en_periodo_historico(repo, orden):
         return tasa_bcv_default, "USD"
     try:
-        tasas_rows = _all_serie_tasas_rows(repo)
-        tasa_eur = get_bcv_euro_rate_for_datetime(hora_pago, tasas_rows)
+        # Fresco, no ``tasas_vigentes``: acá se está fijando la tasa con la
+        # que va a quedar congelada una Vinculación, y el caché de 5
+        # minutos podría ocultar una tasa recién cargada. Es una operación
+        # puntual, así que pagar la lectura sale barato.
+        tasa_eur = Tasas(
+            historicas=repo.all_tasas_historicas_auditoria(),
+            serie=_all_serie_tasas_rows(repo),
+        ).bcv_eur(hora_pago)
     except Exception:
         tasa_eur = None
     if tasa_eur and tasa_eur > Decimal("0"):
@@ -7855,7 +7756,6 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
         ordenes = repo.all_ordenes()
         clientes_map = {c.cliente_id: c.nombre for c in repo.all_clientes()}
         tasas_rows = _all_serie_tasas_rows(repo)
-        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
         pagos_duplicados = _detectar_pagos_duplicados(pagos_rows)
         # Pagos huérfanos que un humano ya cerró "a favor de la empresa"
         # (ver POST /api/conciliaciones/cerrar-pago-huerfano) -- no deben
@@ -8039,15 +7939,13 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 # Se sustituye por BCV-EUR (SerieTasas primero, luego
                 # TasasHistoricasAuditoria), invalidando también el
                 # amount_ref de Odoo (calculado con la tasa BCV normal).
-                tasa_eur_huerfano = get_bcv_euro_rate_for_datetime(fecha_dt, tasas_rows)
-                if not tasa_eur_huerfano or tasa_eur_huerfano <= Decimal("0"):
-                    tasa_eur_huerfano = get_eur_rate_for_date(
-                        fecha_dt.date(), tasas_historicas_rows
-                    )
+                tasa_eur_huerfano = tasas_vigentes(repo).bcv_eur(
+                    fecha_dt, arrastrar=False
+                )
                 if tasa_eur_huerfano and tasa_eur_huerfano > Decimal("0"):
                     bcv_rate = tasa_eur_huerfano
                     monto_orig_usd_odoo = None
-            binance_del_dia = get_binance_rate_for_date(fecha_dt.date(), tasas_historicas_rows)
+            binance_del_dia = tasas_vigentes(repo).binance(fecha_dt)
             # Guardia de plausibilidad: Binance y BCV son ambas tasas VES/USD del
             # mismo día, con una brecha de mercado normalmente < 100%. Si el dato
             # histórico sembrado está corrupto (ej. bug de locale que borra el punto
@@ -9293,11 +9191,12 @@ async def post_cambiar_tipo_tasa_bcv(
         tasas_rows = _all_serie_tasas_rows(repo)
 
         if variante == "EUR":
-            tasa_bcv_nueva = get_bcv_euro_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
-            if tasa_bcv_nueva is None:
-                tasa_bcv_nueva = get_eur_rate_for_date(
-                    vinc.hora_pago_confirmada.date(), repo.all_tasas_historicas_auditoria()
-                )
+            # Fresco por lo mismo que ``resolver_tasa_bcv_vinculacion``:
+            # esto congela la tasa de una Vinculación.
+            tasa_bcv_nueva = Tasas(
+                historicas=repo.all_tasas_historicas_auditoria(),
+                serie=_all_serie_tasas_rows(repo),
+            ).bcv_eur(vinc.hora_pago_confirmada)
             if tasa_bcv_nueva is None:
                 raise HTTPException(
                     status_code=400,
@@ -11742,8 +11641,6 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         clientes_map_obj = {c.cliente_id: c for c in clientes}
         clientes_nombre_map = {c.cliente_id: c.nombre for c in clientes}
         ordenes_map = {o.so_id: o for o in repo.all_ordenes()}
-        tasas_historicas_rows = repo.all_tasas_historicas_auditoria()
-        tasas_rows_eur = _all_serie_tasas_rows(repo)
 
         # Fuente única de verdad para "Saldo Orden (CxC)" -- antes venía de
         # un saldo blended (get_reporte_saldos) o un cálculo naive, y para
@@ -11864,15 +11761,9 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             # posterior al último día sembrado en TasasHistoricasAuditoria
             # (2026-07-30) salían con "EUR: -" porque get_eur_rate_for_date
             # busca SOLO el día exacto en esa tabla, sin fallback -- mismo
-            # patrón que ya usa _pagos_bcv_binance_por_orden (línea ~574):
-            # primero SerieTasas (scraper, más reciente), luego el histórico.
-            tasa_eur = None
-            if fecha_dt:
-                tasa_eur = get_bcv_euro_rate_for_datetime(
-                    datetime.combine(fecha_dt, datetime.min.time()), tasas_rows_eur
-                )
-                if not tasa_eur or tasa_eur <= Decimal("0"):
-                    tasa_eur = get_eur_rate_for_date(fecha_dt, tasas_historicas_rows)
+            # La precedencia la resuelve ``Tasas``: manda el histórico
+            # oficial y SerieTasas solo cuenta si es del mismo día.
+            tasa_eur = tasas_vigentes(repo).bcv_eur(fecha_dt, arrastrar=False) if fecha_dt else None
 
             reasignado = reasignados_por_pago.get(pid)
 
@@ -13465,7 +13356,6 @@ async def get_balance_comprobacion():
                 solo_reporte = con_saldo_reporte - con_residual_odoo
                 # Las facturas de las órdenes que el reporte efectivamente
                 # lista -- el universo comparable.
-                hist_bal_f = _tasas_historicas_cacheadas(repo_bal)
                 ordenes_rep = {o.so_id: o for o in repo_bal.all_ordenes()}
                 ids_comparables = {
                     int(ordenes_rep[str(i["so_id"])].factura_id)
@@ -13521,7 +13411,7 @@ async def get_balance_comprobacion():
                         f_inv = date.fromisoformat(str(m.get("invoice_date") or "")[:10])
                     except (TypeError, ValueError):
                         continue
-                    nuestra = float(get_bcv_usd_rate_for_date(f_inv, hist_bal_f) or 0.0)
+                    nuestra = float(tasas_vigentes(repo_bal).bcv_usd(f_inv, arrastrar=False) or 0.0)
                     if nuestra <= 0:
                         continue
                     if abs((ves / usd) / nuestra - 1.0) > 0.02:
@@ -13611,7 +13501,6 @@ async def get_balance_comprobacion():
                 # la tasa cambiada, el descuadre aparece acá y en ningún otro
                 # lado.
                 serie_bal = _all_serie_tasas_rows(repo_bal)
-                hist_bal = _tasas_historicas_cacheadas(repo_bal)
                 vivos_por_id = {int(x["id"]): x for x in vivos}
                 eq_nuestro = eq_odoo = 0.0
                 en_euros = 0
@@ -13637,7 +13526,7 @@ async def get_balance_comprobacion():
                         # intradía crudo y de noche ya trae la tasa de
                         # MAÑANA. Para auditar contra Odoo lo que sirve es la
                         # oficial del día.
-                        tasa_dec = get_bcv_usd_rate_for_date(p.fecha_pago.date(), hist_bal)
+                        tasa_dec = tasas_vigentes(repo_bal).bcv_usd(p.fecha_pago, arrastrar=False)
                         tasa_p = float(tasa_dec or 0.0)
                         sin_intradia += 0 if tasa_p > 0 else 1
                         if tasa_p <= 0:
@@ -13652,7 +13541,7 @@ async def get_balance_comprobacion():
                         # por la tasa implícita del propio pago, no por una
                         # lista fija, así que el que aparezca mañana también
                         # queda cubierto.
-                        eur = get_eur_rate_for_date(p.fecha_pago.date(), hist_bal)
+                        eur = tasas_vigentes(repo_bal).bcv_eur(p.fecha_pago, arrastrar=False)
                         implicita = monto / ref_p if ref_p > 0 else 0.0
                         if (
                             eur
@@ -13701,7 +13590,7 @@ async def get_balance_comprobacion():
                     if nominal <= 0.0 or ref_val <= 0.0:
                         continue
                     oficial = float(
-                        get_bcv_usd_rate_for_date(p.fecha_pago.date(), hist_bal) or 0.0
+                        tasas_vigentes(repo_bal).bcv_usd(p.fecha_pago, arrastrar=False) or 0.0
                     )
                     if oficial <= 0:
                         continue
@@ -13711,7 +13600,7 @@ async def get_balance_comprobacion():
                     # Los abonos cobrados en euros no son un error de tasa:
                     # su tasa es la del euro y está bien. Ya se reconocen
                     # arriba, así que acá solo se descartan.
-                    eur_dia = get_eur_rate_for_date(p.fecha_pago.date(), hist_bal)
+                    eur_dia = tasas_vigentes(repo_bal).bcv_eur(p.fecha_pago, arrastrar=False)
                     if eur_dia and abs(estampada / float(eur_dia) - 1.0) < 0.01:
                         continue
                     tasa_mal.append(
@@ -14797,10 +14686,7 @@ def _get_ventas_sync(
         # una vez para las 953 órdenes -- el toggle se lee de la base en
         # cada llamada a ``orden_en_periodo_historico``.
         so_ids_historicas_ventas = so_ids_en_ventana_historica(repo, ordenes)
-        serie_rows_euro_v = _all_serie_tasas_rows(repo) if so_ids_historicas_ventas else []
-        hist_rows_euro_v = (
-            _tasas_historicas_cacheadas(repo) if so_ids_historicas_ventas else []
-        )
+        tasas_euro_v = tasas_vigentes(repo)
         # Excepciones: ordenes cuyo descuento NO se le prometio al cliente.
         # Ver schema.descuentos_no_otorgados -- el descuento se asume
         # comprometido por defecto y esto son las excepciones marcadas.
@@ -15442,9 +15328,7 @@ def _get_ventas_sync(
                 # para la misma orden.
                 if str(o.so_id) in so_ids_historicas_ventas:
                     val_bcv = float(
-                        valor_pagado_bcv_usd_en_euros(
-                            vincs_orden, serie_rows_euro_v, hist_rows_euro_v
-                        )
+                        valor_pagado_bcv_usd_en_euros(vincs_orden, tasas_euro_v)
                     )
             else:
                 p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
@@ -15460,9 +15344,7 @@ def _get_ventas_sync(
             vincs_pend_orden = vincs_pendientes_por_so.get(o.so_id, [])
             if vincs_pend_orden:
                 pend_bcv = (
-                    valor_pagado_bcv_usd_en_euros(
-                        vincs_pend_orden, serie_rows_euro_v, hist_rows_euro_v
-                    )
+                    valor_pagado_bcv_usd_en_euros(vincs_pend_orden, tasas_euro_v)
                     if str(o.so_id) in so_ids_historicas_ventas
                     else valor_pagado_bcv_usd(vincs_pend_orden)
                 )
