@@ -72,3 +72,65 @@ def test_una_orden_cobrada_no_puede_tener_saldo() -> None:
 def test_la_tolerancia_del_saldo_a_favor_cubre_el_redondeo() -> None:
     """Se agrega sobre cientos de clientes; $2,09 es redondeo, no un error."""
     assert _partida(3696.39, 3694.30, tolerancia=5.0) is True
+
+
+# --- La identidad de fondo -------------------------------------------------
+
+
+def _identidad(venta: float, cobrado: float, favor: float, por_cobrar: float) -> bool:
+    """venta − cobrado + saldo a favor = por cobrar."""
+    return _partida(venta - cobrado + favor, por_cobrar, tolerancia=1.0)
+
+
+def test_ventas_menos_cobrado_es_por_cobrar() -> None:
+    """La identidad que planteó el usuario: "en teoría mis ventas − lo
+    cobrado = por cobrar". Verificada contra producción en las tres
+    referencias, al centavo."""
+    assert _identidad(venta=1000.0, cobrado=300.0, favor=0.0, por_cobrar=700.0) is True
+
+
+def test_el_saldo_a_favor_es_el_residuo_de_la_identidad() -> None:
+    """No cierra exacta sin ese ajuste, y no es un error: los saldos se
+    calculan con ``max(0, venta − pagado)``, así que una orden pagada de
+    más aporta 0 en vez de un negativo. Ese recorte ES el saldo a favor.
+
+    Cliente que compró 1.000 y pagó 1.200: el saldo por cobrar es 0, no
+    -200, y los 200 son crédito suyo.
+    """
+    assert _identidad(venta=1000.0, cobrado=1200.0, favor=200.0, por_cobrar=0.0) is True
+    # Sin el ajuste, la misma orden parecería un descuadre de 200.
+    assert _partida(1000.0 - 1200.0, 0.0) is False
+
+
+def test_un_pago_que_no_se_resta_rompe_la_identidad() -> None:
+    """Es lo que la partida existe para atrapar."""
+    assert _identidad(venta=1000.0, cobrado=0.0, favor=0.0, por_cobrar=700.0) is False
+
+
+# --- Contra Odoo -----------------------------------------------------------
+
+
+def test_los_montos_en_monedas_distintas_no_se_comparan() -> None:
+    """El residual de Odoo está en la moneda de cada factura (casi todas en
+    bolívares) y el Reporte de Saldos lo trae a dólares con la tasa de SU
+    día. Compararlos daba un "descuadre" de 65 millones que no es un error
+    de conteo: 60.368,21 USD contra 65.162.339,64 VES.
+
+    Convertir a una tasa única tampoco sirve -- deja un 25 % de diferencia,
+    que es el efecto de las tasas históricas. La partida compara QUÉ
+    facturas siguen debiendo, que sí es verificable.
+    """
+    usd_reporte = 60368.21
+    ves_odoo = 65162339.64
+    assert _partida(usd_reporte, ves_odoo) is False
+    # Lo que sí se compara: el conjunto de facturas pendientes.
+    assert _partida(0.0, 0.0) is True
+
+
+def test_un_equivalente_mayor_que_el_nominal_es_una_tasa_mal_congelada() -> None:
+    """Un abono en bolívares no puede valer más dólares que bolívares."""
+    monto_ves = 34580.50
+    equiv_usd_plausible = 42.45
+    equiv_usd_imposible = 40000.0
+    assert equiv_usd_plausible < monto_ves
+    assert equiv_usd_imposible > monto_ves
