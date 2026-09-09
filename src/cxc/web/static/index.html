@@ -1516,6 +1516,7 @@
                                 <option value="contado">Pronto pago (contado)</option>
                                 <option value="volumen">Volumen / fidelidad</option>
                                 <option value="recompra">Recompra</option>
+                                <option value="producto">Descuento por producto</option>
                                 <option value="promocion">Promoción / primera compra</option>
                                 <option value="diferencial">Diferencial cambiario</option>
                                 <option value="credito">Días de crédito</option>
@@ -1643,14 +1644,14 @@
 
                         <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">El beneficio</h3>
 
-                        <div class="ru-bloque" data-tipos="contado volumen recompra">
+                        <div class="ru-bloque" data-tipos="contado volumen recompra producto">
                             <div class="form-group" style="max-width:220px">
                                 <label>Porcentaje <small style="font-weight:400;opacity:.7">(0.08 = 8 %)</small></label>
                                 <input type="number" id="ru-porcentaje" step="0.0001" value="0.05">
                             </div>
                         </div>
 
-                        <div class="ru-bloque" data-tipos="volumen recompra credito">
+                        <div class="ru-bloque" data-tipos="volumen recompra credito producto">
                             <div class="form-group-row">
                                 <div class="form-group" style="flex:1">
                                     <label>Desde (mínimo)</label>
@@ -1679,7 +1680,7 @@
                             </div>
                         </div>
 
-                        <div class="ru-bloque" data-tipos="promocion">
+                        <div class="ru-bloque" data-tipos="promocion producto">
                             <div class="form-group-row">
                                 <!-- Selector del catálogo, no texto libre: el motor
                                      compara contra la referencia interna del producto,
@@ -1699,6 +1700,9 @@
                                     </select>
                                 </div>
                             </div>
+                            </div>
+
+                        <div class="ru-bloque" data-tipos="promocion">
                             <div class="form-group-row">
                                 <div class="form-group" style="flex:1">
                                     <label>Cantidad de regalo</label>

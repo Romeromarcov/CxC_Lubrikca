@@ -60,6 +60,7 @@ from cxc.models import (
     Cliente,
     DescuentoDiferencialCambiario,
     DescuentoMarcaCategoria,
+    DescuentoProducto,
     DescuentoRecompra,
     DescuentoVolumen,
     EstadoVinculacion,
@@ -9841,6 +9842,30 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
         desde = _fecha_regla(req.vigencia_desde, date.today()) or date.today()
         hasta = _fecha_regla(req.vigencia_hasta, None)
 
+        # Paso 0 del analisis de tramos en USD: cerrar el agujero antes de
+        # decidir si se implementa la funcion.
+        #
+        # El motor lee ``unidad_medida`` en UN solo lugar y solo pregunta si
+        # dice LITROS; todo lo demas cae a la misma rama, que compara contra
+        # un conteo de cajas. Con la unidad en USD y un tramo cargado, el
+        # motor comparaba DOLARES contra CAJAS en silencio. Hoy no muerde
+        # porque las 10 reglas con unidad USD tienen el tramo en 0-999999,
+        # pero el formulario unico permite combinarlos.
+        #
+        # Se rechaza al guardar en vez de dejarlo pasar. Cuando el tramo en
+        # dolares se implemente de verdad -- anclado al teorico USD, con la
+        # base declarada en la regla -- esta guarda se levanta.
+        _tramo_cargado = req.min_unidades > 0 or req.max_unidades < 999999
+        if (req.unidad_medida or "").strip().upper() == "USD" and _tramo_cargado:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "El tramo en USD todavía no está implementado: el motor lo "
+                    "compararía contra un conteo de cajas. Usa Unidades o Litros, "
+                    "o deja el tramo en 0 a 999999."
+                ),
+            )
+
         comun: dict[str, Any] = {
             "regla_id": rid,
             "marca": req.marca or "*",
@@ -9904,11 +9929,31 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
                     solo_primera_compra=bool(req.solo_primera_compra),
                 )
             )
+        elif tipo == "producto":
+            # Faltaba: era la unica de las siete familias sin rama en el
+            # formulario unico. La tabla y el motor la soportan desde
+            # siempre (``descuento_producto_vigente``), solo que hoy no hay
+            # reglas cargadas en produccion.
+            repo.append_descuento_producto(
+                DescuentoProducto(
+                    **comun,
+                    porcentaje=Decimal(str(req.porcentaje)),
+                    productos=req.productos or "*",
+                    min_unidades=Decimal(str(req.min_unidades)),
+                    max_unidades=Decimal(str(req.max_unidades)),
+                    monedas_aplicables=req.monedas_aplicables or "*",
+                )
+            )
         elif tipo == "diferencial":
             repo.append_descuento_diferencial_cambiario(
                 DescuentoDiferencialCambiario(
                     **comun,
                     tipo_diferencial=req.tipo_diferencial,
+                    # Derivado, nunca elegido aparte -- el motor solo lee
+                    # tipo_diferencial y un segundo selector era una trampa.
+                    tipo_calculo=(
+                        "fijo" if req.tipo_diferencial == "fijo_35_ves_usd" else "variable"
+                    ),
                     porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
                     monedas_aplicables=req.monedas_aplicables or "*",
                 )
