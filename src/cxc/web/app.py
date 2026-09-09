@@ -9,6 +9,7 @@ import re
 import sys
 import time
 import traceback
+import uuid
 from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -57,12 +58,18 @@ from cxc.engine.runner import EngineRunner
 from cxc.models import (
     AplicacionConciliada,
     Cliente,
+    DescuentoDiferencialCambiario,
+    DescuentoMarcaCategoria,
+    DescuentoRecompra,
+    DescuentoVolumen,
     EstadoVinculacion,
     LineaOrden,
     MetodoPago,
     Moneda,
     OrdenVenta,
     Producto,
+    PromocionPrimeraCompra,
+    TipoDescuento,
     TipoTasa,
     Vinculacion,
     set_marca_fallback,
@@ -9749,7 +9756,188 @@ async def post_config_exclusiones(req: ExclusionRequest):
     # abajo (junto a Recompra) con el modelo completo `VolumenRequest`.
 
 
+class ReglaUnificadaRequest(BaseModel):
+    """Una regla de descuento, de cualquier tipo, en un solo formulario.
+
+    Paso 4 del plan que aprobó el usuario (septiembre 2026). Antes había
+    seis formularios, uno por tabla, y cada uno ofrecía solo su propio
+    subconjunto de campos: no se podía armar, por ejemplo, un descuento por
+    producto con ventana de pago, aunque el motor lo soporta.
+
+    Los 37 campos del inventario son en realidad un núcleo común más un
+    bloque corto por tipo. Acá el núcleo va plano y lo específico viaja en
+    los campos opcionales de abajo -- el ``tipo_regla`` decide cuáles se
+    leen y a qué tabla va.
+    """
+
+    tipo_regla: str  # contado | volumen | recompra | promocion | diferencial | credito
+    regla_id: str = ""  # vacío = alta
+
+    # --- Identidad y alcance (común a todas) ---
+    descripcion: str = ""
+    marca: str = "*"
+    categoria: str = "*"
+    unidad_medida: str = "UNIDADES"
+    vigencia_desde: str = ""
+    vigencia_hasta: str = ""
+    activo: bool = True
+
+    # --- A quién aplica (común) ---
+    listas_aplicables: str = "*"
+    listas_excluidas: str = ""
+    monedas_aplicables: str = "*"
+    monedas_excluidas: str = ""
+    requiere_pago_previo: bool = False
+    aplica_a: str = "linea"
+    # Ventana de pago: vive en contado y recompra, y el usuario pidió
+    # subirla al bloque común -- "en recompra también tiene una ventana de
+    # pago". Cualquier regla puede condicionarse a que el pago haya
+    # entrado a tiempo.
+    ventana_pago_tipo: str = "no_aplica"
+    ventana_pago_dias: int = 0
+    # "Una sola vez por cliente" vs recurrente. Hoy solo existe en
+    # promociones (``solo_primera_compra``) y por eso el motor etiqueta con
+    # origen "primera_compra" tanto la primera compra real como las promos
+    # recurrentes -- la colisión que impide distinguirlas en el desglose.
+    solo_primera_compra: bool = False
+
+    # --- El beneficio (según el tipo) ---
+    porcentaje: float = 0.0
+    tipo_beneficio: str = "descuento"
+    min_unidades: float = 0.0
+    max_unidades: float = 999999.0
+    tipo_evaluacion: str = "orden"
+    dias_evaluacion: int = 30
+    productos: str = ""
+    regalo_tipo: str = "solo_uno"
+    valor: float = 0.0
+    compra_minima: float = 0.0
+    descuento_fallback: float = 0.0
+    categorias_aplica: str = ""
+    tipo_diferencial: str = "fijo_35_ves_usd"
+    porcentaje_fijo: float = 0.0
+    dias_credito_max: int = 30
+
+
+def _fecha_regla(valor: str, por_defecto: date | None) -> date | None:
+    try:
+        return date.fromisoformat(valor) if valor else por_defecto
+    except ValueError:
+        return por_defecto
+
+
+@app.post("/api/config/regla")
+async def post_regla_unificada(req: ReglaUnificadaRequest):
+    """Crea o actualiza una regla de cualquier tipo desde un solo formulario.
+
+    Despacha a la tabla que corresponde según ``tipo_regla``. Los campos
+    que ese tipo no usa se ignoran -- el formulario ya los oculta, pero el
+    endpoint no confía en eso.
+    """
+    try:
+        repo = get_repo()
+        tipo = (req.tipo_regla or "").strip().lower()
+        rid = (req.regla_id or "").strip() or f"{tipo.upper()[:4]}_{uuid.uuid4().hex[:8].upper()}"
+        desde = _fecha_regla(req.vigencia_desde, date.today()) or date.today()
+        hasta = _fecha_regla(req.vigencia_hasta, None)
+
+        comun: dict[str, Any] = {
+            "regla_id": rid,
+            "marca": req.marca or "*",
+            "categoria": req.categoria or "*",
+            "unidad_medida": req.unidad_medida or "UNIDADES",
+            "listas_aplicables": req.listas_aplicables or "*",
+            "listas_excluidas": req.listas_excluidas or "",
+            "monedas_excluidas": req.monedas_excluidas or "",
+            "vigencia_desde": desde,
+            "vigencia_hasta": hasta,
+            "activo": bool(req.activo),
+            "requiere_pago_previo": bool(req.requiere_pago_previo),
+            "aplica_a": req.aplica_a or "linea",
+            "descripcion": req.descripcion or "",
+            "tipo_beneficio": req.tipo_beneficio or "descuento",
+        }
+
+        if tipo == "contado":
+            repo.append_descuento_pronto_pago(
+                DescuentoMarcaCategoria(
+                    **comun,
+                    porcentaje=Decimal(str(req.porcentaje)),
+                    tipo_descuento=TipoDescuento.CONTADO,
+                    monedas_aplicables=req.monedas_aplicables or "*",
+                    ventana_pago_tipo=req.ventana_pago_tipo,
+                    ventana_pago_dias=req.ventana_pago_dias,
+                )
+            )
+        elif tipo == "volumen":
+            repo.append_descuento_volumen(
+                DescuentoVolumen(
+                    **comun,
+                    porcentaje=Decimal(str(req.porcentaje)),
+                    min_unidades=Decimal(str(req.min_unidades)),
+                    max_unidades=Decimal(str(req.max_unidades)),
+                    tipo_evaluacion=req.tipo_evaluacion,
+                    dias_evaluacion=req.dias_evaluacion,
+                )
+            )
+        elif tipo == "recompra":
+            repo.append_descuento_recompra(
+                DescuentoRecompra(
+                    **comun,
+                    porcentaje=Decimal(str(req.porcentaje)),
+                    min_unidades=Decimal(str(req.min_unidades)),
+                    max_unidades=Decimal(str(req.max_unidades)),
+                    ventana_pago_tipo=req.ventana_pago_tipo,
+                    ventana_pago_dias=req.ventana_pago_dias,
+                )
+            )
+        elif tipo == "promocion":
+            repo.append_promocion_primera_compra(
+                PromocionPrimeraCompra(
+                    **comun,
+                    productos=req.productos,
+                    regalo_tipo=req.regalo_tipo,
+                    valor=Decimal(str(req.valor)),
+                    compra_minima=Decimal(str(req.compra_minima)),
+                    descuento_fallback=Decimal(str(req.descuento_fallback)),
+                    categorias_aplica=req.categorias_aplica,
+                    solo_primera_compra=bool(req.solo_primera_compra),
+                )
+            )
+        elif tipo == "diferencial":
+            repo.append_descuento_diferencial_cambiario(
+                DescuentoDiferencialCambiario(
+                    **comun,
+                    tipo_diferencial=req.tipo_diferencial,
+                    porcentaje_fijo=Decimal(str(req.porcentaje_fijo)),
+                    monedas_aplicables=req.monedas_aplicables or "*",
+                )
+            )
+        elif tipo == "credito":
+            repo.upsert_regla_dias_credito_volumen(
+                {
+                    "regla_id": rid,
+                    "litros_minimo": str(req.min_unidades),
+                    "litros_maximo": str(req.max_unidades),
+                    "dias_credito_max": str(req.dias_credito_max),
+                    "descripcion": req.descripcion,
+                    "activo": "true" if req.activo else "false",
+                }
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Tipo de regla desconocido: {tipo!r}")
+
+        repo.invalidate_cache()
+        return {"status": "success", "regla_id": rid, "message": f"Regla {rid} guardada."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 # --- Unified Discount Rules Endpoint ---
+
 @app.get("/api/reglas-descuento")
 async def get_todas_reglas_descuento():
     try:

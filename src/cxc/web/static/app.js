@@ -4101,6 +4101,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>`).join('');
         };
 
+        if (typeof cambiarTipoRegla === "function") cambiarTipoRegla();
         const body = document.getElementById("pricelist-mapeo-table-body");
         if (!body) return;
 
@@ -5394,6 +5395,90 @@ document.addEventListener("DOMContentLoaded", () => {
     window.cerrarDetalleReglas = function() {
         const modal = document.getElementById("modal-detalle-reglas");
         if (modal) modal.style.display = "none";
+    };
+
+    // ── Formulario único de reglas ────────────────────────────────────────
+    // Paso 4 del plan de unificación. Antes había seis formularios, uno por
+    // tabla, y cada uno ofrecía solo su propio subconjunto de campos: no se
+    // podía armar un descuento por producto con ventana de pago, aunque el
+    // motor lo soporta. Los 37 campos son un núcleo común más un bloque
+    // corto por tipo; el desplegable decide cuál se muestra.
+    window.cambiarTipoRegla = function() {
+        const tipo = document.getElementById("ru-tipo")?.value || "contado";
+        document.querySelectorAll(".ru-bloque").forEach(b => {
+            const tipos = (b.dataset.tipos || "").split(/\s+/);
+            b.style.display = tipos.includes(tipo) ? "" : "none";
+        });
+        // La unidad de medida solo tiene sentido donde hay un tramo que
+        // contar; en días de crédito son siempre litros.
+        const uni = document.getElementById("ru-unidad");
+        if (uni && tipo === "credito") uni.value = "LITROS";
+    };
+
+    window.guardarReglaUnificada = async function() {
+        const v = (id, def) => {
+            const el = document.getElementById(id);
+            if (!el) return def;
+            if (el.type === "checkbox") return el.checked;
+            return el.value === "" ? def : el.value;
+        };
+        const num = (id, def) => {
+            const raw = String(v(id, def)).replace(",", ".");
+            const n = parseFloat(raw);
+            return Number.isFinite(n) ? n : def;
+        };
+        const tipo = v("ru-tipo", "contado");
+        const msg = document.getElementById("ru-mensaje");
+        const payload = {
+            tipo_regla: tipo,
+            regla_id: v("ru-regla-id", ""),
+            descripcion: v("ru-descripcion", ""),
+            marca: v("ru-marca", "*"),
+            categoria: v("ru-categoria", "*"),
+            unidad_medida: v("ru-unidad", "UNIDADES"),
+            vigencia_desde: v("ru-desde", ""),
+            vigencia_hasta: v("ru-hasta", ""),
+            activo: v("ru-activo", true),
+            listas_aplicables: v("ru-listas", "*"),
+            listas_excluidas: v("ru-listas-excluidas", ""),
+            monedas_excluidas: v("ru-monedas-excluidas", ""),
+            requiere_pago_previo: v("ru-pago-previo", false),
+            ventana_pago_tipo: v("ru-ventana-tipo", "no_aplica"),
+            ventana_pago_dias: num("ru-ventana-dias", 0),
+            solo_primera_compra: v("ru-frecuencia", "recurrente") === "una_vez",
+            porcentaje: num("ru-porcentaje", 0),
+            min_unidades: num("ru-min", 0),
+            max_unidades: num("ru-max", 999999),
+            tipo_evaluacion: v("ru-evaluacion", "orden"),
+            dias_evaluacion: num("ru-dias-eval", 30),
+            productos: v("ru-productos", ""),
+            regalo_tipo: v("ru-regalo", "solo_uno"),
+            valor: num("ru-valor", 0),
+            compra_minima: num("ru-compra-minima", 0),
+            descuento_fallback: num("ru-fallback", 0),
+            tipo_diferencial: v("ru-tipo-dif", "fijo_35_ves_usd"),
+            porcentaje_fijo: num("ru-tope", 0.35),
+            dias_credito_max: num("ru-dias-credito", 30)
+        };
+        if (msg) { msg.textContent = "Guardando..."; msg.style.color = "#64748b"; }
+        try {
+            const res = await fetch("/api/config/regla", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                if (msg) { msg.textContent = "✓ " + (data.message || "Guardada."); msg.style.color = "#059669"; }
+                document.getElementById("ru-regla-id").value = "";
+                if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
+            } else {
+                if (msg) { msg.textContent = "✕ " + (data.detail || "No se pudo guardar."); msg.style.color = "#dc2626"; }
+            }
+        } catch (err) {
+            if (msg) { msg.textContent = "✕ Error de red."; msg.style.color = "#dc2626"; }
+            console.error("Error guardando la regla:", err);
+        }
     };
 
     window.btnDetalleReglas = function(item) {
