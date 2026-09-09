@@ -1640,6 +1640,14 @@ class FilaMapeoRequest(BaseModel):
     moneda: str = ""  # "usd" | "ves" | ""
     categoria: str = ""  # "industrial" | "comercial" | ""
     vigente: bool = False
+    # Período en que esta lista fue la referencia de su grupo, en ISO.
+    # Con esto el teórico de una orden se compara contra las listas que
+    # regían EL DÍA QUE NACIÓ, no contra las de hoy. Pedido del usuario
+    # (septiembre 2026): "deja configurado y configurable hacia el futuro,
+    # desde la interfaz, ese mapeo de listas, para que tome la vigencia
+    # correcta y cuáles aplican a cada teórico".
+    desde: str = ""
+    hasta: str = ""  # vacío = sigue vigente
 
 
 class PricelistMapeoUnificadoRequest(BaseModel):
@@ -7077,6 +7085,8 @@ async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
                     fila.categoria if fila.categoria in ("industrial", "comercial") else ""
                 ),
                 "vigente": bool(fila.vigente),
+                "desde": (fila.desde or "").strip(),
+                "hasta": (fila.hasta or "").strip(),
             }
             for pid, fila in req.mapeo.items()
         }

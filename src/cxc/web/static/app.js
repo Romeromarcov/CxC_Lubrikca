@@ -4131,6 +4131,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td style="text-align:center;">
                             <input type="checkbox" class="pm-vigente" ${fila.vigente ? "checked" : ""}>
                         </td>
+                        <td><input type="date" class="pm-desde" value="${fila.desde || ""}" style="padding:0.25rem;"></td>
+                        <td><input type="date" class="pm-hasta" value="${fila.hasta || ""}" style="padding:0.25rem;" title="Vacío = sigue siendo la referencia"></td>
                     </tr>
                 `;
             }).join('');
@@ -4174,7 +4176,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (err) {
             console.error("Error cargando mapeo de listas:", err);
-            body.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
+            body.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
         }
     };
 
@@ -4188,6 +4190,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 moneda: row.querySelector(".pm-moneda")?.value || "",
                 categoria: row.querySelector(".pm-categoria")?.value || "",
                 vigente: row.querySelector(".pm-vigente")?.checked || false,
+                // Sin estas dos, guardar el mapeo borraba las vigencias y
+                // el teórico volvía a compararse contra las listas de hoy.
+                desde: row.querySelector(".pm-desde")?.value || "",
+                hasta: row.querySelector(".pm-hasta")?.value || "",
             };
         });
 
