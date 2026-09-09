@@ -77,6 +77,7 @@ from cxc.models import (
 )
 from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
 from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
+from cxc.rates import Tasas
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
@@ -2104,36 +2105,34 @@ def _tasas_historicas_cacheadas(repo: Any) -> list[dict[str, str]]:
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
     """Tasa BCV/Binance más cercana a ``dt``.
 
-    Orden de fuentes (nunca un default hardcodeado -- auditoría de tasas
-    históricas, agosto 2026): 1) ``SerieTasas`` (scraper horario, solo
-    cubre desde que el cron corre -- en producción, desde 2026-07-25) si
-    tiene una captura del MISMO día que ``dt``; 2) si no, cae a
-    ``TasasHistoricasAuditoria`` (tabla poblada con la tasa BCV real de
-    Odoo día a día desde 2026-02-01, y Binance real donde ``SerieTasas`` sí
-    la capturó, o estimada con el diferencial de mercado donde no --
-    ``scripts/cargar_tasas_historicas.py``); 3) como ÚLTIMO recurso, si
-    ninguna fuente tiene NADA (no debería pasar tras la siembra inicial),
-    usa la fila de ``SerieTasas`` más cercana aunque sea de otro día.
+    Orden de fuentes, unificado en ``cxc.rates.Tasas`` (septiembre 2026):
+    manda ``TasasHistoricasAuditoria``, que es la oficial -- una fila por
+    día, indexada por FECHA VALOR y alineada con las series que publica el
+    BCV (147 de 147 días verificados). ``SerieTasas`` va segunda y solo si
+    es del MISMO día.
+
+    El orden estaba al revés hasta que se realineó el histórico. Tenía
+    sentido cuando el histórico era una siembra y la serie horaria el dato
+    fresco; dejó de tenerlo cuando resultó que el scraper guardaba bajo la
+    fecha de hoy la tasa que el BCV publica con fecha valor de MAÑANA. Se
+    midió antes de invertirlo: cero movimiento en Ventas y en el Reporte de
+    Saldos, porque los equivalentes ya aplicados están congelados en las
+    Vinculaciones. Cambia lo que se congele de acá en adelante.
+
+    El último recurso -- la fila de ``SerieTasas`` más cercana aunque sea
+    de otro día -- se conserva para no romper a quien depende de recibir
+    siempre un par de números, pero por eso mismo va al final.
     """
-    # El repo se resuelve tarde y solo si hace falta: cuando quien llama ya
-    # trae las filas de SerieTasas y ahí está el día exacto, esta función no
-    # toca la base.
+    # El repo se resuelve tarde y solo si hace falta.
     if rows is None:
         rows = _all_serie_tasas_rows(get_repo())
 
     fecha_str = dt.date().isoformat()
-    if rows:
-        closest_row = _closest_serie_row(dt, rows)
-        if closest_row and str(closest_row.get("timestamp", ""))[:10] == fecha_str:
-            return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
-                closest_row.get("tasa_binance")
-            )
-
-    hist_rows = _tasas_historicas_cacheadas(get_repo())
-    bcv_hist = get_bcv_usd_rate_for_date(dt.date(), hist_rows)
-    binance_hist = get_binance_rate_for_date(dt.date(), hist_rows)
-    if bcv_hist is not None and binance_hist is not None:
-        return bcv_hist, binance_hist
+    tasas = Tasas(historicas=_tasas_historicas_cacheadas(get_repo()), serie=rows or [])
+    bcv = tasas.bcv_usd(dt, arrastrar=False)
+    binance = tasas.binance(dt)
+    if bcv is not None and binance is not None:
+        return bcv, binance
 
     if rows:
         closest_row = _closest_serie_row(dt, rows)
@@ -2227,14 +2226,15 @@ def get_bcv_usd_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     """Tasa BCV-USD oficial del día EXACTO `fecha`, desde ``TasasHistoricasAuditoria``.
 
     Mismo criterio que ``get_binance_rate_for_date``/``get_eur_rate_for_date``
-    (lookup por día exacto, sin caer a otro día)."""
-    fecha_str = fecha.isoformat()
-    for r in rows:
-        if str(r.get("fecha", ""))[:10] == fecha_str:
-            val = parse_decimal_safe(r.get("tasa_bcv_usd", "0"))
-            if val > Decimal("0"):
-                return val
-    return None
+    (lookup por día exacto, sin caer a otro día).
+
+    Delega en ``cxc.rates.Tasas``, donde vive la política de precedencia
+    unificada. Se conserva ``arrastrar=False`` -- el día EXACTO, sin caer a
+    otro -- porque es la semántica que estos llamadores ya tenían y
+    cambiarla movería montos. El arrastre es el default del módulo y lo
+    usan los llamadores nuevos que sí lo quieren.
+    """
+    return Tasas(historicas=rows).bcv_usd(fecha, arrastrar=False)
 
 
 def get_bcv_euro_rate_for_datetime(dt: datetime, rows: list[dict]) -> Decimal | None:
@@ -2295,14 +2295,12 @@ def get_binance_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     para una fecha puntual es el histórico diario ya sembrado
     (``scripts/cargar_tasas_historicas.py``). Devuelve ``None`` si ese día
     no tiene fila -- quien llama decide el fallback.
+
+    Delega en ``cxc.rates.Tasas``, donde vive la política de precedencia
+    unificada. Binance nunca se arrastra de otro día: se mueve todo el día
+    y el promedio de ayer no describe hoy.
     """
-    fecha_str = fecha.isoformat()
-    for r in rows:
-        if str(r.get("fecha", ""))[:10] == fecha_str:
-            val = parse_decimal_safe(r.get("tasa_binance_promedio_diario", "0"))
-            if val > Decimal("0"):
-                return val
-    return None
+    return Tasas(historicas=rows).binance(fecha)
 
 
 def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
@@ -2321,18 +2319,14 @@ def get_eur_rate_for_date(fecha: date, rows: list[dict]) -> Decimal | None:
     detectable por "> 0") se devolvía sin más, produciendo tarjetas "Tasa
     BCV" y "Tasa BCV-EUR" idénticas en la UI. Se compara contra el
     ``tasa_bcv_usd`` de la MISMA fila (mismo día), no uno buscado aparte.
+
+    Delega en ``cxc.rates.Tasas``, donde viven ahora tanto la política de
+    precedencia como ese piso de plausibilidad. Se conserva el día EXACTO
+    (``arrastrar=False``) porque es la semántica que estos llamadores ya
+    tenían y cambiarla movería montos; el arrastre es el default del
+    módulo y lo usan los llamadores nuevos que sí lo quieren.
     """
-    fecha_str = fecha.isoformat()
-    for r in rows:
-        if str(r.get("fecha", ""))[:10] == fecha_str:
-            val = parse_decimal_safe(r.get("tasa_bcv_euro", "0"))
-            if val <= Decimal("0"):
-                continue
-            tasa_bcv_fila = parse_decimal_safe(r.get("tasa_bcv_usd", "0"))
-            if tasa_bcv_fila > Decimal("0") and (val / tasa_bcv_fila) < Decimal("1.05"):
-                continue
-            return val
-    return None
+    return Tasas(historicas=rows).bcv_eur(fecha, arrastrar=False)
 
 
 def resolve_metodo_pago_nombre(execute: Any) -> dict[int, str]:
