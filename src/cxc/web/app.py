@@ -3982,6 +3982,11 @@ def _pagos_odoo_por_orden(
     # - Fecha del pago (date)
     # - Si es USD -> 1:1 ($1 pagado = $1 abonado).
     # - Si es VES -> Se convierte a la tasa BCV/Binance a la fecha del pago (date).
+    # Órdenes de la lista histórica: las únicas que pueden tomar la vía de
+    # pago en euros (criterio del usuario, "por ahora").
+    so_ids_historicas = so_ids_en_ventana_historica(get_repo(), ordenes_map.values())
+    hist_rows_euro = _tasas_historicas_cacheadas(get_repo()) if so_ids_historicas else []
+
     payments_by_so: dict[str, dict[str, Any]] = {}
     if invoice_ids_all:
         try:
@@ -4074,6 +4079,31 @@ def _pagos_odoo_por_orden(
                             else Decimal("0")
                         )
                         p_bin = p_bcv
+
+                    # La vía euro, solo para las órdenes de la lista
+                    # histórica y solo sobre lo que rebaja la CxC. El
+                    # equivalente que se concilia contra Odoo no se toca
+                    # -- ver ``abono_cxc_en_euros``.
+                    if p_curr != "USD" and so_m in so_ids_historicas:
+                        try:
+                            f_pago = date.fromisoformat(p_date)
+                        except (TypeError, ValueError):
+                            f_pago = None
+                        if f_pago is not None:
+                            p_eur = abono_cxc_en_euros(
+                                p_amt, f_pago, serie_rows, hist_rows_euro
+                            )
+                            if p_eur is not None:
+                                # Los DOS, a diferencia del camino de
+                                # Vinculaciones (donde solo cambia el
+                                # equivalente BCV). Acá ya salían iguales a
+                                # propósito: Odoo no distingue la ruta de
+                                # pago a nivel de account.payment, solo la
+                                # moneda -- ver la advertencia del
+                                # docstring. Mover uno solo rompería esa
+                                # invariante sin ganar información.
+                                p_bcv = p_eur
+                                p_bin = p_eur
 
                     p_info["abono_bcv"] += p_bcv
                     p_info["abono_binance"] += p_bin
@@ -4258,6 +4288,12 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         if so_ids_names:
             entrega_valida_set, picking_delivery_map = _entregas_desde_espejo(repo, so_ids_names)
 
+        # Órdenes de la lista histórica: las únicas que pueden tomar la vía
+        # de pago en euros (criterio del usuario, "por ahora").
+        so_ids_historicas = so_ids_en_ventana_historica(repo, ordenes)
+        hist_rows_euro = _tasas_historicas_cacheadas(repo) if so_ids_historicas else []
+        serie_rows_euro = _all_serie_tasas_rows(repo) if so_ids_historicas else []
+
         # Compute payments per SO from manual Vinculaciones (Google Sheets)
         pagos_by_so = {}
         for v in vincs:
@@ -4271,6 +4307,21 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
             # BCV equivalent
             eq_bcv = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
+            # La vía euro: solo para órdenes de la lista histórica, y solo
+            # acá -- ``equiv_usd_bcv`` queda intacto en BCV-USD porque es el
+            # que se concilia contra Odoo. Ver ``abono_cxc_en_euros``.
+            # Solo el equivalente BCV: el Binance conserva su propia tasa,
+            # porque acá sí sabemos por qué ruta entró cada abono (a
+            # diferencia del camino de Odoo, donde los dos salen iguales).
+            if v.moneda_abono == Moneda.VES and str(v.so_id) in so_ids_historicas:
+                eq_eur = abono_cxc_en_euros(
+                    v.monto_aplicado,
+                    v.hora_pago_confirmada.date(),
+                    serie_rows_euro,
+                    hist_rows_euro,
+                )
+                if eq_eur is not None:
+                    eq_bcv = eq_eur
             pagos_by_so[v.so_id]["abono_bcv"] += eq_bcv
 
             # Binance equivalent
@@ -7146,6 +7197,102 @@ def _productos_despachados_desde_espejo(
             continue
         result.setdefault(so_name, set()).add(int(ln.producto_id))
     return result
+
+
+def abono_cxc_en_euros(
+    monto_ves: Decimal,
+    fecha_pago: date,
+    serie_rows: list[dict],
+    hist_rows: list[dict],
+) -> Decimal | None:
+    """Equivalente en dólares de un abono en bolívares, a tasa BCV-Euro.
+
+    Criterio del usuario (septiembre 2026): "el equivalente a tasa euro es
+    vía de pago, pero solo para las órdenes de la lista histórica, por
+    ahora", y aplica POR ORDEN -- toda la cobranza en bolívares de una
+    orden histórica se acredita al euro.
+
+    Y la aclaración que define DÓNDE se usa: "para esos casos mantén el
+    equivalente a BCV usd para conciliar contra odoo, solo usa la
+    referencia en euro para rebajar la cxc como se hace con la tasa
+    binance; tú no comparas el equivalente a binance contra odoo porque
+    odoo no maneja esa tasa".
+
+    O sea que el euro NO toca ``Vinculacion.equiv_usd_bcv``: ese sigue
+    siendo BCV-USD y es el que se enfrenta a Odoo en el balance de
+    comprobación. El euro vive solo en ``abono_bcv``, que es la cifra que
+    rebaja la cuenta por cobrar -- exactamente el trato que ya recibe el
+    equivalente Binance, que tampoco se compara contra Odoo porque Odoo no
+    conoce esa tasa.
+
+    Devuelve None cuando no hay tasa euro para esa fecha en NINGUNA de las
+    dos fuentes. None significa "no pude", no "cero": quien llama debe
+    seguir con la tasa BCV-USD en vez de acreditar nada.
+
+    Las dos series llegan ya cargadas: esto corre una vez por abono y
+    releerlas acá era una consulta a la base por pago.
+    """
+    if monto_ves <= Decimal("0"):
+        return None
+    try:
+        momento = datetime.combine(fecha_pago, datetime.min.time())
+        tasa = get_bcv_euro_rate_for_datetime(momento, serie_rows)
+        if not tasa or tasa <= Decimal("0"):
+            # SerieTasas arranca el 2026-07-25 y la ventana histórica va del
+            # 20-feb al 12-mar: para estas órdenes la única fuente con euro
+            # es siempre el histórico. Sin esta caída la vía euro nunca se
+            # activaba -- llevaba meses muerta por eso.
+            tasa = get_eur_rate_for_date(fecha_pago, hist_rows)
+    except Exception as e:
+        logger.warning("Sin tasa euro para el abono del %s: %s", fecha_pago, e)
+        return None
+    if not tasa or tasa <= Decimal("0"):
+        return None
+    return monto_ves / tasa
+
+
+def valor_pagado_bcv_usd_en_euros(
+    vinculaciones: list[Vinculacion],
+    serie_rows: list[dict],
+    hist_rows: list[dict],
+) -> Decimal:
+    """``valor_pagado_bcv_usd`` pero acreditando los abonos en bolívares a
+    la tasa BCV-Euro -- la vía de pago de las órdenes de la lista histórica.
+
+    Vive acá y no en ``engine/equivalents`` porque necesita las series de
+    tasas, que son cosa de la capa web. ``equivalents.valor_pagado_bcv_usd``
+    sigue siendo la función que suma lo congelado tal cual, y es la que
+    alimenta la conciliación contra Odoo.
+    """
+    total = Decimal("0")
+    for v in vinculaciones:
+        eq = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
+        if v.moneda_abono == Moneda.VES:
+            en_eur = abono_cxc_en_euros(
+                v.monto_aplicado, v.hora_pago_confirmada.date(), serie_rows, hist_rows
+            )
+            if en_eur is not None:
+                eq = en_eur
+        total += eq
+    return total
+
+
+def so_ids_en_ventana_historica(repo: Any, ordenes: Any) -> set[str]:
+    """Los ``so_id`` que caen en la ventana de la Lista Histórica.
+
+    Existe para no llamar a ``orden_en_periodo_historico`` una vez por
+    orden: esa función consulta el toggle con ``repo.get_config`` en CADA
+    llamada, así que recorrer 953 órdenes eran 953 lecturas a la base. Acá
+    el toggle se lee UNA vez y la ventana se evalúa en memoria.
+    """
+    if not is_historical_pricelist_enabled(repo):
+        return set()
+    return {
+        str(o.so_id)
+        for o in ordenes
+        if isinstance(getattr(o, "fecha", None), date)
+        and HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+    }
 
 
 def orden_en_periodo_historico(repo, orden) -> bool:
@@ -14531,6 +14678,15 @@ def _get_ventas_sync(
         today_ventas = date.today()
 
         ordenes = repo.all_ordenes()
+        # Órdenes de la lista histórica: las únicas que pueden tomar la vía
+        # de pago en euros (criterio del usuario, "por ahora"). Se resuelve
+        # una vez para las 953 órdenes -- el toggle se lee de la base en
+        # cada llamada a ``orden_en_periodo_historico``.
+        so_ids_historicas_ventas = so_ids_en_ventana_historica(repo, ordenes)
+        serie_rows_euro_v = _all_serie_tasas_rows(repo) if so_ids_historicas_ventas else []
+        hist_rows_euro_v = (
+            _tasas_historicas_cacheadas(repo) if so_ids_historicas_ventas else []
+        )
         # Excepciones: ordenes cuyo descuento NO se le prometio al cliente.
         # Ver schema.descuentos_no_otorgados -- el descuento se asume
         # comprometido por defecto y esto son las excepciones marcadas.
@@ -15162,6 +15318,20 @@ def _get_ventas_sync(
             if vincs_orden:
                 val_bcv = float(valor_pagado_bcv_usd(vincs_orden))
                 val_binance = float(valor_pagado_binance_usd(vincs_orden))
+                # La vía euro. El comentario de arriba daba por hecho que el
+                # ajuste BCV-EUR venía DENTRO de ``equiv_usd_bcv``, que es lo
+                # que el diseño original pretendía. El criterio del usuario
+                # (septiembre 2026) lo separó: ese campo se queda en BCV-USD
+                # porque es el que se concilia contra Odoo, y el euro se
+                # aplica solo acá, sobre lo que rebaja la CxC. Sin esto
+                # Ventas y el Reporte de Saldos dirían números distintos
+                # para la misma orden.
+                if str(o.so_id) in so_ids_historicas_ventas:
+                    val_bcv = float(
+                        valor_pagado_bcv_usd_en_euros(
+                            vincs_orden, serie_rows_euro_v, hist_rows_euro_v
+                        )
+                    )
             else:
                 p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
                 val_bcv = float(p_bcv_binance.get("monto_pagado_bcv", 0.0))
@@ -15175,7 +15345,14 @@ def _get_ventas_sync(
             # descuento -- eso sigue siendo exclusivamente CONCILIADO.
             vincs_pend_orden = vincs_pendientes_por_so.get(o.so_id, [])
             if vincs_pend_orden:
-                val_bcv_incl_pendiente = val_bcv + float(valor_pagado_bcv_usd(vincs_pend_orden))
+                pend_bcv = (
+                    valor_pagado_bcv_usd_en_euros(
+                        vincs_pend_orden, serie_rows_euro_v, hist_rows_euro_v
+                    )
+                    if str(o.so_id) in so_ids_historicas_ventas
+                    else valor_pagado_bcv_usd(vincs_pend_orden)
+                )
+                val_bcv_incl_pendiente = val_bcv + float(pend_bcv)
                 val_binance_incl_pendiente = val_binance + float(
                     valor_pagado_binance_usd(vincs_pend_orden)
                 )
