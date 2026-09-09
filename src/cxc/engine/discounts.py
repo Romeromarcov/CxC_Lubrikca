@@ -1650,7 +1650,7 @@ def _calcular_componentes(
         # ¿pueden unificarse?".
         #
         # Lo eran. Las dos preguntaban "¿el pago cubre el teórico USD?" y
-        # las dos cerraban el hueco hasta lo pagado, topado al mismo
+        # las dos cerraban la brecha hasta lo pagado, topado al mismo
         # porcentaje. Lo que las separaba era ``todos_usd_puro`` -- si TODOS
         # los abonos estaban registrados con moneda USD -- y ese criterio es
         # frágil: el usuario aclaró que los pagos se registran en VES y que
@@ -1669,7 +1669,7 @@ def _calcular_componentes(
         #     favorece al cliente. Para un pago en dólares las dos
         #     valoraciones son el monto nominal, así que la vieja rama fija
         #     entra sin cambiar.
-        #   · hueco medido contra el precio REAL de la línea y contra lo que
+        #   · brecha medida contra el precio REAL de la línea y contra lo que
         #     el pago vale en los términos de la factura (BCV).
         #   · la guarda de pagos huérfanos, que antes solo cubría a la rama
         #     "equiparar", vale ahora para las dos: es control de calidad
@@ -1700,23 +1700,23 @@ def _calcular_componentes(
                     (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
                     Decimal("0"),
                 )
-                # Sin líneas con precio propio no hay con qué medir el hueco:
+                # Sin líneas con precio propio no hay con qué medir la brecha:
                 # "no sé" no es "cero", así que manda el precio de lista.
-                base_hueco = precio_real_orden if precio_real_orden > 0 else precio_base
-                hueco = max(Decimal("0"), base_hueco - otros_desc_pre - pagado_en_factura)
-                diferencial_cambiario = min(techo, hueco)
+                base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
+                brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
+                diferencial_cambiario = min(techo, brecha)
                 if diferencial_cambiario > 0:
                     pct_str = f"{diferencial_maximo * 100:.1f}%"
                     detalle_diferencial = DescuentoAplicado(
                         origen="bcv_completo",
                         descripcion=(
                             f"Diferencial Cambiario (tope {pct_str}, "
-                            f"hueco hasta lo pagado)"
+                            f"brecha hasta lo pagado)"
                         ),
                         monto=q2(diferencial_cambiario),
                         regla_id=getattr(regla_max, "regla_id", "") or "",
                         porcentaje=diferencial_maximo,
-                        base=q2(base_hueco),
+                        base=q2(base_brecha),
                     )
 
     return _Componentes(
