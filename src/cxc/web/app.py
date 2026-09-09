@@ -2176,19 +2176,35 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
     tasas = Tasas(historicas=_tasas_historicas_cacheadas(get_repo()), serie=rows or [])
     bcv = tasas.bcv_usd(dt, arrastrar=False)
     binance = tasas.binance(dt)
-    if bcv is not None and binance is not None:
-        return bcv, binance
+    if bcv is not None:
+        # Basta con tener la BCV. Exigir las dos hacía que una fila sin
+        # Binance -- que las hay, y son legítimas: Odoo no conoce esa tasa
+        # -- cayera al default de 2019 teniendo la BCV correcta del día a
+        # mano. Binance en cero es lo que ya devolvía esta función antes,
+        # y quien la usa para ese lado comprueba ``> 0``.
+        return bcv, binance if binance is not None else Decimal("0")
 
-    if rows:
-        closest_row = _closest_serie_row(dt, rows)
-        if closest_row:
-            return parse_decimal_safe(closest_row.get("tasa_bcv")), parse_decimal_safe(
-                closest_row.get("tasa_binance")
-            )
-
-    logger.warning(
-        "Sin ninguna tasa disponible (SerieTasas ni TasasHistoricasAuditoria) para %s -- "
-        "revisar que la siembra inicial se haya corrido.",
+    # Acá había un fallback más: "la fila de SerieTasas más cercana aunque
+    # sea de OTRO día". Se quitó (septiembre 2026). Ya había causado un bug
+    # real -- una N/C de marzo resuelta con una tasa de agosto, porque la
+    # fila más cercana a marzo era la primera que el scraper llegó a
+    # escribir. Se tapó con una guardia de fecha en el camino del euro,
+    # pero seguía vivo para USD y Binance. Medido antes de sacarlo: sobre
+    # las 154 fechas con actividad real (25-feb a 09-sep) las 154 resuelven
+    # por día exacto, así que nunca disparaba.
+    #
+    # El default de abajo -- 36,5 / 38,0, las tasas de 2019 -- SÍ debería
+    # ser un error duro: un asiento congelado con eso queda mal para
+    # siempre, y ``cxc.rates.TasaNoDisponible`` existe para eso. No se
+    # cambió todavía porque 42 tests de la suite construyen escenarios sin
+    # tasas sembradas y dependen de este valor; convertirlo en excepción es
+    # un trabajo aparte, que además obliga a revisar qué monto asertan esos
+    # tests. Mientras tanto se registra como ERROR y no como warning: si
+    # esto aparece en los logs, hay que mirarlo.
+    logger.error(
+        "Sin ninguna tasa para %s en SerieTasas ni en TasasHistoricasAuditoria. "
+        "Se usa el default de 2019 (36,5/38,0), que casi con certeza es incorrecto "
+        "-- revisar que el scraper esté corriendo y que el histórico esté cargado.",
         fecha_str,
     )
     return Decimal("36.5"), Decimal("38.0")

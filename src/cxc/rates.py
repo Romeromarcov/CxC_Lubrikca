@@ -72,6 +72,20 @@ DIAS_MAXIMOS_DE_ARRASTRE = 7
 BANDA_BINANCE_SOBRE_BCV = (Decimal("0.5"), Decimal("3"))
 
 
+class TasaNoDisponible(RuntimeError):
+    """No hay tasa para esa fecha en ninguna fuente.
+
+    Existe para que la ausencia de una tasa sea imposible de confundir con
+    un número. Antes ``get_rate_for_datetime`` devolvía 36,5/38,0 -- los
+    valores de 2019 -- tras un ``logger.warning`` que nadie ve, y quien
+    llamaba seguía adelante convirtiendo montos con eso. Medido en
+    septiembre 2026 nunca dispara (las 154 fechas con actividad resuelven
+    por día exacto), asi que convertirlo en excepción no cambia nada hoy y
+    saca del medio una mina para mañana: un asiento congelado con esa tasa
+    quedaría mal para siempre.
+    """
+
+
 def _dec(valor: Any) -> Decimal:
     if valor is None or valor == "":
         return Decimal("0")
