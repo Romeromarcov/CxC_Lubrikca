@@ -13471,7 +13471,7 @@ async def get_balance_comprobacion():
                 solo_reporte = con_saldo_reporte - con_residual_odoo
                 # Las facturas de las órdenes que el reporte efectivamente
                 # lista -- el universo comparable.
-                serie_bal_f = _all_serie_tasas_rows(repo_bal)
+                hist_bal_f = _tasas_historicas_cacheadas(repo_bal)
                 ordenes_rep = {o.so_id: o for o in repo_bal.all_ordenes()}
                 ids_comparables = {
                     int(ordenes_rep[str(i["so_id"])].factura_id)
@@ -13518,13 +13518,22 @@ async def get_balance_comprobacion():
                     usd = abs(float(m.get("amount_residual_usd") or 0.0))
                     if ves <= 0.05 or usd <= 0.05:
                         continue
-                    nuestra = tasa_bcv_de_dia(
-                        str(m.get("invoice_date") or "")[:10], serie_bal_f
-                    )
+                    # Contra la OFICIAL del BCV de esa fecha valor, no
+                    # contra ``tasa_bcv_de_dia``: esa prefiere la captura de
+                    # SerieTasas del mismo día, que es el intradía crudo y de
+                    # noche ya trae la tasa de mañana. El histórico está
+                    # alineado 147 de 147 días con lo que publica el BCV.
+                    try:
+                        f_inv = date.fromisoformat(str(m.get("invoice_date") or "")[:10])
+                    except (TypeError, ValueError):
+                        continue
+                    nuestra = float(get_bcv_usd_rate_for_date(f_inv, hist_bal_f) or 0.0)
                     if nuestra <= 0:
                         continue
                     if abs((ves / usd) / nuestra - 1.0) > 0.02:
-                        divergentes.append(str(m.get("name") or mid))
+                        divergentes.append(
+                            f"{m.get('name') or mid} ({ves / usd:,.2f} vs {nuestra:,.2f})"
+                        )
                 partida(
                     "La tasa de Odoo coincide con el BCV del día",
                     "esperado",
@@ -13665,6 +13674,69 @@ async def get_balance_comprobacion():
                     else:
                         eq_nuestro += monto
                     eq_odoo += ref_p
+                # Y la misma validación que ya existe para las facturas,
+                # ahora pago por pago.
+                #
+                # Pedido del usuario: "validar que la tasa que odoo esta
+                # reportando en los pagos y las facturas se corresponda con
+                # la tasa correcta de ese dia".
+                #
+                # La partida de abajo da un total y por lo tanto solo dice
+                # CUÁNTO se desvía el conjunto; esta dice CUÁLES pagos y por
+                # qué tasa, que es lo que sirve para ir a corregirlos en
+                # Odoo. Se despeja la tasa que Odoo estampó (nominal en
+                # bolívares / ``amount_ref``) y se compara contra la oficial
+                # del BCV de esa fecha valor.
+                #
+                # El 2 % de margen deja pasar el redondeo de ``amount_ref``,
+                # que Odoo guarda con dos decimales: en un abono chico eso
+                # solo mueve centésimas de punto.
+                tasa_mal: list[str] = []
+                for p in pagos:
+                    if not str(p.pago_id).isdigit():
+                        continue
+                    m_val = vivos_por_id.get(int(p.pago_id))
+                    if not m_val:
+                        continue
+                    if str(getattr(p, "moneda", "") or "").upper().replace(
+                        "MONEDA.", ""
+                    ) != "VES":
+                        continue
+                    nominal = float(getattr(p, "monto", 0.0) or 0.0)
+                    ref_val = float(m_val.get("amount_ref") or 0.0)
+                    if nominal <= 0.0 or ref_val <= 0.0:
+                        continue
+                    oficial = float(
+                        get_bcv_usd_rate_for_date(p.fecha_pago.date(), hist_bal) or 0.0
+                    )
+                    if oficial <= 0:
+                        continue
+                    estampada = nominal / ref_val
+                    if abs(estampada / oficial - 1.0) <= 0.02:
+                        continue
+                    # Los abonos cobrados en euros no son un error de tasa:
+                    # su tasa es la del euro y está bien. Ya se reconocen
+                    # arriba, así que acá solo se descartan.
+                    eur_dia = get_eur_rate_for_date(p.fecha_pago.date(), hist_bal)
+                    if eur_dia and abs(estampada / float(eur_dia) - 1.0) < 0.01:
+                        continue
+                    tasa_mal.append(
+                        f"pago {p.pago_id} del {p.fecha_pago.date().isoformat()} "
+                        f"({estampada:,.2f} vs {oficial:,.2f})"
+                    )
+                partida(
+                    "La tasa de Odoo en los pagos coincide con el BCV del día",
+                    "esperado",
+                    0.0,
+                    "pagos con más de 2 % de desviación",
+                    float(len(tasa_mal)),
+                    "Se despeja la tasa que Odoo estampó en cada abono en "
+                    "bolívares (nominal / amount_ref) y se compara contra la "
+                    "oficial del BCV de esa fecha valor. Los abonos cobrados "
+                    "en euros no cuentan: su tasa es la del euro y está bien."
+                    + (f" Divergen: {'; '.join(tasa_mal[:5])}." if tasa_mal else ""),
+                )
+
                 partida(
                     "Pagos: equivalente BCV contra Odoo",
                     "nuestra serie de tasas",
