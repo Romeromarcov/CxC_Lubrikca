@@ -85,20 +85,13 @@ def test_una_nota_de_credito_mayor_que_la_factura_se_senala(escenario, sistema, 
     sistema.sync_y_motor()
     total = escenario.total_factura(situacion.facturas[0])
 
-    notas = odoo.nota_credito(situacion.facturas[0])
+    # ``factor=2`` genera la NC ya inflada al doble, en un solo asiento. Antes
+    # se creaba al valor de la factura y se editaba después, y eso obligaba a
+    # pasar por el asistente de reverso -- que en esta base exige un diario que
+    # la localización valida aparte y que resulta ser el diario REAL, con la
+    # imprenta digital conectada. Ver ``OdooQA.nota_credito``.
+    notas = odoo.nota_credito(situacion.facturas[0], factor=2.0)
     assert notas, "No se generó la nota de crédito."
-    # Se infla la NC al doble de la factura.
-    lineas_nc = odoo.ex(
-        "account.move.line",
-        "search_read",
-        [[["move_id", "=", notas[0]], ["display_type", "in", ["product", False]]]],
-        {"fields": ["id", "quantity"]},
-    )
-    odoo.ex("account.move", "button_draft", [notas])
-    for ln in lineas_nc:
-        odoo.ex("account.move.line", "write", [[ln["id"]], {"quantity": float(ln["quantity"]) * 2}])
-    odoo.ex("account.move", "action_post", [notas])
-    sistema.sync_y_motor()
 
     ncs = sistema.espejo("facturas", "factura_id = :f", f=str(notas[0]))
     assert ncs, "La nota de crédito no llegó al espejo."

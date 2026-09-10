@@ -601,39 +601,76 @@ class OdooQA:
         return fid
 
     def nota_credito(
-        self, factura_id: int, fecha: date | str = "2026-09-05", motivo: str = f"{PREFIJO} NC"
+        self,
+        factura_id: int,
+        fecha: date | str = "2026-09-05",
+        motivo: str = f"{PREFIJO} NC",
+        factor: float = 1.0,
     ) -> list[int]:
-        """Nota de crédito por reverso de una factura."""
+        """Nota de crédito contra una factura, construida a mano.
+
+        **No se usa ``account.move.reversal``** a propósito. El asistente de
+        reverso exige un ``journal_id`` que la localización valida aparte -- «the
+        journal must be of the credit note type» -- y el único diario que
+        acepta es el real, que tiene la imprenta digital conectada. Pasar por
+        ahí emitiría un documento fiscal, que es exactamente lo que el banco no
+        puede hacer.
+
+        Construir el asiento directamente con ``move_type = out_refund`` y
+        ``reversed_entry_id`` apuntando a la factura da el mismo resultado para
+        lo que los escenarios miden -- el espejo lee esos dos campos -- sin
+        tocar el asistente ni su diario.
+
+        ``factor`` multiplica las cantidades: con 2.0 sale una NC del doble de
+        la factura, que es el escenario «nota de crédito por más que la
+        factura».
+        """
         if isinstance(fecha, date):
             fecha = fecha.isoformat()
-        wizard = int(
+        lineas = self.ex(
+            "account.move.line",
+            "search_read",
+            [[["move_id", "=", factura_id], ["display_type", "in", ["product", False]]]],
+            {"fields": ["product_id", "quantity", "price_unit", "name"]},
+        )
+        if not lineas:
+            raise RuntimeError(f"La factura {factura_id} no tiene líneas de producto.")
+        cliente = self._cliente_de(factura_id)
+        nc = int(
             self.ex(
-                "account.move.reversal",
+                "account.move",
                 "create",
                 [
                     {
-                        "move_ids": [(6, 0, [factura_id])],
-                        "reason": motivo,
-                        "date": fecha,
-                        # Obligatorio en ``account.move.reversal``, y ademas es
-                        # lo que mantiene la NC fuera de la imprenta digital:
-                        # si saliera por el diario real, emitiria.
+                        "move_type": "out_refund",
+                        "partner_id": cliente,
                         "journal_id": self.diario_pruebas,
+                        "invoice_date": fecha,
+                        "ref": motivo,
+                        "reversed_entry_id": factura_id,
+                        "invoice_line_ids": [
+                            (
+                                0,
+                                0,
+                                {
+                                    "product_id": (
+                                        ln["product_id"][0] if ln.get("product_id") else False
+                                    ),
+                                    "name": ln.get("name") or motivo,
+                                    "quantity": float(ln["quantity"]) * factor,
+                                    "price_unit": float(ln["price_unit"]),
+                                    "tax_ids": [(6, 0, [IMPUESTO_IVA_16])],
+                                    "account_id": CUENTA_INGRESOS,
+                                },
+                            )
+                            for ln in lineas
+                        ],
                     }
                 ],
-                {"context": {"active_model": "account.move", "active_ids": [factura_id]}},
             )
         )
-        self.ex("account.move.reversal", "reverse_moves", [[wizard]])
-        return [
-            int(f["id"])
-            for f in self.ex(
-                "account.move",
-                "search_read",
-                [[["reversed_entry_id", "=", factura_id]]],
-                {"fields": ["id"]},
-            )
-        ]
+        self.ex("account.move", "action_post", [[nc]])
+        return [nc]
 
     def anular_factura(self, factura_id: int) -> None:
         """Vuelve la factura a borrador y la cancela."""
