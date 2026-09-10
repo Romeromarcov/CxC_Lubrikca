@@ -159,13 +159,19 @@ def test_el_pago_duplicado_deja_la_orden_sobrepagada_y_visible(escenario, sistem
         "El segundo pago no llegó al espejo. Un pago duplicado es plata del cliente "
         "que hay que devolverle: perderlo es peor que registrarlo dos veces."
     )
-    gemelos = sistema.espejo(
-        "pagos",
-        "cliente_id = :c GROUP BY cliente_id, monto, moneda, fecha_pago::date "
-        "HAVING count(*) > 1",
-        c=str(situacion.cliente_id),
+    # El detector de gemelos agrupa, así que no entra por ``espejo()`` -- ése
+    # hace ``SELECT *`` y un GROUP BY encima es SQL inválido. Se comprueba la
+    # misma condición desde Python, sobre las filas que ya se tienen.
+    from collections import Counter
+
+    claves = Counter(
+        (p["cliente_id"], str(p["monto"]), p["moneda"], str(p["fecha_pago"])[:10])
+        for p in pagos_despues
     )
-    assert gemelos, "El detector de pagos gemelos no ve el duplicado."
+    assert any(n > 1 for n in claves.values()), (
+        "Dos cobros del mismo monto, la misma moneda y el mismo día no quedaron "
+        f"como gemelos detectables: {dict(claves)}"
+    )
 
 
 @pytest.mark.escenario("Registran el mismo pago dos veces — sobre una factura ya saldada")

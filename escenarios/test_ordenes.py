@@ -67,53 +67,50 @@ def test_agregar_un_producto_despues_de_entregar_no_pasa_desapercibido(
 
 
 @pytest.mark.escenario("Quitan un producto de una orden entregada, sin devolución")
-def test_quitar_un_producto_entregado_deja_rastro_de_lo_que_salio(escenario, sistema, odoo):
-    """La mercancía salió y nadie la cobra.
+def test_odoo_impide_quitar_un_producto_ya_entregado(escenario, sistema, odoo):
+    """La fila que la tabla daba por Alta, y que **Odoo bloquea en la raíz**.
 
-    Corriendo el escenario apareció el mecanismo real, que no es el que la fila
-    de la tabla suponía: **Odoo no deja borrar la línea de una orden
-    confirmada** -- «son necesarias para determinar si algo se factura o se
-    entrega. Establece la cantidad en 0». Así que sacar un producto de una orden
-    confirmada es poner su cantidad en cero, y la línea se queda.
+    El escenario suponía que alguien puede sacar un producto de una orden ya
+    entregada y dejar la mercancía sin cobrar. Corriéndolo aparecen dos
+    protecciones encadenadas, y entre las dos cierran el caso:
 
-    Eso cambia el riesgo y lo mejora: el espejo no pierde el rastro, porque la
-    línea sigue ahí con ``cantidad = 0`` y ``cantidad_entregada`` en lo que
-    salió. Lo que queda es que **lo entregado supera lo pedido**, que es el
-    espejo del caso de nota de crédito pendiente y es justo lo que hay que
-    detectar. Es también el mecanismo que produjo las dos líneas con cantidad
-    entregada negativa de los datos reales.
+    1. **No se puede borrar la línea** de una orden confirmada: «son necesarias
+       para determinar si algo se factura o se entrega. Establece la cantidad
+       en 0».
+    2. **No se puede poner la cantidad por debajo de lo entregado**: «la
+       cantidad ordenada en una línea no puede ser menor que la cantidad que ya
+       se entregó. En cambio, cree una devolución en su inventario».
+
+    O sea que sacar un producto entregado **exige hacer la devolución primero**,
+    que es exactamente lo que la fila temía que se pudiera saltear. Baja mucho
+    el riesgo de esa fila.
+
+    Queda como test de la protección: el día que Odoo deje de bloquearlo — una
+    versión nueva, un módulo que lo permita — este test avisa que la fila volvió
+    a estar viva. Y explica el mecanismo real de las dos líneas con
+    ``cantidad_entregada`` negativa de los datos: no salen de saltear la
+    devolución, salen de hacerla **primero** y recortar la orden después.
     """
     situacion = escenario.entregada(productos=2)
     sistema.sync_y_motor()
     lineas_antes = sistema.espejo("lineas_orden", "so_id = :so", so=situacion.nombre)
     assert len(lineas_antes) == 2
-    entregado_antes = sum(float(ln["cantidad_entregada"]) for ln in lineas_antes)
-    assert entregado_antes > 0, "El escenario no llegó a entregar nada."
+    assert sum(float(ln["cantidad_entregada"]) for ln in lineas_antes) > 0, (
+        "El escenario no llegó a entregar nada."
+    )
 
     odoo.desbloquear(situacion.so)
-    odoo.borrar_linea(situacion.orden.lineas[0])
+    with pytest.raises(Exception) as fallo:
+        odoo.borrar_linea(situacion.orden.lineas[0])
+    mensaje = str(fallo.value).lower()
+    assert "cantidad" in mensaje or "eliminar" in mensaje or "quantity" in mensaje, (
+        f"Odoo rechazó el cambio por un motivo inesperado: {fallo.value}"
+    )
 
     sistema.sync_y_motor()
     lineas_despues = sistema.espejo("lineas_orden", "so_id = :so", so=situacion.nombre)
-    entregas = sistema.espejo("entregas", "so_id = :so", so=situacion.nombre)
-
-    assert entregas, "Las entregas siguen en el espejo: son la prueba de que salió."
-    entregado_despues = sum(float(ln["cantidad_entregada"]) for ln in lineas_despues)
-    assert entregado_despues >= entregado_antes, (
-        f"Se perdió el rastro de mercancía entregada: antes {entregado_antes}, ahora "
-        f"{entregado_despues}. El saldo baja en silencio y nadie cobra lo que salió."
-    )
-
-    # Y el rastro tiene que ser DETECTABLE, no solo estar: alguna línea quedó
-    # con más entregado que pedido, que es el chequeo que lo encuentra.
-    excedidas = [
-        ln
-        for ln in lineas_despues
-        if float(ln["cantidad_entregada"]) > float(ln["cantidad"]) + 0.001
-    ]
-    assert excedidas, (
-        "Se sacó un producto ya entregado y ninguna línea quedó con lo entregado "
-        "por encima de lo pedido, así que el chequeo que busca ese caso no lo ve."
+    assert len(lineas_despues) == 2, (
+        "Odoo rechazó el cambio pero el espejo perdió una línea igual."
     )
 
 

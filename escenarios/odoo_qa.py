@@ -137,21 +137,39 @@ class OdooQA:
                                 "code": CODIGO_DIARIO_PRUEBAS,
                                 "type": "sale",
                                 "invoicing_digital_conn": False,
+                                # Un diario de venta nuevo NO nace neutro: el
+                                # default de ``billing_type`` en esta base es
+                                # ``fiscal_printer``, o sea otra via fiscal
+                                # distinta del conector digital. Se fuerza a
+                                # ``free_form`` (impresion libre), que es la
+                                # unica de las tres opciones sin dispositivo
+                                # fiscal detras. Verificar solo el conector
+                                # dejaba esta puerta abierta.
+                                "billing_type": "free_form",
                             }
                         ],
                     )
                 )
-        conn = self.ex(
+        fila = self.ex(
             "account.journal",
             "read",
             [[self._diario_pruebas]],
-            {"fields": ["invoicing_digital_conn"]},
-        )[0]["invoicing_digital_conn"]
-        if conn:
+            {"fields": ["invoicing_digital_conn", "billing_type"]},
+        )[0]
+        if fila["invoicing_digital_conn"]:
             raise EmisionFiscalDetectada(
                 f"El diario de pruebas {CODIGO_DIARIO_PRUEBAS} tiene conector de "
-                f"imprenta digital ({conn}). Facturar por ahí emitiría documentos "
-                "fiscales reales. Abortado."
+                f"imprenta digital ({fila['invoicing_digital_conn']}). Facturar por "
+                "ahí emitiría documentos fiscales reales. Abortado."
+            )
+        if fila["billing_type"] != "free_form":
+            # Se corrige en vez de abortar: el diario puede haberse creado antes
+            # de que esta comprobación existiera, y dejarlo en fiscal_printer es
+            # justamente lo que hay que evitar.
+            self.ex(
+                "account.journal",
+                "write",
+                [[self._diario_pruebas], {"billing_type": "free_form"}],
             )
         return self._diario_pruebas
 
@@ -712,7 +730,17 @@ class OdooQA:
             {"fields": ["id"]},
         )
         if partidas:
-            self.ex("account.move.line", "remove_move_reconcile", [[p["id"] for p in partidas]])
+            # ``remove_move_reconcile`` tambien devuelve ``None``: mismo
+            # "cannot marshal None" que ``action_draft`` y ``action_unlock``.
+            try:
+                self.ex(
+                    "account.move.line",
+                    "remove_move_reconcile",
+                    [[p["id"] for p in partidas]],
+                )
+            except Exception as exc:  # noqa: BLE001 -- se filtra por el mensaje
+                if "cannot marshal None" not in str(exc):
+                    raise
 
     # --- devoluciones ----------------------------------------------------
 
