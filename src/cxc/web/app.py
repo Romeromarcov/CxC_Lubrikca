@@ -41,6 +41,7 @@ from cxc.auth import (
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
 from cxc.engine.balance import crear_partida, num, partidas_internas
+from cxc.engine.conciliacion import campos_de_saldo, usd_bcv_a_binance
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
@@ -1586,9 +1587,7 @@ def usd_bcv_to_binance(
     referencias de un mismo pago en VES sin recalcular desde la celda cruda.
     Para pagos en USD el valor no cambia (no hay tasa que aplicar).
     """
-    if moneda == "VES" and binance_rate > Decimal("0"):
-        return usd_via_bcv * bcv_rate / binance_rate
-    return usd_via_bcv
+    return usd_bcv_a_binance(usd_via_bcv, moneda, bcv_rate, binance_rate)
 
 
 # Models for POST requests
@@ -8080,21 +8079,11 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 bcv_r: Decimal = bcv_rate,
                 binance_r: Decimal = binance_rate,
             ) -> dict:
-                # Ambas referencias del MISMO residual -- el pago en VES no
-                # tiene una tasa "oficial" unica para el usuario, y la que
-                # aplique al vincular puede ajustarse (hora) antes de
-                # confirmar; mostrar las dos evita que una parezca faltante.
-                # Argumentos default (no closure) para no atar esta función
-                # a la variable de loop mutable de la siguiente iteración.
-                return {
-                    "saldo_pago": float(restante_usd_bcv),
-                    "saldo_pago_binance": float(
-                        usd_bcv_to_binance(restante_usd_bcv, moneda_r, bcv_r, binance_r)
-                    ),
-                    "saldo_pago_original": float(
-                        restante_usd_bcv * bcv_r if moneda_r == "VES" else restante_usd_bcv
-                    ),
-                }
+                # Delega en ``engine/conciliacion.py`` (Fase 2.4). Los argumentos
+                # por defecto quedan porque los 4 sitios que la llaman lo hacen
+                # con un solo argumento; lo que se movió es el cálculo, que ahora
+                # es una función de módulo sin closure que amarrar.
+                return campos_de_saldo(restante_usd_bcv, moneda_r, bcv_r, binance_r)
 
             base_item = {
                 "pago_id": p["pago_id"],
