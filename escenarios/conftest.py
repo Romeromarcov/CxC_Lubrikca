@@ -15,6 +15,9 @@ Tres barreras, y ninguna es opcional:
 3. El **canario fiscal** se lee antes y después de cada escenario. Si crece,
    el escenario emitió un documento fiscal real contra el proveedor de la
    empresa y la corrida falla ahí mismo. Ver ``odoo_qa`` para el por qué.
+
+Y un timeout de red, que no es una barrera de seguridad pero sin él el banco
+no se puede correr -- ver ``TIMEOUT_ODOO_SEGUNDOS``.
 """
 
 from __future__ import annotations
@@ -73,7 +76,21 @@ def _verificar_barreras() -> None:
         )
 
 
+# Ninguna llamada a Odoo puede colgarse para siempre. ``xmlrpc.client`` no
+# expone un timeout, asi que se pone en el socket: sin esto, una corrida se
+# quedo 37 minutos parada despues de que un escenario fallara -- pytest ya
+# habia escrito la "F" y la limpieza del canario esperaba una respuesta que
+# nunca llego. Un banco que se puede colgar no se corre.
+#
+# 300 s es holgado a proposito: la consulta de ``sale.report`` sobre 950
+# ordenes es la mas lenta del banco y tarda bastante menos que eso.
+TIMEOUT_ODOO_SEGUNDOS = 300.0
+
+
 def pytest_configure(config: pytest.Config) -> None:
+    import socket
+
+    socket.setdefaulttimeout(TIMEOUT_ODOO_SEGUNDOS)
     _cargar_env_qa()
     _verificar_barreras()
     config.addinivalue_line(
@@ -107,7 +124,15 @@ def canario_fiscal(odoo):
     """
     antes = odoo.control_fiscal_emitidos()
     yield
-    despues = odoo.control_fiscal_emitidos()
+    try:
+        despues = odoo.control_fiscal_emitidos()
+    except Exception as exc:  # noqa: BLE001 -- se reporta, no se traga
+        pytest.fail(
+            "No se pudo verificar el canario fiscal al terminar el escenario "
+            f"({str(exc)[:200]}). Sin esa lectura no se puede afirmar que no se "
+            "emitio nada, y afirmarlo sin mirar seria justamente lo que este "
+            "blindaje persigue."
+        )
     if despues != antes:
         from escenarios.odoo_qa import EmisionFiscalDetectada
 
