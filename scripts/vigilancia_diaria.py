@@ -15,7 +15,7 @@ QUE EVALUA
 
 Tres bloques, los tres reejecutables por separado:
 
-1. **Integridad** -- los 30 chequeos de ``auditar_integridad``: huerfanos,
+1. **Integridad** -- los 34 chequeos de ``auditar_integridad``: huerfanos,
    duplicados por clave natural, dinero imposible, fechas absurdas, estados
    imposibles.
 2. **Conciliacion** -- las 9 partidas de ``conciliar_espejo_odoo``: por cada
