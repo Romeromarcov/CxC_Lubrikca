@@ -4068,6 +4068,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 }).join('');
             }
 
+            // Aviso de modo degradado. `fuente` lo agrega el backend (Fase 5
+            // del blindaje): antes existia como variable local y no se exponia,
+            // asi que con Odoo caido la pantalla mostraba numeros de respaldo
+            // sin decirlo.
+            const avisoEl = document.getElementById("dashboard-degradado");
+            if (avisoEl) {
+                const f = data.fuente || {};
+                if (f.degradado) {
+                    const partes = [];
+                    if (!f.odoo_respondio) {
+                        partes.push("Odoo no respondio: los litros se calcularon localmente y el estado de las ordenes sale del espejo, no en vivo");
+                    }
+                    if (f.cobranza !== "odoo") {
+                        partes.push("la cobranza se calculo con nuestra serie de tasas, no con el equivalente que estampa Odoo");
+                    }
+                    avisoEl.innerHTML = "<strong>Datos de respaldo.</strong> " + partes.join("; ") + ".";
+                    avisoEl.hidden = false;
+                } else {
+                    avisoEl.hidden = true;
+                }
+            }
+
             // Acumulados Hoy / Mes / Trimestre / Año
             const r = data.resumen || {};
             const fmtUsd = (val) => `$${(val || 0).toLocaleString('es-VE', {minimumFractionDigits:2})}`;

@@ -17119,6 +17119,27 @@ async def post_marcar_recibido(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _eq_usd_por_serie(fecha_iso: str, monto: Decimal, tasas_rows: list[dict]) -> Decimal:
+    """Equivalente en dólares de un monto en bolívares, por NUESTRA serie.
+
+    Existe para que los dos caminos del dashboard —el normal, que toma el
+    equivalente de Odoo, y el degradado, que lo calcula— usen la misma
+    conversión cuando les toca calcularla, en vez de dos copias del mismo
+    ``monto / bcv_rate`` con dos manejos distintos del caso "no hay tasa".
+
+    Devuelve ``0`` cuando no hay tasa para esa fecha, que es lo que ya hacía el
+    camino degradado. Es un cero que miente, y está anotado como tal en el
+    inventario 1.1: el arreglo de fondo es que ``get_rate_for_datetime`` levante
+    en vez de devolver el default de 2019, y eso es la Fase 2.1.
+    """
+    try:
+        fecha_dt = datetime.strptime(fecha_iso[:10], "%Y-%m-%d")
+    except ValueError:
+        fecha_dt = datetime.now()
+    bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+    return monto / bcv_rate if bcv_rate > 0 else Decimal("0")
+
+
 def _periodo_bounds(hoy: date) -> dict[str, str]:
     """Fechas de inicio (YYYY-MM-DD) de mes/trimestre/año en curso, para acumulados."""
     mes_inicio = hoy.replace(day=1)
@@ -17316,15 +17337,22 @@ def _get_reporte_diario_sync(
 
         # 2. Cobranza por Día (Desglosada por Moneda y Método) -- espejo EXACTO
         # de Odoo. Se consulta LIVE account.payment (cliente, inbound,
-        # confirmado) en vez de la hoja local "Pagos": esa hoja solo
-        # sincroniza pagos is_reconciled=False (changed_pagos() en
-        # odoo/client.py -- existe para sugerir vinculaciones manuales, NO
-        # para totalizar cobranza), así que en cuanto Odoo reconcilia un pago
-        # contra una factura el sync deja de traerlo. Verificado en vivo: de
-        # 882 pagos confirmados en Odoo, 673 (76%) ya estaban reconciliados y
-        # el total de cobranza del dashboard quedaba ~$16,562 por debajo del
-        # real (ver get_live_pagos_confirmados). Si Odoo no responde, cae a
-        # la hoja local (degradado pero funcional).
+        # confirmado); si Odoo no responde, cae al espejo local (degradado
+        # pero funcional, y ahora la respuesta lo DICE -- ver "fuente").
+        #
+        # El motivo original de leer en vivo era que el espejo filtraba
+        # ``is_reconciled = False``, así que en cuanto Odoo reconciliaba un
+        # pago el sync dejaba de traerlo: medido en vivo, de 882 pagos
+        # confirmados 673 (76%) ya estaban reconciliados y el total de
+        # cobranza quedaba ~$16.562 por debajo del real.
+        #
+        # **Ese motivo ya no aplica**: ``changed_pagos`` quitó el filtro
+        # (septiembre 2026, ver su comentario), así que el espejo hoy tiene
+        # los conciliados también. La lectura en vivo se conserva porque
+        # ``amount_ref`` -- el equivalente que Odoo estampó -- no está en el
+        # espejo, pero el respaldo local es bastante mejor de lo que este
+        # comentario afirmaba, y decidir en base a la versión vieja llevaría
+        # a sobreestimar cuánto se pierde con Odoo caído.
         cobranza_por_dia: dict[str, dict[str, Any]] = {}
 
         def _acumular_pago(
@@ -17358,7 +17386,6 @@ def _get_reporte_diario_sync(
                     if not in_range(fecha_key):
                         continue
                     monto = parse_decimal_safe(str(p.get("amount") or "0"))
-                    eq_usd = parse_decimal_safe(str(p.get("amount_ref") or "0"))
                     curr_info = p.get("currency_id")
                     moneda = (
                         curr_info[1]
@@ -17371,6 +17398,24 @@ def _get_reporte_diario_sync(
                         if isinstance(journal_info, list | tuple) and len(journal_info) > 1
                         else "Efectivo"
                     )
+                    # ``amount_ref`` es el equivalente que Odoo estampó. Cuando
+                    # falta NO se suma cero (Fase 5 del blindaje): un pago sin
+                    # ese campo aportaba su nominal completo al desglose por
+                    # moneda y CERO al total, así que la tarjeta principal lo
+                    # perdía y el desglose lo mostraba. Medido: 1.273 de los
+                    # 1.275 pagos confirmados lo traen, y los dos que faltan
+                    # son de un banco de pruebas -- o sea que un pago
+                    # registrado por una vía que no llena el campo desaparece
+                    # de la cobranza sin dejar rastro. Se cae a nuestra propia
+                    # serie de tasas, que es lo que ya hace el camino
+                    # degradado de más abajo.
+                    ref = parse_decimal_safe(str(p.get("amount_ref") or "0"))
+                    if ref > 0:
+                        eq_usd = ref
+                    elif moneda == "USD":
+                        eq_usd = monto
+                    else:
+                        eq_usd = _eq_usd_por_serie(fecha_key, monto, tasas_rows)
                     _acumular_pago(fecha_key, monto, eq_usd, moneda, metodo)
                 cobranza_desde_odoo = True
             except Exception as e_pagos:
@@ -17396,15 +17441,8 @@ def _get_reporte_diario_sync(
                     or metodo_raw
                     or "Efectivo"
                 )
-                try:
-                    fecha_dt = datetime.strptime(fecha_key, "%Y-%m-%d")
-                except ValueError:
-                    fecha_dt = datetime.now()
-                bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
                 eq_usd = (
-                    monto
-                    if moneda == "USD"
-                    else (monto / bcv_rate if bcv_rate > 0 else Decimal("0"))
+                    monto if moneda == "USD" else _eq_usd_por_serie(fecha_key, monto, tasas_rows)
                 )
                 _acumular_pago(fecha_key, monto, eq_usd, moneda, metodo)
 
@@ -17431,7 +17469,17 @@ def _get_reporte_diario_sync(
         ]
 
         # 3. Acumulados (Hoy / Mes / Trimestre / Año) para las tarjetas del Dashboard
-        bounds = _periodo_bounds(date.today())
+        # Los períodos se anclan a ``fecha_hasta`` cuando el usuario filtró, no
+        # al día del servidor (hallazgo de la Fase 5 del blindaje). Con el
+        # filtro puesto en un rango pasado, las tarjetas medían desde el inicio
+        # del mes/trimestre/año ACTUAL y quedaban en cero, mientras las tablas
+        # por día sí mostraban el rango pedido: la misma pantalla se
+        # contradecía consigo misma.
+        try:
+            ancla = date.fromisoformat(hasta_f) if hasta_f else date.today()
+        except ValueError:
+            ancla = date.today()
+        bounds = _periodo_bounds(ancla)
 
         def suma_ventas_desde(inicio: str) -> dict:
             en_rango = [v for k, v in ventas_por_dia.items() if k >= inicio]
@@ -17506,6 +17554,20 @@ def _get_reporte_diario_sync(
             "cobranza_diaria": cobranza_list,
             "resumen": resumen,
             "vendedores": vendedores,
+            # De dónde salió cada mitad del reporte, para que la pantalla pueda
+            # decirlo (Fase 5 del blindaje). Antes existía ``cobranza_desde_
+            # odoo`` como variable local y no se exponía: con Odoo caído el
+            # dashboard mostraba números degradados -- litros calculados
+            # localmente, universo sin el estado en vivo, cobranza desde el
+            # espejo -- con la misma confianza que los buenos. Es el mismo
+            # defecto que el balance resolvió absteniéndose; acá no hace falta
+            # abstenerse, hace falta decirlo.
+            "fuente": {
+                "odoo_respondio": bool(execute),
+                "cobranza": "odoo" if cobranza_desde_odoo else "espejo",
+                "litros": "sale.report" if litros_por_so else "calculo_local",
+                "degradado": not (execute and cobranza_desde_odoo),
+            },
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
