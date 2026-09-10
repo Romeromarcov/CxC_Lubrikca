@@ -39,9 +39,7 @@ def sincronizar(desde_cero: bool = False) -> Any:
     from cxc.sync.incremental import IncrementalSync
 
     if desde_cero:
-        url = os.environ["DATABASE_URL"].replace(
-            "postgresql://", "postgresql+psycopg://", 1
-        )
+        url = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg://", 1)
         with sa.create_engine(url).begin() as con:
             con.execute(sa.text("DELETE FROM app_settings WHERE key = 'last_sync'"))
 
@@ -62,6 +60,7 @@ def recalcular_teoricos(limite: int | None = None) -> int:
     from cxc.odoo.client import _connect
     from cxc.odoo.price import OdooPriceResolver
     from cxc.web.app import (
+        _primer_id_activo,
         build_fallback_ficha_config,
         get_valid_pricelists_usd_and_ves,
     )
@@ -72,9 +71,19 @@ def recalcular_teoricos(limite: int | None = None) -> int:
     usd, ves = get_valid_pricelists_usd_and_ves(repo)
     ids_usd = [int(x) for x in usd if str(x).isdigit()]
     ids_ves = [int(x) for x in ves if str(x).isdigit()]
+    # `_primer_id_activo` y no `ids_*[0]`: el primer id de la config puede ser
+    # una lista ARCHIVADA cuyas reglas de precio vencieron -- y como
+    # `_precio_fijo_en_lista` devuelve `rules[0]` cuando ninguna calza por
+    # fecha, valorar contra ella no falla: da un precio viejo en silencio.
+    # Medido en esta base con `scripts/auditar_listas_de_precio.py`: las listas
+    # 3 y 7 estan archivadas y no tienen NINGUNA regla vigente desde abril,
+    # contra 10/11 que si -- 18,9 % menos de teorico en VES.
     resolver = OdooPriceResolver(
         ejecutar,
-        {"USD": ids_usd[0] if ids_usd else 11, "BCV": ids_ves[0] if ids_ves else 10},
+        {
+            "USD": _primer_id_activo(ejecutar, ids_usd) or 11,
+            "BCV": _primer_id_activo(ejecutar, ids_ves) or 10,
+        },
         [*ids_usd, *ids_ves],
         build_fallback_ficha_config(repo),
     )
@@ -152,9 +161,9 @@ class Sistema:
 
     def _json(self, ruta: str) -> dict[str, Any]:
         respuesta = self.cliente.get(ruta)
-        assert respuesta.status_code == 200, (
-            f"{ruta} respondió {respuesta.status_code}: {respuesta.text[:400]}"
-        )
+        assert (
+            respuesta.status_code == 200
+        ), f"{ruta} respondió {respuesta.status_code}: {respuesta.text[:400]}"
         return dict(respuesta.json())
 
     def saldos(self) -> dict[str, Any]:

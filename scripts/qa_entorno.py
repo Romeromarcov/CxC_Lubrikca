@@ -191,7 +191,11 @@ def motor() -> int:
     from cxc.engine.runner import EngineRunner
     from cxc.odoo.client import _connect
     from cxc.odoo.price import OdooPriceResolver
-    from cxc.web.app import build_fallback_ficha_config, get_valid_pricelists_usd_and_ves
+    from cxc.web.app import (
+        _primer_id_activo,
+        build_fallback_ficha_config,
+        get_valid_pricelists_usd_and_ves,
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     config = AppConfig.from_env()
@@ -202,16 +206,24 @@ def motor() -> int:
     usd, ves = get_valid_pricelists_usd_and_ves(repo)
     ids_usd = [int(x) for x in usd if str(x).isdigit()]
     ids_ves = [int(x) for x in ves if str(x).isdigit()]
+    # `_primer_id_activo` y no `ids_*[0]`: el primer id de la config puede ser
+    # una lista ARCHIVADA cuyas reglas de precio vencieron -- y como
+    # `_precio_fijo_en_lista` devuelve `rules[0]` cuando ninguna calza por
+    # fecha, valorar contra ella no falla: da un precio viejo en silencio.
+    # Medido en esta base con `scripts/auditar_listas_de_precio.py`: las listas
+    # 3 y 7 estan archivadas y no tienen NINGUNA regla vigente desde abril,
+    # contra 10/11 que si -- 18,9 % menos de teorico en VES.
     resolver = OdooPriceResolver(
         ejecutar,
-        {"USD": ids_usd[0] if ids_usd else 11, "BCV": ids_ves[0] if ids_ves else 10},
+        {
+            "USD": _primer_id_activo(ejecutar, ids_usd) or 11,
+            "BCV": _primer_id_activo(ejecutar, ids_ves) or 10,
+        },
         [*ids_usd, *ids_ves],
         build_fallback_ficha_config(repo),
     )
     inicio = datetime.now()
-    procesadas = EngineRunner(repo, resolver, config.engine).run_teoricos_pendientes(
-        date.today()
-    )
+    procesadas = EngineRunner(repo, resolver, config.engine).run_teoricos_pendientes(date.today())
     print(
         f"{procesadas} orden(es) con teorico calculado en "
         f"{(datetime.now() - inicio).total_seconds():.0f}s"
@@ -224,12 +236,16 @@ def estado() -> int:
 
     motor = _motor(os.environ["DATABASE_URL"])
     with motor.connect() as con:
-        tablas = con.execute(
-            sa.text(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='public' ORDER BY table_name"
+        tablas = (
+            con.execute(
+                sa.text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='public' ORDER BY table_name"
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         print(f"{'tabla':<34} {'filas':>10}")
         print("-" * 46)
         for tabla in tablas:
