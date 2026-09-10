@@ -11,6 +11,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 | [1.2 a 1.5 — Auditoría](1.2-1.5-auditoria.md) | cobertura, integridad, conciliación, y qué prueba cada partida |
 | [2.2 — Invariantes](2.2-invariantes.md) | 8 restricciones de base, y las 2 que deliberadamente no entran |
 | [2.3 — Alertas](2.3-alertas.md) | la corrida diaria, y los 1.333,85 USD aplicados que nadie pagó |
+| [2.4 — Modularizar](2.4-modularizar.md) | dos piezas sacadas de `app.py`, con su medición A/B, y qué sigue |
 | [3 — Escenarios](3-escenarios.md) | la imprenta fiscal, y los 1.108,59 USD de mercancía devuelta que la factura sigue cobrando |
 | [4 — Estrés](4-estres.md) | 6 escenarios en verde, y el motor que a 10× tarda 16 horas |
 | [5 — Dashboard](5-dashboard.md) | seis hallazgos, los seis aplicados |
