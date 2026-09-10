@@ -56,8 +56,8 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | 1.5 | Qué prueba cada partida del balance | **cerrada** — 8 externas, 1 invariante, 9 internas; etiquetado aplicado |
 | 2.1 | Ausencia de dato ≠ número | pendiente, y **subió de prioridad**: el default de 2019 no solo se lee, se **escribe** en un campo congelado. Espera tu decisión sobre las minas 1, 5 y 8. |
 | 2.2 | Invariantes al escribir | **cerrada del lado de la base** — 8 restricciones `CHECK` aplicadas y verificadas contra la copia de producción. Falta la validación en el repositorio, que necesita decidir qué hacer con la fila rechazada. |
-| 2.3 | Alertas | **cerrada** — corrida diaria funcionando, con el hallazgo de sobreaplicación |
-| 2.4 | Sacar caminos de dinero de app.py | **empezada** — dos piezas extraídas con su medición A/B: `engine/saldos.py` (cuánto falta cobrar) y `engine/universo.py` (qué órdenes entran). Es la tarea más larga del plan y se hace por pedazos. |
+| 2.3 | Alertas | **cerrada** — corrida diaria funcionando (51 chequeos), con el hallazgo de sobreaplicación. Se le sumó el desacuerdo de listas de precio, y se arregló un bug del informe que contaba hallazgos sin imprimirlos. |
+| 2.4 | Sacar caminos de dinero de app.py | **empezada** — tres piezas extraídas con su medición A/B: `engine/saldos.py` (cuánto falta cobrar), `engine/universo.py` (qué órdenes entran) y `engine/listas.py` (cuál lista de precios valora el teórico, donde apareció el hallazgo de las 789 órdenes). 81 tests nuevos. Es la tarea más larga del plan y se hace por pedazos. |
 | 3 | Escenarios de error humano | **cerrada** — 46 pruebas, corrida completa en 25 min. Produjo 2 hallazgos del sistema, 2 protecciones de Odoo que la tabla no contemplaba, y 8 bugs del propio andamiaje ya arreglados. |
 | 4 | Estrés y fallas | **cerrada** — 6 escenarios en verde. El volumen se midió y extrapoló en vez de ejecutarse; el motor a 10× tarda ~16 h por un tope de 50/ciclo. |
 | 5 | Dashboard | **cerrada** — 6 hallazgos, 6 aplicados |

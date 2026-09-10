@@ -218,6 +218,53 @@ def evaluar_invariantes(con, informe: Informe) -> None:
             )
 
 
+def evaluar_eleccion_de_listas(informe: Informe) -> None:
+    """Las cuatro paginas tienen que valorar el teorico con la misma lista.
+
+    No es una consulta a la base: es una pregunta sobre la CONFIGURACION, y por
+    eso no puede ser un chequeo SQL como los otros. De los cuatro sitios que
+    arman un `OdooPriceResolver`, tres se saltan las listas archivadas y uno no
+    (`_get_reporte_saldos_sync`). Cuando la primera lista configurada esta
+    archivada, el reporte de saldos valora con una lista vencida y las otras tres
+    paginas con otra -- medido en la copia de produccion: 789 ordenes, -18,9 % en
+    VES. Ver `src/cxc/engine/listas.py`.
+
+    Va en la corrida diaria porque el disparador es un cambio de configuracion:
+    alguien archiva una lista en Odoo, o reordena las validas, y a partir de ahi
+    dos pantallas dicen numeros distintos sin que nada falle.
+    """
+    from cxc.config import AppConfig
+    from cxc.engine.listas import diagnostico_de_eleccion
+    from cxc.odoo.client import _connect
+    from cxc.web.app import _activos_pricelist, get_valid_pricelists_usd_and_ves
+
+    ejecutar = _connect(AppConfig.from_env().odoo)
+    if not ejecutar:
+        informe.saltados.append("eleccion de listas de precio (sin conexion a Odoo)")
+        return
+    activos = _activos_pricelist(ejecutar)
+    if not activos:
+        informe.saltados.append("eleccion de listas de precio (Odoo no devolvio pricelists)")
+        return
+    usd, ves = get_valid_pricelists_usd_and_ves(_repo_para_config())
+    for moneda, crudos in (("USD", usd), ("BCV", ves)):
+        informe.evaluados += 1
+        ids = [int(x) for x in crudos if str(x).isdigit()]
+        diag = diagnostico_de_eleccion(moneda, ids, activos)
+        if not diag.coinciden:
+            informe.hallazgos.append(
+                Hallazgo("listas", f"eleccion_{moneda.lower()}", "ALTA", diag.nota)
+            )
+
+
+def _repo_para_config():
+    """El repositorio que `get_valid_pricelists_usd_and_ves` necesita para leer
+    el mapeo unificado desde la base."""
+    from cxc.db.postgres_repository import PostgresRepository
+
+    return PostgresRepository.from_url(os.environ["DATABASE_URL"])
+
+
 def evaluar_conciliacion(con, informe: Informe) -> None:
     from cxc.config import AppConfig
     from cxc.odoo.client import _connect
@@ -262,6 +309,11 @@ def evaluar_conciliacion(con, informe: Informe) -> None:
         )
 
 
+# En que orden se leen los bloques del informe. No es la lista de bloques
+# validos: ver `texto_del_informe`.
+ORDEN_DE_BLOQUES = ("invariantes", "conciliacion", "integridad", "listas")
+
+
 def texto_del_informe(informe: Informe, para_telegram: bool = False) -> str:
     if informe.limpio:
         cuerpo = f"CxC — vigilancia diaria: sin hallazgos ({informe.evaluados} chequeos)."
@@ -273,7 +325,17 @@ def texto_del_informe(informe: Informe, para_telegram: bool = False) -> str:
         f"CxC — vigilancia diaria: {len(informe.hallazgos)} hallazgo(s) "
         f"({len(informe.altas)} de severidad ALTA) sobre {informe.evaluados} chequeos."
     ]
-    for bloque in ("invariantes", "conciliacion", "integridad"):
+    # El orden es una PREFERENCIA, no un filtro: los bloques salen de los
+    # hallazgos mismos y los que no esten en `ORDEN_DE_BLOQUES` van al final en
+    # vez de desaparecer. La version anterior iteraba una tupla fija de tres
+    # nombres, asi que al agregar el bloque "listas" sus hallazgos se calcularon
+    # y no se imprimieron -- un hallazgo que no se muestra es exactamente lo que
+    # este trabajo persigue, y no puede depender de que alguien se acuerde de
+    # tocar dos lugares.
+    presentes = {h.bloque for h in informe.hallazgos}
+    orden = [b for b in ORDEN_DE_BLOQUES if b in presentes]
+    orden += sorted(presentes - set(ORDEN_DE_BLOQUES))
+    for bloque in orden:
         del_bloque = [h for h in informe.hallazgos if h.bloque == bloque]
         if not del_bloque:
             continue
@@ -296,9 +358,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", type=Path, default=None)
     parser.add_argument("--alertar", action="store_true", help="manda el informe por Telegram")
-    parser.add_argument(
-        "--sin-odoo", action="store_true", help="salta la conciliacion contra Odoo"
-    )
+    parser.add_argument("--sin-odoo", action="store_true", help="salta la conciliacion contra Odoo")
     args = parser.parse_args()
 
     cargar_env(args.env)
@@ -309,8 +369,10 @@ def main() -> int:
         evaluar_integridad(con, informe)
         if args.sin_odoo:
             informe.saltados.append("conciliacion contra Odoo (--sin-odoo)")
+            informe.saltados.append("eleccion de listas de precio (--sin-odoo)")
         else:
             evaluar_conciliacion(con, informe)
+            evaluar_eleccion_de_listas(informe)
 
     texto = texto_del_informe(informe)
     print(texto)

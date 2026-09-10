@@ -1,0 +1,136 @@
+"""Cuál de las listas de precio configuradas es la primaria.
+
+Tercera pieza de la Fase 2.4 del plan de blindaje. Se eligió ésta porque es
+donde vive un defecto medido, y porque la decisión que hay que tomar sobre ese
+defecto necesita un instrumento para tomarse.
+
+**El contrato, escrito por el propio código.** ``get_valid_pricelists_usd_and_ves``
+devuelve a propósito TODAS las listas de una moneda, vigentes o no, y su docstring
+dice por qué: la vigencia "solo afecta qué se muestra en Inventario, no qué usa el
+motor para resolver precios (ver ``_primer_id_activo``/``OdooPriceResolver``)". O
+sea que **elegir bien la primaria es responsabilidad de quien la elige**, y el
+mecanismo designado para eso es la guarda.
+
+**El defecto.** De los cuatro sitios de ``web/app.py`` que arman un
+``OdooPriceResolver``, tres pasan por esa guarda (líneas 2623, 3573, 3709) y uno
+no: ``_get_reporte_saldos_sync`` toma ``ves_ids[0]``/``usd_ids[0]`` crudo. Medido
+en la copia de producción con ``scripts/auditar_listas_de_precio.py``: eso es la
+lista 3/7 —archivadas, y sin **una sola** regla de precio vigente desde abril de
+2026— contra la 10/11, activas y al día. **789 órdenes se valoran distinto según
+qué página las mire**: −18,9 % en VES y −16,8 % en USD, con un desvío bruto de
+194.532,51 y 115.805,93 respectivamente. El reporte de saldos **subvalúa** el
+teórico, así que la subfacturación es justo lo que no se ve.
+
+**Por qué nadie lo notó en cinco meses.** ``_precio_fijo_en_lista``
+(``odoo/price.py``) devuelve ``rules[0]`` cuando ninguna regla calza por fecha, así
+que nunca devuelve "no hay precio" mientras exista alguna regla -- y la marca
+``usa_fallback`` se enciende solo cuando devuelve eso. Una lista con todas las
+reglas vencidas entrega precios de abril con la misma cara que una al día. Es la
+mina 9 del inventario de la 1.1.
+
+**Este módulo no arregla el defecto**, porque arreglarlo mueve montos en una
+pantalla que ya se usa y ésa es una decisión del usuario (regla de la Fase 1). Lo
+que hace es sacar la decisión —que es pura: una lista de ids y un conjunto de
+activos— de un archivo de diecisiete mil líneas, y agregar
+``diagnostico_de_eleccion``, que **no elige: compara las dos elecciones posibles**
+y dice si difieren. Ese es el instrumento que la decisión necesita, y no cambia
+ningún número.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
+
+
+def primera_activa(ids: list[int], activos: AbstractSet[int]) -> int | None:
+    """El primer id de ``ids`` que sigue activo, preservando el orden dado.
+
+    ``None`` si ``ids`` viene vacío. Si NINGUNO está activo, devuelve el primero
+    de todos: es el comportamiento histórico de ``_primer_id_activo`` y se
+    preserva a propósito -- sin ninguna lista activa no hay respuesta mejor, y
+    devolver ``None`` ahí dejaría al llamador sin precio en vez de con un precio
+    viejo, que es un cambio de montos y no una corrección.
+
+    Es la mitad **pura** de ``web/app.py::_primer_id_activo``: ese sigue siendo
+    quien le pregunta a Odoo cuáles están activas, porque eso es E/S.
+    """
+    if not ids:
+        return None
+    for pid in ids:
+        if pid in activos:
+            return pid
+    return ids[0]
+
+
+def primero_crudo(ids: list[int]) -> int | None:
+    """El primer id, sin mirar si está activo.
+
+    Existe para que el diagnóstico pueda comparar contra lo que hace hoy
+    ``_get_reporte_saldos_sync``, y para que ese comportamiento tenga un nombre
+    en vez de ser un ``[0]`` suelto en medio de mil líneas.
+    """
+    return ids[0] if ids else None
+
+
+@dataclass(frozen=True)
+class DiagnosticoEleccion:
+    """Las dos elecciones posibles para una moneda, y si difieren.
+
+    No decide nada: describe. ``con_guarda`` es lo que eligen tres de los cuatro
+    caminos de la aplicación; ``sin_guarda`` es lo que elige el cuarto.
+    """
+
+    moneda: str
+    ids_configurados: tuple[int, ...]
+    activos: tuple[int, ...]
+    con_guarda: int | None
+    sin_guarda: int | None
+
+    @property
+    def coinciden(self) -> bool:
+        return self.con_guarda == self.sin_guarda
+
+    @property
+    def elegida_esta_archivada(self) -> bool:
+        """True si el camino sin guarda eligió una lista que Odoo tiene archivada.
+
+        Es la condición exacta que produjo el hallazgo: no que la lista no exista
+        ni que falle, sino que esté archivada y siga entregando precios.
+        """
+        return self.sin_guarda is not None and self.sin_guarda not in self.activos
+
+    @property
+    def nota(self) -> str:
+        if not self.ids_configurados:
+            return f"{self.moneda}: no hay ninguna lista configurada."
+        if self.coinciden:
+            return (
+                f"{self.moneda}: las dos elecciones dan la lista {self.con_guarda}. "
+                "La guarda que falta no cambia nada en esta configuración."
+            )
+        detalle = " (ARCHIVADA en Odoo)" if self.elegida_esta_archivada else ""
+        return (
+            f"{self.moneda}: el reporte de saldos valora con la lista "
+            f"{self.sin_guarda}{detalle} y los otros tres caminos con la "
+            f"{self.con_guarda}. La misma orden vale distinto segun que pagina la mire."
+        )
+
+
+def diagnostico_de_eleccion(
+    moneda: str, ids: list[int], activos: Iterable[int]
+) -> DiagnosticoEleccion:
+    """Compara las dos elecciones posibles sin tomar ninguna.
+
+    ``ids`` en el orden en que los da la configuración -- el orden es el dato,
+    porque las dos elecciones se diferencian justamente en cuánto lo respetan.
+    """
+    conjunto = frozenset(activos)
+    return DiagnosticoEleccion(
+        moneda=moneda,
+        ids_configurados=tuple(ids),
+        activos=tuple(sorted(conjunto & set(ids))),
+        con_guarda=primera_activa(ids, conjunto),
+        sin_guarda=primero_crudo(ids),
+    )

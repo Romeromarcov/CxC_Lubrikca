@@ -47,6 +47,7 @@ from cxc.engine.equivalents import (
     valor_pagado_binance_usd,
 )
 from cxc.engine.historical_pricing import es_orden_historica
+from cxc.engine.listas import diagnostico_de_eleccion, primera_activa
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -1726,6 +1727,26 @@ class EliminarDescuentoRequest(BaseModel):
     regla_id: str
 
 
+def _activos_pricelist(execute: Any) -> frozenset[int]:
+    """Ids de ``product.pricelist`` que siguen activos en Odoo.
+
+    Separado de ``_primer_id_activo`` para que el diagnóstico de
+    ``engine/listas.py`` pueda preguntar lo mismo sin repetir la consulta ni
+    duplicar el ``context`` de ``active_test``. Devuelve el conjunto vacío si
+    Odoo no contesta -- el llamador decide qué hacer con eso, igual que antes.
+    """
+    try:
+        filas = execute(
+            "product.pricelist",
+            "search_read",
+            [[]],
+            {"fields": ["id", "active"], "context": {"active_test": False}},
+        )
+    except Exception:
+        return frozenset()
+    return frozenset(f["id"] for f in filas if f.get("active"))
+
+
 def _primer_id_activo(execute: Any, ids: list[int]) -> int | None:
     """Evita que una lista de precios ARCHIVADA en Odoo quede como
 
@@ -1750,10 +1771,9 @@ def _primer_id_activo(execute: Any, ids: list[int]) -> int | None:
         activos_set = {a["id"] for a in activos if a.get("active")}
     except Exception:
         return ids[0]
-    for i in ids:
-        if i in activos_set:
-            return i
-    return ids[0]
+    # La decisión vive en ``engine/listas.py`` (Fase 2.4): acá queda solo la
+    # consulta a Odoo, que es la parte que no se puede probar sin la red.
+    return primera_activa(ids, activos_set)
 
 
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
@@ -4435,6 +4455,22 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             "BCV": int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
         }
         _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
+        # Este es el ÚNICO de los cuatro sitios que arman un OdooPriceResolver
+        # que no pasa por ``_primer_id_activo`` -- ver ``engine/listas.py`` para
+        # el hallazgo y sus montos. Poner la guarda acá mueve el teórico de 789
+        # órdenes en esta pantalla, así que es una decisión del usuario y NO se
+        # aplica sola. Lo que sí se puede hacer sin mover nada es que deje de
+        # pasar en silencio: si las dos elecciones difieren, queda en el log.
+        for _diag in (
+            diagnostico_de_eleccion(
+                _moneda,
+                [int(x) for x in _ids if str(x).isdigit()],
+                _activos_pricelist(execute),
+            )
+            for _moneda, _ids in (("USD", usd_ids), ("BCV", ves_ids))
+        ):
+            if not _diag.coinciden:
+                logger.warning("Reporte de saldos, eleccion de lista: %s", _diag.nota)
         price_resolver_engine = (
             OdooPriceResolver(
                 execute, pricelist_ids_map, _fallback_pl_ids, build_fallback_ficha_config(repo)
