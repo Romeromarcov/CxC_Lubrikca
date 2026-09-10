@@ -41,6 +41,7 @@ from cxc.web.app import (
     _sincronizar_aplicaciones_conciliadas,
     agrupar_aplicaciones,
 )
+from tests import builders as b
 
 _TODOS_LOS_PAGOS = {
     "513",
@@ -90,8 +91,14 @@ class _RepoFalso:
         self.escritas.append(v)
 
     # Tasas: el helper de app.py las lee por estas dos vías.
+    #
+    # La serie va SEMBRADA (Fase 2.1 del plan de blindaje). Con la lista vacía,
+    # ``get_rate_for_datetime`` caía a su último recurso -- 36,5 / 38,0, las
+    # tasas de 2019 -- y estos diez tests dependían de que ese default
+    # existiera. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia; lo que cambia es que el número sale de un dato presente.
     def all_serie_tasas(self):
-        return []
+        return b.serie_tasas_sembrada()
 
     def all_tasas_historicas_auditoria(self):
         return []

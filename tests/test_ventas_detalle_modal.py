@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from cxc.config import EngineConfig
 from cxc.models import LineaOrden, OrdenVenta
 from cxc.web.app import app
+from tests import builders as b
 
 client = TestClient(app)
 
@@ -502,7 +503,11 @@ def test_detalle_pagos_odoo_calcula_equivalentes_bcv_binance_y_totales() -> None
     mock_repo.all_clientes.return_value = []
     mock_repo.lineas_de_orden.return_value = [_linea()]
     mock_repo.vinculaciones_de_orden.return_value = []
-    mock_repo.all_serie_tasas.return_value = []
+    # Serie sembrada (Fase 2.1): con la lista vacía estos tests dependían del
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
 
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(

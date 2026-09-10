@@ -36,6 +36,7 @@ from cxc.models import (
     Pago,
     Vinculacion,
 )
+from tests import builders as b
 
 from .test_e2e_production_readiness import client  # noqa: F401 (reutiliza el mismo TestClient)
 
@@ -1226,7 +1227,10 @@ def test_reparto_cobranza_no_muestra_dos_saldos_distintos_para_la_misma_orden():
             "vendedor_email": "v@lubrikca.com",
         }
     ]
-    mock_repo.all_serie_tasas.return_value = []
+    # Serie sembrada (Fase 2.1): con la lista vacía se caía al último recurso
+    # de ``get_rate_for_datetime``, las tasas de 2019. Mismos valores, así que
+    # ningún monto asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
     mock_repo.all_clientes.return_value = [
@@ -1346,7 +1350,10 @@ def test_reporte_cxc_cliente_neta_vinculacion_pendiente_de_la_orden():
     ]
     mock_repo.all_ventas_teoricos.return_value = []
     mock_repo.all_pagos.return_value = []
-    mock_repo.all_serie_tasas.return_value = []
+    # Serie sembrada (Fase 2.1): con la lista vacía se caía al último recurso
+    # de ``get_rate_for_datetime``, las tasas de 2019. Mismos valores, así que
+    # ningún monto asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
     mock_repo.all_clientes.return_value = [

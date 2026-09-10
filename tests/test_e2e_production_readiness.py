@@ -27,6 +27,7 @@ from cxc.models import (
 from cxc.sheets import serde
 from cxc.web import app as _app_module
 from cxc.web.app import SECRET_KEY, app, crear_session_token
+from tests import builders as b
 
 client = TestClient(app)
 
@@ -72,9 +73,29 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
     repo.all_clientes.side_effect = lambda: [
         serde.cliente_from_row(r) for r in repo._g.read_rows("Clientes")
     ]
-    repo.all_serie_tasas.side_effect = lambda: [
-        serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")
-    ]
+    # SerieTasas sembrada por defecto (Fase 2.1 del plan de blindaje). Sin
+    # esto, un test que no declara la pestaña "SerieTasas" cae al ultimo
+    # recurso de ``get_rate_for_datetime``: 36,5 / 38,0, las tasas de 2019.
+    # Los valores sembrados son ESOS MISMOS, asi que ningun monto asertado
+    # cambia -- lo que cambia es que el numero viene de un dato presente.
+    #
+    # Un test que quiera medir el comportamiento SIN tasas lo declara
+    # explicitamente: ``repo.all_serie_tasas.side_effect = lambda: []``.
+    def _serie_o_sembrada():
+        propias = [serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")]
+        if propias:
+            return propias
+        # No sembrar si el test provee tasas por la OTRA via.
+        # ``get_rate_for_datetime`` consulta SerieTasas primero y
+        # TasasHistoricasAuditoria despues, asi que sembrar la primera le
+        # ganaria a la segunda y cambiaria de que fuente sale el numero.
+        # Hallado al sembrar: el test 50 pasaba 550,0 por auditoria y la
+        # siembra se lo tapaba con 38,00.
+        if repo._g.read_rows("TasasHistoricasAuditoria"):
+            return []
+        return b.serie_tasas_sembrada()
+
+    repo.all_serie_tasas.side_effect = _serie_o_sembrada
     repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
         "TasasHistoricasAuditoria"
     )
@@ -126,6 +147,11 @@ def test_e2e_01_catalog_and_odoo_ingestion(mock_env, mock_conn):
 def test_e2e_02_payment_loading_and_manual_allocation():
     """Test 2 & 3: Carga de pagos y asignación manual a órdenes de venta."""
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO100",
@@ -1519,6 +1545,11 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     from cxc.models import Pago
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else []
     )
@@ -1934,6 +1965,11 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
     poblado.
     """
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [{"cliente_id": "10", "nombre": "Cliente Odoo"}] if sheet == "Clientes" else []
     )
@@ -2093,6 +2129,11 @@ def test_e2e_18b_editar_vinculacion_pendiente_cambia_orden_y_monto():
         vendedor_email="v@lubrikca.com",
     )
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_vinculaciones.return_value = [vinc]
     mock_repo.get_pago.return_value = mock_pago
 
@@ -3930,6 +3971,11 @@ def test_e2e_42b_revincular_tambien_corrige_el_monto_si_odoo_difiere():
     from cxc.web.app import _resincronizar_vinculaciones_con_odoo
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_vinculaciones.return_value = [
         Vinculacion(
             vinc_id="V1",
@@ -4137,6 +4183,11 @@ def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
     from cxc.web.app import _resincronizar_vinculaciones_con_odoo
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.get_orden.return_value = None
     mock_repo.last_serie_tasa.return_value = SerieTasa(
         timestamp=datetime(2026, 7, 1),
