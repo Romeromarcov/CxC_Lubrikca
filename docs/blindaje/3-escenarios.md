@@ -88,32 +88,108 @@ a la corrida diaria de la 2.3 automáticamente, porque importa el catálogo.
 **Qué queda para vos:** las tres facturas hay que acreditarlas en Odoo. El sistema
 ahora las lista; emitir la nota de crédito es tu decisión y tus manos.
 
-## MEDIA — el 1,2 % de las órdenes se valora por fórmula, no por precio de lista
+## ALTA — el reporte de saldos valora el teórico con otra lista que el resto de la app
 
-La medición que el plan pedía antes de decidir si el ítem `OdooPriceResolver sin
-calibrar para Odoo 18` es urgente. Corriendo el motor sobre las 801 órdenes reales
-con teórico calculado:
+Esto salió de perseguir un número mío que no cerraba, y es el hallazgo más grande
+de esta tanda. La historia de cómo apareció está abajo, porque el error de método
+importa tanto como el resultado.
 
-| | órdenes | teórico USD |
+Cuatro sitios de `app.py` arman un `OdooPriceResolver`. Tres pasan por
+`_primer_id_activo`, que existe justamente para que una lista **archivada** no
+quede como primaria solo por aparecer primera en la configuración (bug real de
+agosto 2026, documentado en su propio docstring). El cuarto no:
+
+| sitio | elige la lista con | en esta base |
+|---|---|---|
+| `app.py:2623` | `_primer_id_activo` | BCV → 10, USD → 11 |
+| `app.py:3573` | `_primer_id_activo` | BCV → 10, USD → 11 |
+| `app.py:3709` | `_primer_id_activo` | BCV → 10, USD → 11 |
+| **`app.py:4434`** (`_get_reporte_saldos_sync`) | **`ves_ids[0]` / `usd_ids[0]` crudo** | **BCV → 3, USD → 7** |
+
+Las listas 3 y 7 están archivadas en Odoo **y no tienen una sola regla de precio
+vigente desde abril de 2026**. Las 10 y 11 están activas con las 154 vigentes.
+
+Medido línea por línea sobre las 1.887 líneas comparables de órdenes reales
+(`scripts/auditar_listas_de_precio.py --sin-pruebas`):
+
+| | reporte de saldos (3 / 7) | las otras tres páginas (10 / 11) | diferencia |
+|---|---:|---:|---:|
+| VES | 686.466,48 | 846.558,83 | **−160.092,35 (−18,9 %)** |
+| USD | 457.648,41 | 550.264,50 | **−92.616,09 (−16,8 %)** |
+
+**789 órdenes** se valoran distinto según qué página las mire. El bruto —sin que
+los desvíos de un signo tapen los del otro— es 194.532,51 en VES y 115.805,93 en
+USD. Y el signo importa: el reporte de saldos **subvalúa** el teórico, así que la
+subfacturación es justo lo que no se ve.
+
+Dos advertencias sobre esa tabla, porque son la diferencia entre un número y un
+número citable: compara **precios de línea**, no el teórico completo del motor
+(que aplica descuentos, volumen, el fallback de ficha y la lógica de moneda), así
+que acota el orden de magnitud y no es el monto exacto de la pantalla; y la
+configuración de listas de esta base de prueba puede no ser la de producción. Lo
+que **no** depende del entorno es el defecto: la guarda está en tres de cuatro
+sitios.
+
+**Qué queda para vos:** poner `_primer_id_activo` en el cuarto sitio mueve montos
+en una pantalla que ya se usa, así que no lo toqué — es la regla de la Fase 1.
+Está medido y listo para tu visto bueno.
+
+## ALTA — una lista de precios vencida no puede marcarse, por diseño
+
+Por qué lo de arriba pudo pasar cinco meses sin que nadie lo note.
+
+`_precio_fijo_en_lista` (`odoo/price.py:174-177`) busca la regla que calza por
+fecha y, **si ninguna calza, devuelve `rules[0]` igual**. Nunca devuelve `None`
+mientras exista alguna regla para ese producto en esa lista. Y `usa_fallback` solo
+se marca cuando devuelve `None`.
+
+O sea: una lista con todas las reglas vencidas entrega precios de abril con la
+misma cara que una lista al día. No hay excepción, no hay log, no hay bandera.
+
+Es una mina nueva para el inventario de la [1.1](1.1-fallbacks-silenciosos.md), y
+mi auditoría AST **no la cazó** porque no traga una excepción ni devuelve un
+centinela: devuelve un dato real, de otra fecha. El clasificador busca `except`
+vacíos y ceros por defecto; esto no es ninguno de los dos.
+
+## Cómo apareció, y qué medí mal
+
+Había publicado en este documento y en la [6](6-deuda-medida.md) que **10 de 801
+órdenes (1,2 %), por 10.059,44 USD**, se valoraban por fórmula en vez de por
+precio de lista, y con eso bajé el ítem `OdooPriceResolver sin calibrar` de Alta a
+Media. Al reejecutar el chequeo dio **7**, no 10, y varios teóricos habían
+cambiado de valor sobre datos que nadie tocó. Perseguir esa diferencia destapó
+todo lo de arriba, y también tres errores míos:
+
+1. **`app_settings` de esta base no tiene `valid_pricelists_ves`/`_usd`.**
+   `build_inputs` los lee de ahí, no los encuentra, y el teórico cae al nombre
+   lógico `"BCV"`/`"USD"` cableado en `engine/discounts.py:377-378`. Los 883
+   teóricos de la tabla se calcularon así, sin pasar por la lógica de pareo de
+   listas. **Ese es un hueco de mi entorno de prueba, no un hallazgo de
+   producción**, y contamina toda medición de teóricos que hice acá.
+2. **Mis dos scripts tenían el mismo defecto que `app.py:4434`.**
+   `scripts/qa_entorno.py` y `escenarios/sistema.py` armaban el resolver con
+   `ids_*[0]` sin la guarda, así que escribieron los 883 teóricos contra las
+   listas archivadas. Eso ya está arreglado en los dos.
+3. **La marca `usa_fallback` subreporta, y no lo puedo explicar del todo.** Contra
+   las mismas listas archivadas, un conteo directo da **39 órdenes** con algún
+   producto sin regla de precio; la marca guardada dice **7**. Un factor de cinco.
+
+La medición corregida, contra las listas que la app elegiría con la guarda puesta:
+
+| | órdenes reales | |
 |---|---:|---:|
-| valoradas por precio de lista | 791 (98,8 %) | — |
-| **valoradas por fórmula** | **10 (1,2 %)** | **10.059,44** |
+| consideradas | 863 | |
+| **con alguna línea cuyo producto no tiene regla de precio** | **13 (1,5 %)** | teórico USD guardado: 7.743,11 |
 
-Las diez, con su lista: S00328 (lista 3), S00411 (8), S00801/S00709/S00723/S00743/
-S00925/S00327/S00708 (5) y S00220 (4). **Nueve de las diez están en listas
-archivadas** (3, 4, 5, 8) — las históricas. Solo tienen que valorarse por fórmula
-porque su lista ya no tiene el precio de ese producto cargado.
+El 1,5 % se parece al 1,2 % que había publicado, pero **por casualidad**: el
+número anterior salía de una marca que subreporta, sobre teóricos calculados con
+las listas equivocadas. Y ese teórico USD de 7.743,11 hay que leerlo con pinzas
+por lo mismo — está calculado con las listas archivadas.
 
-Eso reencuadra el ítem: sigue siendo real, pero es **1,2 % y está concentrado en
-el histórico**, no una hemorragia en las ventas de hoy. Baja de ALTA a MEDIA, y su
-arreglo natural es cargar los precios faltantes en las listas históricas —que es
-el otro ítem pendiente, «Precios faltantes en la lista 5»— y no reescribir el
-resolver.
-
-Lo que **sí** sigue siendo ALTA es que el resolver está `pragma: no cover`: sus
-cuatro minas de la [1.1](1.1-fallbacks-silenciosos.md) no tienen un solo test, y
-lo que las dispara no es la falta de precio sino un fallo de red disfrazado de
-falta de precio.
+Lo que cambia de fondo es la conclusión: bajé el ítem a Media diciendo que el
+problema era «faltan precios en las listas históricas, no hay que reescribir el
+resolver». **Faltar precios es el 1,5 %; elegir la lista equivocada es el 18,9 %.**
+El ítem vuelve a Alta, y por un motivo distinto al del plan.
 
 ## BAJA — el espejo trae 10 facturas en borrador, y sumarlas es fácil
 

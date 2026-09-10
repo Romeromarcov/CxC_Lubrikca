@@ -6,7 +6,7 @@ uno sube, y dos se cierran.
 
 | Ítem | Severidad del plan | Medida | Estado |
 |---|---|---|---|
-| `OdooPriceResolver` sin calibrar para Odoo 18 | Alta | **1,2 % de las órdenes** | baja a Media |
+| `OdooPriceResolver` sin calibrar para Odoo 18 | Alta | **789 órdenes valoradas con una lista vencida** | **sigue Alta, y por otro motivo** |
 | El default `36,5 / 38,0` | Alta | 42 tests dependen; ya deja rastro | sigue Alta, espera tu decisión |
 | Dos definiciones de «orden histórica» | Media | **2 órdenes vivas, 457,51 USD** | confirmada, acotada |
 | Equivalentes congelados sin propagar correcciones | Media | **no medible en QA**; apareció otra cosa peor | sigue Media, y sube la 2.1 |
@@ -17,30 +17,42 @@ uno sube, y dos se cierran.
 
 ---
 
-## `OdooPriceResolver`: 1,2 %, y concentrado en el histórico
+## `OdooPriceResolver`: no es que falten precios, es que se elige la lista vencida
 
-La medición que el plan pedía antes de decidir. Corriendo el motor sobre las 801
-órdenes reales con teórico calculado:
+El plan pedía medir esto antes de decidir. Lo medí, publiqué **10 de 801 órdenes
+(1,2 %), 10.059,44 USD** valoradas por fórmula, y con eso bajé el ítem a Media
+diciendo que el arreglo era cargar los precios faltantes y no tocar el resolver.
 
-| | órdenes | teórico USD |
+**Esa conclusión estaba mal.** Al reejecutar el chequeo dio 7 en vez de 10 sobre
+datos que nadie tocó; perseguir la diferencia mostró que el problema real es otro y
+es más grande. El detalle completo, incluidos mis tres errores de método, está en
+la [3](3-escenarios.md#cómo-apareció-y-qué-medí-mal).
+
+Lo medido ahora, con `scripts/auditar_listas_de_precio.py`:
+
+| | órdenes reales | monto |
 |---|---:|---:|
-| por precio de lista | 791 (98,8 %) | — |
-| **por fórmula de respaldo** | **10 (1,2 %)** | **10.059,44** |
+| con alguna línea cuyo producto no tiene regla de precio | 13 (1,5 %) | 7.743,11 USD de teórico guardado |
+| **valoradas con una lista archivada y vencida por el reporte de saldos** | **789** | **194.532,51 VES / 115.805,93 USD de desvío bruto** |
 
-Y **nueve de las diez están en listas archivadas** (3, 4, 5, 8) — las históricas.
-Solo caen a la fórmula porque su lista ya no tiene el precio de ese producto
-cargado, que es el otro ítem pendiente («Precios faltantes en la lista 5»).
+La primera fila es lo que yo había medido (mal, y da parecido por casualidad). La
+segunda es el hallazgo: `_get_reporte_saldos_sync` (`app.py:4434`) elige la lista
+de precios sin pasar por `_primer_id_activo`, mientras los otros tres sitios que
+arman un resolver sí lo hacen. En esta base eso es la lista 3/7 —archivadas, cero
+reglas vigentes desde abril— contra la 10/11. El reporte de saldos **subvalúa** el
+teórico un 18,9 % en VES y 16,8 % en USD.
 
-Eso lo baja de Alta a **Media**, y cambia el arreglo: no hay que reescribir el
-resolver, hay que **cargar los precios faltantes**. Reescribirlo no arreglaría
-estas diez, porque el precio no existe en ninguna parte.
+Cargar los precios faltantes —el otro ítem, «Precios faltantes en la lista 5»—
+arregla el 1,5 %. No toca el 18,9 %.
 
-**Lo que sigue siendo Alta** es otra cosa, y el plan las tenía juntas: el resolver
-está marcado `pragma: no cover`, así que sus cuatro minas de la
-[1.1](1.1-fallbacks-silenciosos.md) no tienen un solo test. Y lo que las dispara
-no es la falta de precio —eso está medido y es 1,2 %— sino **un fallo de red
-disfrazado de falta de precio**. Con Odoo lento, la orden se valora por fórmula y
-nada distingue ese caso del legítimo.
+**Lo que sigue siendo Alta, y ahora tiene compañía:** el resolver está marcado
+`pragma: no cover`, así que sus minas de la [1.1](1.1-fallbacks-silenciosos.md) no
+tienen un solo test. Y hay una mina más, que la auditoría AST no podía cazar:
+`_precio_fijo_en_lista` devuelve `rules[0]` cuando ninguna regla calza por fecha
+(`odoo/price.py:174-177`), así que **una lista vencida entrega precios viejos sin
+marcar `usa_fallback` nunca**. No traga una excepción ni devuelve un centinela
+—devuelve un dato real de otra fecha—, y el clasificador busca las dos primeras
+cosas.
 
 ## Dos definiciones de «orden histórica»: el plan tenía razón, y son 4
 

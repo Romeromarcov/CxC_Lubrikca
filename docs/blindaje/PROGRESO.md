@@ -25,6 +25,7 @@ python scripts/auditar_fallbacks.py --json out.json      # 1.1
 python scripts/auditar_integridad.py --env .env.qa --detalle   # 1.3
 python scripts/conciliar_espejo_odoo.py --env .env.qa     # 1.4
 python scripts/vigilancia_diaria.py --alertar             # 2.3, va como cron
+python scripts/auditar_listas_de_precio.py --env .env.qa --sin-pruebas  # 6
 python scripts/qa_entorno.py crear|sync|resync|motor|estado
 ./scripts/escenarios.sh                                   # Fase 3
 ```
@@ -60,7 +61,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | 3 | Escenarios de error humano | **cerrada** — 46 pruebas, corrida completa en 25 min. Produjo 2 hallazgos del sistema, 2 protecciones de Odoo que la tabla no contemplaba, y 8 bugs del propio andamiaje ya arreglados. |
 | 4 | Estrés y fallas | **cerrada** — 6 escenarios en verde. El volumen se midió y extrapoló en vez de ejecutarse; el motor a 10× tarda ~16 h por un tope de 50/ciclo. |
 | 5 | Dashboard | **cerrada** — 6 hallazgos, 6 aplicados |
-| 6 | Bugs y deuda | **medida** — ver [6 — Deuda medida](6-deuda-medida.md) |
+| 6 | Bugs y deuda | **medida** — ver [6 — Deuda medida](6-deuda-medida.md). Corregido: el ítem `OdooPriceResolver` había bajado a Media por una medición mía mal hecha; vuelve a Alta y por otro motivo. |
 
 ## Lo que espera tu decisión
 
@@ -73,6 +74,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | 5 | **1.108,59 USD** de mercancía devuelta que la factura sigue cobrando (3 órdenes) | Hay que emitir la nota de crédito en Odoo: son tus manos. El sistema ahora las lista. |
 | 6 | Las 2 órdenes con las dos definiciones de «orden histórica» en desacuerdo | Unificar mueve el equivalente congelado de dos órdenes, 457,51 USD. |
 | 7 | ¿«Ventas» del dashboard debería mostrar también el neto teórico? | Es una tarjeta nueva, no un arreglo. |
+| 8 | **El reporte de saldos valora el teórico con una lista archivada y vencida** — falta `_primer_id_activo` en `app.py:4434`, el único de los cuatro sitios que no lo tiene | Poner la guarda mueve el teórico de 789 órdenes en una pantalla que ya se usa: −18,9 % en VES, −16,8 % en USD. Está medido y listo; aplicarlo es tu visto bueno. Ver [3](3-escenarios.md). |
 
 ## Lo que este trabajo encontró, en un renglón cada uno
 
@@ -81,6 +83,8 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | Hallazgo | Cuánto | Dónde |
 |---|---|---|
 | El default de 2019 está **escrito** en las 1.462 vinculaciones del espejo | 82,7 M aplicados | [6](6-deuda-medida.md) |
+| El reporte de saldos valora con una lista vencida; las otras tres páginas no | 789 órdenes, 194.532,51 VES / 115.805,93 USD de desvío bruto | [3](3-escenarios.md) |
+| Una lista de precios vencida **no puede** marcarse: `rules[0]` gana sobre la fecha | — | [3](3-escenarios.md) |
 | Pagos sobreaplicados: se acredita plata que el cliente no puso | 1.333,85 USD | [2.3](2.3-alertas.md) |
 | Mercancía devuelta con la factura viva, fuera de la bandeja | 1.108,59 USD | [3](3-escenarios.md) |
 | Órdenes canceladas con entrega, invisibles en los totales | 11.995,68 USD | [1.3](1.2-1.5-auditoria.md) |
