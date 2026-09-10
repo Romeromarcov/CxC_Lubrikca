@@ -26,6 +26,7 @@ python scripts/auditar_integridad.py --env .env.qa --detalle   # 1.3
 python scripts/conciliar_espejo_odoo.py --env .env.qa     # 1.4
 python scripts/vigilancia_diaria.py --alertar             # 2.3, va como cron
 python scripts/auditar_listas_de_precio.py --env .env.qa --sin-pruebas  # 6
+python scripts/auditar_equivalentes_congelados.py --env .env.qa --detalle  # 6
 python scripts/qa_entorno.py crear|sync|resync|motor|estado
 ./scripts/escenarios.sh                                   # Fase 3
 ```

@@ -14,7 +14,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=74"
+addopts = "-q --cov=cxc --cov-report=term-missing --cov-fail-under=74.9"
 pythonpath = ["src"]
 
 [tool.coverage.run]
@@ -40,7 +40,12 @@ source = ["cxc"]
 #    ``_entorno_hermetico`` en tests/conftest.py). Antes la cobertura
 #    dependía de si la máquina tenía ``.env``: daba 74,16% en desarrollo y
 #    73,10% en CI, así que un umbral tomado en local condenaba al pipeline
-#    a estar rojo. Hoy da 74,17% en los dos lados.
+#    a estar rojo. Hoy da lo mismo en los dos lados.
+#
+# Historial del trinquete: 74 -> 74,9 (10-sep-2026, Fase 1.2 del plan de
+# blindaje). Lo que lo movió: el test de punta a punta del balance, y las
+# seis piezas que la Fase 2.4 sacó de ``app.py`` a módulos propios, todas
+# al 100 %. Medido con la suite hermética: 74,99 %.
 
 [tool.coverage.report]
 exclude_lines = [

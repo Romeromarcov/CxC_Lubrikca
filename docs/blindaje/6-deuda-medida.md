@@ -9,7 +9,7 @@ uno sube, y dos se cierran.
 | `OdooPriceResolver` sin calibrar para Odoo 18 | Alta | **789 órdenes valoradas con una lista vencida** | **sigue Alta, y por otro motivo** |
 | El default `36,5 / 38,0` | Alta | 42 tests dependen; ya deja rastro | sigue Alta, espera tu decisión |
 | Dos definiciones de «orden histórica» | Media | **2 órdenes vivas, 457,51 USD** | confirmada, acotada |
-| Equivalentes congelados sin propagar correcciones | Media | **no medible en QA**; apareció otra cosa peor | sigue Media, y sube la 2.1 |
+| Equivalentes congelados sin propagar correcciones | Media | **ya hay algo que los lista** — 1.487 con el default de 2019, 2.687.701,19 USD | herramienta entregada; el número real sale de producción |
 | El arreglo del scraper nunca corrió en producción | Media | no verificable desde acá | tuyo |
 | Formularios de reglas legacy | Baja | — | espera tu confirmación |
 | `SerieTasas` se lee sin caché | Baja | **3 sitios, 2 deliberados** | **cerrada** |
@@ -53,6 +53,39 @@ tienen un solo test. Y hay una mina más, que la auditoría AST no podía cazar:
 marcar `usa_fallback` nunca**. No traga una excepción ni devuelve un centinela
 —devuelve un dato real de otra fecha—, y el clasificador busca las dos primeras
 cosas.
+
+## Equivalentes congelados: ya hay algo que los lista
+
+El plan describía este ítem con una frase que era el problema entero:
+
+> Es correcto como diseño contable, pero **hoy no hay nada que liste cuáles
+> quedaron con una tasa que después se corrigió**.
+
+Ahora hay: `scripts/auditar_equivalentes_congelados.py`. No corrige nada
+—congelar el equivalente es la decisión contable correcta, y descongelarlo es
+tuya—; convierte «no hay nada que lo liste» en «está listado, con su monto».
+
+Separa tres cosas que no son lo mismo, y esa separación es el aporte:
+
+| | qué es |
+|---|---|
+| **congeladas con el default de 2019** | nunca hubo tasa. El número quedó escrito y por diseño no se revisa. |
+| **congeladas con una tasa que hoy es otra** | la corrección posterior propiamente dicha: había tasa, se congeló, después cambió. |
+| **sin tasa para comparar** | no se puede afirmar nada. Se cuentan aparte y **no** entran a «coinciden». |
+
+Medido en la copia de prueba: **las 1.487 vinculaciones** están en la primera
+categoría, por **2.687.701,19 USD** de equivalente acreditado, de los cuales 569
+son abonos en bolívares por 90.774.985,31 Bs.
+
+La segunda categoría dio **cero, y el script lo dice como corresponde**: «NO SE
+COMPARÓ NINGUNA. Sin tasa conocida para ninguna fecha, este cero no significa
+"todas bien" — significa "no se pudo mirar"». La copia de prueba tiene una sola
+fecha con tasa (las 13 filas de la serie son todas de hoy, escritas por el
+scraper durante este trabajo). Es la misma trampa que las dos partidas de tasa del
+balance tenían, evitada a propósito acá.
+
+**El número real de la segunda categoría sale de producción**, donde la serie sí
+existe, y el script corre contra ella sin escribir nada.
 
 ## Dos definiciones de «orden histórica»: el plan tenía razón, y son 4
 
