@@ -121,6 +121,25 @@ combinación, en el 100 % de las filas. Son las tasas de 2019: el default de
 `get_rate_for_datetime`, la mina 8 del inventario [1.1](1.1-fallbacks-silenciosos.md).
 La tasa real de hoy es **827,74**, o sea 22 veces más.
 
+### Cuánto es en plata
+
+La suma cruda de `monto_aplicado` no sirve para medirlo: mezcla monedas, que es
+justamente lo que el balance audita. Separadas:
+
+| moneda del abono | vinculaciones | nominal | equivalente acreditado | al cambio real |
+|---|---:|---:|---:|---:|
+| USD | 916 | 199.453,77 USD | 199.453,77 | igual |
+| **VES** | **546** | **82.496.372,90 Bs** | **2.260.174,60 USD** | **~99.664 USD** |
+
+Los abonos en bolívares quedaron acreditados como **2,26 millones de dólares**
+cuando a la tasa real son unos **99.664**. Veintidós veces y media de más.
+(82.496.372,90 ÷ 36,50 da exactamente los 2.260.174,60 acreditados, que es la
+confirmación de que la tasa usada fue el default.)
+
+**Esto no dice que producción esté así hoy** — ahí la serie de tasas existe. Dice
+de qué tamaño es el agujero cuando no existe, y que nada avisa mientras se está
+cayendo dentro.
+
 Esto cambia cómo hay que leer ese ítem. El plan dice del default: «Hoy nunca
 dispara». Medido: en un entorno sin la serie sembrada **dispara en todas**, y no
 solo devuelve un número equivocado — **lo escribe en un campo congelado**, que por
