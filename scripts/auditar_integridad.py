@@ -469,6 +469,52 @@ CHEQUEOS: list[Chequeo] = [
 ]
 
 
+PREFIJO_DE_PRUEBA = "ZZ BLINDAJE"
+
+
+def _excluir_datos_de_prueba(con) -> None:
+    """Crea vistas temporales que tapan las tablas con su version sin pruebas.
+
+    Se hace con vistas y no reescribiendo los 34 SQL: cada chequeo sigue
+    diciendo ``FROM ordenes_venta`` y la vista decide que hay ahi. Son
+    temporales, asi que viven lo que dura la conexion y no tocan la base.
+    """
+    import sqlalchemy as sa
+
+    # El prefijo va inline y no como parametro: Postgres no puede inferir el
+    # tipo de un parametro dentro de un CREATE VIEW. Es una constante del
+    # modulo, no entrada de nadie.
+    con.execute(
+        sa.text(
+            "CREATE TEMP VIEW clientes_reales AS "
+            f"SELECT * FROM clientes WHERE nombre NOT LIKE '{PREFIJO_DE_PRUEBA}%'"
+        )
+    )
+    con.execute(
+        sa.text(
+            "CREATE TEMP VIEW ordenes_venta AS SELECT o.* FROM public.ordenes_venta o "
+            "JOIN clientes_reales c ON c.cliente_id = o.cliente_id"
+        )
+    )
+    con.execute(
+        sa.text(
+            "CREATE TEMP VIEW clientes AS SELECT * FROM clientes_reales"
+        )
+    )
+    con.execute(
+        sa.text(
+            "CREATE TEMP VIEW pagos AS SELECT p.* FROM public.pagos p "
+            "JOIN clientes_reales c ON c.cliente_id = p.cliente_id"
+        )
+    )
+    con.execute(
+        sa.text(
+            "CREATE TEMP VIEW facturas AS SELECT * FROM public.facturas "
+            "WHERE numero NOT LIKE 'ZZPRU%' AND numero NOT LIKE 'NC-ZZPRU%'"
+        )
+    )
+
+
 def cargar_env(ruta: Path | None) -> None:
     if ruta is None:
         ruta = RAIZ / ".env"
@@ -490,6 +536,11 @@ def main() -> int:
     parser.add_argument("--max-filas", type=int, default=8, help="filas por chequeo en --detalle")
     parser.add_argument("--json", type=Path, default=None)
     parser.add_argument("--familia", default=None)
+    parser.add_argument(
+        "--sin-pruebas",
+        action="store_true",
+        help="excluye los datos que deja el banco de escenarios (clientes ZZ BLINDAJE)",
+    )
     args = parser.parse_args()
 
     cargar_env(args.env)
@@ -505,6 +556,15 @@ def main() -> int:
     con_filas_altas = 0
 
     with motor.connect() as con:
+        if args.sin_pruebas:
+            # El banco de escenarios deja ordenes y facturas en el espejo de QA
+            # -- Odoo no permite borrar una orden confirmada ni una factura
+            # posteada -- y esas filas contaminan los conteos: la primera
+            # medicion de ``orden_cancelada_con_entrega`` dio 16 y la segunda
+            # 18, y las dos de mas eran mias. Con esta bandera los chequeos
+            # miran solo los datos que vinieron de produccion.
+            _excluir_datos_de_prueba(con)
+
         for chequeo in chequeos:
             try:
                 filas = con.execute(sa.text(chequeo.sql)).mappings().all()
