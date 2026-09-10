@@ -20,7 +20,12 @@ set -euo pipefail
 export DATABASE_URL
 
 echo "── ruff ──────────────────────────────────────────"
-python -m ruff check src/ tests/
+# ``scripts/`` y ``escenarios/`` entran a la barrera aunque no sean el
+# deliverable: la corrida diaria de vigilancia y el banco de escenarios son
+# codigo que corre contra produccion y contra el Odoo de prueba, y dejarlos
+# fuera del lint es como no tenerlo. No entran a mypy ni a la cobertura --
+# ``mypy`` cubre el paquete ``cxc`` y la cobertura mide lo mismo.
+python -m ruff check src/ tests/ scripts/ escenarios/
 
 echo "── mypy ──────────────────────────────────────────"
 python -m mypy
@@ -34,3 +39,6 @@ fi
 
 echo
 echo "✔ Las tres barreras en verde."
+echo
+echo "El banco de escenarios NO entra acá: escribe en el Odoo de prueba por la"
+echo "red y tarda ~25 minutos. Se corre aparte con ./scripts/escenarios.sh"
