@@ -39,13 +39,14 @@ desactiva la cobertura, que acá no significa nada.
 números de control y URL pública de consulta. Emitir un documento fiscal es
 irreversible y sale de la secuencia de la empresa.
 
-El banco no puede emitir ninguno, por tres barreras independientes:
+El banco no puede emitir ninguno, por cuatro barreras independientes:
 
 | Barrera | Qué impide |
 |---|---|
 | **Diario `ZZPRU`** | Las facturas del banco van por un diario de ventas creado sin `invoicing_digital_conn`. El único diario real de la base, `INV`, sí lo tiene. |
 | **Ubicación `ZZ PRUEBAS BLINDAJE clientes`** | Las notas de entrega **también** se emiten. Lo que decide es `is_digital_invoicing` de la ubicación de DESTINO — no el campo homónimo del picking, que es calculado y sigue leyendo `True` aunque no se emita nada. La ubicación del banco lo tiene apagado. |
-| **Canario** | `account.digital.ctrl.number` se cuenta antes y después de **cada** escenario. Si creció, la corrida falla en el acto con `EmisionFiscalDetectada`. Es la barrera que no depende de que yo entienda bien las otras dos. |
+| **`billing_type = free_form`** | Un diario de venta nuevo **no nace neutro**: el default en esta base es `fiscal_printer`, otra vía fiscal distinta del conector digital. El diario de pruebas se fuerza a impresión libre, la única de las tres opciones sin dispositivo detrás. Se descubrió tarde, verificando solo el conector. |
+| **Canario** | `account.digital.ctrl.number` se cuenta antes y después de **cada** escenario. Si creció, la corrida falla en el acto con `EmisionFiscalDetectada`. Es la barrera que no depende de que yo entienda bien las otras tres. |
 
 Y dos más, de entorno: `ODOO_URL` tiene que llevar `.dev.odoo.com`, y
 `DATABASE_URL` tiene que ser local y distinta de `cxc_ci` (la base de CI, que
@@ -85,6 +86,12 @@ Diez cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
    siempre, no solo para una devolución parcial.
 10. **`account.move.reversal` exige `journal_id`** — y pasarlo es además lo que
     mantiene la nota de crédito fuera de la imprenta digital.
+11. **No se puede bajar la cantidad de una línea por debajo de lo entregado** —
+    «cree una devolución en su inventario». Junto con la anterior, cierra el
+    escenario «quitan un producto de una orden entregada sin devolver».
+12. **Un diario de venta nuevo nace con `billing_type = fiscal_printer`**, que
+    es una vía fiscal distinta del conector digital. Hay que forzarlo a
+    `free_form`.
 
 Y una del propio sistema: **`ENGINE_LISTA_USD=4` / `ENGINE_LISTA_BCV=5`
 apuntan a listas archivadas.** Las vigentes son otras (10 a 19). El banco

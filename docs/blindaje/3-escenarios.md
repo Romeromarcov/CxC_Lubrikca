@@ -23,10 +23,16 @@ un picking de salida lo dispara igual. Lo que decide si se emite es
 picking, que es calculado, de solo lectura, y sigue leyendo `True` aunque no se
 emita nada.
 
-El banco quedó con tres barreras independientes (diario sin conector, ubicación
-con la imprenta apagada, y un canario que cuenta los números de control antes y
-después de cada escenario). **Ninguna corrida emitió nada**, verificado con el
-canario en cero en cada una.
+El banco quedó con **cuatro** barreras independientes: diario sin conector,
+diario forzado a impresión libre, ubicación con la imprenta apagada, y un canario
+que cuenta los números de control antes y después de cada escenario. **Ninguna
+corrida emitió nada**, verificado con el canario en cero en cada una.
+
+La segunda barrera apareció tarde y merece nombrarse: **un diario de venta nuevo
+no nace neutro**. El default de `billing_type` en esta base es `fiscal_printer`
+—una vía fiscal distinta del conector digital— y yo estaba verificando solo el
+conector. El canario nunca se movió, así que no se emitió nada; lo que se cerró
+es la posibilidad.
 
 ---
 
@@ -174,7 +180,7 @@ cambiar `date_order` cambia la lista vigente y la tasa aplicable, y
 `ventas_teoricos` sigue con el valor y la marca de tiempo viejos. La orden queda
 valorada con la lista de una fecha en la que ya no está, y nada avisa.
 
-### Dos hallazgos sobre Odoo, y los dos bajan el riesgo
+### Tres hallazgos sobre Odoo, y los tres bajan el riesgo
 
 Estos no eran defectos: eran suposiciones de la tabla que Odoo no permite.
 
@@ -187,7 +193,19 @@ contesta «no queda nada por pagar en los apuntes contables seleccionados». La
 duplicación sigue siendo posible mientras la factura tenga residual —y ese caso
 sí se prueba— pero el camino fácil está cerrado.
 
-Los dos escenarios se reescribieron para **vigilar la protección** en vez de
+**No se puede quitar un producto de una orden ya entregada**, y ésta es la que
+más baja el riesgo. Dos protecciones encadenadas: no se puede borrar la línea de
+una orden confirmada («establece la cantidad en 0») y no se puede poner la
+cantidad por debajo de lo entregado («cree una devolución en su inventario»). O
+sea que sacar un producto entregado **exige hacer la devolución primero**, que es
+exactamente lo que la fila —de severidad alta— temía que se pudiera saltear.
+
+Eso además explica el mecanismo real de las dos líneas con `cantidad_entregada`
+negativa de los datos reales: **no salen de saltear la devolución, salen de
+hacerla primero y recortar la orden después**. Cada paso es legítimo; el
+resultado, negativo.
+
+Los tres escenarios se reescribieron para **vigilar la protección** en vez de
 suponer que no existe: si un día Odoo dejara de bloquearlos, los tests fallan y
 avisan que la fila volvió a estar viva.
 
