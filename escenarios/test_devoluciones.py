@@ -75,36 +75,43 @@ def test_una_devolucion_sobre_una_orden_saldada_genera_saldo_a_favor(escenario, 
 
 
 @pytest.mark.escenario("Nota de crédito por más que la factura")
-def test_una_nota_de_credito_mayor_que_la_factura_se_senala(escenario, sistema, odoo):
-    """Deja la factura en negativo.
+def test_odoo_impide_una_nota_de_credito_mayor_que_su_factura(escenario, sistema, odoo):
+    """La fila decía: «debe rechazarse o señalarse. Hay un techo implementado
+    pero no se probó contra Odoo real».
 
-    Debe rechazarse o señalarse. Hay un techo implementado pero no se había
-    probado contra Odoo real: acá se prueba.
+    Probado: **Odoo la rechaza en la raíz**. Al intentar postear una NC del
+    doble contesta «El monto de la Nota de Crédito no puede exceder el monto
+    total de la factura original», con los dos montos en el mensaje.
+
+    O sea que el techo del sistema nunca llega a ejercitarse, porque la
+    situación no puede darse por esta vía. La fila baja de Media a lo que
+    corresponda cuando decidas si te alcanza con la protección de Odoo.
+
+    El escenario verifica las dos mitades: que la NC inflada se rechace, **y**
+    que una NC normal sí se pueda emitir — si no, el rechazo no probaría nada,
+    podría estar fallando por cualquier otro motivo.
     """
     situacion = escenario.facturada()
     sistema.sync_y_motor()
     total = escenario.total_factura(situacion.facturas[0])
 
-    # ``factor=2`` genera la NC ya inflada al doble, en un solo asiento. Antes
-    # se creaba al valor de la factura y se editaba después, y eso obligaba a
-    # pasar por el asistente de reverso -- que en esta base exige un diario que
-    # la localización valida aparte y que resulta ser el diario REAL, con la
-    # imprenta digital conectada. Ver ``OdooQA.nota_credito``.
-    notas = odoo.nota_credito(situacion.facturas[0], factor=2.0)
-    assert notas, "No se generó la nota de crédito."
+    with pytest.raises(Exception, match="(?i)exceder|exceed"):
+        odoo.nota_credito(situacion.facturas[0], factor=2.0)
+
+    # La otra mitad: una NC por el monto de la factura SÍ tiene que salir.
+    notas = odoo.nota_credito(situacion.facturas[0], factor=1.0)
+    assert notas, "Tampoco se pudo emitir una nota de crédito normal."
+    sistema.sync_y_motor()
 
     ncs = sistema.espejo("facturas", "factura_id = :f", f=str(notas[0]))
     assert ncs, "La nota de crédito no llegó al espejo."
+    assert ncs[0]["move_type"] == "out_refund"
     monto_nc = abs(float(ncs[0]["monto_total"]))
-    assert monto_nc > total + 0.01, (
-        f"El escenario no logró inflar la NC: {monto_nc} contra una factura de {total}."
+    assert monto_nc <= total + 0.01, (
+        f"La NC ({monto_nc}) supera su factura ({total}) y Odoo la dejó pasar."
     )
-    # Lo que importa: que el neto quede señalado, no que se compense a cero.
-    facturas = sistema.espejo("facturas", "so_id = :so", so=situacion.nombre)
-    neto = sum(float(f["monto_total_signed_usd"]) for f in facturas)
-    assert neto < 0, (
-        "Una NC mayor que la factura debería dejar el neto en negativo y visible; "
-        f"quedó en {neto}."
+    assert ncs[0]["factura_origen_id"], (
+        "La NC quedó sin factura de origen, así que no se puede imputar a la orden."
     )
 
 

@@ -180,7 +180,7 @@ cambiar `date_order` cambia la lista vigente y la tasa aplicable, y
 `ventas_teoricos` sigue con el valor y la marca de tiempo viejos. La orden queda
 valorada con la lista de una fecha en la que ya no está, y nada avisa.
 
-### Tres hallazgos sobre Odoo, y los tres bajan el riesgo
+### Cuatro hallazgos sobre Odoo, y los cuatro bajan el riesgo
 
 Estos no eran defectos: eran suposiciones de la tabla que Odoo no permite.
 
@@ -205,7 +205,19 @@ negativa de los datos reales: **no salen de saltear la devolución, salen de
 hacerla primero y recortar la orden después**. Cada paso es legítimo; el
 resultado, negativo.
 
-Los tres escenarios se reescribieron para **vigilar la protección** en vez de
+**No se puede emitir una nota de crédito por más que su factura.** La fila decía
+«debe rechazarse o señalarse; hay un techo implementado pero no se probó contra
+Odoo real». Probado: Odoo la rechaza en la raíz, con los dos montos en el
+mensaje —«El monto de la Nota de Crédito no puede exceder el monto total de la
+factura original. Monto Factura: 517.288,72 / Monto NC: 1.034.577,45»—. O sea que
+**el techo del sistema nunca llega a ejercitarse**, porque la situación no puede
+darse por esta vía.
+
+El escenario verifica las dos mitades: que la inflada se rechace **y** que una
+normal sí salga. Sin la segunda, el rechazo no probaría nada — podría estar
+fallando por cualquier otro motivo.
+
+Los cuatro escenarios se reescribieron para **vigilar la protección** en vez de
 suponer que no existe: si un día Odoo dejara de bloquearlos, los tests fallan y
 avisan que la fila volvió a estar viva.
 
@@ -233,8 +245,8 @@ fallas originales quedaron así:
 
 | | |
 |---|---:|
-| bugs del andamiaje, arreglados | 8 |
-| escenarios reescritos para vigilar una protección de Odoo | 3 |
+| bugs del andamiaje, arreglados | 7 |
+| escenarios reescritos para vigilar una protección de Odoo | 4 |
 | **hallazgos del sistema, que siguen en rojo a propósito** | **1** |
 
 Ese único rojo es **«el teórico no se re-verifica cuando cambia la fecha de la

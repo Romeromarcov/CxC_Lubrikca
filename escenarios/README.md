@@ -92,7 +92,10 @@ Diez cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
 12. **Un diario de venta nuevo nace con `billing_type = fiscal_printer`**, que
     es una vía fiscal distinta del conector digital. Hay que forzarlo a
     `free_form`.
-13. **El asistente de reverso (`account.move.reversal`) no acepta el diario de
+13. **No se puede emitir una nota de crédito por más que su factura** — «el
+    monto de la Nota de Crédito no puede exceder el monto total de la factura
+    original». La regla es de Odoo, no del sistema.
+14. **El asistente de reverso (`account.move.reversal`) no acepta el diario de
     pruebas** — «the journal must be of the credit note type», y el único que
     acepta es el real, con la imprenta conectada. No alcanza con `free_form` ni
     con `refund_sequence`: la validación es del módulo de localización. Las
