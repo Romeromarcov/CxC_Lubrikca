@@ -7,6 +7,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 
 | Documento | Qué contiene |
 |---|---|
+| [0 — La credencial en el historial](0-credencial.md) | dónde está exactamente, y el procedimiento listo para correr |
 | [1.1 — Fallbacks silenciosos](1.1-fallbacks-silenciosos.md) | 456 sitios clasificados; 8 minas confirmadas a mano |
 | [1.2 a 1.5 — Auditoría](1.2-1.5-auditoria.md) | cobertura, integridad, conciliación, y qué prueba cada partida |
 | [2.2 — Invariantes](2.2-invariantes.md) | 8 restricciones de base, y las 2 que deliberadamente no entran |
@@ -29,6 +30,7 @@ python scripts/vigilancia_diaria.py --alertar             # 2.3, va como cron
 python scripts/auditar_listas_de_precio.py --env .env.qa --sin-pruebas  # 6
 python scripts/auditar_equivalentes_congelados.py --env .env.qa --detalle  # 6
 python scripts/volumen_10x.py --origen cxc_qa --factor 10  # 4
+python scripts/verificar_secretos.py                      # 0, y va en barreras.sh
 python scripts/qa_entorno.py crear|sync|resync|motor|estado
 ./scripts/escenarios.sh                                   # Fase 3
 ```
@@ -51,7 +53,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 
 | # | Tarea | Estado |
 |---|---|---|
-| 0 | Rotar credencial de producción | **pendiente, y es el ítem más urgente.** Requiere tus manos: rotar en Railway y luego purgar el historial de git, porque mientras el valor viejo siga ahí cualquiera con acceso al repo lo tiene. |
+| 0 | Rotar credencial de producción | **pendiente, y sigue siendo el ítem más urgente.** Requiere tus manos (Railway). Lo que sí se hizo: está **medido** —una sola credencial remota, un archivo, 269 commits, empujada a `main` y `develop`—, el procedimiento está escrito paso a paso en [0](0-credencial.md), y `scripts/verificar_secretos.py` entró como primera etapa de la barrera para que no vuelva a pasar. **Ojo:** el commit que la introdujo dice «Staging», no producción — hay que reconciliar si son la misma. |
 | 1.1 | Inventario de fallbacks silenciosos | **cerrada** — 132 minas, 140 ruidosos, 184 legítimos; 8 minas verificadas a mano con severidad y costo |
 | 1.2 | Cobertura de los caminos de dinero | **cerrada** — barrera subida de 74 a **74,9** (medida: 74,99 %), y los caminos de dinero modularizados al **93,23 %**, por encima del 90 % que pedía el plan. La brecha que queda es `app.py` al 64 %, que es la Fase 2.4. Estaba roja desde antes, sin ningún test roto. El test de punta a punta del balance cubrió 142 sentencias y confirmó las 24 partidas. |
 | 1.3 | Integridad de las tablas | **cerrada** — 30 chequeos, 25 limpios; 16 órdenes canceladas con entrega por 11.995,68 USD |

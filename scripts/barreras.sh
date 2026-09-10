@@ -19,6 +19,13 @@ set -euo pipefail
 : "${DATABASE_URL:=postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci}"
 export DATABASE_URL
 
+echo "── secretos ──────────────────────────────────────"
+# Va PRIMERO y a proposito: es la barrera mas barata y la que protege de lo mas
+# caro. El 1 de agosto de 2026 entro al historial la contrasena de una base
+# Postgres remota, y sigue ahi -- ver docs/blindaje/0-credencial.md. Purgar el
+# historial es una decision del usuario; que no vuelva a entrar es esto.
+python scripts/verificar_secretos.py
+
 echo "── ruff ──────────────────────────────────────────"
 # ``scripts/`` y ``escenarios/`` entran a la barrera aunque no sean el
 # deliverable: la corrida diaria de vigilancia y el banco de escenarios son
