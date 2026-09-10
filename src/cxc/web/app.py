@@ -13018,6 +13018,7 @@ async def get_balance_comprobacion():
             der: float,
             nota: str = "",
             tolerancia: float = 0.5,
+            tipo: str = "interna",
         ) -> None:
             dif = round(izq - der, 2)
             partidas.append(
@@ -13028,8 +13029,35 @@ async def get_balance_comprobacion():
                     "diferencia": dif,
                     "cuadra": abs(dif) <= tolerancia,
                     "nota": nota,
+                    "tipo": tipo,
                 }
             )
+
+        # Las tres clases de partida, cada una con su nombre propio (Fase 1.5
+        # del plan de blindaje). Un verde no significa lo mismo en las tres, y
+        # antes se veían idénticos en la respuesta:
+        #
+        # - ``externa``: el otro lado es una fuente que no somos nosotros
+        #   (Odoo, o la serie del BCV). Si el número está mal, lo dice.
+        # - ``invariante``: verifica una propiedad que tiene que ser cierta por
+        #   aritmética, sin comparar dos vistas. Es la más fuerte: no existe un
+        #   par de números mal calculados que la haga pasar.
+        # - ``interna``: las dos vistas salen de la misma función. Detecta que
+        #   dos páginas se contradigan -- valioso, y ya atrapó bugs -- pero NO
+        #   puede detectar que el número esté mal: un error en la función de
+        #   origen se propaga igual a los dos lados y la partida sale verde.
+        #
+        # Siete de las internas lo son necesariamente (son trinquetes de
+        # consistencia e identidades algebraicas). Que se lean como lo que son
+        # es el punto de etiquetarlas.
+        def interna(*args: Any, **kwargs: Any) -> None:
+            partida(*args, **kwargs, tipo="interna")
+
+        def externa(*args: Any, **kwargs: Any) -> None:
+            partida(*args, **kwargs, tipo="externa")
+
+        def invariante(*args: Any, **kwargs: Any) -> None:
+            partida(*args, **kwargs, tipo="invariante")
 
         # 1. Órdenes cobradas: el árbol decide, y las tres vistas lo acatan.
         pagadas_ventas = sum(1 for i in items.values() if i.get("sale_de_cxc"))
@@ -13275,7 +13303,7 @@ async def get_balance_comprobacion():
                 )
                 vivas_o = [o for o in odoo_ordenes if o.get("state") != "cancel"]
                 encontradas = {str(o["name"]) for o in vivas_o}
-                partida(
+                externa(
                     "Ventas reales (órdenes) contra Odoo",
                     "espejo local",
                     sum(
@@ -13320,7 +13348,7 @@ async def get_balance_comprobacion():
                 vivas_f = {
                     int(m["id"]): m for m in odoo_fact if m.get("state") not in ("cancel", "draft")
                 }
-                partida(
+                externa(
                     "Facturado contra Odoo",
                     "espejo local",
                     sum(
@@ -13385,7 +13413,7 @@ async def get_balance_comprobacion():
                     if mid in ids_comparables
                 )
                 rep_usd = sum(num(i, "saldo_factura_odoo") for i in saldos_items.values())
-                partida(
+                externa(
                     "Saldo por cobrar en USD de lo facturado",
                     "Reporte de Saldos",
                     rep_usd,
@@ -13434,7 +13462,7 @@ async def get_balance_comprobacion():
                         divergentes.append(
                             f"{m.get('name') or mid} ({ves / usd:,.2f} vs {nuestra:,.2f})"
                         )
-                partida(
+                externa(
                     "La tasa de Odoo coincide con el BCV del día",
                     "esperado",
                     0.0,
@@ -13447,7 +13475,7 @@ async def get_balance_comprobacion():
                     "fecha."
                     + (f" Divergen: {', '.join(divergentes[:5])}." if divergentes else ""),
                 )
-                partida(
+                externa(
                     "Facturas por cobrar: el reporte contra Odoo",
                     "esperado",
                     0.0,
@@ -13490,7 +13518,7 @@ async def get_balance_comprobacion():
                     else []
                 )
                 vivos = [p for p in odoo_pagos if p.get("state") != "cancel"]
-                partida(
+                externa(
                     "Pagos: importe en su moneda contra Odoo",
                     "espejo local (VES + USD)",
                     total_ves + total_usd,
@@ -13623,7 +13651,7 @@ async def get_balance_comprobacion():
                         f"pago {p.pago_id} del {p.fecha_pago.date().isoformat()} "
                         f"({estampada:,.2f} vs {oficial:,.2f})"
                     )
-                partida(
+                externa(
                     "La tasa de Odoo en los pagos coincide con el BCV del día",
                     "esperado",
                     0.0,
@@ -13636,7 +13664,7 @@ async def get_balance_comprobacion():
                     + (f" Divergen: {'; '.join(tasa_mal[:5])}." if tasa_mal else ""),
                 )
 
-                partida(
+                externa(
                     "Pagos: equivalente BCV contra Odoo",
                     "nuestra serie de tasas",
                     eq_nuestro,
@@ -13682,7 +13710,7 @@ async def get_balance_comprobacion():
                     and float(getattr(v, "equiv_usd_bcv", 0.0) or 0.0)
                     > float(getattr(v, "monto_aplicado", 0.0) or 0.0)
                 ]
-                partida(
+                invariante(
                     "Pagos en bolívares: equivalente BCV plausible",
                     "esperado",
                     0.0,
