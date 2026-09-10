@@ -12,7 +12,7 @@ uno sube, y dos se cierran.
 | Equivalentes congelados sin propagar correcciones | Media | **ya hay algo que los lista** — 1.487 con el default de 2019, 2.687.701,19 USD | herramienta entregada; el número real sale de producción |
 | El arreglo del scraper nunca corrió en producción | Media | no verificable desde acá | tuyo |
 | Formularios de reglas legacy | Baja | — | espera tu confirmación |
-| `SerieTasas` se lee sin caché | Baja | **3 sitios, 2 deliberados** | **cerrada** |
+| `SerieTasas` se lee sin caché | Baja | **22 sitios: 21 legítimos, 1 era un N+1** | **cerrada, y con un arreglo** |
 | Tramos de volumen en USD | Baja | — | cuando lo pidas |
 
 ---
@@ -53,6 +53,61 @@ tienen un solo test. Y hay una mina más, que la auditoría AST no podía cazar:
 marcar `usa_fallback` nunca**. No traga una excepción ni devuelve un centinela
 —devuelve un dato real de otra fecha—, y el clasificador busca las dos primeras
 cosas.
+
+## `SerieTasas` sin caché: corrijo mi propio conteo, y había un N+1
+
+**Lo que había reportado estaba mal.** Cerré este ítem diciendo «3 sitios, 2
+deliberados». Son **22** —el plan decía 24 y tenía razón, contando la definición y
+un alias— y es mi segundo error de conteo en este trabajo, del mismo género que el
+del 1,2 %: reporté una cifra sin contarla como corresponde.
+
+Contados y clasificados con el criterio que el plan mismo da («las que pasan las
+filas por parámetro están bien; las otras deberían ir por `tasas_vigentes()`»):
+
+| | sitios | |
+|---|---:|---|
+| leen una vez y **pasan las filas** hacia abajo | **18** | el patrón que el plan aprueba |
+| son el propio punto de entrada o el camino de escritura | **3** | `get_rate_for_datetime`, `post_sync_odoo_rates`, `get_config_tasas` |
+| **armaban su propio `Tasas` dentro de un bucle** | **1** | `resolver_tasa_bcv_vinculacion` |
+
+Así que 21 de 22 estaban bien, y el conteo crudo de 24 exageraba el problema tanto
+como mi 3 lo minimizaba.
+
+### El que faltaba, y por qué importa más que el rendimiento
+
+`resolver_tasa_bcv_vinculacion` leía la serie completa para resolver la tasa
+BCV-Euro, y su comentario decía «es una operación puntual, así que pagar la lectura
+sale barato». Para cuatro de sus seis llamadores es cierto. **Los otros dos lo
+llaman dentro de un bucle sobre pagos** (`_sincronizar_aplicaciones_conciliadas` y
+`_vincular_masivo_sync`).
+
+Medido: 85 órdenes caen en la ventana histórica y **206 vinculaciones** apuntan a
+ellas — la única rama que llega a esa lectura. En producción son 919 filas de serie
+por cada una, por ciclo. Es la misma forma de N+1 que en su momento dejó la página
+de Auditoría en 18 minutos.
+
+Pero el argumento que decidió el arreglo no fue el rendimiento. **Esos dos
+llamadores ya tienen la serie leída antes del bucle** y se la pasan a
+`get_rate_for_datetime` para la tasa del día:
+
+```python
+tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)   # snapshot
+tasa_bcv, variante = resolver_tasa_bcv_vinculacion(repo, so_id, hora_pago, tasa_bcv_dia)
+#                    ^ leía la serie DE NUEVO, fresca
+```
+
+O sea que la tasa USD salía de un snapshot y la EUR de una lectura fresca, **y las
+dos se congelan juntas en la misma vinculación**. Pasar la misma serie no es solo
+más rápido: hace que el par sea consistente, que es más correcto y no menos.
+
+`serie_rows` es opcional y por defecto lee fresco, así que los cuatro llamadores
+puntuales no cambian: ahí la lectura fresca **es** lo correcto, porque se está
+fijando una tasa que queda congelada y el caché de cinco minutos podría ocultar una
+recién cargada. Ese razonamiento del comentario original era bueno y se preserva.
+
+Cinco tests lo fijan, incluido el que distingue `[]` de `None` — «no hay tasas»
+contra «leelas vos», que es la misma distinción que este blindaje persigue en todo
+lo demás.
 
 ## Equivalentes congelados: ya hay algo que los lista
 

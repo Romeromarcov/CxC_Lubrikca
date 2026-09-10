@@ -802,7 +802,7 @@ def _sincronizar_aplicaciones_conciliadas(
         moneda = moneda_por_pago[pago_id]
         tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id, hora_pago, tasa_bcv_dia
+            repo, so_id, hora_pago, tasa_bcv_dia, serie_rows=tasas_rows
         )
         if moneda == Moneda.USD:
             equiv_usd_bcv = equiv_usd_binance = monto
@@ -7199,7 +7199,11 @@ def orden_en_periodo_historico(repo, orden) -> bool:
 
 
 def resolver_tasa_bcv_vinculacion(
-    repo, so_id: str, hora_pago: datetime, tasa_bcv_default: Decimal
+    repo,
+    so_id: str,
+    hora_pago: datetime,
+    tasa_bcv_default: Decimal,
+    serie_rows: list[dict] | None = None,
 ) -> tuple[Decimal, str]:
     """Tasa BCV a aplicar a una Vinculación nueva + su variante ('USD'/'EUR').
 
@@ -7217,13 +7221,29 @@ def resolver_tasa_bcv_vinculacion(
     if not orden_en_periodo_historico(repo, orden):
         return tasa_bcv_default, "USD"
     try:
-        # Fresco, no ``tasas_vigentes``: acá se está fijando la tasa con la
-        # que va a quedar congelada una Vinculación, y el caché de 5
-        # minutos podría ocultar una tasa recién cargada. Es una operación
-        # puntual, así que pagar la lectura sale barato.
+        # Fresco, no ``tasas_vigentes``: acá se está fijando la tasa con la que
+        # va a quedar congelada una Vinculación, y el caché de 5 minutos podría
+        # ocultar una tasa recién cargada.
+        #
+        # ``serie_rows`` existe para los dos llamadores que están DENTRO de un
+        # bucle sobre pagos. La nota anterior decía "es una operación puntual,
+        # así que pagar la lectura sale barato", y para cuatro de los seis
+        # llamadores es cierto. Para los otros dos no: leían la serie completa
+        # una vez por fila. Medido en la copia de prueba, 206 vinculaciones caen
+        # en la ventana histórica, así que eran 206 lecturas de las 919 filas de
+        # la serie por ciclo -- la misma forma de N+1 que en su momento dejó la
+        # página de Auditoría en 18 minutos.
+        #
+        # Y hay una razón más fuerte que el rendimiento: esos dos llamadores YA
+        # tienen la serie leída antes del bucle y se la pasan a
+        # ``get_rate_for_datetime`` para la tasa del día. O sea que la tasa USD
+        # salía de un snapshot y la EUR de una lectura fresca, y las dos se
+        # congelan juntas en la misma Vinculación. Pasar la misma serie hace que
+        # el par sea consistente, que es más correcto y no menos.
+        serie = serie_rows if serie_rows is not None else _all_serie_tasas_rows(repo)
         tasa_eur = Tasas(
             historicas=repo.all_tasas_historicas_auditoria(),
-            serie=_all_serie_tasas_rows(repo),
+            serie=serie,
         ).bcv_eur(hora_pago)
     except Exception:
         tasa_eur = None
@@ -8915,7 +8935,7 @@ def _vincular_masivo_sync(
         tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(hora_pago_confirmada, tasas_rows)
         # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
-            repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia
+            repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia, serie_rows=tasas_rows
         )
 
         if pago.moneda == "USD":
