@@ -334,6 +334,26 @@ CHEQUEOS: list[Chequeo] = [
         """,
     ),
     Chequeo(
+        "devuelto_supera_lo_entregado",
+        "estados",
+        "ALTA",
+        "Volvio mas mercancia de la que la linea dice haber enviado: "
+        "``cantidad_entregada`` quedo NEGATIVA. Pasa cuando sacan el producto de "
+        "la orden (cantidad a cero) despues de que la devolucion ya entro, asi "
+        "que el deposito recibio unidades contra una linea que ya no reclama "
+        "haber vendido nada. Medido en el Odoo de prueba: 2 casos, S00952 con -4 "
+        "unidades y S00925 con -10. NO se prohibe con una restriccion de base a "
+        "proposito -- es como Odoo lo representa, y prohibirlo tumbaria el sync "
+        "(ver la migracion f1e2d3c4b5a6).",
+        """
+        SELECT l.so_id, l.linea_id, l.nombre, l.cantidad AS pedida,
+               l.cantidad_entregada AS entregada, o.tiene_devolucion, o.monto_total
+        FROM lineas_orden l JOIN ordenes_venta o ON o.so_id = l.so_id
+        WHERE l.cantidad_entregada < 0
+        ORDER BY l.cantidad_entregada
+        """,
+    ),
+    Chequeo(
         "entregado_supera_lo_pedido",
         "estados",
         "ALTA",
