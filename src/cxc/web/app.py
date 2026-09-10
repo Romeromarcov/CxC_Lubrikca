@@ -13405,6 +13405,17 @@ async def get_balance_comprobacion():
                 # fecha del asiento y nosotros con la del día -- así que se
                 # cuentan solo las que se pasan del 2 %.
                 divergentes: list[str] = []
+                # Cuántas se pudieron comparar de verdad. Sin esto la partida
+                # reportaba "0 divergentes" tanto cuando verificó y estaba todo
+                # bien como cuando NO PUDO VERIFICAR NINGUNA -- y los dos se
+                # leían igual, en verde. Pasa siempre que falte NUESTRA serie de
+                # tasas para la fecha de la factura: el ``continue`` de abajo
+                # saltea la factura en silencio. Reproducido corriendo el
+                # escenario "Cargan una tasa equivocada en Odoo" contra un
+                # espejo sin serie sembrada: se desvió la tasa un 50 % y la
+                # partida siguió en verde porque no comparó ni una.
+                comparadas = 0
+                sin_tasa_nuestra = 0
                 for mid, m in vivas_f.items():
                     if mid not in ids_comparables:
                         continue
@@ -13423,7 +13434,9 @@ async def get_balance_comprobacion():
                         continue
                     nuestra = float(tasas_vigentes(repo_bal).bcv_usd(f_inv, arrastrar=False) or 0.0)
                     if nuestra <= 0:
+                        sin_tasa_nuestra += 1
                         continue
+                    comparadas += 1
                     if abs((ves / usd) / nuestra - 1.0) > 0.02:
                         divergentes.append(
                             f"{m.get('name') or mid} ({ves / usd:,.2f} vs {nuestra:,.2f})"
@@ -13438,7 +13451,19 @@ async def get_balance_comprobacion():
                     "es la que manda; acá se verifica que sea la del BCV. Se "
                     "despeja la tasa implícita de cada factura en bolívares "
                     "(residual VES / residual USD) contra nuestro BCV de su "
-                    "fecha."
+                    "fecha. "
+                    + (
+                        f"Comparadas {comparadas}."
+                        if comparadas
+                        else "NO SE COMPARÓ NINGUNA: sin nuestra serie de tasas para "
+                        "esas fechas, esta partida no puede opinar y el cero de la "
+                        "derecha no significa que esté todo bien."
+                    )
+                    + (
+                        f" {sin_tasa_nuestra} salteadas por falta de tasa nuestra."
+                        if sin_tasa_nuestra
+                        else ""
+                    )
                     + (f" Divergen: {', '.join(divergentes[:5])}." if divergentes else ""),
                 )
                 externa(
@@ -13585,6 +13610,8 @@ async def get_balance_comprobacion():
                 # que Odoo guarda con dos decimales: en un abono chico eso
                 # solo mueve centésimas de punto.
                 tasa_mal: list[str] = []
+                pagos_comparados = 0
+                pagos_sin_tasa_nuestra = 0
                 for p in pagos:
                     if not str(p.pago_id).isdigit():
                         continue
@@ -13603,7 +13630,14 @@ async def get_balance_comprobacion():
                         tasas_vigentes(repo_bal).bcv_usd(p.fecha_pago, arrastrar=False) or 0.0
                     )
                     if oficial <= 0:
+                        # Sin NUESTRA tasa para esa fecha no hay contra qué
+                        # comparar, y saltear en silencio hacía que la partida
+                        # reportara "0 divergentes" -- indistinguible de
+                        # "verifiqué y está todo bien". Ver la partida hermana
+                        # de facturas, donde el mismo hueco quedó documentado.
+                        pagos_sin_tasa_nuestra += 1
                         continue
+                    pagos_comparados += 1
                     estampada = nominal / ref_val
                     if abs(estampada / oficial - 1.0) <= 0.02:
                         continue
@@ -13626,7 +13660,19 @@ async def get_balance_comprobacion():
                     "Se despeja la tasa que Odoo estampó en cada abono en "
                     "bolívares (nominal / amount_ref) y se compara contra la "
                     "oficial del BCV de esa fecha valor. Los abonos cobrados "
-                    "en euros no cuentan: su tasa es la del euro y está bien."
+                    "en euros no cuentan: su tasa es la del euro y está bien. "
+                    + (
+                        f"Comparados {pagos_comparados}."
+                        if pagos_comparados
+                        else "NO SE COMPARÓ NINGUNO: sin nuestra serie de tasas para "
+                        "esas fechas, esta partida no puede opinar y el cero de la "
+                        "derecha no significa que esté todo bien."
+                    )
+                    + (
+                        f" {pagos_sin_tasa_nuestra} salteados por falta de tasa nuestra."
+                        if pagos_sin_tasa_nuestra
+                        else ""
+                    )
                     + (f" Divergen: {'; '.join(tasa_mal[:5])}." if tasa_mal else ""),
                 )
 

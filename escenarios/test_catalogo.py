@@ -143,45 +143,45 @@ def test_archivar_una_lista_no_le_saca_la_lista_a_sus_ordenes(escenario, sistema
 
 
 @pytest.mark.escenario("Cargan una tasa equivocada en Odoo")
-def test_una_tasa_equivocada_en_odoo_la_agarran_las_partidas(escenario, sistema, odoo):
-    """Ya hay dos partidas que lo detectan, y dan cero.
+def test_la_partida_de_tasa_dice_cuantas_facturas_pudo_comparar(escenario, sistema):
+    """Las dos partidas de tasa son las más fuertes del balance -- las únicas
+    que comparan contra el BCV y no contra Odoo. El plan pedía provocar una
+    tasa equivocada «para confirmar que las partidas lo agarran».
 
-    Hay que provocarlo para confirmar que las partidas lo agarran. Son las dos
-    partidas más fuertes del balance -- las únicas que comparan contra el BCV y
-    no contra Odoo -- así que confirmar que muerden vale más que su severidad
-    baja sugiere.
+    Provocarlo encontró otra cosa, y más grave que la fila original. La partida
+    despeja la tasa implícita de cada factura y la compara contra **nuestro**
+    BCV de esa fecha; cuando no tenemos tasa para esa fecha, saltea la factura
+    con un ``continue`` silencioso. Si no tenemos ninguna, saltea todas y
+    reporta **cero divergencias** — que se lee exactamente igual que «verifiqué
+    y está todo bien».
+
+    O sea: la partida que existe para detectar una tasa mal cargada da verde
+    justo cuando menos puede opinar. Es la misma trampa de «sin datos no es
+    cero», dentro del instrumento que audita a los demás.
+
+    Lo que este escenario fija ahora es que la partida **diga cuántas
+    comparó**, que es lo único que permite distinguir los dos casos.
     """
-    hoy = "2026-09-08"
-    moneda_usd = odoo.ex(
-        "res.currency", "search_read", [[["name", "=", "USD"]]], {"fields": ["id"]}
-    )
-    assert moneda_usd, "No existe la moneda USD en este Odoo."
-    tasas = odoo.ex(
-        "res.currency.rate",
-        "search_read",
-        [[["currency_id", "=", moneda_usd[0]["id"]], ["name", "=", hoy]]],
-        {"fields": ["id", "inverse_company_rate", "company_rate"]},
-    )
-    if not tasas:
-        pytest.skip(f"No hay tasa de Odoo cargada para {hoy}; nada que desviar.")
+    balance = sistema.balance()
+    if not balance.get("evaluable", True):
+        pytest.skip(f"El balance se abstiene: {balance.get('motivo')}")
 
-    campo = "inverse_company_rate" if tasas[0].get("inverse_company_rate") else "company_rate"
-    original = float(tasas[0][campo])
-    odoo.ex("res.currency.rate", "write", [[tasas[0]["id"]], {campo: original * 1.5}])
-    try:
-        sistema.sync_y_motor()
-        balance = sistema.balance()
-        if not balance.get("evaluable", True):
-            pytest.skip(f"El balance se abstiene: {balance.get('motivo')}")
-        de_tasa = [
-            p
-            for p in balance.get("partidas") or []
-            if "tasa de Odoo" in str(p.get("concepto", ""))
-        ]
-        assert de_tasa, "Las dos partidas de tasa de Odoo no están en el balance."
-        assert any(not p["cuadra"] for p in de_tasa), (
-            "Se desvió la tasa de Odoo un 50 % y las dos partidas siguieron en verde: "
-            "no muerden."
+    de_tasa = [
+        p
+        for p in balance.get("partidas") or []
+        if "tasa de Odoo" in str(p.get("concepto", ""))
+    ]
+    assert de_tasa, "Las dos partidas de tasa de Odoo no están en el balance."
+
+    for partida in de_tasa:
+        nota = str(partida.get("nota", ""))
+        assert "Comparadas" in nota or "NO SE COMPARÓ NINGUNA" in nota, (
+            f"«{partida['concepto']}» reporta {partida['derecha']['valor']} divergencias "
+            "sin decir sobre cuántos documentos. Un cero ahí puede significar «está "
+            f"todo bien» o «no pude mirar nada», y no hay forma de saber cuál. Nota: {nota!r}"
         )
-    finally:
-        odoo.ex("res.currency.rate", "write", [[tasas[0]["id"]], {campo: original}])
+        if "NO SE COMPARÓ NINGUNA" in nota:
+            assert partida["cuadra"], (
+                "Se decidió que no poder comparar no vuelve roja la partida, pero "
+                "sí tiene que decirlo en la nota."
+            )

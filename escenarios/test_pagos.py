@@ -130,18 +130,28 @@ def test_mover_el_pago_a_otra_orden_mueve_el_saldo(escenario, sistema, odoo):
 
 @pytest.mark.escenario("Registran el mismo pago dos veces")
 def test_el_pago_duplicado_deja_la_orden_sobrepagada_y_visible(escenario, sistema, odoo):
-    """La orden queda sobrepagada.
+    """La orden queda sobrepagada, y el segundo pago no puede perderse.
 
-    Debe aparecer como saldo a favor y como pago duplicado. Lo que no puede
-    pasar es que el segundo pago se pierda: es plata del cliente.
+    Corriendo el escenario apareció una protección que la fila no contemplaba:
+    con la factura ya saldada, el asistente de cobro de Odoo se niega -- «no
+    queda nada por pagar en los apuntes contables seleccionados». Así que la
+    duplicación por esa vía está bloqueada.
+
+    Lo que sí puede pasar, y es lo que el escenario arma, es que el segundo
+    cobro entre cuando la factura **todavía tiene residual**: se cobra la mitad
+    dos veces. La orden queda sobrepagada igual, y lo que hay que verificar es
+    que el segundo abono llegue al espejo -- un pago duplicado es plata del
+    cliente que hay que devolverle, y perderlo es peor que registrarlo dos
+    veces.
     """
-    situacion = escenario.pagada()
+    situacion = escenario.pagada(proporcion=0.5)
     sistema.sync()
     total = escenario.total_factura(situacion.facturas[0])
     pagos_antes = sistema.espejo("pagos", "cliente_id = :c", c=str(situacion.cliente_id))
+    assert pagos_antes, "El escenario no llegó a registrar el primer pago."
 
-    # El mismo cobro otra vez, por el mismo monto y el mismo día.
-    odoo.pagar(situacion.facturas, monto=total)
+    # El mismo cobro otra vez, con la factura aún a medio pagar.
+    odoo.pagar(situacion.facturas, monto=round(total / 2, 2))
     sistema.sync()
 
     pagos_despues = sistema.espejo("pagos", "cliente_id = :c", c=str(situacion.cliente_id))
@@ -149,7 +159,6 @@ def test_el_pago_duplicado_deja_la_orden_sobrepagada_y_visible(escenario, sistem
         "El segundo pago no llegó al espejo. Un pago duplicado es plata del cliente "
         "que hay que devolverle: perderlo es peor que registrarlo dos veces."
     )
-    # Y el chequeo de la 1.3 tiene que verlo como gemelo.
     gemelos = sistema.espejo(
         "pagos",
         "cliente_id = :c GROUP BY cliente_id, monto, moneda, fecha_pago::date "
@@ -157,6 +166,20 @@ def test_el_pago_duplicado_deja_la_orden_sobrepagada_y_visible(escenario, sistem
         c=str(situacion.cliente_id),
     )
     assert gemelos, "El detector de pagos gemelos no ve el duplicado."
+
+
+@pytest.mark.escenario("Registran el mismo pago dos veces — sobre una factura ya saldada")
+def test_odoo_impide_cobrar_dos_veces_una_factura_ya_saldada(escenario, odoo):
+    """La otra mitad del escenario anterior: la vía que Odoo bloquea.
+
+    Se deja como test propio para vigilar la protección. Si un día deja de
+    bloquearlo, este test falla y avisa que la duplicación volvió a ser posible
+    por el camino fácil.
+    """
+    situacion = escenario.pagada()
+    total = escenario.total_factura(situacion.facturas[0])
+    with pytest.raises(Exception, match="(?i)nada por pagar|nothing to pay"):
+        odoo.pagar(situacion.facturas, monto=total)
 
 
 @pytest.mark.escenario("Pago en una moneda distinta a la de la orden")

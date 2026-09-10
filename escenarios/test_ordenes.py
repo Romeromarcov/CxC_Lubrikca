@@ -70,13 +70,18 @@ def test_agregar_un_producto_despues_de_entregar_no_pasa_desapercibido(
 def test_quitar_un_producto_entregado_deja_rastro_de_lo_que_salio(escenario, sistema, odoo):
     """La mercancía salió y nadie la cobra.
 
-    Desde el arreglo de S00792 el espejo borra las líneas que ya no están en
-    Odoo -- correcto cuando la orden se corrige ANTES de entregar, peligroso
-    acá: hace que el saldo baje en silencio.
+    Corriendo el escenario apareció el mecanismo real, que no es el que la fila
+    de la tabla suponía: **Odoo no deja borrar la línea de una orden
+    confirmada** -- «son necesarias para determinar si algo se factura o se
+    entrega. Establece la cantidad en 0». Así que sacar un producto de una orden
+    confirmada es poner su cantidad en cero, y la línea se queda.
 
-    Debe detectarse que lo entregado supera lo pedido, que es el espejo del
-    caso de nota de crédito pendiente. Con la línea borrada del todo, el
-    espejo pierde la única prueba de que esa mercancía salió.
+    Eso cambia el riesgo y lo mejora: el espejo no pierde el rastro, porque la
+    línea sigue ahí con ``cantidad = 0`` y ``cantidad_entregada`` en lo que
+    salió. Lo que queda es que **lo entregado supera lo pedido**, que es el
+    espejo del caso de nota de crédito pendiente y es justo lo que hay que
+    detectar. Es también el mecanismo que produjo las dos líneas con cantidad
+    entregada negativa de los datos reales.
     """
     situacion = escenario.entregada(productos=2)
     sistema.sync_y_motor()
@@ -92,14 +97,23 @@ def test_quitar_un_producto_entregado_deja_rastro_de_lo_que_salio(escenario, sis
     lineas_despues = sistema.espejo("lineas_orden", "so_id = :so", so=situacion.nombre)
     entregas = sistema.espejo("entregas", "so_id = :so", so=situacion.nombre)
 
-    assert entregas, "Las entregas siguen en el espejo (bien: son la prueba de que salió)."
-    assert len(lineas_despues) < len(lineas_antes), (
-        "El espejo no borró la línea que Odoo ya no tiene."
-    )
+    assert entregas, "Las entregas siguen en el espejo: son la prueba de que salió."
     entregado_despues = sum(float(ln["cantidad_entregada"]) for ln in lineas_despues)
     assert entregado_despues >= entregado_antes, (
         f"Se perdió el rastro de mercancía entregada: antes {entregado_antes}, ahora "
         f"{entregado_despues}. El saldo baja en silencio y nadie cobra lo que salió."
+    )
+
+    # Y el rastro tiene que ser DETECTABLE, no solo estar: alguna línea quedó
+    # con más entregado que pedido, que es el chequeo que lo encuentra.
+    excedidas = [
+        ln
+        for ln in lineas_despues
+        if float(ln["cantidad_entregada"]) > float(ln["cantidad"]) + 0.001
+    ]
+    assert excedidas, (
+        "Se sacó un producto ya entregado y ninguna línea quedó con lo entregado "
+        "por encima de lo pedido, así que el chequeo que busca ese caso no lo ve."
     )
 
 
@@ -204,32 +218,34 @@ def test_cambiar_la_fecha_de_la_orden_recalcula_su_base(escenario, sistema, odoo
 
 
 @pytest.mark.escenario("Cambian la lista de precios de una orden vieja")
-def test_cambiar_la_lista_de_una_orden_recalcula_su_teorico(escenario, sistema, odoo, listas):
-    """Es el caso que ya se vio con la lista histórica usada para VES y USD.
+def test_odoo_impide_cambiar_la_lista_de_una_orden_confirmada(escenario, sistema, odoo, listas):
+    """El escenario que la tabla daba por Alta, y que **Odoo no permite**.
 
-    Cambiar la lista cambia la moneda de referencia de la orden, y con ella
-    cuál de los dos teóricos la mide.
+    La fila esperaba que cambiar la lista de una orden vieja recalculara su
+    teórico, y el riesgo era que no lo hiciera. Corriéndolo aparece algo mejor:
+    Odoo contesta «No puede cambiar la lista de precios de una orden
+    confirmada», así que el escenario no puede darse por esa vía.
+
+    Eso **baja el riesgo de esa fila**, y el test se queda para vigilar la
+    protección: si un día Odoo dejara de bloquearlo -- una versión nueva, un
+    módulo que lo permita -- este test empieza a fallar y avisa que la fila
+    volvió a estar viva.
+
+    La orden queda sin entregar a propósito: es el caso más permisivo, así que
+    si acá lo bloquea, lo bloquea en todos.
     """
-    situacion = escenario.entregada(moneda="ves")
+    situacion = escenario.pedida(moneda="ves")
     sistema.sync_y_motor()
-    teorico_antes = sistema.teorico(situacion.nombre)
-    assert teorico_antes is not None
 
     odoo.desbloquear(situacion.so)
-    odoo.editar_orden(situacion.so, {"pricelist_id": listas["usd"]})
-    sistema.sync_y_motor()
+    with pytest.raises(Exception, match="(?i)lista de precios|pricelist"):
+        odoo.editar_orden(situacion.so, {"pricelist_id": listas["usd"]})
 
     orden = sistema.espejo("ordenes_venta", "so_id = :so", so=situacion.nombre)[0]
-    assert str(orden["lista_precios"]) == str(listas["usd"]), (
-        "El espejo no siguió el cambio de lista."
+    assert str(orden["lista_precios"]) == str(situacion.lista_id), (
+        "Odoo rechazó el cambio pero el espejo quedó con otra lista."
     )
-    teorico_despues = sistema.teorico(situacion.nombre)
-    assert teorico_despues is not None
-    assert (
-        teorico_despues["lista_usd_id"] != teorico_antes["lista_usd_id"]
-        or teorico_despues["lista_ves_id"] != teorico_antes["lista_ves_id"]
-        or teorico_despues["calculado_en"] != teorico_antes["calculado_en"]
-    ), "El teórico quedó atado a la lista vieja."
+    odoo.cancelar_orden(situacion.so)
 
 
 @pytest.mark.escenario("Cancelan una orden que tiene pagos aplicados")

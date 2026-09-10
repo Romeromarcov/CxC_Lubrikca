@@ -485,7 +485,24 @@ class OdooQA:
         )
 
     def borrar_linea(self, linea_id: int) -> None:
-        self.ex("sale.order.line", "unlink", [[linea_id]])
+        """Saca un producto de la orden.
+
+        En una orden CONFIRMADA, Odoo no deja borrar la linea: contesta "una vez
+        que confirmas una orden de venta, no puedes eliminar ninguna de sus
+        lineas (son necesarias para determinar si algo se factura o se entrega).
+        Establece la cantidad en 0."
+
+        Eso no es un obstaculo del banco, es el hallazgo: poner la cantidad en
+        cero es como se saca un producto de una orden confirmada en la vida
+        real, y es exactamente lo que produce las dos lineas con
+        ``cantidad_entregada`` NEGATIVA que aparecieron en los datos (S00925 con
+        -10 unidades, S00952 con -4). Asi que el escenario hace lo que hace el
+        humano, y cae al borrado solo si la orden todavia esta en borrador.
+        """
+        try:
+            self.ex("sale.order.line", "write", [[linea_id], {"product_uom_qty": 0}])
+        except Exception:  # noqa: BLE001 -- en borrador si se puede borrar
+            self.ex("sale.order.line", "unlink", [[linea_id]])
 
     def editar_orden(self, so: int, valores: dict[str, Any]) -> None:
         self.ex("sale.order", "write", [[so], valores])
@@ -575,7 +592,17 @@ class OdooQA:
             self.ex(
                 "account.move.reversal",
                 "create",
-                [{"move_ids": [(6, 0, [factura_id])], "reason": motivo, "date": fecha}],
+                [
+                    {
+                        "move_ids": [(6, 0, [factura_id])],
+                        "reason": motivo,
+                        "date": fecha,
+                        # Obligatorio en ``account.move.reversal``, y ademas es
+                        # lo que mantiene la NC fuera de la imprenta digital:
+                        # si saliera por el diario real, emitiria.
+                        "journal_id": self.diario_pruebas,
+                    }
+                ],
                 {"context": {"active_model": "account.move", "active_ids": [factura_id]}},
             )
         )
@@ -647,10 +674,31 @@ class OdooQA:
         )
 
     def editar_pago(self, pago_id: int, valores: dict[str, Any]) -> None:
-        """Edita un pago, sacándolo de borrador si hace falta."""
-        self.ex("account.payment", "action_draft", [[pago_id]])
+        """Edita un pago, sacandolo de borrador primero.
+
+        ``action_draft`` devuelve ``None``, y el servidor XML-RPC de Odoo no
+        puede serializarlo: contesta "cannot marshal None unless allow_none is
+        enabled". No es que la operacion falle -- se ejecuta y despues revienta
+        al armar la respuesta. Es la misma trampa que ``action_unlock`` en las
+        ordenes, y se trata igual: se deja pasar ese error puntual y se
+        verifica el estado despues, que es lo unico que importa.
+        """
+        self._sin_respuesta("account.payment", "action_draft", pago_id)
         self.ex("account.payment", "write", [[pago_id], valores])
-        self.ex("account.payment", "action_post", [[pago_id]])
+        self._sin_respuesta("account.payment", "action_post", pago_id)
+
+    def _sin_respuesta(self, modelo: str, metodo: str, registro_id: int) -> None:
+        """Llama a un metodo que devuelve ``None`` y tolera el fallo de
+        serializacion, no el de negocio.
+
+        La distincion importa: un "cannot marshal None" quiere decir que la
+        operacion SI corrio; cualquier otro error es real y se propaga.
+        """
+        try:
+            self.ex(modelo, metodo, [[registro_id]])
+        except Exception as exc:  # noqa: BLE001 -- se filtra por el mensaje
+            if "cannot marshal None" not in str(exc):
+                raise
 
     def desconciliar_pago(self, pago_id: int) -> None:
         """Rompe la conciliación entre el pago y su factura."""
@@ -698,19 +746,26 @@ class OdooQA:
                 {"context": contexto},
             )
         )
-        if cantidad is not None:
-            lineas = self.ex(
-                "stock.return.picking.line",
-                "search_read",
-                [[["wizard_id", "=", wizard]]],
-                {"fields": ["id"]},
+        # El asistente crea sus lineas con ``quantity`` en CERO, asi que hay que
+        # llenarlas SIEMPRE y no solo cuando se pide una devolucion parcial:
+        # sin eso Odoo contesta "Especifique al menos una cantidad diferente a
+        # cero". ``move_quantity`` es lo que salio en el picking original, o sea
+        # el techo de lo que se puede devolver.
+        lineas = self.ex(
+            "stock.return.picking.line",
+            "search_read",
+            [[["wizard_id", "=", wizard]]],
+            {"fields": ["id", "move_quantity"]},
+        )
+        for linea in lineas:
+            devuelta = (
+                cantidad if cantidad is not None else float(linea.get("move_quantity") or 0)
             )
-            for linea in lineas:
-                self.ex(
-                    "stock.return.picking.line",
-                    "write",
-                    [[linea["id"]], {"quantity": cantidad}],
-                )
+            self.ex(
+                "stock.return.picking.line",
+                "write",
+                [[linea["id"]], {"quantity": devuelta}],
+            )
         self.ex(
             "stock.return.picking", "action_create_returns", [[wizard]], {"context": contexto}
         )
