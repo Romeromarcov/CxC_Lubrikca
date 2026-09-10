@@ -19,11 +19,17 @@ desactiva la cobertura, que acá no significa nada.
 
 1. `.env.qa` con las credenciales del Odoo de prueba (copiar de
    `.env.qa.example`).
-2. El espejo `cxc_qa` creado y sincronizado:
+2. El espejo `cxc_qa` creado, sincronizado y con los teóricos calculados:
    ```bash
    python scripts/qa_entorno.py crear
    python scripts/qa_entorno.py sync
+   python scripts/qa_entorno.py motor   # varios minutos, se paga una sola vez
    ```
+
+   El tercer paso importa: el motor resuelve el precio de cada línea contra
+   Odoo, y sobre 967 órdenes sin teórico eso son varios minutos. Si se lo deja
+   para el primer escenario, ese escenario parece colgado y el resto del banco
+   espera detrás.
 
 ## La seguridad, que acá no es un detalle
 

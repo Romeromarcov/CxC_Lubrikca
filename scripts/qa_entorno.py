@@ -8,6 +8,7 @@ migraciones y sincroniza el espejo desde el Odoo de prueba.
     python scripts/qa_entorno.py crear      # crea la base y migra
     python scripts/qa_entorno.py sync       # corrida completa desde cero
     python scripts/qa_entorno.py resync     # corrida delta (lo que cambio)
+    python scripts/qa_entorno.py motor      # backfill de los teoricos
     python scripts/qa_entorno.py estado     # que hay en el espejo
 
 La configuracion sale de ``.env.qa`` (ver ``.env.qa.example``). El script se
@@ -22,7 +23,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -173,6 +174,51 @@ def sync(desde_cero: bool) -> int:
     return 0
 
 
+def motor() -> int:
+    """Backfill de ``ventas_teoricos`` sobre las ordenes sin teorico.
+
+    Va aca y no dentro de un escenario porque es CARO y se paga una sola vez:
+    el motor resuelve el precio de cada linea contra Odoo, y sobre 967 ordenes
+    sin teorico eso son varios minutos. Si queda dentro del primer escenario,
+    ese escenario parece colgado y el resto del banco espera detras.
+
+    Es incremental: solo toca las ordenes que no tienen fila todavia, asi que
+    correrlo dos veces seguidas es barato la segunda.
+    """
+    import logging
+
+    from cxc.config import AppConfig
+    from cxc.engine.runner import EngineRunner
+    from cxc.odoo.client import _connect
+    from cxc.odoo.price import OdooPriceResolver
+    from cxc.web.app import build_fallback_ficha_config, get_valid_pricelists_usd_and_ves
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    config = AppConfig.from_env()
+    repo, _ = _repo_y_reader()
+    ejecutar = _connect(config.odoo)
+    if not ejecutar:
+        sys.exit("Sin conexion a Odoo.")
+    usd, ves = get_valid_pricelists_usd_and_ves(repo)
+    ids_usd = [int(x) for x in usd if str(x).isdigit()]
+    ids_ves = [int(x) for x in ves if str(x).isdigit()]
+    resolver = OdooPriceResolver(
+        ejecutar,
+        {"USD": ids_usd[0] if ids_usd else 11, "BCV": ids_ves[0] if ids_ves else 10},
+        [*ids_usd, *ids_ves],
+        build_fallback_ficha_config(repo),
+    )
+    inicio = datetime.now()
+    procesadas = EngineRunner(repo, resolver, config.engine).run_teoricos_pendientes(
+        date.today()
+    )
+    print(
+        f"{procesadas} orden(es) con teorico calculado en "
+        f"{(datetime.now() - inicio).total_seconds():.0f}s"
+    )
+    return 0
+
+
 def estado() -> int:
     import sqlalchemy as sa
 
@@ -195,7 +241,7 @@ def estado() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("accion", choices=["crear", "sync", "resync", "estado"])
+    parser.add_argument("accion", choices=["crear", "sync", "resync", "motor", "estado"])
     args = parser.parse_args()
 
     cargar_env_qa()
@@ -207,6 +253,8 @@ def main() -> int:
         return sync(desde_cero=True)
     if args.accion == "resync":
         return sync(desde_cero=False)
+    if args.accion == "motor":
+        return motor()
     return estado()
 
 
