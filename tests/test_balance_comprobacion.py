@@ -459,40 +459,48 @@ def _clases_de_partida() -> list[tuple[str, str]]:
     montarlos acá sería un test de otra cosa. Lo que interesa fijar es la
     clasificación, y ésa es estática.
 
-    Mira **las dos** funciones que emiten partidas: el endpoint en ``web/app.py``
-    (las que comparan contra Odoo) y ``engine/balance.py::partidas_internas``
-    (las que comparan vistas nuestras), que se separaron en la Fase 2.4. El test
-    fija la clasificación del balance, no en qué archivo vive cada partida: si
-    alguna vez se mueve otra sección, este helper es el que hay que ampliar, no
-    el número.
+    **Descubre las funciones emisoras en vez de nombrarlas.** Antes listaba dos por
+    nombre y hubo que ampliarlo dos veces, una por cada pieza que la Fase 2.4 sacó
+    de ``app.py``. Ahora recorre los dos archivos y toma cualquier función que
+    emita partidas, así que el test fija **la clasificación** del balance y no en
+    qué archivo vive cada partida. Mover una sección más no lo rompe.
     """
     import ast
     from pathlib import Path
 
+    EMISORES = {"partida", "crear_partida", "interna", "externa", "invariante"}
+    ENVOLTORIOS = {"partida", "interna", "externa", "invariante"}
+
     src = Path(__file__).resolve().parent.parent / "src" / "cxc"
     emisoras = []
-    for ruta, nombre in (
-        (src / "web" / "app.py", "get_balance_comprobacion"),
-        (src / "engine" / "balance.py", "partidas_internas"),
-    ):
+    for ruta in (src / "engine" / "balance.py", src / "web" / "app.py"):
         arbol = ast.parse(ruta.read_text(encoding="utf-8"))
-        emisoras.append(
-            next(
-                n
-                for n in ast.walk(arbol)
-                if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == nombre
+        for f in ast.walk(arbol):
+            if not isinstance(f, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if f.name in ENVOLTORIOS:
+                continue  # el envoltorio no emite: reenvía
+            # Las líneas de los envoltorios anidados: una llamada ahí adentro es
+            # del envoltorio reenviando, no una partida.
+            de_envoltorios: set[int] = set()
+            for g in ast.walk(f):
+                if isinstance(g, ast.FunctionDef) and g.name in ENVOLTORIOS:
+                    de_envoltorios.update(range(g.lineno, (g.end_lineno or g.lineno) + 1))
+            emite = any(
+                isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Name)
+                and c.func.id in EMISORES
+                and c.lineno not in de_envoltorios
+                for c in ast.walk(f)
             )
-        )
+            if emite:
+                emisoras.append(f)
+    assert emisoras, "no se encontró ninguna función que emita partidas"
     # Las llamadas DENTRO de los envoltorios no son sitios de partida.
     lineas_envoltorio: set[tuple[int, int]] = set()
     for idx, emisora in enumerate(emisoras):
         for n in ast.walk(emisora):
-            if isinstance(n, ast.FunctionDef) and n.name in {
-                "partida",
-                "interna",
-                "externa",
-                "invariante",
-            }:
+            if isinstance(n, ast.FunctionDef) and n.name in ENVOLTORIOS:
                 lineas_envoltorio.update(
                     (idx, ln) for ln in range(n.lineno, (n.end_lineno or n.lineno) + 1)
                 )
@@ -515,7 +523,7 @@ def _clases_de_partida() -> list[tuple[str, str]]:
             if (
                 isinstance(n, ast.Call)
                 and isinstance(n.func, ast.Name)
-                and n.func.id in {"partida", "crear_partida", "interna", "externa", "invariante"}
+                and n.func.id in EMISORES
                 and (idx, n.lineno) not in lineas_envoltorio
             ):
                 clase = (
