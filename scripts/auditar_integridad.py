@@ -349,19 +349,67 @@ CHEQUEOS: list[Chequeo] = [
         """,
     ),
     Chequeo(
-        "teorico_en_cero_con_lineas",
+        "teorico_en_cero_sin_explicacion",
         "estados",
         "ALTA",
-        "La orden tiene lineas pero su teorico calculado es cero. Un teorico en "
-        "cero saca la orden de la cuenta por cobrar sin que nadie cobre nada.",
+        "La orden tiene lineas, NO tiene devolucion, y su teorico calculado es "
+        "cero. Un teorico en cero saca la orden de la cuenta por cobrar sin que "
+        "nadie cobre nada. Se excluyen las devueltas por completo porque ahi el "
+        "cero es correcto -- la mercancia volvio y no hay nada que cobrar; esas "
+        "las mira ``devuelta_completa_con_factura_viva``. Separarlas importa: si "
+        "no, el chequeo mezcla 'no pude calcular' con 'calcule cero bien', que es "
+        "justo la distincion que este blindaje persigue.",
         """
         SELECT t.so_id, t.teorico_ves, t.teorico_usd, o.monto_total,
-               t.usa_fallback_ves, t.usa_fallback_usd,
+               t.usa_fallback_ves, t.usa_fallback_usd, o.tiene_devolucion,
                (SELECT count(*) FROM lineas_orden l WHERE l.so_id = t.so_id) AS lineas
         FROM ventas_teoricos t JOIN ordenes_venta o ON o.so_id = t.so_id
         WHERE t.teorico_ves <= 0 AND t.teorico_usd <= 0
           AND EXISTS (SELECT 1 FROM lineas_orden l WHERE l.so_id = t.so_id)
+          AND NOT o.tiene_devolucion
         ORDER BY o.monto_total DESC
+        """,
+    ),
+    Chequeo(
+        "devuelta_completa_con_factura_viva",
+        "estados",
+        "ALTA",
+        "Toda la mercancia volvio (cantidad_entregada en cero en cada linea, con "
+        "devolucion marcada) y la factura sigue posteada. El teorico es cero, que "
+        "es correcto, pero la factura le sigue pidiendo la plata al cliente: es "
+        "una nota de credito pendiente. Medido en el Odoo de prueba: 4 ordenes "
+        "asi, y solo UNA estaba en la bandeja de facturacion.",
+        """
+        SELECT o.so_id, o.monto_total,
+               (SELECT coalesce(sum(f.monto_total_signed_usd), 0) FROM facturas f
+                 WHERE f.so_id = o.so_id AND f.estado = 'posted') AS facturado_vivo,
+               EXISTS (SELECT 1 FROM bandeja_facturacion b WHERE b.so_id = o.so_id)
+                 AS en_bandeja
+        FROM ordenes_venta o
+        WHERE o.tiene_devolucion AND o.entregada_completa AND o.facturada
+          AND EXISTS (SELECT 1 FROM lineas_orden l WHERE l.so_id = o.so_id)
+          AND NOT EXISTS (
+                SELECT 1 FROM lineas_orden l
+                WHERE l.so_id = o.so_id AND l.cantidad_entregada > 0)
+          AND (SELECT coalesce(sum(f.monto_total_signed_usd), 0) FROM facturas f
+                WHERE f.so_id = o.so_id AND f.estado = 'posted') > 0.01
+        ORDER BY 3 DESC
+        """,
+    ),
+    Chequeo(
+        "facturas_borrador_en_el_espejo",
+        "espejos",
+        "BAJA",
+        "Facturas en borrador que el espejo trae a proposito (para reflejarlas en "
+        "cuanto se crean). No son un defecto: son una trampa. Cualquier consumidor "
+        "que sume ``monto_total_signed_usd`` sin filtrar por ``estado = 'posted'`` "
+        "las cuenta como facturado real. Se reproduce facil -- me paso al medir el "
+        "caso S00161, que parecia facturada al doble de su orden y era una posteada "
+        "mas un borrador.",
+        """
+        SELECT count(*) AS borradores, sum(monto_total_signed_usd) AS monto_en_borrador
+        FROM facturas WHERE estado = 'draft'
+        HAVING count(*) > 0
         """,
     ),
     Chequeo(

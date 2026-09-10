@@ -134,6 +134,10 @@ class Sistema:
         limpiar_caches()
         return resultado
 
+    def espejo_todo(self, tablas: tuple[str, ...]) -> dict[str, int]:
+        """Cuántas filas hay en cada tabla. La huella que compara la Fase 4."""
+        return {t: len(self.espejo(t)) for t in tablas}
+
     def motor(self) -> int:
         procesadas = recalcular_teoricos()
         limpiar_caches()
