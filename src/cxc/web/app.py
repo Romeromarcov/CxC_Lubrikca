@@ -1586,6 +1586,10 @@ def usd_bcv_to_binance(
     bcv_rate) y lo reconvierte con binance_rate, para mostrar ambas
     referencias de un mismo pago en VES sin recalcular desde la celda cruda.
     Para pagos en USD el valor no cambia (no hay tasa que aplicar).
+
+    El cuerpo se movió a ``cxc.engine.conciliacion`` en la Fase 2.4 del plan de
+    blindaje. Este alias queda porque hay llamadores que la usan por este nombre,
+    y renombrarlos en el mismo cambio mezclaría dos cosas.
     """
     return usd_bcv_a_binance(usd_via_bcv, moneda, bcv_rate, binance_rate)
 
