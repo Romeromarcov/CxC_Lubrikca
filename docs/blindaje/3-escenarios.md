@@ -217,7 +217,7 @@ Los ocho quedaron arreglados, y tres de ellos valen más que el arreglo:
 | Lo que fallaba | Lo que enseñó |
 |---|---|
 | «Especifique al menos una cantidad diferente a cero» | El asistente de devolución crea sus líneas en cero: hay que llenarlas siempre, no solo para una devolución parcial. |
-| `account.move.reversal` exige `journal_id` | Y ese campo es además lo que mantiene la nota de crédito **fuera de la imprenta digital**: sin pasarlo, saldría por el diario real. |
+| `account.move.reversal` exige `journal_id`… | …y **no acepta el diario de pruebas**: «the journal must be of the credit note type», y el único que acepta es el real, con la imprenta conectada. No alcanza con `free_form` ni con `refund_sequence` — la validación es del módulo de localización. Las notas de crédito del banco se construyen a mano. |
 | «cannot marshal None unless allow_none is enabled» | `action_draft` de un pago devuelve `None` y el servidor XML-RPC de Odoo no lo puede serializar. La operación **sí corre**; revienta al armar la respuesta. Misma trampa que `action_unlock`. |
 | **«No puedes eliminar ninguna de sus líneas… Establece la cantidad en 0»** | **Odoo no deja borrar una línea de una orden confirmada.** Sacar un producto es poner su cantidad en cero — y eso es exactamente el mecanismo que produjo las dos líneas con `cantidad_entregada` negativa de los datos reales (S00925 con −10 unidades, S00952 con −4). |
 

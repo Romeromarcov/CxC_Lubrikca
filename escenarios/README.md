@@ -92,6 +92,12 @@ Diez cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
 12. **Un diario de venta nuevo nace con `billing_type = fiscal_printer`**, que
     es una vía fiscal distinta del conector digital. Hay que forzarlo a
     `free_form`.
+13. **El asistente de reverso (`account.move.reversal`) no acepta el diario de
+    pruebas** — «the journal must be of the credit note type», y el único que
+    acepta es el real, con la imprenta conectada. No alcanza con `free_form` ni
+    con `refund_sequence`: la validación es del módulo de localización. Las
+    notas de crédito del banco se construyen a mano, con `move_type =
+    out_refund` y `reversed_entry_id`.
 
 Y una del propio sistema: **`ENGINE_LISTA_USD=4` / `ENGINE_LISTA_BCV=5`
 apuntan a listas archivadas.** Las vigentes son otras (10 a 19). El banco
