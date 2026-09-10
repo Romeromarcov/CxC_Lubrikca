@@ -200,6 +200,25 @@ CHEQUEOS: list[Chequeo] = [
         """,
     ),
     Chequeo(
+        "vinculaciones_congeladas_al_default_de_2019",
+        "montos",
+        "ALTA",
+        "Vinculaciones cuya tasa congelada es 36,50 / 38,00: el default de 2019 de "
+        "``get_rate_for_datetime``. No es una tasa, es la senal de que no habia "
+        "ninguna y la funcion devolvio un numero igual. Y el dano es permanente, "
+        "porque el equivalente se congela por diseño y no se recalcula: un espejo "
+        "levantado de cero, una migracion, o una ventana en la que el scraper "
+        "estuvo caido, y cada equivalente calculado en ese hueco queda mal para "
+        "siempre. Medido en el espejo de QA: las 1.462 vinculaciones, el 100%.",
+        """
+        SELECT count(*) AS vinculaciones, min(hora_pago_confirmada) AS desde,
+               max(hora_pago_confirmada) AS hasta, sum(monto_aplicado) AS monto
+        FROM vinculaciones
+        WHERE tasa_bcv_aplicada = 36.5 AND tasa_binance_aplicada = 38.0
+        HAVING count(*) > 0
+        """,
+    ),
+    Chequeo(
         "tasas_no_positivas",
         "montos",
         "ALTA",
