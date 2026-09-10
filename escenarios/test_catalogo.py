@@ -175,12 +175,16 @@ def test_la_partida_de_tasa_dice_cuantas_facturas_pudo_comparar(escenario, siste
 
     for partida in de_tasa:
         nota = str(partida.get("nota", ""))
-        assert "Comparadas" in nota or "NO SE COMPARÓ NINGUNA" in nota, (
+        # Una habla de facturas y la otra de pagos, así que concuerdan en
+        # géneros distintos: "Comparadas 12" / "Comparados 12".
+        dice_cuantos = "Comparad" in nota
+        no_comparo_nada = "NO SE COMPARÓ NINGUN" in nota
+        assert dice_cuantos or no_comparo_nada, (
             f"«{partida['concepto']}» reporta {partida['derecha']['valor']} divergencias "
             "sin decir sobre cuántos documentos. Un cero ahí puede significar «está "
             f"todo bien» o «no pude mirar nada», y no hay forma de saber cuál. Nota: {nota!r}"
         )
-        if "NO SE COMPARÓ NINGUNA" in nota:
+        if no_comparo_nada:
             assert partida["cuadra"], (
                 "Se decidió que no poder comparar no vuelve roja la partida, pero "
                 "sí tiene que decirlo en la nota."
