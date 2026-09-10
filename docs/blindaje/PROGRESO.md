@@ -15,6 +15,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 | [3 — Escenarios](3-escenarios.md) | la imprenta fiscal, y los 1.108,59 USD de mercancía devuelta que la factura sigue cobrando |
 | [4 — Estrés](4-estres.md) | 6 escenarios en verde, y el motor que a 10× tarda 16 horas |
 | [5 — Dashboard](5-dashboard.md) | seis hallazgos, los seis aplicados |
+| [2.1 — Ausencia de dato](2.1-ausencia-de-dato.md) | la premisa del plan medida, y el costo real de la decisión |
 | [6 — Deuda medida](6-deuda-medida.md) | los 8 ítems del plan, medidos; el default de 2019 escrito en 1.462 vinculaciones |
 | [escenarios/README.md](../../escenarios/README.md) | el banco de 31 escenarios y sus tres barreras fiscales |
 
@@ -27,6 +28,7 @@ python scripts/conciliar_espejo_odoo.py --env .env.qa     # 1.4
 python scripts/vigilancia_diaria.py --alertar             # 2.3, va como cron
 python scripts/auditar_listas_de_precio.py --env .env.qa --sin-pruebas  # 6
 python scripts/auditar_equivalentes_congelados.py --env .env.qa --detalle  # 6
+python scripts/volumen_10x.py --origen cxc_qa --factor 10  # 4
 python scripts/qa_entorno.py crear|sync|resync|motor|estado
 ./scripts/escenarios.sh                                   # Fase 3
 ```
@@ -51,16 +53,16 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 |---|---|---|
 | 0 | Rotar credencial de producción | **pendiente, y es el ítem más urgente.** Requiere tus manos: rotar en Railway y luego purgar el historial de git, porque mientras el valor viejo siga ahí cualquiera con acceso al repo lo tiene. |
 | 1.1 | Inventario de fallbacks silenciosos | **cerrada** — 132 minas, 140 ruidosos, 184 legítimos; 8 minas verificadas a mano con severidad y costo |
-| 1.2 | Cobertura de los caminos de dinero | **cerrada** — la barrera volvió a VERDE (74,41 %). Estaba roja desde antes, sin ningún test roto. El test de punta a punta del balance cubrió 142 sentencias y confirmó las 24 partidas. |
+| 1.2 | Cobertura de los caminos de dinero | **cerrada** — barrera subida de 74 a **74,9** (medida: 74,99 %), y los caminos de dinero modularizados al **93,23 %**, por encima del 90 % que pedía el plan. La brecha que queda es `app.py` al 64 %, que es la Fase 2.4. Estaba roja desde antes, sin ningún test roto. El test de punta a punta del balance cubrió 142 sentencias y confirmó las 24 partidas. |
 | 1.3 | Integridad de las tablas | **cerrada** — 30 chequeos, 25 limpios; 16 órdenes canceladas con entrega por 11.995,68 USD |
 | 1.4 | Conciliación espejo vs Odoo | **cerrada** — 9 de 9 cuadran al centavo tras un sync completo |
 | 1.5 | Qué prueba cada partida del balance | **cerrada** — 8 externas, 1 invariante, 9 internas; etiquetado aplicado |
-| 2.1 | Ausencia de dato ≠ número | pendiente, y **subió de prioridad**: el default de 2019 no solo se lee, se **escribe** en un campo congelado. Espera tu decisión sobre las minas 1, 5 y 8. La 1 ya está medida y contada (`engine/precios_rapidos.py`), así que la decisión se toma sobre números y no sobre una lectura del código. |
+| 2.1 | Ausencia de dato ≠ número | **preparada, espera tu decisión.** Ver [2.1](2.1-ausencia-de-dato.md): la premisa del plan («42 tests asertan cifras calculadas con una tasa falsa») medida resultó falsa, y sembrar tasas bajó el costo de la decisión de 40 tests a 2 (más 5 que hay que reescribir a propósito). Sigue siendo prioritario: el default de 2019 no solo se lee, se **escribe** en un campo congelado. Espera tu decisión sobre las minas 1, 5 y 8. La 1 ya está medida y contada (`engine/precios_rapidos.py`), así que la decisión se toma sobre números y no sobre una lectura del código. |
 | 2.2 | Invariantes al escribir | **cerrada del lado de la base** — 8 restricciones `CHECK` aplicadas y verificadas contra la copia de producción. Falta la validación en el repositorio, que necesita decidir qué hacer con la fila rechazada. |
 | 2.3 | Alertas | **cerrada** — corrida diaria funcionando (51 chequeos), con el hallazgo de sobreaplicación. Se le sumó el desacuerdo de listas de precio, y se arregló un bug del informe que contaba hallazgos sin imprimirlos. |
 | 2.4 | Sacar caminos de dinero de app.py | **empezada** — cuatro piezas extraídas: `engine/saldos.py` (cuánto falta cobrar), `engine/universo.py` (qué órdenes entran), `engine/listas.py` (cuál lista valora el teórico — de ahí salió el hallazgo de las 789 órdenes) `engine/balance.py` (las 15 partidas internas, al 100 %) `engine/precios_rapidos.py` (la mina 1 del inventario, al 100 %, y sus ceros ahora quedan contados) y `engine/conciliacion.py` (las dos referencias de un residual, que estaba definida adentro de un `for`). 165 tests nuevos. Es la tarea más larga del plan y se hace por pedazos. |
 | 3 | Escenarios de error humano | **cerrada** — 46 pruebas, corrida completa en 25 min. Produjo 2 hallazgos del sistema, 2 protecciones de Odoo que la tabla no contemplaba, y 8 bugs del propio andamiaje ya arreglados. |
-| 4 | Estrés y fallas | **cerrada** — 6 escenarios en verde. El volumen se midió y extrapoló en vez de ejecutarse; el motor a 10× tarda ~16 h por un tope de 50/ciclo. |
+| 4 | Estrés y fallas | **cerrada** — 6 escenarios en verde, y el volumen **ejecutado** (ya no extrapolado): a 10× los cinco reportes terminan con crecimiento lineal. Apareció un falso rojo del balance que solo se ve a volumen. El motor sigue extrapolado en ~16 h por un tope de 50/ciclo. |
 | 5 | Dashboard | **cerrada** — 6 hallazgos, 6 aplicados |
 | 6 | Bugs y deuda | **medida** — ver [6 — Deuda medida](6-deuda-medida.md). Corregido: el ítem `OdooPriceResolver` había bajado a Media por una medición mía mal hecha; vuelve a Alta y por otro motivo. |
 

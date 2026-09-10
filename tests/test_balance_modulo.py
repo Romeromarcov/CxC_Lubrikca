@@ -292,3 +292,49 @@ def test_un_cliente_sin_documentos_no_rompe_el_cuadre() -> None:
     clientes = [{"saldo_a_favor": 0.0, "saldos": {"venta_real": 0.0, "teorico_usd": 0.0}}]
     partidas = partidas_internas({}, clientes, VACIO, {}, set())
     assert len(partidas) == 15
+
+
+# --- el límite que la Fase 4 encontró --------------------------------------
+
+
+def test_la_tolerancia_es_absoluta_y_no_escala_con_el_volumen() -> None:
+    """El hallazgo de la Fase 4, fijado: el residuo crece y la tolerancia no.
+
+    La partida «Saldo a favor de clientes» lleva `tolerancia=5.0` y su propia nota
+    dice que «cubre el redondeo de cientos de filas». Medido multiplicando el
+    espejo local por diez:
+
+    | | filas | residuo | veredicto |
+    |---|---:|---:|---|
+    | 1× | 1.037 órdenes | 1,53 | verde |
+    | 10× | 10.370 órdenes | **15,55** | **ROJA** |
+
+    El residuo escala **lineal** con el volumen (10,2×) y la tolerancia es fija,
+    así que a diez veces los datos una partida aritméticamente sana se pone roja.
+    La dirección importa: es un **falso rojo**, y un instrumento que grita lobo a
+    medida que el negocio crece deja de mirarse.
+
+    No se cambió la tolerancia. Hacerla proporcional la volvería más permisiva a
+    volumen alto, y eso podría tapar un descuadre real -- es un cambio de
+    veredicto y es una decisión del usuario, igual que las dos partidas de tasa.
+    Este test lo deja fijado y medido.
+    """
+    # Un cliente por orden y un centavo de residuo por orden: el residuo agregado
+    # crece con la cantidad de filas, que es exactamente lo que pasa en la copia.
+    def _con_residuo(n_ordenes: int, residuo_por_orden: float):
+        items = {
+            f"S{i:05d}": _item(cliente_nombre=f"CLIENTE {i}", saldo_a_favor=residuo_por_orden)
+            for i in range(n_ordenes)
+        }
+        partidas = partidas_internas(items, [], VACIO, {}, set())
+        return next(p for p in partidas if p["concepto"] == "Saldo a favor de clientes")
+
+    chico = _con_residuo(100, 0.01)
+    assert chico["cuadra"] is True, "con cien filas el residuo entra en la tolerancia"
+
+    grande = _con_residuo(1000, 0.01)
+    assert grande["cuadra"] is False, (
+        "con mil filas el mismo residuo por fila supera la tolerancia fija de 5,0 "
+        "-- eso es el hallazgo, no un fallo del test"
+    )
+    assert grande["diferencia"] == 10.0
