@@ -452,29 +452,50 @@ def test_un_abono_en_euros_no_es_una_tasa_mal_puesta() -> None:
 
 
 def _clases_de_partida() -> list[tuple[str, str]]:
-    """(clase, concepto) de cada partida, leído del AST de la función.
+    """(clase, concepto) de cada partida, leído del AST.
 
     Se lee el código en vez de llamar al endpoint porque el endpoint necesita
     Ventas, el Reporte por Cliente, la Bandeja y el Reporte de Saldos --
     montarlos acá sería un test de otra cosa. Lo que interesa fijar es la
     clasificación, y ésa es estática.
+
+    Mira **las dos** funciones que emiten partidas: el endpoint en ``web/app.py``
+    (las que comparan contra Odoo) y ``engine/balance.py::partidas_internas``
+    (las que comparan vistas nuestras), que se separaron en la Fase 2.4. El test
+    fija la clasificación del balance, no en qué archivo vive cada partida: si
+    alguna vez se mueve otra sección, este helper es el que hay que ampliar, no
+    el número.
     """
     import ast
     from pathlib import Path
 
-    ruta = Path(__file__).resolve().parent.parent / "src" / "cxc" / "web" / "app.py"
-    arbol = ast.parse(ruta.read_text(encoding="utf-8"))
-    balance = next(
-        n
-        for n in ast.walk(arbol)
-        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
-        and n.name == "get_balance_comprobacion"
-    )
+    src = Path(__file__).resolve().parent.parent / "src" / "cxc"
+    emisoras = []
+    for ruta, nombre in (
+        (src / "web" / "app.py", "get_balance_comprobacion"),
+        (src / "engine" / "balance.py", "partidas_internas"),
+    ):
+        arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+        emisoras.append(
+            next(
+                n
+                for n in ast.walk(arbol)
+                if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == nombre
+            )
+        )
     # Las llamadas DENTRO de los envoltorios no son sitios de partida.
-    lineas_envoltorio: set[int] = set()
-    for n in ast.walk(balance):
-        if isinstance(n, ast.FunctionDef) and n.name in {"interna", "externa", "invariante"}:
-            lineas_envoltorio.update(range(n.lineno, (n.end_lineno or n.lineno) + 1))
+    lineas_envoltorio: set[tuple[int, int]] = set()
+    for idx, emisora in enumerate(emisoras):
+        for n in ast.walk(emisora):
+            if isinstance(n, ast.FunctionDef) and n.name in {
+                "partida",
+                "interna",
+                "externa",
+                "invariante",
+            }:
+                lineas_envoltorio.update(
+                    (idx, ln) for ln in range(n.lineno, (n.end_lineno or n.lineno) + 1)
+                )
 
     def concepto(nodo: ast.Call) -> str:
         if not nodo.args:
@@ -489,16 +510,19 @@ def _clases_de_partida() -> list[tuple[str, str]]:
         return "?"
 
     salida = []
-    for n in ast.walk(balance):
-        if (
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Name)
-            and n.func.id in {"partida", "interna", "externa", "invariante"}
-            and n.lineno not in lineas_envoltorio
-        ):
-            clase = "interna" if n.func.id == "partida" else n.func.id
-            salida.append((n.lineno, clase, concepto(n)))
-    return [(c, k) for _, c, k in sorted(salida)]
+    for idx, emisora in enumerate(emisoras):
+        for n in ast.walk(emisora):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id in {"partida", "crear_partida", "interna", "externa", "invariante"}
+                and (idx, n.lineno) not in lineas_envoltorio
+            ):
+                clase = (
+                    "interna" if n.func.id in {"partida", "crear_partida"} else n.func.id
+                )
+                salida.append((idx, n.lineno, clase, concepto(n)))
+    return [(c, k) for _, _, c, k in sorted(salida)]
 
 
 def test_toda_partida_declara_de_que_clase_es() -> None:
