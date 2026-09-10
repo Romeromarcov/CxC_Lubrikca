@@ -226,9 +226,34 @@ con cantidad cero y lo entregado intacto, así que el espejo no pierde el rastro
 Lo que queda es que **lo entregado supera lo pedido**, que es el caso que hay
 que detectar, y el escenario ahora lo verifica explícitamente.
 
+## Dónde quedó el banco
+
+Después de arreglar lo mío y reescribir lo que Odoo resultó proteger, las 12
+fallas originales quedaron así:
+
+| | |
+|---|---:|
+| bugs del andamiaje, arreglados | 8 |
+| escenarios reescritos para vigilar una protección de Odoo | 3 |
+| **hallazgos del sistema, que siguen en rojo a propósito** | **1** |
+
+Ese único rojo es **«el teórico no se re-verifica cuando cambia la fecha de la
+orden»**, y tiene que quedarse rojo: es el hallazgo. El día que se arregle, deja
+de fallar solo — que es exactamente para lo que sirve un banco de escenarios y no
+un informe de una corrida.
+
+El otro hallazgo del sistema —las partidas de tasa que daban verde sin haber
+comparado nada— **ya está aplicado**, así que su escenario pasó a verde
+verificando la corrección.
+
 ## Lo que queda para la próxima corrida
 
-La corrida tarda 25 minutos y el grueso son los reportes: el de saldos resuelve
-precios producto por producto contra Odoo. El backfill de teóricos ya se sacó
-del primer escenario a `scripts/qa_entorno.py motor`, donde se paga una sola vez
-(520 órdenes en 677 s, o sea 46 por minuto).
+La corrida completa tarda 25 minutos y el grueso son los reportes: el de saldos
+resuelve precios producto por producto contra Odoo. El backfill de teóricos ya se
+sacó del primer escenario a `scripts/qa_entorno.py motor`, donde se paga una sola
+vez (520 órdenes en 677 s, o sea 46 por minuto).
+
+Y una advertencia para quien lo corra: **el banco deja datos en el Odoo de
+prueba**. Odoo no permite borrar una orden confirmada ni una factura posteada, así
+que las órdenes `ZZ BLINDAJE` se acumulan entre corridas. En un entorno efímero
+está bien; en uno que dure, conviene recrearlo cada tanto.
