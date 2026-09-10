@@ -55,6 +55,7 @@ from cxc.engine.reportes_historicos import (
     resumen_vencida_por_vendedor,
 )
 from cxc.engine.runner import EngineRunner
+from cxc.engine.saldos import saldos_de_la_orden
 from cxc.models import (
     AplicacionConciliada,
     Cliente,
@@ -5565,50 +5566,15 @@ def saldo_priorizacion_cliente(saldos: dict[str, float]) -> float:
 
 
 def _saldos_4_columnas_item(item: dict[str, Any]) -> dict[str, float | None]:
-    """Los 4 saldos pendientes de una orden (mismos campos de ``/api/ventas``),
+    """Los 4 saldos pendientes de una orden. Delega en ``cxc.engine.saldos``.
 
-    en tiempo real -- fuente única de verdad reusada por
-    ``/api/reporte-cxc-cliente`` y ``/api/cobranza/pagos`` (el "Saldo Orden
-    (CxC)" del modal de detalle de pago). Antes ``/api/cobranza/pagos``
-    mostraba un solo saldo blended (``saldo_con_descuento_bcv`` de
-    ``get_reporte_saldos``, o un cálculo naive) -- ahora son las mismas 4
-    referencias que el resto del sistema ya usa (Teórico Lista BS, Teórico
-    Lista USD, Venta Real, Factura Neta Real).
-
-    Pedido explícito del usuario (agosto 2026, cliente CONSTRUCTORA GRANO
-    AGREGADO/orden S00608): una Vinculación PENDIENTE de esta orden (ya
-    vinculada localmente, pero Odoo aún no la reconcilió) SÍ debe
-    restarse de estos 4 saldos -- antes no restaba nada (solo CONCILIADO
-    contaba), así que un pago ya vinculado pero no confirmado no
-    aparecía ni como pagado ni como "saldo a favor" en ningún lado,
-    mostrando el saldo completo sin tocar. Se usan los campos
-    ``*_incl_pendiente`` (mismo "beneficio de la duda" que ya usa
-    ``sale_de_cxc``/``saldo_cxc`` en Ventas) -- nunca gatean nada real
-    (descuentos, salida de CxC confirmada), solo cambian lo que se
-    MUESTRA aquí.
+    El cuerpo se movió a su propio módulo en la Fase 2.4 del plan de blindaje
+    -- es una función pura y es la fuente única de verdad sobre cuánto falta
+    cobrar, así que era la primera pieza natural para sacar de este archivo.
+    Este alias queda porque hay 13 sitios que la llaman por este nombre y
+    renombrarlos en el mismo cambio mezclaría dos cosas.
     """
-    desc_sistema = float(item.get("descuento_aplicado_sistema") or 0.0)
-    pagado_bcv = float(item.get("pagado_teorico_bcv_incl_pendiente") or 0.0)
-    pagado_binance = float(item.get("pagado_teorico_binance_incl_pendiente") or 0.0)
-    pagado_ref = float(item.get("monto_pagado_factura_odoo_incl_pendiente") or 0.0)
-
-    saldo_teorico_bs = max(0.0, float(item.get("ves_neta_teorica_iva") or 0.0) - pagado_bcv)
-    saldo_teorico_usd = max(0.0, float(item.get("usd_neta_teorica_iva") or 0.0) - pagado_binance)
-    saldo_venta_real = max(
-        0.0, float(item.get("venta_neta_real") or 0.0) - desc_sistema - pagado_ref
-    )
-    facturada = bool(item.get("facturada"))
-    saldo_factura_real = (
-        max(0.0, float(item.get("total_facturado_neto") or 0.0) - desc_sistema - pagado_ref)
-        if facturada
-        else None
-    )
-    return {
-        "teorico_bs": saldo_teorico_bs,
-        "teorico_usd": saldo_teorico_usd,
-        "venta_real": saldo_venta_real,
-        "factura_real": saldo_factura_real,
-    }
+    return saldos_de_la_orden(item)
 
 
 def _fecha_y_dias_vencido(item: dict[str, Any], today: date) -> tuple[date | None, int]:
