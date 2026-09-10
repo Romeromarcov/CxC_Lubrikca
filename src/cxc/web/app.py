@@ -49,6 +49,7 @@ from cxc.engine.equivalents import (
 )
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.listas import diagnostico_de_eleccion, primera_activa
+from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -4446,7 +4447,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # Setup engine objects for on-the-fly calculation when order is not in BandejaFacturacion
         from cxc.engine.discounts import EngineInputs, calcular_factura
-        from cxc.engine.price_resolver import PriceResolver
         from cxc.odoo.price import OdooPriceResolver
 
         # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py).
@@ -4525,42 +4525,20 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 "No se pudieron calcular pagos huérfanos para Diferencial Cambiario: %s", e_huerf
             )
 
-        class FastPriceResolver(PriceResolver):
-            def __init__(self, lines_map, fallback_resolver=None):
-                self._prices = {}
-                for lines in lines_map.values():
-                    for line in lines:
-                        if line.producto and line.precio_unitario is not None:
-                            p_str = str(line.producto).strip()
-                            d_pu = line.precio_unitario
-                            self._prices[(p_str, "5")] = d_pu
-                            self._prices[(p_str, "Precio USD Pago VES")] = d_pu
-                            self._prices[(p_str, "4")] = d_pu
-                            self._prices[(p_str, "Precio USD")] = d_pu
-                self._fallback = fallback_resolver
+        # La clase salió a ``engine/precios_rapidos.py`` en la Fase 2.4: estaba
+        # anidada acá adentro, así que la mina 1 del inventario 1.1 --precio 0
+        # con Odoo caído-- no se podía probar sin levantar todo con Odoo
+        # enfrente. El comportamiento es el mismo; lo que se agrega es que los
+        # ceros quedan contados en vez de pasar en silencio.
+        fast_resolver = ResolverRapidoDePrecios(
+            lines_map=all_lines_map, fallback=price_resolver_engine
+        )
 
-            def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
-                p_str = str(producto).strip()
-                if (p_str, str(lista)) in self._prices:
-                    return self._prices[(p_str, str(lista))]
-                if (p_str, "5") in self._prices:
-                    return self._prices[(p_str, "5")]
-                if self._fallback:
-                    try:
-                        return self._fallback.precio(producto, lista, fecha)
-                    except Exception:
-                        pass
-                return Decimal("0")
-
-            def volumen(self, producto: str) -> Decimal:
-                if self._fallback:
-                    try:
-                        return self._fallback.volumen(producto)
-                    except Exception:
-                        pass
-                return Decimal("0")
-
-        fast_resolver = FastPriceResolver(all_lines_map, price_resolver_engine)
+        if fast_resolver.productos_indexados == 0:
+            logger.warning(
+                "Reporte de saldos: el indice de precios rapidos quedo VACIO, asi que "
+                "cada precio va al resolver de Odoo o a cero."
+            )
 
         try:
             marca_fallback_cfg = repo.get_config("marca_fallback")
