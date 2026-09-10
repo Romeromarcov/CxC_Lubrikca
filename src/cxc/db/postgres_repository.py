@@ -64,6 +64,7 @@ from ..models import (
 from ..repositories import Repository
 from . import schema as t
 from .engine import make_engine
+from .invariantes import exigir, verificar_teorico, verificar_vinculacion
 
 _META_LAST_SYNC = "last_sync"
 
@@ -465,6 +466,11 @@ class PostgresRepository(Repository):
     def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
         if not vincs:
             return
+        # Fase 2.2 del plan de blindaje: la base ya rechaza una fila imposible
+        # con un CHECK, pero el error sale como un IntegrityError crudo a veinte
+        # marcos de profundidad. Esto falla igual --no cambia qué se acepta--
+        # diciendo QUÉ vinculación y con QUÉ valores. Ver ``db/invariantes.py``.
+        exigir(f for v in vincs for f in verificar_vinculacion(v))
         with self._engine.begin() as conn:
             _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
 
@@ -1088,6 +1094,7 @@ class PostgresRepository(Repository):
 
     # --- Teóricos de Ventas (Fase 10) -----------------------------------------
     def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        exigir(verificar_teorico(fila))
         with self._engine.begin() as conn:
             _upsert(conn, t.ventas_teoricos, [_dataclass_row(fila)], ["so_id"])
 
