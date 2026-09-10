@@ -5,7 +5,7 @@ volver a correr cada vez que se toque el motor o el sync. Es la diferencia
 entre haber probado una vez y quedar protegido.
 
 ```bash
-./scripts/escenarios.sh                                # las 39
+./scripts/escenarios.sh                                # las 46
 ./scripts/escenarios.sh escenarios/test_humo.py        # solo la fontanería
 ./scripts/escenarios.sh escenarios/test_ordenes.py     # una familia
 ./scripts/escenarios.sh -k cancelan                    # una fila
@@ -53,7 +53,7 @@ los escenarios modificarían).
 
 ## Lo que costó aprender del Odoo
 
-Seis cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
+Diez cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
 
 1. **Cancelar una orden abre un asistente que puede mandar correo al cliente.**
    Se usa `action_cancel`, nunca `action_send_mail`.
@@ -73,6 +73,18 @@ Seis cosas que no son obvias, todas encodadas en `odoo_qa.py` con su comentario:
    fijo en la lista vigente y no llevan lote.
 6. **`_create_invoices` es privado** y no se puede llamar por XML-RPC; la vía
    pública es el asistente `sale.advance.payment.inv`.
+7. **No se puede borrar una línea de una orden confirmada** — «son necesarias
+   para determinar si algo se factura o se entrega. Establece la cantidad en 0».
+   Y poner la cantidad en cero es exactamente lo que produce las líneas con
+   `cantidad_entregada` negativa que aparecen en los datos reales.
+8. **`action_draft` de un pago devuelve `None`**, y el servidor XML-RPC de Odoo
+   no lo puede serializar: contesta «cannot marshal None unless allow_none is
+   enabled». La operación **sí corre**; revienta al armar la respuesta. Misma
+   trampa que `action_unlock`.
+9. **El asistente de devolución crea sus líneas en cero**: hay que llenarlas
+   siempre, no solo para una devolución parcial.
+10. **`account.move.reversal` exige `journal_id`** — y pasarlo es además lo que
+    mantiene la nota de crédito fuera de la imprenta digital.
 
 Y una del propio sistema: **`ENGINE_LISTA_USD=4` / `ENGINE_LISTA_BCV=5`
 apuntan a listas archivadas.** Las vigentes son otras (10 a 19). El banco
@@ -89,11 +101,12 @@ de humo que lo fija.
 | `conftest.py` | Fixtures y las barreras de entorno. |
 | `test_humo.py` | Que la fontanería ande, antes de creerle a un escenario. |
 | `test_ordenes.py` | 8 filas, las tres primeras son «la orden cambia después de la entrega». |
-| `test_pagos.py` | 6 filas. El hilo común es el equivalente congelado. |
+| `test_pagos.py` | 7 pruebas para 6 filas: la de pago duplicado se partió en dos, porque Odoo bloquea una de las dos vías. |
 | `test_entregas.py` | 4 filas. La CxC nace con la entrega. |
 | `test_devoluciones.py` | 5 filas. Entregado contra facturado, en los dos sentidos. |
 | `test_facturacion.py` | 4 filas. S00573 y el detector de doble facturación. |
 | `test_catalogo.py` | 4 filas. Lo que cambia la base sobre la que TODAS se valoran. |
+| `test_estres.py` | los 5 escenarios de la Fase 4: reejecución, corte a la mitad, Odoo caído, concurrencia. |
 
 **Cada escenario arma su propia orden** en vez de mutar una copiada de
 producción. Cuesta unos segundos más y compra dos cosas: el banco es
@@ -114,6 +127,17 @@ fila lo pide.
 Cada prueba dice **qué debería pasar**, no lo que pasa. Cuando lo que pasa es
 otra cosa, la prueba falla y ese fallo ES el hallazgo — con el mensaje
 explicando por qué importa, no solo qué número no calzó.
+
+**Un fallo no siempre acusa al sistema.** De las 12 de la primera corrida
+completa, dos eran hallazgos del sistema, dos eran protecciones de Odoo que la
+tabla del plan no contemplaba —no deja cambiar la lista de una orden confirmada,
+ni cobrar dos veces una factura saldada— y ocho eran bugs del propio andamiaje.
+Los resultados clasificados están en
+[`docs/blindaje/3-escenarios.md`](../docs/blindaje/3-escenarios.md).
+
+Cuando un escenario descubre que Odoo ya protege el caso, se reescribe para
+**vigilar la protección** en vez de suponer que no existe: si un día deja de
+bloquearlo, el test avisa que la fila volvió a estar viva.
 
 ## Lo que deja atrás
 
