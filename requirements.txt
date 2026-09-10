@@ -23,3 +23,8 @@ alembic==1.13.3
 
 # Export a Excel (Cobranza, Ventas) -- sin dependencia de pandas.
 openpyxl==3.1.5
+
+# Lectura de los .xls del BCV (formato viejo, BIFF: openpyxl solo lee
+# .xlsx). Lo usa scripts/verificar_tasas_contra_bcv.py, que corre como
+# cron y contrasta el histórico de tasas contra las series oficiales.
+xlrd==2.0.2
