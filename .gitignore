@@ -48,3 +48,9 @@ data/*.local.json
 
 # Hallazgos del monitor local de logs de Railway (scripts/monitor_railway_logs.ps1)
 railway_monitor_findings.log
+
+# Entorno de pruebas del blindaje (credenciales efimeras del Odoo de QA)
+.env.qa
+
+# Artefactos generados de la auditoria de blindaje (se regeneran con los scripts)
+docs/blindaje/*.json
