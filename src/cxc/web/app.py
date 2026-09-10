@@ -56,6 +56,7 @@ from cxc.engine.reportes_historicos import (
 )
 from cxc.engine.runner import EngineRunner
 from cxc.engine.saldos import saldos_de_la_orden
+from cxc.engine.universo import orden_excluida
 from cxc.models import (
     AplicacionConciliada,
     Cliente,
@@ -116,34 +117,12 @@ def parse_decimal_safe(val) -> Decimal:
         return Decimal("0")
 
 
-# Estados de sale.order que NUNCA deben entrar a un reporte, bandeja o
-# cálculo de cobranza: Cancelada (cancel), Cotización en cualquiera de sus
-# dos sub-estados Odoo (draft/sent). Regla global — ver auditoría.
-#
-# Excepción de negocio: una orden CANCELADA cuya mercancía ya salió de
-# almacén (ALM/OUT, stock.picking saliente en estado "done") y el cliente
-# no la devolvió sigue siendo una venta real -- Odoo permite cancelar una SO
-# después del despacho y eso no deshace la entrega. Ver
-# get_live_delivered_not_returned() / parámetro entrega_valida.
-ESTADOS_ORDEN_EXCLUIDOS = frozenset({"cancel", "cancelled", "draft", "sent"})
-
-
-def orden_excluida(o: Any, live_state: str | None = None, entrega_valida: bool = False) -> bool:
-    """True si la orden debe excluirse de cualquier reporte/bandeja/cálculo.
-
-    Usa el estado en vivo de Odoo si se provee (más fresco que el mirror);
-    si no, cae al `estado_orden` ya sincronizado en la orden. `entrega_valida`
-    es la excepción de negocio: una orden cancelada con entrega ALM/OUT sin
-    devolver no se excluye (ver comentario de ESTADOS_ORDEN_EXCLUIDOS).
-    """
-    st = (
-        (live_state if live_state is not None else str(getattr(o, "estado_orden", "sale") or ""))
-        .strip()
-        .lower()
-    )
-    if st not in ESTADOS_ORDEN_EXCLUIDOS:
-        return False
-    return not (st in ("cancel", "cancelled") and entrega_valida)
+# ``orden_excluida`` y ``ESTADOS_ORDEN_EXCLUIDOS`` viven ahora en
+# ``cxc.engine.universo`` (Fase 2.4 del plan de blindaje). Se movieron porque
+# son LA DEFINICION DEL UNIVERSO: de ahi dependen las dos primeras partidas del
+# balance, el reporte de saldos, la bandeja, el dashboard y el reporte diario, y
+# que las seis paginas cuenten las mismas ordenes es lo que hace que el balance
+# signifique algo. Se reexportan para no tocar los 10 sitios que las usan.
 
 
 # Caché por-orden de estado en vivo (agosto 2026, plan de reducción de
