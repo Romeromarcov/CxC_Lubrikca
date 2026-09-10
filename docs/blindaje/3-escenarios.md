@@ -139,17 +139,78 @@ y aguantaron:
   función, mismos argumentos, con el estado en vivo de Odoo.
 - **El balance se abstiene** cuando no tiene contra qué comparar.
 
-## Estado de las 31 filas
+## La corrida completa: 33 pasan, 12 fallan, y las 12 dicen cosas distintas
 
-El banco tiene los 31 escenarios escritos y la fontanería verificada de punta a
-punta: los 8 de humo en verde (crear una orden, entregarla completa, facturarla
-por el diario de pruebas, cobrarla, sincronizar, y los cuatro reportes
-contestando), más los 6 de la [Fase 4](4-estres.md), también en verde.
+Primera corrida de las 45 pruebas (31 escenarios + 8 de humo + 6 de estrés):
+**25 minutos y 44 segundos**, 33 en verde y 12 en rojo. Lo importante no es el
+número sino que las 12 se parten en tres grupos, y solo uno de los tres es un
+defecto del sistema.
 
-La corrida completa de las 31 filas es lenta por una razón medida y no por un
-defecto: el motor procesa **46 órdenes por minuto** contra Odoo, así que el
-backfill inicial de los teóricos son ~11 minutos que ahora se pagan una sola vez
-en `scripts/qa_entorno.py motor` en vez de dentro del primer escenario.
+### Dos hallazgos del sistema
 
-Los hallazgos de arriba salieron de correr el motor y los reportes completos sobre
-el espejo de QA, que es el trabajo que los escenarios ejercitan fila por fila.
+**Las dos partidas de tasa dan verde justo cuando menos pueden opinar.**
+Es el escenario «Cargan una tasa equivocada en Odoo», que el plan pedía provocar
+«para confirmar que las partidas lo agarran». Se movió la tasa de Odoo un 50 % y
+las dos siguieron en verde. La causa no es que no detecten el desvío: es que
+**no compararon ni un documento**. Las dos despejan la tasa implícita de cada
+factura o pago y la comparan contra **nuestro** BCV de esa fecha; cuando no
+tenemos tasa para esa fecha, saltean el documento con un `continue` silencioso.
+Sin serie sembrada saltean todos y reportan cero divergencias — que se lee
+exactamente igual que «verifiqué y está todo bien».
+
+Son las dos partidas más fuertes del balance, las únicas que comparan contra el
+BCV y no contra Odoo. Y es la misma trampa de «sin datos no es cero», adentro
+del instrumento que audita a los demás.
+
+*Aplicado:* las dos dicen ahora cuántos compararon, y cuando no compararon
+ninguno lo dicen con todas las letras. **No se cambió el veredicto**: volverlas
+rojas podría enrojecer el balance de producción por documentos viejos sin tasa,
+y eso es una decisión aparte. Lo que se arregló es que el cero deje de poder
+leerse como una confirmación.
+
+**El teórico no se re-verifica cuando cambia la fecha de la orden.** Es una de
+las filas de severidad alta, y el escenario confirma la predicción del plan:
+cambiar `date_order` cambia la lista vigente y la tasa aplicable, y
+`ventas_teoricos` sigue con el valor y la marca de tiempo viejos. La orden queda
+valorada con la lista de una fecha en la que ya no está, y nada avisa.
+
+### Dos hallazgos sobre Odoo, y los dos bajan el riesgo
+
+Estos no eran defectos: eran suposiciones de la tabla que Odoo no permite.
+
+**No se puede cambiar la lista de precios de una orden confirmada.** Odoo
+contesta «No puede cambiar la lista de precios de una orden confirmada». La fila
+estaba en Alta y por esa vía no puede darse.
+
+**No se puede cobrar dos veces una factura ya saldada.** El asistente de cobro
+contesta «no queda nada por pagar en los apuntes contables seleccionados». La
+duplicación sigue siendo posible mientras la factura tenga residual —y ese caso
+sí se prueba— pero el camino fácil está cerrado.
+
+Los dos escenarios se reescribieron para **vigilar la protección** en vez de
+suponer que no existe: si un día Odoo dejara de bloquearlos, los tests fallan y
+avisan que la fila volvió a estar viva.
+
+### Ocho eran bugs míos, y tres enseñaron algo
+
+Un banco con ocho escenarios que no llegan a armar su situación no es un banco.
+Los ocho quedaron arreglados, y tres de ellos valen más que el arreglo:
+
+| Lo que fallaba | Lo que enseñó |
+|---|---|
+| «Especifique al menos una cantidad diferente a cero» | El asistente de devolución crea sus líneas en cero: hay que llenarlas siempre, no solo para una devolución parcial. |
+| `account.move.reversal` exige `journal_id` | Y ese campo es además lo que mantiene la nota de crédito **fuera de la imprenta digital**: sin pasarlo, saldría por el diario real. |
+| «cannot marshal None unless allow_none is enabled» | `action_draft` de un pago devuelve `None` y el servidor XML-RPC de Odoo no lo puede serializar. La operación **sí corre**; revienta al armar la respuesta. Misma trampa que `action_unlock`. |
+| **«No puedes eliminar ninguna de sus líneas… Establece la cantidad en 0»** | **Odoo no deja borrar una línea de una orden confirmada.** Sacar un producto es poner su cantidad en cero — y eso es exactamente el mecanismo que produjo las dos líneas con `cantidad_entregada` negativa de los datos reales (S00925 con −10 unidades, S00952 con −4). |
+
+Esa última cambia el escenario para mejor: la línea **no desaparece**, se queda
+con cantidad cero y lo entregado intacto, así que el espejo no pierde el rastro.
+Lo que queda es que **lo entregado supera lo pedido**, que es el caso que hay
+que detectar, y el escenario ahora lo verifica explícitamente.
+
+## Lo que queda para la próxima corrida
+
+La corrida tarda 25 minutos y el grueso son los reportes: el de saldos resuelve
+precios producto por producto contra Odoo. El backfill de teóricos ya se sacó
+del primer escenario a `scripts/qa_entorno.py motor`, donde se paga una sola vez
+(520 órdenes en 677 s, o sea 46 por minuto).
