@@ -326,3 +326,109 @@ def test_la_nota_no_dice_que_las_paginas_discrepan_desde_que_la_guarda_esta() ->
         "la nota no debe afirmar que una página valora con la lista archivada: "
         "desde que la guarda está aplicada, ninguna lo hace"
     )
+
+
+# --- la vigencia efectiva y su denominador (Fase 2.4, pieza 22) --------------
+
+
+def _regla(desde=None, hasta=None):
+    """Una regla como las que Odoo devuelve: `False` cuando no declara la fecha."""
+    return {"date_start": desde or False, "date_end": hasta or False}
+
+
+def test_el_rango_sale_del_minimo_inicio_y_el_maximo_fin() -> None:
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva(
+        [
+            _regla("2026-04-02", "2026-09-02"),
+            _regla("2026-02-23", "2026-04-01"),
+        ]
+    )
+    assert (v.desde, v.hasta) == ("2026-02-23", "2026-09-02")
+    assert v.reglas == 2
+    assert v.todas_declaran_fin
+
+
+def test_las_fechas_con_hora_se_recortan_al_dia() -> None:
+    """Odoo devuelve `date_start` con hora en algunos campos datetime."""
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva([_regla("2026-04-02 00:00:00", "2026-09-02 23:59:59")])
+    assert (v.desde, v.hasta) == ("2026-04-02", "2026-09-02")
+
+
+def test_una_regla_sin_fechas_no_ensancha_ni_angosta_el_rango() -> None:
+    """Pero sí cambia el denominador, que es lo que el endpoint no decía.
+
+    Es el defecto que esta pieza expone: `min`/`max` saltean las reglas sin fecha
+    en silencio, así que el rango se muestra como si fuera el de la lista entera.
+    """
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva([_regla("2026-04-02", "2026-09-02"), _regla(), _regla()])
+    assert (v.desde, v.hasta) == ("2026-04-02", "2026-09-02")
+    assert v.reglas == 3
+    assert (v.con_desde, v.con_hasta) == (1, 1)
+    assert v.rango_parcial, "el rango sale de 1 de 3 reglas y hay que decirlo"
+    assert not v.todas_declaran_fin
+
+
+def test_la_lista_9_de_QA_no_declara_inicio_en_ninguna_de_sus_149_reglas() -> None:
+    """Medido contra el Odoo de QA el 11-sep-2026.
+
+    «Lista Industrial 3%» (id 9, archivada) tiene 149 reglas: 0 con `date_start` y
+    148 con `date_end`. La pantalla mostraba `N/A..2026-09-02` sin decir que el
+    `N/A` sale de 149 reglas que no lo declaran, no de una lista vacía.
+    """
+    from cxc.engine.listas import vigencia_efectiva
+
+    reglas = [_regla(hasta="2026-09-02") for _ in range(148)] + [_regla()]
+    v = vigencia_efectiva(reglas)
+    assert v.desde is None
+    assert v.hasta == "2026-09-02"
+    assert (v.reglas, v.con_desde, v.con_hasta) == (149, 0, 148)
+    assert not v.ninguna_declara_fin, "148 sí vencen"
+    assert v.rango_parcial
+
+
+def test_ninguna_regla_vence_es_la_forma_de_las_nueve_listas_activas() -> None:
+    """Y por eso ninguna de ellas puede disparar la mina del precio vencido.
+
+    Las listas 10 a 19 (las activas) tienen entre 151 y 186 reglas cada una y
+    **ni una** declara `date_end`. Sus reglas cubren cualquier fecha posterior a su
+    inicio, así que un precio de abril se sigue sirviendo en septiembre sin que
+    nada lo marque como vencido.
+    """
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva([_regla(desde="2026-09-02") for _ in range(154)])
+    assert v.hasta is None
+    assert v.ninguna_declara_fin
+    assert v.con_desde == 154
+    assert not v.rango_parcial, "no es un rango parcial: es que ninguna vence"
+
+
+def test_una_lista_sin_reglas_no_declara_nada_de_las_dos_formas() -> None:
+    """Cero reglas no es «ninguna vence»: es que no hay nada que vencer.
+
+    Si `ninguna_declara_fin` fuera True acá, una lista vacía se leería igual que
+    una de 154 reglas perpetuas.
+    """
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva([])
+    assert (v.desde, v.hasta) == (None, None)
+    assert (v.reglas, v.con_desde, v.con_hasta) == (0, 0, 0)
+    assert not v.ninguna_declara_fin
+    assert not v.todas_declaran_fin
+    assert not v.rango_parcial
+
+
+def test_una_sola_regla_sin_fin_no_es_un_rango_parcial() -> None:
+    """`rango_parcial` compara el rango contra sus hermanas, y acá no hay hermanas."""
+    from cxc.engine.listas import vigencia_efectiva
+
+    v = vigencia_efectiva([_regla(desde="2026-09-02")])
+    assert not v.rango_parcial
+    assert v.ninguna_declara_fin

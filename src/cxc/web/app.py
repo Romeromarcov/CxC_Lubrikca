@@ -66,6 +66,7 @@ from cxc.engine.listas import (
     diagnostico_de_huecos,
     mapa_de_listas_primarias,
     primera_activa,
+    vigencia_efectiva,
 )
 from cxc.engine.pagada_en_odoo import (
     TOLERANCIA_RESIDUAL,
@@ -400,9 +401,7 @@ def resolve_vendedores_por_partner(execute: Any, partner_ids: set[int]) -> dict[
     if not faltantes:
         return result
     try:
-        partners = execute(
-            "res.partner", "read", [faltantes], {"fields": ["id", "user_id"]}
-        )
+        partners = execute("res.partner", "read", [faltantes], {"fields": ["id", "user_id"]})
         uids = {
             int(p["user_id"][0])
             for p in partners
@@ -1245,9 +1244,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                     pid_existente = str(row.get("pago_id") or "").strip()
                     tipo_existente = str(row.get("tipo_auditoria") or "").strip()
                     if pid_existente and tipo_existente:
-                        existing_open_audit_id[(pid_existente, tipo_existente)] = row[
-                            "audit_id"
-                        ]
+                        existing_open_audit_id[(pid_existente, tipo_existente)] = row["audit_id"]
             except Exception as e_lookup:
                 logger.warning(
                     "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
@@ -1259,9 +1256,10 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             tipo_auditoria = _TIPO_AUDITORIA_POR_CAMBIO.get(
                 c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
             )
-            audit_id = existing_open_audit_id.get(
-                (str(c["pago_id"]), tipo_auditoria)
-            ) or f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}"
+            audit_id = (
+                existing_open_audit_id.get((str(c["pago_id"]), tipo_auditoria))
+                or f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}"
+            )
             audit_rows.append(
                 {
                     "audit_id": audit_id,
@@ -1276,9 +1274,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
                         f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
                     ),
                     "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
-                    "estado": "pendiente_revision"
-                    if c["requiere_revision_manual"]
-                    else "aplicado",
+                    "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
                     "revisado_por": "",
                     "timestamp_audit": ahora.isoformat(),
                 }
@@ -1508,13 +1504,9 @@ def get_reconciled_pago_ids_odoo(execute: Any, pago_ids: list[str]) -> set[str]:
                 ],
                 {"fields": ["id", "move_id", "reconciled"]},
             )
-            lineas_por_move = {
-                line["move_id"][0]: line for line in lines if line.get("move_id")
-            }
+            lineas_por_move = {line["move_id"][0]: line for line in lines if line.get("move_id")}
         except Exception as e:
-            logger.warning(
-                "Error leyendo líneas de CxC en get_reconciled_pago_ids_odoo: %s", e
-            )
+            logger.warning("Error leyendo líneas de CxC en get_reconciled_pago_ids_odoo: %s", e)
             lineas_por_move = {}
         for move_id, pid_str in candidatos_por_move.items():
             linea = lineas_por_move.get(move_id)
@@ -1673,8 +1665,6 @@ class FeriadoRequest(BaseModel):
     descripcion: str
 
 
-
-
 class MetaRequest(BaseModel):
     cash_window_business_days: int
     descuento_recompra: float
@@ -1714,16 +1704,10 @@ class TasaBcvVarianteRequest(BaseModel):
     variante: str  # "USD" | "EUR"
 
 
-
-
 class ExclusionRequest(BaseModel):
     regla_tipo_a: str
     regla_tipo_b: str
     activo: bool = True
-
-
-
-
 
 
 class EliminarDescuentoRequest(BaseModel):
@@ -1904,18 +1888,10 @@ def extract_product_tmpl_id(prod_raw: Any) -> int | None:
     return None
 
 
-
-
-
-
-
-
 class ToggleDescuentoRequest(BaseModel):
     tabla: str
     regla_id: str
     activo: bool
-
-
 
 
 _repo_cache: Repository | None = None
@@ -2611,9 +2587,7 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
         )
         runner = EngineRunner(repo, resolver, config.engine)
 
-        procesadas = await asyncio.to_thread(
-            runner.run_teoricos_pendientes, date.today(), limite
-        )
+        procesadas = await asyncio.to_thread(runner.run_teoricos_pendientes, date.today(), limite)
         return {
             "status": "ok",
             "ordenes_procesadas": procesadas,
@@ -2995,7 +2969,7 @@ async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
 
 @app.get("/conciliaciones")
 async def page_conciliaciones():
-    """"Conciliaciones" se unificó con "Cobranza" en una sola página.
+    """ "Conciliaciones" se unificó con "Cobranza" en una sola página.
 
     Redirect para bookmarks/links viejos -- la tabla y sus 4 endpoints
     de origen (sugerencias, mapa-vinculaciones, pagos-historial, cobranza)
@@ -3651,9 +3625,7 @@ def recalculate_all_orders():
                     rescatados = reader_apps.pagos_por_id(sorted(faltantes))
                     if rescatados:
                         repo.upsert_pagos(rescatados)
-                        print(
-                            f"Pagos conciliados rescatados del histórico: {len(rescatados)}."
-                        )
+                        print(f"Pagos conciliados rescatados del histórico: {len(rescatados)}.")
                 res_apl = _sincronizar_aplicaciones_conciliadas(repo, aplicaciones)
                 if res_apl["creadas"] or res_apl["corregidas"]:
                     print(
@@ -3933,11 +3905,7 @@ def _pagos_odoo_por_orden(
                 )
                 p_date = str(p.get("date") or "")[:10]
                 p_ref_raw = p.get("amount_ref")
-                p_ref = (
-                    Decimal(str(p_ref_raw))
-                    if p_ref_raw not in (None, False, "")
-                    else None
-                )
+                p_ref = Decimal(str(p_ref_raw)) if p_ref_raw not in (None, False, "") else None
 
                 rec_invs = p.get("reconciled_invoice_ids", [])
                 matched_sos = set()
@@ -4355,8 +4323,11 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # -- se reutiliza esa función solo por este dict (lectura del espejo
         # local, no otra llamada a Odoo).
         inv_usd_ratio_map = _facturacion_por_so_desde_espejo(repo, so_ids)["inv_usd_ratio_map"]
-        sol_discounts_by_so, inv_line_discounts_by_so, sol_discount_detail_by_so, (
-            inv_line_discount_detail_by_so
+        (
+            sol_discounts_by_so,
+            inv_line_discounts_by_so,
+            sol_discount_detail_by_so,
+            (inv_line_discount_detail_by_so),
         ) = _descuentos_lineas_desde_espejo(
             repo, so_ids_names, invoice_ids_all, inv_id_to_so, inv_usd_ratio_map, con_detalle=True
         )
@@ -4438,9 +4409,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # Aplicada el 11-sep-2026 por decisión explícita del usuario: mueve el
         # teórico de esas 789 órdenes, y hacia arriba, que es la dirección en la
         # que la subfacturación deja de estar escondida.
-        pricelist_ids_map = mapa_de_listas_primarias(
-            usd_ids, ves_ids, _activos_pricelist(execute)
-        )
+        pricelist_ids_map = mapa_de_listas_primarias(usd_ids, ves_ids, _activos_pricelist(execute))
         _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
         # El diagnóstico se conserva: ahora las dos elecciones tienen que
         # coincidir, así que un aviso acá significa que alguien reintrodujo la
@@ -4718,9 +4687,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 inv_names_list = []
                 for inv in inv_list:
                     inv_names_list.append(str(inv.get("name", "")))
-                    tot_res_usd += residual_usd_de_factura(
-                        inv, o.fecha.isoformat(), tasas_rows
-                    )
+                    tot_res_usd += residual_usd_de_factura(inv, o.fecha.isoformat(), tasas_rows)
                 saldo_factura_odoo = max(0.0, float(tot_res_usd))
                 factura_odoo_nombre = ", ".join(inv_names_list)
             else:
@@ -5205,9 +5172,7 @@ async def get_reporte_saldos(refresh: bool = False):
     # mostrar de más.
     try:
         ventas = await get_ventas(vendedor=None, cxc_session=None)
-        cobradas = {
-            str(i["so_id"]) for i in (ventas.get("items") or []) if i.get("sale_de_cxc")
-        }
+        cobradas = {str(i["so_id"]) for i in (ventas.get("items") or []) if i.get("sale_de_cxc")}
     except Exception as e:
         logger.warning("No se pudo excluir las órdenes ya cobradas del reporte: %s", e)
         return datos
@@ -5223,9 +5188,7 @@ async def get_reporte_saldos(refresh: bool = False):
 _CXC_CLIENTE_SALDOS = ["teorico_bs", "teorico_usd", "venta_real", "factura_real"]
 
 
-def venta_real_neta_de_devolucion(
-    orden: Any, lineas: list[Any], bruta_odoo: float
-) -> float:
+def venta_real_neta_de_devolucion(orden: Any, lineas: list[Any], bruta_odoo: float) -> float:
     """Subtotal real de la orden, restando lo que el cliente devolvió.
 
     Pedido del usuario (septiembre 2026): "al implementar la regla resta las
@@ -5261,9 +5224,7 @@ def venta_real_neta_de_devolucion(
     return round(entregado, 2)
 
 
-def orden_devuelta_por_completo(
-    orden: Any, lineas: list[Any], tiene_abonos: bool = False
-) -> bool:
+def orden_devuelta_por_completo(orden: Any, lineas: list[Any], tiene_abonos: bool = False) -> bool:
     """True si el cliente devolvió TODA la mercancía y no pagó nada.
 
     Reportado por el usuario (septiembre 2026) al ver tres órdenes de "Mini
@@ -5424,9 +5385,7 @@ def separar_discrepancias_aceptadas(
     return pendientes, ya_aceptadas
 
 
-def sin_datos_teorico(
-    teorico_row: Any, bruta: float | None, precio_base: float = 0.0
-) -> bool:
+def sin_datos_teorico(teorico_row: Any, bruta: float | None, precio_base: float = 0.0) -> bool:
     """True si el teórico de esta orden no se pudo calcular.
 
     Fase 10: ``ventas_teoricos`` aún sin fila para la orden (nunca
@@ -5867,9 +5826,7 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
             _nombre = nombre_por_cliente.get(_cid) or f"Cliente {_cid}"
             _fila = _cliente_row(_cid, _nombre)
             _fila["saldo_a_favor"] = round(_favor, 2)
-            _fila["saldo_pendiente_por_aplicar"] = round(
-                pendiente_por_cliente.get(_cid, 0.0), 2
-            )
+            _fila["saldo_pendiente_por_aplicar"] = round(pendiente_por_cliente.get(_cid, 0.0), 2)
             _fila["tiene_saldo_a_favor"] = True
             _fila["vendedor"] = "Sin Vendedor"
             _fila["saldo_priorizacion"] = 0.0
@@ -5996,8 +5953,6 @@ async def get_config_descuentos_marca():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-
-
 @app.get("/api/config/listas-precio")
 @app.get("/api/odoo/listas-precio")
 async def get_config_listas_precio():
@@ -6051,8 +6006,6 @@ async def get_config_listas_precio():
         for pl in pricelists:
             pl_items = items_by_list.get(pl["id"], [])
             rules = []
-            dates_start = []
-            dates_end = []
             for item in pl_items:
                 prod = item.get("product_tmpl_id")
                 prod_name = (
@@ -6060,10 +6013,6 @@ async def get_config_listas_precio():
                 )
                 ds = item.get("date_start") or None
                 de = item.get("date_end") or None
-                if ds:
-                    dates_start.append(str(ds)[:10])
-                if de:
-                    dates_end.append(str(de)[:10])
                 rules.append(
                     {
                         "producto": prod_name,
@@ -6074,6 +6023,7 @@ async def get_config_listas_precio():
                     }
                 )
 
+            vig = vigencia_efectiva(pl_items)
             resultado.append(
                 {
                     "id": pl["id"],
@@ -6083,9 +6033,18 @@ async def get_config_listas_precio():
                     else "USD",
                     "active": pl["active"],
                     "reglas": rules,
-                    # Fechas mínima/máxima de las reglas para mostrar rango de vigencia real
-                    "fecha_desde": min(dates_start) if dates_start else "N/A",
-                    "fecha_hasta": max(dates_end) if dates_end else "N/A",
+                    # El rango que abarcan las fechas de las reglas -- y el denominador
+                    # de donde sale, porque `min`/`max` saltean las reglas sin fecha.
+                    # Medido contra el Odoo de QA el 11-sep-2026: la lista 9 tiene 149
+                    # reglas y NINGUNA declara inicio, y las nueve listas activas no
+                    # tienen una sola regla con fin. Sin los contadores, un "N/A" de
+                    # 0 de 149 se lee igual que uno de una lista sin reglas.
+                    "fecha_desde": vig.desde or "N/A",
+                    "fecha_hasta": vig.hasta or "N/A",
+                    "reglas_con_fecha_inicio": vig.con_desde,
+                    "reglas_con_fecha_fin": vig.con_hasta,
+                    "ninguna_regla_vence": vig.ninguna_declara_fin,
+                    "rango_parcial": vig.rango_parcial,
                 }
             )
 
@@ -6621,9 +6580,7 @@ def _facturacion_por_so_desde_espejo(
     }
 
 
-def _entregas_desde_espejo(
-    repo, so_names: set[str] | list[str]
-) -> tuple[set[str], dict[str, str]]:
+def _entregas_desde_espejo(repo, so_names: set[str] | list[str]) -> tuple[set[str], dict[str, str]]:
     """Fase 2 (plan de consolidación de fuentes, agosto 2026) -- réplica,
 
     leyendo del espejo ``Entrega`` (``repo.all_entregas()``), de
@@ -6666,9 +6623,7 @@ def _entregas_desde_espejo(
     return delivered, fecha_entrega_map
 
 
-def _litros_por_so_desde_espejo(
-    repo, lineas_por_so: dict[str, list[Any]]
-) -> dict[str, float]:
+def _litros_por_so_desde_espejo(repo, lineas_por_so: dict[str, list[Any]]) -> dict[str, float]:
     """Fase 2 (plan de consolidación de fuentes, agosto 2026) -- réplica,
 
     leyendo del espejo ``Producto`` (``repo.all_catalogo()``), del cálculo
@@ -6699,8 +6654,7 @@ def _litros_por_so_desde_espejo(
     litros_por_so: dict[str, float] = {}
     for so_id, lineas in lineas_por_so.items():
         litros_por_so[so_id] = sum(
-            float(ln.cantidad) * volumen_por_producto.get(str(ln.producto), 0.0)
-            for ln in lineas
+            float(ln.cantidad) * volumen_por_producto.get(str(ln.producto), 0.0) for ln in lineas
         )
     return litros_por_so
 
@@ -6839,9 +6793,7 @@ def _facturas_confirmadas_pagadas_por_so(
             {"fields": ["id", "move_type", "payment_state"]},
         )
     except Exception as e:
-        logger.warning(
-            "Error consultando facturas confirmadas pagadas en Odoo: %s", e
-        )
+        logger.warning("Error consultando facturas confirmadas pagadas en Odoo: %s", e)
         return {}
     estados_por_so: dict[str, list[str]] = {}
     for r in recs:
@@ -6870,9 +6822,10 @@ def _descuentos_lineas_desde_espejo(
     inv_id_to_so: dict[int, str],
     inv_usd_ratio_map: dict[int, float] | None = None,
     con_detalle: bool = False,
-) -> tuple[dict[str, float], dict[str, float]] | tuple[
-    dict[str, float], dict[str, float], dict[str, str], dict[str, str]
-]:
+) -> (
+    tuple[dict[str, float], dict[str, float]]
+    | tuple[dict[str, float], dict[str, float], dict[str, str], dict[str, str]]
+):
     """Fase 4/5 (plan de consolidación de fuentes, agosto 2026) -- réplica,
 
     leyendo del espejo (``LineaOrden``/``LineaFactura``), de
@@ -6991,9 +6944,7 @@ def _productos_despachados_desde_espejo(
     return result
 
 
-def abono_cxc_en_euros(
-    monto_ves: Decimal, fecha_pago: date, tasas: Tasas
-) -> Decimal | None:
+def abono_cxc_en_euros(monto_ves: Decimal, fecha_pago: date, tasas: Tasas) -> Decimal | None:
     """Equivalente en dólares de un abono en bolívares, a tasa BCV-Euro.
 
     Criterio del usuario (septiembre 2026): "el equivalente a tasa euro es
@@ -7030,9 +6981,7 @@ def abono_cxc_en_euros(
     return monto_ves / tasa
 
 
-def valor_pagado_bcv_usd_en_euros(
-    vinculaciones: list[Vinculacion], tasas: Tasas
-) -> Decimal:
+def valor_pagado_bcv_usd_en_euros(vinculaciones: list[Vinculacion], tasas: Tasas) -> Decimal:
     """``valor_pagado_bcv_usd`` pero acreditando los abonos en bolívares a
     la tasa BCV-Euro -- la vía de pago de las órdenes de la lista histórica.
 
@@ -7045,9 +6994,7 @@ def valor_pagado_bcv_usd_en_euros(
     for v in vinculaciones:
         eq = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
         if v.moneda_abono == Moneda.VES:
-            en_eur = abono_cxc_en_euros(
-                v.monto_aplicado, v.hora_pago_confirmada.date(), tasas
-            )
+            en_eur = abono_cxc_en_euros(v.monto_aplicado, v.hora_pago_confirmada.date(), tasas)
             if en_eur is not None:
                 eq = en_eur
         total += eq
@@ -7526,9 +7473,7 @@ def _get_salidas_cxc_sync() -> set[str] | None:
     except Exception as e:
         logger.warning("No se pudo determinar qué órdenes salieron de CxC: %s", e)
         return None
-    salidas = {
-        str(i["so_id"]) for i in (data.get("items") or []) if i.get("sale_de_cxc")
-    }
+    salidas = {str(i["so_id"]) for i in (data.get("items") or []) if i.get("sale_de_cxc")}
     _SALIDAS_CXC_CACHE["data"] = salidas
     _SALIDAS_CXC_CACHE["timestamp"] = now_ts
     return salidas
@@ -7603,6 +7548,7 @@ def _detectar_pagos_duplicados(pagos_rows: list[dict[str, str]]) -> dict[str, li
     un cliente parecido.
     """
     return detectar_pagos_duplicados(list(pagos_rows))
+
 
 def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
     """``pago_id`` -> detalle de cierre (``motivo``, ``cerrado_por``,
@@ -7874,9 +7820,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 # Se sustituye por BCV-EUR (SerieTasas primero, luego
                 # TasasHistoricasAuditoria), invalidando también el
                 # amount_ref de Odoo (calculado con la tasa BCV normal).
-                tasa_eur_huerfano = tasas_vigentes(repo).bcv_eur(
-                    fecha_dt, arrastrar=False
-                )
+                tasa_eur_huerfano = tasas_vigentes(repo).bcv_eur(fecha_dt, arrastrar=False)
                 if tasa_eur_huerfano and tasa_eur_huerfano > Decimal("0"):
                     bcv_rate = tasa_eur_huerfano
                     monto_orig_usd_odoo = None
@@ -8250,9 +8194,7 @@ async def get_bandeja_facturacion():
         ventas_data = await get_ventas(vendedor=None, cxc_session=None)
         ventas_items = {it["so_id"]: it for it in ventas_data["items"]}
 
-        def _tolerancia_retencion(
-            target: float, pagado: float, wh_rate: float
-        ) -> bool:
+        def _tolerancia_retencion(target: float, pagado: float, wh_rate: float) -> bool:
             """True si lo pagado cubre el teórico salvo la porción de IVA
             retenida (agentes de retención no pagan esa porción en efectivo)."""
             if target <= 0.05:
@@ -9840,10 +9782,6 @@ def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
     return ",".join(resueltos)
 
 
-
-
-
-
 @app.get("/api/config/exclusiones")
 async def get_config_exclusiones():
     try:
@@ -9900,7 +9838,6 @@ async def post_config_exclusiones(req: ExclusionRequest):
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
 
     # NOTA: existía una ruta GET/POST /api/config/descuentos-volumen duplicada
     # aquí (mismo path, modelo DescuentoVolumenRequest más viejo/incompleto --
@@ -10142,6 +10079,7 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
 
 # --- Unified Discount Rules Endpoint ---
 
+
 @app.get("/api/reglas-descuento")
 async def get_todas_reglas_descuento():
     try:
@@ -10379,10 +10317,6 @@ async def get_config_pronto_pago():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-
-
-
-
 # --- Volumen Endpoints ---
 @app.get("/api/config/descuentos-volumen")
 async def get_config_volumen():
@@ -10429,10 +10363,6 @@ async def get_config_volumen():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-
-
-
-
 # --- Recompra Endpoints ---
 @app.get("/api/config/descuentos-recompra")
 async def get_config_recompra():
@@ -10464,10 +10394,6 @@ async def get_config_recompra():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-
-
 
 
 # --- Producto Promo Endpoints ---
@@ -10503,10 +10429,6 @@ async def get_config_producto():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-
-
-
-
 # --- Diferencial Cambiario Endpoints ---
 @app.get("/api/config/descuentos-diferencial-cambiario")
 async def get_config_diferencial():
@@ -10539,10 +10461,6 @@ async def get_config_diferencial():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-
-
 
 
 def _vigente_diferencial_local(r: Any, today: date) -> bool:
@@ -10831,9 +10749,7 @@ def _get_tasas_promedios_sync():
             "tasa_binance_manana": _r2(prom.manana),
             "tasa_binance_tarde": _r2(prom.tarde),
             "tasa_binance_diario": _r2(prom.diario),
-            "diferencial_bcv_binance_pct": round(
-                float(diferencial_pct(prom.diario, last_bcv)), 2
-            ),
+            "diferencial_bcv_binance_pct": round(float(diferencial_pct(prom.diario, last_bcv)), 2),
             # Los dos avisos. No cambian ningun numero; dicen de donde salio.
             "ventanas_solapadas": prom.ventanas_solapadas,
             "horas_compartidas": list(prom.horas_compartidas),
@@ -10847,6 +10763,7 @@ def _get_tasas_promedios_sync():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.get("/api/pagos-historial")
 async def get_pagos_historial():
@@ -10880,9 +10797,9 @@ def _get_pagos_historial_sync():
         # vinculación manual todavía tiene saldo pendiente (residual).
         linked_so_total: dict[str, Decimal] = {}
         for v in vincs:
-            linked_so_total[v.so_id] = linked_so_total.get(
-                v.so_id, Decimal("0")
-            ) + _vinc_usd_equiv(v)
+            linked_so_total[v.so_id] = linked_so_total.get(v.so_id, Decimal("0")) + _vinc_usd_equiv(
+                v
+            )
 
         historial = []
         vinculados_pago_ids: set[str] = set()
@@ -11070,9 +10987,7 @@ def _rows_to_xlsx_response(
             if isinstance(v, list | dict):
                 v = json.dumps(v, ensure_ascii=False, default=str) if v else ""
             elif (
-                isinstance(v, str)
-                and ("fecha" in k or "timestamp" in k)
-                and _FECHA_ISO_RE.match(v)
+                isinstance(v, str) and ("fecha" in k or "timestamp" in k) and _FECHA_ISO_RE.match(v)
             ):
                 with contextlib.suppress(ValueError):
                     v = datetime.fromisoformat(v[:19])
@@ -11678,7 +11593,6 @@ async def get_tasas_historicas():
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-
     # NOTA (agosto 2026, plan de consolidación de fuentes): existía una
     # segunda ruta GET /api/reglas-descuento aquí (función
     # get_reglas_descuento, shape dict por categoría) -- mismo patrón ya
@@ -11875,9 +11789,7 @@ def _detectar_pagos_con_importe_local_desincronizado(
             {"fields": ["id", "move_id", "debit"]},
         )
     except Exception as e:
-        logger.warning(
-            "Error leyendo líneas de pagos para importe local desincronizado: %s", e
-        )
+        logger.warning("Error leyendo líneas de pagos para importe local desincronizado: %s", e)
         return []
 
     resultado: list[dict[str, Any]] = []
@@ -12057,9 +11969,7 @@ def _detectar_vinculaciones_sobreaplicadas(
         monto_raw = parse_decimal_safe(p.get("monto", "0"))
         fecha_str = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
         try:
-            fecha_dt = (
-                datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
-            )
+            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
         except ValueError:
             fecha_dt = datetime.now()
         bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
@@ -12528,9 +12438,7 @@ async def get_balance_comprobacion():
         # son puras --entran los cuatro payloads y sale la lista-- y eran 220 de
         # las 843 líneas de este endpoint. Lo que queda acá es la sección 7, que
         # compara contra Odoo y por eso no se puede probar sin la red.
-        partidas.extend(
-            partidas_internas(items, clientes, bandeja, saldos_items, saldos_min)
-        )
+        partidas.extend(partidas_internas(items, clientes, bandeja, saldos_items, saldos_min))
 
         # 7. Contra Odoo, que es la fuente externa de la verdad.
         #
@@ -12617,9 +12525,7 @@ async def get_auditoria():
             for p in pagos_rows_local
             if str(p.get("pago_id", "")).strip().isdigit()
         ]
-        pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(
-            execute, pago_ids_int
-        )
+        pagos_residual_sin_aplicar = _detectar_pagos_con_residual_sin_aplicar(execute, pago_ids_int)
         # Un pago ENTERO sin aplicar que nuestro motor YA tiene vinculado no
         # es un hallazgo de auditoria: es el estado "En Proceso de Pago" que
         # Cobranza ya muestra -- el motor lo cuenta como cobrado y lo unico
@@ -12955,9 +12861,7 @@ async def get_auditoria():
                 inv_names_list = []
                 for inv in inv_list:
                     inv_names_list.append(str(inv.get("name", "")))
-                    tot_res_usd += residual_usd_de_factura(
-                        inv, o.fecha.isoformat(), tasas_rows
-                    )
+                    tot_res_usd += residual_usd_de_factura(inv, o.fecha.isoformat(), tasas_rows)
 
                 saldo_factura_odoo = max(0.0, float(tot_res_usd))
                 factura_nombre = ", ".join(inv_names_list)
@@ -13177,9 +13081,7 @@ async def get_auditoria():
                 ),
                 "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
                 "total_ajustes_cambio_huerfanos": len(ajustes_cambio_huerfanos),
-                "total_pagos_importe_local_desincronizado": len(
-                    pagos_importe_local_desincronizado
-                ),
+                "total_pagos_importe_local_desincronizado": len(pagos_importe_local_desincronizado),
                 "total_vinculaciones_sobreaplicadas": len(vinculaciones_sobreaplicadas),
                 "total_vinculaciones_tasa_implausible": len(vinculaciones_tasa_implausible),
                 "total_devolucion_no_reflejada_en_cantidad": len(devolucion_no_reflejada),
@@ -13868,9 +13770,7 @@ def _get_ventas_sync(
             if o.tiene_devolucion:
                 revisar_motivos.append("Devolución registrada (total o parcial)")
             lineas_o = lineas_por_so.get(o.so_id, [])
-            cant_entregada_orden = sum(
-                float(ln.cantidad_entregada or 0) for ln in lineas_o
-            )
+            cant_entregada_orden = sum(float(ln.cantidad_entregada or 0) for ln in lineas_o)
             if lineas_o:
                 cant_pedida = sum(float(ln.cantidad) for ln in lineas_o)
                 cant_entregada = cant_entregada_orden
@@ -13933,9 +13833,8 @@ def _get_ventas_sync(
             # comportamiento anterior como red de seguridad).
             _teorico_row_diff = teoricos_map.get(o.so_id)
             if _teorico_row_diff is not None:
-                _es_usd_nac_diff = (
-                    str(o.lista_precios) in usd_ids_str
-                    and not es_historica_map.get(o.so_id, False)
+                _es_usd_nac_diff = str(o.lista_precios) in usd_ids_str and not es_historica_map.get(
+                    o.so_id, False
                 )
                 if _es_usd_nac_diff:
                     venta_bruta_teorica = float(_teorico_row_diff.teorico_usd)
@@ -14114,9 +14013,7 @@ def _get_ventas_sync(
             # el excedente no es un descuento neteado: es una venta por
             # debajo de lista sin regla que la sustente. Se expone aparte
             # para que se revise, en vez de desaparecer dentro de un max(0).
-            venta_bajo_lista = round(
-                max(0.0, rebaja_en_precio - float(motor_total_descuentos)), 2
-            )
+            venta_bajo_lista = round(max(0.0, rebaja_en_precio - float(motor_total_descuentos)), 2)
 
             # Puntos 5-6 (agosto 2026, aprobado por el usuario): nueva columna
             # en la sección de totales de la orden real -- el subtotal REAL
@@ -14182,9 +14079,7 @@ def _get_ventas_sync(
                 # Ventas y el Reporte de Saldos dirían números distintos
                 # para la misma orden.
                 if str(o.so_id) in so_ids_historicas_ventas:
-                    val_bcv = float(
-                        valor_pagado_bcv_usd_en_euros(vincs_orden, tasas_euro_v)
-                    )
+                    val_bcv = float(valor_pagado_bcv_usd_en_euros(vincs_orden, tasas_euro_v))
             else:
                 p_bcv_binance = pagos_bcv_binance_map.get(o.so_id, {})
                 val_bcv = float(p_bcv_binance.get("monto_pagado_bcv", 0.0))
@@ -14216,9 +14111,7 @@ def _get_ventas_sync(
                 historical_enabled,
                 lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
             )
-            es_lista_usd_nacimiento = (
-                str(o.lista_precios) in usd_ids_str and not es_historica_o
-            )
+            es_lista_usd_nacimiento = str(o.lista_precios) in usd_ids_str and not es_historica_o
             val_ref_nacimiento = val_binance if es_lista_usd_nacimiento else val_bcv
             val_ref_nacimiento_incl_pendiente = (
                 val_binance_incl_pendiente if es_lista_usd_nacimiento else val_bcv_incl_pendiente
@@ -14250,9 +14143,7 @@ def _get_ventas_sync(
                     _sin_datos_teorico(teorico_row, ves_bruta_teorica, precio_base_calculado)
                     or ves_neta_teorica_iva is None
                 )
-                else _estado_pago_display(
-                    val_bcv, val_bcv_incl_pendiente, ves_neta_teorica_iva
-                )
+                else _estado_pago_display(val_bcv, val_bcv_incl_pendiente, ves_neta_teorica_iva)
             )
             estatus_pago_teorico_usd = (
                 "sin_datos"
@@ -14349,9 +14240,7 @@ def _get_ventas_sync(
             # misma tolerancia que el resto de los estados de pago: un
             # excedente de centavos es redondeo, no un saldo a favor.
 
-            _base_subtotal = (
-                usd_neta_teorica if es_lista_usd_nacimiento else ves_neta_teorica
-            )
+            _base_subtotal = usd_neta_teorica if es_lista_usd_nacimiento else ves_neta_teorica
             if _base_subtotal is None or _sin_datos_teorico(
                 teorico_row,
                 usd_bruta_teorica if es_lista_usd_nacimiento else ves_bruta_teorica,
@@ -14407,9 +14296,7 @@ def _get_ventas_sync(
             referencia_debio_pagar = max(
                 0.0, base_saldo_favor - max(0.0, descuento_pendiente_aplicar)
             )
-            saldo_a_favor = round(
-                max(0.0, val_ref_nacimiento - referencia_debio_pagar), 2
-            )
+            saldo_a_favor = round(max(0.0, val_ref_nacimiento - referencia_debio_pagar), 2)
             # El tramo que todavia depende de que administracion emita la
             # nota: hasta que la NC no baje la factura, ese credito no
             # existe en los libros. Se expone aparte para no prometerlo.
@@ -14562,9 +14449,7 @@ def _get_ventas_sync(
                     # orden -- ver comentario de
                     # monto_pagado_factura_odoo_incl_pendiente arriba.
                     "pagado_teorico_bcv_incl_pendiente": round(val_bcv_incl_pendiente, 2),
-                    "pagado_teorico_binance_incl_pendiente": round(
-                        val_binance_incl_pendiente, 2
-                    ),
+                    "pagado_teorico_binance_incl_pendiente": round(val_binance_incl_pendiente, 2),
                     # Monto pagado con SU PROPIA tasa por ruta (BCV vs
                     # Binance del día del pago) -- distinto del "abono_bcv"/
                     # "abono_binance" que usa estatus_pago_real_orden/_
@@ -14573,9 +14458,7 @@ def _get_ventas_sync(
                         pagos_bcv_binance_map.get(o.so_id, {}).get("monto_pagado_bcv", 0.0), 2
                     ),
                     "monto_pagado_usd": round(
-                        pagos_bcv_binance_map.get(o.so_id, {}).get(
-                            "monto_pagado_usd_binance", 0.0
-                        ),
+                        pagos_bcv_binance_map.get(o.so_id, {}).get("monto_pagado_usd_binance", 0.0),
                         2,
                     ),
                     # Tarea 1: lista con la que nació la orden vs. la que
@@ -14672,9 +14555,7 @@ def _get_ventas_sync(
                     # Los libros no se tocan -- en Odoo la factura sigue en
                     # bruto hasta que administracion emita la NC.
                     "descuento_comprometido": (
-                        0.0
-                        if o.so_id in descuentos_no_otorgados
-                        else descuento_pendiente_aplicar
+                        0.0 if o.so_id in descuentos_no_otorgados else descuento_pendiente_aplicar
                     ),
                     "descuento_no_otorgado": o.so_id in descuentos_no_otorgados,
                     "descuento_no_otorgado_por": descuentos_no_otorgados.get(o.so_id, {}).get(
@@ -14850,8 +14731,7 @@ def _get_ventas_sync(
                         else (
                             "pendiente_entrega"
                             if not bool(
-                                (cant_entregada_orden > 0.005)
-                                or (val_ref_nacimiento > _EPS_PAGO)
+                                (cant_entregada_orden > 0.005) or (val_ref_nacimiento > _EPS_PAGO)
                             )
                             else "por_cobrar"
                         )
@@ -15092,9 +14972,7 @@ async def get_ventas_detalle(so_id: str):
             pricelist_ids_map_pr = mapa_de_listas_primarias(
                 usd_ids_pr, ves_ids_pr, _activos_pricelist(execute)
             )
-            fallback_pl_ids_pr = [
-                int(x) for x in (*usd_ids_pr, *ves_ids_pr) if str(x).isdigit()
-            ]
+            fallback_pl_ids_pr = [int(x) for x in (*usd_ids_pr, *ves_ids_pr) if str(x).isdigit()]
             price_resolver = OdooPriceResolver(
                 execute,
                 pricelist_ids_map_pr,
@@ -15160,9 +15038,7 @@ async def get_ventas_detalle(so_id: str):
                         }
                     )
             except Exception as e_sol:
-                logger.warning(
-                    "Error leyendo sale.order.line en get_ventas_detalle: %s", e_sol
-                )
+                logger.warning("Error leyendo sale.order.line en get_ventas_detalle: %s", e_sol)
 
         # --- Real Factura: account.move.line de facturas posted ligadas por
         # invoice_origin (mismo criterio que el resto del rediseño).
@@ -15243,9 +15119,7 @@ async def get_ventas_detalle(so_id: str):
                                 "cantidad": qty,
                                 "precio_unitario": round(price_unit, 2),
                                 "descuento_pct": round(disc_pct, 2),
-                                "descuento_monto": round(
-                                    qty * price_unit * (disc_pct / 100.0), 2
-                                ),
+                                "descuento_monto": round(qty * price_unit * (disc_pct / 100.0), 2),
                                 "subtotal_antes_descuento": round(qty * price_unit, 2),
                                 "subtotal_despues_descuento": round(subtotal, 2),
                                 "subtotal": round(subtotal, 2),
@@ -15254,9 +15128,7 @@ async def get_ventas_detalle(so_id: str):
                             }
                         )
             except Exception as e_aml:
-                logger.warning(
-                    "Error leyendo account.move.line en get_ventas_detalle: %s", e_aml
-                )
+                logger.warning("Error leyendo account.move.line en get_ventas_detalle: %s", e_aml)
 
         # --- Teórico VES / Teórico USD: EngineRunner.build_inputs +
         # discounts.lineas_con_precio (mismo cableo que el cálculo real).
@@ -15485,9 +15357,7 @@ async def get_ventas_detalle(so_id: str):
                 "descuento_total": round(
                     sum(line["descuento_monto"] for line in lineas_real_orden), 2
                 ),
-                "litros_total": round(
-                    sum(line["litros_total"] for line in lineas_real_orden), 3
-                ),
+                "litros_total": round(sum(line["litros_total"] for line in lineas_real_orden), 3),
             },
             "real_factura": {
                 "lineas": lineas_real_factura,
@@ -15495,33 +15365,23 @@ async def get_ventas_detalle(so_id: str):
                 "descuento_total": round(
                     sum(line["descuento_monto"] for line in lineas_real_factura), 2
                 ),
-                "litros_total": round(
-                    sum(line["litros_total"] for line in lineas_real_factura), 3
-                ),
+                "litros_total": round(sum(line["litros_total"] for line in lineas_real_factura), 3),
             },
             "teorico_ves": {
                 "lista_label": _lista_label(lista_ves_id),
                 "lineas": lineas_teorico_ves,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_ves), 2),
                 "conceptos": conceptos_teorico_ves,
-                "descuento_total": round(
-                    sum(c["monto"] for c in conceptos_teorico_ves), 2
-                ),
-                "litros_total": round(
-                    sum(line["litros_total"] for line in lineas_teorico_ves), 3
-                ),
+                "descuento_total": round(sum(c["monto"] for c in conceptos_teorico_ves), 2),
+                "litros_total": round(sum(line["litros_total"] for line in lineas_teorico_ves), 3),
             },
             "teorico_usd": {
                 "lista_label": _lista_label(lista_usd_id),
                 "lineas": lineas_teorico_usd,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_teorico_usd), 2),
                 "conceptos": conceptos_teorico_usd,
-                "descuento_total": round(
-                    sum(c["monto"] for c in conceptos_teorico_usd), 2
-                ),
-                "litros_total": round(
-                    sum(line["litros_total"] for line in lineas_teorico_usd), 3
-                ),
+                "descuento_total": round(sum(c["monto"] for c in conceptos_teorico_usd), 2),
+                "litros_total": round(sum(line["litros_total"] for line in lineas_teorico_usd), 3),
             },
             "pagos": pagos,
             "pagos_totales": pagos_totales,
@@ -15699,9 +15559,7 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
     filas: list[dict] = []
     for so_id in so_ids:
         bandeja = bandeja_map.get(so_id)
-        motor_total_descuentos = (
-            Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
-        )
+        motor_total_descuentos = Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
         audit_orden = auditar_descuento_orden(
             so_id=so_id,
             motor_total_descuentos=motor_total_descuentos,
@@ -15849,8 +15707,6 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-
-
 @app.get("/api/config/dias-credito-volumen")
 async def get_config_dias_credito_volumen():
     """Rangos de litros -> máximo de días de crédito permitido (config).
@@ -15876,8 +15732,6 @@ async def get_config_dias_credito_volumen():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-
 
 
 class MarcarRecibidoRequest(BaseModel):
@@ -15964,9 +15818,7 @@ async def get_reporte_diario(
     """Wrapper async -- ver ``_get_reporte_diario_sync`` (mismo hallazgo
 
     que ``get_ventas``, ver su docstring)."""
-    return await asyncio.to_thread(
-        _get_reporte_diario_sync, vendedor, fecha_desde, fecha_hasta
-    )
+    return await asyncio.to_thread(_get_reporte_diario_sync, vendedor, fecha_desde, fecha_hasta)
 
 
 def _get_reporte_diario_sync(

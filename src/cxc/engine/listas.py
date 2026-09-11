@@ -262,3 +262,62 @@ def mapa_de_listas_primarias(
         "USD": primaria_usd if primaria_usd is not None else por_defecto_usd,
         "BCV": primaria_ves if primaria_ves is not None else por_defecto_ves,
     }
+
+
+@dataclass(frozen=True)
+class VigenciaEfectiva:
+    """El rango de vigencia de una lista, CON el denominador de donde sale.
+
+    Vigesimosegunda pieza de la Fase 2.4. ``get_config_listas_precio`` calculaba
+    ``min(date_start)`` y ``max(date_end)`` sobre las reglas y mostraba eso como el
+    rango de la lista, **salteando en silencio las reglas sin fecha**. Una lista con
+    99 reglas sin fecha de fin y una que vencio en abril se veia vencida en abril.
+
+    Los tres contadores estan para que el rango no se lea sin su denominador, que es
+    la misma disciplina que el resto de este plan: un ``hasta`` que sale de 1 de 100
+    reglas no significa lo mismo que uno que sale de 100 de 100.
+    """
+
+    desde: str | None
+    hasta: str | None
+    reglas: int
+    con_desde: int
+    con_hasta: int
+
+    @property
+    def todas_declaran_fin(self) -> bool:
+        """Todas las reglas tienen fecha de fin, asi que ``hasta`` es el fin real."""
+        return self.reglas > 0 and self.con_hasta == self.reglas
+
+    @property
+    def ninguna_declara_fin(self) -> bool:
+        """Ninguna vence: el ``hasta`` es ``None`` y las reglas valen para siempre.
+
+        Importa para la mina 9 -- la del precio que sale de una regla vencida. Una
+        lista asi NUNCA la dispara, porque sus reglas cubren cualquier fecha
+        posterior a su inicio. Y eso hace que un precio viejo se vea al dia.
+        """
+        return self.reglas > 0 and self.con_hasta == 0
+
+    @property
+    def rango_parcial(self) -> bool:
+        """El rango sale de una minoria de las reglas, asi que dice menos de lo que parece."""
+        return self.reglas > 1 and 0 < self.con_hasta < self.reglas
+
+
+def vigencia_efectiva(reglas: list[dict[str, Any]]) -> VigenciaEfectiva:
+    """El rango que abarcan las fechas de las reglas de una lista.
+
+    ``reglas`` son dicts como los que Odoo devuelve para
+    ``product.pricelist.item``: ``date_start`` y ``date_end``, que pueden venir en
+    ``False`` cuando la regla no los declara.
+    """
+    desde = [str(r.get("date_start"))[:10] for r in reglas if r.get("date_start")]
+    hasta = [str(r.get("date_end"))[:10] for r in reglas if r.get("date_end")]
+    return VigenciaEfectiva(
+        desde=min(desde) if desde else None,
+        hasta=max(hasta) if hasta else None,
+        reglas=len(reglas),
+        con_desde=len(desde),
+        con_hasta=len(hasta),
+    )
