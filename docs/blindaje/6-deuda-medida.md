@@ -1083,6 +1083,63 @@ dispara la conversión, así que si alguien agrega una tercera moneda sin tocar 
 función, sus montos entran como dólares sin convertirse. El mismo error con otro
 nombre.
 
+## Los promedios de Binance: dos ventanas que se solapan, y muerde hoy
+
+`_get_tasas_promedios_sync` calcula tres promedios de la tasa Binance —mañana,
+tarde y diario— y el diferencial contra la BCV. Alimenta la pantalla de tasas y las
+columnas `tasa_binance_*` de la serie. Ninguna prueba la nombraba.
+
+### Las ventanas se solapan
+
+| ventana | horas |
+|---|---|
+| mañana preferida | 6 a 9 |
+| tarde preferida | 10 a 13 |
+| mañana de respaldo | hora < 12 **← incluye 10 y 11** |
+| tarde de respaldo | hora ≥ 12 |
+
+Cuando no hay captura entre las 6 y las 9, la mañana cae a su respaldo, que llega
+hasta las 11 — y esas horas ya están en la tarde preferida. **La misma captura entra
+como promedio de mañana y de tarde.**
+
+### Y hoy pasó
+
+De los dos días con capturas en la serie:
+
+| día | con solapamiento | con ventanas disjuntas |
+|---|---|---|
+| 10-sep (27 capturas) | mañana 959,66 · tarde 962,46 | idéntico |
+| **11-sep (3 capturas, todas a las 10)** | mañana **954,75** · tarde **954,75** | mañana **`None`** · tarde 954,75 |
+
+Hoy **no hubo captura de mañana**, y la pantalla muestra un promedio de mañana igual
+al de tarde. El dato verdadero es `None`: no se midió.
+
+### Dos cosas más que la función hacía sin decirlo
+
+**Sin capturas de hoy, promedia las últimas 24 filas de cualquier fecha.**
+`rates_today if rates_today else rows[-24:]` — el «promedio de hoy» puede ser el de
+la semana pasada, y nada lo dice.
+
+**El diferencial se calcula sobre Binance, no sobre la BCV**, y el nombre del campo
+(`diferencial_bcv_binance_pct`) no lo aclara. Con BCV 700 y Binance 800, sobre
+Binance es 12,5 % y sobre BCV sería 14,29 %.
+
+### Qué queda hecho
+
+`engine/promedios_tasas.py` calcula las **dos lecturas** y `diagnostico_de_promedios`
+las compara, nombrando la hora compartida. 25 tests.
+
+Dos merecen mención porque son de la misma familia que el resto del plan: **un sello
+de hora ilegible no cuenta como medianoche** (devolver 0 lo metería en el promedio de
+la mañana) y **una captura fallida no arrastra el promedio** (guarda cero, y con
+1000 y un cero el promedio sería 500 — la mitad de la tasa real).
+
+**No corrige ninguno de los dos hallazgos:** cambiar las ventanas o el respaldo mueve
+las cifras que la pantalla muestra y las que la serie guarda. Es decisión tuya, y se
+suma a la del «sesgo de la tasa Binance» que el plan ya tenía anotada — resulta que
+hay **dos** sesgos, no uno: el del promedio de 5 compras y 5 ventas, y éste,
+estructural, en cómo se parten las horas.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos
