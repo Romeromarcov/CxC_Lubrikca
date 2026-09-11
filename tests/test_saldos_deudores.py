@@ -260,21 +260,53 @@ def test_sin_fecha_en_la_nota_se_usa_la_de_la_orden() -> None:
     assert monto == pytest.approx(40.0), "cayó a la fecha de la orden, junio"
 
 
-def test_sin_tasa_para_esa_fecha_el_monto_en_bolivares_se_suma_como_dolares() -> None:
-    """**Una mina, preservada a propósito.**
+def test_sin_tasa_para_esa_fecha_la_nota_no_se_cuenta() -> None:
+    """La mina, desactivada el 11-sep-2026.
 
-    Con tasa en cero, 40.000 Bs reducen la deuda en 40.000 dólares. Es lo que
-    hacía antes de extraerlo y se preserva porque cambiarlo mueve montos en una
-    pantalla en uso — pero queda fijado con nombre para que sea una decisión y no
-    un descubrimiento.
+    Este test asertaba ``40000.0``: con tasa en cero, 40.000 Bs reducían la deuda
+    en 40.000 **dólares**. Estaba preservado a propósito, con nombre, para que
+    cambiarlo fuera una decisión y no un descubrimiento.
+
+    La decisión llegó por otro lado. Al convertir el default de 2019 en error
+    duro, ``tasa_bcv_de_dia`` pasó a devolver cero donde antes devolvía 36,50, y
+    la mina se agrandó en vez de desaparecer: medido en la copia sin tasas, la
+    nota de S00573 pasó de valuarse en 37.335,66 a valuarse en 1.362.751,66 sobre
+    una orden de 1.860,48. El error duro no la creó, la destapó.
+
+    Ahora la nota no se cuenta. Eso deja la deuda **más alta** de lo que
+    corresponde, que es el lado seguro: se persigue un cobro que quizá ya está
+    acreditado, en vez de dar por saldada una orden que no lo está.
     """
-    monto, _ = valor_usd_de_notas_de_credito(
-        [{"amount_total": 40000.0, "currency_id": [1, "VES"], "invoice_date": "2099-01-01"}],
+    monto, nombres = valor_usd_de_notas_de_credito(
+        [
+            {
+                "amount_total": 40000.0,
+                "currency_id": [1, "VES"],
+                "invoice_date": "2099-01-01",
+                "name": "NC-SIN-TASA",
+            }
+        ],
         "2099-01-01",
         [],
         _tasa,
     )
-    assert monto == 40000.0
+    assert monto == 0.0
+    assert nombres == ["NC-SIN-TASA"], "la nota se lista aunque no se pueda valuar"
+
+
+def test_una_nota_en_dolares_sin_tasa_si_se_cuenta() -> None:
+    """El contraste: sin tasa solo se pierde la conversión, no el documento.
+
+    Una nota emitida en dólares no necesita tasa ninguna, así que excluirla
+    sería confundir «no puedo convertir» con «no puedo contar».
+    """
+    monto, _ = valor_usd_de_notas_de_credito(
+        [{"amount_total": 250.0, "currency_id": [2, "USD"], "invoice_date": "2099-01-01"}],
+        "2099-01-01",
+        [],
+        _tasa,
+    )
+    assert monto == 250.0
 
 
 def test_varias_notas_se_suman_y_se_nombran_todas() -> None:

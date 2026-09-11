@@ -102,7 +102,7 @@ from cxc.models import (
 )
 from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
 from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
-from cxc.rates import Tasas
+from cxc.rates import TasaNoDisponible, Tasas
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
@@ -2217,21 +2217,28 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decima
     # las 154 fechas con actividad real (25-feb a 09-sep) las 154 resuelven
     # por día exacto, así que nunca disparaba.
     #
-    # El default de abajo -- 36,5 / 38,0, las tasas de 2019 -- SÍ debería
-    # ser un error duro: un asiento congelado con eso queda mal para
-    # siempre, y ``cxc.rates.TasaNoDisponible`` existe para eso. No se
-    # cambió todavía porque 42 tests de la suite construyen escenarios sin
-    # tasas sembradas y dependen de este valor; convertirlo en excepción es
-    # un trabajo aparte, que además obliga a revisar qué monto asertan esos
-    # tests. Mientras tanto se registra como ERROR y no como warning: si
-    # esto aparece en los logs, hay que mirarlo.
+    # Acá estaba el default de 2019 -- 36,5 / 38,0 -- devuelto tras un log que
+    # nadie mira. Ahora es un error duro, por decisión del usuario del
+    # 11-sep-2026.
+    #
+    # El argumento que decidió: un equivalente calculado con esta tasa se
+    # CONGELA en la vinculación y por diseño no se vuelve a mirar. En el espejo
+    # de prueba hay 1.463 vinculaciones con ese valor escrito, acreditando
+    # 2.260.174,60 USD donde correspondían unos 99.664 -- 22,7 veces. Devolver
+    # un número inventado no es degradarse con elegancia: es escribir una
+    # cifra mala en un lugar donde nadie la va a corregir.
+    #
+    # Quien llame decide qué hacer. Lo que ya no puede pasar es que siga
+    # adelante sin enterarse.
     logger.error(
         "Sin ninguna tasa para %s en SerieTasas ni en TasasHistoricasAuditoria. "
-        "Se usa el default de 2019 (36,5/38,0), que casi con certeza es incorrecto "
-        "-- revisar que el scraper esté corriendo y que el histórico esté cargado.",
+        "Revisar que el scraper esté corriendo y que el histórico esté cargado.",
         fecha_str,
     )
-    return Decimal("36.5"), Decimal("38.0")
+    raise TasaNoDisponible(
+        f"No hay tasa para {fecha_str} en SerieTasas ni en TasasHistoricasAuditoria. "
+        "Antes se devolvía el default de 2019 (36,5/38,0); ahora no se inventa."
+    )
 
 
 def tasa_bcv_de_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
@@ -2257,15 +2264,29 @@ def tasa_bcv_de_dia(fecha_iso: str, serie_rows: list[dict]) -> float:
     función es la fachada por fecha en texto, que es como la tienen los
     llamadores (``invoice_date`` de Odoo).
 
-    Devuelve 0.0 si la fecha no se puede parsear, para que quien llama
-    decida qué hacer: convertir con una tasa inventada es peor que no
-    convertir.
+    Devuelve 0.0 si la fecha no se puede parsear **o si no hay tasa para ese
+    día**, para que quien llama decida qué hacer: convertir con una tasa
+    inventada es peor que no convertir.
+
+    Ese segundo caso es la mitad de lectura de la decisión del 11-sep-2026.
+    ``get_rate_for_datetime`` ahora levanta ``TasaNoDisponible`` en vez de
+    devolver el default de 2019, y acá se traduce a cero **a propósito**: los
+    llamadores de esta fachada son pantallas, y ya comprueban ``> 0`` para
+    mostrar el renglón sin convertir. Tumbar un reporte entero por un
+    documento sin tasa sería cambiar un problema por otro.
+
+    Los caminos de ESCRITURA no pasan por acá: llaman a
+    ``get_rate_for_datetime`` directo y la excepción los detiene, que es donde
+    importa — una tasa mala escrita en una vinculación queda congelada.
     """
     try:
         dia = datetime.fromisoformat(str(fecha_iso)[:10])
     except (TypeError, ValueError):
         return 0.0
-    return float(get_rate_for_datetime(dia, serie_rows)[0] or 0.0)
+    try:
+        return float(get_rate_for_datetime(dia, serie_rows)[0] or 0.0)
+    except TasaNoDisponible:
+        return 0.0
 
 
 def residual_usd_de_factura(inv: dict, fecha_orden: str, serie_rows: list[dict]) -> float:
@@ -7892,7 +7913,24 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 )
             except ValueError:
                 fecha_dt = datetime.now()
-            bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+            try:
+                bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+            except TasaNoDisponible:
+                # Sin tasa para el día del pago, este pago NO se ofrece.
+                #
+                # Es lectura, pero de una clase especial: una sugerencia es algo
+                # que el usuario acepta con un clic, y aceptarla escribe un
+                # equivalente que queda congelado. Antes acá entraba el default
+                # de 2019 y la sugerencia salía igual, con un monto calculado a
+                # 36,50. Mejor no ofrecerla: lo que no se ofrece no se puede
+                # aceptar, y por lo tanto no compromete nada -- el mismo
+                # criterio que ``repartir_pago_entre_ordenes``.
+                logger.error(
+                    "Sugerencias de conciliacion: el pago %s se omite, no hay tasa para %s.",
+                    p.get("pago_id"),
+                    fecha_dt.date().isoformat(),
+                )
+                continue
 
             moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
             monto_orig_raw = parse_decimal_safe(p.get("monto", "0"))
@@ -16417,15 +16455,24 @@ def _eq_usd_por_serie(fecha_iso: str, monto: Decimal, tasas_rows: list[dict]) ->
     ``monto / bcv_rate`` con dos manejos distintos del caso "no hay tasa".
 
     Devuelve ``0`` cuando no hay tasa para esa fecha, que es lo que ya hacía el
-    camino degradado. Es un cero que miente, y está anotado como tal en el
-    inventario 1.1: el arreglo de fondo es que ``get_rate_for_datetime`` levante
-    en vez de devolver el default de 2019, y eso es la Fase 2.1.
+    camino degradado.
+
+    Ese cero **antes mentía** y está anotado así en el inventario 1.1: no había
+    forma de distinguir «no hay tasa» de «la tasa da cero», porque
+    ``get_rate_for_datetime`` devolvía el default de 2019 y el cero venía de
+    otro lado. Desde el 11-sep-2026 esa función levanta ``TasaNoDisponible``
+    (Fase 2.1, decisión del usuario), así que el cero de acá ya es honesto:
+    significa exactamente que no había con qué convertir, y el dashboard lo
+    muestra anotado en vez de inventar el monto.
     """
     try:
         fecha_dt = datetime.strptime(fecha_iso[:10], "%Y-%m-%d")
     except ValueError:
         fecha_dt = datetime.now()
-    bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+    try:
+        bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
+    except TasaNoDisponible:
+        return Decimal("0")
     return monto / bcv_rate if bcv_rate > 0 else Decimal("0")
 
 

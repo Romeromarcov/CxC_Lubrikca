@@ -14,6 +14,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from cxc.rates import TasaNoDisponible
 from cxc.web.app import get_rate_for_datetime
 
 
@@ -55,13 +58,33 @@ def test_cae_a_tasas_historicas_auditoria_si_serie_tasas_no_tiene_ese_dia() -> N
     assert binance == Decimal("603.791")
 
 
-def test_usa_default_hardcodeado_solo_si_ninguna_fuente_tiene_dato() -> None:
+def test_sin_ninguna_fuente_no_se_inventa_una_tasa() -> None:
+    """Era la especificación del default de 2019, y ahora es la de su ausencia.
+
+    Este test asertaba ``36,5 / 38,0``. Se reescribió el 11-sep-2026 por decisión
+    del usuario: un equivalente calculado con esa tasa se **congela** en la
+    vinculación y por diseño no se vuelve a mirar. En el espejo de prueba hay
+    1.463 con ese valor escrito, acreditando 2.260.174,60 USD donde correspondían
+    unos 99.664 — 22,7 veces.
+
+    Devolver un número inventado no es degradarse con elegancia: es escribir una
+    cifra mala donde nadie la va a corregir.
+    """
     mock_repo = MagicMock()
     mock_repo.all_tasas_historicas_auditoria.return_value = []
-    with patch("cxc.web.app.get_repo", return_value=mock_repo):
-        bcv, binance = get_rate_for_datetime(datetime(2025, 1, 1, 12, 0), [])
-    assert bcv == Decimal("36.5")
-    assert binance == Decimal("38.0")
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), pytest.raises(TasaNoDisponible):
+        get_rate_for_datetime(datetime(2025, 1, 1, 12, 0), [])
+
+
+def test_el_error_dice_la_fecha_que_falta() -> None:
+    """Sin la fecha, el error manda a revisar toda la serie en vez de un día."""
+    mock_repo = MagicMock()
+    mock_repo.all_tasas_historicas_auditoria.return_value = []
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        pytest.raises(TasaNoDisponible, match="2025-01-01"),
+    ):
+        get_rate_for_datetime(datetime(2025, 1, 1, 12, 0), [])
 
 
 # Las guardas del euro se migraron a ``cxc.rates.Tasas`` (septiembre 2026),

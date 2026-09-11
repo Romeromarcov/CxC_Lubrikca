@@ -17,7 +17,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cxc.models import Moneda, Pago, SerieTasa
+from cxc.rates import TasaNoDisponible
 from cxc.web.app import _vincular_masivo_sync
 
 
@@ -64,12 +67,23 @@ def test_usa_la_tasa_del_dia_del_pago_no_la_mas_reciente() -> None:
     assert vinc.tasa_binance_aplicada == Decimal("717.7717")
 
 
-def test_cae_al_default_hardcodeado_si_no_hay_dato_para_esa_fecha() -> None:
-    """Si ni SerieTasas ni TasasHistoricasAuditoria tienen nada para la
+def test_sin_tasa_no_se_escribe_la_vinculacion() -> None:
+    """Era «cae al default hardcodeado»; ahora es «no se escribe nada».
 
-    fecha exacta del pago, ``get_rate_for_datetime`` ya trae su propio
-    último recurso (36.5/38.0 hardcodeado) -- no hace falta ningún
-    fallback adicional en ``_vincular_masivo_sync``."""
+    Reescrito el 11-sep-2026 por decisión del usuario. Este test asertaba que la
+    vinculación quedaba guardada con ``36,5 / 38,0`` — o sea, era la
+    especificación del defecto: **1.463 vinculaciones del espejo de prueba
+    tienen exactamente ese valor congelado**, acreditando 2.260.174,60 USD donde
+    correspondían unos 99.664.
+
+    Este es un camino de ESCRITURA, y el equivalente que se calcula acá se
+    congela y por diseño no se vuelve a revisar. Que la operación entera falle
+    es más barato que una cifra mala que nadie va a corregir.
+
+    Consecuencia que conviene tener escrita: falla **todo el lote**, no solo el
+    pago sin tasa. Es deliberado — un lote a medias deja al usuario sin saber
+    qué se aplicó y qué no.
+    """
     mock_repo = MagicMock()
     mock_repo.get_pago.return_value = Pago(
         pago_id="1",
@@ -87,11 +101,8 @@ def test_cae_al_default_hardcodeado_si_no_hay_dato_para_esa_fecha() -> None:
     # get_rate_for_datetime consulta TasasHistoricasAuditoria vía el
     # get_repo() global (no el mock_repo pasado directo a la función) --
     # se parchea para que ambos apunten al mismo mock.
-    with patch("cxc.web.app.get_repo", return_value=mock_repo):
-        processed, _ = _vincular_masivo_sync(
-            mock_repo, [("1", "SO_X", 1.29)], confirmado_por="test"
-        )
-    assert processed == 1
-    vinc = mock_repo.update_vinculacion.call_args[0][0]
-    assert vinc.tasa_bcv_aplicada == Decimal("36.5")
-    assert vinc.tasa_binance_aplicada == Decimal("38.0")
+    with patch("cxc.web.app.get_repo", return_value=mock_repo), pytest.raises(TasaNoDisponible):
+        _vincular_masivo_sync(mock_repo, [("1", "SO_X", 1.29)], confirmado_por="test")
+
+    mock_repo.update_vinculacion.assert_not_called()
+    mock_repo.add_vinculacion.assert_not_called()

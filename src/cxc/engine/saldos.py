@@ -221,11 +221,24 @@ def valor_usd_de_notas_de_credito(
         )
         fecha = str(nc.get("invoice_date") or fecha_fallback)[:10]
         tasa = tasa_del_dia(fecha, tasas_rows)
-        if moneda == "VES" and tasa > 0:
-            # Con tasa en cero el monto en bolívares se suma COMO SI fuera USD, y
-            # eso es lo que hacía antes de moverlo. Se preserva: cambiarlo mueve
-            # montos en una pantalla en uso. Pero queda dicho que es una mina --
-            # una nota de 40.000 Bs sin tasa reduce la deuda en 40.000 dólares.
+        if moneda == "VES":
+            if tasa <= 0:
+                # Sin tasa, esta nota NO se cuenta.
+                #
+                # Antes se sumaba el monto en bolívares COMO SI fuera dólares:
+                # una nota de 1.362.751,66 Bs reducía la deuda en 1.362.751,66
+                # USD sobre una orden de 1.860,48. Medido en la copia sin tasas
+                # el 11-sep-2026, al convertir el default de 2019 en error duro:
+                # la mina pasó de dar 37.335,66 (el monto a 36,50) a dar el
+                # nominal entero. El error duro no la creó, la destapó.
+                #
+                # No contarla deja la deuda MÁS ALTA de lo que corresponde, que
+                # es el lado seguro: se persigue un cobro que capaz ya está
+                # acreditado, en vez de dar por saldada una orden que no lo
+                # está. Y la nota queda listada igual, así que la pantalla dice
+                # que existe aunque no pueda valuarla.
+                nombres.append(str(nc.get("name", "")))
+                continue
             monto_usd += total / tasa
         else:
             monto_usd += total

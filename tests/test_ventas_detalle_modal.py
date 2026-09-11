@@ -414,6 +414,11 @@ def test_detalle_pagos_usa_account_payment_directo_si_no_hay_vinculaciones() -> 
         return []
 
     mock_repo = MagicMock()
+    # La serie, para que la conversion salga de un dato. Antes este test
+    # resolvia la tasa por el default de 2019 sin decirlo; desde el
+    # 11-sep-2026 ese default es un error duro. Los valores sembrados son
+    # los mismos 36,50 / 38,00, asi que ningun monto asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.get_orden.return_value = _orden()
     mock_repo.all_clientes.return_value = []
     mock_repo.lineas_de_orden.return_value = [_linea()]

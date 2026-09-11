@@ -40,21 +40,39 @@ def test_un_pago_sin_amount_ref_no_vale_cero() -> None:
     )
 
 
-def test_sin_tasa_para_la_fecha_el_equivalente_es_cero_y_esta_anotado() -> None:
-    """Sigue siendo un cero que miente, y está anotado como tal.
+def test_sin_tasa_para_la_fecha_el_equivalente_es_cero_y_ahora_es_honesto() -> None:
+    """El cero dejó de mentir, que era lo que este test esperaba.
 
-    No se cambia acá a propósito: el arreglo de fondo es que
-    ``get_rate_for_datetime`` levante en vez de devolver el default de 2019, y
-    eso arrastra 42 tests -- es la Fase 2.1, no ésta. Lo que este test fija es
-    que el comportamiento no cambie por accidente mientras tanto.
+    Antes asertaba ``eq > 0``: sin serie, ``get_rate_for_datetime`` caía al
+    default de 2019 y 5.000 Bs se convertían a 136,99 USD a una tasa de 36,50
+    que no tenía nada que ver con septiembre de 2026. El test fijaba ese
+    comportamiento **a propósito y de forma transitoria**, hasta que la Fase 2.1
+    se decidiera; su docstring lo decía.
+
+    Se decidió el 11-sep-2026. Ahora la función devuelve cero, y ese cero
+    significa exactamente «no había con qué convertir» — que es lo que el
+    dashboard muestra anotado, en vez de un monto inventado.
     """
     from cxc.web.app import _eq_usd_por_serie
 
     eq = _eq_usd_por_serie("2026-09-05", Decimal("5000"), [])
-    # Sin serie, ``get_rate_for_datetime`` cae al default de 2019 (36,5), que es
-    # justamente la mina 8 del inventario 1.1. Lo que importa acá es que NO
-    # devuelva cero en silencio por una división evitada.
-    assert eq > 0
+    assert eq == Decimal("0"), (
+        "sin tasa no se convierte; un 136,99 acá sería la tasa de 2019 "
+        "disfrazada de equivalente de septiembre de 2026"
+    )
+
+
+def test_con_tasa_si_convierte_y_el_cero_no_se_come_un_monto_real() -> None:
+    """El contraste, para que el cero de arriba no tape una regresión.
+
+    Un cero devuelto siempre pasaría el test anterior. Éste comprueba que la
+    función sigue convirtiendo cuando sí hay tasa — que es el caso que hacía
+    desaparecer un pago de la tarjeta de cobranza cuando se sumaba cero.
+    """
+    from cxc.web.app import _eq_usd_por_serie
+
+    filas = [{"timestamp": "2026-09-05 12:00:00", "tasa_bcv": "100"}]
+    assert _eq_usd_por_serie("2026-09-05", Decimal("5000"), filas) == Decimal("50")
 
 
 def test_una_fecha_ilegible_no_tumba_el_reporte() -> None:

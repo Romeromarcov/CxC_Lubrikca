@@ -85,15 +85,30 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
         propias = [serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")]
         if propias:
             return propias
-        # No sembrar si el test provee tasas por la OTRA via.
         # ``get_rate_for_datetime`` consulta SerieTasas primero y
         # TasasHistoricasAuditoria despues, asi que sembrar la primera le
         # ganaria a la segunda y cambiaria de que fuente sale el numero.
         # Hallado al sembrar: el test 50 pasaba 550,0 por auditoria y la
         # siembra se lo tapaba con 38,00.
-        if repo._g.read_rows("TasasHistoricasAuditoria"):
-            return []
-        return b.serie_tasas_sembrada()
+        #
+        # Antes esto devolvia [] apenas el test proveia UNA fila de auditoria, y
+        # los dias que esa fila no cubria caian al default de 2019. Desde que el
+        # default es error duro (11-sep-2026), esos dias revientan: el test 32
+        # trae la tasa de su pago por auditoria y necesita OTRA fecha para el
+        # resto del escenario.
+        #
+        # Asi que se siembran solo los dias que la auditoria NO trae. La fuente
+        # que el test eligio sigue ganando donde la puso, y donde no la puso hay
+        # un dato en vez de un invento.
+        dias_de_auditoria = {
+            str(fila.get("fecha") or "")[:10]
+            for fila in repo._g.read_rows("TasasHistoricasAuditoria")
+        }
+        return [
+            s
+            for s in b.serie_tasas_sembrada()
+            if s.timestamp.date().isoformat() not in dias_de_auditoria
+        ]
 
     repo.all_serie_tasas.side_effect = _serie_o_sembrada
     repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
@@ -1550,8 +1565,16 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     # 2019. Los valores sembrados son esos mismos, así que ningún monto
     # asertado cambia.
     mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
+    # La serie también por la vía del gateway: ``_get_conciliaciones_sugerencias_
+    # sync`` lee SerieTasas por ahí, no por ``all_serie_tasas``. Sin esto el pago
+    # huérfano se omite por falta de tasa desde que el default de 2019 es error
+    # duro (11-sep-2026), y el saldo a favor de −50 que este test verifica
+    # desaparecía. Los valores sembrados son los mismos 36,50 / 38,00, así que
+    # ningún monto asertado cambia.
     mock_repo._g.read_rows.side_effect = lambda sheet: (
-        [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else []
+        [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}]
+        if sheet == "Clientes"
+        else (b.serie_tasas_sembrada_rows() if sheet == "SerieTasas" else [])
     )
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
@@ -1573,7 +1596,8 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     mock_repo.all_descuentos_sistema_aprobados.return_value = []
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_vinculaciones.return_value = []
-    mock_repo.all_serie_tasas.return_value = []
+    # (la serie ya quedó sembrada arriba; este bloque la ponía en [] y dejaba
+    # la siembra muerta -- el test pasaba por el default de 2019, no por un dato)
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
     mock_repo.all_facturas.return_value = []
     mock_repo.all_pagos.return_value = [
@@ -3274,9 +3298,18 @@ def test_e2e_32_sugerencias_usa_tasa_odoo_del_pago_no_serietasas_cercana():
                 else (
                     # TasasHistoricasAuditoria SÍ tiene el día exacto para
                     # Binance (Odoo no tiene noción de esa tasa).
+                    #
+                    # Y desde el 11-sep-2026 trae también la BCV real de ese
+                    # día. Antes no hacía falta porque el sistema caía al
+                    # default de 2019; ahora la ausencia es un error duro. Y el
+                    # test queda MEJOR probado: con 451,5072 disponible, que
+                    # igual gane la tasa de Odoo deja de ser "no había otra" y
+                    # pasa a ser "había otra y no se usó", que es lo que el
+                    # test afirma.
                     [
                         {
                             "fecha": "2026-03-18",
+                            "tasa_bcv_usd": "451.5072",
                             "tasa_binance_promedio_diario": "471.87",
                         }
                     ]
@@ -4712,6 +4745,12 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
                 [
                     {
                         "fecha": "2026-03-18",
+                        # La BCV del día se agregó el 11-sep-2026: este test
+                        # ejercita las tres tasas por la vía de auditoría, y
+                        # antes la BCV le llegaba del default de 2019 sin que
+                        # el test lo dijera. Ahora las tres vienen de donde el
+                        # test dice que vienen.
+                        "tasa_bcv_usd": "451.5072",
                         "tasa_binance_promedio_diario": "550.0",
                         "tasa_bcv_euro": "600.0",
                     }
