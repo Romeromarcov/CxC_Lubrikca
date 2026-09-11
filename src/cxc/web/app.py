@@ -58,6 +58,7 @@ from cxc.engine.discount_audit import (
 )
 from cxc.engine.equivalents import (
     calcular_equivalentes,
+    equivalente_usd_a_tasa,
     equivalentes_bcv,
     equivalentes_binance,
     valor_pagado_bcv_usd,
@@ -11263,29 +11264,38 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 "recibido_por": p_row.get("recibido_por") or None,
             }
 
+        def _monto_y_moneda_del_pago(pid: str) -> tuple[Decimal, str] | None:
+            """El monto original de un pago y su moneda, buscando en los DOS lugares.
+
+            El espejo primero; si el pago no está ahí es porque se concilió directo en
+            Odoo y nunca se sincronizó local, y entonces sale del historial en vivo
+            (campo ``monto_original`` de ``/api/pagos-historial``). ``None`` si no está
+            en ninguno de los dos: un pago que no se encontró no vale cero.
+
+            Estaba escrito dos veces --en ``monto_eur`` y en ``monto_bcv_real``-- y las
+            dos copias tenían su rama del historial sin cubrir por ninguna prueba.
+            """
+            p_row = pagos_by_id.get(pid)
+            if p_row:
+                return (
+                    parse_decimal_safe(p_row.get("monto", "0")),
+                    str(p_row.get("moneda", "USD") or "USD").upper().strip(),
+                )
+            for h in historial:
+                if h["pago_id"] == pid and h.get("vinc_id") is None:
+                    return (
+                        Decimal(str(h.get("monto_original", 0))),
+                        str(h.get("moneda", "USD") or "USD").upper().strip(),
+                    )
+            return None
+
         def monto_eur(pid: str, tasa_eur: float | None) -> float | None:
             # USD es 1:1 en las 3 tasas (BCV, Binance, EUR) -- no depende de
             # conocer la tasa del día, igual que ``pago_monto_usd``.
-            p_row = pagos_by_id.get(pid)
-            if p_row:
-                monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
-                moneda = str(p_row.get("moneda", "USD") or "USD").upper().strip()
-            else:
-                # Pago conciliado directo en Odoo, nunca sincronizado local --
-                # se usa el monto original ya traído por get_live_pagos_conciliados
-                # (ver el campo "monto_original" agregado a /api/pagos-historial).
-                for h in historial:
-                    if h["pago_id"] == pid and h.get("vinc_id") is None:
-                        monto_raw = Decimal(str(h.get("monto_original", 0)))
-                        moneda = str(h.get("moneda", "USD") or "USD").upper().strip()
-                        break
-                else:
-                    return None
-            if moneda == "USD":
-                return float(monto_raw)
-            if tasa_eur is None or tasa_eur <= 0:
+            hallado = _monto_y_moneda_del_pago(pid)
+            if hallado is None:
                 return None
-            return float(monto_raw / Decimal(str(tasa_eur)))
+            return equivalente_usd_a_tasa(*hallado, tasa_eur)
 
         def monto_bcv_real(pid: str, tasa_bcv_real: float | None) -> float | None:
             """Equivalente USD de la tarjeta "Tasa BCV" -- SIEMPRE con la
@@ -11299,23 +11309,10 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             sí. Mismo patrón que ``monto_eur``, aplicado a la tasa real en
             vez de la EUR.
             """
-            p_row = pagos_by_id.get(pid)
-            if p_row:
-                monto_raw = parse_decimal_safe(p_row.get("monto", "0"))
-                moneda = str(p_row.get("moneda", "USD") or "USD").upper().strip()
-            else:
-                for h in historial:
-                    if h["pago_id"] == pid and h.get("vinc_id") is None:
-                        monto_raw = Decimal(str(h.get("monto_original", 0)))
-                        moneda = str(h.get("moneda", "USD") or "USD").upper().strip()
-                        break
-                else:
-                    return None
-            if moneda == "USD":
-                return float(monto_raw)
-            if tasa_bcv_real is None or tasa_bcv_real <= 0:
+            hallado = _monto_y_moneda_del_pago(pid)
+            if hallado is None:
                 return None
-            return float(monto_raw / Decimal(str(tasa_bcv_real)))
+            return equivalente_usd_a_tasa(*hallado, tasa_bcv_real)
 
         unificados: list[dict[str, Any]] = []
 

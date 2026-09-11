@@ -8,7 +8,7 @@ valoración en dato auditable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ..decimal_utils import q6
 from ..models import Moneda, TipoTasa, Vinculacion
@@ -177,3 +177,42 @@ def valor_pagado_bcv_usd(vinculaciones: list[Vinculacion]) -> Decimal:
             eq = v.monto_aplicado
         total += eq
     return total
+
+
+# --- el equivalente USD de un pago a una tasa dada ---------------------------
+
+
+def equivalente_usd_a_tasa(
+    monto: Decimal, moneda: str, tasa: float | Decimal | None
+) -> float | None:
+    """Cuanto vale en dolares un pago de ``monto`` en ``moneda``, dividido por ``tasa``.
+
+    Trigesima pieza de la Fase 2.4. En ``get_cobranza_pagos_unificado`` este cuerpo
+    estaba escrito DOS veces --``monto_eur`` y ``monto_bcv_real``-- identico salvo por
+    cual tasa divide, y las dos con sus caminos de error sin cubrir.
+
+    **Las dos existen por un bug real**, y conviene que quede escrito porque explica
+    la forma: agosto 2026, pago 1279 del cliente SJMG 2012 C.A., la tarjeta mostraba
+    ``tasa_bcv_real`` (752,09, correcta) junto a un equivalente calculado con la tasa
+    BCV-EUR (865,17, que el sistema usa como base de conversion interna para clientes
+    con ordenes historicas). El numero y su tasa no se correspondian.
+
+    ``None`` --y no cero-- cuando no hay tasa con la que convertir: un pago cuyo
+    equivalente no se pudo calcular no vale cero dolares, y la pantalla tiene que
+    mostrar un guion y no un monto. Es la misma distincion que
+    ``RangoDelDia.verificado`` y que ``diferencial_verificable``.
+
+    Un pago que YA esta en dolares se devuelve tal cual, sin mirar la tasa: dividirlo
+    seria convertir dos veces.
+    """
+    if (moneda or "").upper().strip() == "USD":
+        return float(monto)
+    if tasa is None:
+        return None
+    try:
+        divisor = Decimal(str(tasa))
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    if divisor <= 0:
+        return None
+    return float(monto / divisor)

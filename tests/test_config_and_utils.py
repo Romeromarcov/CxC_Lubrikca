@@ -383,3 +383,86 @@ def test_los_dos_lados_son_independientes() -> None:
         Decimal("1000"), Moneda.VES, Decimal("4")
     )
     assert todos.equiv_usd_bcv != todos.equiv_usd_binance, "tasas distintas, valores distintos"
+
+
+# --- el equivalente USD de un pago a una tasa dada (Fase 2.4, pieza 30) -------
+
+
+class TestEquivalenteUsdATasa:
+    """En `get_cobranza_pagos_unificado` este cuerpo estaba escrito DOS veces.
+
+    `monto_eur` y `monto_bcv_real`, idénticos salvo por cuál tasa divide, y las dos con
+    sus caminos de error sin cubrir.
+
+    Las dos existen por un bug real: agosto 2026, pago 1279 del cliente SJMG 2012 C.A.,
+    la tarjeta mostraba `tasa_bcv_real` (752,09, correcta) junto a un equivalente
+    calculado con la tasa BCV-EUR (865,17, la base de conversión interna para clientes
+    con órdenes históricas). El número y su tasa no se correspondían.
+    """
+
+    def test_un_pago_en_bolivares_se_divide_por_la_tasa(self) -> None:
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("82774"), "VES", 827.74) == 100.0
+
+    def test_un_pago_YA_en_dolares_no_se_toca(self) -> None:
+        """Dividirlo sería convertir dos veces, y la tasa ni se mira."""
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("100"), "USD", 827.74) == 100.0
+        assert equivalente_usd_a_tasa(Decimal("100"), "usd", None) == 100.0
+
+    def test_sin_tasa_devuelve_None_y_NO_cero(self) -> None:
+        """Un equivalente que no se pudo calcular no es cero dólares.
+
+        La pantalla tiene que mostrar un guion, no un monto. Es la misma distinción que
+        `RangoDelDia.verificado` y que `diferencial_verificable`: la ausencia de una
+        medición no es una medición de cero.
+        """
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("82774"), "VES", None) is None
+
+    @pytest.mark.parametrize("tasa", [0, 0.0, -1, -827.74])
+    def test_una_tasa_cero_o_negativa_tampoco_convierte(self, tasa) -> None:
+        """Cero dividiría por cero; negativa daría un equivalente negativo."""
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("82774"), "VES", tasa) is None
+
+    def test_una_tasa_ilegible_devuelve_None_en_vez_de_reventar(self) -> None:
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("82774"), "VES", "no es un numero") is None  # type: ignore[arg-type]
+
+    def test_la_moneda_se_normaliza_en_mayusculas_y_sin_espacios(self) -> None:
+        """El espejo guarda la moneda como texto libre."""
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        for moneda in ("USD", "usd", " Usd ", "uSd"):
+            assert equivalente_usd_a_tasa(Decimal("100"), moneda, None) == 100.0
+
+    def test_una_moneda_vacia_NO_se_toma_como_dolares(self) -> None:
+        """Suponer USD ante la duda mostraría el nominal en bolívares como dólares.
+
+        Es el mismo error que este plan corrigió en `pago_monto_usd`, que devolvía el
+        nominal VES cuando no había tasa.
+        """
+        from decimal import Decimal
+
+        from cxc.engine.equivalents import equivalente_usd_a_tasa
+
+        assert equivalente_usd_a_tasa(Decimal("82774"), "", 827.74) == 100.0
+        assert equivalente_usd_a_tasa(Decimal("82774"), "", None) is None
