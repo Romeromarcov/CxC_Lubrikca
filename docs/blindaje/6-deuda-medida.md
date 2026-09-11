@@ -1003,6 +1003,56 @@ Cinco tests, y el de la forma de las partidas —que existe para que la pantalla
 rompa— sirvió para lo contrario: confirmó que las tres claves nuevas llegan a las
 **24** y no sólo a las internas.
 
+## Pagos duplicados: 19 grupos, y 13 son de mi propio banco
+
+Salió del barrido que busca funciones de `app.py` que hablen de dinero y que
+ninguna prueba nombre. `_detectar_pagos_duplicados` era una: detecta dos pagos con
+cliente, monto, moneda, método y fecha idénticos — el mismo pago cargado dos veces,
+o un banco que reporta la misma transacción dos veces. Un duplicado infla la
+cobranza y saca de la cuenta por cobrar una orden que no se cobró.
+
+**Medido: 19 grupos.** Y lo que importa para poder usarlo: **13 son del banco de
+escenarios** (clientes `ZZ BLINDAJE`, todos del 05-sep con montos idénticos) y
+**6 son de clientes reales**:
+
+| cliente | monto | fecha |
+|---|---:|---|
+| En ascenso 2011,c.a. | 40.187,53 VES | 19-ago |
+| En ascenso 2011,c.a. | 72.287,74 VES | 31-jul |
+| INVERSIONES MI LINDA YEMAIRE 2019 | 56.976,38 VES | 30-abr |
+| AUTOPERIQUITOS LA CAMPIÑA C.A. | 14.757,63 VES | 23-jul |
+| Pedro Castro | 100,00 USD | 22-jul |
+| Angel ARMAS | 75,00 USD | 05-jun |
+
+«En ascenso 2011,c.a.» aparece dos veces, y es el mismo cliente de S00372.
+
+**El detector no puede distinguir** los del banco de los reales, así que muestra 19
+y alguien filtra a mano. **No se filtra por nombre de cliente a propósito**: una
+función que descarta pagos así esconderá un duplicado real el día que alguien llame
+a un cliente parecido. La separación es del llamador, que sabe si mira un entorno de
+prueba.
+
+### Lo que la clave de cinco campos protege
+
+Cada campo está por una razón, y 16 tests las fijan:
+
+* **cliente** — dos clientes pueden pagar lo mismo el mismo día.
+* **monto**, a dos decimales — el mismo pago llega con un tercer decimal distinto
+  según por dónde entró. Pero **un centavo sí separa**: es redondeo, no tolerancia.
+* **moneda**, y **sin convertir** — un duplicado es el mismo documento, no dos
+  montos equivalentes. Convertir haría que 100 USD y 3.650 VES parezcan el mismo.
+* **método** — el mismo monto por transferencia y en efectivo es plausible.
+* **fecha, truncada al día** — el mismo pago cargado dos veces suele tener horas
+  distintas.
+
+Y un borde que importa: un pago **sin `pago_id` se saltea**. Agruparlos entre sí
+inventaría duplicados, porque dos filas sin id compartirían clave y se acusarían
+mutuamente.
+
+Verificado además que **cero pagos** de los 1.320 vienen sin `cliente_id` ni sin
+`metodo_pago`, así que el riesgo de que los campos vacíos agrupen pagos ajenos existe
+en el código pero no tiene instancia viva.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

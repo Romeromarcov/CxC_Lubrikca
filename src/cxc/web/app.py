@@ -69,6 +69,7 @@ from cxc.engine.pagada_en_odoo import (
     diagnostico_de_pagada,
     pagada_por_estado,
 )
+from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
@@ -7562,38 +7563,15 @@ def _get_saldos_reales_por_so_sync() -> dict[str, float] | None:
 
 
 def _detectar_pagos_duplicados(pagos_rows: list[dict[str, str]]) -> dict[str, list[str]]:
-    """``pago_id`` -> lista de otros ``pago_id`` con cliente, monto, moneda,
+    """Fachada: la regla vive en ``engine/pagos_duplicados.py``, con sus tests.
 
-    método de pago y fecha IDÉNTICOS -- posible duplicado (ej. el mismo
-    pago cargado dos veces en Odoo, o un banco que reporta la misma
-    transacción dos veces).
-
-    Compara contra TODO el universo de pagos, incluidos los ya vinculados o
-    conciliados -- no solo los pendientes: el caso real es que el pago
-    "original" ya esté aplicado, y el que entra de nuevo (todavía sin
-    asociar) sea el sospechoso. Comparar solo contra pendientes no
-    detectaría ese caso, el más común de un duplicado real.
+    Medido al extraerla (11-sep-2026): 19 grupos en la copia, de los cuales **13
+    son del banco de escenarios** y 6 de clientes reales. El detector no puede
+    distinguirlos, y no se filtra por nombre de cliente a propósito -- una función
+    que descarta pagos así esconderá un duplicado real el día que alguien llame a
+    un cliente parecido.
     """
-    grupos: dict[tuple[str, Decimal, str, str, str], list[str]] = {}
-    for p in pagos_rows:
-        pid = str(p.get("pago_id", "")).strip()
-        if not pid:
-            continue
-        cliente_id = str(p.get("cliente_id", "")).strip()
-        monto = parse_decimal_safe(p.get("monto", "0")).quantize(Decimal("0.01"))
-        moneda = str(p.get("moneda", "") or "").upper().strip()
-        metodo = str(p.get("metodo_pago", "") or "").strip()
-        fecha = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
-        key = (cliente_id, monto, moneda, metodo, fecha)
-        grupos.setdefault(key, []).append(pid)
-
-    duplicados: dict[str, list[str]] = {}
-    for pids in grupos.values():
-        if len(pids) > 1:
-            for pid in pids:
-                duplicados[pid] = [otro for otro in pids if otro != pid]
-    return duplicados
-
+    return detectar_pagos_duplicados(list(pagos_rows))
 
 def leer_pagos_huerfanos_cerrados(repo: Any) -> dict[str, dict[str, str]]:
     """``pago_id`` -> detalle de cierre (``motivo``, ``cerrado_por``,
