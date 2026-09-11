@@ -198,3 +198,61 @@ def verificar_session_token(token: str, secret_key: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+# --- quien hizo una accion, sin creerle al navegador -------------------------
+
+# Los nombres que el formulario ofrece por defecto. No identifican a nadie: son
+# roles, y estan pre-cargados en un `prompt`, asi que llegan tal cual cuando la
+# persona aprieta Enter sin escribir.
+DECLARADOS_GENERICOS = frozenset(
+    {
+        "",
+        "direccion / administracion",
+        "dirección / administración",
+        "direccion / auditor",
+        "dirección / auditor",
+        "direccion / facturacion",
+        "dirección / facturación",
+        "desconocido",
+    }
+)
+
+
+def identidad_de_sesion(usuario: dict[str, Any] | None) -> str:
+    """Como se llama quien esta logueado, o cadena vacia si no hay sesion."""
+    if not usuario:
+        return ""
+    return str(usuario.get("nombre") or usuario.get("email") or "").strip()
+
+
+def actor_de_la_accion(usuario: dict[str, Any] | None, declarado: str) -> str:
+    """Quien hizo una accion: la sesion manda, y lo declarado se conserva.
+
+    Tres endpoints que cambian decisiones de dinero --aceptar una discrepancia,
+    marcar un descuento como no otorgado, aprobar un descuento del sistema-- tomaban
+    al actor del CUERPO del request. Y el formulario lo pide con un
+    ``prompt("¿Quien lo marca?", "Direccion / Administracion")``: la persona **tipea**
+    quien es, con un default que no identifica a nadie, mientras la sesion ya lo sabe.
+    Comparar con ``patch_auditoria_estado``, en el mismo archivo, que si lo lee de la
+    cookie.
+
+    **No se descarta lo declarado.** Que alguien escriba "Direccion / Administracion"
+    puede ser deliberado --actua en nombre de ese rol-- y borrarlo perderia la
+    intencion. Lo que no puede pasar es que la identidad real no quede, asi que:
+
+      - sin sesion, se conserva lo declarado (es todo lo que hay) o "desconocido"
+      - con sesion y un declarado generico o vacio, se guarda la identidad sola
+      - con sesion y un declarado distinto, se guardan las dos:
+        ``"Ana Perez en nombre de Direccion / Auditor"``
+
+    Nunca devuelve cadena vacia: una fila de auditoria sin actor no sirve para
+    auditar.
+    """
+    sesion = identidad_de_sesion(usuario)
+    limpio = (declarado or "").strip()
+    if not sesion:
+        return limpio or "desconocido"
+    if limpio.lower() in DECLARADOS_GENERICOS or limpio.lower() == sesion.lower():
+        return sesion
+    return f"{sesion} en nombre de {limpio}"

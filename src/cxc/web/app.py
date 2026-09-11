@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from cxc.auth import (
     NOMBRES_ROLES,
     ROLES_PERMISOS,
+    actor_de_la_accion,
     autenticar_usuario,
     buscar_usuario_plataforma,
     crear_session_token,
@@ -15455,7 +15456,10 @@ class AceptarDiscrepanciaRequest(BaseModel):
 
 
 @app.post("/api/auditoria/aceptar-discrepancia")
-async def post_aceptar_discrepancia(req: AceptarDiscrepanciaRequest):
+async def post_aceptar_discrepancia(
+    req: AceptarDiscrepanciaRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
     try:
         repo = get_repo()
         row = {
@@ -15467,7 +15471,10 @@ async def post_aceptar_discrepancia(req: AceptarDiscrepanciaRequest):
             or huella_discrepancia(req.tipo_discrepancia, req.so_id, req.valores or {}),
             "detalle": req.detalle,
             "motivo_aceptacion": req.motivo_aceptacion,
-            "aprobado_por": req.aprobado_por,
+            # La sesion manda; ver `auth.actor_de_la_accion`.
+            "aprobado_por": actor_de_la_accion(
+                get_current_user_from_cookie(cxc_session), req.aprobado_por
+            ),
             "timestamp_aprobacion": datetime.now().isoformat(),
         }
         repo.append_discrepancia_aceptada(row)
@@ -15502,7 +15509,10 @@ class MarcarDescuentoNoOtorgadoRequest(BaseModel):
 
 
 @app.post("/api/ventas/descuento-no-otorgado")
-async def post_descuento_no_otorgado(req: MarcarDescuentoNoOtorgadoRequest):
+async def post_descuento_no_otorgado(
+    req: MarcarDescuentoNoOtorgadoRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
     try:
         repo = get_repo()
         if req.no_otorgado:
@@ -15510,7 +15520,13 @@ async def post_descuento_no_otorgado(req: MarcarDescuentoNoOtorgadoRequest):
                 {
                     "so_id": req.so_id,
                     "motivo": req.motivo,
-                    "marcado_por": req.marcado_por,
+                    # La SESION manda y lo declarado se conserva. El formulario pide
+                    # el nombre con un `prompt` --la persona lo tipea, con un default
+                    # que no identifica a nadie-- mientras la cookie ya sabe quien es.
+                    # Ver `auth.actor_de_la_accion`.
+                    "marcado_por": actor_de_la_accion(
+                        get_current_user_from_cookie(cxc_session), req.marcado_por
+                    ),
                     "timestamp_marcado": datetime.now().isoformat(),
                 }
             )
@@ -15692,7 +15708,10 @@ def _detectar_sobre_descuento_vigente(repo, so_id: str):
 
 
 @app.post("/api/facturacion/aprobar-descuento-sistema")
-async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
+async def post_aprobar_descuento_sistema(
+    req: AprobarDescuentoSistemaRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
     """Aprueba (o revoca, con ``activo=false``) un descuento manual interno
 
     para una orden. NUNCA se escribe a Odoo -- solo ajusta los saldos
@@ -15726,7 +15745,10 @@ async def post_aprobar_descuento_sistema(req: AprobarDescuentoSistemaRequest):
             "so_id": req.so_id,
             "monto": str(req.monto),
             "motivo": req.motivo,
-            "aprobado_por": req.aprobado_por,
+            # La sesion manda; ver `auth.actor_de_la_accion`.
+            "aprobado_por": actor_de_la_accion(
+                get_current_user_from_cookie(cxc_session), req.aprobado_por
+            ),
             "timestamp_aprobacion": datetime.now().isoformat(),
             "activo": "true" if req.activo else "false",
         }
