@@ -387,11 +387,23 @@ de la orden. Es el **noveno bug del propio andamiaje**, y se arregla fijando las
 fechas en la misma escritura: sin nada que pisar, la validación se cumple por
 construcción.
 
+### La corrida de confirmación, después del arreglo
+
+| | resultado |
+|---|---|
+| **45 pasan, 1 falla** | en 27:39 |
+| la única falla | `test_cambiar_la_fecha_de_la_orden_recalcula_su_base` |
+| canario fiscal | **0 en las 46** |
+
+**Esa única falla es el rojo intencional**, el mismo de siempre: «el teórico no se
+re-verifica cuando cambia la fecha de la orden». Tiene que quedarse rojo hasta que se
+arregle — es el hallazgo, y el día que se arregle deja de fallar solo.
+
 **Lo que esto dice del banco.** Ocho extracciones de un archivo de diecisiete mil
-líneas no rompieron nada del sistema — el fallo era del andamiaje y en una interacción
-con dos módulos venezolanos de Odoo que ningún test unitario podía ver. Correrlo era la
-única forma de saberlo, y la razón por la que el plan pedía un banco reejecutable y no
-un informe de una corrida.
+líneas no rompieron nada del sistema: las 20 fallas eran una sola del andamiaje, en una
+interacción con dos módulos venezolanos de Odoo que ningún test unitario podía ver.
+Correrlo era la única forma de saberlo, y es exactamente la razón por la que el plan
+pedía un banco reejecutable y no el informe de una corrida.
 
 ## Dónde quedó el banco
 
