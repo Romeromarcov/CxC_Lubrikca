@@ -945,18 +945,33 @@ el caso del pago 200 fijado en un test. 15 tests. **No aplica ninguno.**
 ### «Manda la definición que rige el precio, que es la de la lista histórica»
 
 Las dos definiciones de «orden histórica» quedaron unificadas, y la que gana es la
-del precio (`es_orden_historica`). Difieren en **13 órdenes**, no en 2 como había
-publicado:
+del precio (`es_orden_historica`). Medido con la definición nueva sobre las 1.111
+órdenes: **15 cambian de referencia**, y se parten en dos grupos.
 
-* **S00088 y S00090** (13-mar-2026, sin lista asignada). El precio salía por la
-  histórica, referenciada al euro, y el pago por la BCV-USD. **457,51 USD.**
-* **11 órdenes de la ventana con una lista USD real** (la #7, «Pago USD Marzo»).
-  El precio ya las trataba como NO históricas —es la excepción documentada del
-  caso SJMG 2012— y el pago las seguía pagando en euro.
+**Cuatro sin lista asignada**, que pasan a históricas sin importar la fecha:
+
+| orden | fecha | estado | vinculaciones | |
+|---|---|---|---:|---|
+| S00088 | 13-mar | `sale` | 1 | **viva** |
+| S00090 | 13-mar | `sale` | 2 | **viva** |
+| S00091 | 13-mar | `cancel` | 0 | la del campo de entrega contradictorio |
+| S00162 | 27-mar | `cancel` | 0 | la de 161.679,06 que figuraba `sale` en el espejo |
+
+Las dos vivas son las que había publicado, y son los **457,51 USD**: su precio
+salía por la histórica, referenciada al euro, y su pago por la BCV-USD.
+
+**Once de la ventana con una lista USD real** (la #7, «Pago USD Marzo»): S00007,
+S00022, S00023, S00026, S00027, S00033, S00049, S00052, S00059, S00061 y S00069. El
+precio ya las trataba como NO históricas —es la excepción documentada del caso SJMG
+2012— y el pago las seguía pagando en euro.
 
 Yo había llamado a esas 11 «una excepción deliberada que funciona», y era verdad a
 medias: funcionaba **del lado del precio**. Del lado del pago seguían con la
 referencia vieja.
+
+Y una precisión sobre el conteo: al aplicar esto escribí «difieren en 13», sumando
+mal las 2 vivas con las 11. Son **15** — la medición vieja decía «4 difieren, de las
+cuales 2 siguen vivas» y esa estaba bien. El error fue mío al resumirla.
 
 **No mueve ningún equivalente ya congelado.** `resolver_tasa_bcv_vinculacion` se
 llama sólo al *crear* una vinculación; las que ya están escritas conservan su tasa

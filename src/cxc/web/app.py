@@ -7049,12 +7049,14 @@ def orden_en_periodo_historico(repo, orden) -> bool:
 
     Antes esta función miraba SOLO la ventana de fechas, mientras el precio usaba
     ``es_orden_historica``, que además trata como histórica a cualquier orden **sin
-    lista asignada** y excluye a las que nacieron en una lista USD válida. Las dos
-    difieren en 13 órdenes, y el efecto era que la venta se valoraba en una
-    referencia y el cobro en otra:
+    lista asignada** y excluye a las que nacieron en una lista USD válida. Medido
+    sobre las 1.111 órdenes, las dos difieren en **15**, y el efecto era que la
+    venta se valoraba en una referencia y el cobro en otra:
 
-    * **S00088 y S00090** (13-mar-2026, sin lista): el precio salía por la
-      histórica, referenciada al euro, y el pago por la BCV-USD. 457,51 USD.
+    * **Cuatro sin lista**: S00088 y S00090 (vivas, con vinculaciones -- son los
+      457,51 USD), más S00091 y S00162, las dos canceladas y sin vinculaciones.
+      Su precio salía por la histórica, referenciada al euro, y el pago por la
+      BCV-USD.
     * **11 órdenes de la ventana con lista USD real** (ej. la #7 «Pago USD
       Marzo»): el precio ya las trataba como NO históricas —es la excepción
       documentada del caso SJMG 2012— y el pago las seguía pagando en euro.
