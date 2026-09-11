@@ -54,3 +54,9 @@ railway_monitor_findings.log
 
 # Artefactos generados de la auditoria de blindaje (se regeneran con los scripts)
 docs/blindaje/*.json
+
+# El reporte de cobertura en JSON, que `scripts/dinero_sin_cubrir.py`
+# consume para elegir la proxima pieza de la Fase 2.4. Se regenera con
+# `pytest --cov-report=json` y cambia en cada corrida: versionarlo llenaria
+# el historial de diffs de un megabyte que nadie lee.
+coverage.json
