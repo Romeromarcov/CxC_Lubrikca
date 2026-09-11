@@ -98,6 +98,29 @@ tu decisión, igual que las dos partidas de tasa. Queda fijado con un test
 mil filas y un centavo de residuo por fila.
 
 
+### Y los tres residuos que el plan propone aceptar tienen fecha de vencimiento
+
+El plan cierra con tres residuos «que propongo aceptar y no perseguir»: −6,06 en pagos
+contra Odoo, +1,87 de saldo a favor y −0,02 del teórico USD. La decisión es razonable:
+los tres tienen explicación y ninguno cambia nada.
+
+Lo que la prueba de volumen agrega es que **los tres crecen con el negocio y las
+tolerancias que los absorben no**. Medidos en las dos escalas:
+
+| partida | 1× | 10× | tolerancia | veredicto a 10× |
+|---|---:|---:|---:|---|
+| Saldo a favor de clientes | 1,53 | **15,55** | 5,0 | **ROJA** |
+| Cuadre interno — Venta Real | 0,01 | 0,23 | 1,0 | verde |
+| Cuadre interno — Teórico USD | 0,05 | 0,39 | 1,0 | verde |
+
+El primero ya se pasó. Los otros dos todavía entran, pero con el mismo patrón: el
+residuo escala con las filas y el umbral es un número fijo escrito una vez.
+
+Aceptar un residuo es correcto; **aceptarlo con un umbral absoluto es aceptarlo hasta
+que el negocio crezca**, y sin avisar cuándo. Las tres partidas se ponen rojas tarde o
+temprano por redondeo, y cuando eso pase el balance va a estar señalando algo que no es
+un error.
+
 ## Sync interrumpido a la mitad
 
 **La defensa existe y es el orden de las operaciones.** `set_last_sync(now)` es
