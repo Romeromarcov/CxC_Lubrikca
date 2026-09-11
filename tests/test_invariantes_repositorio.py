@@ -232,3 +232,94 @@ def test_las_restricciones_de_la_migracion_estan_todas_traducidas() -> None:
     en_la_migracion = {nombre for _tabla, nombre, _clausula in modulo.RESTRICCIONES}
     sin_traducir = en_la_migracion - set(_POR_QUE)
     assert not sin_traducir, f"restricciones sin frase legible: {sorted(sin_traducir)}"
+
+
+# --- la novena: un pago no puede aplicar más de lo que vale ------------------
+
+
+class _V:
+    """Una vinculación mínima, que es todo lo que la invariante mira."""
+
+    def __init__(self, vinc_id, pago_id, monto):
+        self.vinc_id = vinc_id
+        self.pago_id = pago_id
+        self.monto_aplicado = monto
+
+
+def test_una_vinculacion_que_cabe_en_el_pago_pasa() -> None:
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    assert verificar_no_sobreaplica(_V("V2", "P1", "40"), [_V("V1", "P1", "60")], "100") == []
+
+
+def test_una_vinculacion_que_excede_el_pago_se_rechaza() -> None:
+    """El caso del pago 200: vale 134,00 y tiene aplicados 715,04."""
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    fallas = verificar_no_sobreaplica(_V("V2", "200", "581.04"), [_V("V1", "200", "134")], "134")
+    assert len(fallas) == 1
+    assert fallas[0].restriccion == "ck_vinc_no_sobreaplica_el_pago"
+    assert "134" in fallas[0].detalle and "715.04" in fallas[0].detalle
+
+
+def test_el_borde_exacto_cabe() -> None:
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    assert verificar_no_sobreaplica(_V("V2", "P1", "50"), [_V("V1", "P1", "50")], "100") == []
+
+
+def test_el_redondeo_de_centavos_no_rechaza() -> None:
+    """Misma tolerancia que el detector, para que no puedan discrepar."""
+    from cxc.db.invariantes import TOLERANCIA_SOBREAPLICACION, verificar_no_sobreaplica
+
+    assert verificar_no_sobreaplica(
+        _V("V2", "P1", str(TOLERANCIA_SOBREAPLICACION)), [_V("V1", "P1", "100")], "100"
+    ) == []
+
+
+def test_reescribir_la_misma_vinculacion_no_la_cuenta_dos_veces() -> None:
+    """Un ``update`` trae la fila en las dos listas.
+
+    Sin esta guarda, guardar una vinculación sin cambiarla se rechazaría a sí
+    misma — y el sync reescribe filas todo el tiempo.
+    """
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    assert verificar_no_sobreaplica(_V("V1", "P1", "100"), [_V("V1", "P1", "100")], "100") == []
+
+
+def test_un_pago_ya_sobreaplicado_no_se_bloquea_ni_se_corrige() -> None:
+    """Los diez que ya están mal en producción siguen pudiendo escribirse.
+
+    Corregirlos mueve montos y es decisión del usuario; esta invariante sólo
+    impide que el exceso **crezca**. Si bloqueara lo existente, el sync se caería
+    sobre datos que ya estaban así antes de que la regla existiera.
+    """
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    ya = [_V("V1", "200", "715.04")]
+    assert verificar_no_sobreaplica(_V("V2", "200", "10"), ya, "134") == []
+
+
+def test_sin_monto_de_pago_confiable_no_se_afirma_nada() -> None:
+    """«Sin datos no es cero», que es la regla de toda esta fase.
+
+    Rechazar cuando falta el tope convertiría un dato ausente en un error.
+    """
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    for tope in (None, "", "0", "-5", "ilegible"):
+        assert verificar_no_sobreaplica(_V("V1", "P1", "999"), [], tope) == []
+
+
+def test_el_mensaje_dice_el_pago_y_los_dos_sumandos() -> None:
+    """Para poder ir a mirarlo sin volver a calcular.
+
+    Es la misma razón por la que las otras ocho invariantes traen sus valores:
+    el error tiene que decir qué fila y con qué números, no sólo que algo falló.
+    """
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    f = verificar_no_sobreaplica(_V("V2", "P77", "30"), [_V("V1", "P77", "80")], "100")[0]
+    assert "pago P77" in f.fila
+    assert "80" in f.detalle and "30" in f.detalle and "100" in f.detalle

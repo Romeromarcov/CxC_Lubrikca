@@ -64,7 +64,12 @@ from ..models import (
 from ..repositories import Repository
 from . import schema as t
 from .engine import make_engine
-from .invariantes import exigir, verificar_teorico, verificar_vinculacion
+from .invariantes import (
+    exigir,
+    verificar_no_sobreaplica,
+    verificar_teorico,
+    verificar_vinculacion,
+)
 
 _META_LAST_SYNC = "last_sync"
 
@@ -454,6 +459,19 @@ class PostgresRepository(Repository):
             ).all()
         return [_row_to_vinc(r) for r in rows]
 
+    def vinculaciones_de_pago(self, pago_id: str) -> list[Vinculacion]:
+        """Las vinculaciones de un pago. Existe para la novena invariante.
+
+        Se lee por pago y no filtrando ``all_vinculaciones()`` porque esto corre en
+        cada escritura: con 1.466 filas, traerlas todas para mirar una sería el
+        mismo N+1 que ya costó dieciocho minutos en otra pantalla.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.vinculaciones).where(t.vinculaciones.c.pago_id == pago_id)
+            ).all()
+        return [_row_to_vinc(r) for r in rows]
+
     def all_vinculaciones(self) -> list[Vinculacion]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.vinculaciones)).all()
@@ -471,6 +489,37 @@ class PostgresRepository(Repository):
         # marcos de profundidad. Esto falla igual --no cambia qué se acepta--
         # diciendo QUÉ vinculación y con QUÉ valores. Ver ``db/invariantes.py``.
         exigir(f for v in vincs for f in verificar_vinculacion(v))
+
+        # La novena invariante (11-sep-2026): las vinculaciones de un pago no
+        # pueden sumar más que el pago. No es un CHECK porque habla de la suma de
+        # varias filas, así que se comprueba acá.
+        #
+        # Sólo impide que el exceso CREZCA: los diez pagos que ya están
+        # sobreaplicados en producción -- 1.269,25 USD -- no se bloquean ni se
+        # corrigen, porque corregirlos mueve montos y es decisión del usuario.
+        # Ver ``db/invariantes.py::verificar_no_sobreaplica``.
+        fallas_de_suma: list[Any] = []
+        for pago_id in {str(v.pago_id) for v in vincs if getattr(v, "pago_id", None)}:
+            pago = self.get_pago(pago_id)
+            if pago is None:
+                continue
+            # Todas, de cualquier estado: es el mismo universo que suma
+            # ``_detectar_vinculaciones_sobreaplicadas``, para que el detector y la
+            # invariante no puedan discrepar sobre el mismo pago.
+            existentes = self.vinculaciones_de_pago(pago_id)
+            nuevas = [v for v in vincs if str(v.pago_id) == pago_id]
+            # Las que entran en este lote reemplazan a su homónima, así que la
+            # base de comparación son las existentes MENOS las que se reescriben.
+            ids_del_lote = {str(v.vinc_id) for v in nuevas}
+            base = [v for v in existentes if str(v.vinc_id) not in ids_del_lote]
+            acumuladas: list[Vinculacion] = list(base)
+            for nueva in nuevas:
+                fallas_de_suma.extend(
+                    verificar_no_sobreaplica(nueva, acumuladas, pago.monto)
+                )
+                acumuladas.append(nueva)
+        exigir(fallas_de_suma)
+
         with self._engine.begin() as conn:
             _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
 

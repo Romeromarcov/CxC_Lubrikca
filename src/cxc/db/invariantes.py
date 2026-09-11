@@ -52,11 +52,20 @@ _POR_QUE: dict[str, str] = {
     ),
     "ck_pago_monto_no_negativo": "un pago negativo es una devolución, y va por otro lado",
     "ck_orden_monto_total_no_negativo": "una orden no puede valer menos que nada",
+    "ck_vinc_no_sobreaplica_el_pago": (
+        "las vinculaciones de un pago no pueden sumar más que el pago: sería "
+        "acreditarle al cliente plata que nunca entró"
+    ),
     "ck_linea_cantidad_no_negativa": (
         "una cantidad negativa en la línea es cómo Odoo representa una devolución "
         "que supera lo que quedó, y el espejo no debe guardarla así"
     ),
 }
+
+# Cuanto puede exceder la suma y seguir siendo redondeo. Es la misma que usa
+# ``_detectar_vinculaciones_sobreaplicadas``, para que el detector y la
+# invariante no puedan discrepar sobre el mismo pago.
+TOLERANCIA_SOBREAPLICACION = Decimal("0.05")
 
 _NOMBRE_DE_RESTRICCION = re.compile(r'"(ck_[a-z0-9_]+)"')
 
@@ -122,6 +131,74 @@ def verificar_vinculacion(v: Any) -> list[Violacion]:
                 )
             )
     return fallas
+
+
+def verificar_no_sobreaplica(
+    nueva: Any, ya_aplicadas: Iterable[Any], monto_del_pago: Any
+) -> list[Violacion]:
+    """Que las vinculaciones de un pago no sumen más que el pago.
+
+    La novena invariante, y la única que **no puede** ser un ``CHECK`` de la base:
+    no habla de una fila sino de la suma de varias, y Postgres no expresa eso sin
+    un trigger. Vive acá, en el repositorio, que es donde pasa toda escritura.
+
+    **Por qué hace falta.** Medido sobre la copia de producción el 11-sep-2026:
+    diez pagos, todos en dólares, tienen vinculaciones que suman más que el pago --
+    1.269,25 USD de exceso. El peor es el pago 200: vale 134,00 y tiene aplicados
+    715,04 en nueve parciales. Ya existía un detector que lo **reporta**
+    (``_detectar_vinculaciones_sobreaplicadas``) y ningún lugar que lo **rechace**.
+
+    La dirección importa: un aplicado inflado hace que la orden se vea más pagada,
+    así que sale de la cuenta por cobrar antes de estar cobrada, y además dispara
+    las reglas que exigen pago previo.
+
+    **No toca lo que ya está escrito.** ``ya_aplicadas`` son las vinculaciones que
+    el pago ya tiene, y la comparación es contra la suma CON la nueva: si el pago
+    ya estaba sobreaplicado, esto no lo empeora ni lo bloquea, sólo impide que
+    crezca. Corregir las diez existentes mueve montos y es una decisión del
+    usuario; impedir la número once no mueve ninguno.
+
+    ``monto_del_pago`` y los montos aplicados tienen que venir en **la misma
+    moneda**. Suena obvio y es el error que cometí midiendo esto: comparar el
+    aplicado en la moneda del pago contra la referencia en dólares daba 417 pagos
+    y 82,9 millones de exceso, un número absurdo que delató la mezcla de unidades.
+    """
+    tope = _dec(monto_del_pago)
+    monto_nuevo = _dec(getattr(nueva, "monto_aplicado", None))
+    if tope is None or tope <= 0 or monto_nuevo is None:
+        # Sin tope confiable no se afirma nada: rechazar acá convertiría un dato
+        # ausente en un error, que es justo lo que este plan viene corrigiendo.
+        return []
+
+    vinc_id = str(getattr(nueva, "vinc_id", "") or "")
+    ya = Decimal("0")
+    for v in ya_aplicadas:
+        # La propia fila no se cuenta dos veces: un update la trae en las dos
+        # listas, y sin esta guarda una reescritura idéntica se rechazaría.
+        if str(getattr(v, "vinc_id", "") or "") == vinc_id:
+            continue
+        parcial = _dec(getattr(v, "monto_aplicado", None))
+        if parcial is not None:
+            ya += parcial
+
+    suma = ya + monto_nuevo
+    if suma <= tope + TOLERANCIA_SOBREAPLICACION:
+        return []
+
+    # Ya estaba sobreaplicado sin esta fila: no se bloquea, porque el exceso no lo
+    # trae este cambio. Se deja que el detector lo reporte.
+    if ya > tope + TOLERANCIA_SOBREAPLICACION:
+        return []
+
+    pago = str(getattr(nueva, "pago_id", "?") or "?")
+    return [
+        Violacion(
+            "ck_vinc_no_sobreaplica_el_pago",
+            f"pago {pago}",
+            f"el pago vale {tope} y las vinculaciones sumarían {suma} "
+            f"({ya} ya aplicados + {monto_nuevo} de esta)",
+        )
+    ]
 
 
 def verificar_teorico(t: Any) -> list[Violacion]:
