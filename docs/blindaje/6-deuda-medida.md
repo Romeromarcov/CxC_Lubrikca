@@ -478,6 +478,147 @@ Así que el trabajo real del ítem es **cero o casi**: dos de los tres son
 deliberados y documentados, y el tercero es un respaldo. Se cierra, y queda
 anotado para que el próximo inventario no lo vuelva a levantar.
 
+## S00573 «refacturar» y S00372 «revisar el caso»: los dos, diagnosticados
+
+El plan lista estos dos como una línea cada uno, sin decir qué tienen. Ahora lo
+dicen, y salieron cosas distintas: S00372 **ya está señalado por el sistema**, y
+S00573 destapó un defecto que afecta a diecisiete órdenes.
+
+### S00372: el sistema lo dice, y lo dice bien
+
+Consultado en el Odoo de prueba, la orden es esto:
+
+| | |
+|---|---|
+| estado | `sale`, facturada |
+| mercancía | 6 unidades pedidas, **0 entregadas** |
+| entregas | salida el 13-may-2026, **devolución el 14-may** |
+| factura | 00000049, `posted`, 327.608,74 VES = 644,12 USD |
+| pago | 282.415,63 VES, `payment_state='partial'` |
+| residual | **45.193,11 VES** |
+
+Las tres cifras cierran al centavo: 327.608,74 − 282.415,63 = 45.193,11, y la
+factura tiene `wh_iva_aplicado = True`. **Ese residual es el IVA retenido**, no
+una deuda impaga: lo cierra el comprobante de retención y no la cobranza. Así que
+cuando el reporte clasifica la orden como «legalmente la factura ya está saldada»
+y la saca de CxC activa, **tiene razón** — es la lógica que pediste en la Fase 3
+del plan de pagos.
+
+Lo que está mal es otra cosa, y `/api/ventas` ya la nombra:
+
+> `revisar_motivo`: Devolución registrada (total o parcial); **Falta crear Nota de
+> Crédito en Odoo por la devolución**
+
+Eso es exactamente el caso. La mercancía volvió completa el 14 de mayo, la factura
+sigue emitida por 644,12 USD, y el cliente pagó 555,29 USD por productos que
+devolvió. **Falta la nota de crédito que formalice la devolución**, y hasta que
+exista, el cobro de 555,29 USD no tiene respaldo.
+
+Y de paso, la misma orden es un ejemplo con nombre del hallazgo de las tasas
+congeladas: su vinculación quedó con `tasa_bcv_aplicada = 36,50` y acredita
+`equiv_usd_bcv = 7.737,41` sobre una orden de 644,13 USD. **Doce veces.**
+
+### S00573: la orden que nadie está persiguiendo, y las otras dieciséis
+
+S00573 es lo opuesto: 29 unidades **entregadas y no devueltas**, `facturado = 0`,
+y su única factura (00000530) está `reversed` — anulada por la nota de crédito
+00000014. O sea mercancía afuera, ningún documento que la cobre, **1.860,48 USD**.
+Confirma el ítem del plan: hay que refacturar.
+
+Pero al preguntar por qué el reporte de saldos no la muestra, apareció el defecto.
+No es que la saltee: la clasifica **«Pagado vs Teórico Lista USD»** con saldo
+0,00. Y S00573 no tiene ni una vinculación registrada — nunca entró un bolívar.
+
+#### Una factura anulada tiene residual cero, y la resta lo lee como cobro
+
+`_pagos_odoo_por_orden` tiene dos caminos. El principal pregunta por los
+`account.payment` reconciliados, que es el importe real. Cuando no hay ninguno,
+cae al fallback:
+
+```python
+paid_inv = max(Decimal("0"), tot - res)   # amount_total - amount_residual
+```
+
+La resta es correcta para una factura que se está cobrando: lo que ya no se debe,
+se cobró. Pero **una factura anulada tiene residual cero por definición**. Lo que
+la dejó en cero fue la nota de crédito, no un bolívar que entró.
+
+Y no depende de ninguna tasa. El fallback deduce la tasa dividiendo el total de la
+factura por el total de la orden, así que el abono fantasma sale **exactamente
+igual al monto de la orden en dólares**, con la tasa que sea. Por eso el saldo da
+0,00 y no un número raro.
+
+El caso más limpio no es S00573 sino **S00886**:
+
+| documento | estado | total VES | residual VES |
+|---|---|---|---|
+| 00000677 (25-ago) | `reversed` | 581.034,93 | 0,00 |
+| 00000701 (26-ago) | `not_paid` | 596.091,85 | **596.091,85** |
+
+Cero `account.payment` reconciliados. La resta suma (581.034,93 − 0) + (596.091,85
+− 596.091,85) = 581.034,93, que es el total de la orden. **Nadie pagó nada y el
+reporte la da por cobrada.**
+
+#### Cuánto es
+
+Medido con `scripts/auditar_facturas_anuladas.py` sobre la copia de producción:
+22 facturas `out_invoice` `posted` con `payment_state='reversed'`, ninguna con
+`account.payment` reconciliado. Descontadas 3 del banco de pruebas y 1 sin
+mercancía entregada, quedan **17 órdenes reales, y las 17 están fuera de la cuenta
+por cobrar**.
+
+Acá importa no inflar el número. De las 17:
+
+| | órdenes | plata |
+|---|---:|---:|
+| **Sin ninguna factura viva** — hay que refacturar | 1 | **1.860,48 USD** |
+| **Refacturada, con residual real sin cobrar** | 7 | **2.628,64 USD** |
+| Refacturada y ya cobrada — el abono cuenta dos veces | 9 | — |
+| | **17** | **4.489,12 USD** |
+
+Dieciséis de las diecisiete **fueron refacturadas bien**: tienen una segunda
+factura viva. Publicar los 11.667,17 USD que suman sus órdenes sería mentir. Lo
+que el defecto esconde son los 2.628,64 USD de residual que esas facturas nuevas
+todavía tienen sin cobrar, más los 1.860,48 de S00573. Ninguno de los siete
+residuales se explica por retención de IVA — se verificó contra el IVA estimado de
+cada factura, igual que en S00372.
+
+El más grande es **S00479**: 1.308,12 USD debiéndose sobre la factura 00000526 en
+`partial`, y la orden fuera de CxC.
+
+#### Lo que queda hecho, y lo que no
+
+Hecho: `src/cxc/engine/reversadas.py` expone las **dos lecturas** del mismo par
+`(amount_total, amount_residual)` y un diagnóstico por orden que dice si hay
+factura viva, cuánto es el abono fantasma y cuánto el residual que sí se debe. 25
+tests, con los tres casos reales (S00886, S00573 y una refacturada ya cobrada)
+fijados con sus números exactos. Y el script que lo mide sobre cualquier entorno.
+
+**No hecho, y a propósito:** aplicar la distinción. Devolver 17 órdenes a la
+cuenta por cobrar mueve montos, y la Fase 1 dice que eso pasa por tu visto bueno.
+Cuando lo apruebes, el cambio es de una línea — que el fallback aporte cero
+cuando `payment_state` es `reversed` — y los tests ya describen qué tiene que
+pasar.
+
+Una nota sobre cómo encontré esto, porque cambia qué se puede afirmar. Lo vi
+primero como notas de crédito valuadas en 37.335,66 USD sobre una orden de
+1.860,48 — veinte veces. Eso resultó ser un artefacto de esta copia: **la QA no
+tiene ninguna tasa cargada**, así que toda conversión cae al default de 2019, y
+1.362.751,66 / 36,50 = 37.335,6619 exacto. La magnitud era del entorno; el defecto
+del fallback, no. Por eso el número que se publica arriba es el residual medido en
+Odoo y no una conversión nuestra.
+
+### Y una tabla que no se puede consultar por orden
+
+De paso: **las 47 notas de crédito del espejo tienen `so_id` en NULL**, porque en
+Odoo esas notas traen `invoice_origin = False` y se vinculan solo por
+`factura_origen_id`. Una consulta directa por `so_id` a `facturas` no encuentra
+ninguna NC. El código llega igual, encadenando por la factura de origen, así que
+no es un bug vivo — pero cualquier consulta nueva que filtre NCs por orden va a
+devolver cero sin avisar. Y el espejo ya guarda el valor correcto al lado
+(`monto_total_signed_usd = −1.860,43` para la NC de S00573, calculado por Odoo a
+la tasa real), que es lo que conviene usar en vez de reconvertir a mano.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos
