@@ -173,3 +173,74 @@ def test_sin_capturas_el_diagnostico_lo_dice_en_vez_de_mostrar_ceros() -> None:
     d = diagnostico_de_promedios([])
     assert "NO es un promedio de cero" in d.nota
     assert not d.difieren, "dos ausencias no difieren"
+
+
+# --- el rango del día, compartido por los dos endpoints de tasa -------------
+
+
+def test_el_rango_sale_del_minimo_y_maximo_capturados() -> None:
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    r = rango_binance_del_dia([_f(7, "900"), _f(11, "1000"), _f(17, "950")])
+    assert (r.minimo, r.maximo, r.capturas) == (Decimal("900"), Decimal("1000"), 3)
+    assert r.verificado
+    assert r.acepta(Decimal("950"))
+    assert not r.acepta(Decimal("899"))
+    assert not r.acepta(Decimal("1001"))
+
+
+def test_los_bordes_del_rango_se_aceptan() -> None:
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    r = rango_binance_del_dia([_f(7, "900"), _f(17, "1000")])
+    assert r.acepta(Decimal("900")) and r.acepta(Decimal("1000"))
+
+
+def test_sin_capturas_ese_dia_la_guarda_NO_corre_y_lo_dice() -> None:
+    """El hallazgo: la validación estaba apagada en el 100 % de los casos.
+
+    Las 1.494 vinculaciones del espejo están en fechas sin capturas Binance, así
+    que `acepta` devolvía True para cualquier tasa. Sigue devolviendo True —
+    rechazar impediría corregir la tasa de un pago viejo, que es para lo que
+    sirven esas pantallas— pero ahora `verificado` dice que no se comprobó.
+    """
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    r = rango_binance_del_dia([])
+    assert not r.verificado
+    assert r.capturas == 0
+    assert r.acepta(Decimal("999999")), "acepta, pero avisando que no verificó"
+    assert r.minimo is None and r.maximo is None
+
+
+def test_una_captura_fallida_no_baja_el_minimo_a_cero() -> None:
+    """Si el cero entrara al rango, aceptaría cualquier tasa por abajo."""
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    r = rango_binance_del_dia([_f(7, "900"), _f(8, "0"), _f(17, "1000")])
+    assert r.minimo == Decimal("900")
+    assert not r.acepta(Decimal("1"))
+
+
+def test_el_rango_lee_objetos_y_dicts() -> None:
+    """Un endpoint le pasa filas de ``SerieTasas`` y el otro dicts."""
+    from types import SimpleNamespace
+
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    de_objetos = rango_binance_del_dia(
+        [SimpleNamespace(tasa_binance=Decimal("900")), SimpleNamespace(tasa_binance=Decimal("950"))]
+    )
+    de_dicts = rango_binance_del_dia([{"tasa_binance": "900"}, {"tasa_binance": "950"}])
+    assert (de_objetos.minimo, de_objetos.maximo) == (de_dicts.minimo, de_dicts.maximo)
+
+
+def test_una_sola_captura_da_un_rango_de_un_punto() -> None:
+    """Y entonces solo esa tasa exacta se acepta, que es lo correcto: es el único
+    dato que hay de ese día."""
+    from cxc.engine.promedios_tasas import rango_binance_del_dia
+
+    r = rango_binance_del_dia([_f(10, "954.75")])
+    assert r.verificado
+    assert r.acepta(Decimal("954.75"))
+    assert not r.acepta(Decimal("954.76"))

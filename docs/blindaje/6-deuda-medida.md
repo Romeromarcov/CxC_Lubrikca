@@ -1164,6 +1164,21 @@ justo para lo que sirve esa pantalla. Lo que cambió es que deja de ser invisibl
 queda un `warning` en el log y la respuesta trae `rango_verificado: false`, así que
 la pantalla puede decirlo.
 
+La guarda estaba **duplicada** en los dos endpoints de tasa Binance (el de la
+vinculación y el del pago pendiente). Ahora los dos usan
+`engine/promedios_tasas.py::rango_binance_del_dia`, donde `acepta()` y `verificado`
+son dos preguntas separadas a propósito: *«¿esta tasa entra?»* y *«¿había con qué
+comprobarlo?»*. Juntarlas es lo que hacía que la segunda no se pudiera contestar.
+6 tests más.
+
+Y un arreglo de paso en el endpoint del pago pendiente: buscaba el pago recorriendo
+`all_pagos()` —cargar los 1.320 para encontrar uno— cuando `get_pago` existía. Eso
+descubrió que **sí había un test** para ese endpoint (mi barrido lo había marcado
+como sin pruebas porque busca el nombre de la función, y el test lo ejercita sin
+nombrarla) y que su repo de mentira no implementaba `get_pago`: sobre un `MagicMock`
+devolvía un objeto falso, así que el 404 nunca disparaba. El repo real devuelve
+`None`, y ahora el mock también.
+
 ## Editar la variante de tasa reescribía un equivalente congelado con otra precisión
 
 `post_cambiar_tipo_tasa_bcv` cambia la variante USD/EUR de una vinculación y

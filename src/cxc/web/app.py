@@ -73,6 +73,7 @@ from cxc.engine.pagada_en_odoo import (
 )
 from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
+from cxc.engine.promedios_tasas import rango_binance_del_dia
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -8992,19 +8993,17 @@ async def post_editar_tasa_binance(
         # mínimo capturado ese día en SerieTasas.
         fecha = vinc.hora_pago_confirmada.date()
         dia_rows = repo.serie_tasas_del_dia(fecha)
-        binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
-        rango_verificado = bool(binance_vals)
-        if binance_vals:
-            minimo, maximo = min(binance_vals), max(binance_vals)
-            if nueva_tasa < minimo or nueva_tasa > maximo:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"La tasa Binance ({nueva_tasa}) debe estar entre {minimo} y "
-                        f"{maximo} -- rango capturado el {fecha.isoformat()}."
-                    ),
-                )
-        else:
+        rango = rango_binance_del_dia(dia_rows)
+        rango_verificado = rango.verificado
+        if not rango.acepta(nueva_tasa):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"La tasa Binance ({nueva_tasa}) debe estar entre {rango.minimo} y "
+                    f"{rango.maximo} -- rango capturado el {fecha.isoformat()}."
+                ),
+            )
+        if not rango.verificado:
             # Sin capturas de ese día la guarda NO corre y se acepta cualquier
             # valor. Antes pasaba en silencio; medido el 11-sep-2026, las 1.494
             # vinculaciones del espejo están en fechas sin capturas Binance, o sea
@@ -9067,23 +9066,33 @@ async def post_editar_tasa_binance_pago_pendiente(pago_id: str, req: TasaBinance
         if nueva_tasa <= Decimal("0"):
             raise HTTPException(status_code=400, detail="La tasa Binance debe ser positiva.")
 
-        pago = next((p for p in repo.all_pagos() if p.pago_id == pago_id), None)
+        # ``get_pago`` en vez de recorrer ``all_pagos()``: buscar uno cargando los
+        # 1.320 es la misma forma del N+1 que ya costo dieciocho minutos en otra
+        # pantalla, y acá ni siquiera hacia falta -- el accesor existia.
+        pago = repo.get_pago(pago_id)
         if pago is None:
             raise HTTPException(status_code=404, detail=f"Pago {pago_id} no encontrado.")
 
         fecha = pago.fecha_pago.date()
-        dia_rows = repo.serie_tasas_del_dia(fecha)
-        binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
-        if binance_vals:
-            minimo, maximo = min(binance_vals), max(binance_vals)
-            if nueva_tasa < minimo or nueva_tasa > maximo:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"La tasa Binance ({nueva_tasa}) debe estar entre {minimo} y "
-                        f"{maximo} -- rango capturado el {fecha.isoformat()}."
-                    ),
-                )
+        rango = rango_binance_del_dia(repo.serie_tasas_del_dia(fecha))
+        if not rango.acepta(nueva_tasa):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"La tasa Binance ({nueva_tasa}) debe estar entre {rango.minimo} y "
+                    f"{rango.maximo} -- rango capturado el {fecha.isoformat()}."
+                ),
+            )
+        if not rango.verificado:
+            # Sin capturas de ese dia la guarda no corre. Ver la misma nota en
+            # ``post_editar_tasa_binance``.
+            logger.warning(
+                "Tasa Binance del pago pendiente %s puesta en %s SIN verificar el "
+                "rango: no hay capturas para el %s.",
+                pago_id,
+                nueva_tasa,
+                fecha.isoformat(),
+            )
 
         repo.upsert_pago_tasa_binance_override(
             {
@@ -9098,6 +9107,7 @@ async def post_editar_tasa_binance_pago_pendiente(pago_id: str, req: TasaBinance
             "status": "success",
             "pago_id": pago_id,
             "tasa_binance_aplicada": float(nueva_tasa),
+            "rango_verificado": rango.verificado,
         }
     except HTTPException:
         raise

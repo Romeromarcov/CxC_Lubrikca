@@ -2237,6 +2237,12 @@ def test_e2e_editar_tasa_binance_pago_pendiente_valida_min_max_y_persiste():
     )
     mock_repo = MagicMock()
     mock_repo.all_pagos.return_value = [pago]
+    # ``get_pago`` tambien, que es por donde el endpoint busca desde el
+    # 11-sep-2026: antes recorria all_pagos() -- cargar los 1.320 para
+    # encontrar uno. Sobre un MagicMock sin configurar, get_pago devuelve un
+    # objeto falso y el 404 de este test no disparaba; el repo real devuelve
+    # None, asi que el mock ahora se comporta como el.
+    mock_repo.get_pago.side_effect = lambda pid: pago if pid == pago.pago_id else None
     mock_repo.serie_tasas_del_dia.return_value = [
         SerieTasa(datetime(2026, 7, 10, 8, 0), Decimal("36"), Decimal("39.0"), "x"),
         SerieTasa(datetime(2026, 7, 10, 12, 0), Decimal("36"), Decimal("41.0"), "x"),

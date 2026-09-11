@@ -204,3 +204,53 @@ def diagnostico_de_promedios(filas: list[dict[str, Any]]) -> DiagnosticoPromedio
             f"{con.capturas_tarde}."
         )
     return DiagnosticoPromedios(con_solapamiento=con, sin_solapamiento=sin, nota=nota)
+
+
+@dataclass(frozen=True)
+class RangoDelDia:
+    """El rango de tasas Binance capturado un dia, o la ausencia de capturas.
+
+    ``verificado`` es lo que importa: con False, **la guarda no corrio** y
+    cualquier tasa pasa. Antes eso era un ``if`` sin ``else`` en dos endpoints y no
+    dejaba rastro; medido el 11-sep-2026, las 1.494 vinculaciones del espejo estan
+    en fechas sin capturas, o sea que la validacion estaba apagada en el 100 % de
+    los casos.
+    """
+
+    minimo: Decimal | None
+    maximo: Decimal | None
+    capturas: int
+
+    @property
+    def verificado(self) -> bool:
+        return self.capturas > 0
+
+    def acepta(self, tasa: Decimal) -> bool:
+        """True si ``tasa`` cae en el rango, o si no hay rango contra el que medir.
+
+        Devolver True sin capturas es deliberado y hay que leerlo junto con
+        ``verificado``: rechazar impediria corregir la tasa de un pago viejo, que es
+        justo para lo que sirven esas pantallas. Lo que NO puede pasar es que se
+        acepte en silencio, y para eso esta ``verificado``.
+        """
+        if not self.verificado or self.minimo is None or self.maximo is None:
+            return True
+        return self.minimo <= tasa <= self.maximo
+
+
+def rango_binance_del_dia(filas: list[Any]) -> RangoDelDia:
+    """El minimo y el maximo de ``tasa_binance`` entre las capturas de un dia.
+
+    ``filas`` son objetos de ``SerieTasas`` (tienen el atributo) o dicts. Solo
+    cuentan las capturas positivas: una fallida guarda cero y meteria el minimo en
+    cero, con lo cual el rango aceptaria cualquier tasa por abajo.
+    """
+    vals: list[Decimal] = []
+    for f in filas:
+        crudo = f.get("tasa_binance") if isinstance(f, dict) else getattr(f, "tasa_binance", None)
+        tasa = _dec(crudo)
+        if tasa > Decimal("0"):
+            vals.append(tasa)
+    if not vals:
+        return RangoDelDia(minimo=None, maximo=None, capturas=0)
+    return RangoDelDia(minimo=min(vals), maximo=max(vals), capturas=len(vals))
