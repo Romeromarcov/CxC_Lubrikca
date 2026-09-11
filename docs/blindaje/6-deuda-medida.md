@@ -11,7 +11,7 @@ uno sube, y dos se cierran.
 | Dos definiciones de «orden histórica» | Media | **2 órdenes vivas, 457,51 USD** | confirmada, acotada |
 | Equivalentes congelados sin propagar correcciones | Media | **ya hay algo que los lista** — 1.487 con el default de 2019, 2.687.701,19 USD | herramienta entregada; el número real sale de producción |
 | El arreglo del scraper nunca corrió en producción | Media | no verificable desde acá | tuyo |
-| Formularios de reglas legacy | Baja | — | espera tu confirmación |
+| Formularios de reglas legacy | Baja | **verificado: el unificado cubre los 9**; las 5 brechas aparentes eran renombres | espera tu confirmación, ahora informada |
 | Vigencias de listas sembradas | — | **0 de 16 listas las tienen**; el verificador decía «ninguno» sin poder mirar | instrumento arreglado; sembrarlas es tuyo |
 | `SerieTasas` se lee sin caché | Baja | **22 sitios: 21 legítimos, 1 era un N+1** | **cerrada, y con un arreglo** |
 | Tramos de volumen en USD | Baja | — | cuando lo pidas |
@@ -130,6 +130,53 @@ configurada porque **no hay ninguna regla**. Las preguntas reales son tres:
    este cliente en descuentos» no tiene una sola respuesta.
 3. **Las 119 órdenes con descuento calculado y no cobrado**: marcarlas como no
    otorgadas es un `INSERT` en una tabla que existe y está vacía.
+
+## Formularios de reglas legacy: el unificado los cubre a los nueve
+
+El ítem decía «el formulario unificado ya cubre las siete familias y las 19 reglas de
+producción viajan por él sin cambiar. Faltaba tu confirmación para retirar los viejos».
+Verificado campo por campo, porque «cubre» es justamente lo que había que comprobar.
+
+**Los dos formularios coexisten hoy en la pantalla.** El unificado existe y funciona
+(`POST /api/config/regla`, campos `ru-*`), y los nueve viejos siguen ahí, cada uno con
+su `GET` para listar y su `POST`/`PUT` para guardar. Retirar los viejos es quitar la UI
+**y** los endpoints, no solo los endpoints.
+
+**Y sí, el unificado los cubre.** Comparados los modelos de request uno contra otro:
+
+| formulario legacy | campos | estado |
+|---|---:|---|
+| `PromocionRequest` | 14 | cubierto |
+| `ProntoPagoRequest` | 15 | cubierto |
+| `RecompraRequest` | 16 | cubierto |
+| `ProductoPromoRequest` | 16 | cubierto |
+| `VolumenRequest` / `DescuentoVolumenRequest` | 16 / 12 | cubierto, con renombre |
+| `DiferencialCambiarioRequest` | 15 | cubierto, con renombre |
+| `DescuentoMarcaRequest` | 7 | cubierto, con renombre |
+| `ReglaDiasCreditoVolumenRequest` | 6 | cubierto, con renombre |
+
+La primera comparación mecánica marcó **cinco campos «faltantes»** y los cinco eran
+**renombres**, no huecos. Vale escribir el mapeo para que nadie repita el susto:
+
+| campo legacy | en el unificado |
+|---|---|
+| `litros_minimo` / `litros_maximo` | `min_unidades` / `max_unidades` + `unidad_medida` |
+| `nombre` | `descripcion` |
+| `tipo_descuento` | `tipo_regla` (el campo de despacho) |
+| `tipo_calculo` | **se deriva** de `tipo_diferencial` |
+
+El último no es un renombre sino una **consolidación deliberada**, y el propio código
+dice por qué: «`tipo_diferencial` y un segundo selector era una trampa». Pedir los dos
+permitía combinarlos de forma incoherente.
+
+Los otros modelos que la comparación encontró —`AprobarDescuentoSistemaRequest`,
+`MarcarDescuentoNoOtorgadoRequest`, `MarcarRecibidoRequest`, `EliminarDescuentoRequest`,
+`ToggleDescuentoRequest`— **no son formularios de regla**: son acciones sobre una regla
+o un pago ya existentes. No entran en el retiro.
+
+**Qué queda para vos:** la confirmación, que ahora es sobre algo verificado. Retirar los
+viejos no pierde ningún campo. Lo que sí hay que hacer al retirarlos es sacar los nueve
+formularios de la pantalla en el mismo cambio, porque hoy son los que guardan.
 
 ## Vigencias de listas sembradas: el instrumento decía «ninguno» sin mirar
 
