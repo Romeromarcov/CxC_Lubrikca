@@ -6986,21 +6986,61 @@ def valor_pagado_bcv_usd_en_euros(vinculaciones: list[Vinculacion], tasas: Tasas
 
 
 def so_ids_en_ventana_historica(repo: Any, ordenes: Any) -> set[str]:
-    """Los ``so_id`` que caen en la ventana de la Lista Histórica.
+    """Los ``so_id`` que usan la referencia histórica (euro) al pagarse.
 
     Existe para no llamar a ``orden_en_periodo_historico`` una vez por
     orden: esa función consulta el toggle con ``repo.get_config`` en CADA
     llamada, así que recorrer 953 órdenes eran 953 lecturas a la base. Acá
-    el toggle se lee UNA vez y la ventana se evalúa en memoria.
+    el toggle y las listas USD se leen UNA vez y la regla se evalúa en memoria.
+
+    **Usa la misma definición que el precio**, que es la decisión del usuario
+    («manda la definición que rige el precio, que es la de la lista histórica»).
+    Hasta el 11-sep-2026 esta función miraba SOLO la ventana de fechas mientras
+    ``orden_en_periodo_historico`` ya se había unificado con ``es_orden_historica``,
+    así que la decisión quedó aplicada a medias: el commit que la unificó tocó una de
+    las dos funciones y ésta —la que alimenta el crédito del pago en
+    ``_pagos_odoo_por_orden`` y en ``_get_reporte_saldos_sync``— se quedó con la regla
+    vieja.
+
+    Medido sobre las 1.111 órdenes del espejo, las dos reglas difieren en **15**, las
+    mismas 15 que el commit de la unificación documentó:
+
+    * **11 con lista 7 («Pago USD Marzo»)**: el precio NO las trata como históricas
+      —es la excepción explícita del caso SJMG 2012, una lista USD real prevalece— y
+      el pago las seguía acreditando al euro.
+    * **4 sin lista**: S00088, S00090, S00091 y S00162. El precio las trata como
+      históricas de forma incondicional (sin lista no hay con qué valorar) y el pago
+      no, porque tres caen justo en el día de cierre de la ventana, que es exclusivo,
+      y la cuarta está fuera.
+
+    De esas 15, el euro solo puede tocar las que tienen abonos en **VES** —son tres:
+    S00059, S00061 y S00088—. **El efecto en plata no se pudo medir** en el entorno de
+    prueba: ``bcv_eur`` devuelve ``None`` para todas las fechas de marzo ahí (la tabla
+    de tasas históricas tiene una sola fila, del 10-sep), así que el camino euro nunca
+    dispara y las tres se acreditan a BCV-USD de todos modos. En producción, donde la
+    serie de euro existe, sí mueve esas tres.
     """
     if not is_historical_pricelist_enabled(repo):
         return set()
-    return {
-        str(o.so_id)
-        for o in ordenes
-        if isinstance(getattr(o, "fecha", None), date)
-        and HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
-    }
+    try:
+        usd_ids, _ves = get_valid_pricelists_usd_and_ves(repo)
+        listas_usd = {str(x).strip() for x in usd_ids}
+    except Exception:
+        # Sin poder resolver las listas USD se cae a tratarlas como no-USD, que es
+        # el comportamiento anterior a la excepción SJMG: incluye de más, nunca de
+        # menos. Excluir de más dejaría un pago acreditado a la tasa equivocada.
+        listas_usd = set()
+    salida = set()
+    for o in ordenes:
+        lista_id = str(getattr(o, "lista_precios", "") or "").strip()
+        if es_orden_historica(
+            getattr(o, "fecha", None),
+            lista_id,
+            enabled=True,
+            lista_es_usd_valida=lista_id in listas_usd,
+        ):
+            salida.add(str(o.so_id))
+    return salida
 
 
 def orden_en_periodo_historico(repo, orden) -> bool:

@@ -116,9 +116,17 @@ class _RepoConToggle:
 
 
 class _Orden:
-    def __init__(self, so_id: str, fecha: date) -> None:
+    """Una orden con su lista, que es lo que el stub viejo no modelaba.
+
+    Sin `lista_precios` el stub no podía expresar la regla del precio, y por eso los
+    tests de abajo encodaban la regla VIEJA —solo la ventana de fechas— sin que se
+    notara. Toda orden real tiene el campo, aunque sea vacío.
+    """
+
+    def __init__(self, so_id: str, fecha: date, lista: str = "4") -> None:
         self.so_id = so_id
         self.fecha = fecha
+        self.lista_precios = lista
 
 
 def test_solo_entran_las_ordenes_de_la_ventana() -> None:
@@ -133,10 +141,79 @@ def test_solo_entran_las_ordenes_de_la_ventana() -> None:
     assert so_ids_en_ventana_historica(_RepoConToggle(), ordenes) == {"S00020", "S00074"}
 
 
-def test_el_toggle_apagado_desactiva_la_via_entera() -> None:
+def test_una_orden_SIN_LISTA_entra_aunque_este_fuera_de_la_ventana() -> None:
+    """La regla del precio, aplicada al pago: sin lista no hay con qué valorar.
+
+    Es la decisión del usuario del 11-sep-2026 —«manda la definición que rige el
+    precio, que es la de la lista histórica»—, y hasta ese día esta función la
+    ignoraba: el commit que unificó las dos definiciones tocó
+    `orden_en_periodo_historico` y dejó ésta con la regla vieja de solo-ventana.
+
+    Medido sobre las 1.111 órdenes del espejo: son **4** —S00088, S00090, S00091 y
+    S00162—. Tres caen justo en el día de cierre de la ventana, que es exclusivo, y la
+    cuarta está fuera; las cuatro sin lista. Su precio salía de la histórica y su pago
+    se acreditaba a BCV-USD.
+    """
     from cxc.web.app import so_ids_en_ventana_historica
 
-    ordenes = [_Orden("S00020", date(2026, 3, 9))]
+    ordenes = [
+        _Orden("S00088", date(2026, 3, 13), lista=""),  # el día del corte, sin lista
+        _Orden("S00162", date(2026, 3, 27), lista=""),  # bien fuera, sin lista
+        _Orden("S00566", date(2026, 7, 17), lista="4"),  # fuera y CON lista: no entra
+    ]
+    assert so_ids_en_ventana_historica(_RepoConToggle(), ordenes) == {"S00088", "S00162"}
+
+
+def test_una_orden_de_la_ventana_CON_lista_USD_real_NO_entra() -> None:
+    """La excepción del caso SJMG 2012, que el precio ya respetaba y el pago no.
+
+    Once órdenes de la ventana tienen una lista USD real y vigente (la 7, «Pago USD
+    Marzo»). Para ésas la lista USD prevalece sobre la sustitución histórica, así que
+    su cobranza tampoco va al euro. Antes entraban por estar en la ventana.
+    """
+    from unittest.mock import patch
+
+    from cxc.web.app import so_ids_en_ventana_historica
+
+    ordenes = [
+        _Orden("S00007", date(2026, 2, 26), lista="7"),  # lista USD real
+        _Orden("S00020", date(2026, 3, 9), lista="5"),  # lista VES: sí entra
+    ]
+    with patch("cxc.web.app.get_valid_pricelists_usd_and_ves", return_value=(["7", "8"], ["5"])):
+        assert so_ids_en_ventana_historica(_RepoConToggle(), ordenes) == {"S00020"}
+
+
+def test_si_no_se_pueden_resolver_las_listas_USD_se_incluye_de_MAS() -> None:
+    """Incluir de más acredita al euro algo que quizá no corresponde; excluir de más
+    deja un pago acreditado a la tasa equivocada sin que nada avise.
+
+    De las dos, la primera es la que se puede ver y corregir, así que es la que se
+    elige. Es el comportamiento previo a la excepción SJMG.
+    """
+    from unittest.mock import patch
+
+    from cxc.web.app import so_ids_en_ventana_historica
+
+    ordenes = [_Orden("S00007", date(2026, 2, 26), lista="7")]
+    with patch("cxc.web.app.get_valid_pricelists_usd_and_ves", side_effect=OSError("sin config")):
+        assert so_ids_en_ventana_historica(_RepoConToggle(), ordenes) == {"S00007"}
+
+
+def test_el_toggle_apagado_desactiva_la_via_entera() -> None:
+    """Incluidas las órdenes sin lista, y eso es una decisión, no una consecuencia.
+
+    `es_orden_historica` trata «sin lista» como histórica de forma **incondicional** —no
+    mira el toggle ni la ventana—, así que la lectura estricta de la regla del precio
+    diría que una orden sin lista se acredita al euro incluso con el interruptor
+    apagado. Acá se elige lo contrario: el toggle apaga la vía entera.
+
+    La razón es que un interruptor que no apaga todo no es un interruptor. Queda
+    anotado como pregunta abierta para el usuario, porque las dos lecturas son
+    defendibles y la diferencia toca plata.
+    """
+    from cxc.web.app import so_ids_en_ventana_historica
+
+    ordenes = [_Orden("S00020", date(2026, 3, 9)), _Orden("S00088", date(2026, 3, 13), lista="")]
     assert so_ids_en_ventana_historica(_RepoConToggle(activo=False), ordenes) == set()
 
 
@@ -157,6 +234,7 @@ def test_una_orden_sin_fecha_no_rompe_el_conjunto() -> None:
     class _SinFecha:
         so_id = "S00001"
         fecha = None
+        lista_precios = "4"
 
     assert so_ids_en_ventana_historica(_RepoConToggle(), [_SinFecha()]) == set()
 
