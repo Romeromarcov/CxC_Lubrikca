@@ -89,8 +89,6 @@ def test_auditar_nota_credito():
     assert res_dif.tipo == TipoAuditoria.NOTA_CREDITO
 
 
-
-
 # --- sobre-descuento: la conjunción de dos condiciones (11-sep-2026) --------
 
 
@@ -258,3 +256,161 @@ def test_una_linea_sin_descuento_ni_subtotal_negativo_no_aporta():
     from cxc.engine.discount_audit import monto_de_descuento_de_linea
 
     assert monto_de_descuento_de_linea({"discount": 0, "price_subtotal": 0}) == 0.0
+
+
+# --- la regla entera del camino vivo (Fase 2.4, pieza 23) --------------------
+
+
+class TestDescuentoDeLinea:
+    """`descuento_de_linea` nace de un error propio, y el docstring lo dice.
+
+    La pieza 21 extrajo la mitad del monto y la cableó en
+    `_leer_descuentos_lineas_odoo`, que **no tiene ningún llamador**. El camino vivo
+    (`_descuentos_lineas_desde_espejo`) se quedó con su copia inline, así que la
+    extracción no redujo la duplicación: la movió a código que no corre. Medido el
+    11-sep-2026.
+    """
+
+    def test_una_linea_sin_descuento_devuelve_None_y_no_cero(self) -> None:
+        """Cero sería un descuento de cero; `None` es «esta línea no es descuento».
+
+        El llamador suma `d.monto`, así que devolver 0.0 lo haría sumar una línea
+        que no corresponde y, peor, agregar su fragmento al detalle que el Reporte
+        de Saldos muestra.
+        """
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        assert (
+            descuento_de_linea(
+                descuento_pct=0.0,
+                cantidad=3,
+                precio_unitario=10.0,
+                subtotal=30.0,
+                nombre_linea="SINOCO SAE 50",
+                nombre_producto="sinoco sae 50",
+            )
+            is None
+        )
+
+    def test_el_porcentaje_se_aplica_sobre_cantidad_por_precio(self) -> None:
+        """Y no sobre el subtotal, que ya lo tiene restado."""
+        from cxc.engine.discount_audit import PATRON_PORCENTAJE, descuento_de_linea
+
+        d = descuento_de_linea(descuento_pct=10.0, cantidad=3, precio_unitario=10.0, subtotal=27.0)
+        assert d is not None
+        assert d.monto == 3.0
+        assert d.patron == PATRON_PORCENTAJE
+
+    def test_con_porcentaje_el_subtotal_negativo_se_ignora(self) -> None:
+        """La precedencia de la pieza 21, preservada: sumar los dos contaría doble."""
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        d = descuento_de_linea(
+            descuento_pct=10.0,
+            cantidad=1,
+            precio_unitario=100.0,
+            subtotal=-50.0,
+            nombre_producto="descuento",
+        )
+        assert d is not None
+        assert d.monto == 10.0, "10 % de 100, no los 50 del subtotal"
+
+    def test_el_hallazgo_de_S00003_Odoo_nombra_la_linea_en_INGLES(self) -> None:
+        """`Discount 20.00%`, en inglés, sin importar el idioma de la UI.
+
+        Mirar solo el nombre del producto pierde esta línea. El parity check contra
+        las 819 órdenes reales dio 0 diffs recién cuando se miraron los dos nombres.
+        """
+        from cxc.engine.discount_audit import PATRON_LINEA_NEGATIVA, descuento_de_linea
+
+        d = descuento_de_linea(
+            descuento_pct=0.0,
+            cantidad=1,
+            precio_unitario=0.0,
+            subtotal=-42.5,
+            nombre_linea="Discount 20.00%",
+            nombre_producto="Descuento ",
+        )
+        assert d is not None
+        assert d.monto == 42.5
+        assert d.patron == PATRON_LINEA_NEGATIVA
+
+    def test_el_nombre_del_producto_alcanza_cuando_la_linea_no_dice_nada(self) -> None:
+        """El vendedor la nombró a mano; el producto vinculado sí trae la palabra."""
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        d = descuento_de_linea(
+            descuento_pct=0.0,
+            cantidad=1,
+            precio_unitario=0.0,
+            subtotal=-30.0,
+            nombre_linea="Ajuste acordado",
+            nombre_producto="Descuento ",
+        )
+        assert d is not None and d.monto == 30.0
+
+    def test_un_subtotal_negativo_que_no_es_descuento_NO_cuenta(self) -> None:
+        """Una devolución o un ajuste con subtotal negativo no es un descuento.
+
+        Es la mitad que la pieza 21 no tenía: ella devolvía `abs(subtotal)` sin
+        preguntar el nombre, porque el dominio de Odoo ya había filtrado. En el
+        espejo no hay dominio que filtre, así que la pregunta tiene que estar acá.
+        """
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        assert (
+            descuento_de_linea(
+                descuento_pct=0.0,
+                cantidad=1,
+                precio_unitario=0.0,
+                subtotal=-99.0,
+                nombre_linea="Devolución parcial",
+                nombre_producto="SINOCO SAE 50",
+            )
+            is None
+        )
+
+    def test_el_detalle_conserva_el_formato_que_el_reporte_muestra_hoy(self) -> None:
+        """Dos formatos distintos con dos palabras de respaldo distintas.
+
+        El del Reporte de Saldos: porcentaje con una decimal, monto con signo de
+        dólar y dos. Y el nombre vacío cae en «línea» para el patrón 1 y en
+        «Descuento» para el 2 -- no es un detalle de estilo, es lo que la pantalla
+        muestra hoy y esta pieza no lo cambia.
+        """
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        pct = descuento_de_linea(
+            descuento_pct=12.5, cantidad=2, precio_unitario=10.0, subtotal=17.5
+        )
+        neg = descuento_de_linea(
+            descuento_pct=0.0,
+            cantidad=1,
+            precio_unitario=0.0,
+            subtotal=-8.0,
+            nombre_producto="descuento",
+        )
+        assert pct is not None and neg is not None
+        assert pct.detalle == "línea: 12.5%"
+        assert neg.detalle == "Descuento: $8.00"
+
+    def test_un_nombre_largo_se_recorta_a_40(self) -> None:
+        from cxc.engine.discount_audit import descuento_de_linea
+
+        d = descuento_de_linea(
+            descuento_pct=5.0,
+            cantidad=1,
+            precio_unitario=1.0,
+            subtotal=0.95,
+            nombre_linea="X" * 60,
+        )
+        assert d is not None
+        assert d.detalle == "X" * 40 + ": 5.0%"
+
+    def test_es_linea_de_descuento_acepta_los_dos_nombres_vacios(self) -> None:
+        """Sin ninguno de los dos nombres no se puede afirmar que sea un descuento."""
+        from cxc.engine.discount_audit import es_linea_de_descuento
+
+        assert not es_linea_de_descuento("", "")
+        assert es_linea_de_descuento("DESCUENTO por volumen", "")
+        assert es_linea_de_descuento("", "Descuento ")

@@ -270,3 +270,84 @@ def monto_de_descuento_de_linea(linea: dict[str, Any]) -> float:
         return cantidad * _f(linea.get("price_unit")) * (pct / 100.0)
     # Patron 2: la linea ES el descuento, con su importe en negativo.
     return abs(_f(linea.get("price_subtotal")))
+
+
+# --- la regla completa, la que el camino VIVO necesita ------------------------
+
+PATRON_PORCENTAJE = "porcentaje"
+PATRON_LINEA_NEGATIVA = "linea_negativa"
+
+
+@dataclass(frozen=True)
+class DescuentoDeLinea:
+    """Cuanto descuento trae una linea, por que patron, y como se lee."""
+
+    monto: float
+    patron: str
+    detalle: str
+
+
+def es_linea_de_descuento(nombre_linea: str, nombre_producto: str) -> bool:
+    """True si la linea ES un descuento (patron 2), por cualquiera de los dos nombres.
+
+    **Los dos nombres, y el orden importa poco pero la union importa mucho.**
+    Hallazgo real de agosto 2026 sobre la orden S00003: Odoo auto-genera el
+    descuento por linea como una linea aparte cuyo NOMBRE PROPIO es
+    ``"Discount 20.00%"`` --en ingles, sin importar el idioma de la UI-- mientras
+    el producto vinculado ("Descuento ") si trae la palabra en espanol.
+
+    Mirar solo el nombre del producto pierde las lineas que Odoo nombro en ingles;
+    mirar solo el de la linea pierde las que el vendedor nombro a mano. El parity
+    check contra las 819 ordenes reales dio 0 diffs recien con los dos.
+    """
+    return "descuento" in (nombre_linea or "").lower() or "descuento" in (
+        nombre_producto or ""
+    ).lower()
+
+
+def descuento_de_linea(
+    *,
+    descuento_pct: float,
+    cantidad: float,
+    precio_unitario: float,
+    subtotal: float,
+    nombre_linea: str = "",
+    nombre_producto: str = "",
+) -> DescuentoDeLinea | None:
+    """El descuento de una linea del espejo, o ``None`` si la linea no es un descuento.
+
+    Vigesimotercera pieza de la Fase 2.4, y nace de un error propio. La pieza 21
+    (``monto_de_descuento_de_linea``) extrajo la mitad del monto y la cableo en
+    ``_leer_descuentos_lineas_odoo``, que **no tiene ningun llamador**: el camino
+    vivo es ``_leer_descuentos_lineas_espejo``, que se quedo con su copia inline.
+    O sea que la pieza 21 no redujo la duplicacion, la movio a codigo muerto.
+
+    Y las dos copias no dicen lo mismo: la muerta decide si una linea es descuento
+    por el nombre del PRODUCTO solamente --la regla vieja, la que perdia las lineas
+    que Odoo nombra en ingles-- y la viva mira los dos nombres. Ver
+    ``es_linea_de_descuento``.
+
+    Esta pieza es la regla del camino vivo, entera: decide **si** la linea cuenta y
+    **cuanto**, mas el fragmento legible que el Reporte de Saldos muestra. Devolver
+    ``None`` en vez de cero es deliberado: una linea sin descuento no es una linea
+    con descuento de cero, y el llamador tiene que saltearla sin sumar nada.
+
+    La precedencia es la de la pieza 21 y no cambia: **con porcentaje, el subtotal
+    negativo se ignora**, porque en el patron 1 el subtotal ya viene descontado y
+    sumar los dos contaria el descuento dos veces.
+    """
+    if descuento_pct > 0:
+        monto = cantidad * precio_unitario * (descuento_pct / 100.0)
+        return DescuentoDeLinea(
+            monto=monto,
+            patron=PATRON_PORCENTAJE,
+            detalle=f"{(nombre_linea or 'línea')[:40]}: {descuento_pct:.1f}%",
+        )
+    if subtotal < 0 and es_linea_de_descuento(nombre_linea, nombre_producto):
+        monto = abs(subtotal)
+        return DescuentoDeLinea(
+            monto=monto,
+            patron=PATRON_LINEA_NEGATIVA,
+            detalle=f"{(nombre_linea or 'Descuento')[:40]}: ${monto:.2f}",
+        )
+    return None

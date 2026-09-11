@@ -51,7 +51,10 @@ from cxc.engine.conciliacion import (
     usd_bcv_a_binance,
 )
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
-from cxc.engine.discount_audit import monto_de_descuento_de_linea
+from cxc.engine.discount_audit import (
+    descuento_de_linea,
+    monto_de_descuento_de_linea,
+)
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     equivalentes_bcv,
@@ -1942,48 +1945,6 @@ def _all_serie_tasas_rows(repo) -> list[dict]:
 # El volumen aparecio en septiembre de 2026, cuando la sincronizacion de
 # pagos conciliados llevo las Vinculaciones de 270 a 1.466: el detector ya
 # era cuadratico, solo que con poco volumen no se notaba.
-_SERIE_TS_CACHE: dict[str, datetime | None] = {}
-
-
-def _parsear_ts_serie(ts_str: str) -> datetime | None:
-    cacheado = _SERIE_TS_CACHE.get(ts_str)
-    if cacheado is not None or ts_str in _SERIE_TS_CACHE:
-        return cacheado
-    limpio = ts_str.replace("T", " ")
-    if "." in limpio:
-        limpio = limpio.split(".")[0]
-    parsed: datetime | None
-    try:
-        parsed = datetime.strptime(limpio, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        try:
-            parsed = datetime.strptime(limpio[:16], "%Y-%m-%d %H:%M")
-        except Exception:
-            parsed = None
-    _SERIE_TS_CACHE[ts_str] = parsed
-    return parsed
-
-
-def _closest_serie_row(dt: datetime, rows: list[dict]) -> dict | None:
-    closest_row = None
-    min_diff = None
-
-    for r in rows:
-        ts_str = r.get("timestamp")
-        if not ts_str:
-            continue
-        row_dt = _parsear_ts_serie(ts_str)
-        if row_dt is None:
-            continue
-
-        diff = abs((dt - row_dt).total_seconds())
-        if min_diff is None or diff < min_diff:
-            min_diff = diff
-            closest_row = r
-
-    return closest_row
-
-
 # TasasHistoricasAuditoria cacheada por proceso. La tabla se siembra con un
 # script y no cambia durante una corrida, pero ``get_rate_for_datetime`` la
 # leia de la base EN CADA LLAMADA -- y se la llama una vez por pago.
@@ -6852,29 +6813,25 @@ def _descuentos_lineas_desde_espejo(
     """
     catalogo_por_id = {p.producto_id: p.nombre.lower() for p in repo.all_catalogo()}
 
-    def _es_linea_descuento(nombre_linea: str, producto_id: str) -> bool:
-        if "descuento" in nombre_linea.lower():
-            return True
-        return "descuento" in catalogo_por_id.get(producto_id, "")
-
     so_set = {str(s) for s in so_names}
     desc_orden: dict[str, float] = {}
     desc_orden_detalle: dict[str, str] = {}
     for ln in repo.all_lineas():
         if ln.so_id not in so_set:
             continue
-        disc_pct = float(ln.descuento)
-        if disc_pct > 0:
-            monto = float(ln.cantidad) * float(ln.precio_unitario) * (disc_pct / 100.0)
-            frag = f"{(ln.nombre or 'línea')[:40]}: {disc_pct:.1f}%"
-        elif float(ln.subtotal) < 0 and _es_linea_descuento(ln.nombre, ln.producto):
-            monto = abs(float(ln.subtotal))
-            frag = f"{(ln.nombre or 'Descuento')[:40]}: ${monto:.2f}"
-        else:
+        d = descuento_de_linea(
+            descuento_pct=float(ln.descuento),
+            cantidad=float(ln.cantidad),
+            precio_unitario=float(ln.precio_unitario),
+            subtotal=float(ln.subtotal),
+            nombre_linea=ln.nombre or "",
+            nombre_producto=catalogo_por_id.get(ln.producto, ""),
+        )
+        if d is None:
             continue
-        desc_orden[ln.so_id] = desc_orden.get(ln.so_id, 0.0) + monto
+        desc_orden[ln.so_id] = desc_orden.get(ln.so_id, 0.0) + d.monto
         if con_detalle:
-            _agregar_fragmento_detalle(desc_orden_detalle, ln.so_id, frag)
+            _agregar_fragmento_detalle(desc_orden_detalle, ln.so_id, d.detalle)
 
     invoice_ids_set = set(invoice_ids)
     desc_factura: dict[str, float] = {}
@@ -6888,15 +6845,17 @@ def _descuentos_lineas_desde_espejo(
         so_name = inv_id_to_so.get(fid, "")
         if not so_name:
             continue
-        disc_pct = float(lf.descuento)
-        if disc_pct > 0:
-            monto = float(lf.cantidad) * float(lf.precio_unitario) * (disc_pct / 100.0)
-            frag = f"{(lf.nombre or 'línea')[:40]}: {disc_pct:.1f}%"
-        elif float(lf.subtotal) < 0 and _es_linea_descuento(lf.nombre, lf.producto_id):
-            monto = abs(float(lf.subtotal))
-            frag = f"{(lf.nombre or 'Descuento')[:40]}: ${monto:.2f}"
-        else:
+        d = descuento_de_linea(
+            descuento_pct=float(lf.descuento),
+            cantidad=float(lf.cantidad),
+            precio_unitario=float(lf.precio_unitario),
+            subtotal=float(lf.subtotal),
+            nombre_linea=lf.nombre or "",
+            nombre_producto=catalogo_por_id.get(lf.producto_id, ""),
+        )
+        if d is None:
             continue
+        monto, frag = d.monto, d.detalle
         ratio = (inv_usd_ratio_map or {}).get(fid, 1.0)
         desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
         if con_detalle:
@@ -10015,7 +9974,14 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
             repo.append_promocion_primera_compra(
                 PromocionPrimeraCompra(
                     **comun,
-                    productos=req.productos,
+                    # Normalizado, NO en crudo. El formulario viejo lo hacia y el
+                    # unico no: al sacar los nueve formularios (393b520) se quedo
+                    # sin llamador y el bug de S00679 --`productos` guardado como
+                    # codigo de catalogo, que nunca matchea `LineaOrden.producto`,
+                    # asi que la regla no dispara nunca-- podia volver a entrar por
+                    # aca. Regresion propia del 11-sep-2026, detectada por la
+                    # guarda de funciones sin llamador.
+                    productos=_resolver_productos_promo(req.productos, repo),
                     regalo_tipo=req.regalo_tipo,
                     valor=Decimal(str(req.valor)),
                     compra_minima=Decimal(str(req.compra_minima)),
@@ -13100,6 +13066,21 @@ def _leer_descuentos_lineas_odoo(
     inv_usd_ratio_map: dict[int, float] | None = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Lee los descuentos ya materializados en Odoo por orden y por factura.
+
+    **SIN LLAMADORES, y con la regla SUPERADA.** Medido el 11-sep-2026: ninguna
+    ruta del proyecto invoca esta funcion --el camino vivo es
+    ``_descuentos_lineas_desde_espejo``, que lee del espejo-- y varios comentarios
+    de este archivo, de ``models.py`` y de ``odoo/client.py`` siguen diciendo que
+    es "la que usa Ventas" y que "arma hoy en vivo". No lo es.
+
+    Peor: su dominio decide si una linea ES un descuento por ``product_id.name``
+    **solamente**, que es la regla que perdia las lineas que Odoo auto-nombra en
+    ingles ("Discount 20.00%"). El camino vivo mira los dos nombres --ver
+    ``es_linea_de_descuento`` en el motor-- y ese arreglo dio 0 diffs contra las
+    819 ordenes reales. Quien lea de aca la regla, lee la vieja.
+
+    Queda en pie porque su docstring la posiciona como la referencia en vivo para
+    un parity check, y borrarla es decision del usuario, no mia.
 
     Tarea 3c: no CALCULA ningún descuento -- solo lee lo que Odoo ya tiene
     guardado por línea (campo ``discount`` % en ``sale.order.line``/

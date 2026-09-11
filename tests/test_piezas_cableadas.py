@@ -144,3 +144,120 @@ def test_cada_excepcion_trae_una_razon_de_verdad() -> None:
     """Una razón vacía o de dos palabras no es una razón."""
     flojas = [k for k, v in SIN_LLAMADOR_A_PROPOSITO.items() if len(v.split()) < 4]
     assert not flojas, f"Estas excepciones necesitan una razón escrita: {flojas}"
+
+
+# --- la guarda de la guarda --------------------------------------------------
+#
+# El test de arriba pasó con la pieza 21 cableada en código MUERTO. Solo chequea
+# que el nombre de la pieza aparezca en algún archivo fuera de `engine/`, y
+# `monto_de_descuento_de_linea` aparecía: sus dos llamadores estaban los dos dentro
+# de `_leer_descuentos_lineas_odoo`, una función de 95 líneas que nadie invoca.
+#
+# O sea que la pieza 21 no redujo la duplicación: la movió a un lugar que no corre,
+# y el camino vivo se quedó con su copia. Medido el 11-sep-2026.
+#
+# Lo que sigue cierra ese agujero por el otro lado: una función privada de `app.py`
+# que nadie llama es código muerto, y hay que declararla.
+
+APP = RAIZ / "src" / "cxc" / "web" / "app.py"
+
+# Funciones privadas de `app.py` que a propósito no tienen llamador.
+SIN_LLAMADOR_EN_APP: dict[str, str] = {
+    # Las tres lecturas en vivo que el espejo reemplazó. Las tres preceden a este
+    # plan y sus docstrings las posicionan como la referencia del parity check, así
+    # que borrarlas es decisión del usuario, no de quien escribe este test.
+    "_leer_descuentos_lineas_odoo": (
+        "lectura en vivo superada por _descuentos_lineas_desde_espejo, y con la "
+        "regla vieja (solo nombre de producto); borrarla es decisión del usuario"
+    ),
+    "_leer_notas_credito_odoo": (
+        "lectura en vivo superada por _facturacion_por_so_desde_espejo; queda como "
+        "referencia del parity check"
+    ),
+    "_leer_notas_debito_odoo": (
+        "lectura en vivo superada por _facturacion_por_so_desde_espejo; queda como "
+        "referencia del parity check"
+    ),
+}
+
+
+def _privadas_de_app() -> list[str]:
+    """Funciones de nivel de módulo de `app.py` con nombre privado.
+
+    Solo las de nivel de módulo: una función anidada vive dentro de su madre y su
+    alcance ya está acotado por ella.
+    """
+    arbol = ast.parse(APP.read_text(encoding="utf-8"))
+    return [
+        n.name
+        for n in arbol.body
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name.startswith("_")
+    ]
+
+
+def _nombres_llamados_en_app() -> set[str]:
+    """Todo nombre que aparece como `algo(...)` en `app.py`, más los referenciados.
+
+    Se cuentan las referencias sueltas (pasar la función como argumento, meterla en
+    un dict) además de las llamadas: usarla así también es usarla.
+    """
+    arbol = ast.parse(APP.read_text(encoding="utf-8"))
+    usados: set[str] = set()
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            usados.add(n.func.id)
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            usados.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            usados.add(n.attr)
+    return usados
+
+
+def test_ninguna_funcion_privada_de_app_queda_sin_llamador_sin_declararlo() -> None:
+    """El caso que este test habría atrapado: cablear una pieza en código muerto.
+
+    No es lo mismo que el test de arriba. Ése pregunta "¿alguien llama a la pieza
+    del motor?"; éste pregunta "¿alguien llama al que la llama?". Hacen falta los
+    dos, porque la pieza 21 pasó el primero y falló el segundo.
+    """
+    definidas = _privadas_de_app()
+    # Un nombre definido dos veces (un decorador, un overload) no es el caso de acá.
+    usados = _nombres_llamados_en_app()
+    consumidores = _consumidores()
+    huerfanas = sorted(
+        fn
+        for fn in definidas
+        if definidas.count(fn) == 1
+        and fn not in usados
+        and f"app.{fn}" not in consumidores
+        and fn not in SIN_LLAMADOR_EN_APP
+    )
+    assert not huerfanas, (
+        "Estas funciones privadas de app.py no tienen llamador. O se borran, o se "
+        f"declaran en SIN_LLAMADOR_EN_APP con la razón: {huerfanas}"
+    )
+
+
+def test_la_declaracion_de_app_no_guarda_nombres_que_ya_no_existen() -> None:
+    """Misma razón que su hermana del motor: una excepción huérfana es un permiso
+    en blanco para la próxima función que se llame igual."""
+    reales = set(_privadas_de_app())
+    fantasmas = sorted(set(SIN_LLAMADOR_EN_APP) - reales)
+    assert not fantasmas, f"Entradas que ya no corresponden a ninguna función: {fantasmas}"
+
+
+def test_la_regla_del_descuento_de_linea_vive_en_UN_solo_lugar() -> None:
+    """El camino vivo y la pieza del motor tienen que ser el mismo código.
+
+    Antes de la pieza 23, `_descuentos_lineas_desde_espejo` tenía la regla inline y
+    `descuento_de_linea` no existía. Este test fija que el camino vivo delegue: si
+    alguien vuelve a escribir `disc_pct > 0` ahí, falla.
+    """
+    fuente = APP.read_text(encoding="utf-8")
+    inicio = fuente.index("def _descuentos_lineas_desde_espejo")
+    fin = fuente.index("def _productos_despachados_desde_espejo")
+    cuerpo = fuente[inicio:fin]
+    assert cuerpo.count("descuento_de_linea(") == 2, (
+        "las dos mitades (orden y factura) tienen que llamar a la pieza del motor"
+    )
+    assert "disc_pct" not in cuerpo, "la regla volvió a estar inline en el camino vivo"
