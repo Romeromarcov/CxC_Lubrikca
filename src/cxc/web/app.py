@@ -56,6 +56,7 @@ from cxc.engine.equivalents import (
     valor_pagado_bcv_usd,
     valor_pagado_binance_usd,
 )
+from cxc.engine.facturado import facturado_de_orden
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.listas import (
     diagnostico_de_eleccion,
@@ -14443,48 +14444,31 @@ def _get_ventas_sync(
                 else None
             )
 
-            total_facturado_antes_impuestos = facturado_antes_imp_map.get(o.so_id, 0.0)
-            total_facturado_con_impuestos = facturado_con_imp_map.get(o.so_id, 0.0)
-            total_nc_aplicada = nc_con_imp_map.get(o.so_id, 0.0)
-            # Tarea 3g: facturado en Odoo - N/C (lógica existente) + N/D (nueva).
-            total_nd_aplicada = nd_con_imp_map.get(o.so_id, 0.0)
-            total_facturado_neto = (
-                total_facturado_con_impuestos - total_nc_aplicada + total_nd_aplicada
+            # Las cuatro reglas viven en engine/facturado.py -- incluido el
+            # orden entre "falta la NC" y el ajuste por retención, que no es
+            # intercambiable. Ver el docstring de ese módulo.
+            _fact = facturado_de_orden(
+                facturado_sin_impuestos=facturado_antes_imp_map.get(o.so_id, 0.0),
+                facturado_con_impuestos=facturado_con_imp_map.get(o.so_id, 0.0),
+                nc_aplicada=nc_con_imp_map.get(o.so_id, 0.0),
+                nd_aplicada=nd_con_imp_map.get(o.so_id, 0.0),
+                iva_rate=iva_rate,
+                wh_iva_aplicado=bool(wh_iva_aplicado_map.get(o.so_id)),
+                facturada=bool(o.facturada),
+                tiene_devolucion=bool(o.tiene_devolucion),
+                cancelada_sin_devolver=orden_cancelada_sin_devolver,
             )
-            # Pedido del usuario (artefacto de verificación, agosto 2026):
-            # la alerta de devolución debe decir explícitamente cuándo falta
-            # la Nota de Crédito que la formaliza -- antes solo señalaba que
-            # había una devolución/cancelación, sin decir si ya se corrigió
-            # el lado financiero. Solo aplica a órdenes YA facturadas (antes
-            # de facturar, la corrección pasa por las líneas reales de Odoo,
-            # nunca por una NC -- ver sección "Modificación de una orden").
-            falta_nc_por_devolucion = (
-                bool(o.facturada)
-                and (bool(o.tiene_devolucion) or orden_cancelada_sin_devolver)
-                and total_nc_aplicada <= 0.005
-            )
+            total_facturado_antes_impuestos = _fact.bruto_sin_impuestos
+            total_facturado_con_impuestos = _fact.bruto_con_impuestos
+            total_nc_aplicada = _fact.nc_aplicada
+            total_nd_aplicada = _fact.nd_aplicada
+            total_facturado_neto = _fact.neto
+            iva_retenido_confirmado = _fact.iva_retenido_confirmado
+            tiene_factura = _fact.tiene_factura
+            falta_nc_por_devolucion = _fact.falta_nc_por_devolucion
             if falta_nc_por_devolucion:
-                revisar_motivos.append(
-                    "Falta crear Nota de Crédito en Odoo por la devolución"
-                )
+                revisar_motivos.append("Falta crear Nota de Crédito en Odoo por la devolución")
             revisar_motivo = "; ".join(revisar_motivos) if revisar_motivos else None
-            # Fase 3 (plan de arquitectura de pagos, agosto 2026, pedido
-            # explícito del usuario): la retención de IVA debe comunicarse
-            # a Ventas igual que ya hacen NC/ND -- antes `wh_iva_aplicado`
-            # solo decidía si la orden salía de la Bandeja 3, sin tocar
-            # nunca este saldo; una orden con retención ya confirmada en
-            # Odoo se veía "parcialmente pagada" para siempre. Una vez
-            # confirmada, el cliente ya no debe en efectivo el IVA (0-100%
-            # retenido según el documento -- mismo rango que ya acepta la
-            # Bandeja 3, sin asumir un porcentaje fijo), así que el saldo
-            # objetivo baja por el IVA estimado completo de la factura.
-            iva_retenido_confirmado = 0.0
-            if wh_iva_aplicado_map.get(o.so_id) and total_facturado_neto > 0.005:
-                iva_retenido_confirmado = total_facturado_neto - (
-                    total_facturado_neto / (1 + iva_rate)
-                )
-                total_facturado_neto = max(0.0, total_facturado_neto - iva_retenido_confirmado)
-            tiene_factura = total_facturado_con_impuestos > 0.005
 
             # Tarea 3c: descuentos ya aplicados en Odoo (orden/factura, columnas
             # separadas) + validación visual contra lo que dictamina el motor.
