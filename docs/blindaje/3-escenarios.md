@@ -38,6 +38,55 @@ es la posibilidad.
 
 # Lo que el banco encontró
 
+## El riesgo fiscal dejó de ser hipotético: cinco emisiones reales, el mismo día
+
+Esta sección se escribió con el riesgo en condicional —«si un escenario logra
+emitir»—. **Ese condicional se cerró el 10 de septiembre, y no por un escenario.**
+
+Entre las **13:19 y las 14:22 UTC** se validaron cinco entregas salientes con
+destino `Socios/Clientes` —la ubicación real, con `is_digital_invoicing = True`— y
+**cada una emitió una nota de entrega fiscal real**:
+
+| control | picking | cliente |
+|---|---|---|
+| `00-00001586` | MATU/OUT/00002 | Marco Romero |
+| `00-00001587` | ALM/OUT/00848 | Marco Romero |
+| `00-00001588` | ALM/OUT/00849 | Marco Romero |
+| `00-00001589` | ALM/OUT/00850 | Marco Romero |
+| `00-00001590` | ALM/OUT/00851 | SERVICIOS Y MANTENIMIENTO SPACARS |
+
+Los cinco fueron a `emisionv2.thefactoryhka.com.ve` —el proveedor **de producción**,
+no un sandbox—, volvieron `"Documento procesado correctamente"`, quedaron `approved`
+y **tienen URL pública de consulta**. Cinco números de control de la empresa,
+consumidos.
+
+**No salieron del banco de escenarios, y la evidencia es estructural y no de
+horarios**: el destino de los cinco es la ubicación real y los clientes son reales.
+El andamiaje *siempre* redirige `location_dest_id` a
+`Socios/ZZ PRUEBAS BLINDAJE clientes` y usa clientes con prefijo `ZZ BLINDAJE`, así
+que no puede producir esas filas. Y el canario dio delta 0 en todas las corridas.
+
+Lo que esto confirma es la frase que esta sección ya decía y que era una advertencia:
+**la nota de entrega también se emite**, así que validar una salida del depósito
+dispara el proveedor igual que postear una factura. Cinco veces, en poco más de una
+hora, sin que nada lo pidiera dos veces.
+
+### Y por qué las cuatro barreras se quedan
+
+El conector se archivó (`account.digital.invoicing.conn.active = False`) a las
+**21:46 UTC** — *después* de las cinco emisiones. Así que todo lo observable es de
+antes y **no hay evidencia de que archivarlo impida emitir**. Dos cosas siguen como
+estaban: el diario `INV` todavía resuelve el conector archivado
+(`invoicing_digital_conn = [1, 'THKA…']`, `billing_type = 'digital_inv'`) —en Odoo un
+`many2one` a un registro archivado sigue resolviendo— y `Socios/Clientes` sigue con
+la bandera encendida.
+
+**Y quitarlas no compraría nada.** `changed_facturas` filtra por `move_type` y **no
+por diario**: una factura posteada por `ZZPRU` la ve el sync exactamente igual que
+una por `INV`. El diario de pruebas es un sustituto fiel de todo lo que nuestra
+aplicación observa; lo único que cambia es el efecto fiscal de Odoo, que no es lo que
+esta fase mide. Las barreras no cuestan fidelidad.
+
 ## ALTA — 1.108,59 USD de mercancía devuelta que la factura sigue cobrando, y nadie lo ve
 
 Esta es la respuesta al ítem que el plan tenía pendiente: *«Recálculo con
