@@ -17,7 +17,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 | [4 — Estrés](4-estres.md) | 6 escenarios en verde, y el motor que a 10× tarda 16 horas |
 | [5 — Dashboard](5-dashboard.md) | seis hallazgos, los seis aplicados |
 | [2.1 — Ausencia de dato](2.1-ausencia-de-dato.md) | la premisa del plan medida, y el costo real de la decisión |
-| [6 — Deuda medida](6-deuda-medida.md) | los 8 ítems del plan, medidos; el default de 2019 escrito en 1.462 vinculaciones |
+| [6 — Deuda medida](6-deuda-medida.md) | los 8 ítems del plan, medidos; el default de 2019 escrito en 1.463 vinculaciones |
 | [escenarios/README.md](../../escenarios/README.md) | el banco de 31 escenarios y sus tres barreras fiscales |
 
 ## Herramientas nuevas, todas reejecutables
@@ -88,7 +88,7 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 
 | Hallazgo | Cuánto | Dónde |
 |---|---|---|
-| El default de 2019 está **escrito** en las 1.462 vinculaciones del espejo | 82,7 M aplicados | [6](6-deuda-medida.md) |
+| El default de 2019 está **escrito** en las 1.463 vinculaciones del espejo | 82,7 M aplicados | [6](6-deuda-medida.md) |
 | El reporte de saldos valora con una lista vencida; las otras tres páginas no | 789 órdenes, 194.532,51 VES / 115.805,93 USD de desvío bruto | [3](3-escenarios.md) |
 | Una lista de precios vencida **no puede** marcarse: `rules[0]` gana sobre la fecha | — | [3](3-escenarios.md) |
 | Pagos sobreaplicados: se acredita plata que el cliente no puso | 1.333,85 USD | [2.3](2.3-alertas.md) |

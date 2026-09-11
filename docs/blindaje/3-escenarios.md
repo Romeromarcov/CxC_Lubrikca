@@ -363,6 +363,36 @@ con cantidad cero y lo entregado intacto, así que el espejo no pierde el rastro
 Lo que queda es que **lo entregado supera lo pedido**, que es el caso que hay
 que detectar, y el escenario ahora lo verifica explícitamente.
 
+## La corrida de verificación: un bug más del andamiaje, y por qué valía correrla
+
+Después de sacar ocho piezas de `app.py`, el banco se volvió a correr completo contra
+el Odoo real. **20 fallaron y 26 pasaron**, contra un solo rojo intencional de la
+corrida anterior.
+
+Lo primero y lo que importa: **el canario dio cero en las 46**. Nada se emitió.
+
+Las 20 fallas eran **una sola**, en cascada. `facturar()` reventaba y con él todo lo
+que necesita una factura: el archivo entero de pagos, el de devoluciones y el de
+facturación. El error de Odoo:
+
+```
+account_dual_currency._compute_date  ->  rec.invoice_date = datetime.now()
+l10n_ve_full.write  ->  ValueError: La fecha contable no puede ser menor
+                                     a la fecha de la factura
+```
+
+Al escribir solo `journal_id` sobre el borrador, Odoo recomputa y el módulo de doble
+moneda pisa `invoice_date` con **hoy**, mientras la fecha contable había quedado en la
+de la orden. Es el **noveno bug del propio andamiaje**, y se arregla fijando las dos
+fechas en la misma escritura: sin nada que pisar, la validación se cumple por
+construcción.
+
+**Lo que esto dice del banco.** Ocho extracciones de un archivo de diecisiete mil
+líneas no rompieron nada del sistema — el fallo era del andamiaje y en una interacción
+con dos módulos venezolanos de Odoo que ningún test unitario podía ver. Correrlo era la
+única forma de saberlo, y la razón por la que el plan pedía un banco reejecutable y no
+un informe de una corrida.
+
 ## Dónde quedó el banco
 
 Después de arreglar lo mío y reescribir lo que Odoo resultó proteger, las 12

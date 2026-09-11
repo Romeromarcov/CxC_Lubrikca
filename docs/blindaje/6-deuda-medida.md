@@ -329,22 +329,23 @@ congelado de dos órdenes.
 Si alguna vez divergen, las dos definiciones van a diferir también en la ventana,
 y eso sería mucho peor que estas 4 órdenes.
 
-## Equivalentes congelados: no se pudo medir, y en el intento apareció algo peor
+## Con qué tasa se congelaron: el default de 2019, en todas
 
-El ítem dice que si se corrige una tasa vieja, las vinculaciones ya aplicadas
-conservan el equivalente que congelaron —correcto como diseño contable— y que hoy
-nada lista cuáles quedaron con una tasa que después se corrigió.
+Esta sección se escribió antes de que existiera el listado, y decía «no se pudo
+medir». La herramienta está [más arriba](#equivalentes-congelados-ya-hay-algo-que-los-lista);
+lo que sigue es la otra mitad de la medición, la que **sí** se pudo hacer en QA.
 
-**No se pudo medir en el espejo de QA**, y hay que decirlo en vez de dar un cero
-tranquilizador: `tasas_historicas_auditoria` tiene **0 filas** ahí y `serie_tasas`
-tiene **6**, todas de hoy. Son tablas de trabajo humano y del scraper, no vienen
-del sync de Odoo, así que la comparación «tasa congelada contra la serie actual»
-no tiene contra qué correr. Queda pendiente contra producción, donde el script de
-integridad corre igual (es solo lectura).
+Lo que **no** se puede medir ahí es la *corrección posterior* de una tasa: eso exige
+un historial, y `tasas_historicas_auditoria` tiene **0 filas** en esa base mientras
+`serie_tasas` tiene solo las del día. Son tablas de trabajo humano y del scraper, no
+vienen del sync de Odoo. Esa mitad queda para producción, donde el script corre igual
+porque es de solo lectura.
+
+Lo que **sí** se pudo medir es con qué tasa se congelaron, y ahí está el agujero.
 
 ### Lo que sí apareció al mirar
 
-Al revisar con qué tasa se congelaron esas vinculaciones, **las 1.462 tienen
+Al revisar con qué tasa se congelaron esas vinculaciones, **las 1.463 tienen
 `tasa_bcv_aplicada = 36,50` y `tasa_binance_aplicada = 38,00`**. Una sola
 combinación, en el 100 % de las filas. Son las tasas de 2019: el default de
 `get_rate_for_datetime`, la mina 8 del inventario [1.1](1.1-fallbacks-silenciosos.md).
@@ -352,17 +353,22 @@ La tasa real de hoy es **827,74**, o sea 22 veces más.
 
 ### Cuánto es en plata
 
+Las cifras de abajo son **solo de clientes reales**: el banco de escenarios agrega
+vinculaciones entre corridas, y sin ese filtro el número sube según cuántas veces se
+haya corrido. Reproducible con
+`scripts/auditar_equivalentes_congelados.py --env .env.qa`.
+
 La suma cruda de `monto_aplicado` no sirve para medirlo: mezcla monedas, que es
 justamente lo que el balance audita. Separadas:
 
 | moneda del abono | vinculaciones | nominal | equivalente acreditado | al cambio real |
 |---|---:|---:|---:|---:|
 | USD | 916 | 199.453,77 USD | 199.453,77 | igual |
-| **VES** | **546** | **82.496.372,90 Bs** | **2.260.174,60 USD** | **~99.664 USD** |
+| **VES** | **547** | **81.979.553,52 Bs** | **2.246.015,17 USD** | **~99.040 USD** |
 
 Los abonos en bolívares quedaron acreditados como **2,26 millones de dólares**
-cuando a la tasa real son unos **99.664**. Veintidós veces y media de más.
-(82.496.372,90 ÷ 36,50 da exactamente los 2.260.174,60 acreditados, que es la
+cuando a la tasa real son unos **99.040**. Veintidós veces y media de más.
+(81.979.553,52 ÷ 36,50 da exactamente los 2.246.015,17 acreditados, que es la
 confirmación de que la tasa usada fue el default.)
 
 **Esto no dice que producción esté así hoy** — ahí la serie de tasas existe. Dice

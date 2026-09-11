@@ -48,6 +48,10 @@ PREFIJO = "ZZ BLINDAJE"
 
 # Diario de ventas del banco de escenarios. Se crea si no existe, SIEMPRE sin
 # conector de imprenta digital.
+# La fecha con la que se postean las facturas del banco. Tiene que ser la MISMA
+# para ``invoice_date`` y ``date``: ver el comentario en ``facturar``.
+FECHA_CONTABLE = "2026-09-01"
+
 CODIGO_DIARIO_PRUEBAS = "ZZPRU"
 NOMBRE_DIARIO_PRUEBAS = "ZZ PRUEBAS BLINDAJE (sin imprenta digital)"
 
@@ -555,7 +559,32 @@ class OdooQA:
         )
         ids = [int(f["id"]) for f in borradores]
         if ids:
-            self.ex("account.move", "write", [ids, {"journal_id": self.diario_pruebas}])
+            # Las DOS fechas van juntas en la misma escritura, y no es cosmetico.
+            #
+            # Bug real, encontrado corriendo el banco completo: al escribir solo
+            # ``journal_id``, Odoo recomputa y ``account_dual_currency``
+            # (``_compute_date``) pisa ``invoice_date`` con ``datetime.now()``.
+            # Entonces ``l10n_ve_full.write`` rechaza el asiento con "La fecha
+            # contable no puede ser menor a la fecha de la factura", porque la
+            # contable habia quedado en la fecha de la orden y la de factura paso
+            # a ser hoy. Fallaba ``facturar()`` y con el los 20 escenarios que
+            # necesitan una factura -- todo el archivo de pagos, el de
+            # devoluciones y el de facturacion.
+            #
+            # Fijando las dos a la misma fecha, el recomputo no tiene nada que
+            # pisar y la validacion se cumple por construccion.
+            self.ex(
+                "account.move",
+                "write",
+                [
+                    ids,
+                    {
+                        "journal_id": self.diario_pruebas,
+                        "invoice_date": FECHA_CONTABLE,
+                        "date": FECHA_CONTABLE,
+                    },
+                ],
+            )
             self.ex("account.move", "action_post", [ids])
         return ids
 
