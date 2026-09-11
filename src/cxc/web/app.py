@@ -1214,7 +1214,7 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     if vincs_a_actualizar:
         repo.update_vinculaciones(vincs_a_actualizar)
 
-    if cambios and hasattr(repo, "append_auditoria_rows"):
+    if cambios:
         ahora = datetime.now()
         # ``tipo_auditoria``/``detalle_odoo`` por defecto cubren el caso
         # histórico (re-apuntado de so_id) -- los 3 casos nuevos
@@ -1241,20 +1241,19 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         # ``all_auditoria()`` (antes ausente en Postgres -- ver migración
         # ``d1e2f3a4b5c6``).
         existing_open_audit_id: dict[tuple[str, str], str] = {}
-        if hasattr(repo, "all_auditoria"):
-            try:
-                for row in repo.all_auditoria():
-                    if row.get("estado") != "pendiente_revision":
-                        continue
-                    pid_existente = str(row.get("pago_id") or "").strip()
-                    tipo_existente = str(row.get("tipo_auditoria") or "").strip()
-                    if pid_existente and tipo_existente:
-                        existing_open_audit_id[(pid_existente, tipo_existente)] = row["audit_id"]
-            except Exception as e_lookup:
-                logger.warning(
-                    "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
-                    e_lookup,
-                )
+        try:
+            for row in repo.all_auditoria():
+                if row.get("estado") != "pendiente_revision":
+                    continue
+                pid_existente = str(row.get("pago_id") or "").strip()
+                tipo_existente = str(row.get("tipo_auditoria") or "").strip()
+                if pid_existente and tipo_existente:
+                    existing_open_audit_id[(pid_existente, tipo_existente)] = row["audit_id"]
+        except Exception as e_lookup:
+            logger.warning(
+                "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
+                e_lookup,
+            )
 
         audit_rows = []
         for c in cambios:
@@ -1379,7 +1378,7 @@ def _detectar_vinculaciones_pendientes_a_revisar(
         for r in revisar
         if (r["so_id"], "vinculacion_pendiente_revisar") not in existing_audit_keys
     ]
-    if nuevas_rows and hasattr(repo, "append_auditoria_rows"):
+    if nuevas_rows:
         ahora = datetime.now()
         audit_rows = [
             {
@@ -2352,7 +2351,7 @@ def _correr_auditoria_sobre_descuento_diaria(repo) -> None:
     """
     try:
         filas = _detectar_sobre_descuentos_batch(repo)
-        if filas and hasattr(repo, "append_auditoria_rows"):
+        if filas:
             repo.append_auditoria_rows(filas)
             print(f"FastAPI Daemon: {len(filas)} sobre-descuento(s) nuevo(s) en Auditoría.")
     except Exception as e_aud:
@@ -3746,7 +3745,7 @@ async def get_auditoria_descuentos(
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         repo = get_repo()
-        rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+        rows = repo.all_auditoria()
         if estado:
             rows = [r for r in rows if r.get("estado", "") == estado]
         if tipo:
@@ -3778,12 +3777,11 @@ async def patch_auditoria_estado(
         raise HTTPException(status_code=403, detail="Sin permisos para actualizar auditoría")
     try:
         repo = get_repo()
-        if hasattr(repo, "update_auditoria_estado"):
-            repo.update_auditoria_estado(
-                audit_id=audit_id,
-                estado=req.estado,
-                revisado_por=user.get("nombre") or user.get("email") or "desconocido",
-            )
+        repo.update_auditoria_estado(
+            audit_id=audit_id,
+            estado=req.estado,
+            revisado_por=user.get("nombre") or user.get("email") or "desconocido",
+        )
         return {"status": "ok", "audit_id": audit_id, "nuevo_estado": req.estado}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -4493,7 +4491,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # Load existing audit rows to avoid duplicate appends on every cache refresh
         try:
-            existing_audit_rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+            existing_audit_rows = repo.all_auditoria()
         except Exception:
             existing_audit_rows = []
         # Key: (so_id, tipo_auditoria) — only append if not already recorded today
@@ -5069,7 +5067,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             )
 
         # Single batch write for new audit rows to avoid Google Sheets API rate limits
-        if new_audit_rows and hasattr(repo, "append_auditoria_rows"):
+        if new_audit_rows:
             try:
                 repo.append_auditoria_rows(new_audit_rows)
             except Exception as e_aud:
@@ -5825,17 +5823,31 @@ async def get_config_tasas():
         filas = _all_serie_tasas_rows(repo)[-15:]
         tasas = []
         for f in reversed(filas):
-            tbcv = float(parse_decimal_safe(f.get("tasa_bcv", "0")))
-            tbin = float(parse_decimal_safe(f.get("tasa_binance", "0")))
-            diff_bs = tbin - tbcv
-            diff_pct = (diff_bs / tbin * 100) if tbin > 0 else 0.0
+            tbcv = parse_decimal_safe(f.get("tasa_bcv", "0"))
+            tbin = parse_decimal_safe(f.get("tasa_binance", "0"))
+            diff_bs = float(tbin) - float(tbcv)
+            # La cuenta vive en el motor (`diferencial_pct`), que documenta lo que el
+            # nombre del campo no dice: **el denominador es Binance, no la BCV**. Con
+            # BCV 700 y Binance 800, sobre Binance es 12,5 % y sobre BCV seria 14,3 %.
+            #
+            # Y cambia un borde: el cuerpo inline solo se protegia de `tbin == 0`, asi
+            # que con la BCV en cero --lo que el scraper guarda cuando una captura
+            # falla-- mostraba 100 %, o sea presentaba una captura fallida como un
+            # diferencial real. La pieza devuelve cero ahi. Ninguno de los dos es la
+            # respuesta correcta, y por eso va `diferencial_verificable`: un cero
+            # medido y un cero por no haber podido medir no son el mismo cero.
+            #
+            # Medido el 11-sep-2026: 0 de las 30 filas del espejo tienen la BCV en
+            # cero -- pero 30 filas son dos dias, asi que eso NO prueba que no pase.
+            diff_pct = float(diferencial_pct(tbin, tbcv))
             tasas.append(
                 {
                     "timestamp": f.get("timestamp", ""),
-                    "tasa_bcv": tbcv,
-                    "tasa_binance": tbin,
+                    "tasa_bcv": float(tbcv),
+                    "tasa_binance": float(tbin),
                     "diferencia_bs": round(diff_bs, 2),
                     "diferencia_pct": round(diff_pct, 2),
+                    "diferencial_verificable": tbcv > 0 and tbin > 0,
                     "fuente": f.get("fuente", ""),
                 }
             )
@@ -11121,20 +11133,19 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         # tiene orden garantizado -- un pago movido dos veces podia mostrar
         # el detalle del movimiento viejo.
         reasignados_por_pago: dict[str, dict[str, str]] = {}
-        if hasattr(repo, "all_auditoria"):
-            try:
-                for row in repo.all_auditoria():
-                    if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
-                        pid = str(row.get("pago_id", "")).strip()
-                        if not pid:
-                            continue
-                        previa = reasignados_por_pago.get(pid)
-                        if previa is None or str(row.get("timestamp_audit") or "") >= str(
-                            previa.get("timestamp_audit") or ""
-                        ):
-                            reasignados_por_pago[pid] = row
-            except Exception as e_aud:
-                logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
+        try:
+            for row in repo.all_auditoria():
+                if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
+                    pid = str(row.get("pago_id", "")).strip()
+                    if not pid:
+                        continue
+                    previa = reasignados_por_pago.get(pid)
+                    if previa is None or str(row.get("timestamp_audit") or "") >= str(
+                        previa.get("timestamp_audit") or ""
+                    ):
+                        reasignados_por_pago[pid] = row
+        except Exception as e_aud:
+            logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
 
         metodo_pago_map: dict[int, str] = {}
         odoo_tax_today_map: dict[str, dict[str, Any]] = {}
@@ -15571,7 +15582,7 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
     )
 
     try:
-        existing_audit_rows = repo.all_auditoria() if hasattr(repo, "all_auditoria") else []
+        existing_audit_rows = repo.all_auditoria()
     except Exception:
         existing_audit_rows = []
     _today_str = date.today().isoformat()

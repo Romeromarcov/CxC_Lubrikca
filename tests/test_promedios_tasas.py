@@ -300,3 +300,69 @@ def test_el_endpoint_expone_los_dos_avisos() -> None:
         "el aviso existe porque los dos promedios salen de las mismas capturas"
     )
     assert cuerpo["capturas"] == {"manana": 2, "tarde": 2, "diario": 2}
+
+
+# --- el endpoint de configuración de tasas, que tenía la cuenta inline -------
+
+
+def test_get_config_tasas_usa_la_pieza_y_dice_si_el_diferencial_es_verificable() -> None:
+    """`get_config_tasas` calculaba `diff_bs / tbin * 100` a mano.
+
+    Es exactamente `diferencial_pct`, que ya existía — otro duplicado sin cablear. Y
+    el cuerpo inline tenía un borde distinto: solo se protegía de `tbin == 0`, así que
+    **con la BCV en cero mostraba 100 %**, o sea presentaba una captura fallida como
+    un diferencial real (el scraper guarda cero cuando falla).
+
+    Ninguna de las dos respuestas es correcta, y por eso la fila lleva ahora
+    `diferencial_verificable`: un cero medido y un cero por no haber podido medir no
+    son el mismo cero. Es la misma disciplina que `RangoDelDia.verificado`.
+
+    Medido el 11-sep-2026: 0 de las 30 filas del espejo tienen la BCV en cero. Pero 30
+    filas son dos días, así que eso no prueba que no pase — el test lo fija igual.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    import cxc.web.app as app
+
+    filas = [
+        {"timestamp": "2026-09-11 10:00:00", "tasa_bcv": "700", "tasa_binance": "800",
+         "fuente": "scraper"},
+        # Captura de BCV fallida: el inline decía 100 %.
+        {"timestamp": "2026-09-11 11:00:00", "tasa_bcv": "0", "tasa_binance": "800",
+         "fuente": "scraper"},
+        # Captura de Binance fallida: el inline ya devolvía 0 acá.
+        {"timestamp": "2026-09-11 12:00:00", "tasa_bcv": "700", "tasa_binance": "0",
+         "fuente": "scraper"},
+    ]
+
+    async def _nada():
+        return None
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=MagicMock()),
+        patch("cxc.web.app._all_serie_tasas_rows", return_value=filas),
+        patch("cxc.web.app.run_scraper_in_background", _nada),
+        patch("cxc.web.app.run_sync_in_background", _nada),
+        patch("cxc.web.app._aplicar_migraciones_pendientes"),
+        TestClient(app.app) as cliente,
+    ):
+        r = cliente.get("/api/config/tasas")
+
+    assert r.status_code == 200, r.text
+    # La respuesta viene en orden inverso al de las filas.
+    por_hora = {x["timestamp"][-8:]: x for x in r.json()}
+
+    bien = por_hora["10:00:00"]
+    assert bien["diferencia_pct"] == 12.5, "sobre Binance: (800-700)/800. Sobre BCV sería 14,29"
+    assert bien["diferencia_bs"] == 100.0
+    assert bien["diferencial_verificable"] is True
+
+    sin_bcv = por_hora["11:00:00"]
+    assert sin_bcv["diferencia_pct"] == 0.0, "antes decía 100 %, que era una captura fallida"
+    assert sin_bcv["diferencial_verificable"] is False, "y ahora se sabe que no se midió"
+
+    sin_binance = por_hora["12:00:00"]
+    assert sin_binance["diferencia_pct"] == 0.0
+    assert sin_binance["diferencial_verificable"] is False
