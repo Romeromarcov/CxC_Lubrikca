@@ -203,3 +203,137 @@ def test_el_endpoint_expone_la_diferencia_entre_encabezado_y_filas() -> None:
     assert cuerpo["kpis_sin_cobradas"]["total_general"]["deudor_bcv"] == 100.0
     assert cuerpo["kpis_coinciden"] is False
     assert cuerpo["kpis_diferencias"]["total_general"]["deudor_bcv"] == 100.0
+
+
+# --- la medición A/B, que es la red para poder cablear la pieza ---------------
+
+
+def _acumulacion_original(filas):
+    """El cuerpo de `_get_reporte_saldos_sync` tal como estaba, copiado a propósito.
+
+    **Por qué una copia en un test.** Nada ejercita la función real: los diez tests que
+    la mencionan la mockean, y el de FIFO reimplementa su fórmula. O sea que la suite no
+    es red para un cambio ahí, y armar el arnés de una función de 1.104 líneas con 29
+    dependencias no es proporcionado.
+
+    Entonces la red es una medición A/B: esta copia es el lado «antes». Si las dos dan lo
+    mismo sobre las mismas filas, reemplazar el cuerpo por la pieza preserva el
+    resultado. Y si alguien cambia la regla en un solo lado, este test falla.
+
+    Verificado antes de copiarla: entre la acumulación y el `reporte.append` **no hay
+    ningún `continue`**, así que las dos cuentas recorren exactamente las mismas órdenes.
+    """
+
+    def vacio():
+        return {"deudor_bcv": 0.0, "desc_bcv": 0.0, "desc_usd": 0.0, "factura_odoo": 0.0}
+
+    g, v, vig = vacio(), vacio(), vacio()
+    b1, b2, b3, b4 = vacio(), vacio(), vacio(), vacio()
+
+    for f in filas:
+        saldo_deudor_bcv = float(f.get("saldo_deudor_bcv") or 0)
+        saldo_con_descuento_bcv = float(f.get("saldo_con_descuento_bcv") or 0)
+        saldo_con_descuento_lista_usd = float(f.get("saldo_con_descuento_lista_usd") or 0)
+        saldo_factura_odoo = f.get("saldo_factura_odoo")
+        dias_vencido = float(f.get("dias_vencido") or 0)
+
+        s_inv = float(saldo_factura_odoo) if saldo_factura_odoo is not None else 0.0
+        if saldo_deudor_bcv > 0.05 or saldo_con_descuento_lista_usd > 0.05 or s_inv > 0.05:
+            g["deudor_bcv"] += saldo_deudor_bcv
+            g["desc_bcv"] += saldo_con_descuento_bcv
+            g["desc_usd"] += saldo_con_descuento_lista_usd
+            g["factura_odoo"] += s_inv
+
+            if dias_vencido <= 0:
+                destino = [vig]
+            else:
+                destino = [v]
+                if 1 <= dias_vencido <= 30:
+                    destino.append(b1)
+                elif 31 <= dias_vencido <= 60:
+                    destino.append(b2)
+                elif 61 <= dias_vencido <= 90:
+                    destino.append(b3)
+                else:
+                    destino.append(b4)
+            for d in destino:
+                d["deudor_bcv"] += saldo_deudor_bcv
+                d["desc_bcv"] += saldo_con_descuento_bcv
+                d["desc_usd"] += saldo_con_descuento_lista_usd
+                d["factura_odoo"] += s_inv
+
+    return {
+        "total_general": g,
+        "total_vencido": v,
+        "vigentes": vig,
+        "vencidas_1_30": b1,
+        "vencidas_31_60": b2,
+        "vencidas_61_90": b3,
+        "vencidas_mas_90": b4,
+    }
+
+
+def _universo_de_filas():
+    """Filas que cubren cada borde y cada rareza que encontré en el cuerpo original."""
+    filas = []
+    for dias in (-400, -1, 0, 1, 15, 30, 31, 45, 60, 61, 75, 90, 91, 400):
+        filas.append(_fila(dias, so_id=f"S{dias}"))
+    # Bajo el umbral por los tres campos que la condición mira.
+    filas.append(
+        _fila(10, deudor=0.04, desc_bcv=0.04, desc_usd=0.04, factura=0.04, so_id="centavos")
+    )
+    # Solo `desc_bcv`: NO entra, aunque tenga monto.
+    filas.append(
+        _fila(10, deudor=0.0, desc_bcv=900.0, desc_usd=0.0, factura=0.0, so_id="solo_desc")
+    )
+    # Entra por uno solo de los tres, y arrastra su desc_bcv.
+    filas.append(
+        _fila(10, deudor=0.0, desc_bcv=900.0, desc_usd=0.0, factura=1.0, so_id="por_factura")
+    )
+    filas.append(_fila(40, deudor=1.0, desc_bcv=0.0, desc_usd=0.0, factura=0.0, so_id="por_deudor"))
+    filas.append(_fila(70, deudor=0.0, desc_bcv=0.0, desc_usd=1.0, factura=0.0, so_id="por_usd"))
+    # Saldo de factura ausente, que el original convierte en 0.0.
+    sin_factura = _fila(10, so_id="sin_factura")
+    sin_factura["saldo_factura_odoo"] = None
+    filas.append(sin_factura)
+    # Negativos: un sobrepago no entra por el umbral, pero si algo más la mete, resta.
+    filas.append(
+        _fila(10, deudor=-50.0, desc_bcv=-50.0, desc_usd=-50.0, factura=90.0, so_id="sobrepago")
+    )
+    return filas
+
+
+def test_la_pieza_da_EXACTAMENTE_lo_mismo_que_el_cuerpo_original() -> None:
+    """La medición A/B sobre las 20 filas que cubren todos los bordes.
+
+    Es la prueba que hace seguro reemplazar la acumulación inline por la pieza. Sin
+    esto sería un refactor sin red: nada ejercita la función real.
+    """
+    filas = _universo_de_filas()
+    de_la_pieza = kpis_de_filas(filas)
+    del_original = _acumulacion_original(filas)
+    assert set(de_la_pieza) == set(del_original)
+    for nombre in del_original:
+        for campo in ("deudor_bcv", "desc_bcv", "desc_usd", "factura_odoo"):
+            assert abs(de_la_pieza[nombre][campo] - del_original[nombre][campo]) < 1e-9, (
+                f"{nombre}.{campo}: la pieza da {de_la_pieza[nombre][campo]} y el cuerpo "
+                f"original {del_original[nombre][campo]}"
+            )
+
+
+def test_la_AB_no_es_trivial_las_filas_producen_numeros_distintos_de_cero() -> None:
+    """Una A/B sobre dos ceros pasaría sin probar nada.
+
+    El plan ya se comió esa trampa una vez: un instrumento que nunca corrió daba cero y
+    se leía como un cero verificado.
+    """
+    k = kpis_de_filas(_universo_de_filas())
+    assert k["total_general"]["deudor_bcv"] != 0.0
+    for tramo in (
+        "vigentes",
+        "vencidas_1_30",
+        "vencidas_31_60",
+        "vencidas_61_90",
+        "vencidas_mas_90",
+    ):
+        assert k[tramo]["deudor_bcv"] != 0.0, f"{tramo} quedó en cero: el universo no lo cubre"

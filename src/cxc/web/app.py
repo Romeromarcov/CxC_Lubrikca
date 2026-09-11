@@ -68,7 +68,7 @@ from cxc.engine.equivalents import (
 from cxc.engine.facturado import facturado_de_orden
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.identidad_de_reglas import aviso_de_ambiguedad, elegir_tabla_de_regla
-from cxc.engine.kpis_de_saldos import diferencia_de_kpis
+from cxc.engine.kpis_de_saldos import diferencia_de_kpis, kpis_de_filas
 from cxc.engine.listas import (
     diagnostico_de_eleccion,
     diagnostico_de_huecos,
@@ -4352,16 +4352,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         saldo_minimo_items = []  # Tarea 3: facturadas con saldo residual <= $1
         vendedores_set = set()
 
-        def empty_kpi():
-            return {"deudor_bcv": 0.0, "desc_bcv": 0.0, "desc_usd": 0.0, "factura_odoo": 0.0}
-
-        kpi_total_general = empty_kpi()
-        kpi_total_vencido = empty_kpi()
-        kpi_vigentes = empty_kpi()
-        kpi_1_30 = empty_kpi()
-        kpi_31_60 = empty_kpi()
-        kpi_61_90 = empty_kpi()
-        kpi_mas_90 = empty_kpi()
 
         today_date = date.today()
 
@@ -4935,47 +4925,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             )
             fecha_vencimiento = dt_venc.isoformat() if dt_venc else o.fecha.isoformat()
 
-            # Accumulate Aging KPIs with 4 distinct sub-balances per bucket
-            s_inv = saldo_factura_odoo if saldo_factura_odoo is not None else 0.0
-            if saldo_deudor_bcv > 0.05 or saldo_con_descuento_lista_usd > 0.05 or s_inv > 0.05:
-                # 1. Total General por Cobrar (Always accumulate)
-                kpi_total_general["deudor_bcv"] += saldo_deudor_bcv
-                kpi_total_general["desc_bcv"] += saldo_con_descuento_bcv
-                kpi_total_general["desc_usd"] += saldo_con_descuento_lista_usd
-                kpi_total_general["factura_odoo"] += s_inv
-
-                if dias_vencido <= 0:
-                    kpi_vigentes["deudor_bcv"] += saldo_deudor_bcv
-                    kpi_vigentes["desc_bcv"] += saldo_con_descuento_bcv
-                    kpi_vigentes["desc_usd"] += saldo_con_descuento_lista_usd
-                    kpi_vigentes["factura_odoo"] += s_inv
-                else:
-                    # 2. Total Vencido General (All overdue orders)
-                    kpi_total_vencido["deudor_bcv"] += saldo_deudor_bcv
-                    kpi_total_vencido["desc_bcv"] += saldo_con_descuento_bcv
-                    kpi_total_vencido["desc_usd"] += saldo_con_descuento_lista_usd
-                    kpi_total_vencido["factura_odoo"] += s_inv
-
-                    if 1 <= dias_vencido <= 30:
-                        kpi_1_30["deudor_bcv"] += saldo_deudor_bcv
-                        kpi_1_30["desc_bcv"] += saldo_con_descuento_bcv
-                        kpi_1_30["desc_usd"] += saldo_con_descuento_lista_usd
-                        kpi_1_30["factura_odoo"] += s_inv
-                    elif 31 <= dias_vencido <= 60:
-                        kpi_31_60["deudor_bcv"] += saldo_deudor_bcv
-                        kpi_31_60["desc_bcv"] += saldo_con_descuento_bcv
-                        kpi_31_60["desc_usd"] += saldo_con_descuento_lista_usd
-                        kpi_31_60["factura_odoo"] += s_inv
-                    elif 61 <= dias_vencido <= 90:
-                        kpi_61_90["deudor_bcv"] += saldo_deudor_bcv
-                        kpi_61_90["desc_bcv"] += saldo_con_descuento_bcv
-                        kpi_61_90["desc_usd"] += saldo_con_descuento_lista_usd
-                        kpi_61_90["factura_odoo"] += s_inv
-                    else:
-                        kpi_mas_90["deudor_bcv"] += saldo_deudor_bcv
-                        kpi_mas_90["desc_bcv"] += saldo_con_descuento_bcv
-                        kpi_mas_90["desc_usd"] += saldo_con_descuento_lista_usd
-                        kpi_mas_90["factura_odoo"] += s_inv
 
             conc = concs.get(o.so_id)
 
@@ -5086,16 +5035,20 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         reporte.sort(key=_so_num, reverse=True)
 
+        # Los KPI salen de LAS MISMAS FILAS que el reporte muestra, no de una
+        # acumulacion paralela dentro del bucle. Antes eran dos cuentas que tenian que
+        # coincidir y nada obligaba a que coincidieran -- y de hecho dejaron de
+        # coincidir cuando `get_reporte_saldos` empezo a filtrar las ordenes ya
+        # cobradas: sacaba las filas y el encabezado seguia incluyendolas.
+        #
+        # La regla es la misma, verificada con una medicion A/B: el test
+        # `test_la_pieza_da_EXACTAMENTE_lo_mismo_que_el_cuerpo_original` corre una copia
+        # del cuerpo original contra la pieza sobre 20 filas que cubren cada borde de
+        # tramo, el umbral de cinco centavos, los negativos y el saldo de factura
+        # ausente. Hizo falta porque NINGUN test ejercita esta funcion: los diez que la
+        # mencionan la mockean.
         res = {
-            "kpis": {
-                "total_general": kpi_total_general,
-                "total_vencido": kpi_total_vencido,
-                "vigentes": kpi_vigentes,
-                "vencidas_1_30": kpi_1_30,
-                "vencidas_31_60": kpi_31_60,
-                "vencidas_61_90": kpi_61_90,
-                "vencidas_mas_90": kpi_mas_90,
-            },
+            "kpis": kpis_de_filas(reporte),
             "vendedores": sorted(vendedores_set),
             "items": reporte,
             "saldo_minimo_pendientes": saldo_minimo_items,
