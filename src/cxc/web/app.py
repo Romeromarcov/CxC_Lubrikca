@@ -56,6 +56,7 @@ from cxc.engine.discount_audit import (
     descuento_de_linea,
     monto_de_descuento_de_linea,
 )
+from cxc.engine.discounts import unidad_de_volumen
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     equivalente_usd_a_tasa,
@@ -10183,23 +10184,24 @@ async def get_todas_reglas_descuento():
 
         # 3. Volumen
         for r in repo.descuentos_volumen():
-            min_q = getattr(r, "min_unidades", None)
-            if min_q is None or float(min_q) == 0:
-                min_q = getattr(r, "litros_minimo", 0)
-            u_med = str(getattr(r, "unidad_medida", "") or "").strip()
-            if not u_med or u_med == "None":
-                u_med = (
-                    "LITROS"
-                    if (
-                        float(r.litros_minimo) > 0
-                        and (getattr(r, "min_unidades", None) is None or float(r.min_unidades) == 0)
-                    )
-                    else "CAJAS"
-                )
+            # El tramo sale SIEMPRE de `min_unidades`: la cascada que caia a
+            # `litros_minimo` era de antes de la migracion de unificacion de nombres,
+            # que elimino ese campo de `DescuentoVolumen`. La linea
+            # `float(r.litros_minimo)` era un AttributeError que el `except Exception`
+            # de esta funcion convertia en **500** -- una sola regla de volumen con la
+            # unidad vacia dejaba en blanco la pantalla de reglas entera, no solo esa
+            # fila. El motor ya habia sacado la cascada; esta pantalla no.
+            # Ver `engine/discounts.unidad_de_volumen`.
+            min_q = r.min_unidades
+            u_med, unidad_declarada = unidad_de_volumen(r)
             todas.append(
                 {
                     "tabla": "DescuentosVolumen",
                     "tipo_regla": "volumen",
+                    # False = la unidad NO estaba en el dato, y es la que el motor usa
+                    # de todos modos. "10" en litros y "10" en cajas no son el mismo
+                    # tramo, asi que quien mire la regla tiene que saber si se infirio.
+                    "unidad_declarada": unidad_declarada,
                     "tipo_nombre": "Descuento por Volumen",
                     "regla_id": r.regla_id,
                     "marca": r.marca,

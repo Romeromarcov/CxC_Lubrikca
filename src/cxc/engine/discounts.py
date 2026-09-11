@@ -1434,8 +1434,8 @@ def _calcular_componentes(
         # min_unidades no". En producción los 5 registros tenían el mismo
         # valor en ambos, así que el duplicado solo agregaba formas de
         # equivocarse. Ver la migración de unificación de nombres.
-        unidad = str(r.unidad_medida or "").upper()
-        if unidad == "LITROS":
+        unidad, _declarada = unidad_de_volumen(r)
+        if unidad == UNIDAD_LITROS:
             if litros_eval < r.min_unidades:
                 continue
             if r.max_unidades and r.max_unidades < 999999 and litros_eval > r.max_unidades:
@@ -1450,7 +1450,7 @@ def _calcular_componentes(
         if r.porcentaje <= 0:
             continue
 
-        unidad_tag = "L" if unidad == "LITROS" else " Unid"
+        unidad_tag = "L" if unidad == UNIDAD_LITROS else " Unid"
         min_tag = r.min_unidades
         tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
         candidatas_vol.append(
@@ -2181,3 +2181,44 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         descuentos_teorico_ves=descuentos_teorico_ves,
         descuentos_teorico_usd=descuentos_teorico_usd,
     )
+
+
+# --- la unidad en que se cuenta un tramo de volumen --------------------------
+
+UNIDAD_LITROS = "LITROS"
+UNIDAD_POR_DEFECTO = "UNIDADES"
+
+
+def unidad_de_volumen(regla: Any) -> tuple[str, bool]:
+    """En que unidad se cuenta el tramo de una regla de volumen, y si estaba declarada.
+
+    Trigesimoprimera pieza de la Fase 2.4. El motor decide el tramo con
+    ``unidad == "LITROS"`` y trata cualquier otra cosa como unidades/cajas, pero la
+    pantalla de reglas (``get_todas_reglas_descuento``) se quedo con la cascada
+    ANTERIOR a la migracion de unificacion de nombres:
+
+        u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+        if not u_med or u_med == "None":
+            u_med = "LITROS" if (float(r.litros_minimo) > 0 and ...) else "CAJAS"
+
+    ``litros_minimo`` **ya no existe** en ``DescuentoVolumen`` --la migracion lo
+    elimino porque era el mismo dato con otro nombre-- asi que esa linea es un
+    ``AttributeError`` que el ``except Exception`` del endpoint convierte en **500**.
+    Una sola regla de volumen con la unidad vacia deja en blanco la pantalla de reglas
+    entera, no solo esa fila. Se actualizo el motor y no la pantalla.
+
+    Que el dato malo sea alcanzable no es una hipotesis: la columna es ``nullable=False``
+    con ``server_default="UNIDADES"``, o sea que prohibe NULL pero **admite cadena
+    vacia**, y el ``u_med == "None"`` de ese codigo prueba que la cadena "None" llego
+    ahi alguna vez.
+
+    **El segundo valor es la mitad del asunto.** Con ``False``, la unidad NO estaba en
+    el dato: es la que el motor va a usar de todos modos, y la pantalla tiene que poder
+    decir que la infirio. Adivinar en silencio entre litros y cajas decide si "10"
+    significa diez litros o diez cajas, y de eso depende si un descuento por volumen se
+    otorga o no.
+    """
+    crudo = str(getattr(regla, "unidad_medida", "") or "").strip().upper()
+    if not crudo or crudo == "NONE":
+        return UNIDAD_POR_DEFECTO, False
+    return crudo, True
