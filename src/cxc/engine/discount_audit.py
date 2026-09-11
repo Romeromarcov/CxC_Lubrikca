@@ -186,3 +186,37 @@ def auditar_nota_credito(
         detalle_odoo=detalle_odoo,
         detalle_motor=detalle_motor,
     )
+
+
+def hay_sobre_descuento(*resultados: ResultadoAuditoria | None) -> ResultadoAuditoria | None:
+    """El primero de ``resultados`` que sea un SOBRE-descuento, o ``None``.
+
+    Decimocuarta pieza de la Fase 2.4, y la elegio una medicion: es la regla que
+    decide si se bloquea la aprobacion de un descuento de sistema mas sobre una
+    orden, y no tenia ninguna prueba -- ninguna de las 1.718 nombraba a
+    ``_detectar_sobre_descuento_vigente``.
+
+    **Sobre-descuento es la conjuncion de DOS condiciones**, y quedarse con una
+    sola invierte el bloqueo:
+
+    * ``enviar_a_bandeja``: la auditoria encontro una divergencia digna de
+      revisarse. Se enciende en LAS DOS direcciones.
+    * ``diferencia_usd < 0``: la divergencia va en la direccion mala, o sea Odoo
+      aplico MAS descuento del que el motor dice que corresponde.
+
+    Sin la segunda, una orden SUB-descontada --a la que se le dio MENOS de lo que
+    le toca-- bloquearia la aprobacion de nuevos descuentos. Es exactamente el
+    caso opuesto al que la guarda quiere frenar: a esa orden habria que darle mas,
+    no menos.
+
+    El orden de los argumentos importa y es el del llamador: primero la auditoria
+    de la ORDEN, despues la de la FACTURA. Se devuelve el primero que califique,
+    no una lista, porque quien llama solo necesita saber si bloquear y con que
+    motivo mostrarlo.
+    """
+    for r in resultados:
+        if r is None:
+            continue
+        if r.enviar_a_bandeja and r.diferencia_usd < Decimal("0"):
+            return r
+    return None

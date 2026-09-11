@@ -15709,7 +15709,11 @@ def _detectar_sobre_descuento_vigente(repo, so_id: str):
     Devuelve el primer ``ResultadoAuditoria`` en estado de sobre-descuento
     (orden o factura), o ``None`` si no aplica.
     """
-    from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
+    from cxc.engine.discount_audit import (
+        auditar_descuento_factura,
+        auditar_descuento_orden,
+        hay_sobre_descuento,
+    )
 
     orden = repo.get_orden(so_id)
     if orden is None:
@@ -15731,18 +15735,16 @@ def _detectar_sobre_descuento_vigente(repo, so_id: str):
         motor_total_descuentos=motor_total_descuentos,
         odoo_descuento_aplicado=Decimal(str(desc_orden_map.get(so_id, 0.0))),
     )
-    if audit_orden.enviar_a_bandeja and audit_orden.diferencia_usd < 0:
-        return audit_orden
-
     audit_factura = auditar_descuento_factura(
         so_id=so_id,
         motor_total_descuentos=motor_total_descuentos,
         odoo_descuento_factura=Decimal(str(desc_factura_map.get(so_id, 0.0))),
     )
-    if audit_factura.enviar_a_bandeja and audit_factura.diferencia_usd < 0:
-        return audit_factura
-
-    return None
+    # La conjunción de las DOS condiciones vive en el motor, con sus tests: sin
+    # ``diferencia_usd < 0`` una orden SUB-descontada bloquearía la aprobación de
+    # nuevos descuentos, que es el caso opuesto al que esta guarda frena.
+    # Ver ``engine/discount_audit.py::hay_sobre_descuento``.
+    return hay_sobre_descuento(audit_orden, audit_factura)
 
 
 @app.post("/api/facturacion/aprobar-descuento-sistema")
