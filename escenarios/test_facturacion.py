@@ -44,6 +44,30 @@ def test_refacturar_no_cuenta_la_orden_dos_veces(escenario, sistema, odoo):
     )
     assert neto > 0, "El neto facturado quedó en cero o negativo tras refacturar."
 
+    # Y la mitad que faltaba, agregada el 11-sep-2026 después de medirla en la
+    # copia de producción: que el espejo quede bien NO alcanza.
+    #
+    # La factura anulada tiene ``amount_residual = 0`` porque la reversó una nota
+    # de crédito, y el fallback que calcula el abono hacía
+    # ``amount_total - amount_residual`` -- leía la anulación como un cobro
+    # completo. Medido: 17 órdenes reales salían de la cuenta por cobrar por eso,
+    # 4.489,12 USD entre lo no facturado y lo facturado sin cobrar. El caso más
+    # limpio era S00886: dos facturas, cero pagos, y el reporte la daba por
+    # cobrada.
+    #
+    # Este escenario lo habría visto si hubiera mirado el saldo en vez de solo el
+    # espejo. Ahora lo mira.
+    en_saldos = sistema.orden_en_saldos(situacion.nombre)
+    assert en_saldos is not None, (
+        "La orden refacturada desapareció de la cuenta por cobrar. Nadie pagó nada: "
+        "si no está, el abono se calculó desde la factura ANULADA."
+    )
+    deudor = float(en_saldos.get("saldo_deudor_bcv") or 0)
+    assert deudor > 0, (
+        f"La orden refacturada figura con saldo deudor {deudor}. La factura nueva "
+        "está sin pagar, así que debe seguir debiendo."
+    )
+
 
 @pytest.mark.escenario("Facturan la misma orden dos veces")
 def test_el_detector_de_doble_facturacion_no_tiene_falsos_negativos(
