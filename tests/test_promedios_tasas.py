@@ -244,3 +244,59 @@ def test_una_sola_captura_da_un_rango_de_un_punto() -> None:
     assert r.verificado
     assert r.acepta(Decimal("954.75"))
     assert not r.acepta(Decimal("954.76"))
+
+
+# --- el endpoint, que ahora llama a la pieza ---------------------------------
+
+
+def test_el_endpoint_expone_los_dos_avisos() -> None:
+    """Los dos hallazgos viajan en la respuesta, no solo en un docstring.
+
+    `ventanas_solapadas` dice que mañana y tarde salen de las mismas capturas, y
+    `filas_son_de_hoy` dice si el «promedio de hoy» es de hoy. Sin ellos, los dos
+    defectos siguen ahí pero invisibles — que es justo la forma que este plan viene
+    corrigiendo.
+
+    Y hay una razón para probarlo por el endpoint y no solo por la pieza: extraer la
+    lógica movió la cobertura al módulo nuevo sin bajar la del original. La barra de
+    `app.py` bajó cuando el endpoint pasó a llamar a la pieza, medido: esa función
+    fue de 54 de 75 líneas sin cubrir a ninguna en la lista.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    import cxc.web.app as app
+
+    repo = MagicMock()
+    # Tres capturas a las 10 y ninguna entre las 6 y las 9: el caso del 11-sep.
+    repo.all_serie_tasas.return_value = []
+    filas = [
+        {"timestamp": "2026-09-11 10:00:00", "tasa_binance": "954", "tasa_bcv": "832"},
+        {"timestamp": "2026-09-11 10:15:00", "tasa_binance": "955", "tasa_bcv": "832"},
+    ]
+
+    async def _nada():
+        return None
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app._all_serie_tasas_rows", return_value=filas),
+        patch("cxc.web.app.hay_sesion_valida", return_value=True),
+        patch("cxc.web.app.run_scraper_in_background", _nada),
+        patch("cxc.web.app.run_sync_in_background", _nada),
+        patch("cxc.web.app.date") as fecha,
+    ):
+        fecha.today.return_value.isoformat.return_value = "2026-09-11"
+        with TestClient(app.app) as cliente:
+            r = cliente.get("/api/config/tasas-promedios")
+
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["ventanas_solapadas"] is True
+    assert cuerpo["horas_compartidas"] == [10]
+    assert cuerpo["filas_son_de_hoy"] is True
+    assert cuerpo["tasa_binance_manana"] == cuerpo["tasa_binance_tarde"], (
+        "el aviso existe porque los dos promedios salen de las mismas capturas"
+    )
+    assert cuerpo["capturas"] == {"manana": 2, "tarde": 2, "diario": 2}

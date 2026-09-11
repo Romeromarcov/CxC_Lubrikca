@@ -73,7 +73,12 @@ from cxc.engine.pagada_en_odoo import (
 )
 from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
-from cxc.engine.promedios_tasas import rango_binance_del_dia
+from cxc.engine.promedios_tasas import (
+    FILAS_DE_RESPALDO,
+    diferencial_pct,
+    promediar,
+    rango_binance_del_dia,
+)
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -10758,82 +10763,89 @@ async def get_tasas_promedios():
     return await asyncio.to_thread(_get_tasas_promedios_sync)
 
 
+def _ultima_tasa_positiva(filas: list[dict], campo: str) -> Decimal:
+    """La ultima tasa positiva de ``campo`` recorriendo ``filas`` de atras hacia
+    adelante, o cero si ninguna sirve.
+
+    Se recorre al reves porque lo que se quiere es la mas reciente, y se exige
+    positiva porque una captura fallida guarda cero: devolverla haria que la
+    pantalla muestre "tasa actual 0".
+    """
+    for f in reversed(filas):
+        valor = _dec_tasa(f.get(campo))
+        if valor > Decimal("0"):
+            return valor
+    return Decimal("0")
+
+
+def _dec_tasa(valor) -> Decimal:
+    try:
+        return Decimal(str(valor if valor not in (None, "") else "0"))
+    except Exception:
+        return Decimal("0")
+
+
 def _get_tasas_promedios_sync():
+    """Los tres promedios de la tasa Binance y el diferencial contra la BCV.
+
+    La cuenta vive en ``engine/promedios_tasas.py`` desde el 11-sep-2026, con sus
+    31 tests -- acá quedó la lectura, la eleccion de filas y el armado de la
+    respuesta. Antes estaba todo inline y ninguna prueba lo tocaba.
+
+    Dos cosas que el modulo documenta y esta funcion expone en la respuesta, para
+    que dejen de pasar inadvertidas:
+
+    * ``ventanas_solapadas`` -- sin captura entre las 6 y las 9, la manana cae a un
+      respaldo que llega hasta las 11 y comparte capturas con la tarde. Cuando pasa,
+      los dos promedios son el mismo numero. Paso el 11-sep-2026.
+    * ``filas_son_de_hoy`` -- sin capturas de hoy se promedian las ultimas 24 de
+      CUALQUIER fecha, asi que el "promedio de hoy" puede ser el de la semana
+      pasada.
+
+    Ninguna de las dos se corrige acá: cambiar las ventanas o el respaldo mueve las
+    cifras que la pantalla muestra y las que la serie guarda, y eso es decision del
+    usuario.
+    """
     try:
         repo = get_repo()
         rows = _all_serie_tasas_rows(repo)
         today_str = date.today().isoformat()
 
-        rates_today = [r for r in rows if r.get("timestamp", "").startswith(today_str)]
-        target_rows = rates_today if rates_today else rows[-24:]
+        de_hoy = [r for r in rows if str(r.get("timestamp", "")).startswith(today_str)]
+        filas = de_hoy if de_hoy else rows[-FILAS_DE_RESPALDO:]
 
-        manana_near_9 = []
-        manana_all = []
-        tarde_near_13 = []
-        tarde_all = []
-        diario = []
-        last_bcv = Decimal("0")
-        last_binance = Decimal("0")
+        prom = promediar(filas)
+        # Las "vigentes" salen de TODA la serie, no de las filas elegidas: son la
+        # ultima tasa conocida, no un promedio del dia.
+        last_bcv = _ultima_tasa_positiva(rows, "tasa_bcv")
+        last_binance = _ultima_tasa_positiva(rows, "tasa_binance")
 
-        # Find most recent valid Binance & BCV rates from all rows
-        for r in reversed(rows):
-            try:
-                tb_val = Decimal(str(r.get("tasa_binance", "0")))
-                if tb_val > Decimal("0") and last_binance <= Decimal("0"):
-                    last_binance = tb_val
-                tbcv_val = Decimal(str(r.get("tasa_bcv", "0")))
-                if tbcv_val > Decimal("0") and last_bcv <= Decimal("0"):
-                    last_bcv = tbcv_val
-                if last_binance > Decimal("0") and last_bcv > Decimal("0"):
-                    break
-            except Exception:
-                pass
-
-        for r in target_rows:
-            try:
-                tb = Decimal(str(r.get("tasa_binance", "0")))
-                if tb > Decimal("0"):
-                    diario.append(tb)
-                    ts_str = str(r.get("timestamp", "00:00"))
-                    time_part = ts_str.split("T")[-1].split(" ")[-1]
-                    ts_hour = int(time_part.split(":")[0])
-
-                    if 6 <= ts_hour <= 9:
-                        manana_near_9.append(tb)
-                    elif 10 <= ts_hour <= 13:
-                        tarde_near_13.append(tb)
-
-                    if ts_hour < 12:
-                        manana_all.append(tb)
-                    else:
-                        tarde_all.append(tb)
-            except Exception:
-                pass
-
-        m_list = manana_near_9 if manana_near_9 else manana_all
-        t_list = tarde_near_13 if tarde_near_13 else tarde_all
-
-        avg_m = float(sum(m_list) / Decimal(len(m_list))) if m_list else None
-        avg_t = float(sum(t_list) / Decimal(len(t_list))) if t_list else None
-        avg_d = float(sum(diario) / Decimal(len(diario))) if diario else None
-
-        diff_pct = 0.0
-        if avg_d and last_bcv > Decimal("0"):
-            diff_pct = float(((Decimal(str(avg_d)) - last_bcv) / Decimal(str(avg_d))) * 100)
+        def _r2(v: Decimal | None) -> float | None:
+            return round(float(v), 2) if v is not None else None
 
         return {
             "fecha": today_str,
             "tasa_bcv_actual": float(last_bcv),
             "tasa_binance_vigente": float(last_binance),
-            "tasa_binance_manana": round(avg_m, 2) if avg_m else None,
-            "tasa_binance_tarde": round(avg_t, 2) if avg_t else None,
-            "tasa_binance_diario": round(avg_d, 2) if avg_d else None,
-            "diferencial_bcv_binance_pct": round(diff_pct, 2),
+            "tasa_binance_manana": _r2(prom.manana),
+            "tasa_binance_tarde": _r2(prom.tarde),
+            "tasa_binance_diario": _r2(prom.diario),
+            "diferencial_bcv_binance_pct": round(
+                float(diferencial_pct(prom.diario, last_bcv)), 2
+            ),
+            # Los dos avisos. No cambian ningun numero; dicen de donde salio.
+            "ventanas_solapadas": prom.ventanas_solapadas,
+            "horas_compartidas": list(prom.horas_compartidas),
+            "filas_son_de_hoy": bool(de_hoy),
+            "capturas": {
+                "manana": prom.capturas_manana,
+                "tarde": prom.capturas_tarde,
+                "diario": prom.capturas_diario,
+            },
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
 
 @app.get("/api/pagos-historial")
 async def get_pagos_historial():

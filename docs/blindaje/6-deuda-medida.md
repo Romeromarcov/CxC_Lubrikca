@@ -1127,7 +1127,22 @@ Binance es 12,5 % y sobre BCV sería 14,29 %.
 ### Qué queda hecho
 
 `engine/promedios_tasas.py` calcula las **dos lecturas** y `diagnostico_de_promedios`
-las compara, nombrando la hora compartida. 25 tests.
+las compara, nombrando la hora compartida. 32 tests.
+
+Y **el endpoint ahora los expone en su respuesta**, que es lo que convierte el
+hallazgo en algo que se ve en vez de algo que está en un docstring:
+
+```json
+"tasa_binance_manana": 954.75,
+"tasa_binance_tarde":  954.75,
+"ventanas_solapadas":  true,
+"horas_compartidas":   [10],
+"filas_son_de_hoy":    true,
+"capturas": { "manana": 3, "tarde": 3, "diario": 3 }
+```
+
+Ésa es la respuesta real de hoy: los dos promedios son el mismo número sobre las
+mismas tres capturas, y ahora la pantalla puede decirlo.
 
 Dos merecen mención porque son de la misma familia que el resto del plan: **un sello
 de hora ilegible no cuenta como medianoche** (devolver 0 lo metería en el promedio de
