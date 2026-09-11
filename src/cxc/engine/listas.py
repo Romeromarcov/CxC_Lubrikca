@@ -123,12 +123,19 @@ class DiagnosticoEleccion:
         # la corrida diaria reportaba en ALTA una condición ya resuelta. Un
         # instrumento que grita lobo deja de mirarse, que es justo lo que este
         # plan viene corrigiendo en otros lugares.
+        #
+        # Y el texto que lo reemplazó afirmaba "no hay divergencia entre páginas",
+        # que se volvió falso el 11-sep-2026 al medir de dónde salen los ids: los
+        # cinco sitios aplican la guarda, sí, pero leen de DOS fuentes de
+        # configuración distintas. Esta nota ya no afirma nada sobre la divergencia
+        # entre páginas -- eso lo contesta ``comparar_fuentes_de_lista``, que es
+        # quien tiene los datos para contestarlo.
         return (
             f"{self.moneda}: la primera lista que la configuración ofrece es la "
             f"{self.sin_guarda}{detalle}, y la guarda la saltea para valorar con la "
-            f"{self.con_guarda}. No hay divergencia entre páginas -- las cinco usan "
-            "la guarda. Conviene reordenar la configuración para que la primera sea "
-            "la que de verdad se usa."
+            f"{self.con_guarda}. Conviene reordenar la configuración para que la "
+            "primera sea la que de verdad se usa. (Si las páginas coinciden entre sí "
+            "es otra pregunta, y la contesta `comparar_fuentes_de_lista`.)"
         )
 
 
@@ -239,17 +246,26 @@ POR_DEFECTO_VES = 5
 def mapa_de_listas_primarias(
     ids_usd: list[Any],
     ids_ves: list[Any],
-    activos: set[int],
+    activos: AbstractSet[int],
     *,
     por_defecto_usd: int = POR_DEFECTO_USD,
     por_defecto_ves: int = POR_DEFECTO_VES,
 ) -> dict[str, int]:
     """El ``pricelist_ids_map`` que consume ``OdooPriceResolver``.
 
-    Existe para que los cuatro sitios que lo arman no puedan volver a
-    divergir. Era exactamente esa divergencia —tres pasaban por la guarda de
-    archivadas y el cuarto tomaba el primer id crudo— la que hacía que 789
-    órdenes se valoraran distinto según qué página las mirara.
+    Existe para que los sitios que lo arman elijan el id con la misma regla. Era
+    exactamente esa divergencia —tres pasaban por la guarda de archivadas y el cuarto
+    tomaba el primer id crudo— la que hacía que 789 órdenes se valoraran distinto según
+    qué página las mirara.
+
+    **Lo que esta pieza NO resuelve, y el docstring decía que sí.** Hasta el
+    11-sep-2026 acá se afirmaba que existía "para que los cuatro sitios que lo arman no
+    puedan volver a divergir". Falso: cubre **cuál id se elige entre varios**, no **de
+    dónde salen los ids**. Y salen de dos fuentes de configuración distintas —el mapeo
+    unificado y las claves ``valid_pricelists_*``— que nada sincroniza. Medido contra
+    QA, dan USD=11/BCV=10 contra USD=4/BCV=5. Ver ``comparar_fuentes_de_lista``, que
+    mide esa divergencia, y la nota de por qué no se corrige acá: unificarlas cambia
+    con qué lista se valora cada teórico.
 
     Cuando la configuración no ofrece ninguna lista se cae a los ids por
     defecto, que es lo que hacía el código original. **Eso no es un dato**: es
@@ -414,3 +430,113 @@ def reglas_duplicadas(reglas: list[dict[str, Any]]) -> list[ReglaDuplicada]:
             )
         )
     return salida
+
+
+@dataclass(frozen=True)
+class FuenteDeLista:
+    """Lo que UNA fuente de configuracion contesta a "cual lista valora el teorico"."""
+
+    nombre: str
+    ids_usd: tuple[int, ...]
+    ids_ves: tuple[int, ...]
+    primaria_usd: int
+    primaria_ves: int
+    # Cuales de las dos primarias estan activas en Odoo. Una primaria archivada
+    # sirve precios de una lista que nadie mantiene.
+    usd_activa: bool
+    ves_activa: bool
+
+    @property
+    def alguna_archivada(self) -> bool:
+        return not self.usd_activa or not self.ves_activa
+
+
+@dataclass(frozen=True)
+class DiagnosticoDeFuentes:
+    """Dos fuentes de configuracion para la MISMA decision, y si contestan lo mismo."""
+
+    fuentes: tuple[FuenteDeLista, ...]
+    nota: str
+
+    @property
+    def coinciden(self) -> bool:
+        pares = {(f.primaria_usd, f.primaria_ves) for f in self.fuentes}
+        return len(pares) <= 1
+
+    @property
+    def alguna_con_archivada(self) -> bool:
+        return any(f.alguna_archivada for f in self.fuentes)
+
+
+def comparar_fuentes_de_lista(
+    fuentes: list[tuple[str, list[Any], list[Any]]], activos: AbstractSet[int]
+) -> DiagnosticoDeFuentes:
+    """Compara lo que contesta cada fuente de configuracion de listas primarias.
+
+    Vigesimosexta pieza de la Fase 2.4. ``web/app.py`` tiene **cinco** sitios que
+    deciden cual lista valora el teorico, y leen de **dos fuentes distintas**:
+
+      - ``get_valid_pricelists_usd_and_ves`` -> el mapeo unificado
+        (``pricelist_mapeo_unificado``, con cache en memoria y en un JSON local),
+        campo ``moneda``. La usan los tres sitios que arman el resolvedor inline,
+        entre ellos ``api_backfill_ventas_teoricos``, que **escribe** teoricos.
+      - ``get_ui_pricelist_ids`` -> las claves ``valid_pricelists_usd`` /
+        ``valid_pricelists_ves``. La usan los dos sitios que ya pasan por
+        ``mapa_de_listas_primarias``.
+
+    Nada las sincroniza, y el docstring de ``mapa_de_listas_primarias`` decia que
+    existia "para que los cuatro sitios que lo arman no puedan volver a divergir":
+    esa guarda cubre **cual id se elige entre varios**, no **de donde salen los ids**.
+
+    Medido contra QA el 11-sep-2026: el mapeo unificado da USD=11 / BCV=10 (las dos
+    activas) y las claves dan USD=4 / BCV=5 (las dos ARCHIVADAS, y la 5 con todas sus
+    reglas vencidas el 2-sep). **Con la salvedad de que en QA esas claves no existen**
+    y por eso caen al env: si en produccion estan cargadas, el resultado puede ser
+    otro. Lo que queda probado es estructural --hay dos fuentes y nada las sincroniza--
+    y esta pieza sirve justamente para medirlo donde haga falta.
+
+    ``fuentes`` son tuplas ``(nombre, ids_usd, ids_ves)``. No corrige nada: elegir una
+    sola fuente cambia con que lista se valora cada teorico, o sea mueve montos.
+    """
+    armadas = []
+    for nombre, ids_usd, ids_ves in fuentes:
+        mapa = mapa_de_listas_primarias(ids_usd, ids_ves, activos)
+        armadas.append(
+            FuenteDeLista(
+                nombre=nombre,
+                ids_usd=tuple(int(x) for x in ids_usd if str(x).isdigit()),
+                ids_ves=tuple(int(x) for x in ids_ves if str(x).isdigit()),
+                primaria_usd=mapa["USD"],
+                primaria_ves=mapa["BCV"],
+                usd_activa=mapa["USD"] in activos,
+                ves_activa=mapa["BCV"] in activos,
+            )
+        )
+
+    if len(armadas) < 2:
+        nota = "Una sola fuente: no hay nada que comparar."
+    elif len({(f.primaria_usd, f.primaria_ves) for f in armadas}) == 1:
+        f = armadas[0]
+        nota = (
+            f"Las {len(armadas)} fuentes coinciden en USD={f.primaria_usd} y "
+            f"BCV={f.primaria_ves}."
+        )
+        if f.alguna_archivada:
+            nota += (
+                " PERO alguna de las dos primarias esta ARCHIVADA en Odoo: se sirven "
+                "precios de una lista que nadie mantiene."
+            )
+    else:
+        detalle = "; ".join(
+            f"{f.nombre} dice USD={f.primaria_usd}"
+            + ("" if f.usd_activa else " (ARCHIVADA)")
+            + f" / BCV={f.primaria_ves}"
+            + ("" if f.ves_activa else " (ARCHIVADA)")
+            for f in armadas
+        )
+        nota = (
+            f"Las fuentes DIFIEREN, asi que con que lista se valora un teorico depende "
+            f"de que parte del codigo lo calcule: {detalle}. Unificarlas cambia montos, "
+            f"asi que es decision del usuario."
+        )
+    return DiagnosticoDeFuentes(fuentes=tuple(armadas), nota=nota)

@@ -317,15 +317,27 @@ def test_la_nota_no_dice_que_las_paginas_discrepan_desde_que_la_guarda_esta() ->
     primera lista que la configuración ofrece está archivada y la guarda la
     saltea. Vale avisarlo —conviene reordenar la configuración— pero no como si
     dos pantallas dieran números distintos.
+
+    **Y el reemplazo también mintió.** Decía «no hay divergencia entre páginas -- las
+    cinco usan la guarda», y eso se volvió falso el mismo día al medir de dónde salen
+    los ids: los cinco sitios aplican la guarda, pero leen de DOS fuentes de
+    configuración distintas. La nota ya no afirma nada sobre la divergencia entre
+    páginas, porque no tiene los datos para afirmarlo —`comparar_fuentes_de_lista`
+    sí—. La lección, dos veces: una nota que afirma más de lo que su función puede
+    ver envejece mal.
     """
     d = diagnostico_de_eleccion("BCV", [3, 10], {10})
     assert not d.coinciden
     assert "ARCHIVADA" in d.nota, "sigue diciendo cuál está archivada"
-    assert "las cinco usan la guarda" in d.nota
     assert "valora con la lista 3" not in d.nota, (
         "la nota no debe afirmar que una página valora con la lista archivada: "
         "desde que la guarda está aplicada, ninguna lo hace"
     )
+    assert "No hay divergencia" not in d.nota, (
+        "tampoco puede afirmar lo contrario: esta función solo ve UNA fuente de "
+        "configuración, así que no sabe si las páginas coinciden entre sí"
+    )
+    assert "comparar_fuentes_de_lista" in d.nota, "y dice quién sí puede contestarlo"
 
 
 # --- la vigencia efectiva y su denominador (Fase 2.4, pieza 22) --------------
@@ -549,3 +561,98 @@ def test_una_regla_sin_producto_se_saltea_en_vez_de_agruparse_con_las_otras() ->
         {"id": 2, "product_tmpl_id": False, "fixed_price": 20.0},
     ]
     assert reglas_duplicadas(reglas) == []
+
+
+# --- las DOS fuentes de configuración (Fase 2.4, pieza 26) -------------------
+
+
+def test_dos_fuentes_que_coinciden_no_son_un_hallazgo() -> None:
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    d = comparar_fuentes_de_lista(
+        [("mapeo", [11, 13], [10, 12]), ("claves", [11], [10])], {10, 11, 12, 13}
+    )
+    assert d.coinciden
+    assert not d.alguna_con_archivada
+    assert "coinciden en USD=11 y BCV=10" in d.nota
+
+
+def test_el_hallazgo_medido_las_fuentes_dan_listas_DISTINTAS() -> None:
+    """Medido contra QA el 11-sep-2026, y es lo que este chequeo existe para ver.
+
+    El mapeo unificado da USD=11 / BCV=10 (las dos activas) y las claves
+    `valid_pricelists_*` dan USD=4 / BCV=5 (las dos archivadas, y la 5 con todas sus
+    reglas vencidas el 2-sep). Cinco sitios del código deciden con qué lista se valora
+    un teórico, y leen de esas dos fuentes.
+
+    La salvedad va en el docstring del módulo: en QA esas claves no existen y caen al
+    env, así que **ese número concreto no se traslada a producción**. Lo que sí es
+    estructural es que hay dos fuentes y nada las sincroniza.
+    """
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    activos = {10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+    d = comparar_fuentes_de_lista(
+        [
+            ("mapeo unificado", [7, 8, 11, 13], [3, 4, 5, 9, 10, 12]),
+            ("claves valid_pricelists_*", [4], [5]),
+        ],
+        activos,
+    )
+    assert not d.coinciden
+    assert "DIFIEREN" in d.nota
+    assert "USD=11" in d.nota and "USD=4 (ARCHIVADA)" in d.nota
+    assert "BCV=10" in d.nota and "BCV=5 (ARCHIVADA)" in d.nota
+    assert "decision del usuario" in d.nota, "unificarlas mueve montos"
+
+
+def test_coinciden_pero_en_una_lista_ARCHIVADA_tambien_se_avisa() -> None:
+    """Que las dos fuentes estén de acuerdo no las hace correctas.
+
+    Si las dos apuntan a la misma lista archivada, no hay divergencia entre páginas y
+    sin embargo se sirven precios de una lista que nadie mantiene. Son dos problemas
+    distintos y el diagnóstico los separa.
+    """
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    d = comparar_fuentes_de_lista([("a", [4], [5]), ("b", [4], [5])], {10, 11})
+    assert d.coinciden
+    assert d.alguna_con_archivada
+    assert "ARCHIVADA" in d.nota
+
+
+def test_una_sola_fuente_no_tiene_con_que_comparar() -> None:
+    """Y lo dice, en vez de devolver «coinciden», que se leería como verificado."""
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    d = comparar_fuentes_de_lista([("unica", [11], [10])], {10, 11})
+    assert d.coinciden, "trivialmente, porque hay una sola"
+    assert "nada que comparar" in d.nota
+
+
+def test_cada_fuente_reporta_sus_ids_y_cual_eligio() -> None:
+    """Para poder ir a arreglar la configuración hay que ver de qué lista salió."""
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    d = comparar_fuentes_de_lista(
+        [("mapeo", ["7", "8", "11"], ["3", "10"])], {10, 11}
+    )
+    (f,) = d.fuentes
+    assert f.ids_usd == (7, 8, 11)
+    assert f.primaria_usd == 11
+    assert f.usd_activa
+    assert f.primaria_ves == 10
+
+
+def test_una_fuente_vacia_cae_a_los_por_defecto_y_se_ve_que_estan_archivados() -> None:
+    """Config vacía = ids 4 y 5 por defecto, que hoy están archivados.
+
+    El `POR_DEFECTO_USD/VES` no es un dato: es un nombre lógico de respaldo. Que salga
+    marcado como archivado es la señal de que la configuración falta.
+    """
+    from cxc.engine.listas import comparar_fuentes_de_lista
+
+    d = comparar_fuentes_de_lista([("vacia", [], [])], {10, 11})
+    (f,) = d.fuentes
+    assert (f.primaria_usd, f.primaria_ves) == (4, 5)
+    assert f.alguna_archivada

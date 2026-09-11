@@ -254,13 +254,82 @@ def evaluar_eleccion_de_listas(informe: Informe) -> None:
         diag = diagnostico_de_eleccion(moneda, ids, activos)
         if not diag.coinciden:
             informe.hallazgos.append(
-                # BAJA, no ALTA: desde que la guarda esta aplicada en los cinco
-                # sitios esto ya no es "dos paginas dicen numeros distintos" sino
-                # "la primera lista configurada esta archivada y la guarda la
-                # saltea". Sigue valiendo avisarlo -- conviene reordenar la
-                # configuracion -- pero en ALTA gritaba lobo todos los dias.
+                # BAJA, no ALTA: con la guarda aplicada esto ya no es "dos
+                # paginas dicen numeros distintos" sino "la primera lista
+                # configurada esta archivada y la guarda la saltea". Sigue valiendo
+                # avisarlo -- conviene reordenar la configuracion -- pero en ALTA
+                # gritaba lobo todos los dias.
+                #
+                # OJO con lo que este chequeo NO cubre, y que hasta el 11-sep-2026
+                # este comentario daba por resuelto: la guarda decide **cual id se
+                # elige entre varios**, no **de donde salen los ids**. Salen de dos
+                # fuentes de configuracion distintas. Eso lo mide
+                # `evaluar_fuentes_de_lista`, mas abajo.
                 Hallazgo("listas", f"eleccion_{moneda.lower()}", "BAJA", diag.nota)
             )
+
+
+def evaluar_fuentes_de_lista(informe: Informe) -> None:
+    """Las DOS fuentes de configuracion que contestan "cual lista valora el teorico".
+
+    `web/app.py` tiene cinco sitios que arman un `OdooPriceResolver`, y leen de dos
+    fuentes que nada sincroniza:
+
+      - `get_valid_pricelists_usd_and_ves` -> el mapeo unificado
+        (`pricelist_mapeo_unificado`, cacheado en memoria y en un JSON local). La
+        usan los TRES sitios que arman el resolvedor inline, entre ellos
+        `api_backfill_ventas_teoricos`, que **escribe** teoricos.
+      - `get_ui_pricelist_ids` -> las claves `valid_pricelists_usd` /
+        `valid_pricelists_ves`. La usan los dos que pasan por
+        `mapa_de_listas_primarias`.
+
+    Es la hermana del chequeo de arriba y no la reemplaza: ese pregunta si la lista
+    elegida esta activa, este pregunta si las dos fuentes eligen la misma.
+
+    Medido contra QA el 11-sep-2026: el mapeo da USD=11/BCV=10 (activas) y las claves
+    dan USD=4/BCV=5 (archivadas, la 5 con reglas vencidas el 2-sep). **En QA esas
+    claves no existen y caen al env**, asi que ese numero concreto no se traslada a
+    produccion -- y por eso el chequeo va en la corrida diaria, que es donde SI corre
+    contra la configuracion real.
+
+    ALTA cuando difieren: con que lista se valora un teorico no puede depender de que
+    parte del codigo lo calcule.
+    """
+    from cxc.config import AppConfig
+    from cxc.engine.listas import comparar_fuentes_de_lista
+    from cxc.odoo.client import _connect
+    from cxc.web.app import (
+        _activos_pricelist,
+        get_ui_pricelist_ids,
+        get_valid_pricelists_usd_and_ves,
+    )
+
+    ejecutar = _connect(AppConfig.from_env().odoo)
+    if not ejecutar:
+        informe.saltados.append("fuentes de lista primaria (sin conexion a Odoo)")
+        return
+    activos = _activos_pricelist(ejecutar)
+    if not activos:
+        informe.saltados.append("fuentes de lista primaria (Odoo no devolvio pricelists)")
+        return
+
+    repo = _repo_para_config()
+    usd_mapeo, ves_mapeo = get_valid_pricelists_usd_and_ves(repo)
+    usd_claves, ves_claves = get_ui_pricelist_ids(repo)
+    diag = comparar_fuentes_de_lista(
+        [
+            ("mapeo unificado", list(usd_mapeo), list(ves_mapeo)),
+            ("claves valid_pricelists_*", list(usd_claves), list(ves_claves)),
+        ],
+        activos,
+    )
+    informe.evaluados += 1
+    if not diag.coinciden:
+        informe.hallazgos.append(Hallazgo("listas", "fuentes_de_lista", "ALTA", diag.nota))
+    elif diag.alguna_con_archivada:
+        informe.hallazgos.append(
+            Hallazgo("listas", "primaria_archivada", "BAJA", diag.nota)
+        )
 
 
 def evaluar_pagada_en_odoo(informe: Informe) -> None:
@@ -471,6 +540,7 @@ def main() -> int:
         else:
             evaluar_conciliacion(con, informe)
             evaluar_eleccion_de_listas(informe)
+            evaluar_fuentes_de_lista(informe)
             evaluar_pagada_en_odoo(informe)
 
     texto = texto_del_informe(informe)
