@@ -891,6 +891,48 @@ def _sincronizar_aplicaciones_conciliadas(
     }
 
 
+def _congelar_equivalentes(
+    monto: Decimal, moneda: Any, tasa_bcv: Decimal, tasa_binance: Decimal
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Los CUATRO equivalentes de una vinculacion, en el orden en que se guardan.
+
+    Trigesimosegunda pieza de la Fase 2.4. Estas ocho lineas estaban escritas **cuatro
+    veces** --`post_vincular`, `put_editar_vinculacion`, `_vincular_masivo_sync` y el
+    resync del demonio-- y las cuatro **sin pasar por `q6`**, mientras las dos rutas
+    que editan tasas si usan `equivalentes_bcv`/`equivalentes_binance`, que redondean a
+    seis decimales.
+
+    O sea que el mismo equivalente **congelado** quedaba guardado con dos precisiones
+    distintas segun quien lo escribiera. El docstring de `equivalentes_bcv` decia "ahora
+    las dos rutas comparten esta funcion": cierto de esas dos, falso de las otras
+    cuatro. Con 1.000 Bs a tasa 3, uno guarda `333.333333` y el otro
+    `333.3333333333...`.
+
+    **Lanza `ValueError` si alguna tasa no es positiva**, que es la regla de las piezas
+    y es deliberada: un equivalente calculado con una tasa en cero no significa nada y
+    queda congelado asi para siempre. Cada llamador decide que hacer -- 400 al usuario
+    en las rutas manuales, saltear esa fila en las masivas, no tocar la vinculacion en
+    el resync. Lo que ninguno hace es guardar un numero sin sentido.
+
+    Devuelve ``(equiv_usd_bcv, equiv_usd_binance, equiv_ves_bcv, equiv_ves_binance)``.
+    """
+    usd_bcv, ves_bcv = equivalentes_bcv(monto, moneda, tasa_bcv)
+    usd_bin, ves_bin = equivalentes_binance(monto, moneda, tasa_binance)
+    return usd_bcv, usd_bin, ves_bcv, ves_bin
+
+
+def _moneda_de(valor: Any) -> Moneda:
+    """``Moneda`` desde el texto del espejo, cayendo a USD si no se reconoce.
+
+    El campo viaja como texto libre y ya llego con valores raros; tratarlo como USD
+    ante la duda es lo que hacian los cuatro cuerpos originales (``== "USD"`` / else).
+    """
+    try:
+        return Moneda(str(valor or "USD").upper())
+    except ValueError:
+        return Moneda.USD
+
+
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -1053,20 +1095,33 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             repo, so_id_nuevo, hora_pago_nueva, tasa_bcv_del_dia
         )
         monto_nuevo = monto_odoo if monto_odoo > 0 else v.monto_aplicado
-        if moneda_odoo == "USD":
-            equiv_usd_bcv = monto_nuevo
-            equiv_usd_binance = monto_nuevo
-            equiv_ves_bcv = monto_nuevo * tasa_bcv
-            equiv_ves_binance = monto_nuevo * tasa_binance_nueva
-        else:
-            equiv_usd_bcv = monto_nuevo / tasa_bcv
-            equiv_usd_binance = monto_nuevo / tasa_binance_nueva
-            equiv_ves_bcv = monto_nuevo
-            equiv_ves_binance = monto_nuevo
         try:
             moneda_nueva = Moneda(moneda_odoo)
         except ValueError:
             moneda_nueva = v.moneda_abono
+        # Si la tasa no sirve, esta vinculacion NO se toca: se devuelve sin cambio en vez
+        # de abortar el ciclo entero, que es lo que pasaria si el ValueError subiera --el
+        # llamador tiene un `except Exception` que envuelve las 1.494--, y en vez de
+        # congelar un equivalente calculado con una tasa en cero.
+        try:
+            (
+                equiv_usd_bcv,
+                equiv_usd_binance,
+                equiv_ves_bcv,
+                equiv_ves_binance,
+            ) = _congelar_equivalentes(monto_nuevo, moneda_nueva, tasa_bcv, tasa_binance_nueva)
+        except ValueError as e_tasa:
+            logger.warning(
+                "Vinculacion %s no se resincroniza: %s (BCV %s, Binance %s)",
+                v.vinc_id,
+                e_tasa,
+                tasa_bcv,
+                tasa_binance_nueva,
+            )
+            return (
+                dataclasses_replace(v, so_id=so_id_nuevo, estado=EstadoVinculacion.CONCILIADO),
+                False,
+            )
         return (
             dataclasses_replace(
                 v,
@@ -3361,16 +3416,18 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
         )
 
         # Calculate equivalents
-        if pago.moneda == "USD":
-            equiv_usd_bcv = monto_dec
-            equiv_usd_binance = monto_dec
-            equiv_ves_bcv = monto_dec * tasa_bcv
-            equiv_ves_binance = monto_dec * tasa_binance
-        else:
-            equiv_usd_bcv = monto_dec / tasa_bcv
-            equiv_usd_binance = monto_dec / tasa_binance
-            equiv_ves_bcv = monto_dec
-            equiv_ves_binance = monto_dec
+        # Mismo criterio que en `put_editar_vinculacion`: 400, no 500.
+        try:
+            (
+                equiv_usd_bcv,
+                equiv_usd_binance,
+                equiv_ves_bcv,
+                equiv_ves_binance,
+            ) = _congelar_equivalentes(
+                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
+            )
+        except ValueError as e_tasa:
+            raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
 
         vinc_id = f"VINC_{req.pago_id}_{req.so_id}"
         vinc = Vinculacion(
@@ -3468,16 +3525,19 @@ async def put_editar_vinculacion(
             repo, so_id_nuevo, hora_pago_confirmada, tasa_bcv_del_dia
         )
 
-        if pago.moneda == "USD":
-            equiv_usd_bcv = monto_dec
-            equiv_usd_binance = monto_dec
-            equiv_ves_bcv = monto_dec * tasa_bcv
-            equiv_ves_binance = monto_dec * tasa_binance
-        else:
-            equiv_usd_bcv = monto_dec / tasa_bcv
-            equiv_usd_binance = monto_dec / tasa_binance
-            equiv_ves_bcv = monto_dec
-            equiv_ves_binance = monto_dec
+        # El ValueError sale al usuario como 400 y no como 500: «no hay tasa con la
+        # que congelar este equivalente» se corrige cargando la tasa.
+        try:
+            (
+                equiv_usd_bcv,
+                equiv_usd_binance,
+                equiv_ves_bcv,
+                equiv_ves_binance,
+            ) = _congelar_equivalentes(
+                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
+            )
+        except ValueError as e_tasa:
+            raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
 
         # Mismo vinc_id -- esto es una EDICIÓN, no una Vinculación nueva.
         vinc.so_id = so_id_nuevo
@@ -8834,16 +8894,26 @@ def _vincular_masivo_sync(
             repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia, serie_rows=tasas_rows
         )
 
-        if pago.moneda == "USD":
-            equiv_usd_bcv = monto_dec
-            equiv_usd_binance = monto_dec
-            equiv_ves_bcv = monto_dec * tasa_bcv
-            equiv_ves_binance = monto_dec * tasa_binance
-        else:
-            equiv_usd_bcv = monto_dec / tasa_bcv
-            equiv_usd_binance = monto_dec / tasa_binance
-            equiv_ves_bcv = monto_dec
-            equiv_ves_binance = monto_dec
+        try:
+            (
+                equiv_usd_bcv,
+                equiv_usd_binance,
+                equiv_ves_bcv,
+                equiv_ves_binance,
+            ) = _congelar_equivalentes(
+                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
+            )
+        except ValueError as e_tasa:
+            # Se saltea ESTA fila y sigue el lote: congelar un equivalente con una
+            # tasa en cero seria peor que no vincular, y abortar el lote entero por
+            # una fila tambien.
+            logger.warning(
+                "Vinculacion masiva: pago %s con orden %s se saltea, %s",
+                pago_id,
+                so_id,
+                e_tasa,
+            )
+            continue
 
         vinc_id = f"VINC_{pago_id}_{so_id}"
         vinc = Vinculacion(
