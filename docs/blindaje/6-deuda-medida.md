@@ -55,6 +55,82 @@ marcar `usa_fallback` nunca**. No traga una excepción ni devuelve un centinela
 —devuelve un dato real de otra fecha—, y el clasificador busca las dos primeras
 cosas.
 
+## El descuento de TERA: no hay regla mal configurada, no hay regla
+
+El plan lo dejaba como decisión con dos opciones: «hay que decidir si se marca como
+no otorgado o si la regla está mal configurada». **Hay una tercera, y es la que pasa.**
+
+### Qué es, medido
+
+No es un descuento por volumen. La orden es **S00010** de TERA INGENIERIA
+(cliente 202, 16-mar-2026), y su descuento tiene esta forma:
+
+| | |
+|---|---|
+| origen | `primera_compra` |
+| descripción | «Descuento primera compra Industrial 2.00%» |
+| monto | 774,72 USD |
+| **regla** | **`FALLBACK_PRIMERA_COMPRA_INDUSTRIAL_2PCT`** |
+
+El `regla_id` dice `FALLBACK`. Y el código lo declara sin vueltas
+(`engine/discounts.py:394`): «Id del 2 % de primera compra que aplica **cuando no hay
+ninguna promoción configurada** a la fecha de la orden. No es una regla de la tabla:
+es el respaldo histórico».
+
+**Las nueve tablas de reglas de descuento están vacías** en esta base:
+`descuentos_volumen`, `descuentos_pronto_pago`, `descuentos_producto`,
+`descuentos_recompra`, `descuentos_diferencial_cambiario`, `promocion_primera_compra`,
+`reglas_recurrencia`, `exclusiones`, `descuentos_sistema_aprobados` — cero filas todas.
+
+Así que **las 119 filas de `descuento_aplicado` vienen del mismo respaldo cableado**,
+por **2.782,41 USD**. No hay un solo descuento que salga de una regla configurada.
+
+### Y sí, a TERA no se le otorgó
+
+Eso queda establecido y no es opinión. Las siete líneas de S00010 tienen
+`descuento = 0,0000`, y la factura `00000167` cobró el total: 23.948,80 USD netos de
+impuesto contra 23.949,20 de suma de líneas — cuarenta centavos de redondeo. **El
+descuento se calculó y no se cobró menos.**
+
+El mecanismo para marcarlo existe —la tabla `descuentos_no_otorgados`— y tiene **cero
+filas**: nunca se usó.
+
+### El hallazgo que apareció al medirlo
+
+El mismo 2 % da **dos montos distintos en dos tablas, para las 119 órdenes**:
+
+| | total |
+|---|---:|
+| `descuento_aplicado.monto` | **2.782,41 USD** |
+| `descuentos_teorico_usd` | **1.653,50 USD** |
+| brecha | **1.128,91 USD** |
+
+Y no es una conversión de moneda: el factor entre las dos va de **0,156 a 2,191**
+según la orden — en algunas el aplicado es *menor* que el teórico. Ni siquiera la
+relación del lado teórico es uniforme: `descuentos_teorico_usd` es el 2 % de
+`teorico_usd` en **83 de las 119**, no en todas.
+
+O sea que **cuánto descuento le corresponde a un cliente depende de qué tabla se
+mire**, y la diferencia entre las dos lecturas es de 1.128,91 USD sobre 119 órdenes.
+
+**Advertencia sobre estas cifras:** el lado teórico hereda el problema de las listas
+archivadas ([más arriba](#odoopriceresolver-no-es-que-falten-precios-es-que-se-elige-la-lista-vencida)),
+así que su magnitud es indicativa. El lado `descuento_aplicado` no depende del
+teórico y es firme.
+
+### Qué hay que decidir, reformulado
+
+El plan preguntaba entre dos opciones y ninguna aplica: no hay una regla mal
+configurada porque **no hay ninguna regla**. Las preguntas reales son tres:
+
+1. **¿El 2 % cableado tiene que seguir otorgándose?** Hoy se otorga por ausencia de
+   configuración, no por decisión. Si la respuesta es no, el respaldo tiene que dejar
+   de conceder y pasar a abstenerse — y eso mueve el teórico de 119 órdenes.
+2. **¿Qué tabla manda?** Mientras las dos den números distintos, «cuánto se le debe a
+   este cliente en descuentos» no tiene una sola respuesta.
+3. **Las 119 órdenes con descuento calculado y no cobrado**: marcarlas como no
+   otorgadas es un `INSERT` en una tabla que existe y está vacía.
+
 ## Vigencias de listas sembradas: el instrumento decía «ninguno» sin mirar
 
 El plan pedía «verificar que los períodos que se sembraron coinciden con la realidad

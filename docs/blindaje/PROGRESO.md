@@ -79,6 +79,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | 5 | **1.108,59 USD** de mercancía devuelta que la factura sigue cobrando (3 órdenes) | Hay que emitir la nota de crédito en Odoo: son tus manos. El sistema ahora las lista. |
 | 6 | Las 2 órdenes con las dos definiciones de «orden histórica» en desacuerdo | Unificar mueve el equivalente congelado de dos órdenes, 457,51 USD. |
 | 7 | ¿«Ventas» del dashboard debería mostrar también el neto teórico? | Es una tarjeta nueva, no un arreglo. |
+| 9 | **El 2 % de primera compra cableado**: se otorga cuando no hay promoción configurada, y las nueve tablas de reglas están vacías. Que deje de conceder mueve el teórico de 119 órdenes. Y hay que decidir qué tabla manda, porque las dos dan números distintos. | Es una decisión de negocio: hoy se otorga por ausencia de configuración, no porque alguien lo haya resuelto. Ver [6](6-deuda-medida.md). |
 | 8 | **El reporte de saldos valora el teórico con una lista archivada y vencida** — falta `_primer_id_activo` en `app.py:4434`, el único de los cuatro sitios que no lo tiene | Poner la guarda mueve el teórico de 789 órdenes en una pantalla que ya se usa: −18,9 % en VES, −16,8 % en USD. Está medido y listo; aplicarlo es tu visto bueno. Ver [3](3-escenarios.md). |
 
 ## Lo que este trabajo encontró, en un renglón cada uno
@@ -97,6 +98,9 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | El dashboard decía «Tasa BCV» sobre el equivalente de Odoo | — | [5](5-dashboard.md) · aplicado |
 | El espejo de líneas de factura era 89,6 % ruido | — | [1.3](1.2-1.5-auditoria.md) · aplicado |
 | La barrera de cobertura estaba roja sin ningún test fallando | — | [1.2](1.2-1.5-auditoria.md) · aplicado |
+| El 2 % de primera compra se otorga por **ausencia de configuración**, no por decisión | 119 órdenes, 2.782,41 USD | [6](6-deuda-medida.md) |
+| El mismo descuento da dos montos según qué tabla se lea | brecha de 1.128,91 USD | [6](6-deuda-medida.md) |
+| El verificador de huecos de vigencia decía «ninguno» sin poder mirar | 0 de 16 listas evaluables | [6](6-deuda-medida.md) · aplicado |
 | Devuelto supera lo entregado (cantidad negativa) | 14 unidades | [2.2](2.2-invariantes.md) |
 | Dos definiciones de «orden histórica» en desacuerdo | 457,51 USD | [6](6-deuda-medida.md) |
 
