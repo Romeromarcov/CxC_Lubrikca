@@ -709,6 +709,44 @@ devolver cero sin avisar. Y el espejo ya guarda el valor correcto al lado
 (`monto_total_signed_usd = −1.860,43` para la NC de S00573, calculado por Odoo a
 la tasa real), que es lo que conviene usar en vez de reconvertir a mano.
 
+## Mina 9: el precio de la regla vencida ahora deja rastro
+
+La mitad de este ítem que **no mueve montos**, aplicada el 11-sep-2026.
+
+`_precio_fijo_en_lista` busca la regla de precio que cubre la fecha pedida y, si
+ninguna la cubre, **devuelve la primera igual**. Nunca dice «no hay precio»
+mientras exista alguna regla, aunque todas hayan vencido hace meses — y la única
+señal que dice «este teórico no es confiable» se enciende *solo* cuando devuelve
+«no hay precio».
+
+Ahora cada uno de esos precios queda registrado con el producto, la lista, la
+fecha pedida y **la vigencia de la regla que se usó**. Esa última parte es
+deliberada: una regla que venció ayer y una que venció en abril son decisiones
+distintas, y un contador no las distingue.
+
+**El valor devuelto no cambió.** Devolver `None` dejaría la pantalla sin precio en
+vez de con un precio viejo, y eso mueve montos — sigue siendo tu decisión.
+
+13 tests, los primeros del módulo (estaba marcado `pragma: no cover`). Dos merecen
+mención porque acotan el hallazgo en vez de inflarlo: **una regla que todavía no
+empezó también cuenta** —es el mismo problema con el signo invertido—, y **un
+precio pedido sin fecha no cuenta**, porque ahí el filtro de vigencia no corre y la
+regla que hay es la regla que corresponde.
+
+### Y el instrumento dice que no midió nada
+
+Corrido contra la copia de prueba: **cero** precios de regla vencida. Ese cero **no
+significa que no haya**: instrumenté la función para contar sus llamadas y el
+reporte de saldos la consulta **cero veces**. El resolver rápido —el que lee
+precios del espejo local— responde todo, así que el camino donde vive la mina no se
+ejercita en esa corrida.
+
+Lo digo con todas las letras porque es la misma trampa que este plan viene
+corrigiendo en otros cuatro lugares: un cero de un instrumento que no corrió se lee
+igual que un cero de un instrumento que verificó. El rastro va a hablar en
+producción, donde la configuración de listas existe y el resolver de Odoo sí se
+alcanza.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

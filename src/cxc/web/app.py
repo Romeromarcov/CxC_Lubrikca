@@ -5111,6 +5111,17 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             "items": reporte,
             "saldo_minimo_pendientes": saldo_minimo_items,
         }
+        # La mina 9, contada por ciclo. Un precio que sale de una regla VENCIDA
+        # se devuelve igual -- cambiar eso mueve montos -- pero ahora deja
+        # rastro, y el rastro sale acá una vez por corrida en vez de una línea
+        # por producto. Ver ``odoo/price.py::precios_de_regla_vencida``.
+        if price_resolver_engine is not None:
+            vencidas = price_resolver_engine.precios_de_regla_vencida()
+            if vencidas:
+                logger.warning(
+                    "Reporte de saldos, precios de regla vencida: %s",
+                    price_resolver_engine.resumen_de_reglas_vencidas(),
+                )
         _REPORTE_SALDOS_CACHE["data"] = res
         _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
         return res
