@@ -28,9 +28,30 @@ from typing import Any
 # despacho, y eso no deshace la entrega. Esa excepción entra por el parámetro
 # ``entrega_valida``.
 #
-# Medido en el Odoo de prueba (Fase 1.3 del plan de blindaje): hay **16 órdenes
-# canceladas con entrega completa, por 11.995,68 USD**. La excepción no es
-# hipotética -- es la diferencia entre perseguir esa plata y no verla.
+# CORRECCIÓN (10-sep-2026). Acá decía: "hay 16 órdenes canceladas con entrega
+# completa, por 11.995,68 USD. La excepción no es hipotética -- es la diferencia
+# entre perseguir esa plata y no verla". **Eso estaba mal.** El chequeo
+# ``orden_cancelada_con_entrega`` encuentra 16 filas, pero preguntándole a Odoo
+# por cada una, las 16 tienen ``qty_delivered = 0``: no hay un dólar de mercancía
+# en manos de clientes. Se leyó un conteo de filas como plata en riesgo sin
+# verificar que la mercancía estuviera afuera.
+#
+# Lo que las 16 son, medido:
+#
+# * **12 salieron y volvieron** (3.460,27 USD de órdenes): salida ``done`` y
+#   después devolución. Correcto, y sin nada que perseguir.
+# * **4 nunca salieron** (8.535,41 USD): su única salida figura ``cancel`` en
+#   Odoo Y en el propio espejo, pero ``ordenes_venta.entregada_completa`` dice
+#   True. Son S00224, S00076, S00091 y S00329 -- las mismas que
+#   ``web/app.py`` ya nombraba por un bug de picking interno leído como
+#   devolución. Ahí el problema no es plata sin perseguir: es que el espejo se
+#   contradice consigo mismo, y lo detecta el chequeo
+#   ``entregada_pero_la_salida_esta_cancelada``.
+#
+# La excepción de abajo sigue siendo correcta como diseño -- una cancelada cuya
+# mercancía salió y no volvió ES una venta -- pero en esta base **no dispara en
+# ninguna orden**, porque en las 16 la mercancía no está afuera. Queda como
+# defensa, no como algo que hoy rescate plata.
 ESTADOS_ORDEN_EXCLUIDOS = frozenset({"cancel", "cancelled", "draft", "sent"})
 
 

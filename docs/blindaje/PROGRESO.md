@@ -56,7 +56,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | 0 | Rotar credencial de producción | **pendiente, y sigue siendo el ítem más urgente.** Requiere tus manos (Railway). Lo que sí se hizo: está **medido** —una sola credencial remota, un archivo, 269 commits, empujada a `main` y `develop`—, el procedimiento está escrito paso a paso en [0](0-credencial.md), y `scripts/verificar_secretos.py` entró como primera etapa de la barrera para que no vuelva a pasar. **Ojo:** el commit que la introdujo dice «Staging», no producción — hay que reconciliar si son la misma. |
 | 1.1 | Inventario de fallbacks silenciosos | **cerrada** — 132 minas, 140 ruidosos, 184 legítimos; 8 minas verificadas a mano con severidad y costo |
 | 1.2 | Cobertura de los caminos de dinero | **cerrada** — barrera subida de 74 a **74,9** (medida: 74,99 %), y los caminos de dinero modularizados al **93,23 %**, por encima del 90 % que pedía el plan. La brecha que queda es `app.py` al 64 %, que es la Fase 2.4. Estaba roja desde antes, sin ningún test roto. El test de punta a punta del balance cubrió 142 sentencias y confirmó las 24 partidas. |
-| 1.3 | Integridad de las tablas | **cerrada** — 30 chequeos, 25 limpios; 16 órdenes canceladas con entrega por 11.995,68 USD |
+| 1.3 | Integridad de las tablas | **cerrada** — 35 chequeos. Y una **corrección**: publiqué las 16 canceladas con entrega como 11.995,68 USD de plata en riesgo y no lo son (las 16 tienen `qty_delivered = 0`). Dentro de esas 16 apareció un hallazgo real en la dirección opuesta: 4 órdenes donde el espejo dice `entregada_completa` y su única salida figura cancelada. |
 | 1.4 | Conciliación espejo vs Odoo | **cerrada** — 9 de 9 cuadran al centavo tras un sync completo |
 | 1.5 | Qué prueba cada partida del balance | **cerrada** — 8 externas, 1 invariante, 9 internas; etiquetado aplicado |
 | 2.1 | Ausencia de dato ≠ número | **preparada, espera tu decisión.** Ver [2.1](2.1-ausencia-de-dato.md): la premisa del plan («42 tests asertan cifras calculadas con una tasa falsa») medida resultó falsa, y sembrar tasas bajó el costo de la decisión de 40 tests a 2 (más 5 que hay que reescribir a propósito). Sigue siendo prioritario: el default de 2019 no solo se lee, se **escribe** en un campo congelado. Espera tu decisión sobre las minas 1, 5 y 8. La 1 ya está medida y contada (`engine/precios_rapidos.py`), así que la decisión se toma sobre números y no sobre una lectura del código. |
@@ -73,7 +73,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 | # | Qué | Por qué no lo aplico solo |
 |---|---|---|
 | 1 | **1.333,85 USD aplicados que nadie pagó** (10 pagos, 20 órdenes) | Cuánto de una diferencia de cambio cuenta como cobranza para los descuentos por pago previo es una decisión de negocio. Ver [2.3](2.3-alertas.md). |
-| 2 | 16 órdenes canceladas con entrega, 11.995,68 USD | Puede ser que estén canceladas *porque* la mercancía volvió por otro camino. El chequeo no puede distinguirlo. |
+| 2 | ~~16 órdenes canceladas con entrega, 11.995,68 USD~~ → **4 órdenes donde el espejo se contradice**: dice `entregada_completa` y su única salida figura `cancel`. No es plata sin cobrar — es un dato interno inconsistente que decide si una orden cancelada cuenta como venta. | Corregir `entregada_completa` mueve el universo de órdenes de seis páginas. Ver la corrección en [1.3](1.2-1.5-auditoria.md). |
 | 3 | El `36,5 / 38,0` de 2019 | Arrastra 42 tests que asertan montos calculados con esa tasa falsa. |
 | 4 | Precio 0 con Odoo caído, y teórico ausente = saldo cero | Cambian lo que muestra la pantalla para una orden no evaluable. |
 | 5 | **1.108,59 USD** de mercancía devuelta que la factura sigue cobrando (3 órdenes) | Hay que emitir la nota de crédito en Odoo: son tus manos. El sistema ahora las lista. |
@@ -93,7 +93,7 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | Una lista de precios vencida **no puede** marcarse: `rules[0]` gana sobre la fecha | — | [3](3-escenarios.md) |
 | Pagos sobreaplicados: se acredita plata que el cliente no puso | 1.333,85 USD | [2.3](2.3-alertas.md) |
 | Mercancía devuelta con la factura viva, fuera de la bandeja | 1.108,59 USD | [3](3-escenarios.md) |
-| Órdenes canceladas con entrega, invisibles en los totales | 11.995,68 USD | [1.3](1.2-1.5-auditoria.md) |
+| El espejo dice «entregada» en 4 órdenes cuya única salida está cancelada | 4 órdenes, 8.535,41 USD de monto | [1.3](1.2-1.5-auditoria.md) |
 | El motor a 10× tarda ~16 h por un tope de 50/ciclo | — | [4](4-estres.md) |
 | El dashboard decía «Tasa BCV» sobre el equivalente de Odoo | — | [5](5-dashboard.md) · aplicado |
 | El espejo de líneas de factura era 89,6 % ruido | — | [1.3](1.2-1.5-auditoria.md) · aplicado |

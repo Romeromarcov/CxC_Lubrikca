@@ -312,6 +312,31 @@ CHEQUEOS: list[Chequeo] = [
         """,
     ),
     Chequeo(
+        "entregada_pero_la_salida_esta_cancelada",
+        "estados",
+        "ALTA",
+        "La orden dice `entregada_completa` y su UNICA salida figura cancelada en "
+        "el propio espejo. Los dos datos vienen del mismo sync y se contradicen, "
+        "asi que uno de los dos esta mal y no se puede saber cual sin mirar Odoo. "
+        "Importa porque `entregada_completa` decide si una orden cancelada sigue "
+        "contando como venta (ver `engine/universo.py`): si dice que si por una "
+        "entrega que nunca ocurrio, se persigue plata que nadie debe.",
+        """
+        SELECT o.so_id, o.estado_orden, o.monto_total, o.estado_entrega,
+               count(*) FILTER (WHERE e.tipo = 'outgoing') AS salidas,
+               count(*) FILTER (WHERE e.tipo = 'outgoing' AND e.estado = 'cancel')
+                   AS salidas_canceladas
+        FROM ordenes_venta o
+        JOIN entregas e ON e.so_id = o.so_id
+        WHERE o.entregada_completa
+        GROUP BY o.so_id, o.estado_orden, o.monto_total, o.estado_entrega
+        HAVING count(*) FILTER (WHERE e.tipo = 'outgoing') > 0
+           AND count(*) FILTER (WHERE e.tipo = 'outgoing' AND e.estado = 'cancel')
+               = count(*) FILTER (WHERE e.tipo = 'outgoing')
+        ORDER BY o.monto_total DESC
+        """,
+    ),
+    Chequeo(
         "entregada_sin_fecha_de_entrega",
         "estados",
         "BAJA",

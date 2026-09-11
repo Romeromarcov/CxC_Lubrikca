@@ -121,8 +121,15 @@ def test_cancelar_una_orden_entregada_nunca_se_va_callada(escenario, sistema, od
     Así que la orden desaparece de los totales. Si tenía pagos quedan
     huérfanos; si no los tenía, dejamos de perseguir plata que nos deben.
 
-    Ya pasó 16 veces en los datos reales, por 11.995,68 USD (ver la 1.3). Una
-    orden cancelada CON entrega tiene que quedar visible en algún lado.
+    El chequeo ``orden_cancelada_con_entrega`` encuentra 16 en los datos reales.
+    **Ojo con el monto**: acá decía «por 11.995,68 USD» y eso estaba mal -- las 16
+    tienen ``qty_delivered = 0`` en Odoo, así que no hay mercancía afuera. La
+    corrección está en la 1.3.
+
+    El escenario sigue valiendo, y más que antes: construye el caso que en los
+    datos reales **no ocurre** -- una cancelada con mercancía realmente en manos
+    del cliente. Que no haya ocurrido todavía no quiere decir que el sistema lo
+    maneje bien, y esto lo verifica.
     """
     situacion = escenario.entregada()
     sistema.sync_y_motor()
