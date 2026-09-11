@@ -54,6 +54,7 @@ from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_est
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     equivalentes_bcv,
+    equivalentes_binance,
     valor_pagado_bcv_usd,
     valor_pagado_binance_usd,
 )
@@ -8992,6 +8993,7 @@ async def post_editar_tasa_binance(
         fecha = vinc.hora_pago_confirmada.date()
         dia_rows = repo.serie_tasas_del_dia(fecha)
         binance_vals = [r.tasa_binance for r in dia_rows if r.tasa_binance and r.tasa_binance > 0]
+        rango_verificado = bool(binance_vals)
         if binance_vals:
             minimo, maximo = min(binance_vals), max(binance_vals)
             if nueva_tasa < minimo or nueva_tasa > maximo:
@@ -9002,14 +9004,29 @@ async def post_editar_tasa_binance(
                         f"{maximo} -- rango capturado el {fecha.isoformat()}."
                     ),
                 )
+        else:
+            # Sin capturas de ese día la guarda NO corre y se acepta cualquier
+            # valor. Antes pasaba en silencio; medido el 11-sep-2026, las 1.494
+            # vinculaciones del espejo están en fechas sin capturas Binance, o sea
+            # que la validación está apagada en el 100 % de los casos.
+            #
+            # No se rechaza --eso impediría corregir la tasa de un pago viejo, que
+            # es justo para lo que sirve esta pantalla-- pero deja de ser invisible:
+            # queda en el log y viaja en la respuesta.
+            logger.warning(
+                "Tasa Binance de la vinculacion %s cambiada a %s SIN verificar el "
+                "rango: no hay capturas para el %s.",
+                vinc_id,
+                nueva_tasa,
+                fecha.isoformat(),
+            )
 
         vinc.tasa_binance_aplicada = nueva_tasa
-        if vinc.moneda_abono == Moneda.USD:
-            vinc.equiv_usd_binance = vinc.monto_aplicado
-            vinc.equiv_ves_binance = vinc.monto_aplicado * nueva_tasa
-        else:
-            vinc.equiv_usd_binance = vinc.monto_aplicado / nueva_tasa
-            vinc.equiv_ves_binance = vinc.monto_aplicado
+        # La cuenta vive en el motor, con ``q6``. Antes estaba acá sin redondear y
+        # recongelaba el equivalente con otra precisión que la de su origen.
+        vinc.equiv_usd_binance, vinc.equiv_ves_binance = equivalentes_binance(
+            vinc.monto_aplicado, vinc.moneda_abono, nueva_tasa
+        )
 
         repo.update_vinculacion(vinc)
         background_tasks.add_task(recalculate_all, vinc.so_id)
@@ -9020,6 +9037,9 @@ async def post_editar_tasa_binance(
             "tasa_binance_aplicada": float(nueva_tasa),
             "equiv_usd_binance": float(vinc.equiv_usd_binance),
             "equiv_ves_binance": float(vinc.equiv_ves_binance),
+            # False = ese día no tenía capturas y la tasa entró sin comprobar el
+            # rango. La pantalla puede decirlo en vez de que pase inadvertido.
+            "rango_verificado": rango_verificado,
         }
     except HTTPException:
         raise

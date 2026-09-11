@@ -1140,6 +1140,30 @@ suma a la del «sesgo de la tasa Binance» que el plan ya tenía anotada — res
 hay **dos** sesgos, no uno: el del promedio de 5 compras y 5 ventas, y éste,
 estructural, en cómo se parten las horas.
 
+## La validación de rango de la tasa Binance está apagada en el 100 % de los casos
+
+`post_editar_tasa_binance` corrige la tasa Binance de una vinculación y valida que
+la nueva esté **dentro del rango capturado ese día** en `SerieTasas`. Es una buena
+guarda, con una condición silenciosa:
+
+```python
+if binance_vals:      # <- si ese día NO hay capturas, no valida NADA
+```
+
+**Medido: las 1.494 vinculaciones del espejo están en fechas sin capturas Binance.**
+La serie tiene capturas de dos días (10 y 11 de septiembre) y las vinculaciones se
+reparten en 144 días distintos. La validación **no corre en ningún caso**, y
+cualquier tasa se acepta sin decirlo.
+
+En producción la serie tiene más días, pero el hueco es el mismo que el plan ya
+había nombrado: la serie arranca el 25-jul y las facturas el 01-feb. Toda
+vinculación anterior al scraper está en la misma situación.
+
+**No se rechaza**, porque eso impediría corregir la tasa de un pago viejo — que es
+justo para lo que sirve esa pantalla. Lo que cambió es que deja de ser invisible:
+queda un `warning` en el log y la respuesta trae `rango_verificado: false`, así que
+la pantalla puede decirlo.
+
 ## Editar la variante de tasa reescribía un equivalente congelado con otra precisión
 
 `post_cambiar_tipo_tasa_bcv` cambia la variante USD/EUR de una vinculación y
@@ -1155,8 +1179,15 @@ reimplementaba inline lo que `calcular_equivalentes` ya hace, **sin pasar por
 `333.3333333333…`. El mismo concepto calculado de dos maneras, y una de ellas
 reescribiendo un valor congelado con otra precisión que la que tenía al nacer.
 
-Ahora las dos rutas comparten `equivalentes_bcv`, así que no pueden volver a
-divergir. 4 tests.
+Ahora las dos rutas comparten `equivalentes_bcv`. Y el mismo defecto estaba del
+**lado Binance**: `post_editar_tasa_binance` reimplementaba su mitad también sin
+`q6`. Los dos lados quedaron como `equivalentes_bcv` y `equivalentes_binance`, y
+`calcular_equivalentes` los usa a los dos — así que las tres rutas comparten la
+cuenta y no pueden volver a divergir. 7 tests.
+
+Son dos funciones y no una con los cuatro valores a propósito: cada endpoint edita
+**un** lado, y una función que devolviera los cuatro obligaría a cada uno a
+descartar dos. Descartar invita a pisar el lado que no venía a tocar.
 
 **2 · Una regresión que yo mismo introduje hoy, y que encontré al mirar esto.** En
 la rama USD el endpoint llama a `get_rate_for_datetime`, que desde la decisión de

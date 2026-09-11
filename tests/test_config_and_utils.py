@@ -333,3 +333,53 @@ def test_calcular_equivalentes_usa_la_misma_pieza_para_el_lado_BCV() -> None:
     assert (todos.equiv_usd_bcv, todos.equiv_ves_bcv) == (usd, ves)
     # Y el lado Binance sigue siendo el suyo, no una copia del BCV.
     assert todos.equiv_usd_binance == Decimal("250.000000")
+
+
+def test_equivalentes_binance_es_el_gemelo_del_lado_bcv() -> None:
+    """Misma divergencia, otro endpoint: ``post_editar_tasa_binance`` también
+    reimplementaba la cuenta inline sin ``q6``."""
+    from decimal import Decimal
+
+    from cxc.engine.equivalents import equivalentes_binance
+    from cxc.models import Moneda
+
+    usd, ves = equivalentes_binance(Decimal("1000"), Moneda.VES, Decimal("3"))
+    assert usd == Decimal("333.333333")
+    assert ves == Decimal("1000.000000")
+
+    usd, ves = equivalentes_binance(Decimal("100"), Moneda.USD, Decimal("800"))
+    assert usd == Decimal("100.000000")
+    assert ves == Decimal("80000.000000")
+
+
+def test_equivalentes_binance_exige_tasa_positiva() -> None:
+    from decimal import Decimal
+
+    import pytest
+
+    from cxc.engine.equivalents import equivalentes_binance
+    from cxc.models import Moneda
+
+    with pytest.raises(ValueError, match="positiva"):
+        equivalentes_binance(Decimal("1000"), Moneda.VES, Decimal("0"))
+
+
+def test_los_dos_lados_son_independientes() -> None:
+    """Cada endpoint edita UN lado, y por eso son dos funciones y no una.
+
+    Si fueran una sola con los cuatro valores, cada endpoint tendría que descartar
+    dos — y descartar invita a pisar el lado que no venía a tocar.
+    """
+    from decimal import Decimal
+
+    from cxc.engine.equivalents import calcular_equivalentes, equivalentes_bcv, equivalentes_binance
+    from cxc.models import Moneda
+
+    todos = calcular_equivalentes(Decimal("1000"), Moneda.VES, Decimal("3"), Decimal("4"))
+    assert (todos.equiv_usd_bcv, todos.equiv_ves_bcv) == equivalentes_bcv(
+        Decimal("1000"), Moneda.VES, Decimal("3")
+    )
+    assert (todos.equiv_usd_binance, todos.equiv_ves_binance) == equivalentes_binance(
+        Decimal("1000"), Moneda.VES, Decimal("4")
+    )
+    assert todos.equiv_usd_bcv != todos.equiv_usd_binance, "tasas distintas, valores distintos"

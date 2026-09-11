@@ -49,6 +49,29 @@ def equivalentes_bcv(
     return q6(monto_aplicado), q6(monto_aplicado * tasa_bcv)
 
 
+def equivalentes_binance(
+    monto_aplicado: Decimal, moneda_abono: Moneda, tasa_binance: Decimal
+) -> tuple[Decimal, Decimal]:
+    """El par del lado Binance: ``(equiv_usd_binance, equiv_ves_binance)``.
+
+    El gemelo de ``equivalentes_bcv``, y existe por la misma divergencia medida el
+    11-sep-2026: ``post_editar_tasa_binance`` reimplementaba esta cuenta inline
+    **sin ``q6``**, igual que el endpoint de la variante BCV hacia con la suya. Los
+    dos reescribian un equivalente **congelado** con otra precision que la que
+    tenia al nacer.
+
+    Los dos lados existen por separado --y no una sola funcion con un parametro de
+    tasa-- porque cada endpoint edita UN lado: el de la variante toca solo el BCV y
+    el de Binance solo el Binance. Una funcion que devolviera los cuatro obligaria
+    a cada uno a descartar dos, y descartar invita a pisar.
+    """
+    if tasa_binance <= 0:
+        raise ValueError("La tasa Binance estampada debe ser positiva")
+    if moneda_abono == Moneda.VES:
+        return q6(monto_aplicado / tasa_binance), q6(monto_aplicado)
+    return q6(monto_aplicado), q6(monto_aplicado * tasa_binance)
+
+
 def calcular_equivalentes(
     monto_aplicado: Decimal,
     moneda_abono: Moneda,
@@ -62,19 +85,12 @@ def calcular_equivalentes(
     # El lado BCV sale de ``equivalentes_bcv``, que es la misma función que usa el
     # endpoint de cambio de variante -- así no pueden volver a divergir.
     usd_bcv, ves_bcv = equivalentes_bcv(m, moneda_abono, tasa_bcv)
-    if moneda_abono == Moneda.VES:
-        return Equivalentes(
-            equiv_usd_bcv=usd_bcv,
-            equiv_usd_binance=q6(m / tasa_binance),
-            equiv_ves_bcv=ves_bcv,
-            equiv_ves_binance=q6(m),
-        )
-    # Abono en USD
+    usd_bin, ves_bin = equivalentes_binance(m, moneda_abono, tasa_binance)
     return Equivalentes(
         equiv_usd_bcv=usd_bcv,
-        equiv_usd_binance=q6(m),
+        equiv_usd_binance=usd_bin,
         equiv_ves_bcv=ves_bcv,
-        equiv_ves_binance=q6(m * tasa_binance),
+        equiv_ves_binance=ves_bin,
     )
 
 
