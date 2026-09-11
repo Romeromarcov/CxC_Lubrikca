@@ -875,6 +875,71 @@ entregado. Si la respuesta es sí para todos, son 8.719,06 USD menos de venta
 reportada en 204 órdenes. Si es solo para los obsequios, alcanza con filtrar por
 `es_obsequio` y son 107,42.
 
+## Los pagos sobreaplicados: el diagnóstico, y los dos repartos medidos
+
+La decisión 1, con la propuesta que pediste. El hallazgo original decía «10 pagos,
+1.333,85 USD»; medido de nuevo contra el campo correcto son **1.269,25 USD**, y la
+diferencia es que aquella cifra pasaba por la conversión a equivalente de la app y
+ésta compara el campo crudo. Es el mismo hallazgo.
+
+### Por qué pasa
+
+Las aplicaciones se leen de los `account.partial.reconcile` de Odoo, tomando
+`credit_amount_currency`. El pago 200 lo muestra entero: **vale 134,00 USD y tiene
+nueve parciales que suman 715,04**, todos contra facturas de cliente reales. Las
+tasas implícitas van de **4,1 a 709,7** dentro del mismo pago, cuando la oficial de
+esa fecha es 483,9.
+
+El docstring del lector dice que los asientos de diferencial cambiario «quedan
+fuera por construcción» porque no tienen un `account.payment` detrás. **No los
+excluye**: los nueve están contra facturas reales. Los parciales posteriores al
+primero son revaluación, y entran igual.
+
+Y el dato que ordena todo: **en 7 de los 10 pagos el primer parcial ya ES el pago
+completo.**
+
+### La propuesta, en tres capas
+
+| capa | qué | decide |
+|---|---|---|
+| 1 · la cota | la suma no puede superar el pago | nadie: es aritmética |
+| 2 · el reparto | por orden de parcial, o proporcional | **vos** |
+| 3 · la invariante | que no vuelva a crecer | **hecha** el 11-sep-2026 |
+
+La capa 3 ya está: ver [2.2 — Invariantes](2.2-invariantes.md). No corrige los diez
+existentes ni los bloquea; sólo impide que el exceso crezca.
+
+### Los dos repartos, medidos sobre los diez pagos
+
+Los dos entregan **exactamente 2.483,00 USD**, que es lo que valen los diez pagos
+juntos. La diferencia es **quién** lo recibe:
+
+| pago | vale | aplicado hoy | por orden | proporcional |
+|---|---:|---:|---|---|
+| 200 | 134,00 | 715,04 | todo a S00279 | las 4 reciben fracción |
+| 86 | 220,00 | 367,22 | S00158 210,99 · S00795 **9,01** | S00158 126,40 · S00795 **93,60** |
+| 40 | 130,00 | 208,46 | S00607 **37,49** | S00607 **72,31** |
+| 230 | 300,00 | 364,60 | S00061 **0,00** | S00061 53,15 |
+| 181 | 250,00 | 254,90 | S00274 **0,00** | S00274 4,81 |
+
+**Siete órdenes pierden todo el crédito** con «por orden»: S00061, S00220, S00274,
+S00412, S00595, S00617 y S00638. Con «proporcional» todas reciben menos y ninguna
+pierde todo.
+
+### Lo que recomiendo, y lo que no puedo decidir
+
+**Por orden**, por una razón que los datos sostienen: que el primer parcial
+coincida exactamente con el pago en 7 de 10 no es casualidad, es la conciliación
+real que hizo Odoo; los parciales posteriores son revaluación cambiaria, que es un
+resultado contable y no cobranza.
+
+Pero en los otros 3 —los pagos 86, 40 y 845— el primer parcial es **menor** que el
+pago, así que ahí el reparto es genuino y la elección pesa más: S00795 pasa de
+93,60 a 9,01 según qué se elija.
+
+`engine/acotar_pago.py` calcula los dos y `diagnostico_de_reparto` los compara, con
+el caso del pago 200 fijado en un test. 15 tests. **No aplica ninguno.**
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos
