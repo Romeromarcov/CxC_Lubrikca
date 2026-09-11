@@ -51,6 +51,7 @@ from cxc.engine.conciliacion import (
     usd_bcv_a_binance,
 )
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
+from cxc.engine.discount_audit import monto_de_descuento_de_linea
 from cxc.engine.equivalents import (
     calcular_equivalentes,
     equivalentes_bcv,
@@ -13243,15 +13244,11 @@ def _leer_descuentos_lineas_odoo(
                 )
                 if not so_name:
                     continue
-                disc_pct = float(sol.get("discount") or 0)
-                if disc_pct > 0:
-                    monto = (
-                        float(sol.get("product_uom_qty") or 0)
-                        * float(sol.get("price_unit") or 0)
-                        * (disc_pct / 100.0)
-                    )
-                else:
-                    monto = abs(float(sol.get("price_subtotal") or 0))
+                # La regla de los dos patrones vive en el motor, con sus tests, y
+                # la comparten las dos mitades de esta función.
+                monto = monto_de_descuento_de_linea(sol)
+                # Sin convertir: las listas de precio están fijadas en dólares por
+                # definición de negocio, así que una línea de orden ya viene en USD.
                 desc_orden[so_name] = desc_orden.get(so_name, 0.0) + monto
     except Exception as e_sol:
         logger.warning("Error leyendo descuentos de sale.order.line en get_ventas: %s", e_sol)
@@ -13279,15 +13276,10 @@ def _leer_descuentos_lineas_odoo(
                 so_name = inv_id_to_so.get(move_id, "")
                 if not so_name:
                     continue
-                disc_pct = float(il.get("discount") or 0)
-                if disc_pct > 0:
-                    monto = (
-                        float(il.get("quantity") or 0)
-                        * float(il.get("price_unit") or 0)
-                        * (disc_pct / 100.0)
-                    )
-                else:
-                    monto = abs(float(il.get("price_subtotal") or 0))
+                monto = monto_de_descuento_de_linea(il)
+                # Las facturas SÍ se convierten: pueden estar emitidas en bolívares,
+                # y el ratio las lleva a dólares para que la comparación contra el
+                # motor sea en la misma unidad. Ver el docstring de la pieza.
                 ratio = (inv_usd_ratio_map or {}).get(move_id, 1.0)
                 desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
     except Exception as e_il:

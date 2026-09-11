@@ -186,3 +186,75 @@ def test_los_none_se_saltean_sin_romper():
         odoo_descuento_factura=Decimal("99.00"),
     )
     assert hay_sobre_descuento(None, res, None) is res
+
+
+# --- los dos patrones de descuento de línea (Fase 2.4, pieza 21) ------------
+
+
+def test_el_patron_del_porcentaje_se_aplica_sobre_cantidad_por_precio():
+    """Y no sobre el subtotal, porque el subtotal ya lo tiene restado.
+
+    Aplicarlo sobre el subtotal contaría el descuento dos veces.
+    """
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    linea = {"discount": 10, "product_uom_qty": 5, "price_unit": 100, "price_subtotal": 450}
+    assert monto_de_descuento_de_linea(linea) == 50.0
+
+
+def test_el_patron_de_la_linea_negativa_toma_su_importe():
+    """Lubrikca también carga descuentos como una línea de producto «Descuento»
+    con el subtotal en negativo."""
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    assert monto_de_descuento_de_linea({"discount": 0, "price_subtotal": -75.5}) == 75.5
+
+
+def test_si_hay_PORCENTAJE_el_subtotal_negativo_se_IGNORA():
+    """La precedencia que ninguna prueba fijaba, y que hay que tener presente.
+
+    Una línea con las dos cosas cuenta el porcentaje, no el subtotal. Es correcto
+    para el patrón 1 —donde el subtotal ya viene descontado— pero significa que si
+    algún día una línea llega con ambos, el segundo no se suma.
+    """
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    linea = {"discount": 10, "product_uom_qty": 1, "price_unit": 100, "price_subtotal": -999}
+    assert monto_de_descuento_de_linea(linea) == 10.0, "gana el porcentaje"
+
+
+def test_la_cantidad_viaja_con_dos_nombres_segun_el_modelo():
+    """``product_uom_qty`` en las líneas de orden, ``quantity`` en las de factura.
+
+    Aceptar los dos es lo que permite que una sola función sirva a las dos mitades
+    de ``_leer_descuentos_lineas_odoo``, que antes tenían la regla duplicada.
+    """
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    de_orden = {"discount": 50, "product_uom_qty": 2, "price_unit": 100}
+    de_factura = {"discount": 50, "quantity": 2, "price_unit": 100}
+    assert monto_de_descuento_de_linea(de_orden) == monto_de_descuento_de_linea(de_factura) == 100.0
+
+
+def test_un_descuento_del_100_por_ciento_da_el_importe_completo():
+    """El caso del obsequio, visto desde este lado."""
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    linea = {"discount": 100, "quantity": 1, "price_unit": 35.81}
+    assert monto_de_descuento_de_linea(linea) == 35.81
+
+
+def test_los_campos_ausentes_o_ilegibles_valen_cero_y_no_revientan():
+    """XML-RPC manda ``False`` por un campo vacío, no ``None``."""
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    assert monto_de_descuento_de_linea({}) == 0.0
+    assert monto_de_descuento_de_linea({"discount": False, "price_subtotal": False}) == 0.0
+    assert monto_de_descuento_de_linea({"discount": "ilegible", "price_subtotal": "-10"}) == 10.0
+
+
+def test_una_linea_sin_descuento_ni_subtotal_negativo_no_aporta():
+    """El filtro de Odoo no debería traerla, pero la función no lo asume."""
+    from cxc.engine.discount_audit import monto_de_descuento_de_linea
+
+    assert monto_de_descuento_de_linea({"discount": 0, "price_subtotal": 0}) == 0.0

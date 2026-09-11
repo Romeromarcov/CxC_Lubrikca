@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 
 class EstadoAuditoria(StrEnum):
@@ -220,3 +221,52 @@ def hay_sobre_descuento(*resultados: ResultadoAuditoria | None) -> ResultadoAudi
         if r.enviar_a_bandeja and r.diferencia_usd < Decimal("0"):
             return r
     return None
+
+
+# Los dos patrones con los que Lubrikca materializa un descuento en una linea de
+# Odoo. No son alternativas de estilo: conviven en los datos.
+#
+#   1. el campo ``discount`` con un porcentaje sobre la linea del producto
+#   2. una linea aparte de un producto llamado "Descuento" con ``price_subtotal``
+#      NEGATIVO
+def monto_de_descuento_de_linea(linea: dict[str, Any]) -> float:
+    """Cuanta plata de descuento representa una linea, con los dos patrones.
+
+    Vigesimoprimera pieza de la Fase 2.4. La regla estaba escrita DOS VECES en
+    ``_leer_descuentos_lineas_odoo`` --una para ``sale.order.line`` y otra para
+    ``account.move.line``-- con una precedencia que ninguna prueba fijaba.
+
+    **La precedencia: si hay porcentaje, el subtotal negativo se ignora.** Una
+    linea con ``discount = 10`` y ``price_subtotal = -50`` cuenta 10 % de su
+    importe, no 50. Es lo correcto para el patron 1 (donde el subtotal ya viene
+    descontado y sumar los dos contaria el descuento dos veces), y hay que tenerlo
+    presente si algun dia una linea llega con los dos.
+
+    El porcentaje se aplica sobre ``cantidad x precio_unitario`` y no sobre el
+    subtotal, justamente porque el subtotal ya lo tiene restado.
+
+    ``cantidad`` viaja con dos nombres segun el modelo: ``product_uom_qty`` en las
+    lineas de orden y ``quantity`` en las de factura. Se aceptan los dos, que es lo
+    que permite que una sola funcion sirva a las dos mitades.
+
+    **Nada de esto convierte moneda.** El llamador de las lineas de FACTURA aplica
+    despues un ratio a dolares; el de las lineas de ORDEN no, porque las listas de
+    precio estan fijadas en dolares por definicion de negocio. Esa asimetria es
+    correcta y estaba sin escribir.
+    """
+    def _f(valor: Any) -> float:
+        if valor is None or valor is False or valor == "":
+            return 0.0
+        try:
+            return float(valor)
+        except (TypeError, ValueError):
+            return 0.0
+
+    pct = _f(linea.get("discount"))
+    if pct > 0:
+        cantidad = _f(linea.get("product_uom_qty"))
+        if cantidad == 0.0:
+            cantidad = _f(linea.get("quantity"))
+        return cantidad * _f(linea.get("price_unit")) * (pct / 100.0)
+    # Patron 2: la linea ES el descuento, con su importe en negativo.
+    return abs(_f(linea.get("price_subtotal")))
