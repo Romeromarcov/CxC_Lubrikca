@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy import Engine, and_, delete, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from ..engine.identidad_de_reglas import ORDEN_DE_BUSQUEDA
 from ..models import (
     BandejaFacturacion,
     Cliente,
@@ -645,6 +646,20 @@ class PostgresRepository(Repository):
                 update(table).where(table.c.regla_id == regla_id).values(activo=activo)
             )
         return bool(result.rowcount)
+
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        encontradas = []
+        with self._engine.connect() as conn:
+            for tabla in ORDEN_DE_BUSQUEDA:
+                table = self._regla_table(tabla)
+                if table is None:
+                    continue
+                existe = conn.execute(
+                    select(table.c.regla_id).where(table.c.regla_id == regla_id).limit(1)
+                ).first()
+                if existe is not None:
+                    encontradas.append(tabla)
+        return encontradas
 
     def all_descuentos_no_otorgados(self) -> dict[str, dict[str, str]]:
         """``so_id`` -> quién marcó que ese descuento NO se le dio al cliente.

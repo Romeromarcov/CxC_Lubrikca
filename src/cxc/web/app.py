@@ -64,6 +64,7 @@ from cxc.engine.equivalents import (
 )
 from cxc.engine.facturado import facturado_de_orden
 from cxc.engine.historical_pricing import es_orden_historica
+from cxc.engine.identidad_de_reglas import aviso_de_ambiguedad, elegir_tabla_de_regla
 from cxc.engine.listas import (
     diagnostico_de_eleccion,
     diagnostico_de_huecos,
@@ -10585,14 +10586,9 @@ async def get_diferencial_candidatos_cierre(cxc_session: str | None = Cookie(def
 
 
 # --- Toggle Rule Active Endpoint ---
-_REGLA_TABLAS_CONOCIDAS = [
-    "DescuentosProntoPago",
-    "DescuentosRecompra",
-    "DescuentosVolumen",
-    "PromocionPrimeraCompra",
-    "DescuentosProducto",
-    "DescuentosDiferencialCambiario",
-]
+# El orden de busqueda vive en `engine/identidad_de_reglas.ORDEN_DE_BUSQUEDA`. Aca
+# habia una copia identica (`_REGLA_TABLAS_CONOCIDAS`); dos listas que tienen que
+# coincidir y que nada obliga a coincidir son una que se va a desincronizar.
 
 
 @app.post("/api/config/toggle-descuento")
@@ -10604,17 +10600,36 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
         # Primero la tabla que mandó el front; si no está ahí (regla_id de
         # otro tipo, o el front no sabía en cuál vivía), se busca en las
         # demás tablas de reglas conocidas.
-        candidate_names = [req.tabla, *_REGLA_TABLAS_CONOCIDAS]
-        for tabla in dict.fromkeys(candidate_names):  # dedup preservando orden
-            if repo.set_regla_activo(tabla, target_id_str, req.activo):
-                estado_str = "Activo" if req.activo else "Inactivo"
-                return {
-                    "status": "success",
-                    "message": (
-                        f"Estado de la regla {target_id_str} actualizado a "
-                        f"{estado_str} en '{tabla}'."
-                    ),
-                }
+        #
+        # Antes esto probaba `set_regla_activo` tabla por tabla hasta que una
+        # respondía, y así **no había forma de saber si el id también estaba en
+        # otra**: prendía o apagaba la primera del orden y devolvía "listo".
+        # Prender o apagar una regla de descuento mueve plata en cada orden que
+        # la regla alcance, así que la elección tiene que decir de dónde salió.
+        # Ver `engine/identidad_de_reglas.py` -- la elección es la MISMA, lo que
+        # se agrega es el aviso.
+        eleccion = elegir_tabla_de_regla(
+            tabla_pedida=req.tabla,
+            tablas_con_el_id=repo.tablas_con_regla(target_id_str),
+        )
+        if eleccion.elegida is not None and repo.set_regla_activo(
+            eleccion.elegida, target_id_str, req.activo
+        ):
+            estado_str = "Activo" if req.activo else "Inactivo"
+            aviso = aviso_de_ambiguedad(eleccion, target_id_str)
+            respuesta = {
+                "status": "success",
+                "message": (
+                    f"Estado de la regla {target_id_str} actualizado a "
+                    f"{estado_str} en '{eleccion.elegida}'."
+                ),
+                "tabla_ambigua": eleccion.ambigua,
+                "tablas_con_el_id": list(eleccion.candidatas),
+            }
+            if aviso:
+                logger.warning("%s", aviso)
+                respuesta["aviso"] = aviso
+            return respuesta
 
         # No encontrada en ninguna tabla real -- puede ser una de las 3
         # reglas de diferencial cambiario "por defecto" (nunca persistidas
