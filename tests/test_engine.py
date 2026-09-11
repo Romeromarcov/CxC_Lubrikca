@@ -2264,3 +2264,129 @@ def test_descuento_volumen_por_presentacion() -> None:
     res = calcular_factura(inp)
     # Solo la linea GARRAFA (3 * 200 = 600) al 7% = 42.
     assert res.total_descuentos == Decimal("42.00")
+
+
+# --- sobre qué líneas aplica una regla su porcentaje (11-sep-2026) ----------
+
+
+def test_una_regla_sin_categorias_de_descuento_aplica_a_todas_las_lineas() -> None:
+    """El default, y es el comportamiento de siempre.
+
+    El campo nace vacío a propósito: la rama de reglas configuradas sumaba todas
+    las líneas sin excepción, así que una regla vieja no puede cambiar de monto
+    al migrar.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=lineas,
+        abonos=[(vinc, metodo)],
+        promociones=[
+            b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+        ],
+        resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+    )
+    # 2 % de (150 + 100) = 5,00
+    assert calcular_factura(inp).ncs_calculadas == Decimal("5.00")
+
+
+def test_una_regla_de_solo_comercial_no_toca_las_lineas_industrial() -> None:
+    """El campo que hacía falta para configurar el 2 % sin ensanchar la base.
+
+    Es la diferencia que motivó el campo: el respaldo cableado suma solo las
+    líneas Comercial, y sin esto configurarlo como regla de la tabla sumaba las
+    dos categorías. Medido: 122 órdenes de la copia de producción tienen líneas
+    de ambas, así que la brecha no es teórica.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    promo = b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+    promo.categorias_descuento = "COMERCIAL"
+    inp = _inputs(
+        orden=orden,
+        lineas=lineas,
+        abonos=[(vinc, metodo)],
+        promociones=[promo],
+        resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+    )
+    # 2 % de 100, la Comercial. La Industrial no entra.
+    assert calcular_factura(inp).ncs_calculadas == Decimal("2.00")
+
+
+def test_la_regla_configurada_da_lo_mismo_que_el_respaldo_cableado() -> None:
+    """La prueba de que el 2 % se puede configurar sin mover un peso.
+
+    Es el objetivo de todo el cambio: una regla con ``categorias_descuento =
+    COMERCIAL`` tiene que dar exactamente el mismo monto que el respaldo, que es
+    lo que hoy se otorga. Si difieren, configurarlo movería montos.
+    """
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+
+    def correr(promociones):
+        return calcular_factura(
+            _inputs(
+                orden=b.orden(primera=True, lista="BCV"),
+                lineas=lineas,
+                abonos=[(vinc, metodo)],
+                promociones=promociones,
+                resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+            )
+        ).ncs_calculadas
+
+    promo = b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+    promo.categorias_descuento = "COMERCIAL"
+    assert correr([promo]) == correr([]), (
+        "configurar la regla tiene que dar el mismo monto que el respaldo; "
+        "si difieren, configurarla mueve el teórico de 119 órdenes"
+    )
+
+
+def test_el_campo_acepta_varias_categorias_y_los_comodines() -> None:
+    from cxc.engine.discounts import _lineas_del_descuento
+
+    class _P:
+        regla_id = "R1"
+
+        def __init__(self, cats):
+            self.categorias_descuento = cats
+
+    class _L:
+        def __init__(self, cat):
+            self.categoria = cat
+
+    lineas = [_L("Comercial"), _L("Industrial"), _L("")]
+    assert len(_lineas_del_descuento([_P("comercial, industrial")], "R1", lineas)) == 2
+    assert len(_lineas_del_descuento([_P("*")], "R1", lineas)) == 3
+    assert len(_lineas_del_descuento([_P("TODAS")], "R1", lineas)) == 3
+    assert len(_lineas_del_descuento([_P("")], "R1", lineas)) == 3
+    # una regla que no está en la lista no filtra nada: sin saber cuál puso el
+    # porcentaje, filtrar sería adivinar.
+    assert len(_lineas_del_descuento([_P("COMERCIAL")], "OTRA", lineas)) == 3

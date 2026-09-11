@@ -9657,6 +9657,7 @@ async def get_config_promociones():
                 "descuento_fallback": str(getattr(p, "descuento_fallback", "0")),
                 "regalo_tipo": p.regalo_tipo,
                 "categorias_aplica": getattr(p, "categorias_aplica", "Comercial"),
+                "categorias_descuento": getattr(p, "categorias_descuento", ""),
                 "solo_primera_compra": getattr(p, "solo_primera_compra", False),
                 "vigencia_desde": p.vigencia_desde.isoformat(),
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
@@ -9849,6 +9850,9 @@ class ReglaUnificadaRequest(BaseModel):
     compra_minima: float = 0.0
     descuento_fallback: float = 0.0
     categorias_aplica: str = ""
+    # Sobre qué líneas se aplica el porcentaje (vacío = todas). Distinto de
+    # ``categorias_aplica``, que es qué unidades califican para el mínimo.
+    categorias_descuento: str = ""
     tipo_diferencial: str = "fijo_35_ves_usd"
     porcentaje_fijo: float = 0.0
     dias_credito_max: int = 30
@@ -9960,6 +9964,7 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
                     compra_minima=Decimal(str(req.compra_minima)),
                     descuento_fallback=Decimal(str(req.descuento_fallback)),
                     categorias_aplica=req.categorias_aplica,
+                    categorias_descuento=req.categorias_descuento,
                     solo_primera_compra=bool(req.solo_primera_compra),
                 )
             )

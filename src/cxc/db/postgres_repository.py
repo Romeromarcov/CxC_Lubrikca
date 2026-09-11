@@ -1610,6 +1610,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         vigencia_hasta=r.vigencia_hasta,
         descuento_fallback=r.descuento_fallback,
         categorias_aplica=r.categorias_aplica,
+        categorias_descuento=getattr(r, "categorias_descuento", "") or "",
         marca=r.marca,
         categoria=r.categoria,
         unidad_medida=r.unidad_medida,

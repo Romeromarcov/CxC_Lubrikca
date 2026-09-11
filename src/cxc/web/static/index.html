@@ -1746,6 +1746,16 @@
                                     <input type="number" id="ru-compra-minima" step="0.01" value="0">
                                 </div>
                                 <div class="form-group" style="flex:1">
+                                    <label>Categorias del descuento
+                                        <span title="Sobre QUE LINEAS se aplica el porcentaje. Vacio = todas. Es distinto del alcance de arriba, que dice que unidades cuentan para la compra minima.">(?)</span>
+                                    </label>
+                                    <select id="ru-categorias-descuento">
+                                        <option value="">Todas las lineas</option>
+                                        <option value="COMERCIAL">Solo Comercial</option>
+                                        <option value="INDUSTRIAL">Solo Industrial</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
                                     <label>Descuento si no alcanza</label>
                                     <input type="number" id="ru-fallback" step="0.0001" value="0">
                                 </div>

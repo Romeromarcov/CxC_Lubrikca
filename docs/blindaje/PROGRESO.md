@@ -72,6 +72,7 @@ aborta la corrida si aparece un documento fiscal. Ninguna corrida emitió nada.
 
 | # | Qué | Por qué no lo aplico solo |
 |---|---|---|
+| — | **El 2 % de primera compra: cerrado el 11-sep-2026.** La categoría estaba invertida (Industrial en vez de Comercial): 85 de 119 órdenes recibían un descuento que no les tocaba. Corregido, más el campo `categorias_descuento` que hacía falta, más la regla configurada — A/B sobre las 119: 742,24 USD de las dos maneras, cero diferencias. | **hecho** |
 | 1 | **1.333,85 USD aplicados que nadie pagó** (10 pagos, 20 órdenes) | Cuánto de una diferencia de cambio cuenta como cobranza para los descuentos por pago previo es una decisión de negocio. Ver [2.3](2.3-alertas.md). |
 | 2 | ~~16 órdenes canceladas con entrega, 11.995,68 USD~~ → **4 órdenes donde el espejo se contradice**: dice `entregada_completa` y su única salida figura `cancel`. No es plata sin cobrar — es un dato interno inconsistente que decide si una orden cancelada cuenta como venta. | Corregir `entregada_completa` mueve el universo de órdenes de seis páginas. Ver la corrección en [1.3](1.2-1.5-auditoria.md). |
 | 3 | El `36,5 / 38,0` de 2019 | **Ya no arrastra 42 tests.** El plan decía que 42 asertaban montos calculados con esa tasa falsa; medido, **ninguno depende del valor** (se cambió a 100/110 y los 121 siguieron pasando). Sembrando tasas, convertirlo en error duro pasó a costar **2 tests**, más 5 que hay que reescribir a propósito porque existen para asertar ese comportamiento. Ver [2.1](2.1-ausencia-de-dato.md). |

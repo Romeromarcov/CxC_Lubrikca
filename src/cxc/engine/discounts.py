@@ -411,6 +411,33 @@ _REGLA_FALLBACK_PRIMERA_COMPRA = "FALLBACK_PRIMERA_COMPRA_COMERCIAL_2PCT"
 _CATEGORIA_FALLBACK = "COMERCIAL"
 
 
+# ``categorias_descuento`` que significa "todas". Es el default (vacío) y los
+# comodines que la pantalla puede dejar.
+_CATEGORIAS_TODAS = frozenset({"", "*", "TODAS", "TODOS", "ALL", "GLOBAL"})
+
+
+def _lineas_del_descuento(promos: list[Any], regla_id: str, lineas: list[Any]) -> list[Any]:
+    """Las líneas sobre las que la regla que puso el porcentaje aplica su descuento.
+
+    Se busca la regla por ``regla_id`` y no por posición: el porcentaje sale de un
+    ``max`` sobre varias promociones activas, así que filtrar con la categoría de
+    otra regla aplicaría el descuento a líneas que esa regla no cubre.
+
+    Sin categorías declaradas devuelve **todas**, que es lo que esta rama hacía
+    antes de que el campo existiera. Una regla vieja no cambia de comportamiento.
+
+    Ojo con no confundir este campo con ``categorias_aplica``, que gobierna qué
+    unidades CALIFICAN para ``compra_minima``. Son dos preguntas distintas y hay
+    tests que fijan la segunda.
+    """
+    elegida = next((p for p in promos if getattr(p, "regla_id", "") == regla_id), None)
+    crudo = str(getattr(elegida, "categorias_descuento", "") or "") if elegida else ""
+    pedidas = {c.strip().upper() for c in crudo.split(",") if c.strip()}
+    if not pedidas or pedidas & _CATEGORIAS_TODAS:
+        return list(lineas)
+    return [ln for ln in lineas if (getattr(ln, "categoria", "") or "").strip().upper() in pedidas]
+
+
 def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
     """La lista del par que corresponde a la moneda pedida, o None.
 
@@ -827,7 +854,18 @@ def _evaluar_promociones_producto(
             regla_pct_general = _REGLA_FALLBACK_PRIMERA_COMPRA
 
         if promos_activas:
-            nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
+            # La regla decide sobre qué líneas aplica su porcentaje. Antes esta
+            # rama sumaba TODAS sin excepción, y por eso configurar el 2 % de
+            # primera compra como regla ensanchaba la base a las Industrial --
+            # justo lo contrario del respaldo, que suma solo las Comercial.
+            # Con el campo vacío el comportamiento es el de antes.
+            nc = (
+                sum(
+                    _precio_linea(inp, ln, lista)
+                    for ln in _lineas_del_descuento(promos_activas, regla_pct_general, inp.lineas)
+                )
+                * pct_general
+            )
             if nc > 0:
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",

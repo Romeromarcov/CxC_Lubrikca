@@ -210,6 +210,64 @@ clases. La suite lo agarró en el acto —33 tests con `NameError`— pero el bo
 automático de bloques por indentación se lleva lo que tiene al lado si no se mira el
 diff. Lo miré después, no antes.
 
+## El 2 % de primera compra: era de Comercial, y se daba a Industrial
+
+El plan planteaba este ítem con dos opciones —«decidir si se marca como no otorgado
+o si la regla está mal configurada»— y yo agregué una tercera: «no hay ninguna
+regla». **Las tres eran incompletas.** Tu aclaración del 11-sep-2026:
+
+> la regla del 2 % solo aplica a comercial y es solo para la primera compra, si no
+> se le dio otra promoción por primera compra. Esa regla estaba configurada como un
+> fallback de la regla de primera compra, pero parece que nunca funcionó bien.
+
+### La categoría estaba invertida
+
+El motor aplicaba el 2 % a las líneas **Industrial**. El id del respaldo lo decía
+con todas las letras — `FALLBACK_PRIMERA_COMPRA_INDUSTRIAL_2PCT` — mientras el
+modelo `PromocionPrimeraCompra` trae `categorias_aplica = "Comercial"` por defecto.
+Dos declaraciones contradictorias que nadie había puesto una al lado de la otra.
+
+Medido sobre las 119 órdenes que recibieron el respaldo, con subtotales del espejo:
+
+| base | subtotal | 2 % |
+|---|---:|---:|
+| líneas **Industrial** (lo que hacía) | 103.055,13 | 2.061,10 |
+| líneas **Comercial** (lo correcto) | 37.111,82 | **742,24** |
+
+La base cae un **64 %**. Y la mitad que más importa: **85 de las 119 órdenes no
+tienen ni una línea Comercial**, así que no les correspondía nada. Corregirlo
+**sube la deuda**, que es la dirección contraria a la que yo había supuesto al
+ofrecer las opciones.
+
+### Y hacía falta un campo que no existía
+
+Configurarlo como regla de la tabla no era directo: **la rama de reglas
+configuradas sumaba TODAS las líneas**, sin filtrar por categoría, mientras el
+respaldo suma solo las Comercial. Con 122 órdenes que tienen líneas de las dos
+categorías, crear la regla habría ensanchado la base otra vez.
+
+Intenté reusar `categorias_aplica` y **dos tests me desmintieron**: ese campo
+gobierna qué unidades **califican** para el mínimo de compra, no sobre qué líneas
+se aplica el descuento. El comentario del modelo («no cambia el cálculo») era
+correcto y mi lectura no. Revertido.
+
+Así que ahora hay un campo nuevo, `categorias_descuento`, que dice exactamente
+eso. Vacío significa «todas», que es lo que la rama hacía siempre — **ninguna
+regla existente cambia de comportamiento al migrar**.
+
+### La regla existe, y no movió un peso
+
+`scripts/configurar_2pct_primera_compra.py` la crea, con un A/B previo orden por
+orden sobre las 119: el respaldo da **742,24 USD** y la regla con
+`categorias_descuento = COMERCIAL` da **742,24 USD**, con **cero** órdenes que
+difieran. Lo que cambió es de dónde sale el número: de una regla que se puede ver
+y editar en la pantalla, en vez de un valor cableado que se otorgaba por ausencia
+de configuración.
+
+El respaldo sigue en el código a propósito y solo dispara cuando no hay **ninguna**
+promoción configurada a la fecha de la orden. Retirarlo es un paso aparte, para
+cuando la regla lleve un tiempo viva.
+
 ## Vigencias de listas sembradas: el instrumento decía «ninguno» sin mirar
 
 El plan pedía «verificar que los períodos que se sembraron coinciden con la realidad

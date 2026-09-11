@@ -461,7 +461,12 @@ class PromocionPrimeraCompra:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     descuento_fallback: Decimal = Decimal("0.02")
+    # Qué unidades CALIFICAN para ``compra_minima``. No confundir con
+    # ``categorias_descuento``, que es sobre qué líneas se aplica el porcentaje.
     categorias_aplica: str = "Comercial"
+    # Sobre qué líneas se aplica el porcentaje. Vacío = todas, que es lo que el
+    # motor hacía siempre en la rama de reglas configuradas.
+    categorias_descuento: str = ""
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
     unidad_medida: str = "CAJAS"

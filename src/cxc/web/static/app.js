@@ -5196,6 +5196,9 @@ document.addEventListener("DOMContentLoaded", () => {
             regalo_tipo: v("ru-regalo", "solo_uno"),
             valor: num("ru-valor", 0),
             compra_minima: num("ru-compra-minima", 0),
+                // Sobre QUE lineas se aplica el porcentaje (vacio = todas).
+                // Distinto del alcance, que dice que unidades califican.
+                categorias_descuento: document.getElementById("ru-categorias-descuento")?.value || "",
             descuento_fallback: num("ru-fallback", 0),
             tipo_diferencial: v("ru-tipo-dif", "fijo_35_ves_usd"),
             porcentaje_fijo: num("ru-tope", 0.35),
