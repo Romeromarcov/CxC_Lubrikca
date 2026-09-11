@@ -1740,6 +1740,44 @@ def _activos_pricelist(execute: Any) -> frozenset[int]:
     return frozenset(f["id"] for f in filas if f.get("active"))
 
 
+def _resolvedor_de_precios(
+    execute: Any, repo: Any, ids_usd: list[Any], ids_ves: list[Any]
+) -> OdooPriceResolver:
+    """El ``OdooPriceResolver`` armado con las listas que le pasen.
+
+    Vigesimoseptima pieza de la Fase 2.4. Estas ocho lineas estaban copiadas en TRES
+    sitios --``api_backfill_ventas_teoricos``, y los dos que arman el runner del motor--
+    palabra por palabra: normalizar los ids, elegir la primaria activa de cada moneda,
+    armar el mapa, armar la lista de respaldo, construir el resolvedor.
+
+    **Los ids llegan por parametro a proposito.** Los cinco sitios que arman un
+    resolvedor no leen la configuracion del mismo lugar: tres usan
+    ``get_valid_pricelists_usd_and_ves`` (el mapeo unificado) y dos
+    ``get_ui_pricelist_ids`` (las claves ``valid_pricelists_*``), y esas dos fuentes
+    DIFIEREN --medido: USD=11/BCV=10 contra USD=4/BCV=5--. Unificarlas cambia con que
+    lista se valora cada teorico, o sea mueve montos, y eso es decision del usuario.
+    Asi que esta pieza deduplica el ARMADO y deja la eleccion de la fuente visible en
+    cada llamador, donde se puede ver de un vistazo. Ver
+    ``engine/listas.comparar_fuentes_de_lista``, que mide la divergencia, y el chequeo
+    ``evaluar_fuentes_de_lista`` de la vigilancia diaria.
+
+    Preserva el comportamiento exacto de las tres copias, incluida la caida a los ids
+    4 y 5 cuando la configuracion no ofrece ninguno --que no son un dato sino un nombre
+    logico de respaldo-- y el ``ids[0]`` cuando Odoo no contesta cual esta activa.
+    De paso baja de dos consultas a Odoo a una por sitio: ``_primer_id_activo``
+    preguntaba una vez por moneda y ``_activos_pricelist`` pregunta una sola vez, con
+    el mismo resultado porque ``primera_activa`` solo chequea pertenencia.
+    """
+    pricelist_ids = mapa_de_listas_primarias(ids_usd, ids_ves, _activos_pricelist(execute))
+    # Tarea 4: ambas listas están fijadas en USD -- si la pricelist puntual de la
+    # orden no tiene item propio para un producto, probar las demás pricelists
+    # configuradas antes de asumir precio 0.
+    fallback_pricelist_ids = [int(x) for x in (*ids_usd, *ids_ves) if str(x).isdigit()]
+    return OdooPriceResolver(
+        execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
+    )
+
+
 def _primer_id_activo(execute: Any, ids: list[int]) -> int | None:
     """Evita que una lista de precios ARCHIVADA en Odoo quede como
 
@@ -2538,16 +2576,10 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
         if not execute:
             raise HTTPException(status_code=503, detail="Sin conexión a Odoo")
 
+        # La fuente es el MAPEO UNIFICADO, no las claves `valid_pricelists_*`. Los
+        # dos lectores difieren -- ver `_resolvedor_de_precios`.
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
-        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
-        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
-        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
-        pricelist_ids = {"USD": primary_usd_id, "BCV": primary_ves_id}
-        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(
-            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
-        )
+        resolver = _resolvedor_de_precios(execute, repo, list(usd_lists), list(ves_lists))
         runner = EngineRunner(repo, resolver, config.engine)
 
         procesadas = await asyncio.to_thread(runner.run_teoricos_pendientes, date.today(), limite)
@@ -3486,26 +3518,13 @@ def recalculate_all(so_id: str):
         # cada ~5 min) agotaría las conexiones.
         repo = get_repo()
         execute = _connect(config.odoo)
+        # "USD"/"BCV" son nombres lógicos de respaldo (ver engine/discounts.py): el
+        # motor ya resuelve la lista via EngineInputs.valid_usd/valid_ves, y ese mapa
+        # solo cubre el caso residual de que algo la pase por nombre en vez de id.
+        # La fuente es el MAPEO UNIFICADO, no las claves `valid_pricelists_*`; los dos
+        # lectores difieren -- ver `_resolvedor_de_precios`.
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
-        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
-        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
-        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
-        # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
-        # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
-        # valid_ves (Configuración), este dict solo cubre el caso residual
-        # de que algo la pase por nombre lógico en vez de id numerico.
-        pricelist_ids = {
-            "USD": primary_usd_id,
-            "BCV": primary_ves_id,
-        }
-        # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
-        # puntual de la orden no tiene item propio para un producto, probar
-        # las demás pricelists configuradas antes de asumir precio 0.
-        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(
-            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
-        )
+        resolver = _resolvedor_de_precios(execute, repo, list(usd_lists), list(ves_lists))
         runner = EngineRunner(repo, resolver, config.engine)
 
         # Calculate this SO
@@ -3620,26 +3639,13 @@ def recalculate_all_orders():
                 file=sys.stderr,
             )
 
+        # "USD"/"BCV" son nombres lógicos de respaldo (ver engine/discounts.py): el
+        # motor ya resuelve la lista via EngineInputs.valid_usd/valid_ves, y ese mapa
+        # solo cubre el caso residual de que algo la pase por nombre en vez de id.
+        # La fuente es el MAPEO UNIFICADO, no las claves `valid_pricelists_*`; los dos
+        # lectores difieren -- ver `_resolvedor_de_precios`.
         usd_lists, ves_lists = get_valid_pricelists_usd_and_ves(repo)
-        usd_ids_int = [int(x) for x in usd_lists if str(x).isdigit()]
-        ves_ids_int = [int(x) for x in ves_lists if str(x).isdigit()]
-        primary_usd_id = _primer_id_activo(execute, usd_ids_int) or 4
-        primary_ves_id = _primer_id_activo(execute, ves_ids_int) or 5
-        # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py) --
-        # el motor mismo ya resuelve la lista via EngineInputs.valid_usd/
-        # valid_ves (Configuración), este dict solo cubre el caso residual
-        # de que algo la pase por nombre lógico en vez de id numerico.
-        pricelist_ids = {
-            "USD": primary_usd_id,
-            "BCV": primary_ves_id,
-        }
-        # Tarea 4: ambas listas están fijadas en USD -- si la pricelist
-        # puntual de la orden no tiene item propio para un producto, probar
-        # las demás pricelists configuradas antes de asumir precio 0.
-        fallback_pricelist_ids = [int(x) for x in (*usd_lists, *ves_lists) if str(x).isdigit()]
-        resolver = OdooPriceResolver(
-            execute, pricelist_ids, fallback_pricelist_ids, build_fallback_ficha_config(repo)
-        )
+        resolver = _resolvedor_de_precios(execute, repo, list(usd_lists), list(ves_lists))
         runner = EngineRunner(repo, resolver, config.engine)
 
         resultados = runner.run_all(date.today())

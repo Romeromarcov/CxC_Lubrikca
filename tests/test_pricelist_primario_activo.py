@@ -47,3 +47,99 @@ def test_si_la_consulta_a_odoo_falla_cae_a_la_primera_sin_reventar():
         raise ConnectionError("Odoo caido")
 
     assert _primer_id_activo(_execute_falla, [7, 8]) == 7
+
+
+# --- el armado del resolvedor, que estaba copiado tres veces (Fase 2.4, 27) ---
+
+
+def test_el_resolvedor_usa_la_primaria_ACTIVA_de_cada_moneda() -> None:
+    """Ocho líneas idénticas en tres sitios: normalizar ids, elegir primaria, armar.
+
+    Preserva el comportamiento de las tres copias: la 7 está archivada, así que la
+    primaria USD es la 8.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from cxc.web.app import _resolvedor_de_precios
+
+    def execute(modelo, metodo, args, kwargs=None):
+        assert modelo == "product.pricelist"
+        return [
+            {"id": 7, "active": False},
+            {"id": 8, "active": True},
+            {"id": 5, "active": True},
+        ]
+
+    with patch("cxc.web.app.build_fallback_ficha_config", return_value=None):
+        r = _resolvedor_de_precios(execute, MagicMock(), ["7", "8"], ["5"])
+    assert r._pricelist_ids == {"USD": 8, "BCV": 5}
+
+
+def test_el_respaldo_junta_las_listas_de_LAS_DOS_monedas() -> None:
+    """Si la lista puntual no tiene item para un producto, se prueban las demás
+    antes de asumir precio 0 -- y eso incluye las de la otra moneda, porque las dos
+    están fijadas en dólares."""
+    from unittest.mock import MagicMock, patch
+
+    from cxc.web.app import _resolvedor_de_precios
+
+    with patch("cxc.web.app.build_fallback_ficha_config", return_value=None):
+        r = _resolvedor_de_precios(
+            lambda *a, **k: [{"id": 8, "active": True}, {"id": 5, "active": True}],
+            MagicMock(),
+            ["8"],
+            ["5"],
+        )
+    assert sorted(r._fallback_pricelist_ids) == [5, 8]
+
+
+def test_sin_configuracion_cae_a_los_ids_por_defecto_4_y_5() -> None:
+    """Que no son un dato: son un nombre lógico de respaldo.
+
+    Y hoy las dos están ARCHIVADAS en Odoo, así que un teórico calculado así no es
+    comparable con uno de un entorno configurado. Comportamiento preservado del
+    `or 4` / `or 5` que tenían las tres copias.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from cxc.web.app import _resolvedor_de_precios
+
+    with patch("cxc.web.app.build_fallback_ficha_config", return_value=None):
+        r = _resolvedor_de_precios(lambda *a, **k: [], MagicMock(), [], [])
+    assert r._pricelist_ids == {"USD": 4, "BCV": 5}
+
+
+def test_si_Odoo_no_contesta_cual_esta_activa_se_usa_la_primera_configurada() -> None:
+    """Preservado: `_activos_pricelist` devuelve vacío y `primera_activa` cae a ids[0].
+
+    Devolver un precio viejo es peor que ninguno, pero dejar al llamador sin precio
+    sería un cambio de montos y no una corrección -- por eso se preserva.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from cxc.web.app import _resolvedor_de_precios
+
+    def explota(*a, **k):
+        raise OSError("Odoo caido")
+
+    with patch("cxc.web.app.build_fallback_ficha_config", return_value=None):
+        r = _resolvedor_de_precios(explota, MagicMock(), ["7", "8"], ["3", "5"])
+    assert r._pricelist_ids == {"USD": 7, "BCV": 3}
+
+
+def test_los_tres_sitios_delegan_en_la_pieza_en_vez_de_copiarla() -> None:
+    """La guarda de la deduplicación: si alguien vuelve a escribirla inline, falla.
+
+    Las ocho líneas estaban tres veces palabra por palabra, y una de esas copias vive
+    en `api_backfill_ventas_teoricos`, que **escribe** `ventas_teoricos`.
+    """
+    from pathlib import Path
+
+    fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
+    assert fuente.count("_resolvedor_de_precios(execute, repo,") == 3, (
+        "los tres sitios que arman un OdooPriceResolver tienen que llamar a la pieza"
+    )
+    assert 'pricelist_ids = {"USD": primary_usd_id' not in fuente, (
+        "el armado del mapa volvió a estar inline"
+    )
+    assert fuente.count("primary_usd_id = _primer_id_activo") == 0

@@ -213,6 +213,43 @@ def _nombres_llamados_en_app() -> set[str]:
     return usados
 
 
+def _usados_desde_afuera_de_app() -> set[str]:
+    """Nombres que otro módulo IMPORTA de `cxc.web.app`, o llama como `app.algo(...)`.
+
+    **Por qué con AST y no buscando el nombre en el texto**, que es lo que hacía la
+    primera versión de esta guarda por el lado del motor. Las dos formas ingenuas
+    fallan, cada una para un lado:
+
+    - buscar `f"app.{fn}"` da FALSOS POSITIVOS: el 11-sep-2026 marcó
+      `_primer_id_activo` como huérfano cuando lo usan cuatro archivos, porque lo
+      importan con `from cxc.web.app import _primer_id_activo` y nunca escriben
+      `app._primer_id_activo`.
+    - buscar el nombre suelto da FALSOS NEGATIVOS, que es peor: el nombre de
+      `_leer_descuentos_lineas_odoo` aparece en comentarios de `models.py` y de
+      `odoo/client.py` diciendo que es "la que usa Ventas", así que una búsqueda
+      textual la habría declarado viva. Y está muerta -- es el caso que esta guarda
+      existe para atrapar.
+
+    Un import es una declaración de uso; una mención en un comentario no lo es.
+    """
+    usados: set[str] = set()
+    for carpeta in ("src/cxc", "scripts", "escenarios", "tests"):
+        for archivo in (RAIZ / carpeta).rglob("*.py"):
+            if "__pycache__" in archivo.parts or archivo.samefile(APP):
+                continue
+            try:
+                arbol = ast.parse(archivo.read_text(encoding="utf-8", errors="ignore"))
+            except SyntaxError:
+                continue
+            for n in ast.walk(arbol):
+                if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("web.app"):
+                    usados.update(a.name for a in n.names)
+                elif isinstance(n, ast.Attribute):
+                    # `app.algo` / `cxc.web.app.algo`, la otra forma de usarla.
+                    usados.add(n.attr)
+    return usados
+
+
 def test_ninguna_funcion_privada_de_app_queda_sin_llamador_sin_declararlo() -> None:
     """El caso que este test habría atrapado: cablear una pieza en código muerto.
 
@@ -222,15 +259,11 @@ def test_ninguna_funcion_privada_de_app_queda_sin_llamador_sin_declararlo() -> N
     """
     definidas = _privadas_de_app()
     # Un nombre definido dos veces (un decorador, un overload) no es el caso de acá.
-    usados = _nombres_llamados_en_app()
-    consumidores = _consumidores()
+    usados = _nombres_llamados_en_app() | _usados_desde_afuera_de_app()
     huerfanas = sorted(
         fn
         for fn in definidas
-        if definidas.count(fn) == 1
-        and fn not in usados
-        and f"app.{fn}" not in consumidores
-        and fn not in SIN_LLAMADOR_EN_APP
+        if definidas.count(fn) == 1 and fn not in usados and fn not in SIN_LLAMADOR_EN_APP
     )
     assert not huerfanas, (
         "Estas funciones privadas de app.py no tienen llamador. O se borran, o se "
