@@ -394,7 +394,21 @@ _LISTA_USD_HISTORICA = "7"
 # configurada a la fecha de la orden. No es una regla de la tabla: es el
 # respaldo histórico, y tiene nombre propio para que el desglose lo diga en
 # vez de mostrarlo como "sin regla".
-_REGLA_FALLBACK_INDUSTRIAL = "FALLBACK_PRIMERA_COMPRA_INDUSTRIAL_2PCT"
+#
+# El id VIEJO decía INDUSTRIAL, y el código aplicaba el 2 % a las líneas
+# Industrial. Aclaración del usuario (11-sep-2026): **la regla es de Comercial**,
+# solo primera compra, y solo si no se le dio otra promoción de primera compra.
+# "Estaba configurada como un fallback de la regla de primera compra, pero
+# parece que nunca funcionó bien."
+#
+# Medido antes de corregirlo, sobre las 119 órdenes que lo recibieron: la base
+# Industrial suma 103.055,13 y la Comercial 37.111,82 — un 64 % menos. Y **85 de
+# las 119 no tienen NI UNA línea Comercial**, así que no les correspondía nada.
+# El id cambia para que el desglose viejo y el nuevo no se confundan.
+_REGLA_FALLBACK_PRIMERA_COMPRA = "FALLBACK_PRIMERA_COMPRA_COMERCIAL_2PCT"
+
+# La categoría de línea sobre la que aplica ese respaldo.
+_CATEGORIA_FALLBACK = "COMERCIAL"
 
 
 def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
@@ -810,7 +824,7 @@ def _evaluar_promociones_producto(
             # es cuando arrancan las dos promociones reales. O sea que el
             # respaldo hizo exactamente lo suyo.
             pct_general = Decimal("0.02")
-            regla_pct_general = _REGLA_FALLBACK_INDUSTRIAL
+            regla_pct_general = _REGLA_FALLBACK_PRIMERA_COMPRA
 
         if promos_activas:
             nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
@@ -827,14 +841,16 @@ def _evaluar_promociones_producto(
                 sum(
                     _precio_linea(inp, ln, lista)
                     for ln in inp.lineas
-                    if (ln.categoria or "").upper() == "INDUSTRIAL"
+                    if (ln.categoria or "").strip().upper() == _CATEGORIA_FALLBACK
                 )
                 * pct_general
             )
             if nc > 0:
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",
-                    descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
+                    descripcion=(
+                        f"Descuento primera compra Comercial {pct_general * 100:.2f}%"
+                    ),
                     monto=q2(nc),
                     regla_id=regla_pct_general,
                     porcentaje=pct_general,

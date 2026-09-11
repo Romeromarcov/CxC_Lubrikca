@@ -178,11 +178,26 @@ def test_sin_promociones_configuradas_no_crashea_ni_descuenta():
     assert conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True) == []
 
 
-def test_sin_promociones_primera_compra_cae_al_2pct_industrial():
-    """Fallback histórico: primera compra sin ninguna promo configurada
+def test_sin_promociones_primera_compra_cae_al_2pct_comercial():
+    """Respaldo histórico: primera compra sin promo configurada, 2 % sobre COMERCIAL.
 
-    descuenta 2% pero SOLO sobre líneas Industrial.
+    Este test asertaba 10,00 sobre una línea **Industrial**. La categoría era la
+    equivocada (aclaración del usuario, 11-sep-2026): la regla es de Comercial.
     """
+    inp = inputs(
+        orden=b.orden(fecha=date(2026, 6, 1), lista=LISTA_VES, primera=True),
+        lineas=[
+            b.linea("L1", producto=PROD_REGALO, categoria="COMERCIAL", cantidad="5", precio="100")
+        ],
+        promociones=[],
+        price_resolver=resolver(precios_ambas_listas(PROD_REGALO)),
+    )
+    # 5 x 100 (lista VES) x 2%.
+    assert calcular_factura(inp).ncs_calculadas == Decimal("10.00")
+
+
+def test_una_orden_solo_industrial_no_cae_al_2pct():
+    """El contraste que fija la corrección: la categoría importa."""
     inp = inputs(
         orden=b.orden(fecha=date(2026, 6, 1), lista=LISTA_VES, primera=True),
         lineas=[
@@ -191,8 +206,7 @@ def test_sin_promociones_primera_compra_cae_al_2pct_industrial():
         promociones=[],
         price_resolver=resolver(precios_ambas_listas(PROD_REGALO)),
     )
-    # 5 x 100 (lista VES) x 2%.
-    assert calcular_factura(inp).ncs_calculadas == Decimal("10.00")
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0")
 
 
 def test_promo_solo_primera_compra_no_dispara_en_orden_recurrente():

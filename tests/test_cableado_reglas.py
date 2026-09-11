@@ -99,7 +99,12 @@ def test_el_fallback_de_primera_compra_tiene_id_propio() -> None:
     cuando arrancan las dos promociones reales. O sea que el respaldo
     histórico hizo exactamente lo suyo, pero el desglose no lo decía.
     """
-    from cxc.engine.discounts import _REGLA_FALLBACK_INDUSTRIAL
+    from cxc.engine.discounts import _REGLA_FALLBACK_PRIMERA_COMPRA
 
-    assert _REGLA_FALLBACK_INDUSTRIAL
-    assert "FALLBACK" in _REGLA_FALLBACK_INDUSTRIAL
+    assert _REGLA_FALLBACK_PRIMERA_COMPRA
+    assert "FALLBACK" in _REGLA_FALLBACK_PRIMERA_COMPRA
+    # El id dice la categoría, y la categoría es Comercial (aclaración del
+    # usuario, 11-sep-2026). El id viejo decía INDUSTRIAL y el motor aplicaba
+    # ahí: 85 de las 119 órdenes recibían un descuento que no les tocaba.
+    assert "COMERCIAL" in _REGLA_FALLBACK_PRIMERA_COMPRA
+    assert "INDUSTRIAL" not in _REGLA_FALLBACK_PRIMERA_COMPRA

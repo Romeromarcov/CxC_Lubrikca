@@ -687,9 +687,14 @@ def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
     assert res.ncs_calculadas == Decimal("0.00")
 
 
-def test_primera_compra_industrial_sin_promos_aplica_2pct() -> None:
-    # First purchase with Industrial products and no active promo
-    # should get 2% discount on Industrial lines
+def test_primera_compra_sin_promos_aplica_2pct_sobre_comercial() -> None:
+    """Primera compra sin promo configurada: 2 % sobre las líneas COMERCIAL.
+
+    Este test asertaba 3,00 — el 2 % de la línea Industrial de 150 — porque el
+    respaldo se aplicaba a Industrial. Aclaración del usuario (11-sep-2026): la
+    regla es de **Comercial**. Ahora son 2,00, el 2 % de la línea Comercial de
+    100, y la Industrial no aporta nada.
+    """
     orden = b.orden(primera=True, lista="BCV")
     linea_ind = b.linea(
         linea_id="L1",
@@ -718,10 +723,40 @@ def test_primera_compra_industrial_sin_promos_aplica_2pct() -> None:
         resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),  # no promos configured
     )
     res = calcular_factura(inp)
-    # Should get 2% of Industrial line (150) = 3.00 NC (nothing on Comercial line)
-    assert res.ncs_calculadas == Decimal("3.00")
+    # 2 % de la línea Comercial (100) = 2,00. La Industrial (150) no entra.
+    assert res.ncs_calculadas == Decimal("2.00")
     origenes = {d.origen for d in res.descuentos_detalle}
     assert "primera_compra" in origenes
+
+
+def test_primera_compra_solo_industrial_no_recibe_nada() -> None:
+    """El caso de las 85 órdenes, y el que más plata mueve.
+
+    De las 119 órdenes que recibieron el respaldo en la copia de producción,
+    **85 no tienen ni una línea Comercial**. Con el respaldo apuntando a
+    Industrial recibían un descuento que no les correspondía; ahora reciben
+    cero. Es la mitad del hallazgo: la base baja un 64 %.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    linea_ind = b.linea(
+        linea_id="L1",
+        producto="P1",
+        marca="Sinoco",
+        categoria="Industrial",
+        precio="150",
+        cantidad="1",
+    )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_ind],
+        abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "150"}),
+    )
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0")
 
 
 def test_orden_con_devolucion_requiere_revision() -> None:
