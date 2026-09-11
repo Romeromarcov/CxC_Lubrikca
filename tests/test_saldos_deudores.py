@@ -463,3 +463,120 @@ def test_el_calculo_original_reconstruido_da_lo_mismo(caso) -> None:
         nuevo.con_descuento_bcv,
         nuevo.con_descuento_lista_usd,
     )
+
+
+# --- el valor entregado, y la regla del obsequio (11-sep-2026) ---------------
+
+
+def _ln(entregada=None, cantidad="0", precio="0", descuento="0"):
+    return {
+        "cantidad_entregada": entregada,
+        "cantidad": cantidad,
+        "precio_unitario": precio,
+        "descuento": descuento,
+    }
+
+
+def test_el_valor_entregado_no_aplica_el_descuento_por_defecto() -> None:
+    """La bandera viene en False: el comportamiento no cambia solo.
+
+    Aplicarla mueve 204 órdenes y 8.719,06 USD sobre la copia de producción, de
+    los cuales solo 107,42 son obsequios. Los otros no están autorizados.
+    """
+    from cxc.engine.saldos import valor_entregado_y_retenido
+
+    lineas = [_ln(entregada="1", precio="35.81", descuento="99.99")]
+    assert valor_entregado_y_retenido(lineas) == pytest.approx(35.81)
+
+
+def test_con_la_bandera_puesta_el_obsequio_deja_de_contar_como_venta() -> None:
+    """El caso real: S00671, S00674 y S00679, producto 1033.
+
+    Regla del usuario: el producto regalado se carga con 99,99 % de descuento
+    «para que no afectara la cxc». Con la bandera, la línea aporta 0,0036 en vez
+    de 35,81.
+    """
+    from cxc.engine.saldos import valor_entregado_y_retenido
+
+    lineas = [_ln(entregada="1", precio="35.81", descuento="99.99")]
+    assert valor_entregado_y_retenido(lineas, aplicar_descuento=True) == pytest.approx(
+        0.003581, abs=1e-6
+    )
+
+
+def test_la_entregada_ausente_cae_a_la_cantidad() -> None:
+    """Comportamiento original, preservado: hay líneas sin la entregada."""
+    from cxc.engine.saldos import valor_entregado_y_retenido
+
+    for ausente in (None, "", "None"):
+        assert valor_entregado_y_retenido(
+            [_ln(entregada=ausente, cantidad="2", precio="10")]
+        ) == pytest.approx(20.0)
+
+
+def test_una_entregada_negativa_no_le_resta_valor_a_las_otras_lineas() -> None:
+    """Pasa en los datos reales: S00925 y S00952 tienen −10 y −4.
+
+    Es una devolución que supera la línea. Sin el piso por línea, restaría del
+    total de la orden y haría desaparecer mercancía que sí está afuera.
+    """
+    from cxc.engine.saldos import valor_entregado_y_retenido
+
+    lineas = [_ln(entregada="-10", precio="50"), _ln(entregada="2", precio="50")]
+    assert valor_entregado_y_retenido(lineas) == pytest.approx(100.0)
+
+
+def test_un_descuento_fuera_de_rango_no_inventa_un_factor() -> None:
+    """Con 150 % el factor daría negativo, y con −20 % inflaría la venta."""
+    from cxc.engine.saldos import valor_entregado_y_retenido
+
+    for malo in ("150", "-20", "ilegible"):
+        assert valor_entregado_y_retenido(
+            [_ln(entregada="1", precio="10", descuento=malo)], aplicar_descuento=True
+        ) == pytest.approx(10.0)
+
+
+def test_el_diagnostico_separa_el_obsequio_de_los_descuentos_normales() -> None:
+    """La separación es el punto: una suma sola haría parecer todo autorizado.
+
+    El usuario autorizó que el obsequio no afecte la CxC. No autorizó los
+    descuentos de línea normales, que son 8.611,64 de los 8.719,06 medidos.
+    """
+    from cxc.engine.saldos import diagnostico_de_obsequios
+
+    lineas = [
+        _ln(entregada="1", precio="35.81", descuento="99.99"),  # obsequio
+        _ln(entregada="1", precio="100", descuento="10"),  # descuento normal
+    ]
+    d = diagnostico_de_obsequios(lineas)
+    assert d["lineas_de_obsequio"] == 1
+    assert d["brecha_de_obsequios"] == pytest.approx(35.81 - 0.003581, abs=1e-4)
+    assert d["brecha_de_descuentos_normales"] == pytest.approx(10.0, abs=1e-4)
+    assert d["brecha"] == pytest.approx(
+        d["brecha_de_obsequios"] + d["brecha_de_descuentos_normales"], abs=1e-6
+    )
+    assert not d["cruza_el_umbral"]
+
+
+def test_el_diagnostico_avisa_si_la_orden_quedaria_sin_nada_que_cobrar() -> None:
+    """Una orden cuyas únicas líneas entregadas son obsequios sale del reporte.
+
+    Medido: **cero** órdenes en la copia de producción están en ese caso, así que
+    aplicar la regla no saca a ninguna. Pero el aviso existe porque el día que
+    haya una, su desaparición no debería ser una sorpresa.
+    """
+    from cxc.engine.saldos import diagnostico_de_obsequios
+
+    d = diagnostico_de_obsequios([_ln(entregada="1", precio="35.81", descuento="100")])
+    assert d["cruza_el_umbral"]
+
+
+def test_el_100_por_ciento_tambien_es_obsequio() -> None:
+    """S00336 se carga con 100 %, no con 99,99: el corte tiene que cubrir las dos."""
+    from cxc.engine.saldos import es_obsequio
+
+    assert es_obsequio({"descuento": "100"})
+    assert es_obsequio({"descuento": "99.99"})
+    assert es_obsequio({"descuento": "99"})
+    assert not es_obsequio({"descuento": "98.9"})
+    assert not es_obsequio({"descuento": None})

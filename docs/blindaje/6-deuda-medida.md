@@ -807,6 +807,74 @@ la medición dice que **ninguna de las dos es correcta en los tres casos**. La
 respuesta buena parece ser: por estado, **más** una tolerancia de centavos, **más**
 una señal de sobrepago. Las tres partes mueven montos.
 
+## El obsequio que cuenta como venta, y los 8.611,64 que vienen pegados
+
+Salió de una aclaración tuya del 11-sep-2026, textual:
+
+> la única excepción es cuando aplica la promoción de primera compra en la que se
+> obsequia producto, lo que se hacía era incluir el producto para que se descontara
+> del inventario, pero se le ponía al producto precio 0 o dcto del 99% **para que
+> no afectara la cxc**. También a veces se le pone el precio en 0 y cantidad
+> entregada 0 si hubo una devolución.
+
+Los dos patrones están en los datos, y **el sistema respeta uno y no el otro**.
+
+### El patrón del obsequio no se respeta
+
+`monto_entregado_neto_usd` —el umbral que decide si una orden genera cuenta por
+cobrar, y la cifra que el reporte publica como `subtotal`— hace
+`cantidad_entregada × precio_unitario` y **no mira el descuento de línea**. Así que
+un obsequio cargado como decís cuenta su precio completo:
+
+| orden | producto | entregada | precio | dcto | `subtotal` del espejo | lo que el reporte suma |
+|---|---|---:|---:|---:|---:|---:|
+| S00671 | 1033 | 1 | 35,81 | 99,99 % | **0,00** | **35,81** |
+| S00674 | 1033 | 1 | 35,81 | 99,99 % | 0,00 | 35,81 |
+| S00679 | 1033 | 1 | 35,81 | 99,99 % | 0,00 | 35,81 |
+| S00336 | 902 | 0 | 74,27 | 100 % | 0,00 | 0,00 |
+
+El espejo **ya trae el valor correcto** en su columna `subtotal` —lo calcula Odoo
+con el descuento— y el reporte lo ignora y lo recalcula mal. Son **107,42 USD** de
+obsequio contados como venta.
+
+### El patrón de la devolución sí se respeta
+
+Tres líneas con precio 0: S00569 con `entregada = 0`, y **S00925 y S00952 con
+entregada NEGATIVA** (−10 y −4), que es una devolución que supera la línea. Ninguna
+línea con precio 0 fue entregada, así que **ninguna está generando cuenta por
+cobrar**. Ese patrón funciona.
+
+### Y esto cambia la decisión del precio en cero
+
+La tenía planteada como «hacer que un precio 0 sea un error». Con tu regla eso
+**rompería los dos flujos**, porque ahí el cero es correcto y deliberado. La
+decisión real es más fina: distinguir «cero porque se regaló» de «cero porque no
+se pudo resolver el precio». El descuento ≥99 % es la marca que las separa, y
+ahora `es_obsequio` la nombra.
+
+### Por qué NO lo apliqué, aunque lo autorizaste
+
+Aplicar el descuento arregla el obsequio. Pero medido sobre la copia:
+
+| | órdenes | monto |
+|---|---:|---:|
+| cambian su `subtotal` | **204** | **−8.719,06 USD** (−1,10 %) |
+| de las cuales, obsequio | 4 | −107,42 |
+| **descuentos de línea normales** | ~200 | **−8.611,64** |
+| cruzan el umbral y saldrían del reporte | **0** | — |
+
+Los 107,42 los autorizaste. **Los 8.611,64 no**, y meterlos en el mismo cambio
+sería colar una corrección de 204 órdenes bajo el permiso que diste para tres.
+
+Así que la bandera `aplicar_descuento` existe, viene en `False`, y
+`diagnostico_de_obsequios` **separa las dos brechas** para que el número autorizado
+no se confunda con el que no lo es. 8 tests nuevos.
+
+**Qué hay que decidir:** si el descuento de línea tiene que entrar en el valor
+entregado. Si la respuesta es sí para todos, son 8.719,06 USD menos de venta
+reportada en 204 órdenes. Si es solo para los obsequios, alcanza con filtrar por
+`es_obsequio` y son 107,42.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

@@ -82,6 +82,7 @@ from cxc.engine.runner import EngineRunner
 from cxc.engine.saldos import (
     saldos_de_la_orden,
     saldos_deudores,
+    valor_entregado_y_retenido,
     valor_usd_de_notas_de_credito,
 )
 from cxc.engine.universo import orden_excluida
@@ -4554,19 +4555,18 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             # Compute actual net delivered subtotal per product line
             # (cantidad_entregada * precio_unitario)
             if order_lines:
-                monto_entregado_neto_usd = sum(
-                    max(
-                        Decimal("0"),
-                        Decimal(
-                            str(
-                                ln.get("cantidad_entregada")
-                                if ln.get("cantidad_entregada") not in (None, "", "None")
-                                else ln.get("cantidad", "0")
-                            )
-                        ),
-                    )
-                    * Decimal(str(ln.get("precio_unitario", "0")))
-                    for ln in order_lines
+                # El descuento de linea NO entra, igual que antes.
+                #
+                # El usuario explico el 11-sep-2026 que un obsequio se carga con
+                # 99,99 % de descuento "para que no afectara la cxc", y este
+                # calculo lo ignora: tres lineas cuentan 35,81 de venta cada una.
+                # Aplicar el descuento arregla eso, pero medido sobre la copia
+                # mueve 204 ordenes y 8.719,06 USD, de los cuales solo 107,42 son
+                # obsequios. Los otros 8.611,64 son descuentos de linea normales
+                # y no estan autorizados, asi que la bandera queda en False.
+                # Ver engine/saldos.py::diagnostico_de_obsequios.
+                monto_entregado_neto_usd = Decimal(
+                    str(valor_entregado_y_retenido(order_lines, aplicar_descuento=False))
                 )
             else:
                 st_fallback = odoo_info.get("state") or getattr(o, "estado_orden", "sale")

@@ -351,3 +351,113 @@ def saldos_deudores(
         con_descuento_lista_usd=max(0.0, deudor_usd - descuentos_con_iva - notas_credito_usd),
         motivo_del_cero=motivo,
     )
+
+
+# Descuento de linea a partir del cual la linea es un OBSEQUIO y no una venta.
+#
+# Regla de negocio que el usuario explico el 11-sep-2026, textual: "la unica
+# excepcion es cuando aplica la promocion de primera compra en la que se obsequia
+# producto, lo que se hacia era incluir el producto para que se descontara del
+# inventario, pero se le ponia al producto precio 0 o dcto del 99% para que NO
+# AFECTARA LA CXC".
+#
+# El corte es 99 y no 100 porque en los datos reales el obsequio se carga con
+# 99,99 % (S00671, S00674 y S00679, las tres del producto 1033) y tambien con
+# 100 % (S00336). Poner el corte en 100 dejaria afuera justo las tres que importan.
+DESCUENTO_DE_OBSEQUIO = 99.0
+
+
+def _num_linea(valor: Any, por_defecto: float = 0.0) -> float:
+    """Un campo de linea como float. Lo ilegible vale el default, no revienta."""
+    if valor is None or valor in ("", "None"):
+        return por_defecto
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return por_defecto
+
+
+def valor_entregado_y_retenido(
+    lineas: list[dict[str, Any]], *, aplicar_descuento: bool = False
+) -> float:
+    """Cuanta plata de mercancia salio y se quedo con el cliente.
+
+    Es el umbral que decide si una orden genera cuenta por cobrar -- con cero no se
+    persigue, porque no hay nada afuera -- y tambien la cifra que el reporte
+    publica como ``subtotal``.
+
+    ``aplicar_descuento`` es LA DECISION, y viene en False para que el
+    comportamiento no cambie solo.
+
+    El calculo original hace ``cantidad_entregada x precio_unitario`` y **no mira
+    el descuento de linea**. Eso hace que un obsequio --producto a 35,81 con
+    99,99 % de descuento, que es como el usuario carga los regalos "para que no
+    afectara la cxc"-- cuente 35,81 de venta. El espejo ya trae el ``subtotal``
+    correcto en 0,00, lo calcula Odoo, y este calculo lo ignora.
+
+    Pero medido sobre la copia de produccion el efecto es mucho mas grande que los
+    obsequios: **204 ordenes cambian y el total baja 8.719,06 USD (-1,10 %)**, de
+    los cuales solo 107,42 son obsequios y 8.611,64 son descuentos de linea
+    normales. Ninguna orden cruza el umbral, asi que ninguna sale del reporte.
+
+    Los obsequios los autorizo el usuario explicitamente; los otros 8.611,64 no.
+    Por eso la bandera existe y esta en False: aplicarla es una decision de el.
+
+    No se usa ``ln["subtotal"]`` directamente porque esa columna corresponde a
+    ``cantidad``, no a ``cantidad_entregada``: en una entrega parcial diria de mas.
+
+    Dos comportamientos preservados del cuerpo original: ``cantidad_entregada``
+    ausente cae a ``cantidad`` (hay ordenes cuyas lineas no la traen), y el piso en
+    cero por linea, porque una entregada NEGATIVA --una devolucion que supera la
+    linea, pasa en los datos reales-- no puede restarle valor a las otras lineas.
+    """
+    total = 0.0
+    for ln in lineas:
+        crudo = ln.get("cantidad_entregada")
+        if crudo in (None, "", "None"):
+            crudo = ln.get("cantidad", 0)
+        cantidad = max(0.0, _num_linea(crudo))
+        precio = _num_linea(ln.get("precio_unitario"))
+        descuento = _num_linea(ln.get("descuento"))
+        # Un descuento fuera de 0-100 no sirve para inventar un factor: se ignora.
+        if not (aplicar_descuento and 0.0 <= descuento <= 100.0):
+            descuento = 0.0
+        total += cantidad * precio * (1.0 - descuento / 100.0)
+    return total
+
+
+def diagnostico_de_obsequios(lineas: list[dict[str, Any]]) -> dict[str, Any]:
+    """Las dos lecturas del valor entregado, y cuanto de la brecha es obsequio.
+
+    Separa la parte que el usuario autorizo --el obsequio, que por regla de negocio
+    NO debe afectar la cuenta por cobrar-- de la que no: los descuentos de linea
+    normales, que son 8.611,64 de los 8.719,06 medidos y siguen siendo decision
+    suya. Un instrumento que las sumara en un solo numero haria parecer autorizado
+    lo que no lo esta.
+    """
+    sin = valor_entregado_y_retenido(lineas, aplicar_descuento=False)
+    con = valor_entregado_y_retenido(lineas, aplicar_descuento=True)
+    obsequios = [ln for ln in lineas if es_obsequio(ln)]
+    brecha_obsequio = valor_entregado_y_retenido(
+        obsequios, aplicar_descuento=False
+    ) - valor_entregado_y_retenido(obsequios, aplicar_descuento=True)
+    return {
+        "sin_descuento": sin,
+        "con_descuento": con,
+        "brecha": sin - con,
+        "brecha_de_obsequios": brecha_obsequio,
+        "brecha_de_descuentos_normales": (sin - con) - brecha_obsequio,
+        "lineas_de_obsequio": len(obsequios),
+        "cruza_el_umbral": sin > 0 and con <= 0,
+    }
+
+
+def es_obsequio(linea: dict[str, Any]) -> bool:
+    """True si la linea es un obsequio y no una venta.
+
+    Existe para que el instrumento que cuenta precios en cero pueda separar "cero
+    porque se regalo" de "cero porque no se pudo resolver el precio". Las dos se
+    ven igual en el monto y son cosas distintas: la primera es correcta y la
+    segunda es la mina 1.
+    """
+    return _num_linea(linea.get("descuento")) >= DESCUENTO_DE_OBSEQUIO
