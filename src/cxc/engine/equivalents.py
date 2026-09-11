@@ -22,6 +22,33 @@ class Equivalentes:
     equiv_ves_binance: Decimal
 
 
+def equivalentes_bcv(
+    monto_aplicado: Decimal, moneda_abono: Moneda, tasa_bcv: Decimal
+) -> tuple[Decimal, Decimal]:
+    """El par de equivalentes del lado BCV: ``(equiv_usd_bcv, equiv_ves_bcv)``.
+
+    Decimoseptima pieza de la Fase 2.4, y existe por una divergencia medida el
+    11-sep-2026: ``post_cambiar_tipo_tasa_bcv`` --el endpoint que cambia la
+    variante USD/EUR de una vinculación-- reimplementaba esta misma cuenta **sin
+    pasar por ``q6``**, mientras ``calcular_equivalentes`` sí redondea a seis
+    decimales.
+
+    O sea que el mismo concepto se calculaba de dos maneras, y editar la variante
+    reescribía un equivalente **congelado** con otra precisión que la que tenía al
+    crearse. Con 1.000 Bs a tasa 3, uno guarda ``333.333333`` y el otro
+    ``333.3333333333...``.
+
+    Ahora las dos rutas comparten esta función. Las tasas positivas se exigen acá
+    por la misma razón que en ``calcular_equivalentes``: un equivalente calculado
+    con una tasa en cero o negativa no significa nada y queda congelado así.
+    """
+    if tasa_bcv <= 0:
+        raise ValueError("La tasa BCV estampada debe ser positiva")
+    if moneda_abono == Moneda.VES:
+        return q6(monto_aplicado / tasa_bcv), q6(monto_aplicado)
+    return q6(monto_aplicado), q6(monto_aplicado * tasa_bcv)
+
+
 def calcular_equivalentes(
     monto_aplicado: Decimal,
     moneda_abono: Moneda,
@@ -32,18 +59,21 @@ def calcular_equivalentes(
     if tasa_bcv <= 0 or tasa_binance <= 0:
         raise ValueError("Las tasas estampadas deben ser positivas")
     m = monto_aplicado
+    # El lado BCV sale de ``equivalentes_bcv``, que es la misma función que usa el
+    # endpoint de cambio de variante -- así no pueden volver a divergir.
+    usd_bcv, ves_bcv = equivalentes_bcv(m, moneda_abono, tasa_bcv)
     if moneda_abono == Moneda.VES:
         return Equivalentes(
-            equiv_usd_bcv=q6(m / tasa_bcv),
+            equiv_usd_bcv=usd_bcv,
             equiv_usd_binance=q6(m / tasa_binance),
-            equiv_ves_bcv=q6(m),
+            equiv_ves_bcv=ves_bcv,
             equiv_ves_binance=q6(m),
         )
     # Abono en USD
     return Equivalentes(
-        equiv_usd_bcv=q6(m),
+        equiv_usd_bcv=usd_bcv,
         equiv_usd_binance=q6(m),
-        equiv_ves_bcv=q6(m * tasa_bcv),
+        equiv_ves_bcv=ves_bcv,
         equiv_ves_binance=q6(m * tasa_binance),
     )
 

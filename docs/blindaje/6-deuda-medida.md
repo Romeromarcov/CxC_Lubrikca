@@ -1140,6 +1140,39 @@ suma a la del «sesgo de la tasa Binance» que el plan ya tenía anotada — res
 hay **dos** sesgos, no uno: el del promedio de 5 compras y 5 ventas, y éste,
 estructural, en cómo se parten las horas.
 
+## Editar la variante de tasa reescribía un equivalente congelado con otra precisión
+
+`post_cambiar_tipo_tasa_bcv` cambia la variante USD/EUR de una vinculación y
+**recongela su equivalente**. Es de las escrituras más delicadas del sistema —el
+equivalente congelado por diseño no se vuelve a revisar— y ninguna prueba la
+nombraba. Salió del mismo barrido.
+
+Dos cosas aparecieron:
+
+**1 · La cuenta estaba duplicada, y las dos copias no coincidían.** El endpoint
+reimplementaba inline lo que `calcular_equivalentes` ya hace, **sin pasar por
+`q6`**. Con 1.000 Bs a tasa 3, el motor guarda `333.333333` y el endpoint guardaba
+`333.3333333333…`. El mismo concepto calculado de dos maneras, y una de ellas
+reescribiendo un valor congelado con otra precisión que la que tenía al nacer.
+
+Ahora las dos rutas comparten `equivalentes_bcv`, así que no pueden volver a
+divergir. 4 tests.
+
+**2 · Una regresión que yo mismo introduje hoy, y que encontré al mirar esto.** En
+la rama USD el endpoint llama a `get_rate_for_datetime`, que desde la decisión de
+esta misma fecha **levanta** en vez de devolver el default de 2019. Su
+`except Exception` convertía eso en un **500 con el mensaje crudo**, cuando el caso
+es exactamente el que su propio 400 de más abajo contempla: no hay tasa con la que
+recongelar.
+
+Alguien que eligiera «USD» sobre un pago de una fecha sin tasa habría visto un error
+de servidor en vez de una explicación. Ahora devuelve 400 con la fecha adentro.
+
+Vale anotar la forma del error, porque va a repetirse: **convertir un valor de
+retorno en una excepción cambia el comportamiento de todos los `except Exception`
+que haya en el camino.** La suite no lo agarró porque ninguna prueba llegaba a este
+endpoint — que es precisamente por lo que estaba en la lista del barrido.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

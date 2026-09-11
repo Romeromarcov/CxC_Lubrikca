@@ -53,6 +53,7 @@ from cxc.engine.conciliacion import (
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
+    equivalentes_bcv,
     valor_pagado_bcv_usd,
     valor_pagado_binance_usd,
 )
@@ -9113,19 +9114,33 @@ async def post_cambiar_tipo_tasa_bcv(
                     detail="No hay tasa BCV-EUR capturada en SerieTasas para usar esta variante.",
                 )
         else:
-            tasa_bcv_nueva, _ = get_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            try:
+                tasa_bcv_nueva, _ = get_rate_for_datetime(vinc.hora_pago_confirmada, tasas_rows)
+            except TasaNoDisponible as sin_tasa:
+                # Desde que el default de 2019 es error duro (11-sep-2026) esto
+                # levanta en vez de devolver 36,50. Sin este catch el
+                # ``except Exception`` de abajo lo convertía en un 500 con el
+                # mensaje crudo, cuando el caso es exactamente el que el 400 de
+                # más abajo ya contempla: no hay tasa con la que congelar.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"No hay tasa BCV-USD para el {vinc.hora_pago_confirmada:%Y-%m-%d}, "
+                        "así que no se puede recongelar el equivalente de esta vinculación."
+                    ),
+                ) from sin_tasa
 
         if tasa_bcv_nueva <= Decimal("0"):
             raise HTTPException(status_code=400, detail=f"Tasa BCV-{variante} inválida (<= 0).")
 
         vinc.bcv_variante = variante
         vinc.tasa_bcv_aplicada = tasa_bcv_nueva
-        if vinc.moneda_abono == Moneda.USD:
-            vinc.equiv_usd_bcv = vinc.monto_aplicado
-            vinc.equiv_ves_bcv = vinc.monto_aplicado * tasa_bcv_nueva
-        else:
-            vinc.equiv_usd_bcv = vinc.monto_aplicado / tasa_bcv_nueva
-            vinc.equiv_ves_bcv = vinc.monto_aplicado
+        # La cuenta vive en el motor, con ``q6``. Antes estaba acá sin redondear, y
+        # editar la variante reescribía un equivalente congelado con otra
+        # precisión que la que tenía al crearse.
+        vinc.equiv_usd_bcv, vinc.equiv_ves_bcv = equivalentes_bcv(
+            vinc.monto_aplicado, vinc.moneda_abono, tasa_bcv_nueva
+        )
 
         repo.update_vinculacion(vinc)
         background_tasks.add_task(recalculate_all, vinc.so_id)

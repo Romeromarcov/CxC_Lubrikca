@@ -268,3 +268,68 @@ def test_valor_pagado_sin_congelar_falla() -> None:
     v = b.vinculacion(moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV)
     with pytest.raises(ValueError, match="congelar"):
         valor_pagado_usd([v])
+
+
+# --- el par BCV de los equivalentes (Fase 2.4, pieza 17) --------------------
+
+
+def test_equivalentes_bcv_en_bolivares_divide_y_redondea_a_seis() -> None:
+    """El redondeo es el punto de la pieza.
+
+    ``post_cambiar_tipo_tasa_bcv`` hacía esta misma cuenta **sin** ``q6``, así que
+    editar la variante USD/EUR de una vinculación reescribía un equivalente
+    **congelado** con otra precisión que la que tenía al crearse.
+    """
+    from decimal import Decimal
+
+    from cxc.engine.equivalents import equivalentes_bcv
+    from cxc.models import Moneda
+
+    usd, ves = equivalentes_bcv(Decimal("1000"), Moneda.VES, Decimal("3"))
+    assert usd == Decimal("333.333333"), "seis decimales, no la división cruda"
+    assert ves == Decimal("1000.000000")
+
+
+def test_equivalentes_bcv_en_dolares_multiplica() -> None:
+    from decimal import Decimal
+
+    from cxc.engine.equivalents import equivalentes_bcv
+    from cxc.models import Moneda
+
+    usd, ves = equivalentes_bcv(Decimal("100"), Moneda.USD, Decimal("732.5"))
+    assert usd == Decimal("100.000000")
+    assert ves == Decimal("73250.000000")
+
+
+def test_equivalentes_bcv_exige_una_tasa_positiva() -> None:
+    """Un equivalente calculado con tasa cero no significa nada, y queda congelado.
+
+    Es la misma razón por la que ``calcular_equivalentes`` ya lo exigía: acá se
+    está fijando un número que por diseño no se vuelve a revisar.
+    """
+    from decimal import Decimal
+
+    import pytest
+
+    from cxc.engine.equivalents import equivalentes_bcv
+    from cxc.models import Moneda
+
+    for mala in (Decimal("0"), Decimal("-3")):
+        with pytest.raises(ValueError, match="positiva"):
+            equivalentes_bcv(Decimal("1000"), Moneda.VES, mala)
+
+
+def test_calcular_equivalentes_usa_la_misma_pieza_para_el_lado_BCV() -> None:
+    """Las dos rutas comparten la función, así que no pueden volver a divergir."""
+    from decimal import Decimal
+
+    from cxc.engine.equivalents import calcular_equivalentes, equivalentes_bcv
+    from cxc.models import Moneda
+
+    todos = calcular_equivalentes(
+        Decimal("1000"), Moneda.VES, Decimal("3"), Decimal("4")
+    )
+    usd, ves = equivalentes_bcv(Decimal("1000"), Moneda.VES, Decimal("3"))
+    assert (todos.equiv_usd_bcv, todos.equiv_ves_bcv) == (usd, ves)
+    # Y el lado Binance sigue siendo el suyo, no una copia del BCV.
+    assert todos.equiv_usd_binance == Decimal("250.000000")
