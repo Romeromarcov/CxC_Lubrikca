@@ -174,9 +174,41 @@ Los otros modelos que la comparación encontró —`AprobarDescuentoSistemaReque
 `ToggleDescuentoRequest`— **no son formularios de regla**: son acciones sobre una regla
 o un pago ya existentes. No entran en el retiro.
 
-**Qué queda para vos:** la confirmación, que ahora es sobre algo verificado. Retirar los
-viejos no pierde ningún campo. Lo que sí hay que hacer al retirarlos es sacar los nueve
-formularios de la pantalla en el mismo cambio, porque hoy son los que guardan.
+### Retirados el 11-sep-2026
+
+Lo confirmaste y están afuera. Lo que salió, en tres capas y en ese orden:
+
+| capa | qué se fue |
+|---|---|
+| la pantalla | **9 bloques de formulario, 765 líneas** de `index.html`, cada uno reemplazado por un aviso que manda al formulario único |
+| el navegador | **9 manejadores de guardado, 420 líneas** de `app.js` |
+| el servidor | **14 endpoints de escritura (535 líneas) y 9 modelos de request (131 líneas)** de `app.py` |
+
+**Lo que NO se fue, y es la mitad del punto:** los ocho `GET` de listado. Las tablas
+siguen mostrando las reglas vigentes — 15 tablas en la pantalla. Lo que se retiró es
+el editor viejo, no la vista.
+
+Verificado sobre el servidor corriendo: **cero** rutas de escritura de reglas,
+`POST /api/config/regla` como único editor, y ninguno de los nueve formularios en el
+HTML servido.
+
+Tres cosas que aparecieron al hacerlo:
+
+1. **Eran nueve, no ocho.** Apareció un `descuento-form` de descuento por marca que
+   ya **no existía en la pantalla**: su manejador nunca se enganchaba y su `POST` era
+   inalcanzable. Código muerto que igual confundía al leer.
+2. **El editor unificado sí puede editar**, y eso había que comprobarlo antes de
+   quitar los `PUT`. Usa `append_*` para seis de las siete familias, que en la época
+   de Sheets agregaba una fila — pero en Postgres es un `_upsert` por `regla_id`. El
+   nombre quedó viejo; el comportamiento es el correcto.
+3. **La cobertura subió sola de 75,87 % a 76,94 %** al sacar 666 líneas de `app.py`
+   que ningún test ejercitaba.
+
+Y un error propio que conviene dejar escrito: el primer script de borrado se comió
+`_repo_cache`, una asignación de nivel de módulo que estaba pegada a una de las
+clases. La suite lo agarró en el acto —33 tests con `NameError`— pero el borrado
+automático de bloques por indentación se lleva lo que tiene al lado si no se mira el
+diff. Lo miré después, no antes.
 
 ## Vigencias de listas sembradas: el instrumento decía «ninguno» sin mirar
 

@@ -2085,110 +2085,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Form submit handlers for new discount panels
     const recompraForm = document.getElementById("recompra-form");
-    if (recompraForm) {
-        recompraForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(recompraForm, ".m2m-rec-marca");
-            const cats = getCategoriaCombinada(recompraForm, "rec");
-            const listas = getM2MCheckedValues(recompraForm, ".m2m-rec-lista");
-            const rawPct = (document.getElementById("cfg-rec-porcentaje")?.value || "0.03").replace(',', '.');
-            const payload = {
-                marca: marcas,
-                categoria: cats,
-                listas_aplicables: listas,
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-rec-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-rec-monedas-excluidas")?.value || "",
-                porcentaje: parseFloat(rawPct),
-                // "unidades", no "cajas": el desplegable de al lado elige
-                // Unidades / Litros / USD, y ahora admite decimales.
-                min_unidades: parseFloat(document.getElementById("cfg-rec-min-cajas")?.value || 1),
-                max_unidades: parseFloat(document.getElementById("cfg-rec-max-cajas")?.value || 9999),
-                unidad_medida: document.getElementById("cfg-rec-unidad")?.value || "CAJAS",
-                tipo_beneficio: document.getElementById("cfg-rec-tipo-benef")?.value || "descuento",
-                vigencia_desde: document.getElementById("cfg-rec-desde")?.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-rec-hasta")?.value || null,
-                activo: true,
-                requiere_pago_previo: document.getElementById("cfg-rec-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-rec-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-rec-descripcion")?.value || "",
-                ventana_pago_tipo: document.getElementById("cfg-rec-ventana-tipo")?.value || "vencimiento",
-                ventana_pago_dias: parseInt(document.getElementById("cfg-rec-ventana-dias")?.value || 3)
-            };
-            const editId = recompraForm.dataset.editRegla;
-            const url = editId ? `/api/config/descuentos-recompra/${editId}` : "/api/config/descuentos-recompra";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Regla de recompra actualizada correctamente." : "✅ Regla de recompra registrada correctamente.");
-                    clearEditMode(recompraForm);
-                    loadRecompra();
-                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando recompra:", err);
-                alert("❌ Error de red al guardar regla de recompra.");
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     const prontoPagoForm = document.getElementById("pronto-pago-form");
-    if (prontoPagoForm) {
-        prontoPagoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-marca");
-            const cats = getCategoriaCombinada(prontoPagoForm, "pp");
-            const listas = getM2MCheckedValues(prontoPagoForm, ".m2m-pp-lista");
-            const rawPct = (document.getElementById("cfg-pp-porcentaje")?.value || "0.05").replace(',', '.');
-            const payload = {
-                ventana_pago_tipo: document.getElementById("cfg-pp-ventana-tipo")?.value || "vencimiento",
-                ventana_pago_dias: parseInt(document.getElementById("cfg-pp-ventana-dias")?.value || 3),
-                marca: marcas,
-                categoria: cats,
-                unidad_medida: document.getElementById("cfg-pp-unidad")?.value || "CAJAS",
-                tipo_beneficio: document.getElementById("cfg-pp-tipo-benef")?.value || "descuento",
-                porcentaje: parseFloat(rawPct),
-                monedas_aplicables: document.getElementById("cfg-pp-monedas")?.value || "*",
-                listas_aplicables: listas,
-                vigencia_desde: document.getElementById("cfg-pp-desde")?.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-pp-hasta")?.value || null,
-                activo: true,
-                requiere_pago_previo: document.getElementById("cfg-pp-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-pp-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-pp-descripcion")?.value || ""
-            };
-            const editId = prontoPagoForm.dataset.editRegla;
-            const url = editId ? `/api/config/descuentos-pronto-pago/${editId}` : "/api/config/descuentos-pronto-pago";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Regla de pronto pago actualizada correctamente." : "✅ Regla de pronto pago registrada correctamente.");
-                    clearEditMode(prontoPagoForm);
-                    loadProntoPago();
-                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando pronto pago:", err);
-                alert("❌ Error de red al registrar pronto pago.");
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     // NOTA: existía un segundo listener duplicado de promoForm.submit aquí
     // (mismos campos, mismo endpoint) -- cada submit creaba DOS reglas de
@@ -2196,119 +2100,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // productos) está más abajo junto a loadExclusiones.
 
     const productoPromoForm = document.getElementById("producto-promo-form");
-    if (productoPromoForm) {
-        productoPromoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-marca");
-            const cats = getCategoriaCombinada(productoPromoForm, "prod");
-            const listas = getM2MCheckedValues(productoPromoForm, ".m2m-prod-lista");
-            const selProds = Array.from(document.getElementById("cfg-prod-select")?.selectedOptions || []).map(o => o.value).join(",");
-            const rawPct = (document.getElementById("cfg-prod-porcentaje")?.value || "0.05").replace(',', '.');
-            const payload = {
-                productos: selProds || "*",
-                marca: marcas,
-                categoria: cats,
-                min_unidades: parseFloat(document.getElementById("cfg-prod-min")?.value || 0),
-                max_unidades: parseFloat(document.getElementById("cfg-prod-max")?.value || 999999),
-                unidad_medida: document.getElementById("cfg-prod-unidad")?.value || "CAJAS",
-                tipo_beneficio: document.getElementById("cfg-prod-tipo-benef")?.value || "descuento",
-                porcentaje: parseFloat(rawPct),
-                monedas_aplicables: document.getElementById("cfg-prod-monedas")?.value || "*",
-                listas_aplicables: listas,
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-prod-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-prod-monedas-excluidas")?.value || "",
-                vigencia_desde: document.getElementById("cfg-prod-desde")?.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-prod-hasta")?.value || null,
-                activo: true,
-                requiere_pago_previo: document.getElementById("cfg-prod-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-prod-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-prod-descripcion")?.value || ""
-            };
-            const editId = productoPromoForm.dataset.editRegla;
-            const url = editId ? `/api/config/descuentos-producto/${editId}` : "/api/config/descuentos-producto";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Regla de promoción por producto actualizada." : "✅ Regla de promoción por producto registrada.");
-                    clearEditMode(productoPromoForm);
-                    loadProductoPromo();
-                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando descuento producto:", err);
-                alert("❌ Error de red.");
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     const diferencialForm = document.getElementById("diferencial-form");
-    if (diferencialForm) {
-        diferencialForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const listas = getM2MCheckedValues(diferencialForm, ".m2m-dif-lista");
-            const rawPct = (document.getElementById("cfg-dif-porcentaje-fijo")?.value || "0.35").replace(',', '.');
-            const payload = {
-                // El campo se llamaba "nombre" solo en esta tabla; ahora usa
-                // "descripcion", el que ya tienen todas las demás reglas.
-                descripcion: document.getElementById("cfg-dif-nombre")?.value || "Diferencial Cambiario",
-                tipo_diferencial: document.getElementById("cfg-dif-tipo-diferencial")?.value || "fijo_35_ves_usd",
-                // Se DERIVA de tipo_diferencial en vez de elegirse aparte: el
-                // motor solo lee tipo_diferencial, así que un segundo
-                // selector para el mismo concepto era una trampa -- se podía
-                // poner "fijo" en una regla "equiparar_binance" y no pasaba
-                // nada. Se conserva la columna para no romper lo histórico.
-                tipo_calculo: (document.getElementById("cfg-dif-tipo-diferencial")?.value
-                    === "fijo_35_ves_usd") ? "fijo" : "variable",
-                porcentaje_fijo: parseFloat(rawPct),
-                marca: "*",
-                categoria: "*",
-                monedas_aplicables: document.getElementById("cfg-dif-monedas")?.value || "*",
-                listas_aplicables: listas,
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-dif-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-dif-monedas-excluidas")?.value || "",
-                unidad_medida: "USD",
-                vigencia_desde: document.getElementById("cfg-dif-desde")?.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: document.getElementById("cfg-dif-hasta")?.value || null,
-                activo: true,
-                requiere_pago_previo: document.getElementById("cfg-dif-requiere-pago-previo")?.checked ?? true,
-                aplica_a: document.getElementById("cfg-dif-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-dif-descripcion")?.value || ""
-            };
-            const editId = diferencialForm.dataset.editRegla;
-            const url = editId ? `/api/config/descuentos-diferencial-cambiario/${editId}` : "/api/config/descuentos-diferencial-cambiario";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Regla de diferencial cambiario actualizada." : "✅ Regla de diferencial cambiario registrada.");
-                    clearEditMode(diferencialForm);
-                    loadDiferencial();
-                    loadDiferencialCandidatos();
-                    if (window.loadReglasConsolidadas) window.loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando diferencial cambiario:", err);
-                alert("❌ Error de red.");
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     // --- Tab 3: Configuration Panels ---
     async function loadConfigData() {
@@ -2683,38 +2482,9 @@ document.addEventListener("DOMContentLoaded", () => {
     window.loadDiferencialCandidatos = loadDiferencialCandidatos;
 
     const diasCreditoForm = document.getElementById("dias-credito-form");
-    if (diasCreditoForm) {
-        diasCreditoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const litrosMaxRaw = document.getElementById("cfg-dc-litros-max")?.value;
-            const payload = {
-                regla_id: document.getElementById("cfg-dc-regla-id")?.value || "",
-                litros_minimo: parseFloat(document.getElementById("cfg-dc-litros-min")?.value || 0),
-                litros_maximo: litrosMaxRaw ? parseFloat(litrosMaxRaw) : null,
-                dias_credito_max: parseInt(document.getElementById("cfg-dc-dias-max")?.value || 0),
-                descripcion: document.getElementById("cfg-dc-descripcion")?.value || "",
-                activo: true
-            };
-            try {
-                const res = await fetch("/api/config/dias-credito-volumen", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert("✅ Regla de días de crédito registrada.");
-                    diasCreditoForm.reset();
-                    loadDiasCredito();
-                } else {
-                    const err = await res.json();
-                    alert(`❌ Error al guardar: ${err.detail || 'Error en servidor'}`);
-                }
-            } catch (err) {
-                console.error("Error guardando regla de días de crédito:", err);
-                alert("❌ Error de red.");
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     async function loadDiasCredito() {
         const tbody = document.getElementById("dias-credito-table-body");
@@ -3179,39 +2949,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save Brand Discount Rule
-    if (descuentoForm) {
-        descuentoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const payload = {
-                marca: cfgDescMarca.value,
-                categoria: cfgDescCat.value,
-                tipo_descuento: cfgDescTipo.value,
-                porcentaje: parseFloat(cfgDescPorcentaje.value),
-                vigencia_desde: cfgDescDesde.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: cfgDescHasta.value || null,
-                listas_aplicables: cfgDescListas.value
-            };
-
-            try {
-                const res = await fetch("/api/config/descuentos-marca", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-
-                if (res.ok) {
-                    alert("✅ Regla de descuento registrada correctamente en Google Sheets.");
-                    descuentoForm.reset();
-                    loadDescuentosMarca();
-                } else {
-                    alert("❌ Error al guardar la regla.");
-                }
-            } catch (err) {
-                alert("❌ Error de red al registrar regla.");
-                console.error(err);
-            }
-        });
-    }
+    // El formulario de descuento por marca ya no existe en la pagina (su id
+    // `descuento-form` no esta en index.html), asi que este manejador nunca se
+    // enganchaba y su POST a /api/config/descuentos-marca era inalcanzable.
+    // Retirado el 11-sep-2026 con el resto de los editores viejos.
 
     // Promo tipo beneficio toggle
     if (cfgPromoTipoBeneficio) {
@@ -3751,62 +3492,9 @@ document.addEventListener("DOMContentLoaded", () => {
     window.loadPromociones = loadPromociones;
 
     // Save Promotion Rule
-    if (promoForm) {
-        promoForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(promoForm, ".m2m-promo-marca");
-            const cats = getCategoriaCombinada(promoForm, "promo");
-            const listas = getM2MCheckedValues(promoForm, ".m2m-promo-lista");
-            const tipoBenef = cfgPromoTipoBeneficio.value;
-            const productosSeleccionados = tipoBenef === "producto"
-                ? Array.from(cfgPromoProductos.selectedOptions).map(o => o.value).join(",")
-                : "";
-
-            const payload = {
-                tipo_beneficio: tipoBenef,
-                productos: productosSeleccionados,
-                valor: tipoBenef === "porcentaje" ? parseFloat(cfgPromoValor.value || 0) : 1,
-                compra_minima: parseFloat(cfgPromoCompraMinima.value || 0),
-                descuento_fallback: parseFloat(cfgPromoFallback.value || 0),
-                regalo_tipo: cfgPromoRegaloTipo.value,
-                categorias_aplica: cats,
-                marca: marcas,
-                listas_aplicables: listas,
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-promo-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-promo-monedas-excluidas")?.value || "",
-                unidad_medida: document.getElementById("cfg-promo-unidad")?.value || "CAJAS",
-                vigencia_desde: cfgPromoDesde.value,
-                vigencia_hasta: cfgPromoHasta.value || null,
-                requiere_pago_previo: document.getElementById("cfg-promo-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-promo-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-promo-descripcion")?.value || ""
-            };
-            const editId = promoForm.dataset.editRegla;
-            const url = editId ? `/api/config/promociones/${editId}` : "/api/config/promociones";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Promoción actualizada exitosamente." : "✅ Promoción registrada exitosamente.");
-                    clearEditMode(promoForm);
-                    if (cfgPromoProductosCount) cfgPromoProductosCount.textContent = "0";
-                    loadPromociones();
-                    loadReglasConsolidadas();
-                } else {
-                    const err = await res.json();
-                    alert("❌ Error: " + (err.detail || "Error al registrar la promoción."));
-                }
-            } catch (err) {
-                alert("❌ Error de red al registrar promoción.");
-                console.error(err);
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     // Load Exclusiones
     async function loadExclusiones() {
@@ -3838,38 +3526,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save Exclusion Rule
-    if (exclusionForm) {
-        exclusionForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            if (cfgExclTipoA.value === cfgExclTipoB.value) {
-                alert("⚠️ Los dos descuentos no pueden ser el mismo tipo.");
-                return;
-            }
-            const payload = {
-                regla_tipo_a: cfgExclTipoA.value,
-                regla_tipo_b: cfgExclTipoB.value,
-                activo: true
-            };
-            try {
-                const res = await fetch("/api/config/exclusiones", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert("✅ Exclusión registrada correctamente.");
-                    exclusionForm.reset();
-                    loadExclusiones();
-                } else {
-                    const err = await res.json();
-                    alert("❌ Error: " + (err.detail || "Error al registrar la exclusión."));
-                }
-            } catch (err) {
-                alert("❌ Error de red al registrar exclusión.");
-                console.error(err);
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     // Load Volume Discount Rules
     async function loadDescuentosVolumen() {
@@ -3893,60 +3552,9 @@ document.addEventListener("DOMContentLoaded", () => {
     window.loadDescuentosVolumen = loadDescuentosVolumen;
 
     // Save Volume Discount Rule
-    if (descuentoVolumenForm) {
-        descuentoVolumenForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const marcas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-marca");
-            const cats = getCategoriaCombinada(descuentoVolumenForm, "vol");
-            const listas = getM2MCheckedValues(descuentoVolumenForm, ".m2m-vol-lista");
-            const minQty = parseFloat(cfgDescVolLitros.value || 0);
-            const payload = {
-                marca: marcas,
-                categoria: cats,
-                listas_aplicables: listas,
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-vol-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-vol-monedas-excluidas")?.value || "",
-                // Prohibicion explicita: gana sobre listas_aplicables.
-                listas_excluidas: document.getElementById("cfg-vol-listas-excluidas")?.value || "",
-                monedas_excluidas: document.getElementById("cfg-vol-monedas-excluidas")?.value || "",
-                litros_minimo: minQty,
-                min_unidades: minQty,
-                max_unidades: parseFloat(document.getElementById("cfg-desc-vol-max")?.value || 999999),
-                porcentaje: parseFloat(cfgDescVolPorcentaje.value || 0.05),
-                tipo_evaluacion: document.getElementById("cfg-desc-vol-tipo-eval").value || "orden",
-                dias_evaluacion: parseInt(document.getElementById("cfg-desc-vol-dias-eval").value || 30),
-                unidad_medida: document.getElementById("cfg-desc-vol-unidad")?.value || "UNIDADES",
-                tipo_beneficio: document.getElementById("cfg-desc-vol-tipo-benef")?.value || "descuento",
-                vigencia_desde: cfgDescVolDesde.value || new Date().toISOString().split('T')[0],
-                vigencia_hasta: cfgDescVolHasta.value || null,
-                requiere_pago_previo: document.getElementById("cfg-desc-vol-requiere-pago-previo")?.checked || false,
-                aplica_a: document.getElementById("cfg-desc-vol-aplica-a")?.value || "linea",
-                descripcion: document.getElementById("cfg-desc-vol-descripcion")?.value || ""
-            };
-            const editId = descuentoVolumenForm.dataset.editRegla;
-            const url = editId ? `/api/config/descuentos-volumen/${editId}` : "/api/config/descuentos-volumen";
-            const method = editId ? "PUT" : "POST";
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    alert(editId ? "✅ Regla de volumen actualizada exitosamente." : "✅ Regla de volumen registrada exitosamente.");
-                    clearEditMode(descuentoVolumenForm);
-                    loadDescuentosVolumen();
-                    loadReglasConsolidadas();
-                } else {
-                    alert("❌ Error al registrar la regla de volumen.");
-                }
-            } catch (err) {
-                alert("❌ Error de red al registrar regla de volumen.");
-                console.error(err);
-            }
-        });
-    }
+    // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
+    // maneras de guardar la misma regla. El formulario unico (POST
+    // /api/config/regla) es el unico editor; el listado de abajo se queda.
 
     window.generarReciboSeleccionados = async function() {
         const checked = Array.from(document.querySelectorAll(".check-cobranza-item:checked")).map(cb => cb.value);
