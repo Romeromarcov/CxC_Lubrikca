@@ -64,6 +64,11 @@ from cxc.engine.listas import (
     mapa_de_listas_primarias,
     primera_activa,
 )
+from cxc.engine.pagada_en_odoo import (
+    TOLERANCIA_RESIDUAL,
+    diagnostico_de_pagada,
+    pagada_por_estado,
+)
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
@@ -4275,10 +4280,24 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # Una SO sale del reporte de CxC solo si TODAS sus facturas out_invoice
         # ya estan pagadas/en proceso de pago (si queda alguna sin pagar, se
         # mantiene visible).
+        #
+        # La regla vive en ``engine/pagada_en_odoo.py``, y ahi esta escrito el
+        # hallazgo: ``so_pagada_en_odoo`` se calcula en TRES sitios y el de las
+        # sugerencias de conciliacion usa una regla DISTINTA (por residual, no por
+        # estado). Medido: 66 de 796 ordenes discrepan. No se unifico -- elegir
+        # una mueve el universo de tres pantallas.
         for so_name, inv_list in invoices_by_so.items():
-            estados = [str(i.get("payment_state", "")) for i in inv_list]
-            if estados and all(ps in ("paid", "in_payment") for ps in estados):
+            if pagada_por_estado(inv_list):
                 so_pagada_en_odoo.add(so_name)
+            _d = diagnostico_de_pagada(inv_list)
+            if not _d.coinciden:
+                logger.info(
+                    "Reporte de saldos, %s: las dos definiciones de 'pagada en Odoo' "
+                    "difieren (%s). %s",
+                    so_name,
+                    _d.causa,
+                    _d.nota,
+                )
 
         # Fase 4 (plan de consolidación de fuentes, agosto 2026): descuentos
         # de línea (orden + factura) ahora se leen del espejo -- validado
@@ -7691,8 +7710,16 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                             residual_por_so[so] = residual_por_so.get(
                                 so, Decimal("0")
                             ) + parse_decimal_safe(str(inv.get("amount_residual_usd") or "0"))
+                    # OJO: esta pantalla usa la regla del RESIDUAL, no la del
+                    # estado que usan el reporte de saldos y la auditoria. No es
+                    # un detalle: una factura ANULADA tiene residual cero por la
+                    # anulacion y aca se lee como pagada. Medido: 66 de 796
+                    # ordenes discrepan entre las dos reglas -- 15 por anuladas,
+                    # 47 por centavos de residual y 4 por sobrepago. Se preserva
+                    # porque cambiarla mueve el universo de esta pantalla; ver
+                    # ``engine/pagada_en_odoo.py`` para el hallazgo completo.
                     for so, residual in residual_por_so.items():
-                        if residual <= Decimal("0.05"):
+                        if residual <= TOLERANCIA_RESIDUAL:
                             so_pagada_en_odoo.add(so)
 
                     entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
@@ -12598,10 +12625,13 @@ async def get_auditoria():
             if merged["move_type"] == "out_invoice":
                 estados_por_so.setdefault(so, []).append(str(merged["payment_state"]))
 
-        # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment
-        # (misma regla que /api/reporte-saldos, Tarea 2).
+        # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment.
+        # Es la MISMA regla que /api/reporte-saldos -- y ahora comparten la
+        # funcion, asi que no pueden separarse sin que alguien lo note. El tercer
+        # sitio (sugerencias de conciliacion) usa otra: ver
+        # ``engine/pagada_en_odoo.py``.
         for so, estados in estados_por_so.items():
-            if estados and all(ps in ("paid", "in_payment") for ps in estados):
+            if pagada_por_estado([{"payment_state": e} for e in estados]):
                 so_pagada_en_odoo.add(so)
 
         # Read rates series to convert VES invoice residual to USD

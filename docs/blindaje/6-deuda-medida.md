@@ -747,6 +747,66 @@ igual que un cero de un instrumento que verificó. El rastro va a hablar en
 producción, donde la configuración de listas existe y el resolver de Odoo sí se
 alcanza.
 
+## «Pagada en Odoo» tiene dos definiciones, y difieren en 66 órdenes
+
+Apareció al extraer la duodécima pieza de la Fase 2.4. `so_pagada_en_odoo` —la
+variable que decide si una orden sale de la cuenta por cobrar— se calculaba en
+**tres sitios** de `app.py`, y uno usaba **otra regla**:
+
+| dónde | regla |
+|---|---|
+| reporte de saldos | `all(payment_state in ("paid", "in_payment"))` |
+| auditoría | igual, y su comentario dice «misma regla que /api/reporte-saldos» |
+| **sugerencias de conciliación** | **`sum(amount_residual_usd) <= 0,05`** |
+
+El nombre compartido lo escondía. Es la misma forma del hallazgo de las listas de
+precio: el mismo concepto calculado de dos maneras en pantallas distintas.
+
+**Medido: 66 de 796 órdenes con factura discrepan**, todas en la misma dirección —
+la regla del residual las da por pagadas y la del estado no. Y las tres causas
+apuntan a **lados distintos** sobre cuál regla es la correcta:
+
+| causa | órdenes | quién tiene razón |
+|---|---:|---|
+| alguna factura **anulada** | 15 | **la de estado.** El residual es cero por la nota de crédito, no por un cobro |
+| `partial` con residual de **centavos** (0,01–0,03) | 47 | **la del residual.** Un centavo no es deuda, y la de estado deja la orden en CxC para siempre |
+| residual **negativo** | 4 | **ninguna** |
+
+### Los 4 del residual negativo: 258,74 USD de sobrepago que nadie reporta
+
+S00188, S00795, S00182 y S00061. Odoo dice `payment_state = 'partial'` y el
+residual es **negativo**: −116,69, −56,63, −46,44 y −38,98 USD. Se cobró más de lo
+facturado.
+
+| orden | total factura (VES) | residual (VES) | residual (USD) |
+|---|---:|---:|---:|
+| S00188 | 68.102,81 | −55.537,27 | **−116,69** |
+| S00795 | 517.467,79 | −42.897,85 | **−56,63** |
+| S00182 | 57.594,46 | −23.072,92 | **−46,44** |
+| S00061 | 6.223.421,82 | −28.728,47 | **−38,98** |
+
+Una regla lo llama pagado y la otra impago, y **las dos se pierden la plata a
+devolver o acreditar**. Son 258,74 USD que el cliente tiene a favor y que ninguna
+pantalla dice.
+
+### Qué queda hecho, y qué no
+
+`engine/pagada_en_odoo.py` expone las **dos lecturas** y un diagnóstico que nombra
+la causa de cada divergencia. Los tres sitios ahora llaman a la función que les
+corresponde —los dos de estado comparten una, el de residual usa la otra con su
+tolerancia nombrada— así que **no pueden separarse más sin que alguien lo note**, y
+el reporte de saldos registra cada divergencia con su causa.
+
+24 tests. Dos merecen mención: **el sobrepago se detecta aunque las dos reglas
+coincidan** (una factura `paid` con residual negativo las tiene de acuerdo, y sigue
+habiendo plata de más), y **una divergencia que no es ninguna de las tres se marca
+para mirar a mano** en vez de forzarla dentro de una causa conocida.
+
+**Qué hay que decidir:** unificar mueve el universo de órdenes de tres pantallas, y
+la medición dice que **ninguna de las dos es correcta en los tres casos**. La
+respuesta buena parece ser: por estado, **más** una tolerancia de centavos, **más**
+una señal de sobrepago. Las tres partes mueven montos.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos
