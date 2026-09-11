@@ -321,3 +321,96 @@ def vigencia_efectiva(reglas: list[dict[str, Any]]) -> VigenciaEfectiva:
         con_desde=len(desde),
         con_hasta=len(hasta),
     )
+
+
+@dataclass(frozen=True)
+class ReglaDuplicada:
+    """Un producto con MAS DE UNA regla de precio en la misma lista."""
+
+    producto_id: int
+    producto: str
+    precios: tuple[float, ...]
+    ids_de_regla: tuple[int, ...]
+    # Los rangos de fecha de cada regla, como ``(desde, hasta)`` con ``None`` cuando
+    # la regla no los declara.
+    rangos: tuple[tuple[str | None, str | None], ...]
+
+    @property
+    def precios_distintos(self) -> bool:
+        """Dos reglas con el MISMO precio son redundantes; con precios distintos, ambiguas."""
+        return len({round(p, 2) for p in self.precios}) > 1
+
+    @property
+    def fechas_desempatan(self) -> bool:
+        """Los rangos son distintos, asi que la fecha decide cual regla aplica.
+
+        Con rangos distintos no hay ambiguedad de verdad: son precios de epocas
+        distintas y eso es lo normal en una lista con historia.
+        """
+        return len(set(self.rangos)) > 1
+
+    @property
+    def ambigua(self) -> bool:
+        """Precios distintos y mismo rango: cual se sirve depende del orden interno de Odoo."""
+        return self.precios_distintos and not self.fechas_desempatan
+
+    @property
+    def tiene_precio_cero(self) -> bool:
+        """Alguna de las reglas dice cero.
+
+        Es la que tiene consecuencia: si Odoo elige esa, el producto sale **gratis**.
+        Medido el 11-sep-2026 en las listas 18 y 19 (activas) para el tambor de
+        SINOCO SAE 50: 0,00 contra 1.139,66 y 1.753,32. Ese cero NO se sirvio nunca
+        --0 de 273 lineas de esos productos tienen precio cero, y ninguna orden
+        confirmada usa esas dos listas-- asi que es una trampa cargada y no una
+        perdida. Basta una orden para que dispare.
+        """
+        return any(round(p, 2) == 0.0 for p in self.precios)
+
+
+def reglas_duplicadas(reglas: list[dict[str, Any]]) -> list[ReglaDuplicada]:
+    """Los productos que tienen mas de una regla en esta lista.
+
+    Vigesimoquinta pieza de la Fase 2.4, hermana de ``vigencia_efectiva`` y del mismo
+    endpoint. ``get_config_listas_precio`` mostraba las reglas en una lista plana, asi
+    que dos reglas para el mismo producto se veian como dos filas cualesquiera entre
+    ciento cincuenta.
+
+    ``reglas`` son dicts de ``product.pricelist.item`` con ``product_tmpl_id``,
+    ``fixed_price``, ``date_start`` y ``date_end``. Solo salen los productos con dos o
+    mas; un producto con una sola regla no es noticia.
+    """
+    por_producto: dict[int, list[dict[str, Any]]] = {}
+    for r in reglas:
+        crudo = r.get("product_tmpl_id")
+        pid = crudo[0] if isinstance(crudo, list | tuple) and crudo else crudo
+        if not pid:
+            continue
+        por_producto.setdefault(int(pid), []).append(r)
+
+    salida = []
+    for pid, grupo in sorted(por_producto.items()):
+        if len(grupo) < 2:
+            continue
+        primero = grupo[0].get("product_tmpl_id")
+        nombre = (
+            str(primero[1])
+            if isinstance(primero, list | tuple) and len(primero) > 1
+            else str(pid)
+        )
+        salida.append(
+            ReglaDuplicada(
+                producto_id=pid,
+                producto=nombre,
+                precios=tuple(float(r.get("fixed_price") or 0.0) for r in grupo),
+                ids_de_regla=tuple(int(r.get("id") or 0) for r in grupo),
+                rangos=tuple(
+                    (
+                        str(r["date_start"])[:10] if r.get("date_start") else None,
+                        str(r["date_end"])[:10] if r.get("date_end") else None,
+                    )
+                    for r in grupo
+                ),
+            )
+        )
+    return salida

@@ -188,3 +188,59 @@ def test_si_odoo_no_responde_el_endpoint_no_inventa_listas() -> None:
     ):
         r = cliente.get("/api/config/listas-precio")
     assert r.status_code == 500
+
+
+# --- dos reglas para el mismo producto (pieza 25) ----------------------------
+
+
+def test_la_respuesta_avisa_del_producto_con_precio_ambiguo() -> None:
+    """Medido el 11-sep-2026 en las listas ACTIVAS 10, 11, 18 y 19: seis pares así.
+
+    Dos reglas con precios distintos y el mismo rango de fechas: cuál se sirve depende
+    del orden interno de Odoo, no del dato. Antes las reglas salían en una lista plana
+    de ciento cincuenta filas, así que las dos del mismo producto no se distinguían.
+    """
+    items = [
+        _item(10, "2026-09-02"),
+        _item(10, "2026-09-02"),
+    ]
+    items[0]["id"] = 3917
+    items[0]["fixed_price"] = 1236.07
+    items[0]["product_tmpl_id"] = [1042, "SINOCO SAE 50 (Tambor)"]
+    items[1]["id"] = 3945
+    items[1]["fixed_price"] = 1198.94
+    items[1]["product_tmpl_id"] = [1042, "SINOCO SAE 50 (Tambor)"]
+
+    (l10,) = _pedir([_lista(10, "Pago VES Sept 2026")], items)
+    assert l10["productos_con_regla_repetida"] == 1
+    assert l10["productos_con_precio_ambiguo"] == 1
+    assert l10["productos_con_regla_en_cero"] == 0
+    (aviso,) = l10["reglas_ambiguas"]
+    assert aviso["producto"] == "SINOCO SAE 50 (Tambor)"
+    assert sorted(aviso["precios"]) == [1198.94, 1236.07]
+    assert aviso["ids_de_regla"] == [3917, 3945], "los ids, para poder ir a borrar una"
+    assert aviso["alguna_en_cero"] is False
+
+
+def test_la_respuesta_marca_aparte_la_regla_en_CERO() -> None:
+    """Listas 18 y 19: 0,00 contra 1.139,66. Si Odoo elige el cero, sale gratis.
+
+    Ese cero no se sirvió nunca —0 de 273 líneas y ninguna orden confirmada en esas
+    listas— así que es una trampa cargada, no una pérdida. Por eso viaja como aviso y
+    no como monto.
+    """
+    items = [_item(18, "2026-09-02"), _item(18, "2026-09-02")]
+    for it, (rid, precio) in zip(items, [(3896, 0.0), (3927, 1139.66)], strict=True):
+        it["id"] = rid
+        it["fixed_price"] = precio
+        it["product_tmpl_id"] = [1042, "SINOCO SAE 50 (Tambor)"]
+
+    (l18,) = _pedir([_lista(18, "Maturin USD Sept 2026")], items)
+    assert l18["productos_con_regla_en_cero"] == 1
+    assert l18["reglas_ambiguas"][0]["alguna_en_cero"] is True
+
+
+def test_una_lista_sin_reglas_repetidas_no_manda_avisos_vacios() -> None:
+    (l3,) = _pedir([_lista(3, "USD")], [_item(3, "2026-02-23", "2026-04-01")])
+    assert l3["productos_con_regla_repetida"] == 0
+    assert l3["reglas_ambiguas"] == []

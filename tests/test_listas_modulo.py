@@ -432,3 +432,120 @@ def test_una_sola_regla_sin_fin_no_es_un_rango_parcial() -> None:
     v = vigencia_efectiva([_regla(desde="2026-09-02")])
     assert not v.rango_parcial
     assert v.ninguna_declara_fin
+
+
+# --- dos reglas para el mismo producto en la misma lista (pieza 25) ----------
+
+
+def _item(id_, tmpl, precio, desde=None, hasta=None, nombre="SINOCO SAE 50 (Tambor)"):
+    return {
+        "id": id_,
+        "product_tmpl_id": [tmpl, nombre],
+        "fixed_price": precio,
+        "date_start": desde or False,
+        "date_end": hasta or False,
+    }
+
+
+def test_un_producto_con_una_sola_regla_no_es_noticia() -> None:
+    from cxc.engine.listas import reglas_duplicadas
+
+    assert reglas_duplicadas([_item(1, 1042, 1139.66), _item(2, 1034, 1021.55)]) == []
+
+
+def test_dos_reglas_con_el_MISMO_precio_son_redundantes_pero_no_ambiguas() -> None:
+    """Da igual cuál elija Odoo: el precio servido es el mismo.
+
+    Es el caso de la lista 10 para [0877], medido: 106,10 en las dos reglas.
+    """
+    from cxc.engine.listas import reglas_duplicadas
+
+    (d,) = reglas_duplicadas([_item(3817, 1056, 106.10), _item(3943, 1056, 106.10)])
+    assert not d.precios_distintos
+    assert not d.ambigua
+    assert d.ids_de_regla == (3817, 3943)
+
+
+def test_dos_precios_con_el_MISMO_rango_de_fechas_son_ambiguos() -> None:
+    """El hallazgo: cuál se sirve depende del orden interno de Odoo, no del dato.
+
+    Lista 10, [1042] SINOCO SAE 50 (Tambor): 1.236,07 contra 1.198,94, las dos desde
+    el 2-sep-2026 y sin fin.
+    """
+    from cxc.engine.listas import reglas_duplicadas
+
+    (d,) = reglas_duplicadas(
+        [
+            _item(3917, 1042, 1236.07, desde="2026-09-02"),
+            _item(3945, 1042, 1198.94, desde="2026-09-02"),
+        ]
+    )
+    assert d.precios_distintos
+    assert not d.fechas_desempatan
+    assert d.ambigua
+    assert not d.tiene_precio_cero
+
+
+def test_si_los_rangos_DIFIEREN_la_fecha_desempata_y_no_hay_ambiguedad() -> None:
+    """Dos precios de épocas distintas es lo normal en una lista con historia.
+
+    Marcar eso como ambiguo llenaría el reporte de ruido, y un aviso con ruido
+    entrena a ignorar los avisos.
+    """
+    from cxc.engine.listas import reglas_duplicadas
+
+    (d,) = reglas_duplicadas(
+        [
+            _item(1, 1042, 900.00, desde="2026-02-23", hasta="2026-04-01"),
+            _item(2, 1042, 1198.94, desde="2026-04-02"),
+        ]
+    )
+    assert d.precios_distintos
+    assert d.fechas_desempatan
+    assert not d.ambigua
+
+
+def test_la_regla_en_CERO_es_la_que_tiene_consecuencia() -> None:
+    """Listas 18 y 19, activas: 0,00 contra 1.139,66 y 1.753,32 para un tambor.
+
+    Si Odoo elige la regla del cero, el producto sale gratis. Medido el 11-sep-2026:
+    ese cero **no se sirvió nunca** —0 de 273 líneas de esos productos tienen precio
+    cero, y ninguna orden confirmada usa esas dos listas—, así que es una trampa
+    cargada y no una pérdida. Basta una orden para que dispare.
+    """
+    from cxc.engine.listas import reglas_duplicadas
+
+    (d,) = reglas_duplicadas(
+        [
+            _item(3896, 1042, 0.0, desde="2026-09-02"),
+            _item(3927, 1042, 1139.66, desde="2026-09-02"),
+        ]
+    )
+    assert d.tiene_precio_cero
+    assert d.ambigua, "y además es ambigua, que es lo que la vuelve peligrosa"
+
+
+def test_tres_reglas_tambien_se_reportan() -> None:
+    """No hay nada que limite el problema a dos."""
+    from cxc.engine.listas import reglas_duplicadas
+
+    (d,) = reglas_duplicadas(
+        [_item(1, 1042, 100.0), _item(2, 1042, 200.0), _item(3, 1042, 300.0)]
+    )
+    assert len(d.precios) == 3
+    assert d.ambigua
+
+
+def test_una_regla_sin_producto_se_saltea_en_vez_de_agruparse_con_las_otras() -> None:
+    """`product_tmpl_id` en False agruparía todas las reglas globales como un producto.
+
+    Y entonces una lista con dos reglas globales se reportaría como un producto con
+    precio ambiguo, que es un aviso falso.
+    """
+    from cxc.engine.listas import reglas_duplicadas
+
+    reglas = [
+        {"id": 1, "product_tmpl_id": False, "fixed_price": 10.0},
+        {"id": 2, "product_tmpl_id": False, "fixed_price": 20.0},
+    ]
+    assert reglas_duplicadas(reglas) == []

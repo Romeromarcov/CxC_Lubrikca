@@ -70,6 +70,7 @@ from cxc.engine.listas import (
     diagnostico_de_huecos,
     mapa_de_listas_primarias,
     primera_activa,
+    reglas_duplicadas,
     vigencia_efectiva,
 )
 from cxc.engine.pagada_en_odoo import (
@@ -5944,6 +5945,7 @@ async def get_config_listas_precio():
             [[["pricelist_id", "in", list_ids]]],
             {
                 "fields": [
+                    "id",
                     "pricelist_id",
                     "fixed_price",
                     "percent_price",
@@ -5986,6 +5988,14 @@ async def get_config_listas_precio():
                 )
 
             vig = vigencia_efectiva(pl_items)
+            # Un producto con DOS reglas en la misma lista: si los precios difieren y
+            # las fechas no los desempatan, cual se sirve depende del orden interno de
+            # Odoo. Medido el 11-sep-2026: seis pares asi, en las listas ACTIVAS 10, 11,
+            # 18 y 19 -- y dos de ellos con precio 0,00 para un tambor de SINOCO SAE 50
+            # (0,00 contra 1.139,66 y 1.753,32). Ese cero no se sirvio nunca, asi que es
+            # una trampa cargada y no una perdida; basta una orden para que dispare.
+            duplicadas = reglas_duplicadas(pl_items)
+            ambiguas = [d for d in duplicadas if d.ambigua]
             resultado.append(
                 {
                     "id": pl["id"],
@@ -6003,6 +6013,20 @@ async def get_config_listas_precio():
                     # 0 de 149 se lee igual que uno de una lista sin reglas.
                     "fecha_desde": vig.desde or "N/A",
                     "fecha_hasta": vig.hasta or "N/A",
+                    "productos_con_regla_repetida": len(duplicadas),
+                    "productos_con_precio_ambiguo": len(ambiguas),
+                    "productos_con_regla_en_cero": sum(
+                        1 for d in duplicadas if d.tiene_precio_cero
+                    ),
+                    "reglas_ambiguas": [
+                        {
+                            "producto": d.producto,
+                            "precios": list(d.precios),
+                            "ids_de_regla": list(d.ids_de_regla),
+                            "alguna_en_cero": d.tiene_precio_cero,
+                        }
+                        for d in ambiguas
+                    ],
                     "reglas_con_fecha_inicio": vig.con_desde,
                     "reglas_con_fecha_fin": vig.con_hasta,
                     "ninguna_regla_vence": vig.ninguna_declara_fin,
