@@ -178,11 +178,12 @@ def test_sin_promociones_configuradas_no_crashea_ni_descuenta():
     assert conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True) == []
 
 
-def test_sin_promociones_primera_compra_cae_al_2pct_comercial():
-    """Respaldo histórico: primera compra sin promo configurada, 2 % sobre COMERCIAL.
+def test_sin_promociones_primera_compra_ya_no_descuenta_nada():
+    """El respaldo histórico se retiró el 11-sep-2026.
 
-    Este test asertaba 10,00 sobre una línea **Industrial**. La categoría era la
-    equivocada (aclaración del usuario, 11-sep-2026): la regla es de Comercial.
+    Asertaba 10,00 sobre una línea Industrial (categoría equivocada), después
+    10,00 sobre una Comercial (corregida), y ahora **cero**: «crea la regla nueva
+    y elimina la vieja». El 2 % vive como regla de la tabla.
     """
     inp = inputs(
         orden=b.orden(fecha=date(2026, 6, 1), lista=LISTA_VES, primera=True),
@@ -192,8 +193,9 @@ def test_sin_promociones_primera_compra_cae_al_2pct_comercial():
         promociones=[],
         price_resolver=resolver(precios_ambas_listas(PROD_REGALO)),
     )
-    # 5 x 100 (lista VES) x 2%.
-    assert calcular_factura(inp).ncs_calculadas == Decimal("10.00")
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0"), (
+        "sin promoción configurada no hay descuento"
+    )
 
 
 def test_una_orden_solo_industrial_no_cae_al_2pct():

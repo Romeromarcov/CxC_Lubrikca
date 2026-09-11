@@ -405,10 +405,21 @@ _LISTA_USD_HISTORICA = "7"
 # Industrial suma 103.055,13 y la Comercial 37.111,82 — un 64 % menos. Y **85 de
 # las 119 no tienen NI UNA línea Comercial**, así que no les correspondía nada.
 # El id cambia para que el desglose viejo y el nuevo no se confundan.
+# El id que llevaba el respaldo cableado, RETIRADO el 11-sep-2026 por decisión del
+# usuario ("crea la regla nueva y elimina la vieja"). Se conserva el nombre porque
+# las 119 filas de ``descuento_aplicado`` que ya existen lo tienen escrito, y un
+# desglose histórico que no lo reconozca diría "sin regla" sobre algo que sí tuvo
+# una.
+#
+# El 2 % ahora es una regla de la tabla: ``PRIMERA_COMPRA_COMERCIAL_2PCT``, que se
+# crea con ``scripts/configurar_2pct_primera_compra.py``. Verificado antes de
+# retirar el respaldo: las dos vías dan 742,24 USD sobre las 119 órdenes, con cero
+# diferencias.
+#
+# CONSECUENCIA QUE HAY QUE TENER PRESENTE AL DESPLEGAR: sin el respaldo, si la regla
+# NO está creada en la base, esas 119 órdenes dejan de recibir el 2 % y su deuda
+# sube 742,24 USD. El script tiene que correr con el despliegue, no después.
 _REGLA_FALLBACK_PRIMERA_COMPRA = "FALLBACK_PRIMERA_COMPRA_COMERCIAL_2PCT"
-
-# La categoría de línea sobre la que aplica ese respaldo.
-_CATEGORIA_FALLBACK = "COMERCIAL"
 
 
 # ``categorias_descuento`` que significa "todas". Es el default (vacío) y los
@@ -839,19 +850,6 @@ def _evaluar_promociones_producto(
                     ),
                     getattr(promos_activas[0], "regla_id", "") if promos_activas else "",
                 )
-        elif fallback_industrial:
-            # Sin NINGUNA promoción configurada a esa fecha. Es el
-            # comportamiento histórico documentado de "primera compra sin
-            # promos", y aplica solo a líneas Industrial.
-            #
-            # Se etiqueta con un id propio en vez de dejarlo en blanco: el
-            # desglose decía "sin regla", que se lee como "el motor regala
-            # un 2 % que nadie configuró". Medido: 28 órdenes por $1.077,32,
-            # TODAS entre el 26-feb y el 26-mar -- anteriores al 01-abr, que
-            # es cuando arrancan las dos promociones reales. O sea que el
-            # respaldo hizo exactamente lo suyo.
-            pct_general = Decimal("0.02")
-            regla_pct_general = _REGLA_FALLBACK_PRIMERA_COMPRA
 
         if promos_activas:
             # La regla decide sobre qué líneas aplica su porcentaje. Antes esta
@@ -870,25 +868,6 @@ def _evaluar_promociones_producto(
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",
                     descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
-                    monto=q2(nc),
-                    regla_id=regla_pct_general,
-                    porcentaje=pct_general,
-                )
-        elif fallback_industrial:
-            nc = (
-                sum(
-                    _precio_linea(inp, ln, lista)
-                    for ln in inp.lineas
-                    if (ln.categoria or "").strip().upper() == _CATEGORIA_FALLBACK
-                )
-                * pct_general
-            )
-            if nc > 0:
-                detalle_nc = DescuentoAplicado(
-                    origen="primera_compra",
-                    descripcion=(
-                        f"Descuento primera compra Comercial {pct_general * 100:.2f}%"
-                    ),
                     monto=q2(nc),
                     regla_id=regla_pct_general,
                     porcentaje=pct_general,

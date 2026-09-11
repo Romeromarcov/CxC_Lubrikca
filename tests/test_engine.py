@@ -687,13 +687,19 @@ def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
     assert res.ncs_calculadas == Decimal("0.00")
 
 
-def test_primera_compra_sin_promos_aplica_2pct_sobre_comercial() -> None:
-    """Primera compra sin promo configurada: 2 % sobre las líneas COMERCIAL.
+def test_primera_compra_sin_promos_no_descuenta_nada() -> None:
+    """Sin ninguna promoción configurada ya NO hay descuento.
 
-    Este test asertaba 3,00 — el 2 % de la línea Industrial de 150 — porque el
-    respaldo se aplicaba a Industrial. Aclaración del usuario (11-sep-2026): la
-    regla es de **Comercial**. Ahora son 2,00, el 2 % de la línea Comercial de
-    100, y la Industrial no aporta nada.
+    Este test tuvo tres vidas y las tres cuentan la misma historia desde más
+    cerca. Asertaba 3,00 (el 2 % de la línea Industrial) porque el respaldo
+    cableado apuntaba a la categoría equivocada. Pasó a 2,00 al corregirla a
+    Comercial. Y ahora es **cero**, porque el respaldo se retiró: el usuario
+    decidió el 11-sep-2026 «crea la regla nueva y elimina la vieja».
+
+    El 2 % sigue existiendo, pero como **regla de la tabla**
+    (``PRIMERA_COMPRA_COMERCIAL_2PCT``) y no como un valor que el motor regala
+    cuando no encuentra configuración. Sin regla cargada no hay descuento, que es
+    justo lo que se buscaba: que sea una decisión y no una ausencia.
     """
     orden = b.orden(primera=True, lista="BCV")
     linea_ind = b.linea(
@@ -722,11 +728,9 @@ def test_primera_compra_sin_promos_aplica_2pct_sobre_comercial() -> None:
         abonos=[(vinc, metodo)],
         resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),  # no promos configured
     )
-    res = calcular_factura(inp)
-    # 2 % de la línea Comercial (100) = 2,00. La Industrial (150) no entra.
-    assert res.ncs_calculadas == Decimal("2.00")
-    origenes = {d.origen for d in res.descuentos_detalle}
-    assert "primera_compra" in origenes
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0"), (
+        "sin promoción configurada no hay descuento: el respaldo cableado se retiró"
+    )
 
 
 def test_primera_compra_solo_industrial_no_recibe_nada() -> None:
@@ -2332,12 +2336,18 @@ def test_una_regla_de_solo_comercial_no_toca_las_lineas_industrial() -> None:
     assert calcular_factura(inp).ncs_calculadas == Decimal("2.00")
 
 
-def test_la_regla_configurada_da_lo_mismo_que_el_respaldo_cableado() -> None:
-    """La prueba de que el 2 % se puede configurar sin mover un peso.
+def test_la_regla_configurada_da_lo_que_daba_el_respaldo_retirado() -> None:
+    """La equivalencia que permitió retirar el respaldo, fijada con su cifra.
 
-    Es el objetivo de todo el cambio: una regla con ``categorias_descuento =
-    COMERCIAL`` tiene que dar exactamente el mismo monto que el respaldo, que es
-    lo que hoy se otorga. Si difieren, configurarlo movería montos.
+    Antes de retirarlo se corrió el A/B sobre las 119 órdenes reales: el respaldo
+    daba 742,24 USD y la regla configurada daba 742,24 USD, con cero órdenes que
+    difirieran. Por eso se pudo eliminar sin mover un peso.
+
+    El respaldo ya no existe, así que la comparación no se puede rehacer contra
+    él. Lo que queda fijado para siempre es la mitad verificable: la regla aplica
+    el 2 % **solo sobre las líneas Comercial**, que es lo que el respaldo hacía.
+    Si alguien le saca el ``categorias_descuento``, el monto cambia y el test lo
+    dice.
     """
     lineas = [
         b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
@@ -2363,10 +2373,11 @@ def test_la_regla_configurada_da_lo_mismo_que_el_respaldo_cableado() -> None:
 
     promo = b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
     promo.categorias_descuento = "COMERCIAL"
-    assert correr([promo]) == correr([]), (
-        "configurar la regla tiene que dar el mismo monto que el respaldo; "
-        "si difieren, configurarla mueve el teórico de 119 órdenes"
-    )
+    # 2 % de la línea Comercial (100). La Industrial (150) no entra, igual que
+    # hacía el respaldo retirado.
+    assert correr([promo]) == Decimal("2.00")
+    # Y sin ninguna regla, cero: el respaldo cableado ya no existe.
+    assert correr([]) == Decimal("0")
 
 
 def test_el_campo_acepta_varias_categorias_y_los_comodines() -> None:
