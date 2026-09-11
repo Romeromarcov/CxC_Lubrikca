@@ -71,7 +71,11 @@ from cxc.engine.reportes_historicos import (
     resumen_vencida_por_vendedor,
 )
 from cxc.engine.runner import EngineRunner
-from cxc.engine.saldos import saldos_de_la_orden
+from cxc.engine.saldos import (
+    saldos_de_la_orden,
+    saldos_deudores,
+    valor_usd_de_notas_de_credito,
+)
 from cxc.engine.universo import orden_excluida
 from cxc.models import (
     AplicacionConciliada,
@@ -4817,22 +4821,12 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 descuentos_desglose = []
 
             # ── Notas de Crédito reales de Odoo para esta orden ──────────────────
+            # La valuación salió a ``engine/saldos.py`` en la Fase 2.4: cada nota
+            # se convierte con la tasa de SU día, no la de hoy.
             nc_list_odoo = ncs_by_so.get(o.so_id, [])
-            ncs_odoo_monto_usd = 0.0
-            ncs_odoo_nombres: list[str] = []
-            for nc in nc_list_odoo:
-                nc_tot = float(nc.get("amount_total") or 0)
-                nc_curr = nc.get("currency_id")
-                nc_c_name = (
-                    nc_curr[1] if isinstance(nc_curr, list | tuple) and len(nc_curr) > 1 else "USD"
-                )
-                nc_dt = str(nc.get("invoice_date") or o.fecha.isoformat())[:10]
-                nc_rate = tasa_bcv_de_dia(nc_dt, tasas_rows)
-                if nc_c_name == "VES" and nc_rate > 0:
-                    ncs_odoo_monto_usd += nc_tot / nc_rate
-                else:
-                    ncs_odoo_monto_usd += nc_tot
-                ncs_odoo_nombres.append(str(nc.get("name", "")))
+            ncs_odoo_monto_usd, ncs_odoo_nombres = valor_usd_de_notas_de_credito(
+                nc_list_odoo, o.fecha.isoformat(), tasas_rows, tasa_bcv_de_dia
+            )
 
             # ── Descuentos en línea de la orden Odoo ─────────────────────────────
             desc_orden_odoo_monto = sol_discounts_by_so.get(o.so_id, 0.0)
@@ -4844,69 +4838,29 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
             # ── Debt columns (including NCs from Odoo) ────────────────────────────
             monto_orig = float(o.monto_total)
-            saldo_deudor_bcv = max(0.0, monto_orig - abono_bcv)
-            saldo_deudor_lista_usd = max(0.0, monto_total_proyectado_usd - abono_binance)
-            # Fase 1 (auditoría del ciclo CxC, agosto 2026): `total_descuentos_
-            # monto` es libre de impuesto (base subtotal del motor, igual que
-            # `venta_bruta_teorica`/`precio_base_calculado`) -- restarlo
-            # directo de `saldo_deudor_*` (que SÍ trae IVA, viene de `monto_
-            # orig`/`monto_total_proyectado_usd`) subestima el saldo real:
-            # un descuento de $100 sobre el subtotal reduce el total CON IVA
-            # en $116, no en $100. Se reaplica el IVA al monto del descuento
-            # antes de restarlo -- mismo orden "descuento sobre subtotal,
-            # impuesto sobre lo ya descontado" que ya usa `/api/ventas`
-            # (`ves_neta_teorica_iva`/`usd_neta_teorica_iva`), sin necesitar
-            # trackear aquí un subtotal separado por lista VES/USD. Los NCs
-            # de Odoo (`ncs_odoo_monto_usd`) NO llevan este ajuste -- ya son
-            # documentos reales con impuesto incluido (`amount_total`).
-            # Una orden marcada como "no se le otorgo el descuento" no debe
-            # ver su saldo deudor reducido por ese descuento. Importa mas de
-            # lo que parece: este saldo es contra el que consume el FIFO
-            # (ver _get_saldos_reales_por_so_sync), asi que sin esta guarda
-            # el reparto seguiria dando la orden por saldada con menos plata
-            # de la que realmente hay que cobrar, y la sacaria de CxC.
-            # Ver schema.descuentos_no_otorgados -- caso TERA.
+            # Los cuatro saldos salieron a ``engine/saldos.py::saldos_deudores``
+            # en la Fase 2.4, con sus cuatro trampas documentadas y fijadas: el
+            # IVA que vuelve al descuento antes de restarlo, que la CxC nace con
+            # la entrega, que "no sé" no es "no se entregó", y la guarda del
+            # descuento no otorgado (caso TERA). **Es el saldo que consume el
+            # FIFO**, así que de él depende si la orden sale de la cuenta.
+            _sd = saldos_deudores(
+                monto_total=monto_orig,
+                monto_proyectado_usd=monto_total_proyectado_usd,
+                abono_bcv=abono_bcv,
+                abono_binance=abono_binance,
+                descuentos_motor=total_descuentos_monto,
+                notas_credito_usd=ncs_odoo_monto_usd,
+                iva=float(config.engine.iva_rate),
+                lineas=order_lines,
+                descuento_no_otorgado=o.so_id in descuentos_no_otorgados_saldos,
+            )
+            saldo_deudor_bcv = _sd.deudor_bcv
+            saldo_deudor_lista_usd = _sd.deudor_lista_usd
+            saldo_con_descuento_bcv = _sd.con_descuento_bcv
+            saldo_con_descuento_lista_usd = _sd.con_descuento_lista_usd
             if o.so_id in descuentos_no_otorgados_saldos:
                 total_descuentos_monto = 0.0
-            # La cuenta por cobrar NACE CON LA ENTREGA. Criterio del usuario
-            # (septiembre 2026): "la orden, si no ha sido entregada no es
-            # susceptible de cobro". Este saldo es el que consume el FIFO,
-            # así que si no se aplica acá el reparto puede asignarle un pago
-            # a mercancía que nunca salió del depósito.
-            #
-            # La excepción que él mismo señaló se respeta con ``abono_bcv``:
-            # "puede pasar el caso de que se registra primero el pago y
-            # luego la entrega o la misma orden". Si ya entró dinero, la
-            # orden sigue contando.
-            #
-            # Ojo con el dato: unas líneas más arriba, ``cantidad_entregada``
-            # vacía cae a ``cantidad`` (el pedido). Ese respaldo es
-            # deliberado para el CÁLCULO del monto, pero no sirve para
-            # responder "¿se entregó algo?", así que acá se mira el campo
-            # crudo y un vacío cuenta como cero.
-            # Y la guarda solo aplica si REALMENTE sabemos qué se entregó.
-            # Sin líneas cargadas no hay dato, y "no sé" no es "no se
-            # entregó": tratar la ausencia como cero dejaba en cero el saldo
-            # de cualquier orden cuyas líneas no se hubieran leído todavía,
-            # y el FIFO se quedaba sin nada que repartir (lo detectaron los
-            # e2e 29 y 46, que arman órdenes sin ese campo).
-            entregado_crudo = sum(
-                float(ln.get("cantidad_entregada") or 0) for ln in (order_lines or [])
-            )
-            hay_dato_de_entrega = bool(order_lines) and any(
-                ln.get("cantidad_entregada") not in (None, "", "None") for ln in order_lines
-            )
-            if hay_dato_de_entrega and entregado_crudo <= 0.005 and abono_bcv <= 0.005:
-                saldo_deudor_bcv = 0.0
-                saldo_deudor_lista_usd = 0.0
-
-            descuentos_motor_con_iva = total_descuentos_monto * (1 + float(config.engine.iva_rate))
-            saldo_con_descuento_bcv = max(
-                0.0, saldo_deudor_bcv - descuentos_motor_con_iva - ncs_odoo_monto_usd
-            )
-            saldo_con_descuento_lista_usd = max(
-                0.0, saldo_deudor_lista_usd - descuentos_motor_con_iva - ncs_odoo_monto_usd
-            )
 
             # Venta bruta teórica: lo que la orden DEBIÓ sumar con el precio
             # correcto de lista y SIN ningún descuento (b.precio_base_calculado,

@@ -37,6 +37,7 @@ Las cuatro referencias, y por qué son cuatro:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,4 +179,162 @@ def diagnostico_de_saldos(item: dict[str, Any]) -> DiagnosticoSaldo:
         so_id=str(item.get("so_id") or "?"),
         referencias_ausentes=ausentes,
         recortes_a_cero={ref: -v for ref, v in crudos.items() if v < 0},
+    )
+
+
+# --- las notas de crédito de Odoo, en dólares ------------------------------
+
+
+def valor_usd_de_notas_de_credito(
+    notas: list[dict[str, Any]],
+    fecha_fallback: str,
+    tasas_rows: list[dict[str, Any]],
+    tasa_del_dia: Callable[[str, list[dict[str, Any]]], float],
+) -> tuple[float, list[str]]:
+    """Cuánto valen en dólares las notas de crédito reales de una orden.
+
+    Novena pieza de la Fase 2.4. Vivía dentro de ``_get_reporte_saldos_sync``, en
+    el medio de un bloque de 223 líneas, y **no tenía un solo test propio** aunque
+    es lo que reduce la deuda de un cliente por una nota de crédito ya emitida.
+
+    Cada nota trae su propia moneda y su propia fecha, y se convierte con la tasa
+    **de su día**, no la de hoy ni la de la orden: una nota de crédito de marzo
+    vale lo que valía en marzo. Cuando la nota no tiene fecha se usa la de la
+    orden (``fecha_fallback``), que es lo más cercano disponible.
+
+    ``tasa_del_dia`` entra por parámetro porque vive en ``web/app.py`` y depende
+    de la política de tasas; acá solo se la aplica.
+
+    Devuelve ``(monto en USD, nombres de las notas)``. Los nombres se devuelven
+    porque la pantalla los muestra: una deuda reducida sin decir por qué documento
+    es un número que nadie puede verificar.
+    """
+    monto_usd = 0.0
+    nombres: list[str] = []
+    for nc in notas:
+        total = float(nc.get("amount_total") or 0)
+        moneda_raw = nc.get("currency_id")
+        moneda = (
+            moneda_raw[1]
+            if isinstance(moneda_raw, list | tuple) and len(moneda_raw) > 1
+            else "USD"
+        )
+        fecha = str(nc.get("invoice_date") or fecha_fallback)[:10]
+        tasa = tasa_del_dia(fecha, tasas_rows)
+        if moneda == "VES" and tasa > 0:
+            # Con tasa en cero el monto en bolívares se suma COMO SI fuera USD, y
+            # eso es lo que hacía antes de moverlo. Se preserva: cambiarlo mueve
+            # montos en una pantalla en uso. Pero queda dicho que es una mina --
+            # una nota de 40.000 Bs sin tasa reduce la deuda en 40.000 dólares.
+            monto_usd += total / tasa
+        else:
+            monto_usd += total
+        nombres.append(str(nc.get("name", "")))
+    return monto_usd, nombres
+
+
+# --- el saldo deudor, que es el que consume el FIFO ------------------------
+
+
+@dataclass(frozen=True)
+class SaldosDeudores:
+    """Los cuatro saldos de una orden, antes y después de descuentos."""
+
+    deudor_bcv: float
+    deudor_lista_usd: float
+    con_descuento_bcv: float
+    con_descuento_lista_usd: float
+    # Por qué quedó en cero, cuando quedó en cero. Un cero con motivo es un dato;
+    # un cero pelado es la trampa que este blindaje persigue.
+    motivo_del_cero: str | None = None
+
+
+def saldos_deudores(
+    *,
+    monto_total: float,
+    monto_proyectado_usd: float,
+    abono_bcv: float,
+    abono_binance: float,
+    descuentos_motor: float,
+    notas_credito_usd: float,
+    iva: float,
+    lineas: list[dict[str, Any]] | None,
+    descuento_no_otorgado: bool = False,
+) -> SaldosDeudores:
+    """Cuánto debe una orden. **Es el saldo que consume el FIFO.**
+
+    Novena pieza de la Fase 2.4, y la que más pesaba: de este número depende si
+    una orden sale de la cuenta por cobrar. Vivía en el medio de
+    ``_get_reporte_saldos_sync`` y no tenía tests propios, con **cuatro trampas
+    documentadas** que ahora quedan fijadas de a una:
+
+    **1. El IVA se reaplica al descuento antes de restarlo.** Los descuentos del
+    motor son sobre el subtotal (sin impuesto) y los saldos traen IVA. Restar
+    directo subestima la deuda: un descuento de 100 reduce un total con IVA en
+    116, no en 100. Las notas de crédito de Odoo **no** llevan este ajuste --
+    ya son documentos reales con impuesto incluido.
+
+    **2. La cuenta por cobrar nace con la entrega.** Criterio del usuario: «la
+    orden, si no ha sido entregada, no es susceptible de cobro». Sin entrega el
+    saldo es cero, porque si no el FIFO le asignaría un pago a mercancía que
+    nunca salió del depósito.
+
+    **3. Con la excepción de que si ya entró dinero, cuenta igual.** «Puede pasar
+    que se registre primero el pago y luego la entrega». Por eso la guarda mira
+    también ``abono_bcv``.
+
+    **4. «No sé» no es «no se entregó».** Sin líneas cargadas no hay dato sobre
+    la entrega, y tratar esa ausencia como cero dejaba en cero el saldo de
+    cualquier orden cuyas líneas no se hubieran leído todavía -- el FIFO se
+    quedaba sin nada que repartir. Lo detectaron los e2e 29 y 46. La guarda solo
+    aplica cuando **realmente** se sabe qué se entregó.
+
+    Y una quinta que no es trampa sino decisión: una orden marcada como «no se le
+    otorgó el descuento» no ve su saldo reducido por ese descuento (caso TERA, ver
+    ``schema.descuentos_no_otorgados``).
+    """
+    descuentos = 0.0 if descuento_no_otorgado else descuentos_motor
+    deudor_bcv = max(0.0, monto_total - abono_bcv)
+    deudor_usd = max(0.0, monto_proyectado_usd - abono_binance)
+    motivo: str | None = None
+
+    # Trampa 4: el campo crudo, y un vacío cuenta como cero SOLO si hay líneas.
+    #
+    # Los tres valores de "no sé" son ``None``, ``""`` y el **string** ``"None"``.
+    # Con la columna del espejo en ``numeric`` solo el primero es alcanzable hoy;
+    # los otros dos son resto de cuando el backend era Sheets y todo venía como
+    # texto. Se conservan porque no cuestan nada y el día que vuelva a entrar un
+    # texto, la guarda está.
+    #
+    # Y la conversión tiene que aguantar los mismos tres. En ``app.py`` las dos
+    # mitades no coincidían: la guarda excluía ``"None"`` pero el ``float()``
+    # corría antes y habría reventado con él. Al no ser alcanzable nunca mordió,
+    # pero una defensa cuyas dos mitades se contradicen no es una defensa. Lo
+    # encontró un test de esta extracción.
+    def _entregada(ln: dict[str, Any]) -> float:
+        valor = ln.get("cantidad_entregada")
+        if valor is None or valor in ("", "None"):
+            return 0.0
+        try:
+            return float(valor)
+        except (TypeError, ValueError):
+            return 0.0
+
+    hay_dato = bool(lineas) and any(
+        ln.get("cantidad_entregada") not in (None, "", "None") for ln in (lineas or [])
+    )
+    entregado = sum(_entregada(ln) for ln in (lineas or []))
+    if hay_dato and entregado <= 0.005 and abono_bcv <= 0.005:
+        deudor_bcv = 0.0
+        deudor_usd = 0.0
+        motivo = "sin entrega y sin abono: la cuenta por cobrar nace con la entrega"
+
+    # Trampa 1: el IVA vuelve al descuento antes de restarlo. Las NC no.
+    descuentos_con_iva = descuentos * (1 + iva)
+    return SaldosDeudores(
+        deudor_bcv=deudor_bcv,
+        deudor_lista_usd=deudor_usd,
+        con_descuento_bcv=max(0.0, deudor_bcv - descuentos_con_iva - notas_credito_usd),
+        con_descuento_lista_usd=max(0.0, deudor_usd - descuentos_con_iva - notas_credito_usd),
+        motivo_del_cero=motivo,
     )
