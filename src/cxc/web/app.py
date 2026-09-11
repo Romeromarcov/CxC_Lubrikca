@@ -7041,13 +7041,42 @@ def so_ids_en_ventana_historica(repo: Any, ordenes: Any) -> set[str]:
 
 
 def orden_en_periodo_historico(repo, orden) -> bool:
-    """True si ``orden`` cae en la ventana de la Lista Histórica de Auditoría
-    (Tarea 2) y el toggle correspondiente está activo."""
+    """True si ``orden`` tiene que usar la referencia histórica (euro) al pagarse.
+
+    **Unificada con la definición del precio el 11-sep-2026, por decisión del
+    usuario: «manda la definición que rige el precio, que es la de la lista
+    histórica».**
+
+    Antes esta función miraba SOLO la ventana de fechas, mientras el precio usaba
+    ``es_orden_historica``, que además trata como histórica a cualquier orden **sin
+    lista asignada** y excluye a las que nacieron en una lista USD válida. Las dos
+    difieren en 13 órdenes, y el efecto era que la venta se valoraba en una
+    referencia y el cobro en otra:
+
+    * **S00088 y S00090** (13-mar-2026, sin lista): el precio salía por la
+      histórica, referenciada al euro, y el pago por la BCV-USD. 457,51 USD.
+    * **11 órdenes de la ventana con lista USD real** (ej. la #7 «Pago USD
+      Marzo»): el precio ya las trataba como NO históricas —es la excepción
+      documentada del caso SJMG 2012— y el pago las seguía pagando en euro.
+
+    Ahora las dos preguntas se contestan con la misma función, así que no pueden
+    volver a separarse.
+
+    **Esto no mueve ningún equivalente ya congelado.** Se llama sólo al *crear*
+    una vinculación, que es cuando la tasa se fija; las que ya están escritas
+    conservan la suya por diseño contable. Lo que cambia es de qué referencia
+    salen las nuevas.
+    """
     if orden is None or not isinstance(getattr(orden, "fecha", None), date):
         return False
     try:
-        return is_historical_pricelist_enabled(repo) and (
-            HISTORICAL_PRICE_LIST_START <= orden.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
+        lista_id = str(getattr(orden, "lista_precios", "") or "").strip()
+        usd_ids, _ves_ids = get_valid_pricelists_usd_and_ves(repo)
+        return es_orden_historica(
+            orden.fecha,
+            lista_id,
+            enabled=is_historical_pricelist_enabled(repo),
+            lista_es_usd_valida=lista_id in {str(x).strip() for x in usd_ids},
         )
     except Exception:
         return False

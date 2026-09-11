@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 # dos lados redondean por separado en varios pasos.
 TOLERANCIA_POR_DEFECTO = 0.5
 
+# Desde qué fracción de su tolerancia una partida se marca "al límite".
+# 0,6 y no 0,9 porque el residuo escala con el volumen: a diez veces los
+# datos, una partida al 60 % de hoy ya cruzó. El aviso tiene que llegar
+# mientras todavía se puede decidir, no el día que el balance amanece rojo.
+UMBRAL_AL_LIMITE = 0.6
+
 
 def num(d: Any, k: str) -> float:
     """El valor numérico de una clave, o 0.0 si no se puede leer.
@@ -75,12 +81,32 @@ def crear_partida(
     diferirían en un campo.
     """
     dif = round(izq - der, 2)
+    cuadra = abs(dif) <= tolerancia
+    # Qué fracción de su tolerancia está usando la partida.
+    #
+    # Decisión del usuario del 11-sep-2026: «mantené la tolerancia al mínimo» --
+    # o sea NO hacerla proporcional al volumen. Eso resuelve el riesgo de que una
+    # tolerancia generosa tape un descuadre real, pero deja el otro: medido a diez
+    # veces los datos, el residuo de «Saldo a favor» pasa de 1,53 a 15,55 y la
+    # partida se pone roja con la tolerancia en 5,0, sin que nada esté mal.
+    #
+    # Un instrumento que grita lobo a medida que el negocio crece deja de mirarse.
+    # Así que la tolerancia no se afloja y en cambio se expone cuánto margen queda:
+    # una partida al 31 % hoy avisa mucho antes de cruzar, y el aviso llega cuando
+    # todavía se puede decidir con calma en vez de el día que el balance amanece
+    # rojo.
+    margen = round(abs(dif) / tolerancia, 3) if tolerancia > 0 else None
     return {
         "concepto": concepto,
         "izquierda": {"vista": izq_nombre, "valor": round(izq, 2)},
         "derecha": {"vista": der_nombre, "valor": round(der, 2)},
         "diferencia": dif,
-        "cuadra": abs(dif) <= tolerancia,
+        "cuadra": cuadra,
+        "tolerancia": round(tolerancia, 2),
+        "margen_usado": margen,
+        # "cuadra, pero por poco". No cambia el veredicto: una partida al 70 % de
+        # su tolerancia sigue cuadrando, y esto sólo dice que conviene mirarla.
+        "al_limite": bool(cuadra and margen is not None and margen >= UMBRAL_AL_LIMITE),
         "nota": nota,
         "tipo": tipo,
     }

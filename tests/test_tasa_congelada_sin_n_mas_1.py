@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from cxc.web.app import resolver_tasa_bcv_vinculacion
 
@@ -53,13 +54,21 @@ def _serie(tasa_eur: str) -> list[dict]:
 class _Repo:
     """Repo mínimo que cuenta cuántas veces se le pide la serie."""
 
-    def __init__(self, fecha: date, serie: list[dict] | None = None) -> None:
+    def __init__(
+        self, fecha: date, serie: list[dict] | None = None, lista: str = "12"
+    ) -> None:
         self._fecha = fecha
         self._serie = serie or []
         self.lecturas_de_serie = 0
+        # La lista con la que nació la orden. Importa desde el 11-sep-2026: al
+        # unificar las dos definiciones de "orden histórica", una orden SIN lista
+        # es histórica sin importar la fecha. El default es una lista cualquiera
+        # que no está entre las USD configuradas, para que los tests de la ventana
+        # sigan midiendo la ventana y no ese caso.
+        self._lista = lista
 
     def get_orden(self, so_id: str):
-        return SimpleNamespace(so_id=so_id, fecha=self._fecha)
+        return SimpleNamespace(so_id=so_id, fecha=self._fecha, lista_precios=self._lista)
 
     def all_serie_tasas(self):
         self.lecturas_de_serie += 1
@@ -100,12 +109,51 @@ def test_sin_serie_se_lee_fresco_como_antes() -> None:
     assert (tasa, variante) == (Decimal("41.00"), "EUR")
 
 
-def test_una_orden_fuera_de_la_ventana_no_llega_a_leer_nada() -> None:
-    """La guarda de fecha va primero, y por eso el N+1 solo afectaba a 206 filas."""
+def test_una_orden_fuera_de_la_ventana_con_lista_no_llega_a_leer_nada() -> None:
+    """La guarda de fecha va primero, y por eso el N+1 solo afectaba a 206 filas.
+
+    La orden tiene lista: sin ella sería histórica por la otra vía, que es el caso
+    del test de abajo.
+    """
     repo = _Repo(FECHA_FUERA, _serie("40.00"))
     tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
     assert repo.lecturas_de_serie == 0
     assert (tasa, variante) == (DEFAULT_USD, "USD")
+
+
+def test_una_orden_SIN_LISTA_es_historica_aunque_este_fuera_de_la_ventana() -> None:
+    """La decisión del usuario del 11-sep-2026, fijada.
+
+    «Manda la definición que rige el precio, que es la de la lista histórica». Esa
+    definición trata como histórica a cualquier orden sin lista asignada,
+    **incondicionalmente**: no depende del toggle ni de la ventana de fechas.
+
+    Antes el precio de esas órdenes salía por la histórica (referenciada al euro) y
+    el pago por la BCV-USD. Son S00088 y S00090, del 13-mar-2026 — el primer día
+    fuera de la ventana — y 457,51 USD.
+    """
+    repo = _Repo(FECHA_FUERA, _serie("40.00"), lista="")
+    tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+    assert (tasa, variante) == (Decimal("40.00"), "EUR"), (
+        "sin lista, la orden usa la referencia histórica también para el pago"
+    )
+
+
+def test_una_orden_de_la_ventana_con_lista_USD_ya_no_paga_en_euro() -> None:
+    """La otra mitad de la unificación, y toca 11 órdenes reales.
+
+    La excepción del caso SJMG 2012: una orden nacida en una lista USD válida
+    **prevalece** sobre la sustitución histórica. El precio ya la trataba así; el
+    pago la seguía pagando en euro. Ahora las dos coinciden.
+    """
+    repo = _Repo(FECHA_EN_VENTANA, _serie("40.00"), lista="7")
+    with patch(
+        "cxc.web.app.get_valid_pricelists_usd_and_ves", return_value=(["7", "8"], ["3", "5"])
+    ):
+        tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+    assert (tasa, variante) == (DEFAULT_USD, "USD"), (
+        "nacida en lista USD: paga en BCV-USD, no en euro"
+    )
 
 
 def test_sin_tasa_euro_en_la_serie_cae_a_la_usd_y_lo_dice() -> None:

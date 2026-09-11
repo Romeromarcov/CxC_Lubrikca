@@ -940,6 +940,54 @@ pago, así que ahí el reparto es genuino y la elección pesa más: S00795 pasa 
 `engine/acotar_pago.py` calcula los dos y `diagnostico_de_reparto` los compara, con
 el caso del pago 200 fijado en un test. 15 tests. **No aplica ninguno.**
 
+## Dos decisiones más, ejecutadas el 11-sep-2026
+
+### «Manda la definición que rige el precio, que es la de la lista histórica»
+
+Las dos definiciones de «orden histórica» quedaron unificadas, y la que gana es la
+del precio (`es_orden_historica`). Difieren en **13 órdenes**, no en 2 como había
+publicado:
+
+* **S00088 y S00090** (13-mar-2026, sin lista asignada). El precio salía por la
+  histórica, referenciada al euro, y el pago por la BCV-USD. **457,51 USD.**
+* **11 órdenes de la ventana con una lista USD real** (la #7, «Pago USD Marzo»).
+  El precio ya las trataba como NO históricas —es la excepción documentada del
+  caso SJMG 2012— y el pago las seguía pagando en euro.
+
+Yo había llamado a esas 11 «una excepción deliberada que funciona», y era verdad a
+medias: funcionaba **del lado del precio**. Del lado del pago seguían con la
+referencia vieja.
+
+**No mueve ningún equivalente ya congelado.** `resolver_tasa_bcv_vinculacion` se
+llama sólo al *crear* una vinculación; las que ya están escritas conservan su tasa
+por diseño contable. Lo que cambia es de qué referencia salen las nuevas.
+
+Tres tests, y uno de los viejos falló por la razón correcta: su orden de mentira no
+tenía lista, y con la definición unificada eso la vuelve histórica sin importar la
+fecha. Quedó separado en dos casos, uno por cada mitad de la unificación.
+
+### «Mantené la tolerancia al mínimo»
+
+Elegido: las tolerancias del balance **no** se hacen proporcionales al volumen. Eso
+cierra el riesgo de que una tolerancia generosa tape un descuadre real.
+
+Pero deja el otro, que es el que había medido: a diez veces los datos el residuo de
+«Saldo a favor» pasa de 1,53 a 15,55 y la partida se pone **roja con la tolerancia
+en 5,0, sin que nada esté mal**. Un instrumento que grita lobo a medida que el
+negocio crece deja de mirarse.
+
+La salida que no afloja nada: cada partida ahora expone **cuánta de su tolerancia
+está usando**, y se marca `al_limite` al llegar al 60 %. No cambia ningún veredicto
+—una partida al 70 % sigue cuadrando— pero el aviso llega mientras todavía se puede
+decidir, en vez del día que el balance amanece rojo.
+
+El umbral es 0,6 y no 0,9 a propósito: el residuo escala con el volumen, así que a
+diez veces los datos una partida que hoy esté al 60 % ya cruzó.
+
+Cinco tests, y el de la forma de las partidas —que existe para que la pantalla no
+rompa— sirvió para lo contrario: confirmó que las tres claves nuevas llegan a las
+**24** y no sólo a las internas.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

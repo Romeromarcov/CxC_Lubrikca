@@ -302,7 +302,13 @@ def test_si_una_consulta_a_odoo_revienta_las_demas_partidas_salen() -> None:
 
 
 def test_todas_las_partidas_tienen_la_forma_completa() -> None:
-    """La pantalla las pinta sin preguntar: si falta una clave, rompe."""
+    """La pantalla las pinta sin preguntar: si falta una clave, rompe.
+
+    Y sirve para lo contrario también: este test es el que avisó que las tres
+    claves nuevas del 11-sep-2026 (``tolerancia``, ``margen_usado``,
+    ``al_limite``) llegaban a **todas** las partidas y no sólo a las internas.
+    Que las 24 pasen por ``crear_partida`` es lo que lo garantiza.
+    """
     partidas = _llamar({"S00001": _item()}, execute=_Odoo())
     for p in partidas:
         assert set(p) == {
@@ -311,11 +317,15 @@ def test_todas_las_partidas_tienen_la_forma_completa() -> None:
             "derecha",
             "diferencia",
             "cuadra",
+            "tolerancia",
+            "margen_usado",
+            "al_limite",
             "nota",
             "tipo",
         }, p
         assert set(p["izquierda"]) == {"vista", "valor"}
         assert isinstance(p["cuadra"], bool)
+        assert isinstance(p["al_limite"], bool)
 
 
 @pytest.mark.parametrize("usd,eur", [(None, None), (Decimal("36.5"), None), (None, Decimal("40"))])

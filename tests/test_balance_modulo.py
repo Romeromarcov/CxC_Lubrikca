@@ -338,3 +338,75 @@ def test_la_tolerancia_es_absoluta_y_no_escala_con_el_volumen() -> None:
         "-- eso es el hallazgo, no un fallo del test"
     )
     assert grande["diferencia"] == 10.0
+
+
+# --- el margen de cada partida (decisión del 11-sep-2026) -------------------
+
+
+def test_una_partida_expone_cuanta_tolerancia_esta_usando() -> None:
+    """«Mantené la tolerancia al mínimo» resuelve un riesgo y deja el otro.
+
+    No hacerla proporcional evita que una tolerancia generosa tape un descuadre
+    real. Pero medido a diez veces los datos, el residuo de «Saldo a favor» pasa
+    de 1,53 a 15,55 y la partida se pone roja con la tolerancia en 5,0 sin que
+    nada esté mal.
+
+    La salida es exponer el margen, no aflojar el límite.
+    """
+    from cxc.engine.balance import crear_partida
+
+    p = crear_partida("X", "A", 101.53, "B", 100.0, tolerancia=5.0)
+    assert p["cuadra"]
+    assert p["tolerancia"] == 5.0
+    assert p["margen_usado"] == 0.306
+    assert not p["al_limite"]
+
+
+def test_una_partida_al_limite_avisa_sin_cambiar_el_veredicto() -> None:
+    """Sigue cuadrando: el aviso no es un rojo, es «mirala».
+
+    Si `al_limite` cambiara `cuadra`, sería aflojar el límite en el otro sentido
+    — poner en rojo algo que está dentro de su tolerancia.
+    """
+    from cxc.engine.balance import crear_partida
+
+    p = crear_partida("X", "A", 104.0, "B", 100.0, tolerancia=5.0)
+    assert p["cuadra"], "4,00 está dentro de 5,00"
+    assert p["margen_usado"] == 0.8
+    assert p["al_limite"]
+
+
+def test_la_partida_que_a_10x_se_pondria_roja_hoy_ya_avisaria() -> None:
+    """El caso medido, en los dos volúmenes.
+
+    A 1× el residuo es 1,53 sobre una tolerancia de 5,0: 31 %, no avisa. A 10×
+    es 15,55: cruza. Con el umbral en 0,6, una partida que hoy esté al 60 % ya
+    avisa — y a diez veces los datos habría cruzado.
+    """
+    from cxc.engine.balance import UMBRAL_AL_LIMITE, crear_partida
+
+    a_1x = crear_partida("Saldo a favor", "A", 1.53, "B", 0.0, tolerancia=5.0)
+    a_10x = crear_partida("Saldo a favor", "A", 15.55, "B", 0.0, tolerancia=5.0)
+    assert a_1x["cuadra"] and not a_10x["cuadra"]
+    assert a_1x["margen_usado"] < UMBRAL_AL_LIMITE
+    # Y el punto: al 60 % de hoy, diez veces eso ya no entra.
+    al_60 = crear_partida("X", "A", 3.0, "B", 0.0, tolerancia=5.0)
+    assert al_60["al_limite"]
+    assert not crear_partida("X", "A", 30.0, "B", 0.0, tolerancia=5.0)["cuadra"]
+
+
+def test_una_partida_que_no_cuadra_no_se_marca_al_limite() -> None:
+    """`al_limite` es «cuadra, pero por poco». Una que no cuadra ya es un rojo."""
+    from cxc.engine.balance import crear_partida
+
+    p = crear_partida("X", "A", 200.0, "B", 100.0, tolerancia=5.0)
+    assert not p["cuadra"]
+    assert not p["al_limite"]
+
+
+def test_con_tolerancia_en_cero_no_se_divide_por_cero() -> None:
+    from cxc.engine.balance import crear_partida
+
+    p = crear_partida("X", "A", 1.0, "B", 1.0, tolerancia=0.0)
+    assert p["margen_usado"] is None
+    assert not p["al_limite"]
