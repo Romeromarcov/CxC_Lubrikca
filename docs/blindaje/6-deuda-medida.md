@@ -1053,6 +1053,36 @@ Verificado además que **cero pagos** de los 1.320 vienen sin `cliente_id` ni si
 `metodo_pago`, así que el riesgo de que los campos vacíos agrupen pagos ajenos existe
 en el código pero no tiene instancia viva.
 
+## Un docstring que prometía lo contrario de lo que el código hacía
+
+El mismo barrido encontró `pago_monto_usd`, nueve líneas usadas en cinco lugares. Su
+docstring decía:
+
+> Nunca trata un monto en VES como si ya fuera USD.
+
+Y el código hacía exactamente eso cuando la tasa llegaba en cero o negativa: la
+guarda era `if moneda == "VES" and bcv_rate > 0`, así que una tasa inválida caía al
+`return monto_raw` final y devolvía los bolívares como si fueran dólares.
+
+**Cuánto sería.** Hay **513 pagos en VES por 120.848.004,12 Bs**. Contados así serían
+**120,8 millones de dólares** en vez de unos 164.980 a la tasa real — **732 veces**.
+
+**Y no está viva.** Los cinco llamadores toman la tasa de `get_rate_for_datetime`,
+que desde la decisión de esta misma fecha **levanta** en vez de devolver el default
+de 2019. Antes tampoco era alcanzable, porque devolvía 36,50 y nunca cero. La suite
+completa pasó sin un solo cambio al hacerla levantar, que es la confirmación de que
+ningún camino la tocaba.
+
+**Por qué la cambié igual.** Una garantía escrita que la función no cumple es peor
+que no escribirla: el próximo que lea el docstring le va a pasar una tasa sin
+comprobarla. Ahora levanta, que es la misma decisión que se tomó para la tasa — no
+inventar un número donde no hay dato.
+
+7 tests. Uno fija la mitad que **no** cambió y que es la próxima trampa: sólo `VES`
+dispara la conversión, así que si alguien agrega una tercera moneda sin tocar esta
+función, sus montos entran como dólares sin convertirse. El mismo error con otro
+nombre.
+
 ## Seguridad: rotar la credencial de producción
 
 El ítem más urgente de toda la lista y el único que **no puedo hacer yo**. Dos

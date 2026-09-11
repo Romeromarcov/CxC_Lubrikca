@@ -1593,14 +1593,36 @@ def residual_disponible_por_pago(execute: Any, pago_ids: list[str]) -> dict[str,
 
 
 def pago_monto_usd(monto_raw: Decimal, moneda: str, bcv_rate: Decimal) -> Decimal:
-    """Equivalente USD de un monto de pago -- usa la tasa BCV del día del pago
+    """Equivalente USD de un monto de pago, con la tasa BCV del día del pago.
 
-    (mismo criterio que ``/api/resumen`` y el resto de reportes agregados).
-    Nunca trata un monto en VES como si ya fuera USD.
+    Mismo criterio que ``/api/resumen`` y el resto de reportes agregados.
+
+    **El docstring viejo decía «nunca trata un monto en VES como si ya fuera USD»
+    y la función hacía exactamente eso** cuando ``bcv_rate`` llegaba en cero o
+    negativa: caía al ``return monto_raw`` final y devolvía los bolívares como si
+    fueran dólares. Medido el 11-sep-2026: hay 513 pagos en VES por 120.848.004,12
+    Bs, que contados así serían 120,8 millones de dólares en vez de unos 164.980
+    — **732 veces**.
+
+    Ninguno de los cinco llamadores puede alcanzarlo hoy: los cinco toman la tasa
+    de ``get_rate_for_datetime``, que desde la decisión de esta misma fecha
+    **levanta** ``TasaNoDisponible`` en vez de devolver el default de 2019. Antes
+    tampoco, porque devolvía 36,50. O sea que la mina nunca estuvo viva por esta
+    vía.
+
+    Pero una garantía escrita que la función no cumple es peor que no escribirla:
+    el próximo que lea el docstring va a pasarle una tasa sin comprobarla. Así que
+    ahora **levanta** en ese caso, que es la misma decisión que se tomó para la
+    tasa: no inventar un número donde no hay dato.
     """
-    if moneda == "VES" and bcv_rate > Decimal("0"):
+    if moneda != "VES":
+        return monto_raw
+    if bcv_rate > Decimal("0"):
         return monto_raw / bcv_rate
-    return monto_raw
+    raise TasaNoDisponible(
+        f"No se puede convertir un pago de {monto_raw} VES a dólares con una tasa "
+        f"de {bcv_rate}. Devolver el nominal lo contaría como si ya fuera USD."
+    )
 
 
 def usd_bcv_to_binance(
