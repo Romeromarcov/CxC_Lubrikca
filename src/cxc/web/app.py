@@ -45,7 +45,11 @@ from cxc.engine.balance import (
     partidas_externas,
     partidas_internas,
 )
-from cxc.engine.conciliacion import campos_de_saldo, usd_bcv_a_binance
+from cxc.engine.conciliacion import (
+    campos_de_saldo,
+    repartir_pago_entre_ordenes,
+    usd_bcv_a_binance,
+)
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
 from cxc.engine.equivalents import (
     calcular_equivalentes,
@@ -8132,24 +8136,19 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 "duplicado_de": p["duplicado_de"],
             }
 
-            monto_pago_restante = p["saldo_pendiente_usd"]
-            for o in client_orders:
-                if monto_pago_restante <= Decimal("0.05"):
-                    break
-                if o["saldo_pendiente"] <= Decimal("0.05"):
-                    continue
-
-                monto_aplicar = min(monto_pago_restante, o["saldo_pendiente"])
-
-                sug_id = f"SUG_{p['pago_id']}_{o['so_id']}"
+            # El reparto vive en ``engine/conciliacion.py`` desde la Fase 2.4.
+            # ``fila`` devuelve None para no ofrecer una sugerencia, y eso
+            # significa que no consume nada -- misma semántica que tenía el
+            # ``continue`` de antes, ahora dicha en el docstring del módulo.
+            def _fila(restante_antes, o, monto_aplicar, _p=p, _base=base_item, _sf=saldo_fields):
                 item = {
-                    **base_item,
+                    **_base,
                     # Residual del pago justo ANTES de aplicar esta sugerencia
                     # -- si un mismo pago cubre varias órdenes, cada fila
                     # muestra cuanto le quedaba disponible en ese momento, no
                     # el total original constante.
-                    **saldo_fields(monto_pago_restante),
-                    "sugerencia_id": sug_id,
+                    **_sf(restante_antes),
+                    "sugerencia_id": f"SUG_{_p['pago_id']}_{o['so_id']}",
                     "so_id": o["so_id"],
                     "so_fecha": o["fecha"].isoformat()
                     if hasattr(o["fecha"], "isoformat")
@@ -8157,15 +8156,14 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     "so_monto_total": float(o["monto_total"]),
                     "so_saldo_pendiente": float(o["saldo_pendiente"]),
                     "monto_sugerido": float(monto_aplicar),
-                    "vendedor": p["vendedor"] or o["vendedor"],
+                    "vendedor": _p["vendedor"] or o["vendedor"],
                 }
+                return item if visible_to_user(item["vendedor"]) else None
 
-                if not visible_to_user(item["vendedor"]):
-                    continue
-
-                sugerencias.append(item)
-                monto_pago_restante -= monto_aplicar
-                o["saldo_pendiente"] -= monto_aplicar
+            filas, monto_pago_restante = repartir_pago_entre_ordenes(
+                p["saldo_pendiente_usd"], client_orders, fila=_fila
+            )
+            sugerencias.extend(filas)
 
             # Pago sin (mas) ordenes abiertas del mismo cliente que cubrir --
             # se sigue mostrando (sin sugerencia, con el residual que
