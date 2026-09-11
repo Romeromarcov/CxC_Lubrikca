@@ -42,6 +42,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from typing import Any
 
 
 def primera_activa(ids: list[int], activos: AbstractSet[int]) -> int | None:
@@ -133,4 +134,83 @@ def diagnostico_de_eleccion(
         activos=tuple(sorted(conjunto & set(ids))),
         con_guarda=primera_activa(ids, conjunto),
         sin_guarda=primero_crudo(ids),
+    )
+
+
+# --- los huecos de vigencia, y cuántas listas se pudieron mirar ------------
+
+
+@dataclass(frozen=True)
+class DiagnosticoHuecos:
+    """Los tramos sin lista de referencia, **y sobre cuántas listas se buscó**.
+
+    La segunda mitad es el punto. ``huecos_de_cobertura`` saltea toda lista sin
+    ``desde`` declarado, así que en una base sin vigencias sembradas devuelve una
+    lista vacía -- y una lista vacía se lee como «no hay huecos», cuando lo que
+    pasó es que **no se pudo buscar ninguno**.
+
+    Medido en la copia de prueba: las **16 listas del mapeo no tienen ni una
+    vigencia declarada**, así que el instrumento que el plan pide usar para
+    verificar los períodos devolvía «ninguno» sin haber evaluado nada. Es la misma
+    trampa que tenían las dos partidas de tasa del balance, en otro lugar.
+
+    No cambia ningún monto: agrega el denominador que faltaba.
+    """
+
+    huecos: tuple[dict[str, str], ...]
+    listas_totales: int
+    listas_con_vigencia: int
+    grupos_evaluados: int
+
+    @property
+    def evaluable(self) -> bool:
+        """False si no había con qué buscar un hueco."""
+        return self.listas_con_vigencia > 0
+
+    @property
+    def nota(self) -> str:
+        if not self.listas_totales:
+            return "No hay ninguna lista en el mapeo."
+        if not self.evaluable:
+            return (
+                f"NO SE PUDO EVALUAR: ninguna de las {self.listas_totales} listas del "
+                "mapeo tiene vigencia declarada (campo «desde»), así que no hay tramos "
+                "entre los que pueda haber un hueco. Cero huecos acá no significa que "
+                "la cobertura esté bien."
+            )
+        base = (
+            f"Evaluadas {self.listas_con_vigencia} de {self.listas_totales} listas "
+            f"con vigencia declarada, en {self.grupos_evaluados} grupo(s)."
+        )
+        if not self.huecos:
+            return base + " Sin huecos."
+        return base + f" {len(self.huecos)} hueco(s)."
+
+
+def diagnostico_de_huecos(
+    mapeo: dict[str, dict[str, Any]] | None,
+    huecos: list[dict[str, str]],
+) -> DiagnosticoHuecos:
+    """Envuelve el resultado de ``huecos_de_cobertura`` con su denominador.
+
+    Recibe los huecos ya calculados en vez de recalcularlos: la política de qué
+    es un hueco vive en un solo lugar, y esto solo la describe.
+    """
+    total = len(mapeo or {})
+    con_vigencia = 0
+    grupos: set[tuple[str, str]] = set()
+    for info in (mapeo or {}).values():
+        if not str(info.get("desde") or ""):
+            continue
+        moneda = str(info.get("moneda") or "").lower()
+        categoria = str(info.get("categoria") or "").lower()
+        if moneda not in ("ves", "usd") or not categoria:
+            continue
+        con_vigencia += 1
+        grupos.add((categoria, moneda))
+    return DiagnosticoHuecos(
+        huecos=tuple(huecos),
+        listas_totales=total,
+        listas_con_vigencia=con_vigencia,
+        grupos_evaluados=len(grupos),
     )

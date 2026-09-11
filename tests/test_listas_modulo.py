@@ -145,3 +145,105 @@ def test_los_activos_reportados_son_solo_los_configurados() -> None:
     d = diagnostico_de_eleccion("BCV", [3, 10], {10, 12, 19, 77})
     assert d.activos == (10,)
     assert d.ids_configurados == (3, 10)
+
+
+# --- los huecos de vigencia, y su denominador ------------------------------
+
+
+def test_sin_vigencias_sembradas_dice_que_no_pudo_evaluar() -> None:
+    """El hallazgo: cero huecos sobre cero listas evaluables no es «está bien».
+
+    ``huecos_de_cobertura`` saltea toda lista sin ``desde``, así que en una base sin
+    vigencias sembradas devuelve ``[]``. Un ``[]`` se lee como «no hay huecos»,
+    cuando lo que pasó es que **no se pudo buscar ninguno**.
+
+    Medido en la copia de prueba: las **16 listas del mapeo no tienen ni una
+    vigencia declarada**, y el instrumento que el plan pide usar para verificar los
+    períodos devolvía «ninguno» sin haber evaluado nada. Misma trampa que las dos
+    partidas de tasa del balance, en otro lugar.
+    """
+    from cxc.engine.listas import diagnostico_de_huecos
+
+    mapeo = {
+        str(i): {"moneda": "ves", "categoria": "comercial", "desde": "", "hasta": ""}
+        for i in range(16)
+    }
+    d = diagnostico_de_huecos(mapeo, [])
+    assert d.listas_totales == 16
+    assert d.listas_con_vigencia == 0
+    assert d.evaluable is False
+    assert "NO SE PUDO EVALUAR" in d.nota
+    assert "16" in d.nota
+    assert "no significa que" in d.nota
+
+
+def test_con_vigencias_y_sin_huecos_lo_dice_con_el_denominador() -> None:
+    from cxc.engine.listas import diagnostico_de_huecos
+
+    mapeo = {
+        "3": {
+            "moneda": "ves",
+            "categoria": "comercial",
+            "desde": "2026-01-01",
+            "hasta": "2026-06-30",
+        },
+        "4": {"moneda": "ves", "categoria": "comercial", "desde": "2026-07-01", "hasta": ""},
+    }
+    d = diagnostico_de_huecos(mapeo, [])
+    assert d.evaluable is True
+    assert (d.listas_con_vigencia, d.listas_totales) == (2, 2)
+    assert d.grupos_evaluados == 1
+    assert "Evaluadas 2 de 2" in d.nota
+    assert "Sin huecos" in d.nota
+
+
+def test_con_huecos_los_cuenta() -> None:
+    from cxc.engine.listas import diagnostico_de_huecos
+
+    mapeo = {
+        "3": {
+            "moneda": "usd",
+            "categoria": "comercial",
+            "desde": "2026-01-01",
+            "hasta": "2026-04-01",
+        },
+        "8": {"moneda": "usd", "categoria": "comercial", "desde": "2026-04-06", "hasta": ""},
+    }
+    hueco = {
+        "categoria": "comercial",
+        "moneda": "USD",
+        "desde": "2026-04-02",
+        "hasta": "2026-04-05",
+    }
+    d = diagnostico_de_huecos(mapeo, [hueco])
+    assert d.evaluable
+    assert d.huecos == (hueco,)
+    assert "1 hueco(s)" in d.nota
+
+
+def test_una_lista_sin_moneda_o_sin_categoria_no_cuenta_como_evaluable() -> None:
+    """El mismo criterio que usa ``huecos_de_cobertura`` para saltearla.
+
+    Si el denominador contara listas que la función nunca mira, diría que evaluó
+    más de lo que evaluó -- que es justo el error que este diagnóstico arregla.
+    """
+    from cxc.engine.listas import diagnostico_de_huecos
+
+    mapeo = {
+        "1": {"moneda": "", "categoria": "comercial", "desde": "2026-01-01"},
+        "2": {"moneda": "ves", "categoria": "", "desde": "2026-01-01"},
+        "3": {"moneda": "eur", "categoria": "comercial", "desde": "2026-01-01"},
+        "4": {"moneda": "ves", "categoria": "comercial", "desde": "2026-01-01"},
+    }
+    d = diagnostico_de_huecos(mapeo, [])
+    assert d.listas_totales == 4
+    assert d.listas_con_vigencia == 1, "solo la 4 cumple los tres requisitos"
+
+
+def test_un_mapeo_vacio_lo_dice_sin_confundirlo_con_sin_huecos() -> None:
+    from cxc.engine.listas import diagnostico_de_huecos
+
+    d = diagnostico_de_huecos({}, [])
+    assert d.listas_totales == 0
+    assert d.evaluable is False
+    assert "No hay ninguna lista" in d.nota

@@ -12,6 +12,7 @@ uno sube, y dos se cierran.
 | Equivalentes congelados sin propagar correcciones | Media | **ya hay algo que los lista** — 1.487 con el default de 2019, 2.687.701,19 USD | herramienta entregada; el número real sale de producción |
 | El arreglo del scraper nunca corrió en producción | Media | no verificable desde acá | tuyo |
 | Formularios de reglas legacy | Baja | — | espera tu confirmación |
+| Vigencias de listas sembradas | — | **0 de 16 listas las tienen**; el verificador decía «ninguno» sin poder mirar | instrumento arreglado; sembrarlas es tuyo |
 | `SerieTasas` se lee sin caché | Baja | **22 sitios: 21 legítimos, 1 era un N+1** | **cerrada, y con un arreglo** |
 | Tramos de volumen en USD | Baja | — | cuando lo pidas |
 
@@ -53,6 +54,58 @@ tienen un solo test. Y hay una mina más, que la auditoría AST no podía cazar:
 marcar `usa_fallback` nunca**. No traga una excepción ni devuelve un centinela
 —devuelve un dato real de otra fecha—, y el clasificador busca las dos primeras
 cosas.
+
+## Vigencias de listas sembradas: el instrumento decía «ninguno» sin mirar
+
+El plan pedía «verificar que los períodos que se sembraron coinciden con la realidad
+del negocio». La realidad del negocio la sabés vos; lo que se puede verificar sin vos
+es la **consistencia**, y para eso ya existía `huecos_de_cobertura` — la función que
+se escribió en septiembre cuando pediste «revisá que no queden períodos vacíos, por
+ejemplo en USD no hay nada entre el 1 y el 6 de abril».
+
+La corrí, y devolvió **«ninguno»**. Pero mirá por qué:
+
+```python
+desde = str(info.get("desde") or "")
+if not desde:
+    continue          # <-- saltea toda lista sin vigencia declarada
+```
+
+**Las 16 listas del mapeo de esta base no tienen ni una vigencia declarada.** Así que
+la función saltea las 16, no le quedan tramos entre los que buscar un hueco, y
+devuelve una lista vacía. Y una lista vacía se lee como «la cobertura está bien»,
+cuando lo que pasó es que **no se pudo buscar nada**.
+
+Es la misma trampa que tenían las dos partidas de tasa del balance, en otro lugar y
+encontrada de la misma forma: corriendo el instrumento y preguntando qué había detrás
+del verde.
+
+### El arreglo, que no mueve ningún monto
+
+`engine/listas.py::diagnostico_de_huecos` agrega el **denominador que faltaba**, y el
+endpoint lo expone junto a los huecos:
+
+```json
+"huecos_cobertura": [],
+"cobertura_vigencias": {
+  "evaluable": false,
+  "listas_totales": 16,
+  "listas_con_vigencia": 0,
+  "nota": "NO SE PUDO EVALUAR: ninguna de las 16 listas del mapeo tiene vigencia
+           declarada (campo «desde»)... Cero huecos acá no significa que la
+           cobertura esté bien."
+}
+```
+
+Cinco tests lo fijan, incluido el que verifica que el denominador use **el mismo
+criterio** que la función para contar una lista como evaluable: si contara listas que
+la función nunca mira, diría que evaluó más de lo que evaluó, que es exactamente el
+error que esto arregla.
+
+**Qué queda para vos:** sembrar las vigencias. Sin ellas el instrumento no puede
+opinar, y el ítem del plan —confirmar que los períodos coinciden con el negocio— no
+tiene sobre qué. Si en producción sí están sembradas, correr el endpoint ahí y mirar
+el `nota`: ahora dice cuántas evaluó.
 
 ## `SerieTasas` sin caché: corrijo mi propio conteo, y había un N+1
 

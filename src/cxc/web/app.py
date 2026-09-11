@@ -57,7 +57,11 @@ from cxc.engine.equivalents import (
     valor_pagado_binance_usd,
 )
 from cxc.engine.historical_pricing import es_orden_historica
-from cxc.engine.listas import diagnostico_de_eleccion, primera_activa
+from cxc.engine.listas import (
+    diagnostico_de_eleccion,
+    diagnostico_de_huecos,
+    primera_activa,
+)
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
@@ -7362,11 +7366,27 @@ async def get_config_pricelist_mapeo():
     try:
         repo = get_repo()
         _mapeo = get_pricelist_mapeo(repo)
+        _huecos = huecos_de_cobertura(_mapeo)
+        _diag_huecos = diagnostico_de_huecos(_mapeo, _huecos)
         return {
             "mapeo": _mapeo,
             # Tramos sin lista de referencia -- la pantalla los muestra
             # arriba de la tabla para que no haya que salir a buscarlos.
-            "huecos_cobertura": huecos_de_cobertura(_mapeo),
+            "huecos_cobertura": _huecos,
+            # Y el DENOMINADOR, que faltaba: ``huecos_de_cobertura`` saltea
+            # toda lista sin vigencia declarada, asi que en una base sin
+            # vigencias sembradas devuelve [] -- y un [] se lee como "no hay
+            # huecos" cuando lo que paso es que no se pudo buscar ninguno.
+            # Medido en la copia de prueba: las 16 listas del mapeo no tienen
+            # ni una vigencia, asi que este instrumento decia "ninguno" sin
+            # haber evaluado nada. Misma trampa que las dos partidas de tasa.
+            "cobertura_vigencias": {
+                "evaluable": _diag_huecos.evaluable,
+                "listas_totales": _diag_huecos.listas_totales,
+                "listas_con_vigencia": _diag_huecos.listas_con_vigencia,
+                "grupos_evaluados": _diag_huecos.grupos_evaluados,
+                "nota": _diag_huecos.nota,
+            },
             "historical_pricelist_enabled": is_historical_pricelist_enabled(repo),
         }
     except Exception as e:
