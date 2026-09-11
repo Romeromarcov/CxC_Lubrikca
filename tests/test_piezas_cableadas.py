@@ -52,6 +52,9 @@ SIN_LLAMADOR_A_PROPOSITO: dict[str, str] = {
     "pagos_duplicados.py::clave_de_pago": (
         "la usa `detectar_pagos_duplicados`, que sí está cableada"
     ),
+    "kpis_de_saldos.py::kpis_de_filas": (
+        "la usa `diferencia_de_kpis`, que sí está cableada en get_reporte_saldos"
+    ),
     # --- anteriores a este plan, cada una con su motivo ---
     # El calendario de días hábiles lo consume ``discounts.py`` para la ventana de
     # contado; la aplicación nunca pregunta por un día hábil directamente.

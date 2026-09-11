@@ -66,6 +66,7 @@ from cxc.engine.equivalents import (
 from cxc.engine.facturado import facturado_de_orden
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.identidad_de_reglas import aviso_de_ambiguedad, elegir_tabla_de_regla
+from cxc.engine.kpis_de_saldos import diferencia_de_kpis
 from cxc.engine.listas import (
     diagnostico_de_eleccion,
     diagnostico_de_huecos,
@@ -5146,10 +5147,35 @@ async def get_reporte_saldos(refresh: bool = False):
         return datos
     if not cobradas or not isinstance(datos, dict):
         return datos
+    quitadas = 0
     for clave in ("items", "saldo_minimo_pendientes"):
         filas = datos.get(clave)
         if isinstance(filas, list):
-            datos[clave] = [f for f in filas if str(f.get("so_id")) not in cobradas]
+            sobreviven = [f for f in filas if str(f.get("so_id")) not in cobradas]
+            if clave == "items":
+                quitadas = len(filas) - len(sobreviven)
+            datos[clave] = sobreviven
+
+    # El filtro de arriba saca filas de `items` y **no toca `kpis`**, asi que el
+    # encabezado --total general, vencido, vigentes y los cuatro tramos de mora--
+    # sigue incluyendo las ordenes que las filas de abajo ya no tienen. El
+    # encabezado y el detalle de la misma pantalla difieren exactamente en el monto
+    # de lo filtrado.
+    #
+    # No se corrige el encabezado: bajar el total de la cartera reportada mueve un
+    # monto, y eso pasa por el visto bueno del usuario (Fase 1). Lo que se agrega es
+    # el segundo juego de KPI y la diferencia, para que se vea en vez de quedar en el
+    # hueco entre dos partes de la misma pantalla. Ver `engine/kpis_de_saldos.py`.
+    try:
+        diag = diferencia_de_kpis(datos.get("kpis") or {}, datos.get("items") or [], quitadas)
+        datos["kpis_sin_cobradas"] = diag.recalculados
+        datos["kpis_diferencias"] = diag.diferencias
+        datos["kpis_coinciden"] = diag.coinciden
+        datos["kpis_nota"] = diag.nota
+        if not diag.coinciden:
+            logger.warning("Reporte de saldos, encabezado vs filas: %s", diag.nota)
+    except Exception as e:  # el diagnostico nunca puede tumbar el reporte
+        logger.warning("No se pudo comparar los KPI contra las filas: %s", e)
     return datos
 
 
