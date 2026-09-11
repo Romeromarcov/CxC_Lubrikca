@@ -62,6 +62,7 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -253,8 +254,104 @@ def evaluar_eleccion_de_listas(informe: Informe) -> None:
         diag = diagnostico_de_eleccion(moneda, ids, activos)
         if not diag.coinciden:
             informe.hallazgos.append(
-                Hallazgo("listas", f"eleccion_{moneda.lower()}", "ALTA", diag.nota)
+                # BAJA, no ALTA: desde que la guarda esta aplicada en los cinco
+                # sitios esto ya no es "dos paginas dicen numeros distintos" sino
+                # "la primera lista configurada esta archivada y la guarda la
+                # saltea". Sigue valiendo avisarlo -- conviene reordenar la
+                # configuracion -- pero en ALTA gritaba lobo todos los dias.
+                Hallazgo("listas", f"eleccion_{moneda.lower()}", "BAJA", diag.nota)
             )
+
+
+def evaluar_pagada_en_odoo(informe: Informe) -> None:
+    """Las dos definiciones de "pagada en Odoo", y el sobrepago que ninguna ve.
+
+    `so_pagada_en_odoo` -- la variable que decide si una orden sale de la cuenta
+    por cobrar -- se calcula con DOS reglas distintas segun la pantalla: por
+    `payment_state` en el reporte de saldos y la auditoria, por
+    `sum(amount_residual_usd)` en las sugerencias de conciliacion. Medido en la
+    copia de produccion: 66 de 796 ordenes discrepan. Ver
+    `src/cxc/engine/pagada_en_odoo.py`.
+
+    Pero lo que este bloque persigue de verdad es la tercera causa, y es la que
+    NINGUNA de las dos reglas reporta: una factura con residual NEGATIVO, o sea
+    que se cobro mas de lo facturado. Una regla lo llama pagado y la otra impago,
+    y las dos se pierden la plata a devolver -- medido: 4 ordenes, 258,74 USD.
+
+    Va en la corrida diaria porque el disparador es un cobro: alguien aplica un
+    pago de mas y nada lo dice. No mueve ningun monto; lo pone a la vista.
+    """
+    from cxc.config import AppConfig
+    from cxc.engine.pagada_en_odoo import diagnostico_de_pagada
+    from cxc.odoo.client import _connect
+
+    ejecutar = _connect(AppConfig.from_env().odoo)
+    if not ejecutar:
+        informe.saltados.append("pagada en Odoo (sin conexion a Odoo)")
+        return
+    try:
+        facturas = ejecutar(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["move_type", "=", "out_invoice"],
+                    ["state", "=", "posted"],
+                    ["invoice_origin", "!=", False],
+                ]
+            ],
+            {"fields": ["invoice_origin", "payment_state", "amount_residual_usd"]},
+        )
+    except Exception as e:
+        informe.saltados.append(f"pagada en Odoo (Odoo no contesto: {e})")
+        return
+    if not facturas:
+        informe.saltados.append("pagada en Odoo (Odoo no devolvio facturas)")
+        return
+
+    por_so: dict[str, list] = {}
+    for f in facturas:
+        por_so.setdefault(str(f["invoice_origin"]).strip(), []).append(f)
+
+    # El denominador se reporta siempre, tambien cuando no hay hallazgos: un cero
+    # sobre cero ordenes se lee igual que un cero sobre ochocientas.
+    informe.evaluados += 1
+    sobrepagos: list[tuple[str, Decimal]] = []
+    por_causa: dict[str, int] = {}
+    for so, lst in por_so.items():
+        diag = diagnostico_de_pagada(lst)
+        if not diag.coinciden:
+            por_causa[diag.causa] = por_causa.get(diag.causa, 0) + 1
+        if diag.hay_sobrepago:
+            sobrepagos.append((so, diag.residual_total))
+
+    if sobrepagos:
+        total = sum((abs(r) for _, r in sobrepagos), Decimal("0"))
+        detalle = ", ".join(
+            f"{so} ({abs(r):,.2f})" for so, r in sorted(sobrepagos, key=lambda x: x[1])[:6]
+        )
+        informe.hallazgos.append(
+            Hallazgo(
+                "pagada",
+                "sobrepago_sin_reportar",
+                "ALTA",
+                f"{len(sobrepagos)} orden(es) con residual NEGATIVO sobre "
+                f"{len(por_so)} con factura: {total:,.2f} USD cobrados de mas que "
+                f"ninguna pantalla reporta como saldo a favor. {detalle}",
+            )
+        )
+    if por_causa:
+        resumen = ", ".join(f"{c}: {n}" for c, n in sorted(por_causa.items()))
+        informe.hallazgos.append(
+            Hallazgo(
+                "pagada",
+                "dos_definiciones",
+                "MEDIA",
+                f"{sum(por_causa.values())} de {len(por_so)} ordenes con factura "
+                f"discrepan entre las dos definiciones de 'pagada en Odoo' "
+                f"({resumen}). Las pantallas no coinciden en que ordenes cuentan.",
+            )
+        )
 
 
 def _repo_para_config():
@@ -311,7 +408,7 @@ def evaluar_conciliacion(con, informe: Informe) -> None:
 
 # En que orden se leen los bloques del informe. No es la lista de bloques
 # validos: ver `texto_del_informe`.
-ORDEN_DE_BLOQUES = ("invariantes", "conciliacion", "integridad", "listas")
+ORDEN_DE_BLOQUES = ("invariantes", "conciliacion", "integridad", "listas", "pagada")
 
 
 def texto_del_informe(informe: Informe, para_telegram: bool = False) -> str:
@@ -370,9 +467,11 @@ def main() -> int:
         if args.sin_odoo:
             informe.saltados.append("conciliacion contra Odoo (--sin-odoo)")
             informe.saltados.append("eleccion de listas de precio (--sin-odoo)")
+            informe.saltados.append("pagada en Odoo (--sin-odoo)")
         else:
             evaluar_conciliacion(con, informe)
             evaluar_eleccion_de_listas(informe)
+            evaluar_pagada_en_odoo(informe)
 
     texto = texto_del_informe(informe)
     print(texto)

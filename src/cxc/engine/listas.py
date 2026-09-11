@@ -109,13 +109,26 @@ class DiagnosticoEleccion:
         if self.coinciden:
             return (
                 f"{self.moneda}: las dos elecciones dan la lista {self.con_guarda}. "
-                "La guarda que falta no cambia nada en esta configuración."
+                "La guarda no cambia nada en esta configuración."
             )
         detalle = " (ARCHIVADA en Odoo)" if self.elegida_esta_archivada else ""
+        # Desde el 11-sep-2026 la guarda está aplicada en los cinco sitios, así
+        # que esta divergencia YA NO es "una página valora distinto que otra":
+        # todas usan ``primera_activa``. Lo que queda es una configuración
+        # incómoda -- la primera lista que la configuración ofrece está archivada
+        # y la guarda la saltea en silencio.
+        #
+        # El texto viejo decía "el reporte de saldos valora con la lista 7 y los
+        # otros tres caminos con la 11", y al aplicar la guarda se volvió FALSO:
+        # la corrida diaria reportaba en ALTA una condición ya resuelta. Un
+        # instrumento que grita lobo deja de mirarse, que es justo lo que este
+        # plan viene corrigiendo en otros lugares.
         return (
-            f"{self.moneda}: el reporte de saldos valora con la lista "
-            f"{self.sin_guarda}{detalle} y los otros tres caminos con la "
-            f"{self.con_guarda}. La misma orden vale distinto segun que pagina la mire."
+            f"{self.moneda}: la primera lista que la configuración ofrece es la "
+            f"{self.sin_guarda}{detalle}, y la guarda la saltea para valorar con la "
+            f"{self.con_guarda}. No hay divergencia entre páginas -- las cinco usan "
+            "la guarda. Conviene reordenar la configuración para que la primera sea "
+            "la que de verdad se usa."
         )
 
 

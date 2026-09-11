@@ -303,3 +303,26 @@ def test_los_ids_no_numericos_se_descartan_sin_romper() -> None:
         "USD": 11,
         "BCV": 10,
     }
+
+
+def test_la_nota_no_dice_que_las_paginas_discrepan_desde_que_la_guarda_esta() -> None:
+    """La nota mintió durante un rato, y este test evita que vuelva a pasar.
+
+    Decía «el reporte de saldos valora con la lista 7 y los otros tres caminos con
+    la 11». Era verdad hasta el 11-sep-2026; al aplicar la guarda en los cinco
+    sitios se volvió **falsa**, y la corrida diaria pasó a reportar en ALTA una
+    condición ya resuelta. Un instrumento que grita lobo deja de mirarse.
+
+    Lo que la divergencia significa ahora es otra cosa, más chica y cierta: la
+    primera lista que la configuración ofrece está archivada y la guarda la
+    saltea. Vale avisarlo —conviene reordenar la configuración— pero no como si
+    dos pantallas dieran números distintos.
+    """
+    d = diagnostico_de_eleccion("BCV", [3, 10], {10})
+    assert not d.coinciden
+    assert "ARCHIVADA" in d.nota, "sigue diciendo cuál está archivada"
+    assert "las cinco usan la guarda" in d.nota
+    assert "valora con la lista 3" not in d.nota, (
+        "la nota no debe afirmar que una página valora con la lista archivada: "
+        "desde que la guarda está aplicada, ninguna lo hace"
+    )
