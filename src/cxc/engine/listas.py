@@ -214,3 +214,38 @@ def diagnostico_de_huecos(
         listas_con_vigencia=con_vigencia,
         grupos_evaluados=len(grupos),
     )
+
+
+# Los ids que el motor usa cuando la configuración no ofrece ninguna lista. Son
+# los nombres lógicos históricos ("USD" -> 4, "BCV" -> 5) y estaban escritos como
+# literales en los cuatro sitios que arman el mapa.
+POR_DEFECTO_USD = 4
+POR_DEFECTO_VES = 5
+
+
+def mapa_de_listas_primarias(
+    ids_usd: list[Any],
+    ids_ves: list[Any],
+    activos: set[int],
+    *,
+    por_defecto_usd: int = POR_DEFECTO_USD,
+    por_defecto_ves: int = POR_DEFECTO_VES,
+) -> dict[str, int]:
+    """El ``pricelist_ids_map`` que consume ``OdooPriceResolver``.
+
+    Existe para que los cuatro sitios que lo arman no puedan volver a
+    divergir. Era exactamente esa divergencia —tres pasaban por la guarda de
+    archivadas y el cuarto tomaba el primer id crudo— la que hacía que 789
+    órdenes se valoraran distinto según qué página las mirara.
+
+    Cuando la configuración no ofrece ninguna lista se cae a los ids por
+    defecto, que es lo que hacía el código original. **Eso no es un dato**: es
+    un nombre lógico de respaldo, y significa que los teóricos calculados así no
+    son comparables con los de un entorno configurado.
+    """
+    primaria_usd = primera_activa([int(x) for x in ids_usd if str(x).isdigit()], activos)
+    primaria_ves = primera_activa([int(x) for x in ids_ves if str(x).isdigit()], activos)
+    return {
+        "USD": primaria_usd if primaria_usd is not None else por_defecto_usd,
+        "BCV": primaria_ves if primaria_ves is not None else por_defecto_ves,
+    }

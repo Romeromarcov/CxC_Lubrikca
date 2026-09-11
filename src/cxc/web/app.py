@@ -61,6 +61,7 @@ from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.listas import (
     diagnostico_de_eleccion,
     diagnostico_de_huecos,
+    mapa_de_listas_primarias,
     primera_activa,
 )
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
@@ -71,6 +72,7 @@ from cxc.engine.reportes_historicos import (
     resumen_cobranza_por_vendedor,
     resumen_vencida_por_vendedor,
 )
+from cxc.engine.reversadas import abono_implicito
 from cxc.engine.runner import EngineRunner
 from cxc.engine.saldos import (
     saldos_de_la_orden,
@@ -4096,7 +4098,11 @@ def _pagos_odoo_por_orden(
             for inv in inv_list:
                 tot = Decimal(str(inv.get("amount_total") or "0"))
                 res = Decimal(str(inv.get("amount_residual") or "0"))
-                paid_inv = max(Decimal("0"), tot - res)
+                # Una factura anulada tiene residual cero porque una nota de
+                # crédito la reversó, no porque entró un bolívar: aporta cero.
+                # Decisión del usuario del 11-sep-2026, sobre 17 órdenes reales
+                # y 4.489,12 USD medidos. Ver engine/reversadas.py.
+                paid_inv = abono_implicito(tot, res, inv.get("payment_state")).sin_anuladas
 
                 curr = inv.get("currency_id")
                 c_name = curr[1] if isinstance(curr, list | tuple) and len(curr) > 1 else "USD"
@@ -4471,17 +4477,22 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
         # "USD"/"BCV": nombres lógicos de fallback (ver engine/discounts.py).
         engine_cfg_obj = config.engine
-        pricelist_ids_map = {
-            "USD": int(usd_ids[0]) if usd_ids and str(usd_ids[0]).isdigit() else 4,
-            "BCV": int(ves_ids[0]) if ves_ids and str(ves_ids[0]).isdigit() else 5,
-        }
+        # La guarda: se saltean las listas ARCHIVADAS, igual que los otros tres
+        # sitios que arman un OdooPriceResolver. Era el único de los cuatro que
+        # tomaba el primer id crudo, y por eso esta pantalla valoraba 789
+        # órdenes con una lista vencida en abril -- −18,9 % en VES y −16,8 % en
+        # USD contra el resto de la aplicación. Ver ``engine/listas.py``.
+        #
+        # Aplicada el 11-sep-2026 por decisión explícita del usuario: mueve el
+        # teórico de esas 789 órdenes, y hacia arriba, que es la dirección en la
+        # que la subfacturación deja de estar escondida.
+        pricelist_ids_map = mapa_de_listas_primarias(
+            usd_ids, ves_ids, _activos_pricelist(execute)
+        )
         _fallback_pl_ids = [int(x) for x in (*usd_ids, *ves_ids) if str(x).isdigit()]
-        # Este es el ÚNICO de los cuatro sitios que arman un OdooPriceResolver
-        # que no pasa por ``_primer_id_activo`` -- ver ``engine/listas.py`` para
-        # el hallazgo y sus montos. Poner la guarda acá mueve el teórico de 789
-        # órdenes en esta pantalla, así que es una decisión del usuario y NO se
-        # aplica sola. Lo que sí se puede hacer sin mover nada es que deje de
-        # pasar en silencio: si las dos elecciones difieren, queda en el log.
+        # El diagnóstico se conserva: ahora las dos elecciones tienen que
+        # coincidir, así que un aviso acá significa que alguien reintrodujo la
+        # divergencia.
         for _diag in (
             diagnostico_de_eleccion(
                 _moneda,
@@ -4491,7 +4502,9 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             for _moneda, _ids in (("USD", usd_ids), ("BCV", ves_ids))
         ):
             if not _diag.coinciden:
-                logger.warning("Reporte de saldos, eleccion de lista: %s", _diag.nota)
+                logger.info(
+                    "Reporte de saldos: la guarda de listas cambio la eleccion. %s", _diag.nota
+                )
         price_resolver_engine = (
             OdooPriceResolver(
                 execute, pricelist_ids_map, _fallback_pl_ids, build_fallback_ficha_config(repo)
@@ -15547,10 +15560,13 @@ async def get_ventas_detalle(so_id: str):
         price_resolver: OdooPriceResolver | None = None
         if execute:
             usd_ids_pr, ves_ids_pr = get_ui_pricelist_ids(repo)
-            pricelist_ids_map_pr = {
-                "USD": int(usd_ids_pr[0]) if usd_ids_pr and str(usd_ids_pr[0]).isdigit() else 4,
-                "BCV": int(ves_ids_pr[0]) if ves_ids_pr and str(ves_ids_pr[0]).isdigit() else 5,
-            }
+            # Quinto sitio, encontrado al aplicar la decisión del 11-sep-2026:
+            # el detalle de una orden también tomaba el primer id crudo. Sin la
+            # guarda acá, el detalle de una orden contradiría a la lista de la
+            # que salió, que es exactamente el defecto que se vino a corregir.
+            pricelist_ids_map_pr = mapa_de_listas_primarias(
+                usd_ids_pr, ves_ids_pr, _activos_pricelist(execute)
+            )
             fallback_pl_ids_pr = [
                 int(x) for x in (*usd_ids_pr, *ves_ids_pr) if str(x).isdigit()
             ]

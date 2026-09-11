@@ -247,3 +247,59 @@ def test_un_mapeo_vacio_lo_dice_sin_confundirlo_con_sin_huecos() -> None:
     assert d.listas_totales == 0
     assert d.evaluable is False
     assert "No hay ninguna lista" in d.nota
+
+
+# --- el mapa que consumen los cinco sitios (decisión del 11-sep-2026) -------
+
+
+def test_el_mapa_primario_saltea_las_archivadas() -> None:
+    """La guarda aplicada, con la configuración real de la copia de producción.
+
+    ``valid_pricelists_ves`` empieza por 3, 4, 5 y 9 —las cuatro archivadas— y
+    ``valid_pricelists_usd`` por 7 y 8, también archivadas. Antes de la decisión,
+    el reporte de saldos y el detalle de una orden tomaban la 3 y la 7.
+    """
+    from cxc.engine.listas import mapa_de_listas_primarias
+
+    usd = [7, 8, 11, 13, 14, 17, 18]
+    ves = [3, 4, 5, 9, 10, 12, 15, 16, 19]
+    activas = {10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+    assert mapa_de_listas_primarias(usd, ves, activas) == {"USD": 11, "BCV": 10}
+
+
+def test_sin_ninguna_activa_se_preserva_el_primero() -> None:
+    """Mismo criterio que ``primera_activa``: sin respuesta mejor, la primera.
+
+    Devolver el id por defecto acá diría «no hay lista» cuando sí la hay, solo
+    que archivada — y valorar con el nombre lógico de respaldo es peor que
+    valorar con una lista vieja que al menos existe.
+    """
+    from cxc.engine.listas import mapa_de_listas_primarias
+
+    assert mapa_de_listas_primarias([7, 8], [3, 4], set()) == {"USD": 7, "BCV": 3}
+
+
+def test_sin_listas_configuradas_caen_los_ids_por_defecto() -> None:
+    """El caso de la copia de QA, y por qué sus teóricos no son comparables.
+
+    Sin configuración de listas el mapa cae a los nombres lógicos 4 y 5. **Eso
+    no es un dato**: es un respaldo, y significa que ningún teórico calculado en
+    ese entorno se puede comparar con uno de un entorno configurado. Ver la nota
+    de ``docs/blindaje/6-deuda-medida.md``.
+    """
+    from cxc.engine.listas import POR_DEFECTO_USD, POR_DEFECTO_VES, mapa_de_listas_primarias
+
+    assert mapa_de_listas_primarias([], [], {10}) == {
+        "USD": POR_DEFECTO_USD,
+        "BCV": POR_DEFECTO_VES,
+    }
+
+
+def test_los_ids_no_numericos_se_descartan_sin_romper() -> None:
+    """La configuración es texto libre editable desde la pantalla de ajustes."""
+    from cxc.engine.listas import mapa_de_listas_primarias
+
+    assert mapa_de_listas_primarias(["", "x", "11"], ["10", None], {10, 11}) == {
+        "USD": 11,
+        "BCV": 10,
+    }

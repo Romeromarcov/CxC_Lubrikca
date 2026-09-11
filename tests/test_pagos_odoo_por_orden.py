@@ -261,3 +261,103 @@ def test_una_factura_vieja_no_se_convierte_a_la_tasa_de_hoy(monkeypatch):
         _serie(**{"2026-07-25": 820.10}),
     )
     assert result["SO1"]["abono_bcv"] == Decimal("100")
+
+
+# --- la factura anulada, decidida el 11-sep-2026 ---------------------------
+
+
+def test_una_factura_anulada_no_aporta_abono():
+    """Decisión del usuario: el residual cero de una anulada no es un cobro.
+
+    Caso real S00886. Dos facturas y CERO ``account.payment`` reconciliados: la
+    00000677 anulada por una nota de crédito (residual 0) y la 00000701, que es
+    su refacturación, entera sin pagar. Antes de esta decisión la resta
+    ``total - residual`` acreditaba el total de la anulada, o sea el monto
+    completo de la orden, y la orden salía de la cuenta por cobrar sin que
+    nadie hubiera pagado nada.
+    """
+
+    def sin_pagos(model, method, args, kwargs=None):
+        return []
+
+    result = _pagos_odoo_por_orden(
+        sin_pagos,
+        [1, 2],
+        {1: "S00886", 2: "S00886"},
+        {
+            "S00886": [
+                {
+                    **_factura(
+                        amount_total="581034.93",
+                        amount_residual="0",
+                        currency="VES",
+                        invoice_date="2026-08-25",
+                    ),
+                    "payment_state": "reversed",
+                },
+                {
+                    **_factura(
+                        amount_total="596091.85",
+                        amount_residual="596091.85",
+                        currency="VES",
+                        invoice_date="2026-08-26",
+                    ),
+                    "payment_state": "not_paid",
+                },
+            ]
+        },
+        {"S00886": orden("S00886", monto_total="756.91")},
+        _serie(**{"2026-08-25": 767.5}),
+    )
+    assert result == {}, "sin un bolívar cobrado, la orden no debe figurar con abono"
+
+
+def test_una_factura_pagada_con_residual_cero_si_aporta():
+    """El contraste que hace que la regla no sea «residual cero no cuenta».
+
+    Una factura ``paid`` también tiene residual cero, y ésa **sí** se cobró. Lo
+    que distingue a la anulada es el ``payment_state``, no el residual.
+    """
+
+    def sin_pagos(model, method, args, kwargs=None):
+        return []
+
+    result = _pagos_odoo_por_orden(
+        sin_pagos,
+        [1],
+        {1: "SO1"},
+        {
+            "SO1": [
+                {
+                    **_factura(amount_total="500", amount_residual="0"),
+                    "payment_state": "paid",
+                }
+            ]
+        },
+        {"SO1": orden("SO1", monto_total="500")},
+        [],
+    )
+    assert result["SO1"]["abono_bcv"] == Decimal("500")
+
+
+def test_sin_payment_state_se_comporta_como_antes():
+    """Compatibilidad: los llamadores que no traen el campo no cambian.
+
+    El overlay de estado de pago viene de Odoo y puede faltar (Odoo caído, o una
+    factura que no estaba en el lote consultado). Sin el dato no se puede
+    afirmar que esté anulada, y afirmarlo sería el mismo error de «sin datos no
+    es cero» en el otro sentido.
+    """
+
+    def sin_pagos(model, method, args, kwargs=None):
+        return []
+
+    result = _pagos_odoo_por_orden(
+        sin_pagos,
+        [1],
+        {1: "SO1"},
+        {"SO1": [_factura(amount_total="500", amount_residual="0")]},
+        {"SO1": orden("SO1", monto_total="500")},
+        [],
+    )
+    assert result["SO1"]["abono_bcv"] == Decimal("500")
