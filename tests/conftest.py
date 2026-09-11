@@ -41,11 +41,22 @@ def _entorno_hermetico():
     daba resultados y cobertura DISTINTOS en una máquina de desarrollo y en
     CI. Anulándolo, lo que corre en local es exactamente lo que corre en el
     pipeline.
+
+    **Se imponen TODAS, no solo las que faltan.** Hasta el 11-sep-2026 esto
+    rellenaba únicamente las variables ausentes del entorno, así que un valor
+    real ya presente se colaba y el aislamiento no existía para él. Se descubrió
+    con ``.env.qa`` cargado en la shell: ``test_la_config_se_construye_sin_dotenv``
+    --de ``test_entorno_hermetico.py``, o sea el test que existe para esto-- falló
+    porque ``config.odoo.url`` traía el Odoo de QA. El docstring prometía que lo
+    local es igual a lo del pipeline y el código solo lo cumplía cuando el entorno
+    venía vacío.
+
+    ``DATABASE_URL`` queda deliberadamente afuera de ``_ENV_DE_PRUEBA``: la suite
+    necesita una base real y el ``conftest`` no debe inventarla.
     """
-    faltantes = {k: v for k, v in _ENV_DE_PRUEBA.items() if not os.environ.get(k)}
     with (
         patch("cxc.config._maybe_load_dotenv", lambda: None),
-        patch.dict(os.environ, faltantes),
+        patch.dict(os.environ, _ENV_DE_PRUEBA),
     ):
         yield
 
