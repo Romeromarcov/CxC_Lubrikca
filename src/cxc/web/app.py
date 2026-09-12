@@ -8107,11 +8107,16 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 fecha_dt = (
                     datetime.strptime(f"{fecha_pago} 12:00:00", "%Y-%m-%d %H:%M:%S")
                     if fecha_pago
-                    else datetime.now()
+                    else None
                 )
             except ValueError:
-                fecha_dt = datetime.now()
+                fecha_dt = None
             try:
+                if fecha_dt is None:
+                    # Sin fecha no hay tasa. Antes se usaba HOY, o sea la tasa de
+                    # hoy para un pago de quién sabe cuándo, y con eso una
+                    # sugerencia que al aceptarse congelaba ese equivalente.
+                    raise TasaNoDisponible(f"pago {p.get('pago_id')} sin fecha")
                 bcv_rate, binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
             except TasaNoDisponible:
                 # Sin tasa para el día del pago, este pago NO se ofrece.
@@ -8126,7 +8131,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 logger.error(
                     "Sugerencias de conciliacion: el pago %s se omite, no hay tasa para %s.",
                     p.get("pago_id"),
-                    fecha_dt.date().isoformat(),
+                    fecha_dt.date().isoformat() if fecha_dt else "(pago sin fecha)",
                 )
                 continue
 
@@ -12435,13 +12440,18 @@ def _detectar_vinculaciones_sobreaplicadas(
         monto_raw = parse_decimal_safe(p.get("monto", "0"))
         fecha_str = str(p.get("fecha_pago") or p.get("fecha") or "")[:10]
         try:
-            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
+            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else None
         except ValueError:
-            fecha_dt = datetime.now()
+            fecha_dt = None
         # Un pago en dólares no necesita tasa para saber cuánto vale en dólares;
         # pedirla igual hacía que un pago USD con fecha sin tasa tumbara el chequeo.
         bcv_rate: Decimal | None = Decimal("0")
         if moneda != "USD":
+            if fecha_dt is None:
+                # Sin fecha no hay tasa; antes se usaba HOY como si lo fuera.
+                if sin_tasa is not None:
+                    sin_tasa.append({"fecha": "", "pago_id": pid, "chequeo": "sobreaplicadas"})
+                continue
             bcv_rate = _tasa_bcv_de_la_fecha_o_ninguna(
                 fecha_dt, tasas_rows, sin_tasa, pago_id=pid, chequeo="sobreaplicadas"
             )
@@ -16336,7 +16346,9 @@ def _eq_usd_por_serie(fecha_iso: str, monto: Decimal, tasas_rows: list[dict]) ->
     try:
         fecha_dt = datetime.strptime(fecha_iso[:10], "%Y-%m-%d")
     except ValueError:
-        fecha_dt = datetime.now()
+        # Sin fecha legible no hay tasa: el mismo cero honesto que sin tasa. Antes
+        # se usaba HOY, y el cero de abajo no distinguía ese caso.
+        return Decimal("0")
     try:
         bcv_rate, _binance_rate = get_rate_for_datetime(fecha_dt, tasas_rows)
     except TasaNoDisponible:

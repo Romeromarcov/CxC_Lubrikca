@@ -153,3 +153,53 @@ def test_editar_vinculacion_sin_tasa_para_la_fecha_es_400() -> None:
     assert r.status_code == 400, r.text
     assert "2030-01-01" in r.json()["detail"]
     repo.update_vinculacion.assert_not_called()
+
+
+# --- «sin fecha» nunca es «hoy» ------------------------------------------------------
+
+
+def test_una_sugerencia_para_un_pago_sin_fecha_no_se_ofrece() -> None:
+    """Antes un pago sin fecha se cotizaba con la tasa de HOY, y la sugerencia que
+    salía se podía aceptar con un clic congelando ese equivalente."""
+    from cxc.web.app import _get_conciliaciones_sugerencias_sync
+
+    repo = MagicMock()
+    repo.all_ordenes.return_value = []
+    repo.all_vinculaciones.return_value = []
+    repo.all_clientes.return_value = []
+    repo.all_serie_tasas.return_value = []
+    repo.all_tasas_historicas_auditoria.return_value = [
+        {
+            "fecha": date.today().isoformat(),
+            "tasa_bcv_usd": "100.0",
+            "tasa_bcv_euro": "110.0",
+            "tasa_binance_promedio_diario": "120.0",
+        }
+    ]
+    filas = [{"pago_id": "SINFECHA", "cliente_id": "C1", "monto": "1000", "moneda": "VES"}]
+    app.invalidar_tasas()
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app._all_pagos_rows", return_value=filas),
+        patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app.AppConfig.from_env"),
+    ):
+        sugerencias = _get_conciliaciones_sugerencias_sync(repo)
+    assert [s for s in sugerencias if s.get("pago_id") == "SINFECHA"] == [], (
+        "con la tasa de HOY habría salido una sugerencia para un pago sin fecha"
+    )
+
+
+def test_el_equivalente_por_serie_de_una_fecha_ilegible_es_cero_y_no_el_de_hoy() -> None:
+    from cxc.web.app import _eq_usd_por_serie
+
+    hoy = [
+        {
+            "timestamp": f"{date.today().isoformat()} 10:00:00",
+            "tasa_bcv": "100.0",
+            "tasa_binance": "120.0",
+        }
+    ]
+    with patch("cxc.web.app._tasas_historicas_cacheadas", return_value=[]):
+        assert _eq_usd_por_serie("ayer", Decimal("1000"), hoy) == Decimal("0")
+        assert _eq_usd_por_serie(date.today().isoformat(), Decimal("1000"), hoy) == Decimal("10")
