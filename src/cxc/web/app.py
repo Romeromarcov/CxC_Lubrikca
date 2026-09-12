@@ -1865,6 +1865,30 @@ def _primer_id_activo(execute: Any, ids: list[int]) -> int | None:
     return primera_activa(ids, activos_set)
 
 
+def listas_configuradas(repo) -> tuple[list[int], list[int]]:
+    """Las listas USD y VES que valoran el teorico, leidas del MAPEO UNIFICADO.
+
+    **Decision del usuario, 11-sep-2026: "el mapeo unificado manda".** Habia cinco sitios
+    que decidian con que lista se valora un teorico leyendo de dos fuentes que nada
+    sincroniza --tres del mapeo, dos de las claves `valid_pricelists_*`--, y las dos
+    fuentes daban distinto (USD=11/BCV=10 contra USD=4/BCV=5, estas ultimas archivadas).
+    Los cuatro sitios que leian las claves pasan por aca y leen lo mismo que los otros.
+
+    `get_ui_pricelist_ids` sigue existiendo como lector de las claves --sus tests
+    protegen el parseo por coma que arreglo el bug del "14" leido como [1, 4]-- y la
+    vigilancia diaria sigue comparando las dos fuentes, ahora para avisar cuando las
+    claves queden viejas respecto del mapeo, no porque alguna pantalla las use.
+
+    Devuelve enteros porque `_get_pricelist_items_fixed` y los conjuntos de ids los
+    esperan asi; el mapeo guarda los ids como texto.
+    """
+    usd, ves = get_valid_pricelists_usd_and_ves(repo)
+    return (
+        [int(x) for x in usd if str(x).strip().isdigit()],
+        [int(x) for x in ves if str(x).strip().isdigit()],
+    )
+
+
 def get_ui_pricelist_ids(repo) -> tuple[list[int], list[int]]:
     try:
         meta = repo.all_config()
@@ -4248,8 +4272,8 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # Los abonos de Odoo se calculan más abajo (post invoices_by_so) usando
         # amount_total - amount_residual de cada factura. Ese campo siempre es exacto.
 
-        # Load UI configured pricelist IDs (USD & VES) from _Meta
-        usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+        # Del mapeo unificado, que es el que manda (decision del 11-sep-2026).
+        usd_ids, ves_ids = listas_configuradas(repo)
         pares_listas = get_pares_listas(repo)
         rules_usd = _get_pricelist_items_fixed(execute, usd_ids)
 
@@ -12621,7 +12645,7 @@ async def get_auditoria():
         # Load UI configured pricelists (USD & VES) from _Meta
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
-        usd_ids, ves_ids = get_ui_pricelist_ids(repo)
+        usd_ids, ves_ids = listas_configuradas(repo)
         all_candidate_ids = list(set(usd_ids + ves_ids))
         rules_all = _get_pricelist_items_fixed(execute, all_candidate_ids)
 
@@ -13661,7 +13685,7 @@ def _get_ventas_sync(
                     candidatos.append(int(r.get("dias_credito_max") or 0))
             return max(candidatos) if candidatos else None
 
-        usd_pricelist_ids, _ves_pricelist_ids = get_ui_pricelist_ids(repo)
+        usd_pricelist_ids, _ves_pricelist_ids = listas_configuradas(repo)
         usd_ids_str = {str(x) for x in usd_pricelist_ids}
         historical_enabled = is_historical_pricelist_enabled(repo)
         # Precomputado una vez -- lo usan tanto el bloque de "lista aplicada"
@@ -15090,7 +15114,7 @@ async def get_ventas_detalle(so_id: str):
         # teóricas (precio unitario por lista, ver más abajo).
         price_resolver: OdooPriceResolver | None = None
         if execute:
-            usd_ids_pr, ves_ids_pr = get_ui_pricelist_ids(repo)
+            usd_ids_pr, ves_ids_pr = listas_configuradas(repo)
             # Quinto sitio, encontrado al aplicar la decisión del 11-sep-2026:
             # el detalle de una orden también tomaba el primer id crudo. Sin la
             # guarda acá, el detalle de una orden contradiría a la lista de la

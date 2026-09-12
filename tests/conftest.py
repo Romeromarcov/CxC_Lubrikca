@@ -53,10 +53,20 @@ def _entorno_hermetico():
 
     ``DATABASE_URL`` queda deliberadamente afuera de ``_ENV_DE_PRUEBA``: la suite
     necesita una base real y el ``conftest`` no debe inventarla.
+
+    **Y el mapeo de listas tampoco se lee del disco.** ``get_pricelist_mapeo`` tiene un
+    caché en ``secrets/pricelist_mapeo.json``, y hasta el 11-sep-2026 la suite lo leía:
+    un test que llegara a las listas veía la configuración de la máquina del
+    desarrollador (16 listas en la mía) en vez del default de prueba. Se notó al hacer
+    que cuatro endpoints más leyeran del mapeo: cuatro tests que asumían las listas 4
+    y 5 pasaron a ver la 7, la 8 y la 11. Anulado, ``get_valid_pricelists_usd_and_ves``
+    cae al env de prueba, que es lo que esos tests siempre supusieron.
     """
     with (
         patch("cxc.config._maybe_load_dotenv", lambda: None),
         patch.dict(os.environ, _ENV_DE_PRUEBA),
+        patch("cxc.web.app._load_pricelist_mapeo_from_json", return_value=None),
+        patch("cxc.web.app._save_pricelist_mapeo_to_json"),
     ):
         yield
 

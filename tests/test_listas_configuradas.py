@@ -76,3 +76,62 @@ def test_agregar_listas_al_final_no_cambia_el_teorico() -> None:
     )
     assert _lista_ves_activa(antes) == _lista_ves_activa(despues) == "5"
     assert _lista_usd_activa(antes) == _lista_usd_activa(despues) == "8"
+
+
+# --- la decisión del 11-sep-2026: el mapeo unificado manda ---------------------
+
+
+def test_listas_configuradas_lee_del_MAPEO_y_no_de_las_claves() -> None:
+    """Cinco sitios decidían con qué lista se valora un teórico leyendo de dos fuentes.
+
+    Tres leían el mapeo unificado y dos las claves `valid_pricelists_*`, y las dos
+    fuentes daban distinto —USD=11/BCV=10 contra USD=4/BCV=5, estas últimas archivadas—.
+    El usuario eligió el mapeo. Este test fija que el lector nuevo sale de ahí y que las
+    claves, aunque digan otra cosa, no cuentan.
+    """
+    from unittest.mock import patch
+
+    from cxc.web.app import listas_configuradas
+
+    repo = _Repo("4", "5")  # las claves dicen las archivadas
+    with patch(
+        "cxc.web.app.get_valid_pricelists_usd_and_ves", return_value=(["7", "8", "11"], ["3", "10"])
+    ):
+        usd, ves = listas_configuradas(repo)
+    assert usd == [7, 8, 11], "del mapeo, no el [4] de las claves"
+    assert ves == [3, 10]
+
+
+def test_listas_configuradas_devuelve_enteros_y_saltea_lo_que_no_es_un_id() -> None:
+    """`_get_pricelist_items_fixed` y los conjuntos de ids esperan enteros; el mapeo
+    guarda texto, y un valor raro no puede reventar el reporte de saldos."""
+    from unittest.mock import patch
+
+    from cxc.web.app import listas_configuradas
+
+    with patch(
+        "cxc.web.app.get_valid_pricelists_usd_and_ves",
+        return_value=([" 11 ", "", "x", "13"], ["10", None]),
+    ):
+        usd, ves = listas_configuradas(_Repo("", ""))
+    assert usd == [11, 13]
+    assert ves == [10]
+
+
+def test_ninguna_pantalla_lee_ya_las_claves_directamente() -> None:
+    """La guarda de la decisión: si alguien vuelve a leer `get_ui_pricelist_ids` desde un
+    endpoint, dos pantallas pueden volver a valorar con listas distintas."""
+    from pathlib import Path
+
+    fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
+    llamadas = [
+        ln
+        for ln in fuente.split("\n")
+        if "get_ui_pricelist_ids(" in ln and "def get_ui_pricelist_ids" not in ln
+    ]
+    assert llamadas == [], f"las claves volvieron a leerse desde app.py: {llamadas}"
+    llamadas_nuevas = [
+        ln for ln in fuente.split("\n")
+        if "listas_configuradas(repo)" in ln and "def listas_configuradas" not in ln
+    ]
+    assert len(llamadas_nuevas) == 4, "los cuatro sitios pasan por el mapeo"

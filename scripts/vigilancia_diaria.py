@@ -292,8 +292,13 @@ def evaluar_fuentes_de_lista(informe: Informe) -> None:
     produccion -- y por eso el chequeo va en la corrida diaria, que es donde SI corre
     contra la configuracion real.
 
-    ALTA cuando difieren: con que lista se valora un teorico no puede depender de que
-    parte del codigo lo calcule.
+    **Desde el 11-sep-2026 ninguna pantalla lee las claves**: el usuario decidio que el
+    mapeo unificado manda, y los cuatro sitios que leian las claves pasan por
+    `listas_configuradas`, que lee el mapeo. Asi que una divergencia ya no es "dos
+    pantallas dicen distinto" sino "las claves `valid_pricelists_*` quedaron viejas
+    respecto del mapeo". Vale avisarlo --alguien podria volver a leerlas, o creer que
+    configurar ahi cambia algo-- pero en BAJA: en ALTA gritaria lobo por una config que
+    nada consume.
     """
     from cxc.config import AppConfig
     from cxc.engine.listas import comparar_fuentes_de_lista
@@ -325,7 +330,16 @@ def evaluar_fuentes_de_lista(informe: Informe) -> None:
     )
     informe.evaluados += 1
     if not diag.coinciden:
-        informe.hallazgos.append(Hallazgo("listas", "fuentes_de_lista", "ALTA", diag.nota))
+        informe.hallazgos.append(
+            Hallazgo(
+                "listas",
+                "claves_de_lista_viejas",
+                "BAJA",
+                "Las claves valid_pricelists_* ya no las lee ninguna pantalla (el mapeo "
+                "unificado manda desde el 11-sep-2026), pero dicen otra cosa que el mapeo: "
+                + diag.nota,
+            )
+        )
     elif diag.alguna_con_archivada:
         informe.hallazgos.append(
             Hallazgo("listas", "primaria_archivada", "BAJA", diag.nota)

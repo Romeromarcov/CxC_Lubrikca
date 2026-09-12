@@ -778,10 +778,10 @@ def test_orden_ventana_historica_con_lista_usd_real_no_se_le_sustituye_la_lista(
 
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
-    mock_repo.all_config.return_value = {
-        "valid_pricelists_usd": "7",
-        "valid_pricelists_ves": "5,3,4",
-    }
+    # Hasta el 11-sep-2026 esto configuraba las claves `valid_pricelists_*`. Desde
+    # entonces el mapeo unificado manda (decisión del usuario) y `nacio_en_lista_usd`
+    # lee de ahí, así que la lista 7 se declara como USD en la fuente que se lee.
+    mock_repo.all_config.return_value = {}
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO_SJMG_HIST",
@@ -820,6 +820,10 @@ def test_orden_ventana_historica_con_lista_usd_real_no_se_le_sustituye_la_lista(
         patch("cxc.web.app.get_repo", return_value=mock_repo),
         patch("cxc.web.app._connect", return_value=fake_execute),
         patch("cxc.web.app.AppConfig.from_env", return_value=_fake_config()),
+        patch(
+            "cxc.web.app.get_valid_pricelists_usd_and_ves",
+            return_value=(["7"], ["5", "3", "4"]),
+        ),
     ):
         res_ventas = client.get("/api/ventas")
         assert res_ventas.status_code == 200
