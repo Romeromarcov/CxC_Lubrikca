@@ -58,8 +58,8 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 
 | | 10-sep-2026 | hoy | |
 |---|---:|---:|---|
-| tests | 1.280 | **2.102** | +822 |
-| cobertura total | — | **81,97 %** | la barrera subió de 74 a 74,9 |
+| tests | 1.280 | **2.103** | +823 |
+| cobertura total | — | **81,98 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.538** | −823 |
 | líneas de `app.py` | 17.484 | **16.791** | −693, en 35 piezas; hoy subió ~300 con las guardas y los avisos de «sin tasa» |
@@ -162,6 +162,8 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | La novena invariante (de ayer) tumbaba el lote **entero** de vinculaciones del motor cada 5 min, por los diez pagos ya sobreaplicados: «10 filas no se escribieron» y no se escribía ninguna | toda promoción PENDIENTE→CONCILIADO y todo recálculo congelados en cualquier base con esos diez; producción los tiene (no desplegado: `main` no lleva la invariante) | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep, lo encontró el banco de escenarios la primera vez que corrió con ella |
 | Un solo pago con fecha sin tasa abortaba el sync de aplicaciones de Odoo y el resync **enteros**, cada 5 min, desde que 2.1 dejó de inventar 36,5/38,0 (`TasaNoDisponible` es `RuntimeError`, y el único `except` cercano miraba `ValueError`) | toda aplicación nueva de Odoo sin reflejar hasta que alguien cargue esa tasa; en QA pasaba con dos fechas | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep: el pago se salta y queda en la bandeja como `pago_sin_tasa_para_su_fecha` |
 | Un solo pago con fecha sin tasa tumbaba **ocho** lecturas o pasos: `/api/auditoria` (500), el balance (500), el historial y con él cobranza (500), el bloque de Odoo de Ventas (vacío), el detalle de ventas (sin pagos de Odoo), el resumen (sumaba de menos en silencio), el sync de aplicaciones, el resync, el lote masivo y el Auto-FIFO (ciclo entero). Y cinco sitios usaban **HOY** como fecha de un pago sin fecha | todo lo que la decisión de 2.1 (no inventar 36,5/38,0) dejó sin la otra mitad: degradarse a «no se pudo mirar» | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep en los 15 llamadores de `get_rate_for_datetime`: donde se lee, `sin_tasa_para_su_fecha` visible en la respuesta; donde se escribe, 400 que nombra la fecha |
+| Una factura que Odoo borró después del sync (borrador eliminado) reventaba la consulta de pagos y dejaba a **todas** las órdenes sin abono de Odoo en Ventas y en el reporte de saldos hasta el sync siguiente | visto en QA (`account.move(12439,)`) midiendo la pieza 35 | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep: se pregunta primero cuáles facturas siguen existiendo |
+| El abono del reporte de saldos aplica «local manda si existe» aunque la regla general del sistema sea «Odoo prevalece»; la rama del máximo que decía otra cosa nunca corrió | no medible en QA (0 vinculaciones conciliadas); el log del reporte en producción ya nombra las órdenes y la diferencia | [2.4 §35](2.4-modularizar.md) · **decisión tuya** una vez medido |
 | Dos definiciones de «orden histórica» en desacuerdo | medido de nuevo: **15 órdenes**, 3 con abonos en bolívares | [2.4](2.4-modularizar.md) · aplicado al camino del pago el 11-sep |
 
 Y lo que hay que hacer con las manos, que es lo más urgente de todo: **rotar la
