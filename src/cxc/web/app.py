@@ -708,10 +708,13 @@ def _pagos_bcv_binance_por_orden(
         curr_raw = p.get("currency_id")
         curr = curr_raw[1] if isinstance(curr_raw, list | tuple) and len(curr_raw) > 1 else "USD"
         fecha_str = str(p.get("date") or "")[:10]
+        # Sin fecha, o con fecha ilegible, antes se usaba HOY -- y la tasa de hoy
+        # para un pago de otro día. Sin fecha no hay tasa: el pago se cuenta
+        # aparte, en ``pagos_sin_tasa``, y no en el monto pagado.
         try:
-            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
+            fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else None
         except ValueError:
-            fecha_dt = datetime.now()
+            fecha_dt = None
 
         sos = {
             inv_id_to_so[int(rid)]
@@ -725,7 +728,24 @@ def _pagos_bcv_binance_por_orden(
             monto_bcv = amt
             monto_binance = amt
         else:
-            bcv_normal, tasa_binance = get_rate_for_datetime(fecha_dt, tasas_rows)
+            # Un pago en bolívares cuya fecha no tiene tasa no puede tumbar el
+            # bloque de Odoo entero de Ventas (el ``except`` del llamador se
+            # tragaba estados, términos y pagos de TODAS las órdenes con un
+            # warning). Se cuenta aparte y se sigue.
+            tasas_del_dia = None
+            if fecha_dt is not None:
+                try:
+                    tasas_del_dia = get_rate_for_datetime(fecha_dt, tasas_rows)
+                except TasaNoDisponible as e_tasa:
+                    logger.warning("Pago %s sin tasa para su fecha: %s", p.get("id"), e_tasa)
+            if tasas_del_dia is None:
+                for so in sos:
+                    entry = result.setdefault(
+                        so, {"monto_pagado_bcv": 0.0, "monto_pagado_usd_binance": 0.0}
+                    )
+                    entry["pagos_sin_tasa"] = entry.get("pagos_sin_tasa", 0.0) + 1.0
+                continue
+            bcv_normal, tasa_binance = tasas_del_dia
             tasa_bcv = bcv_normal
             if any(es_historica_map.get(so, False) for so in sos):
                 # Con las series que recibe por parámetro, no con las
@@ -9059,7 +9079,7 @@ def _vincular_masivo_sync(
     repo: Any,
     items: list[tuple[str, str, float]],
     confirmado_por: str = "Aprobador Masivo FIFO",
-) -> tuple[int, set[str]]:
+) -> tuple[int, set[str], list[dict[str, str]]]:
     """Núcleo de ``/api/vincular-masivo`` -- crea Vinculaciones ``PENDIENTE``
 
     a partir de una lista de ``(pago_id, so_id, monto_aplicado)``. Extraído
@@ -9092,10 +9112,16 @@ def _vincular_masivo_sync(
     tasas_rows = _all_serie_tasas_rows(repo)
     processed = 0
     so_ids_affected: set[str] = set()
+    # Lo que el lote NO vinculó y por qué. Antes se salteaba con un warning y el
+    # llamador decía «se procesaron N» sin decir cuántos faltaron.
+    omitidos: list[dict[str, str]] = []
 
     for pago_id, so_id, monto_aplicado in items:
         pago = repo.get_pago(pago_id)
         if not pago:
+            omitidos.append(
+                {"pago_id": pago_id, "so_id": so_id, "motivo": "pago no está en el espejo"}
+            )
             continue
 
         monto_dec = Decimal(str(monto_aplicado))
@@ -9103,11 +9129,21 @@ def _vincular_masivo_sync(
             continue
 
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
-        # get_rate_for_datetime ya trae su propio fallback de 3 niveles
-        # (SerieTasas del día -> TasasHistoricasAuditoria del día -> fila
-        # más cercana / 36.5-38.0 hardcodeado como último recurso) --
-        # nunca hace falta un fallback propio encima.
-        tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(hora_pago_confirmada, tasas_rows)
+        # Desde la Fase 2.1 la ausencia de tasa levanta en vez de inventar
+        # 36,5/38,0. Acá se aplica la misma política que dos bloques más abajo
+        # para la tasa en cero: se saltea ESTA fila y sigue el lote -- antes un
+        # solo pago sin tasa abortaba el lote entero, o sea el paso Auto-FIFO
+        # del demonio o el endpoint masivo con cero procesados.
+        try:
+            tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(
+                hora_pago_confirmada, tasas_rows
+            )
+        except TasaNoDisponible as e_tasa:
+            logger.warning(
+                "Vinculacion masiva: pago %s con orden %s se saltea, %s", pago_id, so_id, e_tasa
+            )
+            omitidos.append({"pago_id": pago_id, "so_id": so_id, "motivo": str(e_tasa)})
+            continue
         # Tarea 2: orden en la ventana histórica -> tasa BCV-Euro de referencia.
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
             repo, so_id, hora_pago_confirmada, tasa_bcv_del_dia, serie_rows=tasas_rows
@@ -9132,6 +9168,7 @@ def _vincular_masivo_sync(
                 so_id,
                 e_tasa,
             )
+            omitidos.append({"pago_id": pago_id, "so_id": so_id, "motivo": str(e_tasa)})
             continue
 
         vinc_id = f"VINC_{pago_id}_{so_id}"
@@ -9160,7 +9197,7 @@ def _vincular_masivo_sync(
         processed += 1
         so_ids_affected.add(so_id)
 
-    return processed, so_ids_affected
+    return processed, so_ids_affected, omitidos
 
 
 @app.post("/api/vincular-masivo")
@@ -9168,15 +9205,21 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
     try:
         repo = get_repo()
         items = [(it.pago_id, it.so_id, it.monto_aplicado) for it in req.items]
-        processed, so_ids_affected = _vincular_masivo_sync(repo, items)
+        processed, so_ids_affected, omitidos = _vincular_masivo_sync(repo, items)
 
         for so_id in so_ids_affected:
             background_tasks.add_task(recalculate_all, so_id)
 
+        mensaje = f"Se procesaron {processed} vinculaciones exitosamente."
+        if omitidos:
+            mensaje += f" {len(omitidos)} NO se vincularon: " + "; ".join(
+                f"pago {o['pago_id']} → {o['so_id']} ({o['motivo']})" for o in omitidos[:5]
+            )
         return {
-            "status": "success",
-            "message": f"Se procesaron {processed} vinculaciones exitosamente.",
+            "status": "success" if not omitidos else "parcial",
+            "message": mensaje,
             "procesados": processed,
+            "omitidos": omitidos,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -9228,7 +9271,11 @@ def _auto_vincular_fifo_pendientes(repo: Any) -> int:
     if not items:
         return 0
 
-    processed, _so_ids = _vincular_masivo_sync(repo, items, confirmado_por="Auto-FIFO (daemon)")
+    processed, _so_ids, omitidos = _vincular_masivo_sync(
+        repo, items, confirmado_por="Auto-FIFO (daemon)"
+    )
+    if omitidos:
+        logger.warning("Auto-FIFO: %s sugerencia(s) sin vincular: %s", len(omitidos), omitidos[:5])
     return processed
 
 
@@ -14895,6 +14942,12 @@ def _get_ventas_sync(
                     "monto_pagado_usd": round(
                         pagos_bcv_binance_map.get(o.so_id, {}).get("monto_pagado_usd_binance", 0.0),
                         2,
+                    ),
+                    # Pagos en Bs de esta orden que NO entraron en los dos montos de
+                    # arriba porque su fecha no tiene tasa. Cero casi siempre; si no
+                    # es cero, los montos pagados de esta fila están incompletos.
+                    "pagos_sin_tasa_para_su_fecha": int(
+                        pagos_bcv_binance_map.get(o.so_id, {}).get("pagos_sin_tasa", 0.0)
                     ),
                     # Tarea 1: lista con la que nació la orden vs. la que
                     # terminó aplicando el motor (puede diferir por

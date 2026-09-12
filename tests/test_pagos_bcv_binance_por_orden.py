@@ -187,3 +187,54 @@ def test_pago_reconcilia_varias_ordenes_sin_pesos_reparte_equitativo() -> None:
     )
     assert result["SO_C"]["monto_pagado_bcv"] == 500.0
     assert result["SO_D"]["monto_pagado_bcv"] == 500.0
+
+
+def test_un_pago_ves_sin_tasa_para_su_fecha_no_tumba_a_los_demas_y_queda_contado() -> None:
+    """Misma familia que /api/auditoria y el historial (12-sep-2026): la tasa
+    ausente levantaba, el ``except`` del llamador se tragaba el bloque de Odoo
+    entero de Ventas con un warning, y TODAS las órdenes perdían estados, términos
+    y montos pagados. Ahora el pago sin tasa se cuenta en ``pagos_sin_tasa`` de su
+    orden y el resto sigue. Y sin fecha tampoco se usa HOY como si fuera la fecha."""
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "account.payment":
+            return [
+                {
+                    "id": 3,
+                    "amount": 1000.0,
+                    "currency_id": [166, "VES"],
+                    "date": "2030-01-01",  # sin tasa
+                    "reconciled_invoice_ids": [902],
+                },
+                {
+                    "id": 4,
+                    "amount": 1000.0,
+                    "currency_id": [166, "VES"],
+                    "date": "",  # sin fecha
+                    "reconciled_invoice_ids": [902],
+                },
+                {
+                    "id": 5,
+                    "amount": 1000.0,
+                    "currency_id": [166, "VES"],
+                    "date": "2026-06-01",  # con tasa
+                    "reconciled_invoice_ids": [903],
+                },
+            ]
+        return []
+
+    tasas_rows = [
+        {"timestamp": "2026-06-01 10:00:00", "tasa_bcv": "500.0", "tasa_binance": "550.0"}
+    ]
+    result = _pagos_bcv_binance_por_orden(
+        _fake_execute,
+        invoice_ids_all=[902, 903],
+        inv_id_to_so={902: "SO_SIN", 903: "SO_CON"},
+        es_historica_map={},
+        tasas_rows=tasas_rows,
+        hist_rows=[],
+    )
+    assert result["SO_CON"]["monto_pagado_bcv"] == 2.0, "el que tiene tasa se convirtió igual"
+    assert result["SO_SIN"]["monto_pagado_bcv"] == 0.0, "sin tasa no se inventa un monto"
+    assert result["SO_SIN"]["pagos_sin_tasa"] == 2.0
+    assert "pagos_sin_tasa" not in result["SO_CON"]
