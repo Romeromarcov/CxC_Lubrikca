@@ -26,7 +26,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from cxc.web.app import resolver_tasa_bcv_vinculacion
 
@@ -54,9 +53,7 @@ def _serie(tasa_eur: str) -> list[dict]:
 class _Repo:
     """Repo mínimo que cuenta cuántas veces se le pide la serie."""
 
-    def __init__(
-        self, fecha: date, serie: list[dict] | None = None, lista: str = "12"
-    ) -> None:
+    def __init__(self, fecha: date, serie: list[dict] | None = None, lista: str = "12") -> None:
         self._fecha = fecha
         self._serie = serie or []
         self.lecturas_de_serie = 0
@@ -86,97 +83,31 @@ class _Repo:
         return "true" if "histor" in clave else default
 
 
-def test_si_se_pasa_la_serie_no_se_lee_de_la_base() -> None:
-    """El N+1 que este cambio saca del bucle."""
+# Desde el 12-sep-2026 (quiz, pregunta 5) la vía euro no toca montos reales, y la
+# tasa que se congela en una vinculación ES un monto real: `resolver_tasa_bcv_vinculacion`
+# devuelve la BCV-USD del día para toda orden, sin leer la serie. Lo que este archivo
+# fijaba sobre el N+1 sigue valiendo por otra razón: ya no hay lectura que repetir.
+
+
+def _casos():
+    return [
+        ("en la ventana", _Repo(FECHA_EN_VENTANA, _serie("41.00"))),
+        ("fuera de la ventana", _Repo(FECHA_FUERA, _serie("41.00"))),
+        ("sin lista", _Repo(FECHA_FUERA, _serie("41.00"), lista="")),
+    ]
+
+
+def test_toda_orden_congela_la_bcv_usd_y_no_lee_la_serie() -> None:
+    for nombre, repo in _casos():
+        tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+        assert (tasa, variante) == (DEFAULT_USD, "USD"), nombre
+        assert repo.lecturas_de_serie == 0, f"{nombre}: leyó la serie sin necesitarla"
+
+
+def test_con_la_serie_en_la_mano_tampoco_cambia() -> None:
     repo = _Repo(FECHA_EN_VENTANA)
     tasa, variante = resolver_tasa_bcv_vinculacion(
         repo, "S00001", HORA_PAGO, DEFAULT_USD, serie_rows=_serie("40.00")
     )
-    assert repo.lecturas_de_serie == 0, "leyó la serie teniéndola en la mano"
-    assert (tasa, variante) == (Decimal("40.00"), "EUR")
-
-
-def test_sin_serie_se_lee_fresco_como_antes() -> None:
-    """El comportamiento viejo se preserva para los cuatro llamadores puntuales.
-
-    Este docstring decía «la lectura fresca es lo correcto: el caché de cinco minutos
-    podría ocultar una tasa recién cargada». Desde el 11-sep-2026 esa lectura pasa por
-    el mismo caché, y lo que la mantiene correcta es que los tres escritores de la
-    serie lo invalidan al escribir. Lo que este test fija es que sin `serie_rows` se
-    lee la serie (una vez, del repo o del caché) y se resuelve la variante euro.
-    """
-    repo = _Repo(FECHA_EN_VENTANA, _serie("41.00"))
-    tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
-    assert repo.lecturas_de_serie == 1
-    assert (tasa, variante) == (Decimal("41.00"), "EUR")
-
-
-def test_una_orden_fuera_de_la_ventana_con_lista_no_llega_a_leer_nada() -> None:
-    """La guarda de fecha va primero, y por eso el N+1 solo afectaba a 206 filas.
-
-    La orden tiene lista: sin ella sería histórica por la otra vía, que es el caso
-    del test de abajo.
-    """
-    repo = _Repo(FECHA_FUERA, _serie("40.00"))
-    tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+    assert (tasa, variante) == (DEFAULT_USD, "USD")
     assert repo.lecturas_de_serie == 0
-    assert (tasa, variante) == (DEFAULT_USD, "USD")
-
-
-def test_una_orden_SIN_LISTA_es_historica_aunque_este_fuera_de_la_ventana() -> None:
-    """La decisión del usuario del 11-sep-2026, fijada.
-
-    «Manda la definición que rige el precio, que es la de la lista histórica». Esa
-    definición trata como histórica a cualquier orden sin lista asignada,
-    **incondicionalmente**: no depende del toggle ni de la ventana de fechas.
-
-    Antes el precio de esas órdenes salía por la histórica (referenciada al euro) y
-    el pago por la BCV-USD. Son S00088 y S00090, del 13-mar-2026 — el primer día
-    fuera de la ventana — y 457,51 USD.
-    """
-    repo = _Repo(FECHA_FUERA, _serie("40.00"), lista="")
-    tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
-    assert (tasa, variante) == (Decimal("40.00"), "EUR"), (
-        "sin lista, la orden usa la referencia histórica también para el pago"
-    )
-
-
-def test_una_orden_de_la_ventana_con_lista_USD_ya_no_paga_en_euro() -> None:
-    """La otra mitad de la unificación, y toca 11 órdenes reales.
-
-    La excepción del caso SJMG 2012: una orden nacida en una lista USD válida
-    **prevalece** sobre la sustitución histórica. El precio ya la trataba así; el
-    pago la seguía pagando en euro. Ahora las dos coinciden.
-    """
-    repo = _Repo(FECHA_EN_VENTANA, _serie("40.00"), lista="7")
-    with patch(
-        "cxc.web.app.get_valid_pricelists_usd_and_ves", return_value=(["7", "8"], ["3", "5"])
-    ):
-        tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
-    assert (tasa, variante) == (DEFAULT_USD, "USD"), (
-        "nacida en lista USD: paga en BCV-USD, no en euro"
-    )
-
-
-def test_sin_tasa_euro_en_la_serie_cae_a_la_usd_y_lo_dice() -> None:
-    """No se finge una tasa que no existe: la variante queda 'USD'."""
-    repo = _Repo(FECHA_EN_VENTANA)
-    tasa, variante = resolver_tasa_bcv_vinculacion(
-        repo, "S00001", HORA_PAGO, DEFAULT_USD, serie_rows=_serie("")
-    )
-    assert (tasa, variante) == (DEFAULT_USD, "USD")
-
-
-def test_una_serie_vacia_pasada_a_proposito_no_dispara_una_lectura() -> None:
-    """``[]`` es «no hay tasas», distinto de ``None`` que es «leelas vos».
-
-    Es la misma distinción que este blindaje persigue en todo lo demás, y acá
-    importa: si ``[]`` disparara la lectura, el N+1 volvería por la puerta de
-    atrás el día que un ciclo corra sin serie.
-    """
-    repo = _Repo(FECHA_EN_VENTANA, _serie("40.00"))
-    tasa, variante = resolver_tasa_bcv_vinculacion(
-        repo, "S00001", HORA_PAGO, DEFAULT_USD, serie_rows=[]
-    )
-    assert repo.lecturas_de_serie == 0
-    assert (tasa, variante) == (DEFAULT_USD, "USD")

@@ -4556,7 +4556,7 @@ def test_e2e_46_get_eur_rate_for_date_lookup_dia_exacto():
     assert tasas.bcv_eur(date(2026, 3, 19), arrastrar=False) is None
 
 
-def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():
+def test_e2e_48_sugerencia_huerfano_historico_ya_no_convierte_con_eur():
     """Bug real (reportado por el usuario, agosto 2026, cliente Inversiones
 
     Mi Linda Yemaire): un pago huérfano de un cliente con órdenes en la
@@ -4629,13 +4629,14 @@ def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():
         data = res.json()
         assert len(data) == 1
         item = data[0]
-        # La conversión a USD SÍ usa la tasa EUR (comportamiento correcto,
-        # sin cambios): 100 Bs / 569.7638 =~ $0.1755.
-        assert abs(item["tasa_bcv"] - 569.7638) < 0.001
-        # Pero la tarjeta de display debe mostrar el BCV-USD real, NUNCA
-        # el mismo valor que la tarjeta "Tasa BCV-EUR".
+        # Hasta el 12-sep-2026 la conversión a USD de este pago usaba la tasa
+        # EUR (569.7638) por ser el cliente de la ventana histórica, y este test
+        # fijaba que la tarjeta "Tasa BCV" no la mostrara. Decisión del usuario
+        # (quiz, pregunta 5): el euro es solo para auditoría y no toca montos
+        # reales -- y una sugerencia que se acepta congela un monto real. Las dos
+        # tasas son ahora la BCV-USD real.
+        assert abs(item["tasa_bcv"] - 487.1192) < 0.001
         assert abs(item["tasa_bcv_real"] - 487.1192) < 0.001
-        assert item["tasa_bcv_real"] != item["tasa_bcv"]
 
 
 def test_e2e_47_resolve_metodo_pago_nombre_batch_journals():

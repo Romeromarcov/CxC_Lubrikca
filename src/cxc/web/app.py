@@ -6765,18 +6765,37 @@ HISTORICAL_PRICE_LIST_START = date(2026, 2, 20)
 HISTORICAL_PRICE_LIST_END_EXCLUSIVE = date(2026, 3, 13)
 
 
-def is_historical_pricelist_enabled(repo) -> bool:
-    """Selector de Configuración (Tarea 1/2): permite desactivar la
-    sustitución por Lista Histórica de Auditoría para órdenes fechadas en la
-    ventana, sin afectar el fallback estructural de órdenes sin lista
-    asignada (esas siempre necesitan algún precio de referencia). Default
-    activo -- preserva el comportamiento preexistente si nadie lo toca.
+def lista_historica_habilitada_para_auditoria(repo) -> bool:
+    """El selector de Configuración ``historical_pricelist_enabled``, que desde el
+    12-sep-2026 gobierna SOLO la bandeja de auditoría. Default activo.
     """
     try:
         val = repo.get_config("historical_pricelist_enabled")
         return val is None or val.strip().lower() not in ("false", "0", "no")
     except Exception:
         return True
+
+
+def is_historical_pricelist_enabled(repo) -> bool:
+    """¿La Lista Histórica de Auditoría y la vía euro tocan los montos reales? **No.**
+
+    Decisión del usuario (quiz, 12-sep-2026, pregunta 5): «Esa lista histórica es
+    solo para fines de auditoría, igual que el equivalente de sus pagos a tasa
+    euro. No debe modificar los montos reales». Hasta ese día esta función leía el
+    selector de Configuración (default activo), y con él la lista histórica
+    valoraba el teórico del reporte de saldos y de Ventas, la vía euro acreditaba
+    los abonos en bolívares de esas órdenes, y las vinculaciones nuevas de esas
+    órdenes congelaban la tasa BCV-**Euro**. Todo eso son montos reales.
+
+    Ahora devuelve ``False`` siempre, para todos los caminos que producen un monto
+    real. La bandeja de auditoría sigue pudiendo usar la lista histórica: lee el
+    selector por ``lista_historica_habilitada_para_auditoria``. Los equivalentes
+    ya congelados con variante EUR no se tocan: son congelados por diseño, y
+    corregirlos es otra decisión.
+
+    ``repo`` se conserva en la firma para no tocar los llamadores; no se lee.
+    """
+    return False
 
 
 def _build_hist_map(repo) -> dict[str, dict[str, Any]]:
@@ -7624,7 +7643,10 @@ async def get_config_pricelist_mapeo():
                 "grupos_evaluados": _diag_huecos.grupos_evaluados,
                 "nota": _diag_huecos.nota,
             },
-            "historical_pricelist_enabled": is_historical_pricelist_enabled(repo),
+            # Desde el 12-sep-2026 este selector gobierna solo la bandeja de
+            # auditoría; los montos reales no lo leen.
+            "historical_pricelist_enabled": lista_historica_habilitada_para_auditoria(repo),
+            "historical_pricelist_solo_auditoria": True,
         }
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -13017,7 +13039,9 @@ async def get_auditoria():
         # como variables locales de get_reporte_saldos) -- /api/auditoria
         # siempre tiraba NameError y devolvia 500. Fuente única ahora (agosto
         # 2026): _build_hist_map, ya no una copia local del mismo bucle.
-        historical_enabled = is_historical_pricelist_enabled(repo)
+        # La auditoría es el único lugar donde la lista histórica sigue rigiendo
+        # (decisión del 12-sep-2026, pregunta 5 del quiz).
+        historical_enabled = lista_historica_habilitada_para_auditoria(repo)
         hist_map = _build_hist_map(repo)
 
         ordenes = repo.all_ordenes()
