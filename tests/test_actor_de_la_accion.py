@@ -91,7 +91,7 @@ def test_identidad_de_sesion_sin_usuario_es_cadena_vacia() -> None:
 # --- los tres endpoints ------------------------------------------------------
 
 
-def _llamar(ruta, cuerpo, usuario):
+def _llamar(ruta, cuerpo, usuario, preparar=None):
     from contextlib import ExitStack
     from unittest.mock import MagicMock, patch
 
@@ -104,6 +104,8 @@ def _llamar(ruta, cuerpo, usuario):
 
     repo = MagicMock()
     repo.all_descuentos_sistema_aprobados.return_value = {}
+    if preparar is not None:
+        preparar(repo)
     with ExitStack() as pila:
         for parche in (
             patch("cxc.web.app.get_repo", return_value=repo),
@@ -168,3 +170,59 @@ def test_aprobar_descuento_sistema_guarda_la_identidad_real() -> None:
     assert r.status_code == 200, r.text
     fila = repo.upsert_descuento_sistema_aprobado.call_args[0][0]
     assert fila["aprobado_por"] == "Ana Pérez en nombre de Otro"
+
+
+# --- los modelos de entrada: positivo y finito, o no entra ----------------------
+
+
+@pytest.mark.parametrize(
+    "ruta,cuerpo",
+    [
+        ("/api/vincular", {"pago_id": "P1", "so_id": "S00010", "monto_aplicado": 0}),
+        ("/api/vincular", {"pago_id": "P1", "so_id": "S00010", "monto_aplicado": -5}),
+        ("/api/vincular", {"pago_id": "P1", "so_id": "S00010", "monto_aplicado": "inf"}),
+        ("/api/pago/P1/tasa-binance", {"tasa_binance": 0}),
+        ("/api/pago/P1/tasa-binance", {"tasa_binance": -961.67}),
+        ("/api/pago/P1/tasa-binance", {"tasa_binance": "nan"}),
+    ],
+)
+def test_un_monto_o_tasa_no_positivo_da_422_antes_de_tocar_nada(ruta, cuerpo) -> None:
+    """Invariante al escribir, en el modelo: `post_vincular` no validaba el monto en
+    absoluto, y `TasaBinanceEditRequest` aceptaba cualquier float. Una tasa en cero es
+    «no hay dato» para todo lo que la consume, así que no puede entrar por la puerta."""
+    r, repo = _llamar(ruta, cuerpo, ANA)
+    assert r.status_code == 422, r.text
+    repo.append_vinculacion.assert_not_called()
+    repo.upsert_pago_tasa_binance_override.assert_not_called()
+
+
+def test_editar_la_tasa_binance_de_un_pago_pendiente_guarda_la_identidad_real() -> None:
+    """`editado_por` venía del cuerpo, como los otros tres actores. Mismo arreglo."""
+    from unittest.mock import patch
+
+    from cxc.engine.promedios_tasas import RangoDelDia
+
+    repo_extra = {}
+
+    def _preparar(repo):
+        from datetime import datetime
+        from types import SimpleNamespace
+
+        repo.get_pago.return_value = SimpleNamespace(
+            pago_id="P1", fecha_pago=datetime(2026, 9, 11, 10, 0, 0)
+        )
+        repo_extra["repo"] = repo
+
+    with patch(
+        "cxc.web.app.rango_binance_del_dia",
+        return_value=RangoDelDia(minimo=None, maximo=None, capturas=0),
+    ):
+        r, repo = _llamar(
+            "/api/pago/P1/tasa-binance",
+            {"tasa_binance": 961.67, "editado_por": "Dirección / Administración"},
+            ANA,
+            preparar=_preparar,
+        )
+    assert r.status_code == 200, r.text
+    fila = repo.upsert_pago_tasa_binance_override.call_args[0][0]
+    assert fila["editado_por"] == "Ana Pérez", "el default genérico no ensucia"

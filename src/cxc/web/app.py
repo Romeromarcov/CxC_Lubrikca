@@ -1711,12 +1711,14 @@ def usd_bcv_to_binance(
 class VinculacionRequest(BaseModel):
     pago_id: str
     so_id: str
-    monto_aplicado: float
+    # Positivo y finito en el modelo, no en el cuerpo del endpoint: `put_editar_
+    # vinculacion` lo validaba a mano y `post_vincular` no lo validaba en absoluto.
+    monto_aplicado: float = Field(gt=0, allow_inf_nan=False)
 
 
 class VinculacionEditRequest(BaseModel):
     so_id: str
-    monto_aplicado: float
+    monto_aplicado: float = Field(gt=0, allow_inf_nan=False)
 
 
 class TasaRequest(BaseModel):
@@ -1771,7 +1773,11 @@ class VincularMasivoRequest(BaseModel):
 
 
 class TasaBinanceEditRequest(BaseModel):
-    tasa_binance: float
+    # Mismo criterio que `TasaRequest`: una tasa en cero es "no hay dato" para todo lo
+    # que la consume, asi que no entra por la puerta. Y `inf`/`NaN` tampoco.
+    tasa_binance: float = Field(gt=0, allow_inf_nan=False)
+    # Lo que la persona declara. La identidad real sale de la sesion -- ver
+    # `auth.actor_de_la_accion`; este campo se conserva, no manda.
     editado_por: str = ""
 
 
@@ -9163,7 +9169,11 @@ async def post_editar_tasa_binance(
 
 
 @app.post("/api/pago/{pago_id}/tasa-binance")
-async def post_editar_tasa_binance_pago_pendiente(pago_id: str, req: TasaBinanceEditRequest):
+async def post_editar_tasa_binance_pago_pendiente(
+    pago_id: str,
+    req: TasaBinanceEditRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
     """Corrige la tasa Binance de un pago AÚN PENDIENTE (sin Vinculación
 
     real todavía -- el modal de detalle lo muestra como "sugerencia, aún
@@ -9213,7 +9223,10 @@ async def post_editar_tasa_binance_pago_pendiente(pago_id: str, req: TasaBinance
             {
                 "pago_id": pago_id,
                 "tasa_binance": str(nueva_tasa),
-                "editado_por": req.editado_por,
+                # La sesion manda; ver `auth.actor_de_la_accion`.
+                "editado_por": actor_de_la_accion(
+                    get_current_user_from_cookie(cxc_session), req.editado_por
+                ),
                 "timestamp_edicion": datetime.now().isoformat(),
             }
         )
