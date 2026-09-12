@@ -203,3 +203,46 @@ def test_un_id_inexistente_sin_regla_por_defecto_da_404() -> None:
     r, repo = _toggle([])
     assert r.status_code == 404
     repo.set_regla_activo.assert_not_called()
+
+
+def test_una_regla_por_defecto_del_diferencial_se_persiste_al_tocarla_por_primera_vez() -> None:
+    """Las tres reglas de diferencial cambiario «por defecto» no están en ninguna tabla
+    hasta que alguien las prende o apaga desde el panel. Ese primer toque las escribe,
+    con el `activo` que se pidió, y desde entonces viven como cualquier otra."""
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    import cxc.web.app as app
+    from cxc.models import DescuentoDiferencialCambiario
+
+    por_defecto = DescuentoDiferencialCambiario(regla_id="DIF_DEFAULT_1", activo=True)
+    repo = MagicMock()
+    repo.tablas_con_regla.return_value = []  # no está en ninguna tabla
+    repo.descuentos_diferencial_cambiario.return_value = [por_defecto]
+
+    async def _nada():
+        return None
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app.hay_sesion_valida", return_value=True),
+        patch("cxc.web.app.run_sync_in_background", _nada),
+        patch("cxc.web.app.run_scraper_in_background", _nada),
+        patch("cxc.web.app._aplicar_migraciones_pendientes"),
+        TestClient(app.app) as c,
+    ):
+        r = c.post(
+            "/api/config/toggle-descuento",
+            json={
+                "regla_id": "DIF_DEFAULT_1",
+                "tabla": "DescuentosDiferencialCambiario",
+                "activo": False,
+            },
+        )
+    assert r.status_code == 200, r.text
+    assert "por defecto" in r.json()["message"]
+    repo.set_regla_activo.assert_not_called(), "no había fila que actualizar"
+    guardada = repo.append_descuento_diferencial_cambiario.call_args[0][0]
+    assert guardada.regla_id == "DIF_DEFAULT_1"
+    assert guardada.activo is False, "se persiste con el estado pedido, no con el default"
