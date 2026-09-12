@@ -2054,8 +2054,34 @@ def _all_serie_tasas_rows(repo) -> list[dict]:
     """SerieTasas del backend activo, como dict de strings -- mismo formato
     que antes daba ``GspreadGateway.read_rows("SerieTasas")`` -- para no
     tener que tocar el resto del código (parseo con ``.get()``/strptime)
-    que las consume, sea cual sea el backend."""
-    return [serde.serie_to_row(f) for f in repo.all_serie_tasas()]
+    que las consume, sea cual sea el backend.
+
+    **Cacheada desde el 11-sep-2026**, con el mismo TTL y la misma invalidacion
+    que ``tasas_vigentes()``. Cierra el item de la Fase 6 del plan: "quedan 24
+    lecturas directas a la base repartidas por app.py (...) deberian ir por
+    tasas_vigentes()". Los 24 llamadores pasan las filas por parametro a funciones
+    que ya las aceptan, asi que en vez de reescribir 24 sitios la lectura misma pasa
+    a servir del cache: mismos datos, una consulta cada 5 minutos en vez de una por
+    request.
+
+    Es seguro porque los tres sitios que escriben la serie --el scraper, la carga
+    manual y el import desde Odoo-- invalidan el cache al escribir. Antes ninguno lo
+    hacia, y `invalidar_tasas()` no tenia llamadores.
+
+    Se devuelve una copia de la lista para que un llamador que la mute (hay uno que
+    hace ``[-15:]`` y otros que la ordenan) no toque lo cacheado.
+    """
+    ahora = time.time()
+    cacheadas = _SERIE_ROWS_CACHE["rows"]
+    if cacheadas is not None and ahora - float(_SERIE_ROWS_CACHE["ts"]) < _TASAS_HIST_TTL:
+        return list(cacheadas)
+    filas = [serde.serie_to_row(f) for f in repo.all_serie_tasas()]
+    _SERIE_ROWS_CACHE["rows"] = filas
+    _SERIE_ROWS_CACHE["ts"] = ahora
+    return list(filas)
+
+
+_SERIE_ROWS_CACHE: dict[str, Any] = {"rows": None, "ts": 0.0}
 
 
 # Fechas de SerieTasas ya parseadas, por texto. La misma marca de tiempo se
@@ -2146,6 +2172,8 @@ def invalidar_tasas() -> None:
     _TASAS_CACHE["ts"] = 0.0
     _TASAS_HIST_CACHE["rows"] = None
     _TASAS_HIST_CACHE["ts"] = 0.0
+    _SERIE_ROWS_CACHE["rows"] = None
+    _SERIE_ROWS_CACHE["ts"] = 0.0
 
 
 def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
@@ -2792,6 +2820,12 @@ async def run_scraper_in_background():
                 # Fase 1, ver recalculate_all_orders), tumbando /reporte y
                 # cualquier otro endpoint mientras el scraper espera red.
                 fila = await asyncio.to_thread(scraper.run, now_caracas)
+                # La serie cambio: el cache de tasas tiene que verla. Hasta el
+                # 11-sep-2026 `invalidar_tasas()` no tenia NINGUN llamador, asi
+                # que `tasas_vigentes()` servia tasas de hasta 5 minutos atras
+                # despues de cada captura, mientras los lectores sin cache la
+                # veian al instante: dos lectores en desacuerdo por 5 minutos.
+                invalidar_tasas()
                 print(
                     f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
                     f"Binance={fila.tasa_binance}"
@@ -5939,6 +5973,9 @@ async def post_config_tasas(req: TasaRequest):
             capturada_ok=True,
         )
         repo.append_serie_tasa(tasa)
+        # Sin esto, la tasa recien cargada no se veia en las pantallas que pasan por
+        # `tasas_vigentes()` hasta que venciera el TTL de 5 minutos.
+        invalidar_tasas()
         return {"status": "success", "message": "Tasa manual registrada."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -9487,6 +9524,9 @@ async def post_sync_odoo_rates():
                 )
                 repo.append_serie_tasa(tasa)
                 added_count += 1
+                # Ver el comentario en el scraper: la serie cambio, el cache no puede
+                # seguir sirviendo la anterior.
+                invalidar_tasas()
 
         # Automated Holidays Detection Heuristics
         # Days where BCV didn't publish rates (except weekends and Mondays to avoid bank holidays)

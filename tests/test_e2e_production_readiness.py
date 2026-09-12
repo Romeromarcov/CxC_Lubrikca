@@ -2309,6 +2309,11 @@ def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
             tasa_bcv_euro=Decimal("39.8"),
         ),
     ]
+    # Mutar el mock es una escritura POR FUERA de la app -- como corregir la tabla a
+    # mano -- y ese es justamente el caso para el que existe `invalidar_tasas()`.
+    # Desde el 11-sep-2026 la serie tambien se cachea (cerro las 24 lecturas
+    # directas del plan), asi que sin esto la segunda peticion veia la lista vacia.
+    _app_module.invalidar_tasas()
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
         patch("cxc.web.app.recalculate_all"),
