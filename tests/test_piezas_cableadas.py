@@ -32,6 +32,11 @@ ENGINE = RAIZ / "src" / "cxc" / "engine"
 # Funciones públicas del motor que a propósito NO tienen llamador en la aplicación.
 # La clave es ``modulo.py::funcion`` y el valor es la razón.
 SIN_LLAMADOR_A_PROPOSITO: dict[str, str] = {
+    # --- ayudantes de una pieza cableada, públicos solo para sus tests ---
+    "discount_audit.py::es_linea_de_descuento": (
+        "la mitad «si es descuento» de descuento_de_linea (pieza 23); su único "
+        "llamador externo era la lectura en vivo que se borró el 12-sep"
+    ),
     # --- instrumentos: las dos lecturas de un número, esperando una decisión ---
     "acotar_pago.py::repartir_por_orden": "reparto A de los pagos sobreaplicados; el usuario elige",
     "acotar_pago.py::repartir_proporcional": "reparto B de los mismos; el usuario elige",
@@ -163,21 +168,10 @@ APP = RAIZ / "src" / "cxc" / "web" / "app.py"
 
 # Funciones privadas de `app.py` que a propósito no tienen llamador.
 SIN_LLAMADOR_EN_APP: dict[str, str] = {
-    # Las tres lecturas en vivo que el espejo reemplazó. Las tres preceden a este
-    # plan y sus docstrings las posicionan como la referencia del parity check, así
-    # que borrarlas es decisión del usuario, no de quien escribe este test.
-    "_leer_descuentos_lineas_odoo": (
-        "lectura en vivo superada por _descuentos_lineas_desde_espejo, y con la "
-        "regla vieja (solo nombre de producto); borrarla es decisión del usuario"
-    ),
-    "_leer_notas_credito_odoo": (
-        "lectura en vivo superada por _facturacion_por_so_desde_espejo; queda como "
-        "referencia del parity check"
-    ),
-    "_leer_notas_debito_odoo": (
-        "lectura en vivo superada por _facturacion_por_so_desde_espejo; queda como "
-        "referencia del parity check"
-    ),
+    # Vacío desde el 12-sep-2026: las tres lecturas en vivo que el espejo reemplazó
+    # (`_leer_descuentos_lineas_odoo`, `_leer_notas_credito_odoo`,
+    # `_leer_notas_debito_odoo`) se borraron por decisión del usuario (quiz,
+    # pregunta 9). El parity check contra Odoo se rearma como script si hace falta.
 }
 
 

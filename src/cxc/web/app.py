@@ -55,7 +55,6 @@ from cxc.engine.conciliacion import (
 from cxc.engine.cxc_routing import BandejaDestino, ReferenciaCxC, clasificar_estado_cxc
 from cxc.engine.discount_audit import (
     descuento_de_linea,
-    monto_de_descuento_de_linea,
 )
 from cxc.engine.discounts import unidad_de_volumen
 from cxc.engine.equivalents import (
@@ -5466,20 +5465,23 @@ async def get_reporte_saldos(refresh: bool = False):
     # encabezado y el detalle de la misma pantalla difieren exactamente en el monto
     # de lo filtrado.
     #
-    # No se corrige el encabezado: bajar el total de la cartera reportada mueve un
-    # monto, y eso pasa por el visto bueno del usuario (Fase 1). Lo que se agrega es
-    # el segundo juego de KPI y la diferencia, para que se vea en vez de quedar en el
-    # hueco entre dos partes de la misma pantalla. Ver `engine/kpis_de_saldos.py`.
+    # Decisión del usuario (quiz, 12-sep-2026, pregunta 8: «corregirlo, el
+    # encabezado debe coincidir con las filas»): el encabezado se recalcula sobre
+    # las filas que quedan. El juego viejo se conserva como `kpis_antes_del_filtro`
+    # y la diferencia sigue viajando, para que el cambio se pueda ver y medir.
+    # Ver `engine/kpis_de_saldos.py`.
     try:
         diag = diferencia_de_kpis(datos.get("kpis") or {}, datos.get("items") or [], quitadas)
+        datos["kpis_antes_del_filtro"] = datos.get("kpis") or {}
+        datos["kpis"] = diag.recalculados
         datos["kpis_sin_cobradas"] = diag.recalculados
         datos["kpis_diferencias"] = diag.diferencias
         datos["kpis_coinciden"] = diag.coinciden
         datos["kpis_nota"] = diag.nota
         if not diag.coinciden:
-            logger.warning("Reporte de saldos, encabezado vs filas: %s", diag.nota)
+            logger.info("Reporte de saldos, encabezado recalculado sobre las filas: %s", diag.nota)
     except Exception as e:  # el diagnostico nunca puede tumbar el reporte
-        logger.warning("No se pudo comparar los KPI contra las filas: %s", e)
+        logger.warning("No se pudo recalcular los KPI sobre las filas: %s", e)
     return datos
 
 
@@ -13625,230 +13627,6 @@ async def get_auditoria():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-def _leer_descuentos_lineas_odoo(
-    execute: Any,
-    so_names: list[str],
-    invoice_ids: list[int],
-    inv_id_to_so: dict[int, str],
-    inv_usd_ratio_map: dict[int, float] | None = None,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Lee los descuentos ya materializados en Odoo por orden y por factura.
-
-    **SIN LLAMADORES, y con la regla SUPERADA.** Medido el 11-sep-2026: ninguna
-    ruta del proyecto invoca esta funcion --el camino vivo es
-    ``_descuentos_lineas_desde_espejo``, que lee del espejo-- y varios comentarios
-    de este archivo, de ``models.py`` y de ``odoo/client.py`` siguen diciendo que
-    es "la que usa Ventas" y que "arma hoy en vivo". No lo es.
-
-    Peor: su dominio decide si una linea ES un descuento por ``product_id.name``
-    **solamente**, que es la regla que perdia las lineas que Odoo auto-nombra en
-    ingles ("Discount 20.00%"). El camino vivo mira los dos nombres --ver
-    ``es_linea_de_descuento`` en el motor-- y ese arreglo dio 0 diffs contra las
-    819 ordenes reales. Quien lea de aca la regla, lee la vieja.
-
-    Queda en pie porque su docstring la posiciona como la referencia en vivo para
-    un parity check, y borrarla es decision del usuario, no mia.
-
-    Tarea 3c: no CALCULA ningún descuento -- solo lee lo que Odoo ya tiene
-    guardado por línea (campo ``discount`` % en ``sale.order.line``/
-    ``account.move.line``, o una línea aparte de producto "Descuento" con
-    ``price_subtotal`` negativo, patrón también usado en Lubrikca). Sirve
-    para comparar contra lo que el motor dictamina
-    (``BandejaFacturacion.total_descuentos``), nunca para sustituirlo.
-    """
-    desc_orden: dict[str, float] = {}
-    desc_factura: dict[str, float] = {}
-    if not execute:
-        return desc_orden, desc_factura
-    try:
-        if so_names:
-            sol_lines = execute(
-                "sale.order.line",
-                "search_read",
-                [
-                    [
-                        ["order_id.name", "in", so_names],
-                        "|",
-                        ["discount", ">", 0],
-                        "&",
-                        ["product_id.name", "ilike", "descuento"],
-                        ["price_subtotal", "<", 0],
-                    ]
-                ],
-                {
-                    "fields": [
-                        "order_id",
-                        "product_uom_qty",
-                        "price_unit",
-                        "discount",
-                        "price_subtotal",
-                    ]
-                },
-            )
-            for sol in sol_lines:
-                order_raw = sol.get("order_id")
-                so_name = (
-                    order_raw[1]
-                    if isinstance(order_raw, list | tuple) and len(order_raw) > 1
-                    else str(order_raw or "")
-                )
-                if not so_name:
-                    continue
-                # La regla de los dos patrones vive en el motor, con sus tests, y
-                # la comparten las dos mitades de esta función.
-                monto = monto_de_descuento_de_linea(sol)
-                # Sin convertir: las listas de precio están fijadas en dólares por
-                # definición de negocio, así que una línea de orden ya viene en USD.
-                desc_orden[so_name] = desc_orden.get(so_name, 0.0) + monto
-    except Exception as e_sol:
-        logger.warning("Error leyendo descuentos de sale.order.line en get_ventas: %s", e_sol)
-    try:
-        if invoice_ids:
-            inv_lines = execute(
-                "account.move.line",
-                "search_read",
-                [
-                    [
-                        ["move_id", "in", invoice_ids],
-                        ["display_type", "in", ["product", False]],
-                        "|",
-                        ["discount", ">", 0],
-                        "&",
-                        ["product_id.name", "ilike", "descuento"],
-                        ["price_subtotal", "<", 0],
-                    ]
-                ],
-                {"fields": ["move_id", "quantity", "price_unit", "discount", "price_subtotal"]},
-            )
-            for il in inv_lines:
-                move_raw = il.get("move_id")
-                move_id = move_raw[0] if isinstance(move_raw, list | tuple) else int(move_raw or 0)
-                so_name = inv_id_to_so.get(move_id, "")
-                if not so_name:
-                    continue
-                monto = monto_de_descuento_de_linea(il)
-                # Las facturas SÍ se convierten: pueden estar emitidas en bolívares,
-                # y el ratio las lleva a dólares para que la comparación contra el
-                # motor sea en la misma unidad. Ver el docstring de la pieza.
-                ratio = (inv_usd_ratio_map or {}).get(move_id, 1.0)
-                desc_factura[so_name] = desc_factura.get(so_name, 0.0) + monto * ratio
-    except Exception as e_il:
-        logger.warning("Error leyendo descuentos de account.move.line en get_ventas: %s", e_il)
-    return desc_orden, desc_factura
-
-
-def _leer_notas_debito_odoo(
-    execute: Any, original_invoice_ids: list[int], inv_id_to_so: dict[int, str]
-) -> dict[str, float]:
-    """Tarea 3f: notas de débito (N/D) atadas a una factura ya emitida.
-
-    Se buscan por ``debit_origin_id`` (apunta a la factura original), no
-    por ``invoice_origin``, que una N/D no necesariamente trae.
-
-    OJO con el ``move_type``: este docstring afirmaba que las N/D usan
-    ``out_invoice`` porque Odoo no les da un tipo propio. Es falso en esta
-    instancia -- verificado en vivo, usan ``out_debit`` (journal dedicado
-    "Notas de débito clientes"), y el filtro de abajo ya lo corrige desde
-    el bug de la orden S00357. Se deja aclarado acá porque la afirmación
-    vieja invitaba a "arreglar" el filtro en la dirección equivocada.
-
-    A diferencia de una nota de crédito, una N/D AUMENTA lo que el cliente
-    debe: quien la consume la suma al facturado (ver ``total_nd_aplicada``
-    en /api/ventas), nunca la resta.
-    """
-    nd_by_so: dict[str, float] = {}
-    if not execute or not original_invoice_ids:
-        return nd_by_so
-    try:
-        debit_notes = execute(
-            "account.move",
-            "search_read",
-            [
-                [
-                    ["debit_origin_id", "in", original_invoice_ids],
-                    ["state", "=", "posted"],
-                    # Bug real (orden S00357 y otras del mismo cliente,
-                    # agosto 2026): las notas de débito reales en Odoo 18
-                    # tienen move_type="out_debit" (journal dedicado "Notas
-                    # de débito clientes"), NUNCA "out_invoice" -- verificado
-                    # en vivo, debit_origin_id sí apunta correctamente a la
-                    # factura original, pero el filtro de move_type las
-                    # excluía todas.
-                    ["move_type", "=", "out_debit"],
-                ]
-            ],
-            {"fields": ["debit_origin_id", "amount_total_signed_usd"]},
-        )
-        for dn in debit_notes:
-            origin_raw = dn.get("debit_origin_id")
-            origin_id = origin_raw[0] if isinstance(origin_raw, list | tuple) else origin_raw
-            so_name = inv_id_to_so.get(origin_id, "") if origin_id else ""
-            if not so_name:
-                continue
-            nd_by_so[so_name] = nd_by_so.get(so_name, 0.0) + abs(
-                float(dn.get("amount_total_signed_usd") or 0.0)
-            )
-    except Exception as e_nd:
-        logger.warning("Error leyendo notas de débito en get_ventas: %s", e_nd)
-    return nd_by_so
-
-
-def _leer_notas_credito_odoo(
-    execute: Any,
-    original_invoice_ids: list[int],
-    inv_id_to_so: dict[int, str],
-    ids_ya_contados: set[int],
-) -> dict[str, float]:
-    """Notas de crédito (N/C) atadas a una factura ya emitida, vía
-
-    ``reversed_entry_id`` (apunta a la factura original) -- NO vía
-    ``invoice_origin``.
-
-    Bug real (mismo patrón que las notas de débito, ver
-    ``_leer_notas_debito_odoo``): el código anterior encontraba N/C
-    únicamente dentro de la consulta principal de facturas, filtrada por
-    ``invoice_origin in so_names`` -- pero las N/C creadas con el asistente
-    normal de Odoo ("Agregar Nota de Crédito") dejan ``invoice_origin``
-    vacío; se enlazan a la factura original vía ``reversed_entry_id``.
-    Verificado en vivo contra varias N/C reales del sistema.
-
-    ``ids_ya_contados``: ids de account.move que la consulta principal ya
-    sumó a ``nc_con_imp_map`` (los pocos casos donde ``invoice_origin`` sí
-    viene poblado) -- se excluyen aquí para no contar el mismo documento
-    dos veces.
-    """
-    nc_by_so: dict[str, float] = {}
-    if not execute or not original_invoice_ids:
-        return nc_by_so
-    try:
-        credit_notes = execute(
-            "account.move",
-            "search_read",
-            [
-                [
-                    ["reversed_entry_id", "in", original_invoice_ids],
-                    ["state", "=", "posted"],
-                    ["move_type", "=", "out_refund"],
-                ]
-            ],
-            {"fields": ["id", "reversed_entry_id", "amount_total_signed_usd"]},
-        )
-        for cn in credit_notes:
-            if int(cn.get("id") or 0) in ids_ya_contados:
-                continue
-            origin_raw = cn.get("reversed_entry_id")
-            origin_id = origin_raw[0] if isinstance(origin_raw, list | tuple) else origin_raw
-            so_name = inv_id_to_so.get(origin_id, "") if origin_id else ""
-            if not so_name:
-                continue
-            nc_by_so[so_name] = nc_by_so.get(so_name, 0.0) + abs(
-                float(cn.get("amount_total_signed_usd") or 0.0)
-            )
-    except Exception as e_nc:
-        logger.warning("Error leyendo notas de crédito (reversed_entry_id) en get_ventas: %s", e_nc)
-    return nc_by_so
 
 
 @app.get("/api/ventas")

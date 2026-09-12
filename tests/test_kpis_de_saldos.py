@@ -161,10 +161,11 @@ def test_un_kpis_publicado_vacio_no_revienta() -> None:
 # --- el endpoint -------------------------------------------------------------
 
 
-def test_el_endpoint_expone_la_diferencia_entre_encabezado_y_filas() -> None:
-    """El aviso viaja en la respuesta, no solo en un log.
-
-    Sin esto, el hueco vive entre dos partes de la misma pantalla y nadie lo mide.
+def test_el_endpoint_recalcula_el_encabezado_sobre_las_filas_y_deja_el_viejo_a_la_vista() -> None:
+    """Decisión del usuario (quiz, 12-sep-2026, pregunta 8): el encabezado debe
+    coincidir con las filas. Hasta ese día se dejaban los dos juegos y la
+    diferencia; ahora `kpis` es el recalculado y el viejo queda en
+    `kpis_antes_del_filtro`, con la diferencia todavía en la respuesta.
     """
     from contextlib import ExitStack
     from unittest.mock import MagicMock, patch
@@ -199,7 +200,8 @@ def test_el_endpoint_expone_la_diferencia_entre_encabezado_y_filas() -> None:
     assert r.status_code == 200, r.text
     cuerpo = r.json()
     assert [f["so_id"] for f in cuerpo["items"]] == ["S1"], "S2 se filtró"
-    assert cuerpo["kpis"]["total_general"]["deudor_bcv"] == 200.0, "el encabezado NO se tocó"
+    assert cuerpo["kpis"]["total_general"]["deudor_bcv"] == 100.0, "el encabezado sigue a las filas"
+    assert cuerpo["kpis_antes_del_filtro"]["total_general"]["deudor_bcv"] == 200.0
     assert cuerpo["kpis_sin_cobradas"]["total_general"]["deudor_bcv"] == 100.0
     assert cuerpo["kpis_coinciden"] is False
     assert cuerpo["kpis_diferencias"]["total_general"]["deudor_bcv"] == 100.0
