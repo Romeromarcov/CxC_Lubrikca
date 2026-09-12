@@ -445,6 +445,81 @@ def _repo_para_config():
     return PostgresRepository.from_url(os.environ["DATABASE_URL"])
 
 
+def evaluar_parciales_corrompidos(informe: Informe) -> None:
+    """Los pagos con parciales corrompidos por el bug de Odoo al editar fecha o tasa.
+
+    El usuario lo diagnostico el 11-sep-2026 sobre S00061: editar la fecha de pago de un
+    pago ya reconciliado hace que Odoo genere un diferencial, y "eso puede estar
+    ocurriendo con otros casos que no generan el saldo negativo porque aun no se ha
+    cubierto todo el saldo de la orden". Medido con `scripts/cruzar_diferencial_
+    cambiario.py`: los diez pagos "sobreaplicados" (1.269,25 USD) NO son dinero
+    sobreaplicado --nueve tienen la firma del bug y concentran 1.259,05--, y en total
+    609 de 1.124 pagos con parciales tienen al menos una senal, 599 de ellos sin ningun
+    exceso visible.
+
+    Aca van las TRES senales fuertes, no la debil: `write_date` posterior a los
+    parciales tambien lo dispara una edicion inocente y marca 562 pagos, asi que en la
+    corrida diaria seria ruido. Las fuertes son:
+
+      - tasas implicitas dispersas dentro del mismo pago (max/min > 1,5): un parcial
+        que dice que 272,49 Bs son 66,33 USD no es una tasa;
+      - importe local desincronizado contra el asiento posteado (detector de la app);
+      - Ajuste Cambio huerfano sobre una orden del pago (detector de la app).
+
+    Va en MEDIA: es un stock ya medido y el arreglo es trabajo de Odoo (reconciliar de
+    nuevo), no del sistema. Lo que valdria ALTA es un pago con tasas dispersas que NO
+    estaba la corrida anterior --una edicion corrompiendo algo hoy--, pero la corrida
+    diaria no guarda estado entre corridas, asi que no lo puede distinguir. Queda
+    escrito como limite, no prometido.
+
+    Solo pagos CON parciales: un pago sin parciales puede tener el importe local
+    desincronizado, pero no tiene ningun parcial que corromper, y ese caso ya lo
+    reporta la Auditoria de la app por su cuenta.
+    """
+    import importlib.util
+
+    from cxc.config import AppConfig
+    from cxc.odoo.client import _connect
+
+    ejecutar = _connect(AppConfig.from_env().odoo)
+    if not ejecutar:
+        informe.saltados.append("parciales corrompidos (sin conexion a Odoo)")
+        return
+    ruta = RAIZ / "scripts" / "cruzar_diferencial_cambiario.py"
+    spec = importlib.util.spec_from_file_location("cruzar_diferencial_cambiario", ruta)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    pagos = [p for p in mod.recolectar(ejecutar) if p.parciales]
+    informe.evaluados += 1
+    dispersos = [p for p in pagos if (p.dispersion_de_tasa or 0) > mod.DISPERSION_SOSPECHOSA]
+    desinc = [p for p in pagos if p.importe_local_desincronizado]
+    huerfanos = [p for p in pagos if p.ajuste_huerfano]
+    fuertes = {p.id for p in dispersos} | {p.id for p in desinc} | {p.id for p in huerfanos}
+    if not fuertes:
+        return
+    ordenes = set().union(*(p.ordenes for p in pagos if p.id in fuertes))
+    ejemplo = ", ".join(
+        f"{p.nombre} ({p.monto:,.2f} {p.moneda}, x{p.dispersion_de_tasa:.1f})"
+        for p in dispersos[:4]
+    )
+    informe.hallazgos.append(
+        Hallazgo(
+            "parciales",
+            "corrompidos_por_edicion",
+            "MEDIA",
+            f"{len(fuertes)} pago(s) con la firma fuerte del bug de Odoo al editar fecha/tasa "
+            f"({len(dispersos)} con tasas implicitas dispersas, {len(desinc)} con importe local "
+            f"desincronizado, {len(huerfanos)} con ajuste de cambio huerfano), sobre "
+            f"{len(ordenes)} orden(es). No es dinero sobreaplicado: son parciales que hay que "
+            f"reconciliar de nuevo en Odoo."
+            + (f" Con tasas dispersas: {ejemplo}." if ejemplo else ""),
+        )
+    )
+
+
 def evaluar_conciliacion(con, informe: Informe) -> None:
     from cxc.config import AppConfig
     from cxc.odoo.client import _connect
@@ -556,6 +631,7 @@ def main() -> int:
             evaluar_eleccion_de_listas(informe)
             evaluar_fuentes_de_lista(informe)
             evaluar_pagada_en_odoo(informe)
+            evaluar_parciales_corrompidos(informe)
 
     texto = texto_del_informe(informe)
     print(texto)
