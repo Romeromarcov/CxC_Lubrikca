@@ -219,6 +219,56 @@ def evaluar_invariantes(con, informe: Informe) -> None:
             )
 
 
+# Filas de la bandeja de auditoría que dicen «el demonio NO pudo escribir esto».
+# Salieron del banco de escenarios del 12-sep-2026: antes, una vinculación que
+# violaba la novena invariante o un pago con fecha sin tasa tumbaban el lote o
+# el ciclo entero; ahora se omiten y quedan acá, con revisión manual. Si nadie
+# las mira, se acumulan en silencio -- que es lo que la vigilancia evita.
+TIPOS_QUE_EL_DEMONIO_NO_PUDO_ESCRIBIR = {
+    "vinculacion_rechazada_por_invariante": (
+        "Odoo reporta para ese pago un monto aplicado que no cabe en lo que el pago vale: "
+        "un parcial corrompido (decision 1 del quiz). La base conserva la version anterior."
+    ),
+    "pago_sin_tasa_para_su_fecha": (
+        "No hay tasa para la fecha de ese pago en SerieTasas ni en TasasHistoricasAuditoria: "
+        "cargarla, y el ciclo siguiente lo toma."
+    ),
+}
+
+
+def evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe: Informe) -> None:
+    import sqlalchemy as sa
+
+    for tipo, porque in TIPOS_QUE_EL_DEMONIO_NO_PUDO_ESCRIBIR.items():
+        informe.evaluados += 1
+        try:
+            filas = con.execute(
+                sa.text(
+                    "SELECT pago_id FROM bandeja_auditoria "
+                    "WHERE tipo_auditoria = :tipo AND estado = 'pendiente_revision' "
+                    "ORDER BY pago_id"
+                ),
+                {"tipo": tipo},
+            ).all()
+        except Exception as exc:  # noqa: BLE001
+            informe.hallazgos.append(
+                Hallazgo("demonio", tipo, "ALTA", f"no se pudo evaluar: {exc}"[:200])
+            )
+            continue
+        if not filas:
+            continue
+        pagos = ", ".join(str(f[0]) for f in filas[:8])
+        mas = f" (+{len(filas) - 8})" if len(filas) > 8 else ""
+        informe.hallazgos.append(
+            Hallazgo(
+                "demonio",
+                tipo,
+                "MEDIA",
+                f"{len(filas)} pago(s) pendiente(s) de revision: {pagos}{mas}. {porque}",
+            )
+        )
+
+
 def evaluar_eleccion_de_listas(informe: Informe) -> None:
     """Las cuatro paginas tienen que valorar el teorico con la misma lista.
 
@@ -566,7 +616,7 @@ def evaluar_conciliacion(con, informe: Informe) -> None:
 
 # En que orden se leen los bloques del informe. No es la lista de bloques
 # validos: ver `texto_del_informe`.
-ORDEN_DE_BLOQUES = ("invariantes", "conciliacion", "integridad", "listas", "pagada")
+ORDEN_DE_BLOQUES = ("invariantes", "demonio", "conciliacion", "integridad", "listas", "pagada")
 
 
 def texto_del_informe(informe: Informe, para_telegram: bool = False) -> str:
@@ -621,6 +671,7 @@ def main() -> int:
     motor = _motor()
     with motor.connect() as con:
         evaluar_invariantes(con, informe)
+        evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe)
         evaluar_integridad(con, informe)
         if args.sin_odoo:
             informe.saltados.append("conciliacion contra Odoo (--sin-odoo)")

@@ -115,3 +115,65 @@ def test_el_recorte_para_telegram_avisa_que_recorto(vigilancia) -> None:
     texto = vigilancia.texto_del_informe(informe, para_telegram=True)
     assert len(texto) <= 3800 + 60
     assert "recortado" in texto, "un mensaje truncado sin avisar se lee como el informe completo"
+
+
+# --- lo que el demonio no pudo escribir ---------------------------------------------
+
+
+def _con_filas(filas_por_tipo):
+    """Una conexión falsa: devuelve filas según el ``tipo`` del parámetro."""
+    from unittest.mock import MagicMock
+
+    con = MagicMock()
+
+    def _execute(_sql, params=None):
+        r = MagicMock()
+        r.all.return_value = [(p,) for p in filas_por_tipo.get((params or {}).get("tipo"), [])]
+        return r
+
+    con.execute.side_effect = _execute
+    return con
+
+
+def test_lo_que_el_demonio_no_pudo_escribir_se_reporta_por_tipo_con_los_pagos(vigilancia) -> None:
+    """Si nadie mira estas filas se acumulan en silencio, que es justo lo que
+    reemplazaron (antes el lote o el ciclo entero se caían)."""
+    informe = vigilancia.Informe()
+    con = _con_filas(
+        {
+            "vinculacion_rechazada_por_invariante": ["200", "40"],
+            "pago_sin_tasa_para_su_fecha": [str(i) for i in range(1, 12)],
+        }
+    )
+    vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe)
+
+    assert informe.evaluados == 2
+    por_nombre = {h.nombre: h for h in informe.hallazgos}
+    assert set(por_nombre) == {
+        "vinculacion_rechazada_por_invariante",
+        "pago_sin_tasa_para_su_fecha",
+    }
+    assert all(h.bloque == "demonio" and h.severidad == "MEDIA" for h in informe.hallazgos)
+    assert "2 pago(s)" in por_nombre["vinculacion_rechazada_por_invariante"].detalle
+    assert "200, 40" in por_nombre["vinculacion_rechazada_por_invariante"].detalle
+    assert "11 pago(s)" in por_nombre["pago_sin_tasa_para_su_fecha"].detalle
+    assert "(+3)" in por_nombre["pago_sin_tasa_para_su_fecha"].detalle, "muestra 8 y dice el resto"
+    assert "demonio" in vigilancia.ORDEN_DE_BLOQUES
+
+
+def test_sin_filas_pendientes_el_demonio_no_aporta_hallazgos(vigilancia) -> None:
+    informe = vigilancia.Informe()
+    vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(_con_filas({}), informe)
+    assert informe.evaluados == 2 and informe.hallazgos == []
+
+
+def test_si_la_base_no_responde_es_un_hallazgo_alta_y_no_un_silencio(vigilancia) -> None:
+    from unittest.mock import MagicMock
+
+    con = MagicMock()
+    con.execute.side_effect = RuntimeError("base caída")
+    informe = vigilancia.Informe()
+    vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe)
+    assert len(informe.hallazgos) == 2
+    for h in informe.hallazgos:
+        assert h.severidad == "ALTA" and "no se pudo evaluar" in h.detalle
