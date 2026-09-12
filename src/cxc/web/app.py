@@ -77,6 +77,7 @@ from cxc.engine.listas import (
     reglas_duplicadas,
     vigencia_efectiva,
 )
+from cxc.engine.notas_de_credito import factor_de_impuesto, topar_nota_de_credito
 from cxc.engine.pagada_en_odoo import (
     TOLERANCIA_RESIDUAL,
     diagnostico_de_pagada,
@@ -8533,6 +8534,12 @@ async def get_bandeja_facturacion():
         bandeja_rows = repo.all_bandeja()
         bandeja_map = {b.so_id: b for b in bandeja_rows}
         clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
+        # El IVA configurado, solo como respaldo cuando una factura no trae sus
+        # dos totales; el factor real de cada factura manda.
+        iva_configurado_nc = float(AppConfig.from_env().engine.iva_rate)
+        # Antes había cuatro «uno coma dieciséis» sueltos en esta función además del respaldo de
+        # las NC: la misma constante, escrita cinco veces, sin leer la config.
+        factor_iva_configurado = 1.0 + iva_configurado_nc
         # Fase 0: solo Vinculaciones CONCILIADO cuentan como pagado real
         # para decidir si una orden sale de CxC activa.
         vincs = [v for v in repo.all_vinculaciones() if v.estado == EstadoVinculacion.CONCILIADO]
@@ -8562,7 +8569,7 @@ async def get_bandeja_facturacion():
             retenida (agentes de retención no pagan esa porción en efectivo)."""
             if target <= 0.05:
                 return True
-            subtotal = target / 1.16
+            subtotal = target / factor_iva_configurado
             iva_retenido = (target - subtotal) * (wh_rate / 100.0)
             return pagado >= target - iva_retenido - 0.05
 
@@ -8745,9 +8752,13 @@ async def get_bandeja_facturacion():
                         "teorico_neto_referencia": _teorico_de_referencia(
                             item, clasificacion.referencia
                         ),
-                        "subtotal_neto": round(tot_motor / 1.16, 2) if tot_motor else 0.0,
+                        "subtotal_neto": round(tot_motor / factor_iva_configurado, 2)
+                        if tot_motor
+                        else 0.0,
                         "iva_estimado": (
-                            round(tot_motor - tot_motor / 1.16, 2) if tot_motor else 0.0
+                            round(tot_motor - tot_motor / factor_iva_configurado, 2)
+                            if tot_motor
+                            else 0.0
                         ),
                         "total_motor": tot_motor,
                         "saldo_pendiente": round(max(0.0, tot_motor - abono_para_facturar), 2),
@@ -8862,48 +8873,27 @@ async def get_bandeja_facturacion():
                     # "cero" -- tratarlo como cero vaciaba la bandeja entera
                     # cuando Odoo no responde (lo detectaron los e2e 13 y
                     # 14e, que corren con la conexion apagada).
+                    # Los dos techos viven en ``engine/notas_de_credito`` (pieza
+                    # 34): la brecha facturado−pagado y el teórico de referencia,
+                    # con la regla previa de que sin facturado no hay techo.
                     _facturado_neto = float(item.get("total_facturado_neto") or 0.0)
-                    brecha_facturado_pagado = round(
-                        _facturado_neto - float(item.get("monto_pagado_usd") or 0.0), 2
-                    )
-                    # Y el segundo techo, que el usuario definió como regla
-                    # general (septiembre 2026): "el motor debe equiparar lo
-                    # facturado al neto teórico con el que quedó pagada la
-                    # orden, si lo facturado es menor al neto teórico no
-                    # sugiere aplicar nada, porque estarían dando un sobre
-                    # descuento sobre algo que se facturó por debajo de lo
-                    # que debió ser, y eso pasa a auditoría, pero lo que ya
-                    # se facturó así queda porque fue el compromiso con el
-                    # cliente, salvo que se haga una Nota de débito, pero ya
-                    # eso es parte de administración a través de Odoo".
-                    #
-                    # Una orden facturada POR DEBAJO de su teórico ya
-                    # entregó el descuento (y de más). Acreditarle una NC
-                    # encima sería descontar dos veces sobre una base que
-                    # ya estaba corta. Esas órdenes salen de esta bandeja y
-                    # se ven en Auditoría, en "Facturado por Debajo de lo
-                    # Debido", que es donde se decide si corresponde una
-                    # nota de DÉBITO -- eso lo hace administración en Odoo,
-                    # no el motor.
                     _teorico_ref_nc = _teorico_de_referencia(item, clasificacion.referencia)
-                    facturado_bajo_teorico = (
-                        _teorico_ref_nc is not None
-                        and _facturado_neto > 0.05
-                        and _facturado_neto < float(_teorico_ref_nc) - 0.05
+                    nc_topada = topar_nota_de_credito(
+                        descuento_pendiente=nc_subtotal,
+                        facturado_neto=_facturado_neto,
+                        pagado_usd=float(item.get("monto_pagado_usd") or 0.0),
+                        teorico_de_referencia=(
+                            float(_teorico_ref_nc) if _teorico_ref_nc is not None else None
+                        ),
+                        facturado_sin_impuestos=float(
+                            item.get("total_facturado_antes_impuestos") or 0.0
+                        ),
+                        facturado_con_impuestos=float(
+                            item.get("total_facturado_con_impuestos") or 0.0
+                        ),
+                        iva_configurado=iva_configurado_nc,
                     )
-
-                    if _facturado_neto <= 0.05:
-                        pass
-                    elif facturado_bajo_teorico or brecha_facturado_pagado <= 0.05:
-                        nc_subtotal = 0.0
-                    else:
-                        # La brecha viene CON impuesto; el descuento se
-                        # calcula sobre el subtotal, asi que se compara en
-                        # la misma unidad antes de topar.
-                        _fs = float(item.get("total_facturado_antes_impuestos") or 0.0)
-                        _fc = float(item.get("total_facturado_con_impuestos") or 0.0)
-                        _iva = _fc / _fs if _fs > 0 and _fc > 0 else 1.16
-                        nc_subtotal = min(nc_subtotal, brecha_facturado_pagado / _iva)
+                    nc_subtotal = nc_topada.subtotal
                     # Marcada como "no se le otorgo el descuento": no hay
                     # nota de credito que emitir. Decision del usuario --
                     # el descuento se asume comprometido por defecto y esto
@@ -8917,8 +8907,8 @@ async def get_bandeja_facturacion():
                         # el cliente retuvo IVA o la factura mezcla tasas,
                         # el cociente lo refleja. 1,16 solo como respaldo.
                         fact_con_iva = float(item.get("total_facturado_con_impuestos") or 0.0)
-                        factor_iva = (
-                            fact_con_iva / fact_sub if fact_sub > 0 and fact_con_iva > 0 else 1.16
+                        factor_iva, _iva_asumido = factor_de_impuesto(
+                            fact_sub, fact_con_iva, iva_configurado=iva_configurado_nc
                         )
                         notas_credito_pendientes.append(
                             {
@@ -8942,6 +8932,11 @@ async def get_bandeja_facturacion():
                                 # crédito es gravable y arrastra su porción
                                 # de impuesto (aclaración del usuario).
                                 "nc_subtotal": round(nc_subtotal, 2),
+                                # Por qué es ese monto: cabe en la brecha, o la
+                                # brecha lo topó, o no se sabe cuánto se facturó.
+                                "nc_motivo": nc_topada.motivo,
+                                "nc_brecha_con_impuesto": nc_topada.brecha_con_impuesto,
+                                "nc_iva_asumido": nc_topada.iva_asumido,
                                 "nc_con_iva": round(nc_subtotal * factor_iva, 2),
                                 "nc_porcentaje": round(nc_subtotal / fact_sub * 100.0, 2)
                                 if fact_sub > 0
@@ -9051,7 +9046,7 @@ async def get_bandeja_facturacion():
                 # ante la duda manda Odoo.
                 if not item.get("wh_iva_aplicado") and not item.get("factura_saldada_odoo"):
                     monto_factura_real = float(item.get("total_facturado_neto") or 0.0) or tot_motor
-                    subtotal_est = monto_factura_real / 1.16
+                    subtotal_est = monto_factura_real / factor_iva_configurado
                     iva_total_est = monto_factura_real - subtotal_est
                     iva_retenido_est = iva_total_est * (wh_rate / 100.0) if wh_agent else 0.0
                     abono_odoo = float(item.get("monto_pagado_factura_odoo") or 0.0)
