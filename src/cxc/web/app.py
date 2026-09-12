@@ -100,6 +100,7 @@ from cxc.engine.reportes_historicos import (
 from cxc.engine.reversadas import abono_implicito
 from cxc.engine.runner import EngineRunner
 from cxc.engine.saldos import (
+    ALCANCE_OBSEQUIOS,
     saldos_de_la_orden,
     saldos_deudores,
     valor_entregado_y_retenido,
@@ -4601,18 +4602,18 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             # Compute actual net delivered subtotal per product line
             # (cantidad_entregada * precio_unitario)
             if order_lines:
-                # El descuento de linea NO entra, igual que antes.
+                # Solo los OBSEQUIOS descuentan -- decision del usuario, 11-sep-2026.
                 #
-                # El usuario explico el 11-sep-2026 que un obsequio se carga con
-                # 99,99 % de descuento "para que no afectara la cxc", y este
-                # calculo lo ignora: tres lineas cuentan 35,81 de venta cada una.
-                # Aplicar el descuento arregla eso, pero medido sobre la copia
-                # mueve 204 ordenes y 8.719,06 USD, de los cuales solo 107,42 son
-                # obsequios. Los otros 8.611,64 son descuentos de linea normales
-                # y no estan autorizados, asi que la bandera queda en False.
-                # Ver engine/saldos.py::diagnostico_de_obsequios.
+                # Un obsequio se carga con 99,99 % de descuento "para que no
+                # afectara la cxc", y el calculo original lo ignoraba: tres lineas
+                # contaban 35,81 de venta cada una. Medido, aplicar TODOS los
+                # descuentos de linea moveria 204 ordenes y 8.719,06 USD, de los
+                # cuales solo 107,42 son obsequios; los otros 8.611,64 son
+                # descuentos normales sin autorizar. El usuario eligio el alcance
+                # chico: -107,42, y los 8.611,64 quedan listados para revisar caso
+                # por caso. Ver engine/saldos.py::ALCANCE_OBSEQUIOS.
                 monto_entregado_neto_usd = Decimal(
-                    str(valor_entregado_y_retenido(order_lines, aplicar_descuento=False))
+                    str(valor_entregado_y_retenido(order_lines, alcance=ALCANCE_OBSEQUIOS))
                 )
             else:
                 st_fallback = odoo_info.get("state") or getattr(o, "estado_orden", "sale")

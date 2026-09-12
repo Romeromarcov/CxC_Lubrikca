@@ -377,8 +377,18 @@ def _num_linea(valor: Any, por_defecto: float = 0.0) -> float:
         return por_defecto
 
 
+# El alcance del descuento de linea al valuar lo entregado. Es LA DECISION, y la tomo
+# el usuario el 11-sep-2026: "solo los obsequios reconocibles".
+ALCANCE_NINGUNO = "ninguno"  # el calculo original: el descuento de linea no entra
+ALCANCE_OBSEQUIOS = "obsequios"  # solo las lineas con >= 99 % (la forma del regalo)
+ALCANCE_TODOS = "todos"  # todos los descuentos de linea, autorizados o no
+
+
 def valor_entregado_y_retenido(
-    lineas: list[dict[str, Any]], *, aplicar_descuento: bool = False
+    lineas: list[dict[str, Any]],
+    *,
+    aplicar_descuento: bool | None = None,
+    alcance: str = ALCANCE_NINGUNO,
 ) -> float:
     """Cuanta plata de mercancia salio y se quedo con el cliente.
 
@@ -386,8 +396,18 @@ def valor_entregado_y_retenido(
     persigue, porque no hay nada afuera -- y tambien la cifra que el reporte
     publica como ``subtotal``.
 
-    ``aplicar_descuento`` es LA DECISION, y viene en False para que el
-    comportamiento no cambie solo.
+    ``alcance`` es LA DECISION. Tres valores:
+
+    * ``ALCANCE_NINGUNO``: el calculo original, el descuento de linea no entra.
+    * ``ALCANCE_OBSEQUIOS``: solo las lineas de obsequio (>= 99 % de descuento),
+      que son las que el usuario autorizo: "se le ponia al producto precio 0 o dcto
+      del 99 % para que NO afectara la cxc". Medido: -107,42 USD.
+    * ``ALCANCE_TODOS``: todos los descuentos de linea. Medido: -8.719,06 USD en 204
+      ordenes, de los cuales 8.611,64 son descuentos normales sin autorizar.
+
+    **Decidido el 11-sep-2026: obsequios.** ``aplicar_descuento`` queda como alias
+    (``True`` = todos, ``False`` = ninguno) para las llamadas y tests anteriores; si
+    viene, manda sobre ``alcance``.
 
     El calculo original hace ``cantidad_entregada x precio_unitario`` y **no mira
     el descuento de linea**. Eso hace que un obsequio --producto a 35,81 con
@@ -411,6 +431,10 @@ def valor_entregado_y_retenido(
     cero por linea, porque una entregada NEGATIVA --una devolucion que supera la
     linea, pasa en los datos reales-- no puede restarle valor a las otras lineas.
     """
+    if aplicar_descuento is not None:
+        alcance = ALCANCE_TODOS if aplicar_descuento else ALCANCE_NINGUNO
+    if alcance not in (ALCANCE_NINGUNO, ALCANCE_OBSEQUIOS, ALCANCE_TODOS):
+        raise ValueError(f"alcance desconocido: {alcance!r}")
     total = 0.0
     for ln in lineas:
         crudo = ln.get("cantidad_entregada")
@@ -419,8 +443,9 @@ def valor_entregado_y_retenido(
         cantidad = max(0.0, _num_linea(crudo))
         precio = _num_linea(ln.get("precio_unitario"))
         descuento = _num_linea(ln.get("descuento"))
+        entra = alcance == ALCANCE_TODOS or (alcance == ALCANCE_OBSEQUIOS and es_obsequio(ln))
         # Un descuento fuera de 0-100 no sirve para inventar un factor: se ignora.
-        if not (aplicar_descuento and 0.0 <= descuento <= 100.0):
+        if not (entra and 0.0 <= descuento <= 100.0):
             descuento = 0.0
         total += cantidad * precio * (1.0 - descuento / 100.0)
     return total

@@ -580,3 +580,77 @@ def test_el_100_por_ciento_tambien_es_obsequio() -> None:
     assert es_obsequio({"descuento": "99"})
     assert not es_obsequio({"descuento": "98.9"})
     assert not es_obsequio({"descuento": None})
+
+
+# --- el alcance del descuento de línea: decidido el 11-sep-2026 --------------
+
+
+class TestAlcanceDelDescuento:
+    """Elegiste «solo los obsequios reconocibles», y ésa es la tercera vía.
+
+    La pieza tenía una bandera binaria —sin descuento, o todos los descuentos— y
+    ninguna de las dos era la decisión: aplicar todos movía 8.719,06 USD en 204
+    órdenes, de los cuales solo 107,42 eran obsequios. El alcance chico descuenta
+    solo las líneas con ≥ 99 % (la forma del regalo) y deja los 8.611,64 restantes
+    listados para revisar, no descontados a ciegas.
+    """
+
+    @staticmethod
+    def _lineas():
+        return [
+            # Una venta normal con 10 % de descuento de línea: NO es obsequio.
+            {"cantidad_entregada": 2, "precio_unitario": 50.0, "descuento": 10.0},
+            # Un obsequio con la forma real: 99,99 % (S00671, S00674, S00679).
+            {"cantidad_entregada": 1, "precio_unitario": 35.81, "descuento": 99.99},
+            # Un obsequio al 100 % (S00336).
+            {"cantidad_entregada": 3, "precio_unitario": 20.0, "descuento": 100.0},
+        ]
+
+    def test_ninguno_es_el_calculo_original(self) -> None:
+        from cxc.engine.saldos import ALCANCE_NINGUNO, valor_entregado_y_retenido
+
+        v = valor_entregado_y_retenido(self._lineas(), alcance=ALCANCE_NINGUNO)
+        assert v == pytest.approx(100.0 + 35.81 + 60.0)
+
+    def test_obsequios_descuenta_SOLO_los_regalos(self) -> None:
+        """La venta con 10 % queda entera; los dos regalos se van a cero."""
+        from cxc.engine.saldos import ALCANCE_OBSEQUIOS, valor_entregado_y_retenido
+
+        v = valor_entregado_y_retenido(self._lineas(), alcance=ALCANCE_OBSEQUIOS)
+        assert v == pytest.approx(100.0 + 35.81 * 0.0001 + 0.0)
+
+    def test_todos_descuenta_tambien_la_venta_normal(self) -> None:
+        """Lo que NO se eligió: mete en el mismo montón lo autorizado y lo que no."""
+        from cxc.engine.saldos import ALCANCE_TODOS, valor_entregado_y_retenido
+
+        v = valor_entregado_y_retenido(self._lineas(), alcance=ALCANCE_TODOS)
+        assert v == pytest.approx(90.0 + 35.81 * 0.0001 + 0.0)
+
+    def test_la_bandera_vieja_sigue_funcionando_como_alias(self) -> None:
+        """`aplicar_descuento` mapea a los dos extremos y manda sobre `alcance`."""
+        from cxc.engine.saldos import ALCANCE_OBSEQUIOS, valor_entregado_y_retenido
+
+        lineas = self._lineas()
+        assert valor_entregado_y_retenido(lineas, aplicar_descuento=False) == pytest.approx(195.81)
+        assert valor_entregado_y_retenido(lineas, aplicar_descuento=True) == pytest.approx(
+            90.0 + 35.81 * 0.0001
+        )
+        # Si viene, manda: el alcance se ignora.
+        assert valor_entregado_y_retenido(
+            lineas, aplicar_descuento=False, alcance=ALCANCE_OBSEQUIOS
+        ) == pytest.approx(195.81)
+
+    def test_un_alcance_desconocido_revienta_en_vez_de_no_descontar_nada(self) -> None:
+        """Un typo en el alcance no puede degradar en silencio al cálculo original."""
+        from cxc.engine.saldos import valor_entregado_y_retenido
+
+        with pytest.raises(ValueError, match="alcance"):
+            valor_entregado_y_retenido(self._lineas(), alcance="obsequio")
+
+    def test_el_reporte_de_saldos_usa_el_alcance_de_obsequios(self) -> None:
+        """La guarda de la decisión aplicada."""
+        from pathlib import Path
+
+        fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
+        assert "valor_entregado_y_retenido(order_lines, alcance=ALCANCE_OBSEQUIOS)" in fuente
+        assert "valor_entregado_y_retenido(order_lines, aplicar_descuento=False)" not in fuente
