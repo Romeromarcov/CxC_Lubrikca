@@ -62,7 +62,7 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 | cobertura total | — | **81,83 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.538** | −823 |
-| líneas de `app.py` | 17.484 | **16.479** | −1.005, en 34 piezas |
+| líneas de `app.py` | 17.484 | **16.791** | −693, en 34 piezas; hoy subió ~300 con las guardas y los avisos de «sin tasa» |
 | `except Exception` en `app.py` | 190 | **176** | y una guarda para que ninguno se trague un `HTTPException` |
 | defaults silenciosos (`or 0`, `.get(…, 0)`) | 173 | **~90** | por regex; el inventario 1.1 los clasificó uno por uno |
 | cobertura del motor | 94–100 % | **87–100 %** en 27 módulos | bajó el mínimo porque el motor tiene 18 módulos más que antes; `balance.py`, el más bajo, subió hoy de 71 a 94 |
