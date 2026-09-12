@@ -152,6 +152,9 @@ def test_cada_sitio_maneja_el_ValueError_a_su_manera() -> None:
       su llamador envuelve las 1.494 y una sola tasa mala detendría todo el ciclo.
     """
     fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
-    assert fuente.count("raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa") == 2
+    # Cuatro desde el 12-sep: los dos del ValueError de `_congelar_equivalentes` y
+    # los dos del `TasaNoDisponible` de `get_rate_for_datetime`, en los mismos
+    # endpoints -- la tasa ausente también es un 400, no un 500.
+    assert fuente.count("raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa") == 4
     assert "Vinculacion masiva: pago %s con orden %s se saltea, %s" in fuente
     assert "no se resincroniza: %s (BCV %s, Binance %s)" in fuente

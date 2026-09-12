@@ -3517,18 +3517,22 @@ async def get_resumen():
                     fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else None
                 except ValueError:
                     fecha_dt = None
-                bcv_rate: Decimal | None = Decimal("0")
-                if moneda != "USD":
-                    bcv_rate = (
-                        _tasa_bcv_de_la_fecha_o_ninguna(
-                            fecha_dt, tasas_rows, None, pago_id=pid, chequeo="resumen"
-                        )
-                        if fecha_dt is not None
-                        else None
+                # La tasa hace falta en las dos monedas: para pasar un pago en Bs a
+                # dólares, y para pasar el saldo de uno en dólares a bolívares.
+                bcv_rate = (
+                    _tasa_bcv_de_la_fecha_o_ninguna(
+                        fecha_dt, tasas_rows, None, pago_id=pid, chequeo="resumen"
                     )
+                    if fecha_dt is not None
+                    else None
+                )
                 if bcv_rate is None:
                     pagos_sin_tasa.append(pid)
-                    continue
+                    if moneda != "USD":
+                        continue
+                    # En dólares el saldo en USD no necesita tasa y se suma; la
+                    # columna en Bs queda incompleta, y la lista de arriba lo dice.
+                    bcv_rate = Decimal("0")
 
                 # linked_amounts ya está en USD (_vinc_usd_equiv, no
                 # monto_aplicado crudo -- ver su docstring: monto_aplicado

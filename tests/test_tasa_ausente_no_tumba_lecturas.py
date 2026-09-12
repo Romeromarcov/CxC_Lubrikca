@@ -76,9 +76,12 @@ def test_el_resumen_suma_los_pagos_con_tasa_y_nombra_los_que_no_pudo() -> None:
         r = c.get("/api/resumen")
     assert r.status_code == 200, r.text
     cuerpo = r.json()
-    # 1000 Bs a 100 = 10 USD, más los 7 USD que no necesitan tasa.
+    # 1000 Bs a 100 = 10 USD, más los 7 USD que no necesitan tasa para sumar en USD.
     assert abs(cuerpo["pagos_sin_asignar_usd"] - 17.0) < 0.01
-    assert sorted(cuerpo["pagos_sin_tasa_para_su_fecha"]) == ["SIN", "SINFECHA"]
+    # En Bs: solo el que tiene tasa (10 USD × 100); el de dólares sin tasa no se
+    # puede pasar a Bs, y por eso también figura en la lista.
+    assert abs(cuerpo["pagos_sin_asignar_ves"] - 1000.0) < 0.01
+    assert sorted(cuerpo["pagos_sin_tasa_para_su_fecha"]) == ["SIN", "SINFECHA", "USD"]
 
 
 # --- los dos endpoints de escritura: 400, no 500 ----------------------------------
