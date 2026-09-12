@@ -38,7 +38,10 @@ def test_con_vinculacion_local_manda_la_local_y_odoo_queda_descartado() -> None:
     assert a.abono_bcv == Decimal("100"), "no el máximo (999), no la suma: la local"
     assert a.abono_binance == Decimal("95")
     assert a.tiene_vinc_local and not a.desde_odoo
-    assert f.odoo_descartado == ["SO1"], "y queda dicho que Odoo decía otra cosa"
+    (d,) = f.odoo_descartado
+    assert (d.so_id, d.local_bcv, d.odoo_bcv) == ("SO1", Decimal("100"), Decimal("999"))
+    assert d.diferencia == Decimal("899"), "y queda dicho cuánto decía Odoo de más"
+    assert f.diferencia_total == Decimal("899") and f.con_diferencia == [d]
 
 
 def test_sin_vinculacion_local_entra_la_de_odoo_marcada() -> None:
@@ -55,7 +58,7 @@ def test_las_dos_poblaciones_conviven() -> None:
     assert set(f.por_orden) == {"A", "B"}
     assert f.por_orden["A"].abono_bcv == Decimal("100")
     assert f.por_orden["B"].abono_bcv == Decimal("7")
-    assert f.odoo_descartado == ["A"]
+    assert [d.so_id for d in f.odoo_descartado] == ["A"]
 
 
 def test_el_dict_de_salida_conserva_el_nombre_historico_del_campo() -> None:

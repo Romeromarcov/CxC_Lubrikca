@@ -643,6 +643,40 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _facturas_que_odoo_todavia_tiene(execute: Any, invoice_ids: list[int]) -> list[int]:
+    """Los ids de ``invoice_ids`` que existen en Odoo hoy.
+
+    Buscar pagos por ``reconciled_invoice_ids in [...]`` con UN id que Odoo ya borró
+    (una factura en borrador que alguien eliminó después del sync) revienta la consulta
+    entera: «Record does not exist or has been deleted». Lo mostró el reporte de
+    saldos en QA el 12-sep-2026 (``account.move(12439,)``) y el ``except`` del llamador
+    dejaba a TODAS las órdenes sin abono de Odoo hasta el sync siguiente. Un ``search``
+    plano no revienta: devuelve los que están.
+    """
+    if not invoice_ids:
+        return []
+    try:
+        vivos = execute("account.move", "search", [[["id", "in", invoice_ids]]])
+    except Exception as e_ids:  # noqa: BLE001 -- se cae al listado original
+        logger.warning("No se pudo verificar qué facturas siguen en Odoo: %s", e_ids)
+        return list(invoice_ids)
+    try:
+        vivos_set = {int(i) for i in vivos}
+    except (TypeError, ValueError):
+        # Una respuesta que no es una lista de ids (no debería pasar con Odoo):
+        # no se filtra nada antes que filtrar mal.
+        return list(invoice_ids)
+    perdidas = [i for i in invoice_ids if int(i) not in vivos_set]
+    if perdidas:
+        logger.warning(
+            "%s factura(s) del espejo ya no existen en Odoo y se dejan fuera de la "
+            "consulta de pagos: %s",
+            len(perdidas),
+            perdidas[:10],
+        )
+    return [i for i in invoice_ids if int(i) in vivos_set]
+
+
 def _pagos_bcv_binance_por_orden(
     execute: Any,
     invoice_ids_all: list[int],
@@ -693,7 +727,11 @@ def _pagos_bcv_binance_por_orden(
             "search_read",
             [
                 [
-                    ["reconciled_invoice_ids", "in", invoice_ids_all],
+                    [
+                        "reconciled_invoice_ids",
+                        "in",
+                        _facturas_que_odoo_todavia_tiene(execute, invoice_ids_all),
+                    ],
                     ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                 ]
             ],
@@ -4162,7 +4200,11 @@ def _pagos_odoo_por_orden(
                 "search_read",
                 [
                     [
-                        ["reconciled_invoice_ids", "in", invoice_ids_all],
+                        [
+                            "reconciled_invoice_ids",
+                            "in",
+                            _facturas_que_odoo_todavia_tiene(execute, invoice_ids_all),
+                        ],
                         ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
                     ]
                 ],
@@ -4641,11 +4683,14 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         fusion = fusionar_abonos(pagos_by_so, pagos_odoo)
         pagos_by_so = {so: a.como_dict() for so, a in fusion.por_orden.items()}
         if fusion.odoo_descartado:
+            distintas = fusion.con_diferencia
             logger.info(
                 "Reporte de saldos: %s orden(es) con vinculación local donde la cifra de "
-                "Odoo no entró (manda la local): %s",
+                "Odoo no entró (manda la local); %s con diferencia, %s USD en total: %s",
                 len(fusion.odoo_descartado),
-                ", ".join(fusion.odoo_descartado[:10]),
+                len(distintas),
+                round(float(fusion.diferencia_total), 2),
+                ", ".join(f"{d.so_id} {float(d.diferencia):+.2f}" for d in distintas[:12]),
             )
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)

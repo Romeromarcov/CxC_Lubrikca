@@ -238,3 +238,41 @@ def test_un_pago_ves_sin_tasa_para_su_fecha_no_tumba_a_los_demas_y_queda_contado
     assert result["SO_SIN"]["monto_pagado_bcv"] == 0.0, "sin tasa no se inventa un monto"
     assert result["SO_SIN"]["pagos_sin_tasa"] == 2.0
     assert "pagos_sin_tasa" not in result["SO_CON"]
+
+
+def test_una_factura_que_odoo_ya_borro_no_deja_sin_abono_a_todas_las_ordenes() -> None:
+    """Visto en QA el 12-sep-2026: «Record does not exist or has been deleted
+    (account.move(12439,))». Un solo id borrado en el dominio reventaba la consulta
+    entera y el ``except`` dejaba a TODAS las órdenes sin abono de Odoo. Ahora se
+    pregunta primero cuáles siguen existiendo."""
+    consultas = []
+
+    def _fake_execute(model, method, args, kwargs=None):
+        if model == "account.move" and method == "search":
+            return [900]  # la 901 ya no existe
+        if model == "account.payment":
+            ids = args[0][0][2]
+            consultas.append(ids)
+            if 901 in ids:
+                raise RuntimeError("Record does not exist or has been deleted.")
+            return [
+                {
+                    "id": 1,
+                    "amount": 100.0,
+                    "currency_id": [1, "USD"],
+                    "date": "2026-06-01",
+                    "reconciled_invoice_ids": [900],
+                }
+            ]
+        return []
+
+    result = _pagos_bcv_binance_por_orden(
+        _fake_execute,
+        invoice_ids_all=[900, 901],
+        inv_id_to_so={900: "SO_VIVA", 901: "SO_BORRADA"},
+        es_historica_map={},
+        tasas_rows=[],
+        hist_rows=[],
+    )
+    assert consultas == [[900]], "la consulta salió solo con la factura que existe"
+    assert result["SO_VIVA"]["monto_pagado_bcv"] == 100.0

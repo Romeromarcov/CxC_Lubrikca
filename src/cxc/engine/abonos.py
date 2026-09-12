@@ -50,13 +50,35 @@ class AbonoDeOrden:
         }
 
 
+@dataclass(frozen=True)
+class OdooDescartado:
+    """Una orden con vinculación local donde Odoo decía otra cifra, y cuánto."""
+
+    so_id: str
+    local_bcv: Decimal
+    odoo_bcv: Decimal
+
+    @property
+    def diferencia(self) -> Decimal:
+        return self.odoo_bcv - self.local_bcv
+
+
 @dataclass
 class FusionDeAbonos:
     por_orden: dict[str, AbonoDeOrden]
     # Órdenes con vinculación local para las que Odoo también reportaba abono:
     # la cifra de Odoo NO entró. Es la lista que haría falta mirar si algún día
-    # se decide que Odoo prevalezca también acá.
-    odoo_descartado: list[str] = field(default_factory=list)
+    # se decide que Odoo prevalezca también acá -- con la diferencia, para que
+    # se pueda medir cuánto movería.
+    odoo_descartado: list[OdooDescartado] = field(default_factory=list)
+
+    @property
+    def diferencia_total(self) -> Decimal:
+        return sum((d.diferencia for d in self.odoo_descartado), Decimal("0"))
+
+    @property
+    def con_diferencia(self) -> list[OdooDescartado]:
+        return [d for d in self.odoo_descartado if abs(d.diferencia) > Decimal("0.05")]
 
 
 def _sumar_ultimo(actual: str | None, nuevo: str | None) -> str | None:
@@ -80,10 +102,16 @@ def fusionar_abonos(
             desde_odoo=False,
             tiene_vinc_local=True,
         )
-    descartados: list[str] = []
+    descartados: list[OdooDescartado] = []
     for so_id, p in odoo.items():
         if so_id in por_orden:
-            descartados.append(so_id)
+            descartados.append(
+                OdooDescartado(
+                    so_id=so_id,
+                    local_bcv=por_orden[so_id].abono_bcv,
+                    odoo_bcv=Decimal(str(p.get("abono_bcv", "0"))),
+                )
+            )
             continue
         por_orden[so_id] = AbonoDeOrden(
             abono_bcv=Decimal(str(p.get("abono_bcv", "0"))),
@@ -93,4 +121,6 @@ def fusionar_abonos(
             tiene_vinc_local=False,
             pagos_sin_tasa=int(p.get("pagos_sin_tasa", 0) or 0),
         )
-    return FusionDeAbonos(por_orden=por_orden, odoo_descartado=sorted(descartados))
+    return FusionDeAbonos(
+        por_orden=por_orden, odoo_descartado=sorted(descartados, key=lambda d: d.so_id)
+    )
