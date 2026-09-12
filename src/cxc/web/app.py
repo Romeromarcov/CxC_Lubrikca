@@ -11165,22 +11165,36 @@ def _get_pagos_historial_sync():
             # vinculación puntual) -- en USD, para poder verificar a ojo si
             # el residual mostrado cuadra contra el importe firmado del pago.
             monto_pago_usd = float(_vinc_usd_equiv(v))
+            sin_tasa_p = False
             if p_data:
+                moneda_p = str(p_data.get("moneda", "USD") or "USD").upper().strip()
                 fecha_p = str(p_data.get("fecha_pago") or p_data.get("fecha") or "")[:10]
+                # Antes, sin fecha o con fecha ilegible, se usaba HOY -- y con eso
+                # la tasa de hoy para convertir un pago de otro día. Sin fecha no hay
+                # tasa; se deja el equivalente congelado y se marca la fila.
                 try:
-                    fecha_p_dt = (
-                        datetime.strptime(fecha_p, "%Y-%m-%d") if fecha_p else datetime.now()
-                    )
+                    fecha_p_dt = datetime.strptime(fecha_p, "%Y-%m-%d") if fecha_p else None
                 except ValueError:
-                    fecha_p_dt = datetime.now()
-                bcv_p, _ = get_rate_for_datetime(fecha_p_dt, tasas_rows)
-                monto_pago_usd = float(
-                    pago_monto_usd(
-                        parse_decimal_safe(p_data.get("monto", "0")),
-                        str(p_data.get("moneda", "USD") or "USD").upper().strip(),
-                        bcv_p,
+                    fecha_p_dt = None
+                bcv_p: Decimal | None = Decimal("0")
+                if moneda_p != "USD":
+                    # Un pago sin tasa para su fecha no puede tumbar el historial
+                    # entero (es la misma familia que /api/auditoria, 12-sep-2026).
+                    bcv_p = (
+                        _tasa_bcv_de_la_fecha_o_ninguna(
+                            fecha_p_dt, tasas_rows, None, pago_id=v.pago_id, chequeo="historial"
+                        )
+                        if fecha_p_dt is not None
+                        else None
                     )
-                )
+                if bcv_p is None:
+                    sin_tasa_p = True
+                else:
+                    monto_pago_usd = float(
+                        pago_monto_usd(
+                            parse_decimal_safe(p_data.get("monto", "0")), moneda_p, bcv_p
+                        )
+                    )
 
             historial.append(
                 {
@@ -11191,6 +11205,10 @@ def _get_pagos_historial_sync():
                     if v.hora_pago_confirmada
                     else "",
                     "monto_pago_usd": monto_pago_usd,
+                    # True cuando el monto en USD de arriba es el equivalente
+                    # congelado y no una conversión con la tasa de la fecha,
+                    # porque esa tasa no existe (o el pago no tiene fecha).
+                    "sin_tasa_para_su_fecha": sin_tasa_p,
                     "monto_aplicado": float(v.monto_aplicado),
                     "moneda": v.moneda_abono.value if v.moneda_abono else "USD",
                     "so_id": v.so_id,
@@ -11256,11 +11274,21 @@ def _get_pagos_historial_sync():
                         fecha_pago_dt = (
                             datetime.strptime(fecha_pago_str, "%Y-%m-%d")
                             if fecha_pago_str
-                            else datetime.now()
+                            else None
                         )
                     except ValueError:
-                        fecha_pago_dt = datetime.now()
-                    _, tasa_binance_calc = get_rate_for_datetime(fecha_pago_dt, tasas_rows)
+                        fecha_pago_dt = None
+                    # Sin fecha, o sin tasa para ella, la Binance del día queda en
+                    # ``None`` y la fila se marca. Antes: sin fecha se usaba HOY, y
+                    # sin tasa levantaba y el ``except`` de abajo se tragaba TODOS
+                    # los pagos conciliados solo en Odoo con un warning.
+                    tasa_binance_calc: Decimal | None = None
+                    sin_tasa_odoo = fecha_pago_dt is None
+                    if fecha_pago_dt is not None:
+                        try:
+                            _, tasa_binance_calc = get_rate_for_datetime(fecha_pago_dt, tasas_rows)
+                        except TasaNoDisponible:
+                            sin_tasa_odoo = True
                     historial.append(
                         {
                             "vinc_id": None,
@@ -11268,6 +11296,7 @@ def _get_pagos_historial_sync():
                             "cliente_nombre": c_name,
                             "fecha_pago": p["fecha_pago"],
                             "monto_pago_usd": p["monto_ref_usd"],
+                            "sin_tasa_para_su_fecha": sin_tasa_odoo,
                             "monto_aplicado": p["monto_conciliado_usd"],
                             "moneda": p["moneda"],
                             "so_id": so_id,
