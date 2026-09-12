@@ -185,9 +185,9 @@ def test_una_sugerencia_para_un_pago_sin_fecha_no_se_ofrece() -> None:
         patch("cxc.web.app.AppConfig.from_env"),
     ):
         sugerencias = _get_conciliaciones_sugerencias_sync(repo)
-    assert [s for s in sugerencias if s.get("pago_id") == "SINFECHA"] == [], (
-        "con la tasa de HOY habría salido una sugerencia para un pago sin fecha"
-    )
+    assert [
+        s for s in sugerencias if s.get("pago_id") == "SINFECHA"
+    ] == [], "con la tasa de HOY habría salido una sugerencia para un pago sin fecha"
 
 
 def test_el_equivalente_por_serie_de_una_fecha_ilegible_es_cero_y_no_el_de_hoy() -> None:
@@ -203,3 +203,53 @@ def test_el_equivalente_por_serie_de_una_fecha_ilegible_es_cero_y_no_el_de_hoy()
     with patch("cxc.web.app._tasas_historicas_cacheadas", return_value=[]):
         assert _eq_usd_por_serie("ayer", Decimal("1000"), hoy) == Decimal("0")
         assert _eq_usd_por_serie(date.today().isoformat(), Decimal("1000"), hoy) == Decimal("10")
+
+
+# --- el tope por el residual real de Odoo en las sugerencias ------------------------
+
+
+def test_una_sugerencia_no_ofrece_mas_que_el_residual_que_odoo_le_deja_al_pago() -> None:
+    """Las dos líneas del tope que ninguna prueba ejecutaba. De 260 pagos vivos, 69
+    salían inflados porque el disponible era «monto − vinculaciones locales», que
+    ignora lo que Odoo ya aplicó a facturas (el peor creía tener 2.505.966,52 con
+    185,71 de residual real). El tope escala en proporción, sin tasa propia."""
+    from cxc.web.app import _get_conciliaciones_sugerencias_sync
+
+    repo = MagicMock()
+    repo.all_ordenes.return_value = []
+    repo.all_vinculaciones.return_value = []
+    repo.all_clientes.return_value = []
+    repo.all_serie_tasas.return_value = []
+    repo.all_tasas_historicas_auditoria.return_value = [
+        {
+            "fecha": "2026-07-02",
+            "tasa_bcv_usd": "100.0",
+            "tasa_bcv_euro": "110.0",
+            "tasa_binance_promedio_diario": "120.0",
+        }
+    ]
+    filas = [
+        {
+            "pago_id": "P1",
+            "cliente_id": "C1",
+            "monto": "1000",
+            "moneda": "USD",
+            "fecha_pago": "2026-07-02",
+        }
+    ]
+    app.invalidar_tasas()
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app._all_pagos_rows", return_value=filas),
+        patch("cxc.web.app._connect", return_value=lambda *a, **k: []),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app.get_reconciled_pago_ids_odoo", return_value=set()),
+        # Odoo dice que del pago de 1.000 quedan 100 sin aplicar.
+        patch("cxc.web.app.residual_disponible_por_pago", return_value={"P1": Decimal("100")}),
+    ):
+        sugerencias = _get_conciliaciones_sugerencias_sync(None)
+
+    (fila,) = (s for s in sugerencias if s["pago_id"] == "P1")
+    assert fila["so_id"] is None, "sin órdenes abiertas: la fila muestra el residual, sin sugerir"
+    assert abs(fila["saldo_pago"] - 100.0) < 0.01, "el residual real, no los 1.000"
+    assert fila["monto_pago"] == 1000.0, "el monto original del pago no se toca"
