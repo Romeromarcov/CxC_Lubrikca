@@ -3502,6 +3502,10 @@ async def get_resumen():
 
         pagos_pendientes_usd = Decimal("0")
         pagos_pendientes_ves = Decimal("0")
+        # Pagos que la tarjeta NO pudo sumar: sin fecha, o sin tasa para ella. Antes
+        # un pago sin fecha se convertía con la tasa de HOY, y cualquier excepción
+        # caía en un ``except: pass`` -- la tarjeta sumaba de menos sin decirlo.
+        pagos_sin_tasa: list[str] = []
         for p in pagos:
             pid = str(p.get("pago_id", ""))
             if not pid or pid in reconciled_pagos_set:
@@ -3510,12 +3514,21 @@ async def get_resumen():
                 moneda = str(p.get("moneda", "USD") or "USD").upper().strip()
                 fecha_str = str(p.get("fecha_pago", ""))[:10]
                 try:
-                    fecha_dt = (
-                        datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
-                    )
+                    fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else None
                 except ValueError:
-                    fecha_dt = datetime.now()
-                bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
+                    fecha_dt = None
+                bcv_rate: Decimal | None = Decimal("0")
+                if moneda != "USD":
+                    bcv_rate = (
+                        _tasa_bcv_de_la_fecha_o_ninguna(
+                            fecha_dt, tasas_rows, None, pago_id=pid, chequeo="resumen"
+                        )
+                        if fecha_dt is not None
+                        else None
+                    )
+                if bcv_rate is None:
+                    pagos_sin_tasa.append(pid)
+                    continue
 
                 # linked_amounts ya está en USD (_vinc_usd_equiv, no
                 # monto_aplicado crudo -- ver su docstring: monto_aplicado
@@ -3530,8 +3543,10 @@ async def get_resumen():
 
                 pagos_pendientes_usd += saldo_usd
                 pagos_pendientes_ves += saldo_usd * bcv_rate
-            except Exception:
-                pass
+            except Exception as e_pago:
+                # Se sigue con los demás, pero no en silencio.
+                logger.warning("Resumen: pago %s no se pudo sumar: %s", pid, e_pago)
+                pagos_sin_tasa.append(pid)
 
         # 3. Alertas rojas in Conciliación
         concs = repo.all_conciliaciones()
@@ -3541,6 +3556,8 @@ async def get_resumen():
             "total_por_cobrar_usd": float(total_por_cobrar),
             "pagos_sin_asignar_usd": float(pagos_pendientes_usd),
             "pagos_sin_asignar_ves": float(pagos_pendientes_ves),
+            # Si no está vacío, los dos totales de arriba están incompletos.
+            "pagos_sin_tasa_para_su_fecha": pagos_sin_tasa,
             "alertas_reconciliacion": alertas_rojas,
         }
     except Exception as e:
@@ -3659,6 +3676,10 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
         # en el `except Exception` de abajo y salian como 500. El 400 lo agregue yo
         # hoy y lo probe mirando el texto del archivo, no la respuesta: era un 500.
         raise
+    except TasaNoDisponible as e_tasa:
+        # Acá SÍ es un error duro: el equivalente se congela. Pero es del
+        # cliente (cargar la tasa de ese día), no del servidor: 400, no 500.
+        raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -3765,6 +3786,8 @@ async def put_editar_vinculacion(
         }
     except HTTPException:
         raise
+    except TasaNoDisponible as e_tasa:
+        raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -15768,29 +15791,36 @@ async def get_ventas_detalle(so_id: str):
                     moneda_str = str(pago.get("moneda") or "USD").upper().strip()
                     moneda_enum = Moneda.USD if "USD" in moneda_str else Moneda.VES
                     fecha_str = str(pago.get("fecha_pago") or "")[:10]
+                    # Sin fecha, o sin tasa para ella, los equivalentes quedan en
+                    # ``None`` y la fila lo dice. Antes: sin fecha se usaba HOY, y
+                    # sin tasa levantaba hasta el ``except`` del bloque, que dejaba
+                    # el detalle sin ninguno de los pagos de Odoo.
                     try:
-                        fecha_dt = (
-                            datetime.strptime(fecha_str, "%Y-%m-%d")
-                            if fecha_str
-                            else datetime.now()
-                        )
+                        fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else None
                     except ValueError:
-                        fecha_dt = datetime.now()
-                    tasa_bcv_dia, tasa_binance_dia = get_rate_for_datetime(
-                        fecha_dt, tasas_rows_pagos
-                    )
-                    try:
-                        eq = calcular_equivalentes(
-                            parse_decimal_safe(str(pago.get("monto_original") or "0")),
-                            moneda_enum,
-                            tasa_bcv_dia,
-                            tasa_binance_dia,
-                        )
-                        equiv_usd_bcv = round(float(eq.equiv_usd_bcv), 2)
-                        equiv_usd_binance = round(float(eq.equiv_usd_binance), 2)
-                    except (ValueError, ArithmeticError):
-                        equiv_usd_bcv = None
-                        equiv_usd_binance = None
+                        fecha_dt = None
+                    tasa_bcv_dia = tasa_binance_dia = Decimal("0")
+                    sin_tasa_pago = fecha_dt is None
+                    if fecha_dt is not None:
+                        try:
+                            tasa_bcv_dia, tasa_binance_dia = get_rate_for_datetime(
+                                fecha_dt, tasas_rows_pagos
+                            )
+                        except TasaNoDisponible:
+                            sin_tasa_pago = True
+                    equiv_usd_bcv = equiv_usd_binance = None
+                    if not sin_tasa_pago:
+                        try:
+                            eq = calcular_equivalentes(
+                                parse_decimal_safe(str(pago.get("monto_original") or "0")),
+                                moneda_enum,
+                                tasa_bcv_dia,
+                                tasa_binance_dia,
+                            )
+                            equiv_usd_bcv = round(float(eq.equiv_usd_bcv), 2)
+                            equiv_usd_binance = round(float(eq.equiv_usd_binance), 2)
+                        except (ValueError, ArithmeticError):
+                            pass
 
                     pagos.append(
                         {
@@ -15813,6 +15843,7 @@ async def get_ventas_detalle(so_id: str):
                             "tasa_binance_aplicada": round(float(tasa_binance_dia), 4),
                             "equiv_usd_bcv": equiv_usd_bcv,
                             "equiv_usd_binance": equiv_usd_binance,
+                            "sin_tasa_para_su_fecha": sin_tasa_pago,
                             "confirmado_por": "",
                             "estado": estado,
                         }
