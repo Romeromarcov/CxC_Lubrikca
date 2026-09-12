@@ -58,11 +58,11 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 
 | | 10-sep-2026 | hoy | |
 |---|---:|---:|---|
-| tests | 1.280 | **2.039** | +759 |
-| cobertura total | — | **80,96 %** | la barrera subió de 74 a 74,9 |
+| tests | 1.280 | **2.063** | +783 |
+| cobertura total | — | **81,43 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.606** | −755 |
-| líneas de `app.py` | 17.484 | **16.479** | −1.005, en 32 piezas |
+| líneas de `app.py` | 17.484 | **16.479** | −1.005, en 33 piezas |
 | `except Exception` en `app.py` | 190 | **176** | y una guarda para que ninguno se trague un `HTTPException` |
 | defaults silenciosos (`or 0`, `.get(…, 0)`) | 173 | **~90** | por regex; el inventario 1.1 los clasificó uno por uno |
 | cobertura del motor | 94–100 % | **87–100 %** en 26 módulos | bajó el mínimo porque el motor tiene 17 módulos más que antes; `balance.py`, el más bajo, subió hoy de 71 a 94 |
@@ -159,6 +159,8 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | El mismo descuento da dos montos según qué tabla se lea | brecha de 1.128,91 USD | [6](6-deuda-medida.md) |
 | El verificador de huecos de vigencia decía «ninguno» sin poder mirar | 0 de 16 listas evaluables | [6](6-deuda-medida.md) · aplicado |
 | Devuelto supera lo entregado (cantidad negativa) | 14 unidades | [2.2](2.2-invariantes.md) |
+| La novena invariante (de ayer) tumbaba el lote **entero** de vinculaciones del motor cada 5 min, por los diez pagos ya sobreaplicados: «10 filas no se escribieron» y no se escribía ninguna | toda promoción PENDIENTE→CONCILIADO y todo recálculo congelados en cualquier base con esos diez; producción los tiene (no desplegado: `main` no lleva la invariante) | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep, lo encontró el banco de escenarios la primera vez que corrió con ella |
+| Un solo pago con fecha sin tasa abortaba el sync de aplicaciones de Odoo y el resync **enteros**, cada 5 min, desde que 2.1 dejó de inventar 36,5/38,0 (`TasaNoDisponible` es `RuntimeError`, y el único `except` cercano miraba `ValueError`) | toda aplicación nueva de Odoo sin reflejar hasta que alguien cargue esa tasa; en QA pasaba con dos fechas | [2.4](2.4-modularizar.md) · **aplicado** el 12-sep: el pago se salta y queda en la bandeja como `pago_sin_tasa_para_su_fecha` |
 | Dos definiciones de «orden histórica» en desacuerdo | medido de nuevo: **15 órdenes**, 3 con abonos en bolívares | [2.4](2.4-modularizar.md) · aplicado al camino del pago el 11-sep |
 
 Y lo que hay que hacer con las manos, que es lo más urgente de todo: **rotar la

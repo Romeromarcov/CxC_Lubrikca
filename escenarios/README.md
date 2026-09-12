@@ -31,6 +31,20 @@ desactiva la cobertura, que acá no significa nada.
    para el primer escenario, ese escenario parece colgado y el resto del banco
    espera detrás.
 
+## Cuándo correrlo, además de cuando cambia un escenario
+
+**Antes de mergear cualquier invariante de dinero nueva.** La suite hermética no
+tiene los datos de producción; el banco corre sobre una copia. El 12-sep-2026 la
+novena invariante (un pago no puede aplicar más de lo que vale) llevaba un día en
+`develop` con la suite verde, y la primera corrida del banco mostró que tumbaba el
+lote entero de vinculaciones del motor cada cinco minutos, por los diez pagos que
+ya estaban sobreaplicados en la copia. Ningún test hermético podía verlo: ninguno
+tiene esos diez pagos. Ver `docs/blindaje/2.4-modularizar.md`, sección 33.
+
+Lo que hay que mirar en esa corrida no es solo el verde: el stderr capturado de
+cada escenario trae lo que el demonio imprimió, y un `Error al recalcular todas las
+órdenes` ahí es un hallazgo aunque el escenario pase.
+
 ## La seguridad, que acá no es un detalle
 
 **El Odoo de prueba comparte la imprenta fiscal con producción.** El conector
