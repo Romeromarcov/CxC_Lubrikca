@@ -3538,6 +3538,11 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             "status": "success",
             "message": "Vinculación guardada. Recálculo en segundo plano iniciado.",
         }
+    except HTTPException:
+        # Sin esto, el 404 de 'Pago no encontrado' y el 400 de 'tasa invalida' caian
+        # en el `except Exception` de abajo y salian como 500. El 400 lo agregue yo
+        # hoy y lo probe mirando el texto del archivo, no la respuesta: era un 500.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -7586,6 +7591,11 @@ async def post_eliminar_descuento(req: EliminarDescuentoRequest):
                 status_code=404, detail="Regla no encontrada o no se pudo eliminar."
             )
         return {"status": "success", "message": f"Regla {req.regla_id} eliminada permanentemente."}
+    except HTTPException:
+        # Sin esto, el 404 de arriba caia en el `except Exception` de abajo y salia
+        # como 500: una regla que no existe respondia "error del servidor". Mismo bug
+        # que tenia `post_cambiar_tipo_tasa_bcv`.
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
