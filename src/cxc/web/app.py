@@ -12274,11 +12274,34 @@ def _detectar_ajustes_cambio_huerfanos(
     return resultado
 
 
+def _tasa_bcv_de_la_fecha_o_ninguna(
+    fecha: datetime, tasas_rows: list[Any], sin_tasa: list[dict[str, Any]] | None, **quien: Any
+) -> Decimal | None:
+    """``get_rate_for_datetime`` para un chequeo de auditoría: ``None`` si no hay tasa.
+
+    Desde la Fase 2.1 la ausencia de tasa es un error duro, y eso está bien
+    donde se va a CONGELAR un equivalente. Un chequeo de auditoría no congela
+    nada: lee. Que un solo pago con fecha sin tasa tumbe ``/api/auditoria``
+    entera (500) deja al usuario sin la bandeja que necesita justamente para
+    ver ese pago -- lo mostró el banco de escenarios el 12-sep-2026. Acá el
+    pago se salta, se anota en ``sin_tasa`` con quién lo pidió, y el resto del
+    chequeo sigue.
+    """
+    try:
+        return get_rate_for_datetime(fecha, tasas_rows)[0]
+    except TasaNoDisponible as e_tasa:
+        logger.warning("Chequeo de auditoría sin tasa para %s: %s", fecha.date(), e_tasa)
+        if sin_tasa is not None:
+            sin_tasa.append({"fecha": fecha.date().isoformat(), **quien})
+        return None
+
+
 def _detectar_vinculaciones_sobreaplicadas(
     vincs: list[Vinculacion],
     pagos_rows: list[dict[str, Any]],
     tasas_rows: list[Any],
     tolerancia_usd: Decimal = Decimal("0.05"),
+    sin_tasa: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Por cada pago, suma el equivalente USD de TODAS sus Vinculaciones
 
@@ -12312,7 +12335,15 @@ def _detectar_vinculaciones_sobreaplicadas(
             fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d") if fecha_str else datetime.now()
         except ValueError:
             fecha_dt = datetime.now()
-        bcv_rate, _ = get_rate_for_datetime(fecha_dt, tasas_rows)
+        # Un pago en dólares no necesita tasa para saber cuánto vale en dólares;
+        # pedirla igual hacía que un pago USD con fecha sin tasa tumbara el chequeo.
+        bcv_rate: Decimal | None = Decimal("0")
+        if moneda != "USD":
+            bcv_rate = _tasa_bcv_de_la_fecha_o_ninguna(
+                fecha_dt, tasas_rows, sin_tasa, pago_id=pid, chequeo="sobreaplicadas"
+            )
+            if bcv_rate is None:
+                continue
         monto_usd_real = pago_monto_usd(monto_raw, moneda, bcv_rate)
         exceso = aplicado - monto_usd_real
         if exceso > tolerancia_usd:
@@ -12331,6 +12362,7 @@ def _detectar_vinculaciones_tasa_implicita_implausible(
     vincs: list[Vinculacion],
     tasas_rows: list[Any],
     tolerancia_pct: Decimal = Decimal("0.15"),
+    sin_tasa: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Para cada Vinculación en VES, compara la tasa IMPLÍCITA
 
@@ -12351,8 +12383,15 @@ def _detectar_vinculaciones_tasa_implicita_implausible(
         if not v.equiv_usd_bcv or v.equiv_usd_bcv <= 0:
             continue
         tasa_implicita = v.monto_aplicado / v.equiv_usd_bcv
-        tasa_real, _ = get_rate_for_datetime(v.hora_pago_confirmada, tasas_rows)
-        if tasa_real <= 0:
+        tasa_real = _tasa_bcv_de_la_fecha_o_ninguna(
+            v.hora_pago_confirmada,
+            tasas_rows,
+            sin_tasa,
+            pago_id=v.pago_id,
+            vinc_id=v.vinc_id,
+            chequeo="tasa_implausible",
+        )
+        if tasa_real is None or tasa_real <= 0:
             continue
         ratio = abs(tasa_implicita - tasa_real) / tasa_real
         if ratio > tolerancia_pct:
@@ -12802,7 +12841,11 @@ async def get_balance_comprobacion():
                     execute=execute,
                     repo=repo_bal,
                     tasas=tasas_vigentes(repo_bal),
-                    tasa_de_la_fecha=lambda f: get_rate_for_datetime(f, serie_bal)[0],
+                    # ``None`` si no hay tasa: el balance lo trata como tasa cero y
+                    # la partida sale descuadrada, que es visible; un 500 no lo es.
+                    tasa_de_la_fecha=lambda f: _tasa_bcv_de_la_fecha_o_ninguna(
+                        f, serie_bal, None, chequeo="balance"
+                    ),
                 )
             )
 
@@ -13339,11 +13382,14 @@ async def get_auditoria():
         # "que no vuelva a pasar y no haya casos ocultos"): cubren, hacia
         # adelante, los 3 patrones de bug reales encontrados hoy -- ver
         # docstring de cada detector.
+        # Pagos que estos chequeos no pudieron evaluar por falta de tasa en su
+        # fecha. Van en la respuesta: «no se pudo mirar» no es «está bien».
+        pagos_sin_tasa: list[dict[str, Any]] = []
         vinculaciones_sobreaplicadas = _detectar_vinculaciones_sobreaplicadas(
-            vincs, pagos_rows_local, tasas_rows
+            vincs, pagos_rows_local, tasas_rows, sin_tasa=pagos_sin_tasa
         )
         vinculaciones_tasa_implausible = _detectar_vinculaciones_tasa_implicita_implausible(
-            vincs, tasas_rows
+            vincs, tasas_rows, sin_tasa=pagos_sin_tasa
         )
         _lineas_por_so: dict[str, list[Any]] = {}
         for _ln in repo.all_lineas():
@@ -13388,6 +13434,10 @@ async def get_auditoria():
             # la tasa BCV real de esa fecha (forma general del bug de
             # confundir Bs con USD).
             "vinculaciones_tasa_implausible": vinculaciones_tasa_implausible,
+            # Pagos que los dos chequeos de arriba NO pudieron evaluar porque su
+            # fecha no tiene tasa. Antes uno solo de estos tumbaba la bandeja
+            # entera con un 500 (banco de escenarios, 12-sep-2026).
+            "pagos_sin_tasa_para_su_fecha": pagos_sin_tasa,
             # Ver _detectar_devolucion_no_reflejada_en_cantidad -- línea con
             # devolución que Odoo reflejó en precio $0 sin bajar la
             # cantidad entregada (caso real SO 00133, 12 órdenes corregidas).
@@ -13421,6 +13471,7 @@ async def get_auditoria():
                 ),
                 "total_pagos_con_residual_sin_aplicar": len(pagos_residual_sin_aplicar),
                 "total_ajustes_cambio_huerfanos": len(ajustes_cambio_huerfanos),
+                "total_pagos_sin_tasa_para_su_fecha": len(pagos_sin_tasa),
                 "total_pagos_importe_local_desincronizado": len(pagos_importe_local_desincronizado),
                 "total_vinculaciones_sobreaplicadas": len(vinculaciones_sobreaplicadas),
                 "total_vinculaciones_tasa_implausible": len(vinculaciones_tasa_implausible),

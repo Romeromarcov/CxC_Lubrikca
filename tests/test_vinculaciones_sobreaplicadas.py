@@ -95,3 +95,52 @@ def test_sin_vinculaciones_o_sin_pagos_no_falla() -> None:
     assert _detectar_vinculaciones_sobreaplicadas([], [], []) == []
     solo_vinc = [_vinc("V1", "1", "S1", "100", "1")]
     assert _detectar_vinculaciones_sobreaplicadas(solo_vinc, [], []) == []
+
+
+# --- un pago con fecha sin tasa no tumba el chequeo -----------------------------
+#
+# Tercer hallazgo del banco de escenarios del 12-sep-2026: el escenario armó el bug
+# del importe local y, al pedir /api/auditoria para verlo, recibió un 500 -- "No hay
+# tasa para 2026-09-05". Este detector pedía la tasa para TODOS los pagos, incluso
+# los de dólares (que no la necesitan), y desde la Fase 2.1 esa ausencia levanta.
+# Un chequeo de auditoría lee, no congela: el pago sin tasa se anota y se sigue.
+
+
+def test_un_pago_en_dolares_no_necesita_tasa_y_no_la_pide() -> None:
+    vincs = [
+        _vinc("V1", "P_USD", "S1", "100", "100"),
+        _vinc("V2", "P_USD", "S2", "50", "50"),
+    ]
+    pagos_rows = [{"pago_id": "P_USD", "monto": "100", "moneda": "USD", "fecha_pago": "2030-01-01"}]
+    sin_tasa: list[dict] = []
+    resultado = _detectar_vinculaciones_sobreaplicadas(vincs, pagos_rows, [], sin_tasa=sin_tasa)
+    assert [r["pago_id"] for r in resultado] == ["P_USD"], "sobreaplicado, sin tasa de por medio"
+    assert sin_tasa == []
+
+
+def test_un_pago_en_bolivares_sin_tasa_se_anota_y_los_demas_se_evaluan() -> None:
+    vincs = [
+        _vinc("V1", "P_SIN", "S1", "1000", "1.35"),
+        _vinc("V2", "P_SIN", "S2", "1000", "1.35"),
+        _vinc("V3", "1267", "S00608", "2509340.15", "3378.17"),
+        _vinc("V4", "1267", "S00799", "1384.09", "1.86"),
+    ]
+    pagos_rows = [
+        {"pago_id": "P_SIN", "monto": "1000", "moneda": "VES", "fecha_pago": "2030-01-01"},
+        {"pago_id": "1267", "monto": "2509340.15", "moneda": "VES", "fecha_pago": "2026-07-28"},
+    ]
+    sin_tasa: list[dict] = []
+    resultado = _detectar_vinculaciones_sobreaplicadas(
+        vincs, pagos_rows, [_tasas_row("2026-07-28", "742.81")], sin_tasa=sin_tasa
+    )
+    assert [r["pago_id"] for r in resultado] == ["1267"], "el que sí tiene tasa se evalúa"
+    assert sin_tasa == [{"fecha": "2030-01-01", "pago_id": "P_SIN", "chequeo": "sobreaplicadas"}]
+
+
+def test_sin_acumulador_tampoco_levanta() -> None:
+    """Los llamadores viejos (el script de cruce) no pasan ``sin_tasa``."""
+    vincs = [_vinc("V1", "P_SIN", "S1", "1000", "1.35")]
+    pagos_rows = [
+        {"pago_id": "P_SIN", "monto": "1000", "moneda": "VES", "fecha_pago": "2030-01-01"}
+    ]
+    assert _detectar_vinculaciones_sobreaplicadas(vincs, pagos_rows, []) == []
