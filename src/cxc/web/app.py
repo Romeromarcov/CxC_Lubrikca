@@ -41,6 +41,7 @@ from cxc.auth import (
 )
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
+from cxc.engine.abonos import fusionar_abonos
 from cxc.engine.balance import (
     crear_partida,
     partidas_externas,
@@ -4635,35 +4636,17 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             ordenes_map,
             tasas_rows,
         )
-        for so_name, p_odoo in pagos_odoo.items():
-            existing = pagos_by_so.get(so_name, {})
-            if existing.get("tiene_vinc_manual", False):
-                continue
-            total_paid_bcv = p_odoo["abono_bcv"]
-            total_paid_binance = p_odoo["abono_binance"]
-            latest_inv_date = p_odoo["ultimo_abono"]
-
-            if so_name not in pagos_by_so:
-                pagos_by_so[so_name] = {
-                    "abono_bcv": total_paid_bcv,
-                    "abono_binance": total_paid_binance,
-                    "ultimo_abono": latest_inv_date,
-                    "desde_odoo": True,
-                    "tiene_vinc_manual": False,
-                }
-            else:
-                pagos_by_so[so_name]["abono_bcv"] = max(
-                    Decimal(str(pagos_by_so[so_name].get("abono_bcv", "0"))), total_paid_bcv
-                )
-                pagos_by_so[so_name]["abono_binance"] = max(
-                    Decimal(str(pagos_by_so[so_name].get("abono_binance", "0"))),
-                    total_paid_binance,
-                )
-                pagos_by_so[so_name]["desde_odoo"] = True
-                if latest_inv_date:
-                    curr_last = pagos_by_so[so_name].get("ultimo_abono")
-                    if not curr_last or latest_inv_date > curr_last:
-                        pagos_by_so[so_name]["ultimo_abono"] = latest_inv_date
+        # Local manda si existe; si no, Odoo. La rama del «máximo» que había acá
+        # nunca corría -- ver ``engine/abonos.py`` (pieza 35).
+        fusion = fusionar_abonos(pagos_by_so, pagos_odoo)
+        pagos_by_so = {so: a.como_dict() for so, a in fusion.por_orden.items()}
+        if fusion.odoo_descartado:
+            logger.info(
+                "Reporte de saldos: %s orden(es) con vinculación local donde la cifra de "
+                "Odoo no entró (manda la local): %s",
+                len(fusion.odoo_descartado),
+                ", ".join(fusion.odoo_descartado[:10]),
+            )
 
         # Read historical audit price lists from Google Sheets (ListasPreciosHistoricas)
         hist_map = _build_hist_map(repo)
