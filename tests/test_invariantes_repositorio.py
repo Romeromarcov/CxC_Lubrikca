@@ -272,9 +272,12 @@ def test_el_redondeo_de_centavos_no_rechaza() -> None:
     """Misma tolerancia que el detector, para que no puedan discrepar."""
     from cxc.db.invariantes import TOLERANCIA_SOBREAPLICACION, verificar_no_sobreaplica
 
-    assert verificar_no_sobreaplica(
-        _V("V2", "P1", str(TOLERANCIA_SOBREAPLICACION)), [_V("V1", "P1", "100")], "100"
-    ) == []
+    assert (
+        verificar_no_sobreaplica(
+            _V("V2", "P1", str(TOLERANCIA_SOBREAPLICACION)), [_V("V1", "P1", "100")], "100"
+        )
+        == []
+    )
 
 
 def test_reescribir_la_misma_vinculacion_no_la_cuenta_dos_veces() -> None:
@@ -288,17 +291,63 @@ def test_reescribir_la_misma_vinculacion_no_la_cuenta_dos_veces() -> None:
     assert verificar_no_sobreaplica(_V("V1", "P1", "100"), [_V("V1", "P1", "100")], "100") == []
 
 
-def test_un_pago_ya_sobreaplicado_no_se_bloquea_ni_se_corrige() -> None:
-    """Los diez que ya están mal en producción siguen pudiendo escribirse.
+def test_reescribir_igual_una_fila_ya_sobreaplicada_pasa() -> None:
+    """El caso del pago 200 tal como está en el espejo: UNA vinculación de 318,27
+    sobre un pago de 134,00. El sync la reescribe en cada ciclo sin cambiarla.
 
-    Corregirlos mueve montos y es decisión del usuario; esta invariante sólo
-    impide que el exceso **crezca**. Si bloqueara lo existente, el sync se caería
-    sobre datos que ya estaban así antes de que la regla existiera.
+    La primera versión de la invariante (11-sep a la mañana) rechazaba esto
+    --cero hermanas, 318,27 «de esta»-- y como el motor escribe todo en un
+    lote, tumbaba la escritura entera del ciclo. Lo encontró el banco de
+    escenarios. La regla exacta es «el exceso no crece», y una reescritura
+    idéntica no lo hace crecer.
+    """
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    ya = [_V("V1", "200", "318.27")]
+    assert verificar_no_sobreaplica(_V("V1", "200", "318.27"), ya, "134") == []
+
+
+def test_reescribir_igual_con_hermanas_que_no_exceden_solas_pasa() -> None:
+    """El pago 40: 117,57 en hermanas + la de 90,89 reescrita igual, sobre 130."""
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    ya = [_V("V1", "40", "117.57"), _V("V2", "40", "90.89")]
+    assert verificar_no_sobreaplica(_V("V2", "40", "90.89"), ya, "130") == []
+
+
+def test_bajar_una_fila_ya_sobreaplicada_pasa_aunque_siga_excedida() -> None:
+    """Achicar el exceso nunca se rechaza: es la dirección de la corrección."""
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    ya = [_V("V1", "200", "318.27")]
+    assert verificar_no_sobreaplica(_V("V1", "200", "300"), ya, "134") == []
+
+
+def test_agrandar_una_fila_ya_sobreaplicada_se_rechaza() -> None:
+    """Lo que Odoo reporta para un parcial corrompido puede crecer con cada
+    edición de fecha; la base no lo sigue hacia arriba."""
+    from cxc.db.invariantes import verificar_no_sobreaplica
+
+    fallas = verificar_no_sobreaplica(_V("V1", "200", "715.04"), [_V("V1", "200", "318.27")], "134")
+    assert len(fallas) == 1
+    assert "antes sumaban 318.27" in fallas[0].detalle
+
+
+def test_una_fila_NUEVA_sobre_un_pago_ya_sobreaplicado_se_rechaza() -> None:
+    """Cambio respecto del 11-sep a la mañana, y a propósito.
+
+    La versión anterior dejaba pasar una fila nueva si las hermanas ya
+    excedían solas, con el argumento de «no tocar lo existente». Pero una fila
+    nueva de 10 sobre un pago que ya tiene 715,04 aplicados sobre 134,00 deja
+    al pago con 725,04: el exceso creció, y eso es exactamente acreditarle al
+    cliente plata que no entró. Lo existente no se toca; lo nuevo no entra.
     """
     from cxc.db.invariantes import verificar_no_sobreaplica
 
     ya = [_V("V1", "200", "715.04")]
-    assert verificar_no_sobreaplica(_V("V2", "200", "10"), ya, "134") == []
+    fallas = verificar_no_sobreaplica(_V("V2", "200", "10"), ya, "134")
+    assert len(fallas) == 1
+    assert "725.04" in fallas[0].detalle
 
 
 def test_sin_monto_de_pago_confiable_no_se_afirma_nada() -> None:

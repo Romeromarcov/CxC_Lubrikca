@@ -256,6 +256,18 @@ class Repository(ABC):
         """
 
     @abstractmethod
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        """Como ``update_vinculaciones`` pero una fila que viola una invariante
+
+        de dinero no tumba el lote: se omite, y se devuelve junto con la
+        violación para que el llamador la registre. Es la escritura de los
+        lotes del demonio, donde una fila mala no puede dejar sin escribir a
+        las demás. Ver ``db/invariantes.py``.
+        """
+
+    @abstractmethod
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         """Borra Vinculaciones por id. Devuelve cuántas se borraron.
 
@@ -726,6 +738,14 @@ class InMemoryRepository(Repository):
     def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
         for v in vincs:
             self._vinculaciones[v.vinc_id] = v
+
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        # El repositorio en memoria no impone invariantes (no tiene los CHECK de
+        # la base); escribe todo y no rechaza nada.
+        self.update_vinculaciones(vincs)
+        return []
 
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         borradas = 0

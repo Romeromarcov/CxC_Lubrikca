@@ -152,11 +152,24 @@ def verificar_no_sobreaplica(
     así que sale de la cuenta por cobrar antes de estar cobrada, y además dispara
     las reglas que exigen pago previo.
 
-    **No toca lo que ya está escrito.** ``ya_aplicadas`` son las vinculaciones que
-    el pago ya tiene, y la comparación es contra la suma CON la nueva: si el pago
-    ya estaba sobreaplicado, esto no lo empeora ni lo bloquea, sólo impide que
-    crezca. Corregir las diez existentes mueve montos y es una decisión del
-    usuario; impedir la número once no mueve ninguno.
+    **La regla exacta es que el exceso no crezca.** ``ya_aplicadas`` son las
+    vinculaciones que el pago ya tiene (en un ``update``, incluida la versión
+    vieja de la misma fila). Se acepta la escritura si la suma nueva cabe en el
+    pago, **o** si no supera la suma que ya había: reescribir una fila igual o
+    menor pasa siempre, aunque el pago ya estuviera sobreaplicado. Lo que se
+    rechaza es cualquier escritura que deje al pago con MÁS aplicado del que
+    tenía y por encima de lo que vale -- una fila nueva sobre un pago ya
+    sobreaplicado también, porque también lo agranda. Corregir los diez
+    existentes mueve montos y es una decisión del usuario; impedir que crezcan
+    no mueve ninguno.
+
+    **Por qué esta versión y no la del 11-sep a la mañana.** La primera
+    excusaba el caso «las hermanas ya exceden solas» y nada más. Con eso, la
+    reescritura IDÉNTICA de la única vinculación del pago 200 (318,27 sobre
+    134,00) se rechazaba: cero hermanas, 318,27 «de esta», por encima del tope.
+    Y como el motor escribe todas sus vinculaciones en un solo lote, ese
+    rechazo tumbaba la escritura entera de cada ciclo del demonio. Lo encontró
+    el banco de escenarios la primera vez que corrió con la invariante puesta.
 
     ``monto_del_pago`` y los montos aplicados tienen que venir en **la misma
     moneda**. Suena obvio y es el error que cometí midiendo esto: comparar el
@@ -171,23 +184,28 @@ def verificar_no_sobreaplica(
         return []
 
     vinc_id = str(getattr(nueva, "vinc_id", "") or "")
-    ya = Decimal("0")
+    ya = Decimal("0")  # las otras filas del pago
+    antes = Decimal("0")  # todo lo que sumaba el pago antes de esta escritura
     for v in ya_aplicadas:
+        parcial = _dec(getattr(v, "monto_aplicado", None))
+        if parcial is None:
+            continue
+        antes += parcial
         # La propia fila no se cuenta dos veces: un update la trae en las dos
         # listas, y sin esta guarda una reescritura idéntica se rechazaría.
         if str(getattr(v, "vinc_id", "") or "") == vinc_id:
             continue
-        parcial = _dec(getattr(v, "monto_aplicado", None))
-        if parcial is not None:
-            ya += parcial
+        ya += parcial
 
     suma = ya + monto_nuevo
     if suma <= tope + TOLERANCIA_SOBREAPLICACION:
         return []
 
-    # Ya estaba sobreaplicado sin esta fila: no se bloquea, porque el exceso no lo
-    # trae este cambio. Se deja que el detector lo reporte.
-    if ya > tope + TOLERANCIA_SOBREAPLICACION:
+    # El pago queda por encima de lo que vale, pero no con más de lo que ya
+    # tenía: el exceso no lo trae esta escritura. Es el caso de cada reescritura
+    # del sync sobre los diez que ya están mal. Se deja que el detector lo
+    # reporte.
+    if suma <= antes:
         return []
 
     pago = str(getattr(nueva, "pago_id", "?") or "?")
@@ -196,7 +214,7 @@ def verificar_no_sobreaplica(
             "ck_vinc_no_sobreaplica_el_pago",
             f"pago {pago}",
             f"el pago vale {tope} y las vinculaciones sumarían {suma} "
-            f"({ya} ya aplicados + {monto_nuevo} de esta)",
+            f"({ya} ya aplicados + {monto_nuevo} de esta; antes sumaban {antes})",
         )
     ]
 

@@ -934,6 +934,30 @@ def _moneda_de(valor: Any) -> Moneda:
         return Moneda.USD
 
 
+TIPO_AUDITORIA_VINCULACION_RECHAZADA = "vinculacion_rechazada_por_invariante"
+
+
+def _cambio_por_vinculacion_rechazada(v: Any, falla: Any) -> dict[str, Any]:
+    """La fila de ``cambios`` para una vinculación que el repositorio no escribió.
+
+    Requiere revisión manual: la base se quedó con la versión anterior de la
+    fila, y lo que Odoo dice de ese pago no cabe en lo que el pago vale. Es la
+    huella visible del parcial corrompido (bug de Odoo al editar la fecha de un
+    pago conciliado); nada acá corrige montos.
+    """
+    return {
+        "pago_id": str(v.pago_id),
+        "so_id_anterior": str(v.so_id),
+        "so_id_nuevo": str(v.so_id),
+        "requiere_revision_manual": True,
+        "tipo": "vinculacion_rechazada",
+        "detalle": (
+            f"Vinculación {v.vinc_id} NO escrita -- {falla}. La base conserva la "
+            "versión anterior."
+        ),
+    }
+
+
 def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[str, Any]]:
     """Regla general del sistema: Odoo siempre prevalece.
 
@@ -1272,83 +1296,98 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             )
 
     if vincs_a_actualizar:
-        repo.update_vinculaciones(vincs_a_actualizar)
+        # Una fila que viole una invariante de dinero (típico: el monto que
+        # Odoo reporta para un pago ya sobreaplicado, que la novena invariante
+        # no deja crecer) no puede dejar sin escribir a las demás del lote.
+        # Se omite, queda como estaba, y va a la bandeja de auditoría.
+        for v, falla in repo.update_vinculaciones_omitiendo_invalidas(vincs_a_actualizar):
+            cambios.append(_cambio_por_vinculacion_rechazada(v, falla))
 
-    if cambios:
-        ahora = datetime.now()
-        # ``tipo_auditoria``/``detalle_odoo`` por defecto cubren el caso
-        # histórico (re-apuntado de so_id) -- los 3 casos nuevos
-        # (desconciliado, monto/fecha actualizado, multi-orden) traen su
-        # propio "tipo"/"detalle" ya armado desde donde se generó el
-        # cambio.
-        _TIPO_AUDITORIA_POR_CAMBIO = {
-            "desconciliado": "vinculacion_desconciliada_por_odoo",
-            "monto_o_fecha_actualizado": "vinculacion_actualizada_por_cambio_en_odoo",
-            "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
-            "so_id_repuntado": "vinculacion_revinculada_por_odoo",
-        }
-        # Bug real (agosto 2026, pago 973/Cauchera El Gordo): sin esta
-        # deduplicación, un caso "requiere_revision_manual" (ambiguo, nunca
-        # se auto-corrige -- ver "discrepancia_multi_orden" arriba) generaba
-        # una fila NUEVA con audit_id único (sufijo de timestamp) en CADA
-        # ciclo del daemon, para siempre, porque nada lo marca resuelto.
-        # Verificado en producción: 9268 filas de "discrepancia_multi_orden"
-        # acumuladas, 284 solo para el pago 973. Ahora, si YA existe una
-        # fila abierta (``estado == "pendiente_revision"``) para el mismo
-        # ``(pago_id, tipo_auditoria)``, se reutiliza su ``audit_id`` -- el
-        # upsert actualiza esa misma fila (refresca el timestamp) en vez de
-        # insertar una duplicada. Requiere ``pago_id`` real en
-        # ``all_auditoria()`` (antes ausente en Postgres -- ver migración
-        # ``d1e2f3a4b5c6``).
-        existing_open_audit_id: dict[tuple[str, str], str] = {}
-        try:
-            for row in repo.all_auditoria():
-                if row.get("estado") != "pendiente_revision":
-                    continue
-                pid_existente = str(row.get("pago_id") or "").strip()
-                tipo_existente = str(row.get("tipo_auditoria") or "").strip()
-                if pid_existente and tipo_existente:
-                    existing_open_audit_id[(pid_existente, tipo_existente)] = row["audit_id"]
-        except Exception as e_lookup:
-            logger.warning(
-                "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
-                e_lookup,
-            )
-
-        audit_rows = []
-        for c in cambios:
-            tipo_auditoria = _TIPO_AUDITORIA_POR_CAMBIO.get(
-                c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
-            )
-            audit_id = (
-                existing_open_audit_id.get((str(c["pago_id"]), tipo_auditoria))
-                or f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}"
-            )
-            audit_rows.append(
-                {
-                    "audit_id": audit_id,
-                    "pago_id": c["pago_id"],
-                    "so_id": c["so_id_nuevo"],
-                    "tipo_auditoria": tipo_auditoria,
-                    "motor_calcula_usd": None,
-                    "odoo_registrado_usd": None,
-                    "diferencia_usd": None,
-                    "detalle_odoo": c.get(
-                        "detalle",
-                        f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
-                    ),
-                    "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
-                    "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
-                    "revisado_por": "",
-                    "timestamp_audit": ahora.isoformat(),
-                }
-            )
-        try:
-            repo.append_auditoria_rows(audit_rows)
-        except Exception as e_aud:
-            logger.warning("Error guardando auditoría de re-vinculación por Odoo: %s", e_aud)
+    _guardar_auditoria_de_cambios(repo, cambios)
 
     return cambios
+
+
+def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> None:
+    """Escribe en la bandeja de auditoría una fila por cambio, deduplicando las
+    abiertas del mismo ``(pago_id, tipo)``. Compartida por la resincronización
+    con Odoo y por el ciclo del motor (vinculaciones rechazadas por invariante)."""
+    if not cambios:
+        return
+    ahora = datetime.now()
+    # ``tipo_auditoria``/``detalle_odoo`` por defecto cubren el caso
+    # histórico (re-apuntado de so_id) -- los 3 casos nuevos
+    # (desconciliado, monto/fecha actualizado, multi-orden) traen su
+    # propio "tipo"/"detalle" ya armado desde donde se generó el
+    # cambio.
+    _TIPO_AUDITORIA_POR_CAMBIO = {
+        "vinculacion_rechazada": TIPO_AUDITORIA_VINCULACION_RECHAZADA,
+        "desconciliado": "vinculacion_desconciliada_por_odoo",
+        "monto_o_fecha_actualizado": "vinculacion_actualizada_por_cambio_en_odoo",
+        "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
+        "so_id_repuntado": "vinculacion_revinculada_por_odoo",
+    }
+    # Bug real (agosto 2026, pago 973/Cauchera El Gordo): sin esta
+    # deduplicación, un caso "requiere_revision_manual" (ambiguo, nunca
+    # se auto-corrige -- ver "discrepancia_multi_orden" arriba) generaba
+    # una fila NUEVA con audit_id único (sufijo de timestamp) en CADA
+    # ciclo del daemon, para siempre, porque nada lo marca resuelto.
+    # Verificado en producción: 9268 filas de "discrepancia_multi_orden"
+    # acumuladas, 284 solo para el pago 973. Ahora, si YA existe una
+    # fila abierta (``estado == "pendiente_revision"``) para el mismo
+    # ``(pago_id, tipo_auditoria)``, se reutiliza su ``audit_id`` -- el
+    # upsert actualiza esa misma fila (refresca el timestamp) en vez de
+    # insertar una duplicada. Requiere ``pago_id`` real en
+    # ``all_auditoria()`` (antes ausente en Postgres -- ver migración
+    # ``d1e2f3a4b5c6``).
+    existing_open_audit_id: dict[tuple[str, str], str] = {}
+    try:
+        for row in repo.all_auditoria():
+            if row.get("estado") != "pendiente_revision":
+                continue
+            pid_existente = str(row.get("pago_id") or "").strip()
+            tipo_existente = str(row.get("tipo_auditoria") or "").strip()
+            if pid_existente and tipo_existente:
+                existing_open_audit_id[(pid_existente, tipo_existente)] = row["audit_id"]
+    except Exception as e_lookup:
+        logger.warning(
+            "Error leyendo auditoría existente para deduplicar re-vinculación: %s",
+            e_lookup,
+        )
+
+    audit_rows = []
+    for c in cambios:
+        tipo_auditoria = _TIPO_AUDITORIA_POR_CAMBIO.get(
+            c.get("tipo", ""), "vinculacion_revinculada_por_odoo"
+        )
+        audit_id = (
+            existing_open_audit_id.get((str(c["pago_id"]), tipo_auditoria))
+            or f"RELINK_{c['pago_id']}_{ahora.strftime('%Y%m%d%H%M%S')}"
+        )
+        audit_rows.append(
+            {
+                "audit_id": audit_id,
+                "pago_id": c["pago_id"],
+                "so_id": c["so_id_nuevo"],
+                "tipo_auditoria": tipo_auditoria,
+                "motor_calcula_usd": None,
+                "odoo_registrado_usd": None,
+                "diferencia_usd": None,
+                "detalle_odoo": c.get(
+                    "detalle",
+                    f"Odoo reconcilió el pago {c['pago_id']} contra: {c['so_id_nuevo']}",
+                ),
+                "detalle_motor": f"Vinculación local apuntaba a: {c['so_id_anterior']}",
+                "estado": "pendiente_revision" if c["requiere_revision_manual"] else "aplicado",
+                "revisado_por": "",
+                "timestamp_audit": ahora.isoformat(),
+            }
+        )
+    try:
+        repo.append_auditoria_rows(audit_rows)
+    except Exception as e_aud:
+        logger.warning("Error guardando auditoría de re-vinculación por Odoo: %s", e_aud)
+
 
 
 def _detectar_vinculaciones_pendientes_a_revisar(
@@ -3794,6 +3833,20 @@ def recalculate_all_orders():
         runner = EngineRunner(repo, resolver, config.engine)
 
         resultados = runner.run_all(date.today())
+        if runner.vinculaciones_rechazadas:
+            # Quedaron en la base como estaban; que se vea en la bandeja.
+            print(
+                f"Vinculaciones NO escritas por invariante de dinero: "
+                f"{len(runner.vinculaciones_rechazadas)}.",
+                file=sys.stderr,
+            )
+            _guardar_auditoria_de_cambios(
+                repo,
+                [
+                    _cambio_por_vinculacion_rechazada(v, f)
+                    for v, f in runner.vinculaciones_rechazadas
+                ],
+            )
 
         # Fase 10: teóricos de Ventas -- a diferencia de run_all, SÍ cubre
         # órdenes ya facturadas (por eso vive aparte de Bandeja). Tope por

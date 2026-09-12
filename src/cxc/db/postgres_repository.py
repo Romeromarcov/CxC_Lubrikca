@@ -66,6 +66,7 @@ from ..repositories import Repository
 from . import schema as t
 from .engine import make_engine
 from .invariantes import (
+    Violacion,
     exigir,
     verificar_no_sobreaplica,
     verificar_teorico,
@@ -489,17 +490,49 @@ class PostgresRepository(Repository):
         # con un CHECK, pero el error sale como un IntegrityError crudo a veinte
         # marcos de profundidad. Esto falla igual --no cambia qué se acepta--
         # diciendo QUÉ vinculación y con QUÉ valores. Ver ``db/invariantes.py``.
-        exigir(f for v in vincs for f in verificar_vinculacion(v))
+        exigir(f for _v, f in self._violaciones_del_lote(vincs))
+        with self._engine.begin() as conn:
+            _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
 
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Escribe las que pasan las invariantes; devuelve las que no, con su motivo.
+
+        Para los lotes del demonio (el motor y la resincronización con Odoo),
+        que escriben cientos de filas de una. Con la versión estricta, UNA fila
+        que viole la novena invariante tumbaba el lote entero -- el 12-sep-2026
+        el banco de escenarios lo mostró: diez pagos ya sobreaplicados en Odoo
+        dejaban sin escribir todas las vinculaciones de cada ciclo. Acá la fila
+        que viola se omite (queda en la base como estaba) y el llamador decide
+        cómo avisar; las demás se escriben.
+        """
+        if not vincs:
+            return []
+        rechazadas = self._violaciones_del_lote(vincs)
+        ids_rechazados = {str(v.vinc_id) for v, _f in rechazadas}
+        buenas = [v for v in vincs if str(v.vinc_id) not in ids_rechazados]
+        if buenas:
+            with self._engine.begin() as conn:
+                _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in buenas], ["vinc_id"])
+        return rechazadas
+
+    def _violaciones_del_lote(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Las invariantes por fila y la de suma, sin escribir nada."""
+        fallas: list[tuple[Vinculacion, Violacion]] = [
+            (v, f) for v in vincs for f in verificar_vinculacion(v)
+        ]
         # La novena invariante (11-sep-2026): las vinculaciones de un pago no
         # pueden sumar más que el pago. No es un CHECK porque habla de la suma de
         # varias filas, así que se comprueba acá.
         #
         # Sólo impide que el exceso CREZCA: los diez pagos que ya están
-        # sobreaplicados en producción -- 1.269,25 USD -- no se bloquean ni se
-        # corrigen, porque corregirlos mueve montos y es decisión del usuario.
+        # sobreaplicados en producción -- 1.269,25 USD -- se pueden reescribir
+        # iguales o menores, no corregirlos ni agrandarlos. Corregirlos mueve
+        # montos y es decisión del usuario.
         # Ver ``db/invariantes.py::verificar_no_sobreaplica``.
-        fallas_de_suma: list[Any] = []
         for pago_id in {str(v.pago_id) for v in vincs if getattr(v, "pago_id", None)}:
             pago = self.get_pago(pago_id)
             if pago is None:
@@ -509,20 +542,18 @@ class PostgresRepository(Repository):
             # invariante no puedan discrepar sobre el mismo pago.
             existentes = self.vinculaciones_de_pago(pago_id)
             nuevas = [v for v in vincs if str(v.pago_id) == pago_id]
-            # Las que entran en este lote reemplazan a su homónima, así que la
-            # base de comparación son las existentes MENOS las que se reescriben.
-            ids_del_lote = {str(v.vinc_id) for v in nuevas}
-            base = [v for v in existentes if str(v.vinc_id) not in ids_del_lote]
-            acumuladas: list[Vinculacion] = list(base)
+            # Cada fila del lote se compara contra el estado que tendría la base
+            # con las anteriores del lote ya aplicadas; la versión vieja de la
+            # propia fila sigue en ``acumuladas`` para que la invariante sepa
+            # cuánto sumaba el pago antes.
+            acumuladas: list[Vinculacion] = list(existentes)
             for nueva in nuevas:
-                fallas_de_suma.extend(
-                    verificar_no_sobreaplica(nueva, acumuladas, pago.monto)
+                fallas.extend(
+                    (nueva, f) for f in verificar_no_sobreaplica(nueva, acumuladas, pago.monto)
                 )
+                acumuladas = [v for v in acumuladas if str(v.vinc_id) != str(nueva.vinc_id)]
                 acumuladas.append(nueva)
-        exigir(fallas_de_suma)
-
-        with self._engine.begin() as conn:
-            _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
+        return fallas
 
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         if not vinc_ids:

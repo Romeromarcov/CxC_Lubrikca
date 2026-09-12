@@ -3983,8 +3983,8 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
         }
     ]
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].vinc_id == "V1"
     assert vincs_actualizadas[0].so_id == "SO_B"
@@ -4052,8 +4052,8 @@ def test_e2e_42b_revincular_tambien_corrige_el_monto_si_odoo_difiere():
     assert cambios[0]["tipo"] == "so_id_repuntado"
     assert "monto" in cambios[0]["detalle"].lower()
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     v_nueva = vincs_actualizadas[0]
     assert v_nueva.so_id == "SO_B"
     assert v_nueva.estado == EstadoVinculacion.CONCILIADO
@@ -4090,7 +4090,7 @@ def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
     cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
     assert cambios == []
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_not_called()
 
 
@@ -4125,8 +4125,8 @@ def test_e2e_43b_odoo_confirma_promueve_pendiente_a_conciliado():
 
     assert cambios == []
     mock_repo.append_auditoria_rows.assert_not_called()
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].vinc_id == "V1"
     assert vincs_actualizadas[0].estado == EstadoVinculacion.CONCILIADO
@@ -4169,8 +4169,8 @@ def test_e2e_43c_pago_cancelado_en_odoo_desconcilia_la_vinculacion():
     assert cambios[0]["tipo"] == "desconciliado"
     assert cambios[0]["requiere_revision_manual"] is False
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].estado == EstadoVinculacion.PENDIENTE
     # so_id y monto no se tocan -- solo el estado.
@@ -4211,7 +4211,7 @@ def test_e2e_43d_pago_pendiente_desconciliado_no_genera_ruido():
     cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
     assert cambios == []
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_not_called()
 
 
@@ -4272,8 +4272,8 @@ def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
     assert cambios[0]["tipo"] == "monto_o_fecha_actualizado"
     assert cambios[0]["requiere_revision_manual"] is False
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     v_nueva = vincs_actualizadas[0]
     # Sigue CONCILIADO -- Odoo confirma el mismo so_id, solo cambió el monto.
@@ -4349,8 +4349,8 @@ def test_e2e_43b_recalculo_de_conciliado_usa_tasa_del_dia_del_pago_no_la_mas_rec
 
     _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     v_nueva = vincs_actualizadas[0]
     assert v_nueva.tasa_bcv_aplicada == Decimal("612.43")
     assert v_nueva.tasa_bcv_aplicada != Decimal("784.6633")
@@ -4386,7 +4386,7 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     assert len(cambios) == 1
     assert cambios[0]["requiere_revision_manual"] is True
 
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_called_once()
     (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
     assert audit_rows[0]["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden"

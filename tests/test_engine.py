@@ -1703,6 +1703,9 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
         def update_vinculaciones(self, vincs):
             pass
 
+        def update_vinculaciones_omitiendo_invalidas(self, vincs):
+            return []
+
     repo = DummyRepo()
     runner = EngineRunner(repo, None, None)
 
