@@ -425,6 +425,41 @@ El otro hallazgo del sistema —las partidas de tasa que daban verde sin haber
 comparado nada— **ya está aplicado**, así que su escenario pasó a verde
 verificando la corrección.
 
+## La corrida del 12-sep: un escenario nuevo, tres hallazgos, y una regla
+
+Un escenario más en la familia de pagos: **«Editan la fecha de un pago en USD ya
+conciliado, sin pasarlo a borrador»**. Reproduce el bug de Odoo del diferencial
+cambiario que el usuario describió al contestar el quiz (orden S00061), y verifica
+que la bandeja de auditoría lo lista en `pagos_importe_local_desincronizado`. Pasó en
+la quinta corrida; las cuatro anteriores fueron un hallazgo cada una, y ninguno era
+del escenario:
+
+1. **La novena invariante tumbaba el lote entero de vinculaciones del motor**, cada
+   cinco minutos, por los diez pagos ya sobreaplicados. Estaba en el stderr capturado,
+   no en el fallo. Arreglado ([2.4 §33](2.4-modularizar.md)).
+2. **Un pago con fecha sin tasa abortaba el sync de aplicaciones y el resync
+   enteros.** Misma línea de stderr, dos renglones más abajo. Arreglado.
+3. **Un pago con fecha sin tasa devolvía `/api/auditoria` como 500** — la bandeja que
+   hacía falta para ver el bug era la que se caía. Arreglado.
+4. Dos cosas del banco mismo: el asistente de pago por RPC deja el importe local en
+   cero (`completar_importe_local` lo deja como la pantalla), y el escenario «pago en
+   otra moneda» pasaba la mitad del total en bolívares como si fueran dólares —
+   tres corridas dejaron pagos de 258.644,36 USD en el Odoo de prueba
+   (`pagar(monto=None, proporcion=0.5)` ahora convierte con el asistente).
+
+Y lo que el escenario enseñó sobre Odoo: `write({"date": ...})` sobre un pago
+posteado y conciliado está permitido y **no toca nada**; lo que corrompe es el
+*onchange* de la pantalla, que propone la tasa del día nuevo y recalcula el importe
+local mientras el asiento conciliado se queda con el monto viejo.
+`OdooQA.editar_fecha_como_la_ui` reproduce ese flujo paso a paso. El ajuste
+cambiario que produce el «exceso» del lado de la orden vive en el flujo de la
+pantalla y no se ve por RPC; el escenario no lo afirma.
+
+**La regla que queda** (también en el `README` de `escenarios/`): correr al menos un
+escenario después de tocar invariantes, sync, resync o motor, y **leer su stderr**.
+Desde hoy un fixture `autouse` falla el escenario si el demonio imprimió un ciclo
+caído, para que no dependa de que alguien lo lea.
+
 ## Lo que queda para la próxima corrida
 
 La corrida completa tarda 25 minutos y el grueso son los reportes: el de saldos

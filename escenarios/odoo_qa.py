@@ -714,28 +714,50 @@ class OdooQA:
     def pagar(
         self,
         factura_ids: list[int],
-        monto: float,
+        monto: float | None,
         fecha: date | str = "2026-09-05",
         moneda: str = "VES",
+        proporcion: float = 1.0,
     ) -> int:
-        """Registra un cobro contra las facturas dadas y lo concilia."""
+        """Registra un cobro contra las facturas dadas y lo concilia.
+
+        ``monto`` va en la moneda del diario. Con ``None`` se deja el default del
+        asistente, que es el residual de la factura convertido a esa moneda con
+        la tasa que Odoo tenga -- la única forma sensata de pagar en dólares una
+        factura que está en bolívares sin calcular la tasa a mano. Pasar el
+        total en Bs como si fueran dólares (lo que hacía la primera versión del
+        escenario de la fecha) registra un pago de medio millón de dólares.
+        ``proporcion`` escala ese default: ``monto=None, proporcion=0.5`` es
+        «la mitad del residual, en la moneda del diario».
+        """
         if isinstance(fecha, date):
             fecha = fecha.isoformat()
         contexto = {"active_model": "account.move", "active_ids": factura_ids}
+        valores: dict[str, Any] = {
+            "payment_date": fecha,
+            "journal_id": self.diario_banco(moneda),
+        }
+        if monto is not None:
+            valores["amount"] = monto
         wizard = int(
             self.ex(
                 "account.payment.register",
                 "create",
-                [
-                    {
-                        "payment_date": fecha,
-                        "amount": monto,
-                        "journal_id": self.diario_banco(moneda),
-                    }
-                ],
+                [valores],
                 {"context": contexto},
             )
         )
+        if monto is None and proporcion != 1.0:
+            por_defecto = float(
+                self.ex("account.payment.register", "read", [[wizard]], {"fields": ["amount"]})[0][
+                    "amount"
+                ]
+            )
+            self.ex(
+                "account.payment.register",
+                "write",
+                [[wizard], {"amount": round(por_defecto * proporcion, 2)}],
+            )
         self.ex(
             "account.payment.register",
             "action_create_payments",
@@ -749,6 +771,80 @@ class OdooQA:
             {"fields": ["id"], "order": "id desc", "limit": 1},
         )
         return int(pagos[0]["id"])
+
+    def completar_importe_local(self, pago_id: int) -> None:
+        """Deja el pago como lo deja la pantalla de Odoo, no como lo deja el RPC.
+
+        ``amount_local`` («Importe local», el equivalente en Bs) y ``amount_ref``
+        son campos guardados que llena un *onchange* de la vista: por XML-RPC
+        el asistente los deja en cero (medido: 816 de 827 pagos reales en USD
+        lo tienen cargado; los once en cero son los del banco y cuatro
+        cancelados). Sin esto, ningún detector que compare el importe local
+        contra el asiento puede ver el pago.
+        """
+        p = self.ex(
+            "account.payment", "read", [[pago_id]], {"fields": ["amount", "tax_today"]}
+        )[0]
+        self.ex(
+            "account.payment",
+            "write",
+            [
+                [pago_id],
+                {
+                    "amount_local": round(float(p["amount"]) * float(p["tax_today"]), 2),
+                    "amount_ref": float(p["amount"]),
+                },
+            ],
+        )
+
+    def editar_fecha_como_la_ui(self, pago_id: int, fecha: str) -> None:
+        """Cambia la fecha de un pago POSTEADO como lo hace una persona en la vista.
+
+        Es el bug real del diferencial cambiario, reproducido paso a paso: por
+        RPC, ``write({"date": ...})`` sobre un pago posteado y conciliado está
+        permitido y no toca nada más (medido el 12-sep-2026). Lo que corrompe
+        es lo que la vista hace después: el *onchange* de la fecha propone la
+        tasa del día nuevo (``tax_today``) y la pantalla recalcula
+        ``amount_local`` con ella. El asiento ya posteado y conciliado se queda
+        con el monto VES viejo. Dos números del mismo pago, dos tasas.
+
+        Lo que NO reproduce: si la vista además genera un asiento de ajuste
+        cambiario, eso vive en el flujo de la pantalla y no se ve por RPC.
+        """
+        p = self.ex(
+            "account.payment",
+            "read",
+            [[pago_id]],
+            {"fields": ["amount", "tax_today", "currency_id"]},
+        )[0]
+        self.ex("account.payment", "write", [[pago_id], {"date": fecha}])
+        propuesto = self.ex(
+            "account.payment",
+            "onchange",
+            [
+                [pago_id],
+                {
+                    "date": fecha,
+                    "tax_today": p["tax_today"],
+                    "amount": p["amount"],
+                    "currency_id": p["currency_id"][0],
+                },
+                ["date"],
+                {"date": {}, "tax_today": {}, "amount_local": {}},
+            ],
+        )
+        tasa_nueva = float((propuesto.get("value") or {}).get("tax_today") or p["tax_today"])
+        self.ex(
+            "account.payment",
+            "write",
+            [
+                [pago_id],
+                {
+                    "tax_today": tasa_nueva,
+                    "amount_local": round(float(p["amount"]) * tasa_nueva, 2),
+                },
+            ],
+        )
 
     def _cliente_de(self, factura_id: int) -> int:
         return int(

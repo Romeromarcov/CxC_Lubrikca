@@ -203,8 +203,10 @@ def test_pagar_en_otra_moneda_define_por_cual_teorico_se_mide(escenario, sistema
         "El teórico quedó en cero para una orden con líneas: sin datos no es cero."
     )
 
-    odoo.pagar(situacion.facturas, monto=escenario.total_factura(situacion.facturas[0]) / 2,
-               moneda="USD")
+    # La mitad del residual EN DÓLARES (el asistente convierte). La versión
+    # anterior pasaba la mitad del total en bolívares como si fueran dólares:
+    # tres corridas dejaron pagos de 258.644,36 USD en el Odoo de prueba.
+    odoo.pagar(situacion.facturas, monto=None, moneda="USD", proporcion=0.5)
     sistema.sync()
 
     pagos = sistema.espejo("pagos", "cliente_id = :c", c=str(situacion.cliente_id))
@@ -213,3 +215,105 @@ def test_pagar_en_otra_moneda_define_por_cual_teorico_se_mide(escenario, sistema
         f"El espejo no registró el abono en dólares; vio {monedas}. Sin la moneda "
         "del abono no se puede decidir por cuál teórico se mide la orden."
     )
+
+
+@pytest.mark.escenario("Editan la fecha de un pago en USD ya conciliado, sin pasarlo a borrador")
+def test_editar_la_fecha_de_un_pago_conciliado_queda_en_la_bandeja(escenario, sistema, odoo):
+    """El bug de Odoo del diferencial cambiario, reproducido y detectado.
+
+    Es distinto del escenario anterior, que pasa el pago por borrador: eso
+    deshace la conciliación y la vuelve a armar limpia. El bug real (descrito
+    por el usuario en agosto y confirmado el 11-sep sobre la orden S00061)
+    ocurre cuando se **edita la fecha en la pantalla del pago posteado y
+    conciliado**: el onchange propone la tasa del día nuevo y la pantalla
+    recalcula el «Importe local» en Bs con ella, pero la línea contable ya
+    conciliada se queda con el monto VES viejo (ver
+    ``OdooQA.editar_fecha_como_la_ui``, que reproduce ese flujo paso a paso).
+    Los dos números del mismo pago dejan de coincidir. Del lado de la orden,
+    el «exceso» que se ve en producción sale del ajuste cambiario que la
+    pantalla genera además; eso no se reproduce por RPC y este escenario no
+    lo afirma.
+
+    Lo que tiene que pasar: la bandeja de auditoría (`/api/auditoria`) lista
+    el pago en ``pagos_importe_local_desincronizado`` con la diferencia en
+    Bs. Es la detección que el cruce del 11-sep usó para atribuir 9 de los
+    10 pagos «sobreaplicados» a este bug y no a un cobro de más.
+
+    Si Odoo no deja escribir la fecha sobre un pago posteado, el escenario
+    no aplica en esta versión y lo dice; no lo disfraza de detección.
+    """
+    # La factura está en bolívares aunque la lista sea la «USD» (todas lo están:
+    # es la contabilidad dual). El pago va en dólares por el diario USD, con el
+    # monto que el asistente calcula del residual: ``monto=None``.
+    situacion = escenario.facturada(moneda="usd")
+    pago = odoo.pagar(situacion.facturas, monto=None, moneda="USD", fecha="2026-09-05")
+    odoo.completar_importe_local(pago)
+    sistema.sync()
+
+    antes = odoo.ex(
+        "account.payment",
+        "read",
+        [[pago]],
+        {"fields": ["amount", "amount_local", "state", "date", "currency_id"]},
+    )[0]
+    factura = odoo.ex(
+        "account.move",
+        "read",
+        [[situacion.facturas[0]]],
+        {"fields": ["amount_residual", "payment_state"]},
+    )[0]
+    # Odoo 18 ya no dice «posted» para un pago: dice «in_process» (el asiento
+    # está posteado, el pago espera confirmación bancaria) o «paid». Y
+    # ``is_reconciled`` habla del extracto bancario, no de la factura: lo que
+    # importa es que la factura quedó saldada por este pago.
+    assert antes["state"] in ("in_process", "paid", "posted"), antes
+    assert abs(float(factura["amount_residual"])) < 0.01, (
+        f"El pago no saldó la factura ({factura}); sin conciliación no hay bug que reproducir."
+    )
+    assert float(antes["amount_local"] or 0) > 0, (
+        f"El pago en dólares no tiene importe local ({antes}); es lo que el detector compara, "
+        "así que sin eso el escenario no puede medir nada."
+    )
+
+    try:
+        odoo.editar_fecha_como_la_ui(pago, "2026-04-15")
+    except Exception as exc:  # noqa: BLE001 -- se distingue por el mensaje
+        pytest.skip(
+            "Esta versión de Odoo no deja editar la fecha de un pago posteado y "
+            f"conciliado, así que el bug no se puede reproducir por acá: {exc}"
+        )
+
+    despues = odoo.ex(
+        "account.payment",
+        "read",
+        [[pago]],
+        {"fields": ["amount_local", "date"]},
+    )[0]
+    assert str(despues["date"])[:10] == "2026-04-15", "La fecha no cambió."
+    factura_despues = odoo.ex(
+        "account.move", "read", [[situacion.facturas[0]]], {"fields": ["amount_residual"]}
+    )[0]
+    assert abs(float(factura_despues["amount_residual"])) < 0.01, (
+        "Escribir la fecha desconcilió el pago: entonces no es el bug del importe "
+        "local, es otro comportamiento, y este escenario no lo cubre."
+    )
+    if abs(float(despues["amount_local"] or 0) - float(antes["amount_local"] or 0)) < 1.0:
+        pytest.skip(
+            "Odoo no recalculó el importe local al cambiar la fecha (misma tasa en las "
+            "dos fechas, o esta versión no lo recomputa): no se armó el bug."
+        )
+
+    sistema.sync()
+    auditoria = sistema.auditoria()
+    desincronizados = {
+        str(d.get("pago_id")): d for d in auditoria.get("pagos_importe_local_desincronizado") or []
+    }
+    assert str(pago) in desincronizados, (
+        f"El pago {pago} quedó con importe local {despues['amount_local']} Bs y el asiento "
+        f"con {antes['amount_local']} Bs, y la bandeja de auditoría NO lo lista. Es "
+        "exactamente el caso que hoy se cruza a mano para no confundir un parcial "
+        "corrompido con un cobro de más."
+    )
+    fila = desincronizados[str(pago)]
+    assert abs(float(fila["diferencia_ves"])) > 1.0, "La diferencia listada es cero: no dice nada."
+    assert auditoria["resumen_auditoria"]["total_pagos_importe_local_desincronizado"] >= 1

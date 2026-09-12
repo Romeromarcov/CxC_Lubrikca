@@ -143,6 +143,43 @@ def canario_fiscal(odoo):
         )
 
 
+# Lo que el demonio imprime a stderr cuando un ciclo ENTERO se cae. Son los
+# ``except Exception`` que envuelven un paso completo del sync: si aparecen, el
+# escenario puede estar verde y el sistema no estar escribiendo nada. El 12-sep
+# un escenario nuevo falló por otra cosa y estas líneas estaban en su stderr
+# capturado, sin que nada las mirara: diez pagos ya sobreaplicados tumbaban la
+# escritura de todas las vinculaciones de cada ciclo. Un "Error " de un paso
+# menor (métodos de pago, vigencia de listas) no está acá a propósito: se lee
+# en el stderr, pero no es un ciclo caído.
+_SENALES_DE_CICLO_CAIDO = (
+    "Error al recalcular todas las órdenes",
+    "Error sincronizando aplicaciones de Odoo",
+    "Error re-sincronizando Vinculaciones con Odoo",
+    "violan una invariante de dinero",
+)
+
+
+@pytest.fixture(autouse=True)
+def demonio_sin_ciclos_caidos(capfd):
+    """Un escenario no pasa si el demonio tiró un ciclo entero mientras corría."""
+    yield
+    salida = capfd.readouterr()
+    caidas = [
+        ln.strip()
+        for ln in (salida.err + salida.out).splitlines()
+        if any(senal in ln for senal in _SENALES_DE_CICLO_CAIDO)
+    ]
+    # Se reimprime lo capturado para que el reporte lo siga mostrando.
+    sys.stdout.write(salida.out)
+    sys.stderr.write(salida.err)
+    if caidas:
+        pytest.fail(
+            "El demonio tiró un ciclo entero durante este escenario -- el escenario "
+            "puede haber medido un sistema que no estaba escribiendo:\n  "
+            + "\n  ".join(caidas[:6])
+        )
+
+
 # --- el sistema ------------------------------------------------------------
 
 
