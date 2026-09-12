@@ -603,7 +603,11 @@ def test_el_hallazgo_medido_las_fuentes_dan_listas_DISTINTAS() -> None:
     assert "DIFIEREN" in d.nota
     assert "USD=11" in d.nota and "USD=4 (ARCHIVADA)" in d.nota
     assert "BCV=10" in d.nota and "BCV=5 (ARCHIVADA)" in d.nota
-    assert "decision del usuario" in d.nota, "unificarlas mueve montos"
+    assert "decision del usuario" not in d.nota, (
+        "la nota no opina sobre qué hacer: esta función solo sabe que las fuentes "
+        "difieren, no qué pantalla lee cada una. La versión anterior sí opinaba, y se "
+        "volvió falsa el día en que el usuario decidió que el mapeo manda."
+    )
 
 
 def test_coinciden_pero_en_una_lista_ARCHIVADA_tambien_se_avisa() -> None:

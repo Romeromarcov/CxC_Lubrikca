@@ -534,9 +534,10 @@ def comparar_fuentes_de_lista(
             + ("" if f.ves_activa else " (ARCHIVADA)")
             for f in armadas
         )
-        nota = (
-            f"Las fuentes DIFIEREN, asi que con que lista se valora un teorico depende "
-            f"de que parte del codigo lo calcule: {detalle}. Unificarlas cambia montos, "
-            f"asi que es decision del usuario."
-        )
+        # Solo lo que esta funcion sabe: que las fuentes dicen distinto. Que eso
+        # signifique "dos pantallas valoran distinto" o "una config quedo vieja" lo
+        # sabe el llamador, que es quien conoce que fuente lee cada pantalla. La nota
+        # anterior afirmaba lo primero y se volvio falsa el mismo dia en que el usuario
+        # decidio que el mapeo manda y los sitios se unificaron.
+        nota = f"Las fuentes DIFIEREN: {detalle}."
     return DiagnosticoDeFuentes(fuentes=tuple(armadas), nota=nota)
