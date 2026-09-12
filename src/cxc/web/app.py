@@ -25,7 +25,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cxc.auth import (
     NOMBRES_ROLES,
@@ -1720,8 +1720,19 @@ class VinculacionEditRequest(BaseModel):
 
 
 class TasaRequest(BaseModel):
-    tasa_bcv: float
-    tasa_binance: float
+    """Una tasa cargada a mano por la web.
+
+    **Positiva, finita, o no entra.** Hasta el 11-sep-2026 esto aceptaba cualquier
+    float: un cero, un negativo, un ``inf``. Y todo lo que consume la serie trata la
+    tasa en cero como "no hay dato" --`_congelar_equivalentes` la rechaza,
+    `equivalente_usd_a_tasa` devuelve None, `diferencial_pct` devuelve cero-- asi que
+    dejar que una persona la escriba por la puerta de entrada era guardar en la base
+    exactamente el valor que el resto del sistema esta hecho para no creer. Invariante
+    al escribir (Fase 2.2), no al leer.
+    """
+
+    tasa_bcv: float = Field(gt=0, allow_inf_nan=False)
+    tasa_binance: float = Field(gt=0, allow_inf_nan=False)
 
 
 class FeriadoRequest(BaseModel):

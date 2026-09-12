@@ -25,6 +25,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from cxc.models import SerieTasa
 from cxc.web import app as app_module
 
@@ -106,3 +108,92 @@ def test_los_tres_escritores_invalidan_el_cache() -> None:
     # El scraper escribe desde `rates_scraper.py`; el demonio invalida al volver.
     i = fuente.index("fila = await asyncio.to_thread(scraper.run, now_caracas)")
     assert "invalidar_tasas()" in fuente[i : i + 600]
+
+
+# --- la carga manual, que escribe la serie -----------------------------------
+
+
+def _cargar(cuerpo, repo=None):
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    async def _nada():
+        return None
+
+    if repo is None:
+        repo = MagicMock()
+        repo.all_serie_tasas.return_value = []
+    with ExitStack() as pila:
+        for parche in (
+            patch("cxc.web.app.get_repo", return_value=repo),
+            patch("cxc.web.app.hay_sesion_valida", return_value=True),
+            patch("cxc.web.app.run_scraper_in_background", _nada),
+            patch("cxc.web.app.run_sync_in_background", _nada),
+            patch("cxc.web.app._aplicar_migraciones_pendientes"),
+        ):
+            pila.enter_context(parche)
+        cliente = pila.enter_context(TestClient(app_module.app, raise_server_exceptions=False))
+        r = cliente.post("/api/config/tasas", json=cuerpo)
+    return r, repo
+
+
+def test_la_carga_manual_escribe_y_la_lectura_siguiente_la_ve() -> None:
+    """De comportamiento, no de texto: la invalidación tiene que ocurrir de verdad.
+
+    Se llena el caché con la serie vacía, se carga una tasa, y la lectura siguiente
+    tiene que volver a la base. Sin la invalidación, seguiría sirviendo la lista vacía
+    durante cinco minutos.
+    """
+    repo_previo = MagicMock()
+    repo_previo.all_serie_tasas.return_value = []
+    app_module.invalidar_tasas()
+    assert app_module._all_serie_tasas_rows(repo_previo) == []
+    assert repo_previo.all_serie_tasas.call_count == 1
+
+    r, repo = _cargar({"tasa_bcv": 827.74, "tasa_binance": 961.67})
+    assert r.status_code == 200, r.text
+    fila = repo.append_serie_tasa.call_args[0][0]
+    assert fila.tasa_bcv == Decimal("827.74")
+    assert fila.fuente == "Carga Manual Web"
+
+    # La lectura siguiente NO sale del caché: vuelve a la base.
+    app_module._all_serie_tasas_rows(repo_previo)
+    assert repo_previo.all_serie_tasas.call_count == 2, "el caché se invalidó al cargar"
+
+
+@pytest.mark.parametrize(
+    "cuerpo",
+    [
+        {"tasa_bcv": 0, "tasa_binance": 961.67},
+        {"tasa_bcv": 827.74, "tasa_binance": 0},
+        {"tasa_bcv": -827.74, "tasa_binance": 961.67},
+        {"tasa_bcv": 827.74, "tasa_binance": -1},
+    ],
+)
+def test_una_tasa_en_cero_o_negativa_NO_entra_a_la_serie(cuerpo) -> None:
+    """Invariante al escribir. Todo el sistema trata la tasa en cero como «no hay
+    dato»; la puerta de entrada no puede dejar que una persona la escriba."""
+    r, repo = _cargar(cuerpo)
+    assert r.status_code == 422, r.text
+    repo.append_serie_tasa.assert_not_called()
+
+
+def test_una_tasa_infinita_o_NaN_tampoco() -> None:
+    """`inf` pasa un `> 0` ingenuo; `NaN` pasa cualquier comparación. Los dos serían
+    una tasa con la que nada se puede calcular, guardada como si fuera una."""
+    for cuerpo in (
+        {"tasa_bcv": "inf", "tasa_binance": 961.67},
+        {"tasa_bcv": 827.74, "tasa_binance": "nan"},
+    ):
+        r, repo = _cargar(cuerpo)
+        assert r.status_code == 422, cuerpo
+        repo.append_serie_tasa.assert_not_called()
+
+
+def test_si_la_base_falla_no_se_dice_registrada() -> None:
+    repo = MagicMock()
+    repo.append_serie_tasa.side_effect = RuntimeError("base caida")
+    r, _repo = _cargar({"tasa_bcv": 827.74, "tasa_binance": 961.67}, repo=repo)
+    assert r.status_code == 500
