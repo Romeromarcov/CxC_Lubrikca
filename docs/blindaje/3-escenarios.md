@@ -455,6 +455,12 @@ local mientras el asiento conciliado se queda con el monto viejo.
 cambiario que produce el «exceso» del lado de la orden vive en el flujo de la
 pantalla y no se ve por RPC; el escenario no lo afirma.
 
+**La corrida completa después de los arreglos: 46 en verde, 1 en rojo, 26 min 18 s.**
+El único rojo sigue siendo el intencional («el teórico no se re-verifica cuando cambia
+la fecha de la orden»). El fixture nuevo que falla un escenario si el demonio tira un
+ciclo no disparó en ninguno de los 47. Canario fiscal antes y después: 1578 /
+`00-00001590`, sin movimiento.
+
 **La regla que queda** (también en el `README` de `escenarios/`): correr al menos un
 escenario después de tocar invariantes, sync, resync o motor, y **leer su stderr**.
 Desde hoy un fixture `autouse` falla el escenario si el demonio imprimió un ciclo
