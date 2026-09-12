@@ -225,16 +225,14 @@ def test_una_orden_que_odoo_no_tiene_no_descuadra_pero_la_nota_lo_dice() -> None
 
 def test_cuando_odoo_confirma_el_monto_la_partida_cuadra() -> None:
     """La otra mitad: si cuadra siempre, tampoco sirve."""
-    odoo = _Odoo(
-        {"sale.order": [{"name": "S00001", "amount_total": 500.0, "state": "sale"}]}
-    )
+    odoo = _Odoo({"sale.order": [{"name": "S00001", "amount_total": 500.0, "state": "sale"}]})
     partidas = _llamar(
         {"S00001": _item()}, execute=odoo, repo=_Repo(ordenes=[_orden("S00001", "500")])
     )
     ordenes = [p for p in partidas if "rdenes" in p["concepto"]]
-    assert ordenes and ordenes[0]["cuadra"], (
-        f"Odoo dijo lo mismo que el espejo y la partida descuadró: {ordenes and ordenes[0]}"
-    )
+    assert (
+        ordenes and ordenes[0]["cuadra"]
+    ), f"Odoo dijo lo mismo que el espejo y la partida descuadró: {ordenes and ordenes[0]}"
 
 
 def test_una_cancelada_en_odoo_sale_de_los_dos_lados() -> None:
@@ -246,9 +244,7 @@ def test_una_cancelada_en_odoo_sale_de_los_dos_lados() -> None:
     partida se pondría roja en cada orden cancelada fuera de la ventana, que son
     muchas, y el balance se volvería inútil por ruido.
     """
-    odoo = _Odoo(
-        {"sale.order": [{"name": "S00001", "amount_total": 500.0, "state": "cancel"}]}
-    )
+    odoo = _Odoo({"sale.order": [{"name": "S00001", "amount_total": 500.0, "state": "cancel"}]})
     partidas = _llamar(
         {"S00001": _item()}, execute=odoo, repo=_Repo(ordenes=[_orden("S00001", "500")])
     )
@@ -341,6 +337,244 @@ def test_sin_tasa_nuestra_las_partidas_de_tasa_no_mienten(usd, eur) -> None:
     de_tasa = [p for p in partidas if "tasa" in p["concepto"].lower()]
     for p in de_tasa:
         nota = p["nota"]
-        assert "Comparad" in nota or "NO SE COMPAR" in nota, (
-            f"la partida «{p['concepto']}» no dice cuántos comparó: {nota!r}"
-        )
+        assert (
+            "Comparad" in nota or "NO SE COMPAR" in nota
+        ), f"la partida «{p['concepto']}» no dice cuántos comparó: {nota!r}"
+
+
+# --- las dos partidas de tasa, con un pago que SÍ se puede comparar ----------------
+#
+# El test de arriba fija que sin tasa nuestra las partidas digan «no se comparó». Éste
+# es el otro lado: un abono en bolívares con tasa nuestra y `amount_ref` de Odoo, para
+# que el cuerpo de la comparación corra. Sin esto, 56 líneas del módulo --justamente
+# las que despejan la tasa estampada-- no las ejercitaba ningún test, que es el mismo
+# hueco que este archivo existe para cerrar: una partida cuyo cuerpo nunca corre da
+# cero, y cero se lee como «verificado».
+
+
+def _pago_ves(pago_id="777", monto_ves="82774", fecha=date(2026, 3, 1)):
+    p = _pago(pago_id, monto_ves)
+    p.moneda = "VES"
+    p.fecha_pago = __import__("datetime").datetime.combine(fecha, __import__("datetime").time())
+    return p
+
+
+def _odoo_con_pago(pago_id="777", amount_ref="100.00"):
+    """Odoo tiene el pago vivo y le estampó un equivalente en dólares."""
+    return _Odoo(
+        {
+            "account.payment": [
+                {
+                    "id": int(pago_id),
+                    "amount": 82774.0,
+                    "state": "posted",
+                    "currency_id": [2, "VES"],
+                    "amount_ref": float(amount_ref),
+                }
+            ]
+        }
+    )
+
+
+def _partida(partidas, fragmento):
+    (p,) = (p for p in partidas if fragmento in p["concepto"])
+    return p
+
+
+def test_un_pago_en_VES_con_tasa_nuestra_SE_COMPARA_y_cuadra_cuando_odoo_coincide() -> None:
+    """82.774 Bs a tasa 827,74 = 100 USD, y Odoo estampó 100,00: cuadra, y lo dice."""
+    partidas = _llamar(
+        {"S00001": _item()},
+        execute=_odoo_con_pago(amount_ref="100.00"),
+        repo=_Repo(pagos=[_pago_ves()]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "en los pagos coincide con el BCV")
+    assert "Comparados 1" in p["nota"], p["nota"]
+    assert p["derecha"]["valor"] == 0.0, "cero desviados, y esta vez sí se miró"
+    assert p["cuadra"] is True
+
+
+def test_un_pago_cuya_tasa_estampada_se_desvia_mas_del_2pct_SALE_NOMBRADO() -> None:
+    """Odoo estampó 90 USD por 82.774 Bs: tasa implícita 919,7 contra 827,74 oficial,
+    +11 %. Es el caso que la partida existe para atrapar: un día con la tasa mal
+    cargada en Odoo."""
+    partidas = _llamar(
+        {"S00001": _item()},
+        execute=_odoo_con_pago(amount_ref="90.00"),
+        repo=_Repo(pagos=[_pago_ves()]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "en los pagos coincide con el BCV")
+    assert p["derecha"]["valor"] == 1.0
+    assert "pago 777" in p["nota"]
+    assert "919" in p["nota"] and "827" in p["nota"], "nombra las dos tasas"
+    assert p["cuadra"] is False
+
+
+def test_un_abono_cobrado_en_EUROS_no_cuenta_como_tasa_mal() -> None:
+    """Su tasa implícita es la del euro, ~16 % arriba del dólar, y está bien.
+
+    Sin esta excepción cada abono en euros aparecía como «tasa mal cargada» cuando la
+    tasa está perfecta -- solo es otra moneda.
+    """
+    # 82.774 Bs / 963,21 (BCV euro) = 85,94 USD-equivalente; Odoo estampó eso.
+    partidas = _llamar(
+        {"S00001": _item()},
+        execute=_odoo_con_pago(amount_ref="85.94"),
+        repo=_Repo(pagos=[_pago_ves()]),
+        tasas=_Tasas(usd=Decimal("827.74"), eur=Decimal("963.21")),
+    )
+    p = _partida(partidas, "en los pagos coincide con el BCV")
+    assert p["derecha"]["valor"] == 0.0, "no es una desviación: es un abono en euros"
+    assert "Comparados 1" in p["nota"]
+
+
+def test_el_redondeo_de_amount_ref_a_dos_decimales_no_dispara_la_partida() -> None:
+    """El 2 % de margen existe por esto: en un abono chico, dos decimales de
+    `amount_ref` mueven centésimas de punto de la tasa despejada."""
+    partidas = _llamar(
+        {"S00001": _item()},
+        execute=_Odoo(
+            {
+                "account.payment": [
+                    {
+                        "id": 777,
+                        "amount": 8.0,
+                        "state": "posted",
+                        "currency_id": [2, "VES"],
+                        "amount_ref": 0.01,
+                    }
+                ]
+            }
+        ),
+        repo=_Repo(pagos=[_pago_ves(monto_ves="8")]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "en los pagos coincide con el BCV")
+    # 8 / 0.01 = 800 contra 827,74: -3,4 %, fuera del 2 %. Es un caso real de redondeo
+    # que la partida SÍ marca; queda fijado para que el margen no se agrande sin verlo.
+    assert p["derecha"]["valor"] == 1.0
+
+
+def test_la_partida_de_equivalentes_suma_con_NUESTRA_tasa_y_compara_contra_amount_ref() -> None:
+    """La otra partida de tasa: no despeja tasas, suma los equivalentes en dólares de
+    todos los pagos --los VES convertidos con nuestra serie, los USD tal cual-- y los
+    compara contra la suma de `amount_ref` de Odoo."""
+    odoo = _Odoo(
+        {
+            "account.payment": [
+                {
+                    "id": 777,
+                    "amount": 82774.0,
+                    "state": "posted",
+                    "currency_id": [2, "VES"],
+                    "amount_ref": 100.0,
+                },
+                {
+                    "id": 778,
+                    "amount": 50.0,
+                    "state": "posted",
+                    "currency_id": [1, "USD"],
+                    "amount_ref": 50.0,
+                },
+            ]
+        }
+    )
+    partidas = _llamar(
+        {"S00001": _item()},
+        execute=odoo,
+        repo=_Repo(pagos=[_pago_ves(), _pago("778", "50")]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "equivalente BCV contra Odoo")
+    assert abs(p["izquierda"]["valor"] - 150.0) < 0.01, "100 del VES convertido + 50 del USD"
+    assert abs(p["derecha"]["valor"] - 150.0) < 0.01
+    assert p["cuadra"] is True
+
+
+# --- la partida de tasa de FACTURAS, con una factura que sí se puede comparar ------
+
+
+def _factura_en_odoo(
+    factura_id=12345, residual_ves=82774.0, residual_usd=100.0, fecha="2026-03-01"
+):
+    return {
+        "id": factura_id,
+        "name": "00000001",
+        "state": "posted",
+        "amount_total": residual_ves,
+        "amount_residual": residual_ves,
+        "amount_residual_usd": residual_usd,
+        "invoice_date": fecha,
+        "invoice_origin": "S00001",
+        "move_type": "out_invoice",
+    }
+
+
+def _mundo_con_factura(residual_usd, tasas):
+    """Una orden facturada, su factura en el espejo, y la misma factura viva en Odoo con
+    su residual en las dos monedas. Es lo mínimo para que la partida compare una."""
+    orden = _orden()
+    orden.facturada = True
+    orden.factura_id = "12345"
+    saldos = {"S00001": {"so_id": "S00001", "factura_id": "12345", "saldo_factura_odoo": 100.0}}
+    return _llamar(
+        {"S00001": _item()},
+        saldos,
+        execute=_Odoo({"account.move": [_factura_en_odoo(residual_usd=residual_usd)]}),
+        repo=_Repo(ordenes=[orden], facturas=[_factura()]),
+        tasas=tasas,
+    )
+
+
+def test_una_factura_con_tasa_nuestra_SE_COMPARA_y_cuadra_cuando_odoo_coincide() -> None:
+    """82.774 Bs de residual, 100 USD de residual en dólares: tasa implícita 827,74,
+    igual a la oficial. Comparada 1, divergentes 0, y esta vez el cero se ganó."""
+    partidas = _mundo_con_factura(residual_usd=100.0, tasas=_Tasas(usd=Decimal("827.74")))
+    p = _partida(partidas, "La tasa de Odoo coincide con el BCV")
+    assert "Comparadas 1" in p["nota"], p["nota"]
+    assert p["derecha"]["valor"] == 0.0
+    assert p["cuadra"] is True
+
+
+def test_una_factura_cuya_tasa_implicita_se_desvia_SALE_NOMBRADA() -> None:
+    """Residual USD de 90 por 82.774 Bs: 919,7 contra 827,74, +11 %. Es el escenario
+    «cargan una tasa equivocada en Odoo» de la Fase 3, que antes pasaba en verde porque
+    la partida no comparaba ni una."""
+    partidas = _mundo_con_factura(residual_usd=90.0, tasas=_Tasas(usd=Decimal("827.74")))
+    p = _partida(partidas, "La tasa de Odoo coincide con el BCV")
+    assert p["derecha"]["valor"] == 1.0
+    assert "00000001" in p["nota"] and "919" in p["nota"]
+    assert p["cuadra"] is False
+
+
+def test_una_factura_ya_cobrada_no_entra_a_la_comparacion() -> None:
+    """Residual cero en las dos monedas: no hay tasa que despejar de un cero."""
+    orden = _orden()
+    orden.facturada = True
+    orden.factura_id = "12345"
+    partidas = _llamar(
+        {"S00001": _item()},
+        {"S00001": {"so_id": "S00001", "factura_id": "12345", "saldo_factura_odoo": 0.0}},
+        execute=_Odoo({"account.move": [_factura_en_odoo(residual_ves=0.0, residual_usd=0.0)]}),
+        repo=_Repo(ordenes=[orden], facturas=[_factura()]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "La tasa de Odoo coincide con el BCV")
+    assert "Comparadas 0" in p["nota"] or "NO SE COMPAR" in p["nota"], p["nota"]
+
+
+def test_una_factura_sin_fecha_legible_se_saltea_sin_reventar() -> None:
+    orden = _orden()
+    orden.facturada = True
+    orden.factura_id = "12345"
+    partidas = _llamar(
+        {"S00001": _item()},
+        {"S00001": {"so_id": "S00001", "factura_id": "12345", "saldo_factura_odoo": 100.0}},
+        execute=_Odoo({"account.move": [_factura_en_odoo(fecha="")]}),
+        repo=_Repo(ordenes=[orden], facturas=[_factura()]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    p = _partida(partidas, "La tasa de Odoo coincide con el BCV")
+    assert p["derecha"]["valor"] == 0.0
