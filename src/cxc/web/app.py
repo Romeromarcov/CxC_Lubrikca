@@ -1744,7 +1744,8 @@ class FeriadoRequest(BaseModel):
 
 class MetaRequest(BaseModel):
     cash_window_business_days: int
-    descuento_recompra: float
+    # Fraccion, no porciento: la UI lo dice ("0.08 = 8 %") y el default es 0.05.
+    descuento_recompra: float = Field(ge=0, le=1, allow_inf_nan=False)
     marca_fallback: str = "GLOBAL OIL"
     fallback_industrial_ajuste_pct: float = 0.04
 
@@ -10070,7 +10071,7 @@ class ReglaUnificadaRequest(BaseModel):
     # pago". Cualquier regla puede condicionarse a que el pago haya
     # entrado a tiempo.
     ventana_pago_tipo: str = "no_aplica"
-    ventana_pago_dias: int = 0
+    ventana_pago_dias: int = Field(default=0, ge=0)
     # "Una sola vez por cliente" vs recurrente. Hoy solo existe en
     # promociones (``solo_primera_compra``) y por eso el motor etiqueta con
     # origen "primera_compra" tanto la primera compra real como las promos
@@ -10078,24 +10079,24 @@ class ReglaUnificadaRequest(BaseModel):
     solo_primera_compra: bool = False
 
     # --- El beneficio (según el tipo) ---
-    porcentaje: float = 0.0
+    porcentaje: float = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     tipo_beneficio: str = "descuento"
-    min_unidades: float = 0.0
-    max_unidades: float = 999999.0
+    min_unidades: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    max_unidades: float = Field(default=999999.0, ge=0, allow_inf_nan=False)
     tipo_evaluacion: str = "orden"
-    dias_evaluacion: int = 30
+    dias_evaluacion: int = Field(default=30, ge=0)
     productos: str = ""
     regalo_tipo: str = "solo_uno"
-    valor: float = 0.0
-    compra_minima: float = 0.0
-    descuento_fallback: float = 0.0
+    valor: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    compra_minima: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    descuento_fallback: float = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     categorias_aplica: str = ""
     # Sobre qué líneas se aplica el porcentaje (vacío = todas). Distinto de
     # ``categorias_aplica``, que es qué unidades califican para el mínimo.
     categorias_descuento: str = ""
     tipo_diferencial: str = "fijo_35_ves_usd"
-    porcentaje_fijo: float = 0.0
-    dias_credito_max: int = 30
+    porcentaje_fijo: float = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
+    dias_credito_max: int = Field(default=30, ge=0)
 
 
 def _fecha_regla(valor: str, por_defecto: date | None) -> date | None:
@@ -15725,7 +15726,9 @@ async def post_descuento_no_otorgado(
 
 class AprobarDescuentoSistemaRequest(BaseModel):
     so_id: str
-    monto: float
+    # No negativo: un "descuento aprobado" negativo seria un recargo disfrazado. Cero
+    # se admite porque la revocacion (`activo=False`) no necesita monto.
+    monto: float = Field(ge=0, allow_inf_nan=False)
     motivo: str = "Descuento aprobado en Bandeja de Facturación"
     aprobado_por: str = "Dirección / Facturación"
     activo: bool = True
@@ -15981,7 +15984,10 @@ async def post_marcar_recibido(
 ):
     try:
         user = get_current_user_from_cookie(cxc_session)
-        recibido_por = req.recibido_por or (user["nombre"] if user else "Administración")
+        # Antes: `req.recibido_por or user["nombre"]` -- el CUERPO ganaba sobre la
+        # sesion, y como el default del modelo es "Administracion" nunca estaba vacio,
+        # asi que la sesion no se usaba nunca. Al reves. Ver `auth.actor_de_la_accion`.
+        recibido_por = actor_de_la_accion(user, req.recibido_por)
         repo = get_repo()
 
         now = datetime.now()

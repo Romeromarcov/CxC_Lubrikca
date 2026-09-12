@@ -214,6 +214,9 @@ DECLARADOS_GENERICOS = frozenset(
         "dirección / auditor",
         "direccion / facturacion",
         "dirección / facturación",
+        # El default de `MarcarRecibidoRequest`, a secas.
+        "administracion",
+        "administración",
         "desconocido",
     }
 )

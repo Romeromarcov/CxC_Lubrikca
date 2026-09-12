@@ -226,3 +226,52 @@ def test_editar_la_tasa_binance_de_un_pago_pendiente_guarda_la_identidad_real() 
     assert r.status_code == 200, r.text
     fila = repo.upsert_pago_tasa_binance_override.call_args[0][0]
     assert fila["editado_por"] == "Ana Pérez", "el default genérico no ensucia"
+
+
+# --- el barrido completo de los modelos de entrada ------------------------------
+
+
+@pytest.mark.parametrize(
+    "cuerpo",
+    [
+        {"tipo_regla": "contado", "porcentaje": 5},  # 5 no es 5 %: la UI dice 0.05
+        {"tipo_regla": "contado", "porcentaje": -0.05},
+        {"tipo_regla": "volumen", "porcentaje": 0.05, "min_unidades": -1},
+        {"tipo_regla": "promocion", "descuento_fallback": 2},
+        {"tipo_regla": "recompra", "ventana_pago_dias": -3},
+        {"tipo_regla": "contado", "porcentaje": "nan"},
+    ],
+)
+def test_el_formulario_de_reglas_rechaza_valores_fuera_de_rango(cuerpo) -> None:
+    """Los porcentajes viajan como fracción (la UI lo dice: «0.08 = 8 %»), así que un 5
+    es un 500 % y no un 5 %. Antes entraba y se guardaba como regla."""
+    r, repo = _llamar("/api/config/regla", cuerpo, ANA)
+    assert r.status_code == 422, r.text
+    for metodo in (
+        "append_descuento_pronto_pago",
+        "append_descuento_volumen",
+        "append_descuento_recompra",
+        "append_promocion_primera_compra",
+    ):
+        getattr(repo, metodo).assert_not_called()
+
+
+def test_un_descuento_de_sistema_negativo_no_se_aprueba() -> None:
+    """Un «descuento aprobado» negativo sería un recargo disfrazado."""
+    r, repo = _llamar(
+        "/api/facturacion/aprobar-descuento-sistema", {"so_id": "S00010", "monto": -100.0}, ANA
+    )
+    assert r.status_code == 422
+    repo.upsert_descuento_sistema_aprobado.assert_not_called()
+
+
+def test_marcar_recibido_guarda_la_identidad_real_y_no_el_default() -> None:
+    """El quinto actor. Hacía `req.recibido_por or user["nombre"]`: el cuerpo ganaba,
+    y como el default del modelo es «Administración» nunca estaba vacío. La sesión no
+    se usaba nunca."""
+    r, repo = _llamar("/api/cobranza/marcar-recibido", {"pago_ids": ["P1", "P2"]}, ANA)
+    assert r.status_code == 200, r.text
+    llamada = repo.marcar_pagos_recibido.call_args
+    assert llamada is not None, "el endpoint tiene que llegar al repositorio"
+    assert "Ana Pérez" in str(llamada), "la sesión manda; «Administración» es un default genérico"
+    assert "Administración" not in str(llamada)
