@@ -211,3 +211,60 @@ def test_el_diagnostico_no_elige_ninguna_de_las_dos() -> None:
     assert pagada_por_estado(facturas) is False
     assert pagada_por_residual(facturas) is True
     assert (d.por_estado, d.por_residual) == (False, True)
+
+
+# --- la propuesta unificada (12-sep-2026), sin cablear ----------------------------
+
+
+class TestPagadaUnificada:
+    def test_sin_facturas_no_esta_pagada(self) -> None:
+        from cxc.engine.pagada_en_odoo import CAUSA_SIN_FACTURAS, pagada_unificada
+
+        r = pagada_unificada([])
+        assert not r.pagada and r.causa == CAUSA_SIN_FACTURAS
+
+    def test_todas_pagadas_por_estado(self) -> None:
+        from cxc.engine.pagada_en_odoo import CAUSA_ESTADO, pagada_unificada
+
+        r = pagada_unificada([_f("paid", "0"), _f("in_payment", "0")])
+        assert r.pagada and r.causa == CAUSA_ESTADO and not r.sobreaplicada
+
+    def test_los_47_de_centavos_cuentan_como_pagadas(self) -> None:
+        from cxc.engine.pagada_en_odoo import CAUSA_CENTAVOS, pagada_unificada
+
+        r = pagada_unificada([_f("paid", "0"), _f("partial", "0.03")])
+        assert r.pagada and r.causa == CAUSA_CENTAVOS
+
+    def test_un_residual_real_sigue_debiendo(self) -> None:
+        from cxc.engine.pagada_en_odoo import CAUSA_DEBE, pagada_unificada
+
+        r = pagada_unificada([_f("partial", "12.50")])
+        assert not r.pagada and r.causa == CAUSA_DEBE
+
+    def test_una_anulada_no_cuenta_como_cobrada(self) -> None:
+        """La regla del residual la daba por pagada (residual cero). Los 15 casos."""
+        from cxc.engine.pagada_en_odoo import CAUSA_ANULADA, pagada_unificada
+
+        r = pagada_unificada([_f("reversed", "0")])
+        assert not r.pagada and r.causa == CAUSA_ANULADA
+
+    def test_una_anulada_junto_a_una_viva_se_aparta(self) -> None:
+        from cxc.engine.pagada_en_odoo import pagada_unificada
+
+        assert pagada_unificada([_f("reversed", "0"), _f("paid", "0")]).pagada
+        assert not pagada_unificada([_f("reversed", "0"), _f("partial", "40")]).pagada
+
+    def test_los_cuatro_sobrepagos_quedan_pagados_y_con_senal(self) -> None:
+        """S00188 (−116,69), S00795, S00182, S00061: ninguna de las dos reglas decía
+        «hay algo raro». Ésta dice pagada Y sobreaplicada."""
+        from cxc.engine.pagada_en_odoo import pagada_unificada
+
+        r = pagada_unificada([_f("partial", "-116.69")])
+        assert r.pagada and r.sobreaplicada
+        assert r.residual_total == Decimal("-116.69")
+
+    def test_esta_propuesta_no_esta_cableada_todavia(self) -> None:
+        """Aplicarla mueve el universo de tres pantallas; es decisión del usuario."""
+        from pathlib import Path
+
+        assert "pagada_unificada(" not in Path("src/cxc/web/app.py").read_text(encoding="utf-8")

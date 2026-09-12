@@ -183,3 +183,81 @@ def diagnostico_de_pagada(
         causa=causa,
         nota=nota,
     )
+
+
+# --- la propuesta para que las tres pantallas coincidan (12-sep-2026) -----------
+#
+# El usuario respondió el quiz: el escenario que no le cerraba era éste, y pidió
+# «proponme una solución para que coincida la información». Ésta es la propuesta,
+# escrita como función y con sus tests, SIN cablear: aplicarla mueve el universo
+# de órdenes de tres pantallas (47 pasan a cobradas por centavos, 15 anuladas dejan
+# de contar como pagadas en las sugerencias, 4 quedan pagadas con señal), y eso
+# es una decisión sobre números que ya están medidos.
+
+CAUSA_SIN_FACTURAS = "sin_facturas"
+CAUSA_ESTADO = "por_estado"
+CAUSA_CENTAVOS = "residual_de_centavos"
+CAUSA_DEBE = "residual_pendiente"
+CAUSA_ANULADA = "anulada_sin_reemplazo"
+
+
+@dataclass(frozen=True)
+class PagadaUnificada:
+    """Una sola respuesta, con su causa y la señal de sobrepago aparte."""
+
+    pagada: bool
+    causa: str
+    residual_total: Decimal
+    # Residual negativo en alguna factura: se aplicó más de lo facturado. Con lo
+    # medido el 12-sep-2026 (los cuatro casos son parciales «Ajuste Dif»), es una
+    # señal para auditoría, no plata a devolver -- pero la regla la reporta igual
+    # en vez de esconderla bajo «pagada».
+    sobreaplicada: bool
+
+
+def pagada_unificada(
+    facturas: list[dict[str, Any]], *, tolerancia: Decimal = TOLERANCIA_RESIDUAL
+) -> PagadaUnificada:
+    """Por estado, MÁS una tolerancia de centavos, MÁS la señal de sobrepago, y
+    las anuladas nunca cuentan como cobradas.
+
+    - Sin facturas: **no** está pagada (está sin facturar). Corrige la regla del
+      residual, que decía «pagada» sobre una orden sin factura.
+    - Las facturas ``reversed`` se apartan: no cuentan como pagadas ni como deuda.
+      Si eran las únicas, la orden no está pagada: la reversó una nota de crédito,
+      no un cobro.
+    - Cada factura viva cuenta como pagada si su estado está en
+      ``ESTADOS_PAGADOS``, **o** si está ``partial`` con residual dentro de la
+      tolerancia (los 47 casos de 0,01 a 0,03).
+    - ``sobreaplicada`` es verdadera si alguna factura viva tiene residual por
+      debajo de ``-tolerancia``. La orden cuenta como pagada (no debe nada) pero la
+      señal viaja aparte, que es lo que ninguna de las dos reglas hacía.
+    """
+    vivas = [
+        f for f in facturas if str(f.get("payment_state") or "").strip().lower() != ESTADO_ANULADA
+    ]
+    if not facturas:
+        return PagadaUnificada(False, CAUSA_SIN_FACTURAS, Decimal("0"), False)
+    if not vivas:
+        return PagadaUnificada(False, CAUSA_ANULADA, Decimal("0"), False)
+
+    residual_total = sum((_dec(f.get("amount_residual_usd")) for f in vivas), Decimal("0"))
+    sobreaplicada = any(_dec(f.get("amount_residual_usd")) < -tolerancia for f in vivas)
+
+    todas_por_estado = True
+    todas_cubiertas = True
+    for f in vivas:
+        estado = str(f.get("payment_state") or "").strip().lower()
+        residual = _dec(f.get("amount_residual_usd"))
+        if estado in ESTADOS_PAGADOS:
+            continue
+        todas_por_estado = False
+        if residual <= tolerancia:
+            continue
+        todas_cubiertas = False
+
+    if todas_por_estado:
+        return PagadaUnificada(True, CAUSA_ESTADO, residual_total, sobreaplicada)
+    if todas_cubiertas:
+        return PagadaUnificada(True, CAUSA_CENTAVOS, residual_total, sobreaplicada)
+    return PagadaUnificada(False, CAUSA_DEBE, residual_total, sobreaplicada)
