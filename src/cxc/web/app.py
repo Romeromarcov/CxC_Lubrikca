@@ -809,7 +809,7 @@ def _sincronizar_aplicaciones_conciliadas(
     """
     totales = agrupar_aplicaciones(aplicaciones)
     if not totales:
-        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0, "omitidas": 0}
+        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0, "omitidas": 0, "sin_tasa": []}
 
     fecha_por_pago: dict[str, date] = {}
     moneda_por_pago: dict[str, Moneda] = {}
@@ -828,6 +828,13 @@ def _sincronizar_aplicaciones_conciliadas(
     # se salta esa aplicación en vez de tumbar el ciclo entero.
     en_espejo = {str(p.pago_id) for p in repo.all_pagos()}
     creadas = corregidas = sin_cambio = omitidas = 0
+    # Pagos cuya fecha no tiene tasa en ninguna fuente. Desde la Fase 2.1
+    # ``get_rate_for_datetime`` levanta en vez de inventar 36,5/38,0, y un solo
+    # pago así abortaba ESTE ciclo entero -- ninguna aplicación de Odoo se
+    # escribía, cada cinco minutos, hasta que alguien cargara esa tasa. Lo
+    # encontró el banco de escenarios el 12-sep-2026. Se salta ese pago, se
+    # deja como estaba, y se devuelve para que quede en la bandeja.
+    sin_tasa: list[dict[str, Any]] = []
 
     for (pago_id, so_id), monto in sorted(totales.items()):
         if pago_id not in en_espejo:
@@ -844,7 +851,14 @@ def _sincronizar_aplicaciones_conciliadas(
 
         hora_pago = datetime.combine(fecha_por_pago[pago_id], datetime.min.time())
         moneda = moneda_por_pago[pago_id]
-        tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
+        try:
+            tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
+        except TasaNoDisponible as e_tasa:
+            sin_tasa.append(
+                {"pago_id": pago_id, "so_id": so_id, "fecha": hora_pago.date().isoformat()}
+            )
+            logger.warning("Aplicación %s/%s sin vincular: %s", pago_id, so_id, e_tasa)
+            continue
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
             repo, so_id, hora_pago, tasa_bcv_dia, serie_rows=tasas_rows
         )
@@ -889,6 +903,7 @@ def _sincronizar_aplicaciones_conciliadas(
         "corregidas": corregidas,
         "sin_cambio": sin_cambio,
         "omitidas": omitidas,
+        "sin_tasa": sin_tasa,
     }
 
 
@@ -935,6 +950,29 @@ def _moneda_de(valor: Any) -> Moneda:
 
 
 TIPO_AUDITORIA_VINCULACION_RECHAZADA = "vinculacion_rechazada_por_invariante"
+TIPO_AUDITORIA_PAGO_SIN_TASA = "pago_sin_tasa_para_su_fecha"
+
+
+def _cambio_por_pago_sin_tasa(pago_id: str, so_id: str, vinc_id: str = "") -> dict[str, Any]:
+    """La fila de ``cambios`` para un pago que no se pudo vincular o recalcular
+    porque su fecha no tiene tasa en ninguna fuente. Requiere revisión: alguien
+    tiene que cargar la tasa de ese día; hasta entonces la vinculación queda
+    como estaba (o sin crear)."""
+    que_paso = (
+        f"La vinculación {vinc_id} queda como estaba." if vinc_id else "No se creó vinculación."
+    )
+    return {
+        "pago_id": str(pago_id),
+        "so_id_anterior": str(so_id),
+        "so_id_nuevo": str(so_id),
+        "requiere_revision_manual": True,
+        "tipo": "pago_sin_tasa",
+        "detalle": (
+            f"Pago {pago_id}: no hay tasa para su fecha en SerieTasas ni en "
+            f"TasasHistoricasAuditoria. {que_paso} Cargar la tasa de ese día para que "
+            "el ciclo siguiente la tome."
+        ),
+    }
 
 
 def _cambio_por_vinculacion_rechazada(v: Any, falla: Any) -> dict[str, Any]:
@@ -1058,6 +1096,9 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
     # por la fecha real del pago (``get_rate_for_datetime``), igual que
     # ``_vincular_masivo_sync``.
     tasas_rows_resync = _all_serie_tasas_rows(repo)
+    # Vinculaciones que no se pudieron recalcular por falta de tasa en la fecha
+    # nueva del pago; van a la bandeja al final.
+    sin_tasa: list[Vinculacion] = []
 
     def _recalcular_desde_conciliado(
         v: Vinculacion, so_id_nuevo: str, conciliado: dict[str, Any]
@@ -1113,9 +1154,22 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
             )
         except ValueError:
             hora_pago_nueva = v.hora_pago_confirmada
-        tasa_bcv_del_dia, tasa_binance_nueva = get_rate_for_datetime(
-            hora_pago_nueva, tasas_rows_resync
-        )
+        # Sin tasa para la fecha nueva, esta vinculación no se toca: se
+        # devuelve con el so_id/estado al día y los equivalentes viejos, y se
+        # avisa. Antes ``TasaNoDisponible`` (que NO es un ``ValueError``, así
+        # que el ``except`` de abajo no la veía) subía hasta el ``except
+        # Exception`` del llamador y abortaba el resync de las 1.494 de una.
+        try:
+            tasa_bcv_del_dia, tasa_binance_nueva = get_rate_for_datetime(
+                hora_pago_nueva, tasas_rows_resync
+            )
+        except TasaNoDisponible as e_tasa:
+            logger.warning("Vinculacion %s no se resincroniza: %s", v.vinc_id, e_tasa)
+            sin_tasa.append(v)
+            return (
+                dataclasses_replace(v, so_id=so_id_nuevo, estado=EstadoVinculacion.CONCILIADO),
+                False,
+            )
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
             repo, so_id_nuevo, hora_pago_nueva, tasa_bcv_del_dia
         )
@@ -1302,6 +1356,8 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         # Se omite, queda como estaba, y va a la bandeja de auditoría.
         for v, falla in repo.update_vinculaciones_omitiendo_invalidas(vincs_a_actualizar):
             cambios.append(_cambio_por_vinculacion_rechazada(v, falla))
+    for v in sin_tasa:
+        cambios.append(_cambio_por_pago_sin_tasa(v.pago_id, v.so_id, v.vinc_id))
 
     _guardar_auditoria_de_cambios(repo, cambios)
 
@@ -1322,6 +1378,7 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
     # cambio.
     _TIPO_AUDITORIA_POR_CAMBIO = {
         "vinculacion_rechazada": TIPO_AUDITORIA_VINCULACION_RECHAZADA,
+        "pago_sin_tasa": TIPO_AUDITORIA_PAGO_SIN_TASA,
         "desconciliado": "vinculacion_desconciliada_por_odoo",
         "monto_o_fecha_actualizado": "vinculacion_actualizada_por_cambio_en_odoo",
         "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
@@ -3793,6 +3850,19 @@ def recalculate_all_orders():
                         repo.upsert_pagos(rescatados)
                         print(f"Pagos conciliados rescatados del histórico: {len(rescatados)}.")
                 res_apl = _sincronizar_aplicaciones_conciliadas(repo, aplicaciones)
+                if res_apl.get("sin_tasa"):
+                    print(
+                        f"Aplicaciones de Odoo sin tasa para su fecha: "
+                        f"{len(res_apl['sin_tasa'])} (quedan en la bandeja).",
+                        file=sys.stderr,
+                    )
+                    _guardar_auditoria_de_cambios(
+                        repo,
+                        [
+                            _cambio_por_pago_sin_tasa(st["pago_id"], st["so_id"])
+                            for st in res_apl["sin_tasa"]
+                        ],
+                    )
                 if res_apl["creadas"] or res_apl["corregidas"]:
                     print(
                         f"Aplicaciones de Odoo: {res_apl['creadas']} vinculación(es) "

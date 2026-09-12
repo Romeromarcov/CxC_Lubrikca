@@ -259,3 +259,178 @@ def test_recalculate_all_orders_registra_lo_que_el_motor_rechazo() -> None:
     assert filas[0]["tipo_auditoria"] == app.TIPO_AUDITORIA_VINCULACION_RECHAZADA
     assert filas[0]["pago_id"] == "200"
     reconciler.run.assert_called_once(), "el ciclo siguió hasta el reconciliador"
+
+
+# --- el segundo hallazgo de la misma corrida: un pago sin tasa abortaba el paso ----
+#
+# En el stderr del mismo escenario, dos líneas más:
+#
+#     Error sincronizando aplicaciones de Odoo: No hay tasa para 2026-09-05 ...
+#     Error re-sincronizando Vinculaciones con Odoo: No hay tasa para 2026-04-15 ...
+#
+# Desde la Fase 2.1 ``get_rate_for_datetime`` levanta ``TasaNoDisponible`` en vez de
+# inventar 36,5/38,0 -- decisión correcta -- pero ``TasaNoDisponible`` es un
+# ``RuntimeError``, no un ``ValueError``, y las dos funciones lo llamaban fuera de todo
+# ``try``. UN pago con fecha sin tasa abortaba el paso entero (todas las aplicaciones
+# de Odoo, o todas las 1.494 vinculaciones del resync), cada cinco minutos, hasta que
+# alguien cargara esa tasa. Ahora ese pago se salta, queda como estaba, y va a la
+# bandeja como ``pago_sin_tasa_para_su_fecha``.
+
+
+def _apl(pago, so, monto, fecha):
+    from cxc.models import AplicacionConciliada
+
+    return AplicacionConciliada(
+        pago_id=pago,
+        so_id=so,
+        factura_id="F1",
+        monto=Decimal(monto),
+        moneda=Moneda.USD,
+        fecha_pago=fecha,
+    )
+
+
+class _RepoSinTasaParaUnDia:
+    """Serie sembrada solo para agosto; el pago de abril no tiene tasa."""
+
+    def __init__(self):
+        from tests import builders as b
+
+        self.escritas: list[Vinculacion] = []
+        self._serie = b.serie_tasas_sembrada(date(2026, 8, 1), date(2026, 8, 31))
+
+    def all_vinculaciones(self):
+        return []
+
+    def all_pagos(self):
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(pago_id="P_ABR"), SimpleNamespace(pago_id="P_AGO")]
+
+    def update_vinculacion(self, v):
+        self.escritas.append(v)
+
+    def all_serie_tasas(self):
+        return self._serie
+
+    def all_tasas_historicas_auditoria(self):
+        return []
+
+    def all_listas_precios_historicas(self):
+        return []
+
+    def get_orden(self, so_id):
+        return None
+
+
+def test_un_pago_sin_tasa_para_su_fecha_no_aborta_las_aplicaciones_de_los_demas() -> None:
+    import cxc.web.app as app
+
+    repo = _RepoSinTasaParaUnDia()
+    app.invalidar_tasas()
+    apps = [
+        _apl("P_ABR", "SO1", "100", date(2026, 4, 15)),  # sin tasa
+        _apl("P_AGO", "SO2", "200", date(2026, 8, 10)),  # con tasa
+    ]
+    res = app._sincronizar_aplicaciones_conciliadas(repo, apps)
+
+    assert [v.pago_id for v in repo.escritas] == ["P_AGO"], "el de agosto se escribió igual"
+    assert res["creadas"] == 1
+    assert res["sin_tasa"] == [{"pago_id": "P_ABR", "so_id": "SO1", "fecha": "2026-04-15"}]
+
+
+def test_el_demonio_deja_el_pago_sin_tasa_en_la_bandeja() -> None:
+    """Lo que devuelve ``sin_tasa`` no puede quedarse en un log: va a auditoría."""
+    import cxc.web.app as app
+
+    repo = MagicMock()
+    repo.all_auditoria.return_value = []
+    repo.all_pagos.return_value = []
+
+    class _Runner:
+        def __init__(self, *a, **k):
+            self.vinculaciones_rechazadas = []
+
+        def run_all(self, _fecha):
+            return []
+
+        def run_teoricos_pendientes(self, *a, **k):
+            return 0
+
+    lector = MagicMock()
+    lector.aplicaciones_conciliadas.return_value = []
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app._connect", return_value=MagicMock()),
+        patch("cxc.web.app.AppConfig"),
+        patch("cxc.web.app.EngineRunner", _Runner),
+        patch("cxc.web.app._resolvedor_de_precios", return_value=MagicMock()),
+        patch("cxc.web.app.get_valid_pricelists_usd_and_ves", return_value=([11], [10])),
+        patch("cxc.web.app.sincronizar_metodos_pago"),
+        patch("cxc.web.app.sincronizar_vigencia_listas", return_value=0),
+        patch("cxc.web.app._auto_vincular_fifo_pendientes", return_value=0),
+        patch("cxc.web.app._resincronizar_vinculaciones_con_odoo", return_value=[]),
+        patch("cxc.web.app._detectar_vinculaciones_pendientes_a_revisar", return_value=[]),
+        patch("cxc.web.app.OdooXmlRpcReader", return_value=lector),
+        patch(
+            "cxc.web.app._sincronizar_aplicaciones_conciliadas",
+            return_value={
+                "creadas": 0,
+                "corregidas": 0,
+                "sin_cambio": 0,
+                "omitidas": 0,
+                "sin_tasa": [{"pago_id": "P_ABR", "so_id": "SO1", "fecha": "2026-04-15"}],
+            },
+        ),
+        patch("cxc.web.app.OdooFacturasReader"),
+        patch("cxc.web.app.Reconciler"),
+    ):
+        app.recalculate_all_orders()
+
+    filas = repo.append_auditoria_rows.call_args[0][0]
+    assert filas[0]["tipo_auditoria"] == app.TIPO_AUDITORIA_PAGO_SIN_TASA
+    assert filas[0]["pago_id"] == "P_ABR"
+    assert filas[0]["estado"] == "pendiente_revision"
+    assert "2026" not in filas[0]["detalle_odoo"] or "tasa" in filas[0]["detalle_odoo"]
+
+
+def test_el_resync_no_se_cae_por_una_vinculacion_cuya_fecha_nueva_no_tiene_tasa() -> None:
+    """Odoo movió la fecha del pago a un día sin tasa. Esa vinculación queda con
+    sus equivalentes viejos (y su so_id/estado al día); las demás se procesan; y
+    la bandeja dice cuál fue."""
+    import cxc.web.app as app
+    from cxc.rates import TasaNoDisponible
+
+    v1 = _vinc("V1", "100", pago_id="P1")
+    v1 = v1.__class__(**{**v1.__dict__, "estado": EstadoVinculacion.CONCILIADO})
+    v2 = _vinc("V2", "50", pago_id="P2")
+    repo = MagicMock()
+    repo.all_vinculaciones.return_value = [v1, v2]
+    repo.all_auditoria.return_value = []
+    repo.all_serie_tasas.return_value = []
+    repo.update_vinculaciones_omitiendo_invalidas.return_value = []
+    conciliados = [
+        # P1: misma orden, pero la FECHA cambió -> hay que recalcular -> sin tasa
+        {
+            "pago_id": "P1",
+            "so_ids": ["SO1"],
+            "monto": 100.0,
+            "moneda": "USD",
+            "fecha": "2026-04-15",
+        },
+        # P2: PENDIENTE que Odoo confirma -> promoción simple
+        {"pago_id": "P2", "so_ids": ["SO1"], "monto": 50.0, "moneda": "USD"},
+    ]
+    with (
+        patch("cxc.web.app.get_live_pagos_conciliados", return_value=conciliados),
+        patch("cxc.web.app.get_rate_for_datetime", side_effect=TasaNoDisponible("sin tasa")),
+    ):
+        app.invalidar_tasas()
+        cambios = app._resincronizar_vinculaciones_con_odoo(repo, MagicMock())
+
+    escritas = repo.update_vinculaciones_omitiendo_invalidas.call_args[0][0]
+    assert {v.vinc_id for v in escritas} == {"V2"}, "V1 no se tocó; V2 se promovió igual"
+    sin_tasa = [c for c in cambios if c["tipo"] == "pago_sin_tasa"]
+    assert [c["pago_id"] for c in sin_tasa] == ["P1"]
+    filas = repo.append_auditoria_rows.call_args[0][0]
+    assert any(f["tipo_auditoria"] == app.TIPO_AUDITORIA_PAGO_SIN_TASA for f in filas)
