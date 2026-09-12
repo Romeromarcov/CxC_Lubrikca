@@ -99,9 +99,11 @@ def test_si_se_pasa_la_serie_no_se_lee_de_la_base() -> None:
 def test_sin_serie_se_lee_fresco_como_antes() -> None:
     """El comportamiento viejo se preserva para los cuatro llamadores puntuales.
 
-    Ahí la lectura fresca es lo correcto: se está fijando la tasa con la que una
-    vinculación va a quedar congelada, y el caché de cinco minutos podría ocultar
-    una tasa recién cargada.
+    Este docstring decía «la lectura fresca es lo correcto: el caché de cinco minutos
+    podría ocultar una tasa recién cargada». Desde el 11-sep-2026 esa lectura pasa por
+    el mismo caché, y lo que la mantiene correcta es que los tres escritores de la
+    serie lo invalidan al escribir. Lo que este test fija es que sin `serie_rows` se
+    lee la serie (una vez, del repo o del caché) y se resuelve la variante euro.
     """
     repo = _Repo(FECHA_EN_VENTANA, _serie("41.00"))
     tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)

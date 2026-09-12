@@ -7255,9 +7255,15 @@ def resolver_tasa_bcv_vinculacion(
     if not orden_en_periodo_historico(repo, orden):
         return tasa_bcv_default, "USD"
     try:
-        # Fresco, no ``tasas_vigentes``: acá se está fijando la tasa con la que
-        # va a quedar congelada una Vinculación, y el caché de 5 minutos podría
-        # ocultar una tasa recién cargada.
+        # Acá se está fijando la tasa con la que va a quedar congelada una
+        # Vinculación, así que tiene que ser la vigente de verdad. Hasta el
+        # 11-sep-2026 este comentario decía "fresco, no ``tasas_vigentes``: el
+        # caché de 5 minutos podría ocultar una tasa recién cargada" -- y ese mismo
+        # día ``_all_serie_tasas_rows`` pasó a servir del mismo caché, con lo que el
+        # texto se volvió falso. Lo que hace que siga siendo correcto es otra cosa:
+        # los tres sitios que escriben la serie (scraper, carga manual, import de
+        # Odoo) invalidan el caché al escribir, así que una tasa recién cargada se
+        # ve en la lectura siguiente. Ver ``invalidar_tasas``.
         #
         # ``serie_rows`` existe para los dos llamadores que están DENTRO de un
         # bucle sobre pagos. La nota anterior decía "es una operación puntual,
