@@ -4230,15 +4230,18 @@ def _pagos_odoo_por_orden(
                         p_bcv = p_ref
                         p_bin = p_ref
                     else:
-                        # Respaldo: Odoo no trajo el campo. Ojo que una tasa
-                        # ausente NO puede resolverse como cero -- eso sería
-                        # dar por cobrado nada; se deja el nominal.
+                        # Respaldo: Odoo no trajo el campo. Una tasa ausente NO
+                        # puede resolverse como cero (sería dar por cobrado nada)
+                        # ni como el nominal en Bs (sería multiplicar el abono por
+                        # la tasa). El comentario anterior decía «se deja el
+                        # nominal» y el código dejaba cero: no se hace ninguna de
+                        # las dos. El pago se cuenta en ``pagos_sin_tasa`` de la
+                        # orden y no suma; quien lea el abono sabe que le falta.
                         rate_bcv = tasa_bcv_de_dia(p_date, serie_rows)
-                        p_bcv = (
-                            p_amt / Decimal(str(rate_bcv))
-                            if rate_bcv and float(rate_bcv) > 0
-                            else Decimal("0")
-                        )
+                        if not rate_bcv or float(rate_bcv) <= 0:
+                            p_info["pagos_sin_tasa"] = p_info.get("pagos_sin_tasa", 0) + 1
+                            continue
+                        p_bcv = p_amt / Decimal(str(rate_bcv))
                         p_bin = p_bcv
 
                     # La vía euro, solo para las órdenes de la lista
@@ -4318,11 +4321,16 @@ def _pagos_odoo_por_orden(
                 if inv_dt and (not latest_inv_date or inv_dt > latest_inv_date):
                     latest_inv_date = inv_dt
 
-        if total_paid_bcv > Decimal("0") or total_paid_binance > Decimal("0"):
+        sin_tasa = int((p_direct or {}).get("pagos_sin_tasa", 0))
+        if total_paid_bcv > Decimal("0") or total_paid_binance > Decimal("0") or sin_tasa:
             pagos[so_name] = {
                 "abono_bcv": total_paid_bcv,
                 "abono_binance": total_paid_binance,
                 "ultimo_abono": latest_inv_date,
+                # Pagos en Bs de la orden que no se pudieron valorar (sin
+                # ``amount_ref`` de Odoo y sin tasa para su fecha). Si no es
+                # cero, el abono de arriba es incompleto.
+                "pagos_sin_tasa": sin_tasa,
             }
     return pagos
 

@@ -15,6 +15,7 @@ compararse contra un baseline conocido en vez de adivinar si cambió algo.
 from __future__ import annotations
 
 from decimal import Decimal
+from unittest.mock import patch
 
 from cxc.web import app
 from cxc.web.app import _pagos_odoo_por_orden
@@ -78,6 +79,7 @@ def test_ruta_principal_account_payment_usd():
             "abono_bcv": Decimal("500"),
             "abono_binance": Decimal("500"),
             "ultimo_abono": "2026-06-10",
+            "pagos_sin_tasa": 0,
         }
     }
 
@@ -361,3 +363,120 @@ def test_sin_payment_state_se_comporta_como_antes():
         [],
     )
     assert result["SO1"]["abono_bcv"] == Decimal("500")
+
+
+def test_ves_sin_amount_ref_y_sin_tasa_no_suma_cero_ni_nominal_y_lo_dice():
+    """El comentario decía «se deja el nominal» y el código dejaba CERO. Ninguna
+    de las dos: cero da la orden por no cobrada; el nominal en Bs multiplica el
+    abono por la tasa. El pago no suma y queda contado en ``pagos_sin_tasa``."""
+
+    def fake_execute(model, method, args, kwargs=None):
+        return [
+            {
+                "id": 1,
+                "amount": 3600,
+                "currency_id": [2, "VES"],
+                "date": "2026-06-10",
+                "reconciled_invoice_ids": [101],
+            },
+            {
+                "id": 2,
+                "amount": 50,
+                "currency_id": [1, "USD"],
+                "date": "2026-06-10",
+                "reconciled_invoice_ids": [101],
+            },
+        ]
+
+    with patch.object(app, "_tasas_historicas_cacheadas", return_value=[]):
+        result = _pagos_odoo_por_orden(
+            fake_execute,
+            [101],
+            {101: "SO1"},
+            {"SO1": [_factura(amount_total="500", amount_residual="0", currency="VES")]},
+            {"SO1": orden("SO1", monto_total="500")},
+            _serie(),  # ninguna tasa
+        )
+    assert result["SO1"]["abono_bcv"] == Decimal("50"), "solo el de dólares, que no necesita tasa"
+    assert result["SO1"]["pagos_sin_tasa"] == 1
+
+
+def test_orden_historica_pagada_en_bolivares_se_acredita_a_tasa_euro():
+    """La vía euro: para las órdenes de la lista histórica, toda la cobranza en
+    Bs se acredita al euro -- en las DOS rutas (abono_bcv y abono_binance), porque
+    a nivel de account.payment Odoo no distingue la ruta, solo la moneda. Once
+    líneas que ninguna prueba ejecutaba."""
+    from datetime import date
+
+    from cxc.rates import Tasas
+
+    def fake_execute(model, method, args, kwargs=None):
+        return [
+            {
+                "id": 1,
+                "amount": 1200,
+                "amount_ref": 2.4,  # lo que Odoo dijo a BCV-USD (500)
+                "currency_id": [2, "VES"],
+                "date": "2026-06-10",
+                "reconciled_invoice_ids": [101],
+            }
+        ]
+
+    tasas = Tasas(
+        historicas=[
+            {
+                "fecha": "2026-06-10",
+                "tasa_bcv_usd": "500.0",
+                "tasa_bcv_euro": "600.0",
+                "tasa_binance_promedio_diario": "550.0",
+            }
+        ],
+        serie=[],
+    )
+    with (
+        patch.object(app, "so_ids_en_ventana_historica", return_value={"SO1"}),
+        patch.object(app, "tasas_vigentes", return_value=tasas),
+    ):
+        result = _pagos_odoo_por_orden(
+            fake_execute,
+            [101],
+            {101: "SO1"},
+            {"SO1": [_factura(amount_total="500", amount_residual="0", currency="VES")]},
+            {"SO1": orden("SO1", monto_total="500", fecha=date(2026, 6, 1))},
+            _serie(**{"2026-06-10": 500.0}),
+        )
+    # 1200 Bs / 600 (euro) = 2,0 USD, y no los 2,4 que dijo Odoo a BCV-USD.
+    assert result["SO1"]["abono_bcv"] == Decimal("2")
+    assert result["SO1"]["abono_binance"] == Decimal("2")
+
+
+def test_orden_historica_sin_tasa_euro_para_la_fecha_se_queda_con_la_cifra_de_odoo():
+    """``abono_cxc_en_euros`` devuelve None sin tasa euro: «no pude», no «cero».
+    El abono sigue siendo lo que Odoo dijo a BCV-USD."""
+    from cxc.rates import Tasas
+
+    def fake_execute(model, method, args, kwargs=None):
+        return [
+            {
+                "id": 1,
+                "amount": 1000,
+                "amount_ref": 2.0,
+                "currency_id": [2, "VES"],
+                "date": "2026-06-10",
+                "reconciled_invoice_ids": [101],
+            }
+        ]
+
+    with (
+        patch.object(app, "so_ids_en_ventana_historica", return_value={"SO1"}),
+        patch.object(app, "tasas_vigentes", return_value=Tasas(historicas=[], serie=[])),
+    ):
+        result = _pagos_odoo_por_orden(
+            fake_execute,
+            [101],
+            {101: "SO1"},
+            {"SO1": [_factura(amount_total="500", amount_residual="0", currency="VES")]},
+            {"SO1": orden("SO1", monto_total="500")},
+            _serie(**{"2026-06-10": 500.0}),
+        )
+    assert result["SO1"]["abono_bcv"] == Decimal("2.0")
