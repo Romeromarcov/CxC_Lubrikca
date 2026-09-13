@@ -461,6 +461,10 @@ la fecha de la orden»). El fixture nuevo que falla un escenario si el demonio t
 ciclo no disparó en ninguno de los 47. Canario fiscal antes y después: 1578 /
 `00-00001590`, sin movimiento.
 
+**Y la corrida después de aplicar las decisiones del quiz** (vía euro apagada para
+montos reales, encabezado del reporte recalculado, regla unificada de «pagada»): otra
+vez 46 verdes y el rojo intencional, 26 min 20 s. Canario 1578 / `00-00001590`.
+
 **La regla que queda** (también en el `README` de `escenarios/`): correr al menos un
 escenario después de tocar invariantes, sync, resync o motor, y **leer su stderr**.
 Desde hoy un fixture `autouse` falla el escenario si el demonio imprimió un ciclo
