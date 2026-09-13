@@ -263,8 +263,12 @@ class TestPagadaUnificada:
         assert r.pagada and r.sobreaplicada
         assert r.residual_total == Decimal("-116.69")
 
-    def test_esta_propuesta_no_esta_cableada_todavia(self) -> None:
-        """Aplicarla mueve el universo de tres pantallas; es decisión del usuario."""
+    def test_las_tres_pantallas_usan_la_regla_unificada(self) -> None:
+        """El usuario dijo «aplicalo» el 12-sep-2026. Tres sitios, la misma función:
+        reporte de saldos, sugerencias de conciliación y auditoría. Si alguno vuelve
+        a una regla propia, esto lo ve."""
         from pathlib import Path
 
-        assert "pagada_unificada(" not in Path("src/cxc/web/app.py").read_text(encoding="utf-8")
+        fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
+        assert fuente.count("pagada_unificada(") == 3
+        assert "pagada_por_estado(" not in fuente and "pagada_por_residual(" not in fuente

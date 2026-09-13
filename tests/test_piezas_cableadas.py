@@ -47,9 +47,10 @@ SIN_LLAMADOR_A_PROPOSITO: dict[str, str] = {
     "saldos.py::diagnostico_de_saldos": "expone la mina del saldo sin corregirla",
     "saldos.py::es_obsequio": "separa el cero deliberado del cero por no resolver el precio",
     "saldos.py::diagnostico_de_obsequios": "separa los 107,42 autorizados de los 8.611,64 que no",
-    "pagada_en_odoo.py::pagada_unificada": (
-        "la propuesta del 12-sep para que las tres pantallas coincidan; cablearla mueve "
-        "el universo de tres pantallas y espera la decisión del usuario"
+    "pagada_en_odoo.py::pagada_por_estado": (
+        "la regla vieja del reporte de saldos y la auditoría; desde el 12-sep las tres "
+        "pantallas usan pagada_unificada, y ésta queda como lectura del diagnóstico "
+        "(la vigilancia diaria sigue comparando las dos viejas)"
     ),
     "pagada_en_odoo.py::pagada_por_residual": (
         "la regla del residual; la aplicación compara contra TOLERANCIA_RESIDUAL, "

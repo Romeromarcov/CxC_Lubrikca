@@ -113,7 +113,7 @@ Tres de las que estaban en esta tabla se cerraron y salieron:
 | 7 | Reglas de precio en 0,00 | borrarlas | **Tus manos** en Odoo (ítems 3896 y 3858). |
 | 8 | Encabezado del reporte de saldos | corregirlo | **Aplicado**: los KPI se recalculan sobre las filas que quedan; el juego viejo queda en `kpis_antes_del_filtro`. |
 | 9 | Las tres lecturas muertas | borrarlas | **Aplicado**: 224 líneas menos, y la pieza 21 del motor que solo ellas usaban. |
-| 10 | Escenario que no quedó claro | «pagada», y «proponme una solución para que coincida la información» | **Propuesta escrita y probada, sin cablear**: `pagada_unificada` = por estado, más tolerancia de centavos, más señal de sobrepago aparte, y las anuladas nunca cuentan. Aplicarla mueve el universo de tres pantallas: 47 órdenes pasan a cobradas por centavos, 15 anuladas dejan de contar en sugerencias, 4 quedan pagadas con señal. **Espera tu «aplicalo».** |
+| 10 | Escenario que no quedó claro | «pagada», «proponme una solución para que coincida la información», y después «aplicalo» | **Aplicado**: las tres pantallas (reporte de saldos, sugerencias, auditoría) usan `pagada_unificada` = por estado, más tolerancia de centavos, más señal de sobrepago aparte, y las anuladas nunca cuentan. Medido en la copia: 47 órdenes pasan a cobradas por centavos, 15 anuladas dejan de contar en sugerencias, 4 quedan pagadas con señal (las de «Ajuste Dif»). |
 | 11 | Por dónde arrancar con el precio desviado | por las líneas con descuento por las dos vías | **Entregada**, misma lista, sección 3: 72 líneas en 43 órdenes, 2.822,88 USD (el quiz decía 92: la referencia por población se afinó después). |
 
 ### Las que no están en el quiz porque no son una elección entre dos caminos

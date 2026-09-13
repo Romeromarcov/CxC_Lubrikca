@@ -79,9 +79,7 @@ from cxc.engine.listas import (
 )
 from cxc.engine.notas_de_credito import factor_de_impuesto, topar_nota_de_credito
 from cxc.engine.pagada_en_odoo import (
-    TOLERANCIA_RESIDUAL,
-    diagnostico_de_pagada,
-    pagada_por_estado,
+    pagada_unificada,
 )
 from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
@@ -4612,27 +4610,25 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     invoice_ids_all.append(fid)
                     inv_id_to_so[fid] = so
 
-        # Una SO sale del reporte de CxC solo si TODAS sus facturas out_invoice
-        # ya estan pagadas/en proceso de pago (si queda alguna sin pagar, se
-        # mantiene visible).
-        #
-        # La regla vive en ``engine/pagada_en_odoo.py``, y ahi esta escrito el
-        # hallazgo: ``so_pagada_en_odoo`` se calcula en TRES sitios y el de las
-        # sugerencias de conciliacion usa una regla DISTINTA (por residual, no por
-        # estado). Medido: 66 de 796 ordenes discrepan. No se unifico -- elegir
-        # una mueve el universo de tres pantallas.
+        # Una SO sale del reporte de CxC cuando está pagada según la regla
+        # UNIFICADA (decisión del usuario, 12-sep-2026, pregunta 10 del quiz):
+        # por estado, más una tolerancia de centavos, más la señal de sobrepago
+        # aparte, y las anuladas nunca cuentan. Es la misma función en las tres
+        # pantallas; ver ``engine/pagada_en_odoo.py``.
+        so_sobreaplicadas_odoo: set[str] = set()
         for so_name, inv_list in invoices_by_so.items():
-            if pagada_por_estado(inv_list):
+            _pu = pagada_unificada(inv_list)
+            if _pu.pagada:
                 so_pagada_en_odoo.add(so_name)
-            _d = diagnostico_de_pagada(inv_list)
-            if not _d.coinciden:
-                logger.info(
-                    "Reporte de saldos, %s: las dos definiciones de 'pagada en Odoo' "
-                    "difieren (%s). %s",
-                    so_name,
-                    _d.causa,
-                    _d.nota,
-                )
+            if _pu.sobreaplicada:
+                so_sobreaplicadas_odoo.add(so_name)
+        if so_sobreaplicadas_odoo:
+            logger.info(
+                "Reporte de saldos: %s orden(es) con residual negativo en Odoo (parciales "
+                "«Ajuste Dif», ver decisión 3 del quiz): %s",
+                len(so_sobreaplicadas_odoo),
+                ", ".join(sorted(so_sobreaplicadas_odoo)[:10]),
+            )
 
         # Fase 4 (plan de consolidación de fuentes, agosto 2026): descuentos
         # de línea (orden + factura) ahora se leen del espejo -- validado
@@ -8098,25 +8094,20 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                                 ["move_type", "=", "out_invoice"],
                             ]
                         ],
-                        {"fields": ["invoice_origin", "amount_residual_usd"]},
+                        {"fields": ["invoice_origin", "amount_residual_usd", "payment_state"]},
                     )
-                    residual_por_so: dict[str, Decimal] = {}
+                    facturas_por_so: dict[str, list[dict[str, Any]]] = {}
                     for inv in invoices:
                         so = str(inv.get("invoice_origin", "")).strip()
                         if so:
-                            residual_por_so[so] = residual_por_so.get(
-                                so, Decimal("0")
-                            ) + parse_decimal_safe(str(inv.get("amount_residual_usd") or "0"))
-                    # OJO: esta pantalla usa la regla del RESIDUAL, no la del
-                    # estado que usan el reporte de saldos y la auditoria. No es
-                    # un detalle: una factura ANULADA tiene residual cero por la
-                    # anulacion y aca se lee como pagada. Medido: 66 de 796
-                    # ordenes discrepan entre las dos reglas -- 15 por anuladas,
-                    # 47 por centavos de residual y 4 por sobrepago. Se preserva
-                    # porque cambiarla mueve el universo de esta pantalla; ver
-                    # ``engine/pagada_en_odoo.py`` para el hallazgo completo.
-                    for so, residual in residual_por_so.items():
-                        if residual <= TOLERANCIA_RESIDUAL:
+                            facturas_por_so.setdefault(so, []).append(inv)
+                    # Hasta el 12-sep-2026 esta pantalla usaba la regla del
+                    # RESIDUAL (una factura anulada, residual cero, contaba como
+                    # pagada) y las otras dos la del estado; 66 de 796 ordenes
+                    # discrepaban. Decision del usuario (quiz, pregunta 10): la
+                    # regla unificada en las tres. Ver ``engine/pagada_en_odoo.py``.
+                    for so, facturas_so in facturas_por_so.items():
+                        if pagada_unificada(facturas_so).pagada:
                             so_pagada_en_odoo.add(so)
 
                     entrega_valida_set = get_live_delivered_not_returned(so_names, execute=execute)
@@ -13171,15 +13162,13 @@ async def get_auditoria():
             so = merged["invoice_origin"]
             invoices_by_so.setdefault(so, []).append(merged)
             if merged["move_type"] == "out_invoice":
-                estados_por_so.setdefault(so, []).append(str(merged["payment_state"]))
+                estados_por_so.setdefault(so, []).append(merged)
 
-        # SO "pagada" = todas sus out_invoice estan payment_state paid/in_payment.
-        # Es la MISMA regla que /api/reporte-saldos -- y ahora comparten la
-        # funcion, asi que no pueden separarse sin que alguien lo note. El tercer
-        # sitio (sugerencias de conciliacion) usa otra: ver
+        # SO "pagada": la regla UNIFICADA, la misma de /api/reporte-saldos y de
+        # las sugerencias desde el 12-sep-2026 (quiz, pregunta 10). Ver
         # ``engine/pagada_en_odoo.py``.
-        for so, estados in estados_por_so.items():
-            if pagada_por_estado([{"payment_state": e} for e in estados]):
+        for so, facturas_so in estados_por_so.items():
+            if pagada_unificada(facturas_so).pagada:
                 so_pagada_en_odoo.add(so)
 
         # Read rates series to convert VES invoice residual to USD

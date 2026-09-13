@@ -189,10 +189,12 @@ def diagnostico_de_pagada(
 #
 # El usuario respondió el quiz: el escenario que no le cerraba era éste, y pidió
 # «proponme una solución para que coincida la información». Ésta es la propuesta,
-# escrita como función y con sus tests, SIN cablear: aplicarla mueve el universo
-# de órdenes de tres pantallas (47 pasan a cobradas por centavos, 15 anuladas dejan
-# de contar como pagadas en las sugerencias, 4 quedan pagadas con señal), y eso
-# es una decisión sobre números que ya están medidos.
+# y el mismo día dijo «aplicalo»: desde entonces es la regla de las tres pantallas
+# (reporte de saldos, sugerencias de conciliación, auditoría). Lo que mueve, medido
+# sobre la copia: 47 órdenes pasan a cobradas por centavos, 15 anuladas dejan de
+# contar como pagadas en las sugerencias, 4 quedan pagadas con la señal de
+# sobreaplicación. Las dos lecturas viejas quedan para el diagnóstico de la
+# vigilancia diaria.
 
 CAUSA_SIN_FACTURAS = "sin_facturas"
 CAUSA_ESTADO = "por_estado"
