@@ -19,6 +19,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from .engine.identidad_de_reglas import ORDEN_DE_BUSQUEDA
 from .models import (
     BandejaFacturacion,
     Cliente,
@@ -255,6 +256,18 @@ class Repository(ABC):
         """
 
     @abstractmethod
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        """Como ``update_vinculaciones`` pero una fila que viola una invariante
+
+        de dinero no tumba el lote: se omite, y se devuelve junto con la
+        violación para que el llamador la registre. Es la escritura de los
+        lotes del demonio, donde una fila mala no puede dejar sin escribir a
+        las demás. Ver ``db/invariantes.py``.
+        """
+
+    @abstractmethod
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         """Borra Vinculaciones por id. Devuelve cuántas se borraron.
 
@@ -316,6 +329,20 @@ class Repository(ABC):
 
     @abstractmethod
     def set_regla_activo(self, tabla: str, regla_id: str, activo: bool) -> bool: ...
+
+    @abstractmethod
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        """En que tablas de reglas existe ese ``regla_id``, en orden canonico.
+
+        Solo lectura. Devuelve un nombre por tabla FISICA --nunca el alias
+        ``DescuentosMarcaCategoria`` ademas de ``DescuentosProntoPago``, que apuntan
+        a la misma-- para que quien cuente cuantas tablas lo tienen no cuente dos.
+
+        Existe porque ``post_toggle_descuento`` elegia la tabla a tocar probando
+        ``set_regla_activo`` hasta que una respondia, y asi no habia forma de saber
+        si el id tambien estaba en otra. Ver ``engine/identidad_de_reglas.py``.
+        """
+        ...
 
     # --- Tablas de auditoría/histórico -- filas crudas dict[str,str], mismo
     # shape en ambos backends (equivalentes a lo que daba
@@ -712,6 +739,14 @@ class InMemoryRepository(Repository):
         for v in vincs:
             self._vinculaciones[v.vinc_id] = v
 
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        # El repositorio en memoria no impone invariantes (no tiene los CHECK de
+        # la base); escribe todo y no rechaza nada.
+        self.update_vinculaciones(vincs)
+        return []
+
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         borradas = 0
         for vid in vinc_ids:
@@ -821,6 +856,13 @@ class InMemoryRepository(Repository):
                 r.activo = activo
                 return True
         return False
+
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        return [
+            tabla
+            for tabla in ORDEN_DE_BUSQUEDA
+            if any(r.regla_id == regla_id for r in (self._regla_list(tabla) or []))
+        ]
 
     def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._discrepancias_aceptadas]

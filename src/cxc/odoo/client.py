@@ -776,11 +776,28 @@ class OdooXmlRpcReader(OdooReader):
     # fuentes) -- mitad "factura" de la lógica de descuentos de línea que
     # _leer_descuentos_lineas_odoo arma hoy en vivo. Solo líneas de
     # producto (display_type in [product, False]) -- secciones/notas no
-    # tienen descuento ni monto. -------------------------------------------
+    # tienen descuento ni monto.
+    #
+    # ``move_id.move_type`` -- mismo filtro que ``changed_facturas``, y por
+    # el mismo motivo que ``changed_entregas_lineas`` filtra por
+    # picking_type (ver su comentario). Medido en el Odoo de prueba
+    # (septiembre 2026, Fase 1.3 del plan de blindaje): sin el filtro este
+    # espejo traía 17.167 filas de las cuales 15.380 -- el 89,6% -- eran
+    # líneas de facturas de PROVEEDOR, asientos de diario y movimientos de
+    # pago, sin ninguna relación con la cuenta por cobrar. El único
+    # consumidor de hoy se salvaba porque cruza contra ``invoice_ids`` y
+    # descartaba el resto, así que ningún monto estaba mal; lo que se
+    # arregla es el costo (sincronizar y cargar en memoria diez veces lo
+    # necesario) y la trampa que quedaba armada para el próximo consumidor
+    # que agregara sin ese cruce. ------------------------------------------
     def changed_lineas_factura(self, since: datetime | None) -> list[LineaFactura]:
         recs = self._search_read(
             self.MODEL_MOVE_LINE,
-            self._delta(since) + [["display_type", "in", ["product", False]]],
+            self._delta(since)
+            + [
+                ["display_type", "in", ["product", False]],
+                ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]],
+            ],
             [
                 "id",
                 "move_id",

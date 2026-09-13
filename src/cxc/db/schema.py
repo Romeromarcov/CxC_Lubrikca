@@ -346,7 +346,21 @@ promocion_primera_compra = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("descuento_fallback", PCT, nullable=False, server_default="0.02"),
+    # QUE UNIDADES CALIFICAN para el minimo de compra. NO es sobre que lineas se
+    # aplica el descuento -- eso es ``categorias_descuento``, mas abajo. Los dos
+    # campos existen porque son dos preguntas distintas y confundirlas cuesta
+    # plata: el 11-sep-2026 intente reusar este para el descuento y dos tests lo
+    # desmintieron.
     Column("categorias_aplica", String, nullable=False, server_default="Comercial"),
+    # SOBRE QUE LINEAS se aplica el porcentaje. Vacio = todas, que es lo que la
+    # rama de reglas configuradas hacia siempre, asi que una regla vieja no
+    # cambia de comportamiento.
+    #
+    # Existe por el 2 % de primera compra: vive como respaldo cableado que suma
+    # solo las lineas Comercial, y sin este campo configurarlo como regla de la
+    # tabla ensanchaba la base a TODAS las lineas. Medido: 122 ordenes de la copia
+    # de produccion tienen lineas de las dos categorias.
+    Column("categorias_descuento", String, nullable=False, server_default=""),
     Column("marca", String, nullable=False, server_default="GLOBAL OIL"),
     Column("categoria", String, nullable=False, server_default="CAJA"),
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),

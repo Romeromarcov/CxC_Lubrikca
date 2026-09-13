@@ -958,12 +958,12 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
     assert by_so["SO_LIMPIA"]["revisar_motivo"] is None
 
 
-def test_lista_aplicada_label_indica_lista_historica_para_ordenes_de_la_ventana() -> None:
-    """Órdenes anteriores a S00092/13-3-2026 (o sin lista de precios
-
-    asignada) usan la Lista Histórica de Auditoría (Euro) para el cálculo
-    VES -- antes esto quedaba invisible en "lista aplicada" cuando la orden
-    no tenía ``lista_precios`` asignada (label salía en blanco)."""
+def test_ventas_ya_no_valora_ninguna_orden_con_la_lista_historica() -> None:
+    """Hasta el 12-sep-2026 las órdenes de la ventana (o sin lista) se valoraban en
+    Ventas con la Lista Histórica de Auditoría, y el label lo decía. Decisión del
+    usuario (quiz, pregunta 5): esa lista es solo para auditoría y no modifica
+    montos reales. Ventas es un monto real: ninguna fila lleva ya esa etiqueta, con
+    cualquier fecha y con o sin lista."""
 
     def _fake_execute_hist(model, method, args, kwargs=None):
         if model == "sale.order":
@@ -1040,11 +1040,10 @@ def test_lista_aplicada_label_indica_lista_historica_para_ordenes_de_la_ventana(
         assert res.status_code == 200
         by_so = {it["so_id"]: it for it in res.json()["items"]}
 
-    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_SIN_LISTA"]["lista_aplicada_label"]
-    assert "Lista Histórica de Auditoría" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
-    # Con lista asignada, el label combina el id/nombre real + la nota histórica.
+    for so in ("SO_HIST_SIN_LISTA", "SO_HIST_CON_LISTA", "SO_NO_HIST"):
+        assert "Lista Histórica de Auditoría" not in (by_so[so]["lista_aplicada_label"] or ""), so
+    # Con lista asignada, el label sigue diciendo cuál.
     assert "#3" in by_so["SO_HIST_CON_LISTA"]["lista_aplicada_label"]
-    assert "Lista Histórica de Auditoría" not in (by_so["SO_NO_HIST"]["lista_aplicada_label"] or "")
 
 
 def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
@@ -1455,7 +1454,7 @@ def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> No
     assert item["total_nc_aplicada"] == 516.89
 
 
-def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_y_eur_para_historica() -> None:
+def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_sin_euro_para_historica() -> None:
     """Bug real reportado por el usuario (agosto 2026, cliente Emprendimiento
 
     Tomas Marcano 5 / orden real S00020): un pago en VES se restaba IGUAL
@@ -1553,9 +1552,12 @@ def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_y_eur_para_historica(
         assert res.status_code == 200
         item = next(it for it in res.json()["items"] if it["so_id"] == "SO_HIST_PAGO")
 
-    # 16606.59 / 510.4884 (tasa BCV-EUR, no la BCV normal) ~= 32.53
-    assert item["pagado_teorico_bcv"] == 32.53
-    # 16606.59 / 516.8118 (tasa Binance normal, el Euro NO la sustituye)
+    # Hasta el 12-sep-2026 esta orden de la ventana se acreditaba a tasa BCV-EUR
+    # (16606.59 / 510.4884 = 32.53). Decisión del usuario (quiz, pregunta 5): el
+    # euro es solo para auditoría y no toca montos reales. Ahora la ruta BCV usa
+    # la BCV-USD del día: 16606.59 / 440.9657.
+    assert round(item["pagado_teorico_bcv"], 2) == round(16606.59 / 440.9657, 2)
+    # 16606.59 / 516.8118 (tasa Binance normal)
     assert round(item["pagado_teorico_binance"], 2) == round(16606.59 / 516.8118, 2)
-    # Las dos rutas dan numeros DISTINTOS -- ya no se duplica el mismo valor.
+    # Las dos rutas siguen dando numeros DISTINTOS -- cada una con su tasa.
     assert item["pagado_teorico_bcv"] != item["pagado_teorico_binance"]

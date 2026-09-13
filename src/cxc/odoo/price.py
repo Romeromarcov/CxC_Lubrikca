@@ -14,6 +14,7 @@ lista, nunca al precio real de una pricelist con regla propia.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from typing import Any
 
 from ..decimal_utils import to_decimal
 from ..engine.price_resolver import PriceResolver
+
+logger = logging.getLogger(__name__)
 
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
 
@@ -84,6 +87,28 @@ _SHARED_VOLUMEN_CACHE: dict[str, tuple[Decimal, float]] = {}
 _SHARED_CACHE_TTL_SECONDS = 6 * 3600.0
 
 
+@dataclass(frozen=True)
+class PrecioDeReglaVencida:
+    """Un precio que se devolvió aunque su regla no cubría la fecha pedida.
+
+    Es la mina 9 del inventario 1.1, y la más difícil de cazar de las nueve: el
+    clasificador AST busca ``except`` vacíos y ceros por defecto, y esto no es
+    ninguno de los dos. Devuelve un **dato real**, verdadero para otra fecha.
+
+    ``desde`` y ``hasta`` son la vigencia de la regla que se usó, en texto y tal
+    como Odoo las trae -- vacío cuando la regla no declara ese extremo. Sirven
+    para ver de cuánto se pasó: una regla que venció ayer no es lo mismo que una
+    que venció en abril.
+    """
+
+    producto: str
+    lista: int
+    fecha_pedida: str
+    desde: str
+    hasta: str
+    reglas_disponibles: int
+
+
 class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
     """Lee el precio de un producto en una pricelist vía XML-RPC, con caché.
 
@@ -128,6 +153,36 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         # (producto, lista) -> True si el último precio() resuelto para ese
         # par NO vino de una regla fija en `lista` -- ver fue_fallback().
         self._fallback_flags: dict[tuple[str, str], bool] = {}
+        # Precios que salieron de una regla de precio VENCIDA. Ver
+        # ``precios_de_regla_vencida`` y la mina 9 del inventario 1.1: la señal
+        # de "este teórico no es confiable" se enciende solo cuando NO hay
+        # precio, y una lista con todas las reglas vencidas entrega precios
+        # viejos con la misma cara que una al día. Esto los cuenta.
+        self._reglas_vencidas: list[PrecioDeReglaVencida] = []
+
+    def precios_de_regla_vencida(self) -> list[PrecioDeReglaVencida]:
+        """Los precios que salieron de una regla que no cubria la fecha pedida.
+
+        Se devuelve la lista y no un conteo a proposito: para decidir que hacer
+        con la mina 9 hace falta saber **de cuanto se paso** cada uno. Una regla
+        que vencio ayer no es lo mismo que una que vencio en abril, y el conteo
+        solo no distingue.
+        """
+        return list(self._reglas_vencidas)
+
+    def resumen_de_reglas_vencidas(self) -> str:
+        """Una linea para el log o la pantalla, con el denominador."""
+        if not self._reglas_vencidas:
+            return "Ningun precio salio de una regla vencida."
+        listas = sorted({r.lista for r in self._reglas_vencidas})
+        productos = len({r.producto for r in self._reglas_vencidas})
+        ej = self._reglas_vencidas[0]
+        return (
+            f"{len(self._reglas_vencidas)} precio(s) de regla VENCIDA, sobre "
+            f"{productos} producto(s) y las listas {listas}. Ejemplo: producto "
+            f"{ej.producto} en la lista {ej.lista}, fecha pedida {ej.fecha_pedida or 'sin fecha'}, "
+            f"regla vigente {ej.desde or 'sin inicio'} a {ej.hasta or 'sin fin'}."
+        )
 
     def _precio_fijo_en_lista(
         self, pricelist_id: int, prod_id: int, fecha: date | None
@@ -175,7 +230,35 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         if matched:
             matched.sort(key=lambda x: x[0], reverse=True)
             return matched[0][1]
-        return to_decimal(str(rules[0]["fixed_price"]))
+
+        # Ninguna regla cubre la fecha pedida y se devuelve la primera igual.
+        #
+        # El valor NO cambia: devolver ``None`` acá dejaría la pantalla sin
+        # precio en vez de con un precio viejo, y eso mueve montos -- es una
+        # decisión del usuario, no un efecto colateral. Lo que cambia es que
+        # deja de pasar en silencio.
+        primera = rules[0]
+        self._reglas_vencidas.append(
+            PrecioDeReglaVencida(
+                producto=str(prod_id),
+                lista=pricelist_id,
+                fecha_pedida=fecha.isoformat() if fecha else "",
+                desde=str(primera.get("date_start") or "")[:10],
+                hasta=str(primera.get("date_end") or "")[:10],
+                reglas_disponibles=len(rules),
+            )
+        )
+        logger.warning(
+            "Precio de regla VENCIDA: producto %s, lista %s, fecha pedida %s, "
+            "regla usada vigente %s a %s (de %d reglas, ninguna cubre la fecha).",
+            prod_id,
+            pricelist_id,
+            fecha.isoformat() if fecha else "sin fecha",
+            primera.get("date_start") or "sin inicio",
+            primera.get("date_end") or "sin fin",
+            len(rules),
+        )
+        return to_decimal(str(primera["fixed_price"]))
 
     def precio(self, producto: str, lista: str, fecha: date | None = None) -> Decimal:
         clave = (producto, lista, fecha.isoformat() if fecha else "sin_fecha")

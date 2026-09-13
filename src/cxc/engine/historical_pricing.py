@@ -32,8 +32,13 @@ def es_orden_historica(
     lista_es_usd_valida: bool = False,
 ) -> bool:
     """True si la orden debe usar la Lista Histórica de Auditoría en vez de
-    su lista de Odoo asignada (o si nunca tuvo lista asignada -- ese caso es
-    incondicional, no depende del toggle ni de la ventana).
+    su lista de Odoo asignada, o si nunca tuvo lista asignada.
+
+    **El interruptor apaga todo, incluidas las órdenes sin lista.** Decisión del
+    usuario (quiz, 12-sep-2026, pregunta 5: «el toggle apaga todo»). Hasta ese día
+    el caso «sin lista» era incondicional --no miraba ``enabled``-- y por eso una
+    orden sin lista se valoraba con la lista histórica y cobraba en euro aunque el
+    interruptor estuviera apagado. Con ``enabled=False`` ninguna orden es histórica.
 
     Excepción real (pedido explícito del usuario, agosto 2026, caso SJMG
     2012 C.A. / pago 1279): la ventana histórica (20-feb a 12-mar-2026)
@@ -46,12 +51,14 @@ def es_orden_historica(
     "nació en lista USD". `lista_es_usd_valida` debe venir ya resuelta por
     el llamador (``str(lista_id_str) in <listas USD configuradas>``).
     """
+    if not enabled:
+        return False
     lista_id_str = (lista_id_str or "").strip()
     if not lista_id_str or lista_id_str in ("0", "None"):
         return True
     if lista_es_usd_valida:
         return False
-    if not enabled or fecha is None:
+    if fecha is None:
         return False
     return HISTORICAL_PRICE_LIST_START <= fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
 

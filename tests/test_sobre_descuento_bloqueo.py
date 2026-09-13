@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cxc.models import BandejaFacturacion, LineaFactura, LineaOrden, OrdenVenta
@@ -247,3 +248,75 @@ def test_batch_no_duplica_fila_ya_registrada_hoy():
 
     segunda_corrida = _detectar_sobre_descuentos_batch(repo)
     assert segunda_corrida == []
+
+
+# --- la unidad de un tramo de volumen (Fase 2.4, pieza 31) -------------------
+
+
+class TestUnidadDeVolumen:
+    """`get_todas_reglas_descuento` tenía la cascada ANTERIOR a la migración.
+
+        u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+        if not u_med or u_med == "None":
+            u_med = "LITROS" if (float(r.litros_minimo) > 0 and ...) else "CAJAS"
+
+    `litros_minimo` **ya no existe** en `DescuentoVolumen` —la migración de unificación
+    de nombres lo eliminó porque era el mismo dato con otro nombre— así que esa línea es
+    un `AttributeError` que el `except Exception` del endpoint convierte en **500**: una
+    sola regla de volumen con la unidad vacía dejaba en blanco la pantalla de reglas
+    entera, no solo esa fila. El motor ya había sacado la cascada; la pantalla no.
+    """
+
+    def test_una_unidad_declarada_se_respeta_tal_cual(self) -> None:
+        from types import SimpleNamespace
+
+        from cxc.engine.discounts import unidad_de_volumen
+
+        assert unidad_de_volumen(SimpleNamespace(unidad_medida="LITROS")) == ("LITROS", True)
+        assert unidad_de_volumen(SimpleNamespace(unidad_medida="UNIDADES")) == ("UNIDADES", True)
+        assert unidad_de_volumen(SimpleNamespace(unidad_medida="USD")) == ("USD", True)
+
+    def test_se_normaliza_a_mayusculas_y_sin_espacios(self) -> None:
+        from types import SimpleNamespace
+
+        from cxc.engine.discounts import unidad_de_volumen
+
+        assert unidad_de_volumen(SimpleNamespace(unidad_medida=" litros ")) == ("LITROS", True)
+
+    @pytest.mark.parametrize("malo", ["", "   ", None, "None", "none", "NONE"])
+    def test_una_unidad_ilegible_cae_a_UNIDADES_y_lo_DECLARA(self, malo) -> None:
+        """Es la que el motor usa de todos modos, y ahora se sabe que se infirió.
+
+        La cadena `"None"` no es hipotética: el código original ya la chequeaba, o sea
+        que un `None` se guardó como texto en esa columna alguna vez. Y la columna es
+        `nullable=False` con `server_default="UNIDADES"`, así que prohíbe NULL pero
+        **admite cadena vacía**.
+        """
+        from types import SimpleNamespace
+
+        from cxc.engine.discounts import unidad_de_volumen
+
+        assert unidad_de_volumen(SimpleNamespace(unidad_medida=malo)) == ("UNIDADES", False)
+
+    def test_una_regla_SIN_el_campo_no_revienta(self) -> None:
+        """Que es exactamente lo que pasaba con `r.litros_minimo`."""
+        from types import SimpleNamespace
+
+        from cxc.engine.discounts import unidad_de_volumen
+
+        assert unidad_de_volumen(SimpleNamespace()) == ("UNIDADES", False)
+
+    def test_la_inferencia_NO_adivina_entre_litros_y_cajas(self) -> None:
+        """La cascada vieja elegía entre LITROS y CAJAS mirando un campo borrado.
+
+        Adivinar decide si «10» significa diez litros o diez cajas, y de eso depende si
+        un descuento por volumen se otorga o no. Ahora no se adivina: se usa la unidad
+        que el motor usa y se dice que no estaba declarada.
+        """
+        from types import SimpleNamespace
+
+        from cxc.engine.discounts import unidad_de_volumen
+
+        unidad, declarada = unidad_de_volumen(SimpleNamespace(unidad_medida=""))
+        assert unidad != "LITROS" and unidad != "CAJAS"
+        assert not declarada

@@ -130,6 +130,10 @@ class EngineRunner:
         self._repo = repo
         self._resolver = price_resolver
         self._cfg = engine_config
+        # Las vinculaciones que el último ``run_all`` NO pudo escribir porque
+        # violaban una invariante de dinero, con su motivo. Quedan en la base
+        # como estaban; quien corre el motor decide cómo avisar.
+        self.vinculaciones_rechazadas: list[tuple[Vinculacion, Any]] = []
 
     def _abonos(self, vincs: list[Vinculacion]) -> list[tuple[Vinculacion, MetodoPago]]:
         """Abonos que el motor trata como dinero real.
@@ -521,7 +525,16 @@ class EngineRunner:
             todas_vincs.extend(vincs_actualizadas)
 
         self._repo.upsert_bandejas(resultados)
-        self._repo.update_vinculaciones(todas_vincs)
+        # Un solo lote con todas las vinculaciones del ciclo. Con la escritura
+        # estricta, UNA fila que violara la novena invariante (pago
+        # sobreaplicado) dejaba sin escribir las demás -- lo encontró el banco
+        # de escenarios el 12-sep-2026 con los diez pagos ya sobreaplicados en
+        # Odoo. Se omiten esas y se escriben las otras.
+        self.vinculaciones_rechazadas = self._repo.update_vinculaciones_omitiendo_invalidas(
+            todas_vincs
+        )
+        for v, f in self.vinculaciones_rechazadas:
+            logger.warning("Vinculación %s NO escrita: %s", v.vinc_id, f)
         return resultados
 
     def run_teoricos_pendientes(self, fecha_calculo: date, limite: int | None = None) -> int:

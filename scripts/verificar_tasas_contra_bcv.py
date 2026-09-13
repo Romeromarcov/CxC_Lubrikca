@@ -218,6 +218,24 @@ def main() -> int:
         return None
 
     desde = dt.date.fromisoformat(args.desde)
+    # ``max()`` sobre un diccionario vacio revienta, y el histórico local puede
+    # estar vacío de verdad: un espejo recién levantado, o una base de pruebas.
+    # Antes eso salía como un ``ValueError: max() arg is an empty sequence`` --
+    # un cron que se cae se ve exactamente igual que un cron que nadie agendó,
+    # así que el fallo tiene que decir qué pasó (hallazgo de la Fase 6 del plan
+    # de blindaje, reproducido contra el espejo de QA).
+    if not nuestras:
+        print(
+            "\nEl histórico local (tasas_historicas_auditoria) está VACÍO, así que no "
+            "hay nada que contrastar contra las series del BCV.\n"
+            "Las series oficiales sí se bajaron bien: "
+            f"{len(oficial)} días, {min(oficial)} .. {max(oficial)}.\n"
+            "Si esto sale en producción, el histórico se perdió; si sale en una base "
+            "de pruebas, es lo esperado -- esa tabla la llena el scraper, no el sync "
+            "de Odoo.",
+            file=sys.stderr,
+        )
+        return 1
     hasta = max(dt.date.fromisoformat(max(oficial)), dt.date.fromisoformat(max(nuestras)))
     coinciden, cambios = 0, []
     for i in range((hasta - desde).days + 1):

@@ -27,6 +27,7 @@ from cxc.models import (
 from cxc.sheets import serde
 from cxc.web import app as _app_module
 from cxc.web.app import SECRET_KEY, app, crear_session_token
+from tests import builders as b
 
 client = TestClient(app)
 
@@ -72,9 +73,44 @@ def _mock_repo_with_gateway_bridge() -> MagicMock:
     repo.all_clientes.side_effect = lambda: [
         serde.cliente_from_row(r) for r in repo._g.read_rows("Clientes")
     ]
-    repo.all_serie_tasas.side_effect = lambda: [
-        serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")
-    ]
+    # SerieTasas sembrada por defecto (Fase 2.1 del plan de blindaje). Sin
+    # esto, un test que no declara la pestaña "SerieTasas" cae al ultimo
+    # recurso de ``get_rate_for_datetime``: 36,5 / 38,0, las tasas de 2019.
+    # Los valores sembrados son ESOS MISMOS, asi que ningun monto asertado
+    # cambia -- lo que cambia es que el numero viene de un dato presente.
+    #
+    # Un test que quiera medir el comportamiento SIN tasas lo declara
+    # explicitamente: ``repo.all_serie_tasas.side_effect = lambda: []``.
+    def _serie_o_sembrada():
+        propias = [serde.serie_from_row(r) for r in repo._g.read_rows("SerieTasas")]
+        if propias:
+            return propias
+        # ``get_rate_for_datetime`` consulta SerieTasas primero y
+        # TasasHistoricasAuditoria despues, asi que sembrar la primera le
+        # ganaria a la segunda y cambiaria de que fuente sale el numero.
+        # Hallado al sembrar: el test 50 pasaba 550,0 por auditoria y la
+        # siembra se lo tapaba con 38,00.
+        #
+        # Antes esto devolvia [] apenas el test proveia UNA fila de auditoria, y
+        # los dias que esa fila no cubria caian al default de 2019. Desde que el
+        # default es error duro (11-sep-2026), esos dias revientan: el test 32
+        # trae la tasa de su pago por auditoria y necesita OTRA fecha para el
+        # resto del escenario.
+        #
+        # Asi que se siembran solo los dias que la auditoria NO trae. La fuente
+        # que el test eligio sigue ganando donde la puso, y donde no la puso hay
+        # un dato en vez de un invento.
+        dias_de_auditoria = {
+            str(fila.get("fecha") or "")[:10]
+            for fila in repo._g.read_rows("TasasHistoricasAuditoria")
+        }
+        return [
+            s
+            for s in b.serie_tasas_sembrada()
+            if s.timestamp.date().isoformat() not in dias_de_auditoria
+        ]
+
+    repo.all_serie_tasas.side_effect = _serie_o_sembrada
     repo.all_tasas_historicas_auditoria.side_effect = lambda: repo._g.read_rows(
         "TasasHistoricasAuditoria"
     )
@@ -126,6 +162,11 @@ def test_e2e_01_catalog_and_odoo_ingestion(mock_env, mock_conn):
 def test_e2e_02_payment_loading_and_manual_allocation():
     """Test 2 & 3: Carga de pagos y asignación manual a órdenes de venta."""
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
             so_id="SO100",
@@ -1519,8 +1560,21 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     from cxc.models import Pago
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
+    # La serie también por la vía del gateway: ``_get_conciliaciones_sugerencias_
+    # sync`` lee SerieTasas por ahí, no por ``all_serie_tasas``. Sin esto el pago
+    # huérfano se omite por falta de tasa desde que el default de 2019 es error
+    # duro (11-sep-2026), y el saldo a favor de −50 que este test verifica
+    # desaparecía. Los valores sembrados son los mismos 36,50 / 38,00, así que
+    # ningún monto asertado cambia.
     mock_repo._g.read_rows.side_effect = lambda sheet: (
-        [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}] if sheet == "Clientes" else []
+        [{"cliente_id": "CLI1", "nombre": "Cliente Uno"}]
+        if sheet == "Clientes"
+        else (b.serie_tasas_sembrada_rows() if sheet == "SerieTasas" else [])
     )
     mock_repo.all_ordenes.return_value = [
         OrdenVenta(
@@ -1542,7 +1596,8 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     mock_repo.all_descuentos_sistema_aprobados.return_value = []
     mock_repo.all_tasas_historicas_auditoria.return_value = []
     mock_repo.all_vinculaciones.return_value = []
-    mock_repo.all_serie_tasas.return_value = []
+    # (la serie ya quedó sembrada arriba; este bloque la ponía en [] y dejaba
+    # la siembra muerta -- el test pasaba por el default de 2019, no por un dato)
     mock_repo.all_pagos_huerfanos_cerrados.return_value = []
     mock_repo.all_facturas.return_value = []
     mock_repo.all_pagos.return_value = [
@@ -1934,6 +1989,11 @@ def test_e2e_17_pagos_historial_incluye_conciliados_directo_en_odoo():
     poblado.
     """
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo._g.read_rows.side_effect = lambda sheet: (
         [{"cliente_id": "10", "nombre": "Cliente Odoo"}] if sheet == "Clientes" else []
     )
@@ -2093,6 +2153,11 @@ def test_e2e_18b_editar_vinculacion_pendiente_cambia_orden_y_monto():
         vendedor_email="v@lubrikca.com",
     )
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_vinculaciones.return_value = [vinc]
     mock_repo.get_pago.return_value = mock_pago
 
@@ -2172,6 +2237,12 @@ def test_e2e_editar_tasa_binance_pago_pendiente_valida_min_max_y_persiste():
     )
     mock_repo = MagicMock()
     mock_repo.all_pagos.return_value = [pago]
+    # ``get_pago`` tambien, que es por donde el endpoint busca desde el
+    # 11-sep-2026: antes recorria all_pagos() -- cargar los 1.320 para
+    # encontrar uno. Sobre un MagicMock sin configurar, get_pago devuelve un
+    # objeto falso y el 404 de este test no disparaba; el repo real devuelve
+    # None, asi que el mock ahora se comporta como el.
+    mock_repo.get_pago.side_effect = lambda pid: pago if pid == pago.pago_id else None
     mock_repo.serie_tasas_del_dia.return_value = [
         SerieTasa(datetime(2026, 7, 10, 8, 0), Decimal("36"), Decimal("39.0"), "x"),
         SerieTasa(datetime(2026, 7, 10, 12, 0), Decimal("36"), Decimal("41.0"), "x"),
@@ -2238,6 +2309,11 @@ def test_e2e_19_cambiar_tipo_tasa_bcv_usd_eur():
             tasa_bcv_euro=Decimal("39.8"),
         ),
     ]
+    # Mutar el mock es una escritura POR FUERA de la app -- como corregir la tabla a
+    # mano -- y ese es justamente el caso para el que existe `invalidar_tasas()`.
+    # Desde el 11-sep-2026 la serie tambien se cachea (cerro las 24 lecturas
+    # directas del plan), asi que sin esto la segunda peticion veia la lista vacia.
+    _app_module.invalidar_tasas()
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
         patch("cxc.web.app.recalculate_all"),
@@ -3233,9 +3309,18 @@ def test_e2e_32_sugerencias_usa_tasa_odoo_del_pago_no_serietasas_cercana():
                 else (
                     # TasasHistoricasAuditoria SÍ tiene el día exacto para
                     # Binance (Odoo no tiene noción de esa tasa).
+                    #
+                    # Y desde el 11-sep-2026 trae también la BCV real de ese
+                    # día. Antes no hacía falta porque el sistema caía al
+                    # default de 2019; ahora la ausencia es un error duro. Y el
+                    # test queda MEJOR probado: con 451,5072 disponible, que
+                    # igual gane la tasa de Odoo deja de ser "no había otra" y
+                    # pasa a ser "había otra y no se usó", que es lo que el
+                    # test afirma.
                     [
                         {
                             "fecha": "2026-03-18",
+                            "tasa_bcv_usd": "451.5072",
                             "tasa_binance_promedio_diario": "471.87",
                         }
                     ]
@@ -3898,8 +3983,8 @@ def test_e2e_42_odoo_prevalece_revincula_vinculacion_a_orden_correcta():
         }
     ]
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].vinc_id == "V1"
     assert vincs_actualizadas[0].so_id == "SO_B"
@@ -3930,6 +4015,11 @@ def test_e2e_42b_revincular_tambien_corrige_el_monto_si_odoo_difiere():
     from cxc.web.app import _resincronizar_vinculaciones_con_odoo
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.all_vinculaciones.return_value = [
         Vinculacion(
             vinc_id="V1",
@@ -3962,8 +4052,8 @@ def test_e2e_42b_revincular_tambien_corrige_el_monto_si_odoo_difiere():
     assert cambios[0]["tipo"] == "so_id_repuntado"
     assert "monto" in cambios[0]["detalle"].lower()
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     v_nueva = vincs_actualizadas[0]
     assert v_nueva.so_id == "SO_B"
     assert v_nueva.estado == EstadoVinculacion.CONCILIADO
@@ -4000,7 +4090,7 @@ def test_e2e_43_odoo_prevalece_no_toca_vinculacion_ya_correcta():
     cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
     assert cambios == []
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_not_called()
 
 
@@ -4035,8 +4125,8 @@ def test_e2e_43b_odoo_confirma_promueve_pendiente_a_conciliado():
 
     assert cambios == []
     mock_repo.append_auditoria_rows.assert_not_called()
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].vinc_id == "V1"
     assert vincs_actualizadas[0].estado == EstadoVinculacion.CONCILIADO
@@ -4079,8 +4169,8 @@ def test_e2e_43c_pago_cancelado_en_odoo_desconcilia_la_vinculacion():
     assert cambios[0]["tipo"] == "desconciliado"
     assert cambios[0]["requiere_revision_manual"] is False
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     assert vincs_actualizadas[0].estado == EstadoVinculacion.PENDIENTE
     # so_id y monto no se tocan -- solo el estado.
@@ -4121,7 +4211,7 @@ def test_e2e_43d_pago_pendiente_desconciliado_no_genera_ruido():
     cambios = _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
     assert cambios == []
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_not_called()
 
 
@@ -4137,6 +4227,11 @@ def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
     from cxc.web.app import _resincronizar_vinculaciones_con_odoo
 
     mock_repo = MagicMock()
+    # Serie sembrada (Fase 2.1 del plan de blindaje): sin esto se caía al
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.get_orden.return_value = None
     mock_repo.last_serie_tasa.return_value = SerieTasa(
         timestamp=datetime(2026, 7, 1),
@@ -4177,8 +4272,8 @@ def test_e2e_43e_monto_editado_en_odoo_recalcula_vinculacion_conciliada():
     assert cambios[0]["tipo"] == "monto_o_fecha_actualizado"
     assert cambios[0]["requiere_revision_manual"] is False
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     assert len(vincs_actualizadas) == 1
     v_nueva = vincs_actualizadas[0]
     # Sigue CONCILIADO -- Odoo confirma el mismo so_id, solo cambió el monto.
@@ -4254,8 +4349,8 @@ def test_e2e_43b_recalculo_de_conciliado_usa_tasa_del_dia_del_pago_no_la_mas_rec
 
     _resincronizar_vinculaciones_con_odoo(mock_repo, fake_execute)
 
-    mock_repo.update_vinculaciones.assert_called_once()
-    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones.call_args
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_called_once()
+    (vincs_actualizadas,), _ = mock_repo.update_vinculaciones_omitiendo_invalidas.call_args
     v_nueva = vincs_actualizadas[0]
     assert v_nueva.tasa_bcv_aplicada == Decimal("612.43")
     assert v_nueva.tasa_bcv_aplicada != Decimal("784.6633")
@@ -4291,7 +4386,7 @@ def test_e2e_44_odoo_prevalece_caso_ambiguo_no_autocorrige():
     assert len(cambios) == 1
     assert cambios[0]["requiere_revision_manual"] is True
 
-    mock_repo.update_vinculaciones.assert_not_called()
+    mock_repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
     mock_repo.append_auditoria_rows.assert_called_once()
     (audit_rows,), _ = mock_repo.append_auditoria_rows.call_args
     assert audit_rows[0]["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden"
@@ -4461,7 +4556,7 @@ def test_e2e_46_get_eur_rate_for_date_lookup_dia_exacto():
     assert tasas.bcv_eur(date(2026, 3, 19), arrastrar=False) is None
 
 
-def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():
+def test_e2e_48_sugerencia_huerfano_historico_ya_no_convierte_con_eur():
     """Bug real (reportado por el usuario, agosto 2026, cliente Inversiones
 
     Mi Linda Yemaire): un pago huérfano de un cliente con órdenes en la
@@ -4534,13 +4629,14 @@ def test_e2e_48_sugerencia_huerfano_historico_no_duplica_tasa_bcv_con_eur():
         data = res.json()
         assert len(data) == 1
         item = data[0]
-        # La conversión a USD SÍ usa la tasa EUR (comportamiento correcto,
-        # sin cambios): 100 Bs / 569.7638 =~ $0.1755.
-        assert abs(item["tasa_bcv"] - 569.7638) < 0.001
-        # Pero la tarjeta de display debe mostrar el BCV-USD real, NUNCA
-        # el mismo valor que la tarjeta "Tasa BCV-EUR".
+        # Hasta el 12-sep-2026 la conversión a USD de este pago usaba la tasa
+        # EUR (569.7638) por ser el cliente de la ventana histórica, y este test
+        # fijaba que la tarjeta "Tasa BCV" no la mostrara. Decisión del usuario
+        # (quiz, pregunta 5): el euro es solo para auditoría y no toca montos
+        # reales -- y una sugerencia que se acepta congela un monto real. Las dos
+        # tasas son ahora la BCV-USD real.
+        assert abs(item["tasa_bcv"] - 487.1192) < 0.001
         assert abs(item["tasa_bcv_real"] - 487.1192) < 0.001
-        assert item["tasa_bcv_real"] != item["tasa_bcv"]
 
 
 def test_e2e_47_resolve_metodo_pago_nombre_batch_journals():
@@ -4661,6 +4757,12 @@ def test_e2e_50_cobranza_pagos_unificado_pendiente_con_3_tasas():
                 [
                     {
                         "fecha": "2026-03-18",
+                        # La BCV del día se agregó el 11-sep-2026: este test
+                        # ejercita las tres tasas por la vía de auditoría, y
+                        # antes la BCV le llegaba del default de 2019 sin que
+                        # el test lo dijera. Ahora las tres vienen de donde el
+                        # test dice que vienen.
+                        "tasa_bcv_usd": "451.5072",
                         "tasa_binance_promedio_diario": "550.0",
                         "tasa_bcv_euro": "600.0",
                     }

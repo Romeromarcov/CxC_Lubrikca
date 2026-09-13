@@ -74,3 +74,38 @@ def test_ignora_vinculaciones_sin_equiv_usd_bcv() -> None:
 
 def test_sin_vinculaciones_no_falla() -> None:
     assert _detectar_vinculaciones_tasa_implicita_implausible([], []) == []
+
+
+def test_una_vinculacion_con_fecha_sin_tasa_se_anota_y_no_tumba_el_chequeo() -> None:
+    """Misma familia que en ``test_vinculaciones_sobreaplicadas``: el 12-sep un solo
+    pago sin tasa devolvía /api/auditoria como 500."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from cxc.models import EstadoVinculacion, Moneda, Vinculacion
+    from cxc.web.app import _detectar_vinculaciones_tasa_implicita_implausible
+
+    v = Vinculacion(
+        vinc_id="V_SIN",
+        pago_id="P_SIN",
+        so_id="S1",
+        monto_aplicado=Decimal("1000"),
+        hora_pago_confirmada=datetime(2030, 1, 1, 12, 0, 0),
+        tasa_bcv_aplicada=Decimal("742.81"),
+        tasa_binance_aplicada=Decimal("800"),
+        es_tasa_heredada=False,
+        equiv_usd_bcv=Decimal("1.35"),
+        estado=EstadoVinculacion.PENDIENTE,
+        moneda_abono=Moneda.VES,
+    )
+    sin_tasa: list[dict] = []
+    assert _detectar_vinculaciones_tasa_implicita_implausible([v], [], sin_tasa=sin_tasa) == []
+    assert sin_tasa == [
+        {
+            "fecha": "2030-01-01",
+            "pago_id": "P_SIN",
+            "vinc_id": "V_SIN",
+            "chequeo": "tasa_implausible",
+        }
+    ]
+    assert _detectar_vinculaciones_tasa_implicita_implausible([v], []) == [], "sin acumulador"

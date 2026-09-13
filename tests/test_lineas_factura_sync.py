@@ -94,6 +94,59 @@ def test_changed_lineas_factura_filtra_display_type():
     assert display_type_clauses == [["display_type", "in", ["product", False]]]
 
 
+def test_changed_lineas_factura_solo_trae_facturas_de_cliente():
+    """El espejo no debe traer lineas de asientos que no son venta.
+
+    Medido en el Odoo de prueba (Fase 1.3 del plan de blindaje): sin el
+    filtro de ``move_type``, 15.380 de 17.167 filas -- el 89,6% -- eran
+    lineas de facturas de PROVEEDOR, asientos de diario y movimientos de
+    pago. El consumidor de hoy se salvaba porque cruza contra
+    ``invoice_ids``; el proximo que agregue sin ese cruce sumaria montos de
+    proveedores a la cuenta por cobrar.
+    """
+    captured_domain = {}
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.move.line":
+            captured_domain["domain"] = args[0]
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    reader.changed_lineas_factura(since=None)
+
+    move_type_clauses = [c for c in captured_domain["domain"] if c[0] == "move_id.move_type"]
+    assert move_type_clauses == [
+        ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]]
+    ]
+
+
+def test_los_dos_espejos_de_factura_miran_el_mismo_universo():
+    """``changed_facturas`` y ``changed_lineas_factura``, mismos move_type.
+
+    Si divergen, el espejo de lineas queda con filas cuyo padre no esta en
+    el espejo de facturas -- y cualquier agregacion que no cruce las dos
+    tablas mezcla universos sin avisar.
+    """
+    dominios: dict[str, list] = {}
+
+    def fake_execute(model, method, args, kwargs=None):
+        dominios[model] = args[0]
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    reader.changed_facturas(since=None)
+    reader.changed_lineas_factura(since=None)
+
+    def tipos(dominio, campo):
+        return next(c[2] for c in dominio if c[0] == campo)
+
+    assert tipos(dominios["account.move"], "move_type") == tipos(
+        dominios["account.move.line"], "move_id.move_type"
+    )
+
+
 # --- Repository: InMemoryRepository round-trip ------------------------------
 
 

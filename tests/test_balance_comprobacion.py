@@ -440,3 +440,128 @@ def test_un_abono_en_euros_no_es_una_tasa_mal_puesta() -> None:
     estampada = 39678.80 / 70.0
     assert _tasa_divergente(39678.80, 70.0, 483.8695) is True
     assert abs(estampada / 566.84 - 1.0) < 0.01
+
+
+# --- Las tres clases de partida (Fase 1.5 del plan de blindaje) --------------
+#
+# Un verde no significa lo mismo en las tres, y antes se veían idénticos en la
+# respuesta. Este test no verifica un monto: verifica que la clasificación siga
+# existiendo y que nadie mueva una partida de clase sin querer -- en especial,
+# que ninguna externa se degrade a interna, que es la que perdería capacidad de
+# detectar un número mal calculado.
+
+
+def _clases_de_partida() -> list[tuple[str, str]]:
+    """(clase, concepto) de cada partida, leído del AST.
+
+    Se lee el código en vez de llamar al endpoint porque el endpoint necesita
+    Ventas, el Reporte por Cliente, la Bandeja y el Reporte de Saldos --
+    montarlos acá sería un test de otra cosa. Lo que interesa fijar es la
+    clasificación, y ésa es estática.
+
+    **Descubre las funciones emisoras en vez de nombrarlas.** Antes listaba dos por
+    nombre y hubo que ampliarlo dos veces, una por cada pieza que la Fase 2.4 sacó
+    de ``app.py``. Ahora recorre los dos archivos y toma cualquier función que
+    emita partidas, así que el test fija **la clasificación** del balance y no en
+    qué archivo vive cada partida. Mover una sección más no lo rompe.
+    """
+    import ast
+    from pathlib import Path
+
+    EMISORES = {"partida", "crear_partida", "interna", "externa", "invariante"}
+    ENVOLTORIOS = {"partida", "interna", "externa", "invariante"}
+
+    src = Path(__file__).resolve().parent.parent / "src" / "cxc"
+    emisoras = []
+    for ruta in (src / "engine" / "balance.py", src / "web" / "app.py"):
+        arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+        for f in ast.walk(arbol):
+            if not isinstance(f, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if f.name in ENVOLTORIOS:
+                continue  # el envoltorio no emite: reenvía
+            # Las líneas de los envoltorios anidados: una llamada ahí adentro es
+            # del envoltorio reenviando, no una partida.
+            de_envoltorios: set[int] = set()
+            for g in ast.walk(f):
+                if isinstance(g, ast.FunctionDef) and g.name in ENVOLTORIOS:
+                    de_envoltorios.update(range(g.lineno, (g.end_lineno or g.lineno) + 1))
+            emite = any(
+                isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Name)
+                and c.func.id in EMISORES
+                and c.lineno not in de_envoltorios
+                for c in ast.walk(f)
+            )
+            if emite:
+                emisoras.append(f)
+    assert emisoras, "no se encontró ninguna función que emita partidas"
+    # Las llamadas DENTRO de los envoltorios no son sitios de partida.
+    lineas_envoltorio: set[tuple[int, int]] = set()
+    for idx, emisora in enumerate(emisoras):
+        for n in ast.walk(emisora):
+            if isinstance(n, ast.FunctionDef) and n.name in ENVOLTORIOS:
+                lineas_envoltorio.update(
+                    (idx, ln) for ln in range(n.lineno, (n.end_lineno or n.lineno) + 1)
+                )
+
+    def concepto(nodo: ast.Call) -> str:
+        if not nodo.args:
+            return "?"
+        a = nodo.args[0]
+        if isinstance(a, ast.Constant):
+            return str(a.value)
+        if isinstance(a, ast.JoinedStr):
+            return "".join(
+                v.value if isinstance(v, ast.Constant) else "{}" for v in a.values
+            )
+        return "?"
+
+    salida = []
+    for idx, emisora in enumerate(emisoras):
+        for n in ast.walk(emisora):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id in EMISORES
+                and (idx, n.lineno) not in lineas_envoltorio
+            ):
+                clase = (
+                    "interna" if n.func.id in {"partida", "crear_partida"} else n.func.id
+                )
+                salida.append((idx, n.lineno, clase, concepto(n)))
+    return [(c, k) for _, _, c, k in sorted(salida)]
+
+
+def test_toda_partida_declara_de_que_clase_es() -> None:
+    clases = _clases_de_partida()
+    assert len(clases) == 18
+    assert {c for c, _ in clases} == {"interna", "externa", "invariante"}
+
+
+def test_ocho_partidas_comparan_contra_una_fuente_externa() -> None:
+    """Si este número baja, el balance perdió capacidad de detectar errores.
+
+    Una partida interna no puede detectar que el número esté mal: un error en
+    la función de origen se propaga igual a los dos lados y sale verde.
+    """
+    clases = _clases_de_partida()
+    externas = [k for c, k in clases if c == "externa"]
+    assert len(externas) == 8
+    # Las cuatro que van contra Odoo por monto, nominalmente.
+    assert any("Ventas reales" in k for k in externas)
+    assert any("Facturado contra Odoo" in k for k in externas)
+    assert any("Saldo por cobrar en USD" in k for k in externas)
+    assert any("importe en su moneda" in k for k in externas)
+
+
+def test_la_partida_mas_fuerte_es_una_invariante() -> None:
+    """El equivalente USD nunca puede superar el nominal en bolívares.
+
+    Es la única que no compara dos vistas: verifica una propiedad cierta por
+    aritmética. No existe un par de números mal calculados que la haga pasar,
+    y por eso es la clase que conviene multiplicar.
+    """
+    clases = _clases_de_partida()
+    invariantes = [k for c, k in clases if c == "invariante"]
+    assert invariantes == ["Pagos en bolívares: equivalente BCV plausible"]

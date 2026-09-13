@@ -394,7 +394,59 @@ _LISTA_USD_HISTORICA = "7"
 # configurada a la fecha de la orden. No es una regla de la tabla: es el
 # respaldo histórico, y tiene nombre propio para que el desglose lo diga en
 # vez de mostrarlo como "sin regla".
-_REGLA_FALLBACK_INDUSTRIAL = "FALLBACK_PRIMERA_COMPRA_INDUSTRIAL_2PCT"
+#
+# El id VIEJO decía INDUSTRIAL, y el código aplicaba el 2 % a las líneas
+# Industrial. Aclaración del usuario (11-sep-2026): **la regla es de Comercial**,
+# solo primera compra, y solo si no se le dio otra promoción de primera compra.
+# "Estaba configurada como un fallback de la regla de primera compra, pero
+# parece que nunca funcionó bien."
+#
+# Medido antes de corregirlo, sobre las 119 órdenes que lo recibieron: la base
+# Industrial suma 103.055,13 y la Comercial 37.111,82 — un 64 % menos. Y **85 de
+# las 119 no tienen NI UNA línea Comercial**, así que no les correspondía nada.
+# El id cambia para que el desglose viejo y el nuevo no se confundan.
+# El id que llevaba el respaldo cableado, RETIRADO el 11-sep-2026 por decisión del
+# usuario ("crea la regla nueva y elimina la vieja"). Se conserva el nombre porque
+# las 119 filas de ``descuento_aplicado`` que ya existen lo tienen escrito, y un
+# desglose histórico que no lo reconozca diría "sin regla" sobre algo que sí tuvo
+# una.
+#
+# El 2 % ahora es una regla de la tabla: ``PRIMERA_COMPRA_COMERCIAL_2PCT``, que se
+# crea con ``scripts/configurar_2pct_primera_compra.py``. Verificado antes de
+# retirar el respaldo: las dos vías dan 742,24 USD sobre las 119 órdenes, con cero
+# diferencias.
+#
+# CONSECUENCIA QUE HAY QUE TENER PRESENTE AL DESPLEGAR: sin el respaldo, si la regla
+# NO está creada en la base, esas 119 órdenes dejan de recibir el 2 % y su deuda
+# sube 742,24 USD. El script tiene que correr con el despliegue, no después.
+_REGLA_FALLBACK_PRIMERA_COMPRA = "FALLBACK_PRIMERA_COMPRA_COMERCIAL_2PCT"
+
+
+# ``categorias_descuento`` que significa "todas". Es el default (vacío) y los
+# comodines que la pantalla puede dejar.
+_CATEGORIAS_TODAS = frozenset({"", "*", "TODAS", "TODOS", "ALL", "GLOBAL"})
+
+
+def _lineas_del_descuento(promos: list[Any], regla_id: str, lineas: list[Any]) -> list[Any]:
+    """Las líneas sobre las que la regla que puso el porcentaje aplica su descuento.
+
+    Se busca la regla por ``regla_id`` y no por posición: el porcentaje sale de un
+    ``max`` sobre varias promociones activas, así que filtrar con la categoría de
+    otra regla aplicaría el descuento a líneas que esa regla no cubre.
+
+    Sin categorías declaradas devuelve **todas**, que es lo que esta rama hacía
+    antes de que el campo existiera. Una regla vieja no cambia de comportamiento.
+
+    Ojo con no confundir este campo con ``categorias_aplica``, que gobierna qué
+    unidades CALIFICAN para ``compra_minima``. Son dos preguntas distintas y hay
+    tests que fijan la segunda.
+    """
+    elegida = next((p for p in promos if getattr(p, "regla_id", "") == regla_id), None)
+    crudo = str(getattr(elegida, "categorias_descuento", "") or "") if elegida else ""
+    pedidas = {c.strip().upper() for c in crudo.split(",") if c.strip()}
+    if not pedidas or pedidas & _CATEGORIAS_TODAS:
+        return list(lineas)
+    return [ln for ln in lineas if (getattr(ln, "categoria", "") or "").strip().upper() in pedidas]
 
 
 def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
@@ -798,43 +850,24 @@ def _evaluar_promociones_producto(
                     ),
                     getattr(promos_activas[0], "regla_id", "") if promos_activas else "",
                 )
-        elif fallback_industrial:
-            # Sin NINGUNA promoción configurada a esa fecha. Es el
-            # comportamiento histórico documentado de "primera compra sin
-            # promos", y aplica solo a líneas Industrial.
-            #
-            # Se etiqueta con un id propio en vez de dejarlo en blanco: el
-            # desglose decía "sin regla", que se lee como "el motor regala
-            # un 2 % que nadie configuró". Medido: 28 órdenes por $1.077,32,
-            # TODAS entre el 26-feb y el 26-mar -- anteriores al 01-abr, que
-            # es cuando arrancan las dos promociones reales. O sea que el
-            # respaldo hizo exactamente lo suyo.
-            pct_general = Decimal("0.02")
-            regla_pct_general = _REGLA_FALLBACK_INDUSTRIAL
 
         if promos_activas:
-            nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
-            if nc > 0:
-                detalle_nc = DescuentoAplicado(
-                    origen="primera_compra",
-                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
-                    monto=q2(nc),
-                    regla_id=regla_pct_general,
-                    porcentaje=pct_general,
-                )
-        elif fallback_industrial:
+            # La regla decide sobre qué líneas aplica su porcentaje. Antes esta
+            # rama sumaba TODAS sin excepción, y por eso configurar el 2 % de
+            # primera compra como regla ensanchaba la base a las Industrial --
+            # justo lo contrario del respaldo, que suma solo las Comercial.
+            # Con el campo vacío el comportamiento es el de antes.
             nc = (
                 sum(
                     _precio_linea(inp, ln, lista)
-                    for ln in inp.lineas
-                    if (ln.categoria or "").upper() == "INDUSTRIAL"
+                    for ln in _lineas_del_descuento(promos_activas, regla_pct_general, inp.lineas)
                 )
                 * pct_general
             )
             if nc > 0:
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",
-                    descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
+                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
                     monto=q2(nc),
                     regla_id=regla_pct_general,
                     porcentaje=pct_general,
@@ -1401,8 +1434,8 @@ def _calcular_componentes(
         # min_unidades no". En producción los 5 registros tenían el mismo
         # valor en ambos, así que el duplicado solo agregaba formas de
         # equivocarse. Ver la migración de unificación de nombres.
-        unidad = str(r.unidad_medida or "").upper()
-        if unidad == "LITROS":
+        unidad, _declarada = unidad_de_volumen(r)
+        if unidad == UNIDAD_LITROS:
             if litros_eval < r.min_unidades:
                 continue
             if r.max_unidades and r.max_unidades < 999999 and litros_eval > r.max_unidades:
@@ -1417,7 +1450,7 @@ def _calcular_componentes(
         if r.porcentaje <= 0:
             continue
 
-        unidad_tag = "L" if unidad == "LITROS" else " Unid"
+        unidad_tag = "L" if unidad == UNIDAD_LITROS else " Unid"
         min_tag = r.min_unidades
         tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
         candidatas_vol.append(
@@ -2148,3 +2181,44 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         descuentos_teorico_ves=descuentos_teorico_ves,
         descuentos_teorico_usd=descuentos_teorico_usd,
     )
+
+
+# --- la unidad en que se cuenta un tramo de volumen --------------------------
+
+UNIDAD_LITROS = "LITROS"
+UNIDAD_POR_DEFECTO = "UNIDADES"
+
+
+def unidad_de_volumen(regla: Any) -> tuple[str, bool]:
+    """En que unidad se cuenta el tramo de una regla de volumen, y si estaba declarada.
+
+    Trigesimoprimera pieza de la Fase 2.4. El motor decide el tramo con
+    ``unidad == "LITROS"`` y trata cualquier otra cosa como unidades/cajas, pero la
+    pantalla de reglas (``get_todas_reglas_descuento``) se quedo con la cascada
+    ANTERIOR a la migracion de unificacion de nombres:
+
+        u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+        if not u_med or u_med == "None":
+            u_med = "LITROS" if (float(r.litros_minimo) > 0 and ...) else "CAJAS"
+
+    ``litros_minimo`` **ya no existe** en ``DescuentoVolumen`` --la migracion lo
+    elimino porque era el mismo dato con otro nombre-- asi que esa linea es un
+    ``AttributeError`` que el ``except Exception`` del endpoint convierte en **500**.
+    Una sola regla de volumen con la unidad vacia deja en blanco la pantalla de reglas
+    entera, no solo esa fila. Se actualizo el motor y no la pantalla.
+
+    Que el dato malo sea alcanzable no es una hipotesis: la columna es ``nullable=False``
+    con ``server_default="UNIDADES"``, o sea que prohibe NULL pero **admite cadena
+    vacia**, y el ``u_med == "None"`` de ese codigo prueba que la cadena "None" llego
+    ahi alguna vez.
+
+    **El segundo valor es la mitad del asunto.** Con ``False``, la unidad NO estaba en
+    el dato: es la que el motor va a usar de todos modos, y la pantalla tiene que poder
+    decir que la infirio. Adivinar en silencio entre litros y cajas decide si "10"
+    significa diez litros o diez cajas, y de eso depende si un descuento por volumen se
+    otorga o no.
+    """
+    crudo = str(getattr(regla, "unidad_medida", "") or "").strip().upper()
+    if not crudo or crudo == "NONE":
+        return UNIDAD_POR_DEFECTO, False
+    return crudo, True

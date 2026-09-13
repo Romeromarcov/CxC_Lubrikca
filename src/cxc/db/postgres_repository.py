@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy import Engine, and_, delete, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from ..engine.identidad_de_reglas import ORDEN_DE_BUSQUEDA
 from ..models import (
     BandejaFacturacion,
     Cliente,
@@ -64,6 +65,13 @@ from ..models import (
 from ..repositories import Repository
 from . import schema as t
 from .engine import make_engine
+from .invariantes import (
+    Violacion,
+    exigir,
+    verificar_no_sobreaplica,
+    verificar_teorico,
+    verificar_vinculacion,
+)
 
 _META_LAST_SYNC = "last_sync"
 
@@ -453,6 +461,19 @@ class PostgresRepository(Repository):
             ).all()
         return [_row_to_vinc(r) for r in rows]
 
+    def vinculaciones_de_pago(self, pago_id: str) -> list[Vinculacion]:
+        """Las vinculaciones de un pago. Existe para la novena invariante.
+
+        Se lee por pago y no filtrando ``all_vinculaciones()`` porque esto corre en
+        cada escritura: con 1.466 filas, traerlas todas para mirar una sería el
+        mismo N+1 que ya costó dieciocho minutos en otra pantalla.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.vinculaciones).where(t.vinculaciones.c.pago_id == pago_id)
+            ).all()
+        return [_row_to_vinc(r) for r in rows]
+
     def all_vinculaciones(self) -> list[Vinculacion]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.vinculaciones)).all()
@@ -465,8 +486,74 @@ class PostgresRepository(Repository):
     def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
         if not vincs:
             return
+        # Fase 2.2 del plan de blindaje: la base ya rechaza una fila imposible
+        # con un CHECK, pero el error sale como un IntegrityError crudo a veinte
+        # marcos de profundidad. Esto falla igual --no cambia qué se acepta--
+        # diciendo QUÉ vinculación y con QUÉ valores. Ver ``db/invariantes.py``.
+        exigir(f for _v, f in self._violaciones_del_lote(vincs))
         with self._engine.begin() as conn:
             _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
+
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Escribe las que pasan las invariantes; devuelve las que no, con su motivo.
+
+        Para los lotes del demonio (el motor y la resincronización con Odoo),
+        que escriben cientos de filas de una. Con la versión estricta, UNA fila
+        que viole la novena invariante tumbaba el lote entero -- el 12-sep-2026
+        el banco de escenarios lo mostró: diez pagos ya sobreaplicados en Odoo
+        dejaban sin escribir todas las vinculaciones de cada ciclo. Acá la fila
+        que viola se omite (queda en la base como estaba) y el llamador decide
+        cómo avisar; las demás se escriben.
+        """
+        if not vincs:
+            return []
+        rechazadas = self._violaciones_del_lote(vincs)
+        ids_rechazados = {str(v.vinc_id) for v, _f in rechazadas}
+        buenas = [v for v in vincs if str(v.vinc_id) not in ids_rechazados]
+        if buenas:
+            with self._engine.begin() as conn:
+                _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in buenas], ["vinc_id"])
+        return rechazadas
+
+    def _violaciones_del_lote(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Las invariantes por fila y la de suma, sin escribir nada."""
+        fallas: list[tuple[Vinculacion, Violacion]] = [
+            (v, f) for v in vincs for f in verificar_vinculacion(v)
+        ]
+        # La novena invariante (11-sep-2026): las vinculaciones de un pago no
+        # pueden sumar más que el pago. No es un CHECK porque habla de la suma de
+        # varias filas, así que se comprueba acá.
+        #
+        # Sólo impide que el exceso CREZCA: los diez pagos que ya están
+        # sobreaplicados en producción -- 1.269,25 USD -- se pueden reescribir
+        # iguales o menores, no corregirlos ni agrandarlos. Corregirlos mueve
+        # montos y es decisión del usuario.
+        # Ver ``db/invariantes.py::verificar_no_sobreaplica``.
+        for pago_id in {str(v.pago_id) for v in vincs if getattr(v, "pago_id", None)}:
+            pago = self.get_pago(pago_id)
+            if pago is None:
+                continue
+            # Todas, de cualquier estado: es el mismo universo que suma
+            # ``_detectar_vinculaciones_sobreaplicadas``, para que el detector y la
+            # invariante no puedan discrepar sobre el mismo pago.
+            existentes = self.vinculaciones_de_pago(pago_id)
+            nuevas = [v for v in vincs if str(v.pago_id) == pago_id]
+            # Cada fila del lote se compara contra el estado que tendría la base
+            # con las anteriores del lote ya aplicadas; la versión vieja de la
+            # propia fila sigue en ``acumuladas`` para que la invariante sepa
+            # cuánto sumaba el pago antes.
+            acumuladas: list[Vinculacion] = list(existentes)
+            for nueva in nuevas:
+                fallas.extend(
+                    (nueva, f) for f in verificar_no_sobreaplica(nueva, acumuladas, pago.monto)
+                )
+                acumuladas = [v for v in acumuladas if str(v.vinc_id) != str(nueva.vinc_id)]
+                acumuladas.append(nueva)
+        return fallas
 
     def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
         if not vinc_ids:
@@ -590,6 +677,20 @@ class PostgresRepository(Repository):
                 update(table).where(table.c.regla_id == regla_id).values(activo=activo)
             )
         return bool(result.rowcount)
+
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        encontradas = []
+        with self._engine.connect() as conn:
+            for tabla in ORDEN_DE_BUSQUEDA:
+                table = self._regla_table(tabla)
+                if table is None:
+                    continue
+                existe = conn.execute(
+                    select(table.c.regla_id).where(table.c.regla_id == regla_id).limit(1)
+                ).first()
+                if existe is not None:
+                    encontradas.append(tabla)
+        return encontradas
 
     def all_descuentos_no_otorgados(self) -> dict[str, dict[str, str]]:
         """``so_id`` -> quién marcó que ese descuento NO se le dio al cliente.
@@ -1088,6 +1189,7 @@ class PostgresRepository(Repository):
 
     # --- Teóricos de Ventas (Fase 10) -----------------------------------------
     def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        exigir(verificar_teorico(fila))
         with self._engine.begin() as conn:
             _upsert(conn, t.ventas_teoricos, [_dataclass_row(fila)], ["so_id"])
 
@@ -1603,6 +1705,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         vigencia_hasta=r.vigencia_hasta,
         descuento_fallback=r.descuento_fallback,
         categorias_aplica=r.categorias_aplica,
+        categorias_descuento=getattr(r, "categorias_descuento", "") or "",
         marca=r.marca,
         categoria=r.categoria,
         unidad_medida=r.unidad_medida,

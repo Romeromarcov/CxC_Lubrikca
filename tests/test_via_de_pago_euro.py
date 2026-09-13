@@ -116,39 +116,52 @@ class _RepoConToggle:
 
 
 class _Orden:
-    def __init__(self, so_id: str, fecha: date) -> None:
+    """Una orden con su lista, que es lo que el stub viejo no modelaba.
+
+    Sin `lista_precios` el stub no podía expresar la regla del precio, y por eso los
+    tests de abajo encodaban la regla VIEJA —solo la ventana de fechas— sin que se
+    notara. Toda orden real tiene el campo, aunque sea vacío.
+    """
+
+    def __init__(self, so_id: str, fecha: date, lista: str = "4") -> None:
         self.so_id = so_id
         self.fecha = fecha
+        self.lista_precios = lista
 
 
-def test_solo_entran_las_ordenes_de_la_ventana() -> None:
+def test_desde_el_12_sep_ninguna_orden_es_historica_para_los_montos_reales() -> None:
+    """Decisión del usuario (quiz, 12-sep-2026, pregunta 5): «Esa lista histórica es
+    solo para fines de auditoría, igual que el equivalente de sus pagos a tasa euro.
+    No debe modificar los montos reales».
+
+    Hasta ese día este archivo fijaba qué órdenes entraban a la vía euro (la ventana,
+    las sin lista, las de lista USD real que no). Todo eso sigue siendo cierto para la
+    **auditoría**, que lee `lista_historica_habilitada_para_auditoria`; para los
+    montos reales el conjunto es vacío, con el toggle en cualquier posición, y sin
+    leer la configuración.
+    """
     from cxc.web.app import so_ids_en_ventana_historica
 
     ordenes = [
-        _Orden("S00020", date(2026, 3, 9)),  # dentro
-        _Orden("S00074", date(2026, 3, 12)),  # dentro, último día
-        _Orden("S00092", date(2026, 3, 13)),  # fuera: el corte es exclusivo
-        _Orden("S00566", date(2026, 7, 17)),  # fuera
+        _Orden("S00020", date(2026, 3, 9)),  # en la ventana, lista no-USD
+        _Orden("S00088", date(2026, 3, 13), lista=""),  # sin lista
+        _Orden("S00100", date(2026, 6, 1)),  # fuera de la ventana
     ]
-    assert so_ids_en_ventana_historica(_RepoConToggle(), ordenes) == {"S00020", "S00074"}
+    for activo in (True, False):
+        repo = _RepoConToggle(activo=activo)
+        assert so_ids_en_ventana_historica(repo, ordenes) == set()
+        assert repo.lecturas == 0, "los montos reales ya no leen el selector"
 
 
-def test_el_toggle_apagado_desactiva_la_via_entera() -> None:
-    from cxc.web.app import so_ids_en_ventana_historica
+def test_el_selector_sigue_vivo_para_la_auditoria() -> None:
+    from cxc.web.app import (
+        is_historical_pricelist_enabled,
+        lista_historica_habilitada_para_auditoria,
+    )
 
-    ordenes = [_Orden("S00020", date(2026, 3, 9))]
-    assert so_ids_en_ventana_historica(_RepoConToggle(activo=False), ordenes) == set()
-
-
-def test_el_toggle_se_lee_una_sola_vez() -> None:
-    """No es cosmético: ``orden_en_periodo_historico`` consulta la config en
-    cada llamada, así que recorrer 953 órdenes con ella eran 953 lecturas a
-    la base dentro del reporte de saldos."""
-    from cxc.web.app import so_ids_en_ventana_historica
-
-    repo = _RepoConToggle()
-    so_ids_en_ventana_historica(repo, [_Orden(f"S{i:05d}", date(2026, 3, 9)) for i in range(200)])
-    assert repo.lecturas == 1
+    assert lista_historica_habilitada_para_auditoria(_RepoConToggle(activo=True)) is True
+    assert lista_historica_habilitada_para_auditoria(_RepoConToggle(activo=False)) is False
+    assert is_historical_pricelist_enabled(_RepoConToggle(activo=True)) is False
 
 
 def test_una_orden_sin_fecha_no_rompe_el_conjunto() -> None:
@@ -157,6 +170,7 @@ def test_una_orden_sin_fecha_no_rompe_el_conjunto() -> None:
     class _SinFecha:
         so_id = "S00001"
         fecha = None
+        lista_precios = "4"
 
     assert so_ids_en_ventana_historica(_RepoConToggle(), [_SinFecha()]) == set()
 
