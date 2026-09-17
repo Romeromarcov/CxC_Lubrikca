@@ -8136,29 +8136,16 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
             linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + usd_equiv
             linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + usd_equiv
 
-        # Bug real (reportado por el usuario, cliente Emprendimiento Tomas
-        # Marcano 5): un pago huérfano (aún sin reconciliar en Odoo, así
-        # que ``tax_today`` no refleja ningún contexto de orden -- es solo
-        # la tasa BCV oficial genérica del día) de un cliente cuyas órdenes
-        # abiertas son de la ventana histórica debe convertirse a tasa
-        # BCV-EUR, no BCV-USD normal. Se resuelve por CLIENTE (no hay
-        # orden específica aún -- un pago huérfano por definición no está
-        # cruzado contra ninguna) usando el mismo criterio que ya usa
-        # ``_pagos_bcv_binance_por_orden``.
-        _historical_enabled_sug = is_historical_pricelist_enabled(repo)
-        _usd_ids_sug, _ = get_valid_pricelists_usd_and_ves(repo)
-        _usd_ids_sug_set = set(_usd_ids_sug)
-        clientes_con_orden_historica: set[str] = {
-            str(o.cliente_id)
-            for o in ordenes
-            if es_orden_historica(
-                o.fecha,
-                o.lista_precios,
-                _historical_enabled_sug,
-                lista_es_usd_valida=str(o.lista_precios or "").strip() in _usd_ids_sug_set,
-            )
-        }
-
+        # Hasta el 12-sep-2026 acá vivía un tercer caso de lo mismo que
+        # `resolver_tasa_bcv_vinculacion` (ver `docs/blindaje/2.4-modularizar.md`,
+        # pieza 36): un pago huérfano de un cliente con órdenes en la ventana
+        # histórica se convertía a tasa BCV-EUR en vez de BCV-USD (bug real,
+        # cliente Emprendimiento Tomas Marcano 5, corregido en agosto 2026 --
+        # antes de esa fecha la tarjeta "Tasa BCV" mostraba por error el mismo
+        # valor que "Tasa BCV-EUR"). La decisión 5 del quiz fijó
+        # `is_historical_pricelist_enabled` en `False` para siempre, así que
+        # `clientes_con_orden_historica` daba SIEMPRE vacío y la sustitución
+        # nunca podía dispararse -- se retiró.
         unallocated_pagos = []
         for p in pagos_rows:
             pid = str(p.get("pago_id", "")).strip()
@@ -8215,7 +8202,6 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
             odoo_info = odoo_pago_info.get(pid)
             numero_pago_odoo = odoo_info.get("name") if odoo_info else None
             monto_orig_usd_odoo: Decimal | None = None
-            cliente_id_pago = str(p.get("cliente_id", "")).strip()
             if moneda == "VES" and odoo_info:
                 tax_today = parse_decimal_safe(str(odoo_info.get("tax_today") or "0"))
                 if tax_today > Decimal("0"):
@@ -8223,29 +8209,15 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     amount_ref = parse_decimal_safe(str(odoo_info.get("amount_ref") or "0"))
                     if amount_ref > Decimal("0"):
                         monto_orig_usd_odoo = amount_ref
-            # Bug real (reportado por el usuario, agosto 2026, cliente
-            # Inversiones Mi Linda Yemaire): la tarjeta "Tasa BCV" mostraba
-            # el mismo valor que "Tasa BCV-EUR" -- idéntico, no una
-            # coincidencia -- porque el bloque de abajo sustituye
-            # ``bcv_rate`` (la variable de CONVERSIÓN interna, correcta:
-            # un pago huérfano de cliente con órdenes históricas debe
-            # convertirse con la tasa EUR) sin distinguirla de la variable
-            # de DISPLAY para la tarjeta "Tasa BCV" pura -- el BCV-USD real
-            # nunca se mostraba. Se separan: ``bcv_rate_real`` congela el
-            # BCV-USD verdadero ANTES de la sustitución histórica, para la
-            # tarjeta; ``bcv_rate`` sigue siendo la base de conversión
-            # (sin cambios de comportamiento en el monto USD calculado).
+            # Hasta el 12-sep-2026 acá vivía la sustitución por BCV-EUR de un
+            # pago huérfano de un cliente con órdenes históricas -- ver el
+            # comentario más arriba, junto a lo que era `clientes_con_orden_
+            # historica`. Retirada por la decisión 5 del quiz: nunca podía
+            # dispararse. `bcv_rate_real` se conserva igual a `bcv_rate` --
+            # el campo `tasa_bcv_real` de la respuesta (agosto 2026, cliente
+            # Inversiones Mi Linda Yemaire) sigue existiendo para que la
+            # tarjeta "Tasa BCV" del front no tenga que cambiar de campo.
             bcv_rate_real = bcv_rate
-            if moneda == "VES" and cliente_id_pago in clientes_con_orden_historica:
-                # Pago aún sin reconciliar -- tax_today (si vino) es solo la
-                # tasa BCV genérica del día, sin contexto de orden histórica.
-                # Se sustituye por BCV-EUR (SerieTasas primero, luego
-                # TasasHistoricasAuditoria), invalidando también el
-                # amount_ref de Odoo (calculado con la tasa BCV normal).
-                tasa_eur_huerfano = tasas_vigentes(repo).bcv_eur(fecha_dt, arrastrar=False)
-                if tasa_eur_huerfano and tasa_eur_huerfano > Decimal("0"):
-                    bcv_rate = tasa_eur_huerfano
-                    monto_orig_usd_odoo = None
             binance_del_dia = tasas_vigentes(repo).binance(fecha_dt)
             # Guardia de plausibilidad: Binance y BCV son ambas tasas VES/USD del
             # mismo día, con una brecha de mercado normalmente < 100%. Si el dato
