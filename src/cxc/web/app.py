@@ -3834,6 +3834,12 @@ async def put_editar_vinculacion(
         if not so_id_nuevo:
             raise HTTPException(status_code=400, detail="Debes indicar una orden.")
         monto_dec = Decimal(str(req.monto_aplicado))
+        # Redundante desde el 11-sep-2026: ``VinculacionEditRequest.monto_aplicado``
+        # ya es ``Field(gt=0, ...)``, así que Pydantic rechaza un monto no positivo
+        # con 422 antes de que este código corra. Se deja como defensa en profundidad
+        # (si el campo alguna vez pierde la restricción, esto sigue protegiendo) --
+        # pero es inalcanzable hoy: no lo prueba nada por HTTP, solo se comprobó
+        # con una llamada directa a la función.
         if monto_dec <= Decimal("0"):
             raise HTTPException(status_code=400, detail="El monto debe ser positivo.")
 

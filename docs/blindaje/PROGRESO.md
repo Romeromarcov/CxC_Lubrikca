@@ -59,8 +59,8 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 
 | | 10-sep-2026 | hoy | |
 |---|---:|---:|---|
-| tests | 1.280 | **2.101** | +821 |
-| cobertura total | — | **82,27 %** | la barrera subió de 74 a 74,9 |
+| tests | 1.280 | **2.107** | +827 |
+| cobertura total | — | **82,30 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.538** | −823 |
 | líneas de `app.py` | 17.484 | **16.791** | −693, en 35 piezas; hoy subió ~300 con las guardas y los avisos de «sin tasa» |
