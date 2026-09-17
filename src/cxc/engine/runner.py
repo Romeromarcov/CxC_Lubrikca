@@ -31,7 +31,6 @@ from ..models import (
 )
 from ..repositories import Repository
 from .discounts import EngineInputs, calcular_factura, calcular_teorico_orden_con_fallback
-from .historical_pricing import cargar_mapa_historico, es_orden_historica
 from .price_resolver import PriceResolver
 
 logger = logging.getLogger("cxc.engine")
@@ -319,30 +318,27 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer la vigencia de las listas de precio: %s", e)
 
-        # Tarea 2 (Lista Histórica de Auditoría): sin esto BandejaFacturacion
-        # (lo que alimenta /api/ventas) nunca sabia de la excepcion historica
-        # y mostraba teorico $0.00 para ordenes sin lista o del periodo
-        # 20-feb al 12-mar-2026 -- solo los endpoints de reporte la conocian.
-        historical_enabled = True
+        # Tarea 2 (Lista Histórica de Auditoría) originalmente leía el selector
+        # de Configuración acá -- necesario entonces porque BandejaFacturacion
+        # (lo que alimenta /api/ventas, y de ahí ``calcular_factura``, el
+        # camino de montos reales) no sabía de la excepción histórica.
+        #
+        # 12-sep-2026, decisión 5 del quiz: «esa lista es solo para auditoría,
+        # no debe modificar los montos reales». `web/app.py` aplicó eso
+        # fijando `is_historical_pricelist_enabled` en `False` siempre para
+        # todo camino de monto real -- pero ese cableo vive en `build_inputs`,
+        # que `app.py` no toca, y seguía leyendo el selector en vivo
+        # (default `True` si nadie lo había puesto en "false"). Hallazgo real
+        # (17-sep-2026, verificado contra la copia de QA): con el selector en
+        # `None`, 94 órdenes de la ventana histórica seguían valorándose --
+        # vía ``calcular_factura``, no solo el teórico -- con el precio Euro
+        # de la Lista Histórica, exactamente lo que la decisión 5 dijo que no
+        # debía pasar. Ahora `orden_es_historica` es `False` siempre acá
+        # también, y `historical_price_map` (solo se consulta si
+        # `orden_es_historica` es `True`, ver ``discounts._precio_unitario_
+        # linea``) no tiene ya nada que poblar.
+        orden_es_historica = False
         historical_price_map: dict[str, dict[str, object]] = {}
-        try:
-            toggle = self._repo.get_config("historical_pricelist_enabled")
-            historical_enabled = toggle is None or toggle.strip().lower() not in (
-                "false",
-                "0",
-                "no",
-            )
-            historical_price_map = cargar_mapa_historico(
-                self._repo.all_listas_precios_historicas()
-            )
-        except Exception as e:
-            logger.warning("Error al leer Lista Historica de Auditoria: %s", e)
-        orden_es_historica = es_orden_historica(
-            orden.fecha,
-            orden.lista_precios,
-            historical_enabled,
-            lista_es_usd_valida=str(orden.lista_precios or "").strip() in valid_usd,
-        )
 
         # Recompra (ventana = días de crédito reales de la orden anterior +
         # dias_gracia): la orden anterior del cliente es la de fecha más

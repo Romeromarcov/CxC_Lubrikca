@@ -11,7 +11,7 @@ uno sube, y dos se cierran.
 | Dos definiciones de «orden histórica» | Media | **2 órdenes vivas, 457,51 USD** | confirmada, acotada |
 | Equivalentes congelados sin propagar correcciones | Media | **ya hay algo que los lista** — 1.487 con el default de 2019, 2.687.701,19 USD | herramienta entregada; el número real sale de producción |
 | El arreglo del scraper nunca corrió en producción | Media | no verificable desde acá | tuyo |
-| Formularios de reglas legacy | Baja | **verificado: el unificado cubre los 9**; las 5 brechas aparentes eran renombres | espera tu confirmación, ahora informada |
+| Formularios de reglas legacy | Baja | **verificado: el unificado cubre los 9**; las 5 brechas aparentes eran renombres | **retirados (11-sep, commit `393b520`) y reconfirmados (17-sep)** |
 | Vigencias de listas sembradas | — | **0 de 16 listas las tienen**; el verificador decía «ninguno» sin poder mirar | instrumento arreglado; sembrarlas es tuyo |
 | `SerieTasas` se lee sin caché | Baja | **22 sitios: 21 legítimos, 1 era un N+1** | **cerrada, y con un arreglo** |
 | Tramos de volumen en USD | Baja | — | cuando lo pidas |
@@ -131,16 +131,18 @@ configurada porque **no hay ninguna regla**. Las preguntas reales son tres:
 3. **Las 119 órdenes con descuento calculado y no cobrado**: marcarlas como no
    otorgadas es un `INSERT` en una tabla que existe y está vacía.
 
-## Formularios de reglas legacy: el unificado los cubre a los nueve
+## Formularios de reglas legacy: el unificado los cubre a los nueve -- y ya están retirados
 
 El ítem decía «el formulario unificado ya cubre las siete familias y las 19 reglas de
 producción viajan por él sin cambiar. Faltaba tu confirmación para retirar los viejos».
 Verificado campo por campo, porque «cubre» es justamente lo que había que comprobar.
 
-**Los dos formularios coexisten hoy en la pantalla.** El unificado existe y funciona
-(`POST /api/config/regla`, campos `ru-*`), y los nueve viejos siguen ahí, cada uno con
-su `GET` para listar y su `POST`/`PUT` para guardar. Retirar los viejos es quitar la UI
-**y** los endpoints, no solo los endpoints.
+**Retirados** (commit `393b520`, 11-sep-2026: «Pedido explícito del usuario: los
+formularios viejos elimínalos para evitar confusiones a futuro» -- 1.851 líneas menos
+entre `index.html`, `app.js` y `app.py`) y **confirmados de nuevo** (17-sep-2026, «procede
+con el retiro del formulario»): en el código de hoy no queda ni un modelo de request ni un
+bloque de formulario de los nueve. Lo que sigue abajo es la medición que sustentó ese
+retiro, dejada como fue escrita entonces.
 
 **Y sí, el unificado los cubre.** Comparados los modelos de request uno contra otro:
 

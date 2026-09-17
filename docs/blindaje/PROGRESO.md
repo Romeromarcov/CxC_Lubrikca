@@ -12,7 +12,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 | [1.2 a 1.5 — Auditoría](1.2-1.5-auditoria.md) | cobertura, integridad, conciliación, y qué prueba cada partida |
 | [2.2 — Invariantes](2.2-invariantes.md) | 8 restricciones de base, y las 2 que deliberadamente no entran |
 | [2.3 — Alertas](2.3-alertas.md) | la corrida diaria, y los pagos sobreaplicados (1.269,25 USD contra el campo crudo; la cifra vieja de 1.333,85 pasaba por la conversión a equivalente) |
-| [2.4 — Modularizar](2.4-modularizar.md) | treinta y siete piezas sacadas de `app.py`, con su medición A/B, y qué sigue |
+| [2.4 — Modularizar](2.4-modularizar.md) | treinta y ocho piezas sacadas de `app.py`/`runner.py`, con su medición A/B, y qué sigue |
 | [Quiz de decisiones](https://claude.ai/code/artifact/5a35b1e4-3b92-4108-bd47-4fd81c0e8f0b) | las once decisiones abiertas, cada una con su medición y la consecuencia de cada camino; las respuestas se guardan |
 | [3 — Escenarios](3-escenarios.md) | la imprenta fiscal, y los 1.108,59 USD de mercancía devuelta que la factura sigue cobrando |
 | [4 — Estrés](4-estres.md) | 6 escenarios en verde, y el motor que a 10× tarda 16 horas |
@@ -59,7 +59,7 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 
 | | 10-sep-2026 | hoy | |
 |---|---:|---:|---|
-| tests | 1.280 | **2.107** | +827 |
+| tests | 1.280 | **2.110** | +830 |
 | cobertura total | — | **82,30 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.538** | −823 |
