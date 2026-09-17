@@ -161,3 +161,46 @@ def test_el_sync_de_pagos_ya_no_esconde_los_conciliados() -> None:
     assert dominios, "changed_pagos no consultó account.payment"
     for d in dominios:
         assert ["is_reconciled", "=", False] not in d
+
+
+# --- la factura que consolida varias órdenes (17-sep-2026) --------------------
+#
+# Bug real de producción: una factura con invoice_origin "S00718, S00700" (Odoo
+# la arma consolidando dos SO) se leía como si "S00718, S00700" fuera el nombre
+# de UNA orden. Ese string se escribía en Vinculacion.so_id, que tiene clave
+# foránea contra ordenes_venta -- ninguna orden se llama así, y el INSERT
+# violaba la restricción en cada ciclo del demonio.
+
+
+def test_una_factura_que_consolida_varias_ordenes_se_excluye_y_no_inventa_reparto() -> None:
+    """La factura 10119 (originalmente S00584) pasa a consolidar dos órdenes.
+
+    Las DOS aplicaciones que la tocan desaparecen -- la de 1304 (10.985,0) y la
+    de 890 (30.000,0) -- porque no hay forma de saber cuánto de cada una le
+    corresponde a S00718 y cuánto a S00700 sin una regla de negocio. La otra
+    factura del mismo pago 1304 (S00214, sin tocar) sigue entrando normal.
+    """
+    multi = [dict(f) for f in _FACTURAS]
+    multi[0]["invoice_origin"] = "S00718, S00700"
+    apps = _leer(facturas=multi)
+    assert {(a.pago_id, a.so_id, a.monto) for a in apps} == {
+        ("1304", "S00214", Decimal("500.0")),
+    }
+    assert not any("," in a.so_id for a in apps)
+
+
+def test_una_factura_de_una_sola_orden_no_se_toca() -> None:
+    """Con una sola orden, invoice_origin no lleva coma y nada cambia."""
+    apps = _leer()
+    assert all("," not in a.so_id for a in apps)
+
+
+def test_so_ids_de_invoice_origin() -> None:
+    from cxc.odoo.client import so_ids_de_invoice_origin
+
+    assert so_ids_de_invoice_origin("S00700") == ["S00700"]
+    assert so_ids_de_invoice_origin("S00718, S00700") == ["S00718", "S00700"]
+    assert so_ids_de_invoice_origin("S00718,S00700") == ["S00718", "S00700"], "sin espacio tambien"
+    assert so_ids_de_invoice_origin("") == []
+    assert so_ids_de_invoice_origin(None) == []  # type: ignore[arg-type]
+    assert so_ids_de_invoice_origin("  S00700  ") == ["S00700"]

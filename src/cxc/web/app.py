@@ -126,7 +126,12 @@ from cxc.models import (
     Vinculacion,
     set_marca_fallback,
 )
-from cxc.odoo.client import PAGO_ESTADOS_CONFIRMADOS, OdooXmlRpcReader, _connect
+from cxc.odoo.client import (
+    PAGO_ESTADOS_CONFIRMADOS,
+    OdooXmlRpcReader,
+    _connect,
+    so_ids_de_invoice_origin,
+)
 from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
 from cxc.rates import TasaNoDisponible, Tasas
 from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
@@ -633,7 +638,18 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
                 "residual_pago_usd": float(residual_pago),
                 "residual_facturas_usd": round(residual_facturas, 2),
                 "facturas": facturas,
-                "so_ids": sorted({f["so_id"] for f in facturas if f["so_id"]}),
+                # ``f["so_id"]`` puede nombrar más de una orden (factura consolidada,
+                # ver ``so_ids_de_invoice_origin``) -- se expande acá para que un
+                # pago que reconcilia una factura así se vea como lo que es,
+                # AMBIGUO entre varias órdenes, y no como una sola orden con un
+                # nombre que no existe. Es lo que evita que
+                # ``_resincronizar_vinculaciones_con_odoo`` intente escribir ese
+                # nombre en ``Vinculacion.so_id`` (clave foránea): con más de un
+                # elemento cae en la rama "discrepancia_multi_orden", que solo
+                # audita y no escribe.
+                "so_ids": sorted(
+                    {sid for f in facturas for sid in so_ids_de_invoice_origin(f["so_id"])}
+                ),
                 "vendedor_email": vendedores.get(int(pid), "") if pid else "",
             }
         )
@@ -866,7 +882,14 @@ def _sincronizar_aplicaciones_conciliadas(
     """
     totales = agrupar_aplicaciones(aplicaciones)
     if not totales:
-        return {"creadas": 0, "corregidas": 0, "sin_cambio": 0, "omitidas": 0, "sin_tasa": []}
+        return {
+            "creadas": 0,
+            "corregidas": 0,
+            "sin_cambio": 0,
+            "omitidas": 0,
+            "sin_tasa": [],
+            "errores": [],
+        }
 
     fecha_por_pago: dict[str, date] = {}
     moneda_por_pago: dict[str, Moneda] = {}
@@ -892,6 +915,10 @@ def _sincronizar_aplicaciones_conciliadas(
     # encontró el banco de escenarios el 12-sep-2026. Se salta ese pago, se
     # deja como estaba, y se devuelve para que quede en la bandeja.
     sin_tasa: list[dict[str, Any]] = []
+    # Aplicaciones que la base rechazó por un motivo que no es "sin tasa" -- ver
+    # TIPO_AUDITORIA_APLICACION_NO_ESCRITA. Antes de esto, cualquiera de estos
+    # errores abortaba el ``for`` entero.
+    errores: list[dict[str, Any]] = []
 
     for (pago_id, so_id), monto in sorted(totales.items()):
         if pago_id not in en_espejo:
@@ -928,28 +955,39 @@ def _sincronizar_aplicaciones_conciliadas(
             equiv_usd_binance = monto / tasa_binance
             equiv_ves_bcv = equiv_ves_binance = monto
 
-        repo.update_vinculacion(
-            Vinculacion(
-                vinc_id=(previa.vinc_id if previa else f"VINC_{pago_id}_{so_id}"),
-                pago_id=pago_id,
-                so_id=so_id,
-                monto_aplicado=monto,
-                hora_pago_confirmada=hora_pago,
-                tasa_bcv_aplicada=tasa_bcv,
-                tasa_binance_aplicada=tasa_binance,
-                es_tasa_heredada=False,
-                equiv_usd_bcv=equiv_usd_bcv,
-                equiv_usd_binance=equiv_usd_binance,
-                equiv_ves_bcv=equiv_ves_bcv,
-                equiv_ves_binance=equiv_ves_binance,
-                confirmado_por="Odoo (reconciliación)",
-                timestamp_registro=datetime.now(),
-                estado=EstadoVinculacion.CONCILIADO,
-                moneda_abono=moneda,
-                tipo_tasa_abono=TipoTasa.BCV,
-                bcv_variante=bcv_variante,
+        try:
+            repo.update_vinculacion(
+                Vinculacion(
+                    vinc_id=(previa.vinc_id if previa else f"VINC_{pago_id}_{so_id}"),
+                    pago_id=pago_id,
+                    so_id=so_id,
+                    monto_aplicado=monto,
+                    hora_pago_confirmada=hora_pago,
+                    tasa_bcv_aplicada=tasa_bcv,
+                    tasa_binance_aplicada=tasa_binance,
+                    es_tasa_heredada=False,
+                    equiv_usd_bcv=equiv_usd_bcv,
+                    equiv_usd_binance=equiv_usd_binance,
+                    equiv_ves_bcv=equiv_ves_bcv,
+                    equiv_ves_binance=equiv_ves_binance,
+                    confirmado_por="Odoo (reconciliación)",
+                    timestamp_registro=datetime.now(),
+                    estado=EstadoVinculacion.CONCILIADO,
+                    moneda_abono=moneda,
+                    tipo_tasa_abono=TipoTasa.BCV,
+                    bcv_variante=bcv_variante,
+                )
             )
-        )
+        except Exception as e_escritura:
+            # Una fila que la base rechaza (FK, restricción, lo que sea) no puede
+            # cortar el resto del lote -- antes de esto la excepción salía del
+            # ``for`` entero y las aplicaciones que venían después, en la misma
+            # corrida, ni se procesaban. Ver TIPO_AUDITORIA_APLICACION_NO_ESCRITA.
+            logger.warning(
+                "Aplicación %s/%s no se pudo escribir: %s", pago_id, so_id, e_escritura
+            )
+            errores.append({"pago_id": pago_id, "so_id": so_id, "motivo": str(e_escritura)})
+            continue
         if previa is None:
             creadas += 1
         else:
@@ -961,6 +999,7 @@ def _sincronizar_aplicaciones_conciliadas(
         "sin_cambio": sin_cambio,
         "omitidas": omitidas,
         "sin_tasa": sin_tasa,
+        "errores": errores,
     }
 
 
@@ -1050,6 +1089,32 @@ def _cambio_por_vinculacion_rechazada(v: Any, falla: Any) -> dict[str, Any]:
             f"Vinculación {v.vinc_id} NO escrita -- {falla}. La base conserva la "
             "versión anterior."
         ),
+    }
+
+
+TIPO_AUDITORIA_APLICACION_NO_ESCRITA = "aplicacion_no_escrita_error_inesperado"
+
+
+def _cambio_por_aplicacion_no_escrita(pago_id: str, so_id: str, error: Any) -> dict[str, Any]:
+    """La fila de ``cambios`` para una aplicación de Odoo que no se pudo escribir
+
+    por un error inesperado en la base (una FK, una restricción, lo que sea):
+    no es el caso conocido de "sin tasa", es cualquier otra cosa. Existe para
+    que UNA aplicación así no corte el resto del lote -- antes de esto, la
+    excepción salía del ``for`` entero y ninguna aplicación posterior en la
+    misma corrida se llegaba a procesar. Bug real (17-sep-2026): una factura
+    que consolida dos órdenes escribía ``so_id = "S00718, S00700"`` y violaba
+    la FK contra ``ordenes_venta`` en cada ciclo -- ver
+    ``odoo.client.so_ids_de_invoice_origin``, que ya evita ESE caso puntual;
+    esto es la red para el próximo caso que nadie previó.
+    """
+    return {
+        "pago_id": str(pago_id),
+        "so_id_anterior": str(so_id),
+        "so_id_nuevo": str(so_id),
+        "requiere_revision_manual": True,
+        "tipo": "aplicacion_no_escrita",
+        "detalle": f"Pago {pago_id} / orden {so_id}: no se pudo escribir -- {error}.",
     }
 
 
@@ -1440,6 +1505,7 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
         "monto_o_fecha_actualizado": "vinculacion_actualizada_por_cambio_en_odoo",
         "discrepancia_multi_orden": "vinculacion_discrepancia_multi_orden",
         "so_id_repuntado": "vinculacion_revinculada_por_odoo",
+        "aplicacion_no_escrita": TIPO_AUDITORIA_APLICACION_NO_ESCRITA,
     }
     # Bug real (agosto 2026, pago 973/Cauchera El Gordo): sin esta
     # deduplicación, un caso "requiere_revision_manual" (ambiguo, nunca
@@ -3945,6 +4011,21 @@ def recalculate_all_orders():
                         [
                             _cambio_por_pago_sin_tasa(st["pago_id"], st["so_id"])
                             for st in res_apl["sin_tasa"]
+                        ],
+                    )
+                if res_apl.get("errores"):
+                    print(
+                        f"Aplicaciones de Odoo que no se pudieron escribir: "
+                        f"{len(res_apl['errores'])} (quedan en la bandeja).",
+                        file=sys.stderr,
+                    )
+                    _guardar_auditoria_de_cambios(
+                        repo,
+                        [
+                            _cambio_por_aplicacion_no_escrita(
+                                er["pago_id"], er["so_id"], er["motivo"]
+                            )
+                            for er in res_apl["errores"]
                         ],
                     )
                 if res_apl["creadas"] or res_apl["corregidas"]:
