@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 from datetime import date
+from decimal import Decimal
+from typing import Any
 
 from ..models import (
     BandejaFacturacion,
@@ -28,25 +31,92 @@ from ..models import (
 )
 from ..repositories import Repository
 from .discounts import EngineInputs, calcular_factura, calcular_teorico_orden_con_fallback
-from .historical_pricing import cargar_mapa_historico, es_orden_historica
 from .price_resolver import PriceResolver
 
 logger = logging.getLogger("cxc.engine")
 
 
-def fingerprint_lineas(lineas: list[LineaOrden]) -> str:
+# Versión del DESGLOSE que produce el motor. Entra en la huella para que
+# un cambio en la FORMA del resultado dispare el recálculo de las órdenes
+# ya guardadas, aunque sus líneas y su lista no hayan cambiado.
+#
+# Sin esto, agregar un campo nuevo al detalle lo deja vacío para siempre
+# en todo lo histórico: la huella solo miraba líneas y lista, así que nada
+# invalidaba lo ya calculado. Pasó al agregar ``regla_id`` (septiembre
+# 2026, pedido del usuario para poder auditar de qué regla viene cada
+# descuento): las 387 filas de descuento en producción quedaron con la
+# columna vacía hasta forzar el recálculo por acá.
+#
+# Súbela cuando cambie QUÉ se guarda del cálculo, no cuando cambie el
+# monto -- eso ya lo cubren las líneas y la lista.
+VERSION_DESGLOSE_MOTOR = "8"
+
+
+def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
     """Huella determinista de las líneas de una orden (agosto 2026, hallazgo
 
     real orden S00792: el teórico quedó mostrando una línea de producto que
     ya no existía y cantidades viejas porque nada disparaba un recálculo
     cuando la orden en sí cambiaba en Odoo, solo cuando faltaba precio en
     una lista -- ver ``VentasTeorico.lineas_fingerprint``). Cambia si Odoo
-    edita cantidades, precios o el set de productos de la orden."""
+    edita cantidades, precios o el set de productos de la orden.
+
+    ``lista_precios`` entra en la huella desde septiembre de 2026, cuando
+    el teorico paso a calcularse contra la lista de NACIMIENTO de la
+    orden (ver ``EngineInputs.pares_listas``). Antes de ese cambio la
+    lista de la orden no influia en el teorico y dejarla fuera era
+    inofensivo -- se verifico contra produccion y quedo documentado. Con
+    el pareo si influye: una orden que cambia de lista en Odoo, sin tocar
+    sus lineas, tiene que recalcular su teorico, y sin esto la huella no
+    se moveria.
+    """
     partes = sorted(
         f"{ln.linea_id}|{ln.producto}|{ln.cantidad}|{ln.precio_unitario}|{ln.descuento}"
         for ln in lineas
     )
+    partes.append(f"__lista__|{str(lista_precios or '').strip()}")
+    partes.append(f"__motor__|{VERSION_DESGLOSE_MOTOR}")
     return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
+
+
+# IVA venezolano, misma constante que usa /api/ventas para el teorico.
+_IVA_TEORICO = Decimal("0.16")
+
+
+def _objetivo_teorico(
+    repo: Any, orden: OrdenVenta | None, valid_usd: list[str]
+) -> Decimal | None:
+    """Cuanto tenia que pagar esa orden segun su TEORICO, con impuestos.
+
+    Es el objetivo del gate de Recompra desde septiembre de 2026 (decision
+    del usuario): la orden anterior cuenta como pagada cuando cubrio su
+    teorico, no el `amount_total` crudo de Odoo -- ese es el precio de
+    lista SIN los descuentos que el cliente si se gano.
+
+    Se toma el teorico de la referencia con la que NACIO la orden (USD si
+    su lista es USD, VES si no), neto de sus descuentos y con impuestos,
+    para compararlo contra `valor_pagado_usd`, que ya viene en dolares.
+
+    None si la orden no tiene teorico calculado todavia: el llamador cae
+    entonces al `monto_total`, que es el comportamiento anterior.
+    """
+    if orden is None:
+        return None
+    try:
+        fila = next(
+            (t for t in repo.all_ventas_teoricos() if t.so_id == orden.so_id), None
+        )
+    except Exception:
+        return None
+    if fila is None:
+        return None
+    es_usd = str(orden.lista_precios or "").strip() in set(valid_usd)
+    bruto = fila.teorico_usd if es_usd else fila.teorico_ves
+    desc = fila.descuentos_teorico_usd if es_usd else fila.descuentos_teorico_ves
+    neto = bruto - desc
+    if neto <= 0:
+        return None
+    return Decimal(neto) * (Decimal("1") + _IVA_TEORICO)
 
 
 class EngineRunner:
@@ -59,6 +129,10 @@ class EngineRunner:
         self._repo = repo
         self._resolver = price_resolver
         self._cfg = engine_config
+        # Las vinculaciones que el último ``run_all`` NO pudo escribir porque
+        # violaban una invariante de dinero, con su motivo. Quedan en la base
+        # como estaban; quien corre el motor decide cómo avisar.
+        self.vinculaciones_rechazadas: list[tuple[Vinculacion, Any]] = []
 
     def _abonos(self, vincs: list[Vinculacion]) -> list[tuple[Vinculacion, MetodoPago]]:
         """Abonos que el motor trata como dinero real.
@@ -209,30 +283,62 @@ class EngineRunner:
         except Exception as e:
             logger.warning("Error al leer listas de precio validas de _Meta: %s", e)
 
-        # Tarea 2 (Lista Histórica de Auditoría): sin esto BandejaFacturacion
-        # (lo que alimenta /api/ventas) nunca sabia de la excepcion historica
-        # y mostraba teorico $0.00 para ordenes sin lista o del periodo
-        # 20-feb al 12-mar-2026 -- solo los endpoints de reporte la conocian.
-        historical_enabled = True
-        historical_price_map: dict[str, dict[str, object]] = {}
+        # Pareo VES<->USD (septiembre 2026): el teorico se compara contra la
+        # lista con la que NACIO la orden y su par de la otra moneda -- ver
+        # EngineInputs.pares_listas. Se guarda como {"id ves": "id usd"} y
+        # aca se expande a las dos direcciones, porque el pareo es simetrico:
+        # una orden nacida en la lista USD toma su teorico VES del par VES.
+        pares_listas: dict[str, str] = {}
         try:
-            toggle = self._repo.get_config("historical_pricelist_enabled")
-            historical_enabled = toggle is None or toggle.strip().lower() not in (
-                "false",
-                "0",
-                "no",
-            )
-            historical_price_map = cargar_mapa_historico(
-                self._repo.all_listas_precios_historicas()
-            )
+            crudo = self._repo.get_config("pricelist_pares")
+            if crudo:
+                for ves_id, usd_id in json.loads(crudo).items():
+                    pares_listas[str(ves_id)] = str(usd_id)
+                    pares_listas[str(usd_id)] = str(ves_id)
         except Exception as e:
-            logger.warning("Error al leer Lista Historica de Auditoria: %s", e)
-        orden_es_historica = es_orden_historica(
-            orden.fecha,
-            orden.lista_precios,
-            historical_enabled,
-            lista_es_usd_valida=str(orden.lista_precios or "").strip() in valid_usd,
-        )
+            logger.warning("Error al leer el pareo de listas de precio: %s", e)
+
+        # Vigencia de cada lista: {"id": {"moneda", "desde", "hasta"}}. Con
+        # esto el teórico de una orden se compara contra las listas que
+        # regían EL DÍA QUE NACIÓ, no contra las de hoy -- ver
+        # ``listas_vigentes_en``.
+        vigencias_listas: dict[str, dict[str, str]] = {}
+        try:
+            crudo_map = self._repo.get_config("pricelist_mapeo_unificado")
+            if crudo_map:
+                for lista_id, info in json.loads(crudo_map).items():
+                    if not isinstance(info, dict):
+                        continue
+                    vigencias_listas[str(lista_id)] = {
+                        "moneda": str(info.get("moneda") or ""),
+                        "categoria": str(info.get("categoria") or ""),
+                        "desde": str(info.get("desde") or ""),
+                        "hasta": str(info.get("hasta") or ""),
+                    }
+        except Exception as e:
+            logger.warning("Error al leer la vigencia de las listas de precio: %s", e)
+
+        # Tarea 2 (Lista Histórica de Auditoría) originalmente leía el selector
+        # de Configuración acá -- necesario entonces porque BandejaFacturacion
+        # (lo que alimenta /api/ventas, y de ahí ``calcular_factura``, el
+        # camino de montos reales) no sabía de la excepción histórica.
+        #
+        # 12-sep-2026, decisión 5 del quiz: «esa lista es solo para auditoría,
+        # no debe modificar los montos reales». `web/app.py` aplicó eso
+        # fijando `is_historical_pricelist_enabled` en `False` siempre para
+        # todo camino de monto real -- pero ese cableo vive en `build_inputs`,
+        # que `app.py` no toca, y seguía leyendo el selector en vivo
+        # (default `True` si nadie lo había puesto en "false"). Hallazgo real
+        # (17-sep-2026, verificado contra la copia de QA): con el selector en
+        # `None`, 94 órdenes de la ventana histórica seguían valorándose --
+        # vía ``calcular_factura``, no solo el teórico -- con el precio Euro
+        # de la Lista Histórica, exactamente lo que la decisión 5 dijo que no
+        # debía pasar. Ahora `orden_es_historica` es `False` siempre acá
+        # también, y `historical_price_map` (solo se consulta si
+        # `orden_es_historica` es `True`, ver ``discounts._precio_unitario_
+        # linea``) no tiene ya nada que poblar.
+        orden_es_historica = False
+        historical_price_map: dict[str, dict[str, object]] = {}
 
         # Recompra (ventana = días de crédito reales de la orden anterior +
         # dias_gracia): la orden anterior del cliente es la de fecha más
@@ -305,10 +411,15 @@ class EngineRunner:
             descuentos_diferencial=self._repo.descuentos_diferencial_cambiario(),
             descuentos_producto=self._repo.descuentos_producto(),
             valid_ves=valid_ves,
+            vigencias_listas=vigencias_listas,
             valid_usd=valid_usd,
+            pares_listas=pares_listas,
             orden_es_historica=orden_es_historica,
             historical_price_map=historical_price_map,
             orden_anterior_cliente=orden_anterior_cliente,
+            orden_anterior_objetivo=_objetivo_teorico(
+                self._repo, orden_anterior_cliente, valid_usd
+            ),
             orden_anterior_cliente_vincs=orden_anterior_cliente_vincs,
             historial_cliente_lineas=historial_cliente_lineas,
         )
@@ -377,6 +488,17 @@ class EngineRunner:
         # Órdenes con algún abono -- única vía por la que una orden ya
         # facturada puede tener descuento pendiente de Nota de Crédito.
         so_con_abono = {v.so_id for v in self._repo.all_vinculaciones()}
+        # Órdenes que YA tienen fila de bandeja. Hay que recalcularlas
+        # aunque hoy no califiquen, o la fila vieja queda mintiendo.
+        #
+        # Bug real (auditoría de agosto 2026): si Odoo reconcilia un pago
+        # contra una orden DISTINTA a la que el FIFO había asignado,
+        # ``_resincronizar_vinculaciones_con_odoo`` re-apunta la
+        # Vinculación -- pero la orden que perdió el abono quedaba fuera
+        # del filtro de abajo, así que su fila de bandeja sobrevivía con
+        # el descuento que ya no le corresponde. El descuento terminaba
+        # contado DOS veces: en la orden vieja y en la nueva.
+        so_con_bandeja = {b.so_id for b in self._repo.all_bandeja()}
         # Prefetch UNA sola vez -- ver docstring de build_inputs (bug de
         # rendimiento real, agosto 2026): sin esto, el historial "acumulado"
         # de Volumen hace una query lineas_de_orden por cada orden anterior
@@ -389,7 +511,7 @@ class EngineRunner:
             st = str(getattr(o, "estado_orden", "sale") or "").strip().lower()
             if st in ("cancel", "cancelled", "draft", "sent"):
                 continue
-            if o.facturada and o.so_id not in so_con_abono:
+            if o.facturada and o.so_id not in so_con_abono and o.so_id not in so_con_bandeja:
                 continue
             resultado = self._calcular(o.so_id, fecha_calculo, lineas_index=lineas_index)
             if resultado is None:
@@ -399,7 +521,16 @@ class EngineRunner:
             todas_vincs.extend(vincs_actualizadas)
 
         self._repo.upsert_bandejas(resultados)
-        self._repo.update_vinculaciones(todas_vincs)
+        # Un solo lote con todas las vinculaciones del ciclo. Con la escritura
+        # estricta, UNA fila que violara la novena invariante (pago
+        # sobreaplicado) dejaba sin escribir las demás -- lo encontró el banco
+        # de escenarios el 12-sep-2026 con los diez pagos ya sobreaplicados en
+        # Odoo. Se omiten esas y se escriben las otras.
+        self.vinculaciones_rechazadas = self._repo.update_vinculaciones_omitiendo_invalidas(
+            todas_vincs
+        )
+        for v, f in self.vinculaciones_rechazadas:
+            logger.warning("Vinculación %s NO escrita: %s", v.vinc_id, f)
         return resultados
 
     def run_teoricos_pendientes(self, fecha_calculo: date, limite: int | None = None) -> int:
@@ -458,7 +589,9 @@ class EngineRunner:
                 if not entregada_sin_devolver:
                     continue
             existente = existentes.get(o.so_id)
-            fingerprint_actual = fingerprint_lineas(lineas_index.get(o.so_id, []))
+            fingerprint_actual = fingerprint_lineas(
+                lineas_index.get(o.so_id, []), str(o.lista_precios or "")
+            )
             if (
                 existente is not None
                 and not (existente.usa_fallback_ves or existente.usa_fallback_usd)

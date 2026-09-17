@@ -15,6 +15,7 @@ nativa -- no hace falta ningún truco adicional.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -23,6 +24,7 @@ from typing import Any
 from sqlalchemy import Engine, and_, delete, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from ..engine.identidad_de_reglas import ORDEN_DE_BUSQUEDA
 from ..models import (
     BandejaFacturacion,
     Cliente,
@@ -63,6 +65,13 @@ from ..models import (
 from ..repositories import Repository
 from . import schema as t
 from .engine import make_engine
+from .invariantes import (
+    Violacion,
+    exigir,
+    verificar_no_sobreaplica,
+    verificar_teorico,
+    verificar_vinculacion,
+)
 
 _META_LAST_SYNC = "last_sync"
 
@@ -73,7 +82,6 @@ _META_LAST_SYNC = "last_sync"
 _DIFERENCIAL_DEFAULTS = [
     DescuentoDiferencialCambiario(
         regla_id="DIF_35_VES",
-        nombre="35% Fijo VES a USD",
         tipo_diferencial="fijo_35_ves_usd",
         tipo_calculo="fijo",
         porcentaje_fijo=Decimal("0.35"),
@@ -83,7 +91,6 @@ _DIFERENCIAL_DEFAULTS = [
     ),
     DescuentoDiferencialCambiario(
         regla_id="DIF_EQUIPARAR",
-        nombre="Equiparar Binance N/C",
         tipo_diferencial="equiparar_binance",
         tipo_calculo="variable",
         porcentaje_fijo=Decimal("0"),
@@ -93,7 +100,6 @@ _DIFERENCIAL_DEFAULTS = [
     ),
     DescuentoDiferencialCambiario(
         regla_id="DIF_CANDIDATOS_CIERRE",
-        nombre="Candidatos a Cierre de Factura (reporte)",
         tipo_diferencial="candidato_cierre_factura",
         tipo_calculo="variable",
         porcentaje_fijo=Decimal("0"),
@@ -455,6 +461,19 @@ class PostgresRepository(Repository):
             ).all()
         return [_row_to_vinc(r) for r in rows]
 
+    def vinculaciones_de_pago(self, pago_id: str) -> list[Vinculacion]:
+        """Las vinculaciones de un pago. Existe para la novena invariante.
+
+        Se lee por pago y no filtrando ``all_vinculaciones()`` porque esto corre en
+        cada escritura: con 1.466 filas, traerlas todas para mirar una sería el
+        mismo N+1 que ya costó dieciocho minutos en otra pantalla.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.vinculaciones).where(t.vinculaciones.c.pago_id == pago_id)
+            ).all()
+        return [_row_to_vinc(r) for r in rows]
+
     def all_vinculaciones(self) -> list[Vinculacion]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.vinculaciones)).all()
@@ -467,8 +486,83 @@ class PostgresRepository(Repository):
     def update_vinculaciones(self, vincs: list[Vinculacion]) -> None:
         if not vincs:
             return
+        # Fase 2.2 del plan de blindaje: la base ya rechaza una fila imposible
+        # con un CHECK, pero el error sale como un IntegrityError crudo a veinte
+        # marcos de profundidad. Esto falla igual --no cambia qué se acepta--
+        # diciendo QUÉ vinculación y con QUÉ valores. Ver ``db/invariantes.py``.
+        exigir(f for _v, f in self._violaciones_del_lote(vincs))
         with self._engine.begin() as conn:
             _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in vincs], ["vinc_id"])
+
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Escribe las que pasan las invariantes; devuelve las que no, con su motivo.
+
+        Para los lotes del demonio (el motor y la resincronización con Odoo),
+        que escriben cientos de filas de una. Con la versión estricta, UNA fila
+        que viole la novena invariante tumbaba el lote entero -- el 12-sep-2026
+        el banco de escenarios lo mostró: diez pagos ya sobreaplicados en Odoo
+        dejaban sin escribir todas las vinculaciones de cada ciclo. Acá la fila
+        que viola se omite (queda en la base como estaba) y el llamador decide
+        cómo avisar; las demás se escriben.
+        """
+        if not vincs:
+            return []
+        rechazadas = self._violaciones_del_lote(vincs)
+        ids_rechazados = {str(v.vinc_id) for v, _f in rechazadas}
+        buenas = [v for v in vincs if str(v.vinc_id) not in ids_rechazados]
+        if buenas:
+            with self._engine.begin() as conn:
+                _upsert(conn, t.vinculaciones, [_vinc_to_row(v) for v in buenas], ["vinc_id"])
+        return rechazadas
+
+    def _violaciones_del_lote(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Violacion]]:
+        """Las invariantes por fila y la de suma, sin escribir nada."""
+        fallas: list[tuple[Vinculacion, Violacion]] = [
+            (v, f) for v in vincs for f in verificar_vinculacion(v)
+        ]
+        # La novena invariante (11-sep-2026): las vinculaciones de un pago no
+        # pueden sumar más que el pago. No es un CHECK porque habla de la suma de
+        # varias filas, así que se comprueba acá.
+        #
+        # Sólo impide que el exceso CREZCA: los diez pagos que ya están
+        # sobreaplicados en producción -- 1.269,25 USD -- se pueden reescribir
+        # iguales o menores, no corregirlos ni agrandarlos. Corregirlos mueve
+        # montos y es decisión del usuario.
+        # Ver ``db/invariantes.py::verificar_no_sobreaplica``.
+        for pago_id in {str(v.pago_id) for v in vincs if getattr(v, "pago_id", None)}:
+            pago = self.get_pago(pago_id)
+            if pago is None:
+                continue
+            # Todas, de cualquier estado: es el mismo universo que suma
+            # ``_detectar_vinculaciones_sobreaplicadas``, para que el detector y la
+            # invariante no puedan discrepar sobre el mismo pago.
+            existentes = self.vinculaciones_de_pago(pago_id)
+            nuevas = [v for v in vincs if str(v.pago_id) == pago_id]
+            # Cada fila del lote se compara contra el estado que tendría la base
+            # con las anteriores del lote ya aplicadas; la versión vieja de la
+            # propia fila sigue en ``acumuladas`` para que la invariante sepa
+            # cuánto sumaba el pago antes.
+            acumuladas: list[Vinculacion] = list(existentes)
+            for nueva in nuevas:
+                fallas.extend(
+                    (nueva, f) for f in verificar_no_sobreaplica(nueva, acumuladas, pago.monto)
+                )
+                acumuladas = [v for v in acumuladas if str(v.vinc_id) != str(nueva.vinc_id)]
+                acumuladas.append(nueva)
+        return fallas
+
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        if not vinc_ids:
+            return 0
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                t.vinculaciones.delete().where(t.vinculaciones.c.vinc_id.in_(vinc_ids))
+            )
+        return int(result.rowcount or 0)
 
     # --- Reglas de descuento (config, solo lectura en esta fase) -------------
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
@@ -584,15 +678,74 @@ class PostgresRepository(Repository):
             )
         return bool(result.rowcount)
 
-    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        encontradas = []
         with self._engine.connect() as conn:
-            rows = conn.execute(select(t.anomalias_aceptadas)).all()
+            for tabla in ORDEN_DE_BUSQUEDA:
+                table = self._regla_table(tabla)
+                if table is None:
+                    continue
+                existe = conn.execute(
+                    select(table.c.regla_id).where(table.c.regla_id == regla_id).limit(1)
+                ).first()
+                if existe is not None:
+                    encontradas.append(tabla)
+        return encontradas
+
+    def all_descuentos_no_otorgados(self) -> dict[str, dict[str, str]]:
+        """``so_id`` -> quién marcó que ese descuento NO se le dio al cliente.
+
+        Ver ``schema.descuentos_no_otorgados``: el descuento se asume
+        comprometido por defecto y esto registra las excepciones.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.descuentos_no_otorgados)).all()
+        return {
+            r.so_id: {
+                "so_id": r.so_id,
+                "motivo": r.motivo,
+                "marcado_por": r.marcado_por,
+                "timestamp_marcado": r.timestamp_marcado,
+            }
+            for r in rows
+        }
+
+    def append_descuento_no_otorgado(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.descuentos_no_otorgados,
+                [
+                    {
+                        "so_id": row["so_id"],
+                        "motivo": row.get("motivo", ""),
+                        "marcado_por": row.get("marcado_por", ""),
+                        "timestamp_marcado": row.get("timestamp_marcado", ""),
+                    }
+                ],
+                ["so_id"],
+            )
+
+    def delete_descuento_no_otorgado(self, so_id: str) -> None:
+        """Revierte la marca: el descuento vuelve a contar como comprometido."""
+        with self._engine.begin() as conn:
+            conn.execute(
+                t.descuentos_no_otorgados.delete().where(
+                    t.descuentos_no_otorgados.c.so_id == so_id
+                )
+            )
+
+    def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.discrepancias_aceptadas)).all()
         return [
             {
-                "anomalia_id": r.anomalia_id,
+                "discrepancia_id": r.discrepancia_id,
                 "so_id": r.so_id,
                 "factura_id": r.factura_id,
-                "tipo_anomalia": r.tipo_anomalia,
+                "tipo_discrepancia": r.tipo_discrepancia,
+                "huella": r.huella,
+                "detalle": r.detalle,
                 "motivo_aceptacion": r.motivo_aceptacion,
                 "aprobado_por": r.aprobado_por,
                 "timestamp_aprobacion": r.timestamp_aprobacion.isoformat(),
@@ -600,25 +753,29 @@ class PostgresRepository(Repository):
             for r in rows
         ]
 
-    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
+    def append_discrepancia_aceptada(self, row: dict[str, str]) -> None:
         with self._engine.begin() as conn:
             _upsert(
                 conn,
-                t.anomalias_aceptadas,
+                t.discrepancias_aceptadas,
                 [
                     {
-                        "anomalia_id": row["anomalia_id"],
+                        "discrepancia_id": row["discrepancia_id"],
                         "so_id": row.get("so_id", ""),
                         "factura_id": row.get("factura_id", ""),
-                        "tipo_anomalia": row.get("tipo_anomalia", ""),
+                        "tipo_discrepancia": row.get("tipo_discrepancia", ""),
+                        "huella": row.get("huella", ""),
+                        "detalle": row.get("detalle", ""),
                         "motivo_aceptacion": row.get("motivo_aceptacion", ""),
                         "aprobado_por": row.get("aprobado_por", ""),
                         "timestamp_aprobacion": datetime.fromisoformat(
                             row["timestamp_aprobacion"]
-                        ),
+                        )
+                        if row.get("timestamp_aprobacion")
+                        else datetime.now(),
                     }
                 ],
-                ["anomalia_id"],
+                ["discrepancia_id"],
             )
 
     def all_auditoria(self) -> list[dict[str, Any]]:
@@ -996,6 +1153,14 @@ class PostgresRepository(Repository):
                                 "origen": d.origen,
                                 "descripcion": d.descripcion,
                                 "monto": d.monto,
+                                "regla_id": d.regla_id,
+                                "porcentaje": d.porcentaje,
+                                "base": d.base,
+                                "componentes": (
+                                    json.dumps(d.componentes, default=str)
+                                    if d.componentes
+                                    else ""
+                                ),
                             }
                             for d in b.descuentos_detalle
                         ],
@@ -1024,6 +1189,7 @@ class PostgresRepository(Repository):
 
     # --- Teóricos de Ventas (Fase 10) -----------------------------------------
     def upsert_ventas_teorico(self, fila: VentasTeorico) -> None:
+        exigir(verificar_teorico(fila))
         with self._engine.begin() as conn:
             _upsert(conn, t.ventas_teoricos, [_dataclass_row(fila)], ["so_id"])
 
@@ -1374,8 +1540,6 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         regla_id=r.regla_id,
         marca=r.marca,
         categoria=r.categoria,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
         ventana_pago_tipo=r.ventana_pago_tipo,
@@ -1383,6 +1547,8 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         porcentaje=r.porcentaje,
         monedas_aplicables=r.monedas_aplicables,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
@@ -1398,16 +1564,17 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         regla_id=r.regla_id,
         marca=r.marca,
         categoria=r.categoria,
-        litros_minimo=r.litros_minimo,
         porcentaje=r.porcentaje,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
+        min_unidades=r.min_unidades,
+        max_unidades=r.max_unidades,
         unidad_medida=r.unidad_medida,
         tipo_evaluacion=r.tipo_evaluacion,
         dias_evaluacion=r.dias_evaluacion,
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
         aplica_a=r.aplica_a,
@@ -1420,14 +1587,14 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         regla_id=r.regla_id,
         marca=r.marca,
         categoria=r.categoria,
-        min_cajas=r.min_cajas,
-        max_cajas=r.max_cajas,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
+        min_unidades=r.min_unidades,
+        max_unidades=r.max_unidades,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
         porcentaje=r.porcentaje,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
@@ -1442,18 +1609,17 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
 def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
     return DescuentoDiferencialCambiario(
         regla_id=r.regla_id,
-        nombre=r.nombre,
         tipo_diferencial=r.tipo_diferencial,
         tipo_calculo=r.tipo_calculo,
         porcentaje_fijo=r.porcentaje_fijo,
         marca=r.marca,
         categoria=r.categoria,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
         monedas_aplicables=r.monedas_aplicables,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
@@ -1495,13 +1661,15 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         productos=r.productos,
         marca=r.marca,
         categoria=r.categoria,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
+        min_unidades=r.min_unidades,
+        max_unidades=r.max_unidades,
         unidad_medida=r.unidad_medida,
         tipo_beneficio=r.tipo_beneficio,
         porcentaje=r.porcentaje,
         monedas_aplicables=r.monedas_aplicables,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         vigencia_desde=r.vigencia_desde,
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
@@ -1537,12 +1705,13 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         vigencia_hasta=r.vigencia_hasta,
         descuento_fallback=r.descuento_fallback,
         categorias_aplica=r.categorias_aplica,
+        categorias_descuento=getattr(r, "categorias_descuento", "") or "",
         marca=r.marca,
         categoria=r.categoria,
-        min_cantidad=r.min_cantidad,
-        max_cantidad=r.max_cantidad,
         unidad_medida=r.unidad_medida,
         listas_aplicables=r.listas_aplicables,
+        listas_excluidas=getattr(r, "listas_excluidas", "") or "",
+        monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         solo_primera_compra=r.solo_primera_compra,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
@@ -1649,7 +1818,15 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
 
 
 def _row_to_descuento_aplicado(r: Any) -> DescuentoAplicado:
-    return DescuentoAplicado(origen=r.origen, descripcion=r.descripcion, monto=r.monto)
+    return DescuentoAplicado(
+        origen=r.origen,
+        descripcion=r.descripcion,
+        monto=r.monto,
+        regla_id=getattr(r, "regla_id", "") or "",
+        porcentaje=getattr(r, "porcentaje", None),
+        base=getattr(r, "base", None),
+        componentes=json.loads(getattr(r, "componentes", "") or "[]"),
+    )
 
 
 def _row_to_ventas_teorico(r: Any) -> VentasTeorico:

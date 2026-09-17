@@ -15,7 +15,7 @@ que la regla nunca tuvo efecto.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from cxc.models import Producto
 from cxc.web.app import _resolver_productos_promo
@@ -66,3 +66,58 @@ def test_token_sin_match_se_deja_tal_cual_mejor_esfuerzo() -> None:
 def test_lista_vacia_da_string_vacio() -> None:
     repo = _catalogo_mock([])
     assert _resolver_productos_promo("", repo) == ""
+
+
+# --- y que el formulario ÚNICO la llame, que es lo que se había perdido -------
+
+
+def test_el_formulario_unico_normaliza_los_productos_al_guardar() -> None:
+    """La regresión: `393b520` sacó los nueve formularios viejos y con ellos el
+    único llamador de esta función.
+
+    El formulario único guardaba `productos=req.productos` en crudo, así que el bug
+    de S00679 —código de catálogo en vez de `product.product` id, y la regla no
+    dispara nunca— podía volver a entrar por la puerta nueva. Lo detectó la guarda
+    de funciones sin llamador el 11-sep-2026, no una prueba de comportamiento.
+
+    Ésta sí lo es: manda un POST con el código `0761` y mira qué `productos` llega
+    al repositorio. Tiene que ser el producto_id, no el código.
+    """
+    from fastapi.testclient import TestClient
+
+    import cxc.web.app as app
+
+    repo = MagicMock()
+    repo.all_catalogo.return_value = [_producto("12345", "0761", "SINOCO SAE 50")]
+    repo.all_config.return_value = {}
+
+    async def _nada():
+        return None
+
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app.hay_sesion_valida", return_value=True),
+        patch("cxc.web.app.run_sync_in_background", _nada),
+        patch("cxc.web.app.run_scraper_in_background", _nada),
+        patch("cxc.web.app._aplicar_migraciones_pendientes"),
+        TestClient(app.app) as cliente,
+    ):
+        r = cliente.post(
+            "/api/config/regla",
+            json={
+                "tipo_regla": "promocion",
+                "descripcion": "PROMO 12 MAS 1",
+                "productos": "0761",
+                "regalo_tipo": "producto",
+                "valor": 1,
+                "compra_minima": 12,
+            },
+        )
+
+    assert r.status_code == 200, r.text
+    repo.append_promocion_primera_compra.assert_called_once()
+    guardada = repo.append_promocion_primera_compra.call_args[0][0]
+    assert guardada.productos == "12345", (
+        "el formulario único volvió a guardar el código de catálogo en crudo, que es "
+        "justo lo que nunca matchea LineaOrden.producto"
+    )

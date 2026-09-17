@@ -73,3 +73,60 @@ def test_ninguna_ruta_de_la_app_esta_duplicada():
             vistos[key] = vistos.get(key, 0) + 1
     duplicados = {k: v for k, v in vistos.items() if v > 1}
     assert duplicados == {}, f"Rutas duplicadas encontradas: {duplicados}"
+
+
+def test_una_fila_por_categoria_construye_el_dict_completo():
+    """El otro test deja las seis tablas vacías -- lo correcto para fijar la
+
+    FORMA de la respuesta, pero deja sin ejecutar el cuerpo de cada `for`: las
+    97 líneas que arman cada fila. Ahí vivía el bug real del 11-sep-2026
+    (`float(r.litros_minimo)`, un `AttributeError` que este mismo `except
+    Exception` convertía en 500 y dejaba en blanco la pantalla ENTERA por una
+    sola regla de volumen con la unidad vacía -- ver `engine/discounts.
+    unidad_de_volumen`). Una fila por tabla, para que las seis vuelvan a
+    ejecutarse."""
+    from datetime import date
+
+    from cxc.models import DescuentoDiferencialCambiario
+    from tests import builders as b
+
+    mock_repo = MagicMock()
+    mock_repo.descuentos_recompra.return_value = [b.descuento_recompra("REC1")]
+    mock_repo.descuentos_marca_categoria.return_value = [b.descuento("PP1")]
+    mock_repo.descuentos_volumen.return_value = [b.descuento_volumen("DV1")]
+    mock_repo.promociones_primera_compra.return_value = [b.promo_primera()]
+    mock_repo.descuentos_producto.return_value = [b.descuento_producto("PROD1")]
+    mock_repo.descuentos_diferencial_cambiario.return_value = [
+        DescuentoDiferencialCambiario(regla_id="DIF1", vigencia_desde=date(2026, 1, 1))
+    ]
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        res = client.get("/api/reglas-descuento")
+
+    assert res.status_code == 200
+    filas = {f["tabla"]: f for f in res.json()}
+    assert set(filas) == {
+        "DescuentosRecompra",
+        "DescuentosProntoPago",
+        "DescuentosVolumen",
+        "PromocionPrimeraCompra",
+        "DescuentosProducto",
+        "DescuentosDiferencialCambiario",
+    }
+    # Las tres columnas que las seis ramas repiten literalmente -- si una se
+    # desalinea (un `getattr` con el nombre viejo, por ejemplo), esto lo ve.
+    for tabla, fila in filas.items():
+        assert fila["activo"] is True, tabla
+        assert fila["aplica_a"] == "linea", tabla
+        assert isinstance(fila["descripcion"], str), tabla
+
+    # El caso puntual del 11-sep: la unidad se INFIERE (LITROS, por el builder)
+    # y la fila lo declara.
+    vol = filas["DescuentosVolumen"]
+    assert vol["unidad_medida"] == "LITROS"
+    assert vol["unidad_declarada"] is True
+    assert vol["min_unidades"] == 100.0
+
+    dif = filas["DescuentosDiferencialCambiario"]
+    assert dif["porcentaje"] == 0.35
+    assert dif["campos_especiales"]["tipo_diferencial"] == "fijo_35_ves_usd"

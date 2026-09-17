@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from cxc.config import EngineConfig
 from cxc.models import LineaOrden, OrdenVenta
 from cxc.web.app import app
+from tests import builders as b
 
 client = TestClient(app)
 
@@ -190,9 +191,8 @@ def test_detalle_teorico_conceptos_muestra_reglas_que_aplican_por_lista() -> Non
             regla_id="VOL_USD",
             marca="Sinoco",
             categoria="Comercial",
-            litros_minimo=Decimal("0"),
-            min_cantidad=Decimal("1"),
-            max_cantidad=Decimal("999"),
+            min_unidades=Decimal("1"),
+            max_unidades=Decimal("999"),
             unidad_medida="CAJAS",
             porcentaje=Decimal("0.10"),
             activo=True,
@@ -414,6 +414,11 @@ def test_detalle_pagos_usa_account_payment_directo_si_no_hay_vinculaciones() -> 
         return []
 
     mock_repo = MagicMock()
+    # La serie, para que la conversion salga de un dato. Antes este test
+    # resolvia la tasa por el default de 2019 sin decirlo; desde el
+    # 11-sep-2026 ese default es un error duro. Los valores sembrados son
+    # los mismos 36,50 / 38,00, asi que ningun monto asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
     mock_repo.get_orden.return_value = _orden()
     mock_repo.all_clientes.return_value = []
     mock_repo.lineas_de_orden.return_value = [_linea()]
@@ -503,7 +508,11 @@ def test_detalle_pagos_odoo_calcula_equivalentes_bcv_binance_y_totales() -> None
     mock_repo.all_clientes.return_value = []
     mock_repo.lineas_de_orden.return_value = [_linea()]
     mock_repo.vinculaciones_de_orden.return_value = []
-    mock_repo.all_serie_tasas.return_value = []
+    # Serie sembrada (Fase 2.1): con la lista vacía estos tests dependían del
+    # último recurso de ``get_rate_for_datetime`` -- 36,5 / 38,0, las tasas de
+    # 2019. Los valores sembrados son esos mismos, así que ningún monto
+    # asertado cambia.
+    mock_repo.all_serie_tasas.return_value = b.serie_tasas_sembrada()
 
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
@@ -536,3 +545,72 @@ def test_detalle_pagos_odoo_calcula_equivalentes_bcv_binance_y_totales() -> None
     assert totales["monto_aplicado"] == 100.0
     assert totales["equiv_usd_bcv"] == round(3650.0 / 36.5, 2)
     assert totales["equiv_usd_binance"] == round(3650.0 / 38.0, 2)
+
+
+def test_detalle_pago_de_odoo_con_fecha_sin_tasa_no_pierde_los_pagos_de_odoo() -> None:
+    """Misma familia que /api/auditoria (12-sep-2026): un solo pago conciliado en
+    Odoo cuya fecha no tiene tasa levantaba adentro del bloque, y el ``except``
+    dejaba el detalle SIN NINGÚN pago de Odoo. Ahora la fila queda, con los
+    equivalentes en ``None`` y ``sin_tasa_para_su_fecha``; el otro pago, con tasa,
+    se convierte normalmente."""
+    import cxc.web.app as app_module
+
+    mock_repo = MagicMock()
+    mock_repo.get_orden.return_value = _orden()
+    mock_repo.all_clientes.return_value = []
+    mock_repo.lineas_de_orden.return_value = [_linea()]
+    mock_repo.vinculaciones_de_orden.return_value = []  # nada local -> se mira Odoo
+    mock_repo.all_serie_tasas.return_value = []
+    mock_repo.all_tasas_historicas_auditoria.return_value = [
+        {
+            "fecha": "2026-07-02",
+            "tasa_bcv_usd": "100.0",
+            "tasa_bcv_euro": "110.0",
+            "tasa_binance_promedio_diario": "120.0",
+        }
+    ]
+    conciliados = [
+        {
+            "pago_id": "SIN",
+            "facturas": [{"so_id": "SO_DETALLE", "factura_id": "F1"}],
+            "fecha_pago": "2030-01-01",
+            "moneda": "VES",
+            "monto_original": 1000.0,
+            "monto_conciliado_usd": 10.0,
+            "residual_pago_usd": 0.0,
+            "metodo_pago": "Banco",
+        },
+        {
+            "pago_id": "CON",
+            "facturas": [{"so_id": "SO_DETALLE", "factura_id": "F2"}],
+            "fecha_pago": "2026-07-02",
+            "moneda": "VES",
+            "monto_original": 1000.0,
+            "monto_conciliado_usd": 10.0,
+            "residual_pago_usd": 0.0,
+            "metodo_pago": "Banco",
+        },
+    ]
+
+    fake_config = MagicMock()
+    fake_config.engine = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+    )
+    fake_config.odoo = MagicMock()
+    app_module.invalidar_tasas()
+    with (
+        patch("cxc.web.app.get_repo", return_value=mock_repo),
+        patch("cxc.web.app._connect", return_value=_fake_execute),
+        patch("cxc.web.app.AppConfig.from_env", return_value=fake_config),
+        patch("cxc.web.app.get_live_pagos_conciliados", return_value=conciliados),
+    ):
+        res = client.get("/api/ventas/SO_DETALLE/detalle")
+        assert res.status_code == 200, res.text
+        pagos = {p["pago_id"]: p for p in res.json()["pagos"]}
+
+    assert set(pagos) == {"SIN", "CON"}, "los dos pagos de Odoo están; antes no había ninguno"
+    assert pagos["SIN"]["sin_tasa_para_su_fecha"] is True
+    assert pagos["SIN"]["equiv_usd_bcv"] is None
+    assert pagos["CON"]["sin_tasa_para_su_fecha"] is False
+    assert pagos["CON"]["equiv_usd_bcv"] == 10.0  # 1000 / 100

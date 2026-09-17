@@ -102,6 +102,46 @@ def _match_marca(regla_marca: str, target_marca: str) -> bool:
     )
 
 
+def _excluida_por_lista(
+    regla_excluidas: str,
+    target_lista: str,
+    valid_ves: list[str] | None = None,
+    valid_usd: list[str] | None = None,
+) -> bool:
+    """True si esta regla NO debe aplicar a la lista de nacimiento dada.
+
+    Criterio del usuario (septiembre 2026): "cuando dice que aplica a las
+    listas VES, quiere decir que nunca debe aplicar a orden nacida con
+    lista USD, porque aplicaría dos veces el 35%, pero no que aplique a
+    todas las órdenes en lista VES, para eso el motor debe evaluar cada
+    caso concreto".
+
+    O sea: la configuración fija la PROHIBICIÓN, no el permiso. Lo que sí
+    corresponde a cada orden concreta lo sigue decidiendo el motor.
+
+    Acepta ids ("3,4") o los tokens LISTAS_USD / LISTAS_VES.
+    """
+    if not regla_excluidas or not str(target_lista or "").strip():
+        return False
+    excluidas = [x.strip().upper() for x in str(regla_excluidas).split(",") if x.strip()]
+    if not excluidas:
+        return False
+    target = str(target_lista).strip()
+    if target.upper() in excluidas:
+        return True
+    if "LISTAS_USD" in excluidas and target in [str(u) for u in (valid_usd or [])]:
+        return True
+    return "LISTAS_VES" in excluidas and target in [str(v) for v in (valid_ves or [])]
+
+
+def _excluida_por_moneda(regla_excluidas: str, moneda_pago: str) -> bool:
+    """True si la regla NO debe aplicar con esa moneda de pago."""
+    if not regla_excluidas or not moneda_pago:
+        return False
+    excluidas = [m.strip().upper() for m in str(regla_excluidas).split(",") if m.strip()]
+    return moneda_pago.upper() in excluidas
+
+
 def _match_lista(
     regla_listas: str,
     target_lista: str,
@@ -173,6 +213,14 @@ def descuento_vigente(
         if not _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha):
             continue
         if not _match_lista(r.listas_aplicables, lista_precios, valid_ves, valid_usd):
+            continue
+        # La exclusión gana sobre cualquier permiso: es la prohibición
+        # explícita que el usuario configura ("nunca a lista USD").
+        if _excluida_por_lista(
+            getattr(r, "listas_excluidas", ""), lista_precios, valid_ves, valid_usd
+        ):
+            continue
+        if _excluida_por_moneda(getattr(r, "monedas_excluidas", ""), moneda_pago):
             continue
         if r.monedas_aplicables and r.monedas_aplicables != "*":
             valid_monedas = [

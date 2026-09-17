@@ -300,26 +300,33 @@
                         <button id="dashboard-filter-clear" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Limpiar Filtros</button>
                     </div>
 
+                    <!-- Aviso de modo degradado (Fase 5 del blindaje). Con Odoo
+                         caido el dashboard sigue dando numeros -- litros
+                         calculados localmente, universo sin el estado en vivo,
+                         cobranza desde el espejo -- y antes los mostraba con la
+                         misma confianza que los buenos. Ahora lo dice. -->
+                    <div id="dashboard-degradado" class="card" hidden style="border-left: 4px solid #b45309; background: #fffbeb; padding: 0.7rem 0.9rem; margin-bottom: 1rem; font-size: 0.82rem; color: #92400e;"></div>
+
                     <!-- Acumulados: Ventas (Hoy / Mes / Trimestre / Año) -->
                     <div class="dashboard-kpi-row" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                         <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas de Hoy</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-hoy-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Monto de lista de la orden en Odoo, SIN los descuentos que calcula el motor. El Reporte de Saldos mide contra el teorico NETO, asi que los dos numeros no son comparables directamente.">$ Bruto (lista):</span> <strong id="dash-ventas-hoy-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-hoy-litros">0 L</strong></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Mes</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-mes-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Monto de lista de la orden en Odoo, SIN los descuentos que calcula el motor. El Reporte de Saldos mide contra el teorico NETO, asi que los dos numeros no son comparables directamente.">$ Bruto (lista):</span> <strong id="dash-ventas-mes-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-mes-litros">0 L</strong></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Trimestre</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-trimestre-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Monto de lista de la orden en Odoo, SIN los descuentos que calcula el motor. El Reporte de Saldos mide contra el teorico NETO, asi que los dos numeros no son comparables directamente.">$ Bruto (lista):</span> <strong id="dash-ventas-trimestre-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-trimestre-litros">0 L</strong></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #2563eb; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">🛍️ Ventas del Año</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>$ Bruto:</span> <strong id="dash-ventas-anio-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Monto de lista de la orden en Odoo, SIN los descuentos que calcula el motor. El Reporte de Saldos mide contra el teorico NETO, asi que los dos numeros no son comparables directamente.">$ Bruto (lista):</span> <strong id="dash-ventas-anio-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Litros:</span> <strong id="dash-ventas-anio-litros">0 L</strong></div>
                         </div>
                     </div>
@@ -328,25 +335,25 @@
                     <div class="dashboard-kpi-row" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza de Hoy</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-hoy-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Equivalente en dolares que Odoo estampo en cada pago (amount_ref). No es una conversion a la tasa BCV de nuestra serie: los dos pueden diferir, y las partidas 13 y 16 del balance de comprobacion existen para detectar ese desvio.">Total (eq. Odoo):</span> <strong id="dash-cobranza-hoy-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-hoy-ves">Bs. 0,00 ($0.00)</strong></div>
                             <div id="dash-cobranza-hoy-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Mes</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-mes-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Equivalente en dolares que Odoo estampo en cada pago (amount_ref). No es una conversion a la tasa BCV de nuestra serie: los dos pueden diferir, y las partidas 13 y 16 del balance de comprobacion existen para detectar ese desvio.">Total (eq. Odoo):</span> <strong id="dash-cobranza-mes-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-mes-ves">Bs. 0,00 ($0.00)</strong></div>
                             <div id="dash-cobranza-mes-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Trimestre</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-trimestre-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Equivalente en dolares que Odoo estampo en cada pago (amount_ref). No es una conversion a la tasa BCV de nuestra serie: los dos pueden diferir, y las partidas 13 y 16 del balance de comprobacion existen para detectar ese desvio.">Total (eq. Odoo):</span> <strong id="dash-cobranza-trimestre-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-trimestre-ves">Bs. 0,00 ($0.00)</strong></div>
                             <div id="dash-cobranza-trimestre-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
                         <div class="kpi-card card" style="border-left: 4px solid #059669; padding: 0.85rem;">
                             <div style="font-weight: 700; color: #1e293b; font-size: 0.85rem; margin-bottom: 0.5rem;">💵 Cobranza del Año</div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span>Total (Tasa BCV):</span> <strong id="dash-cobranza-anio-usd">$0.00</strong></div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.85rem;"><span title="Equivalente en dolares que Odoo estampo en cada pago (amount_ref). No es una conversion a la tasa BCV de nuestra serie: los dos pueden diferir, y las partidas 13 y 16 del balance de comprobacion existen para detectar ese desvio.">Total (eq. Odoo):</span> <strong id="dash-cobranza-anio-usd">$0.00</strong></div>
                             <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#0369a1;"><span>VES:</span> <strong id="dash-cobranza-anio-ves">Bs. 0,00 ($0.00)</strong></div>
                             <div id="dash-cobranza-anio-metodos" style="margin-top:4px; font-size:0.72rem; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px;"></div>
                         </div>
@@ -406,7 +413,7 @@
                 <section class="tray-panel card">
                     <div class="panel-header">
                         <h2>Bandeja 1: Órdenes Pendientes por Facturar</h2>
-                        <p>Órdenes sin facturar pagadas hasta su Subtotal (Agentes de Retención IVA) o Total. Indica el descuento a aplicar al facturar.</p>
+                        <p>Órdenes ya pagadas y todavía sin facturar. Todos los montos son <strong>subtotales netos, sin IVA</strong>, para que sean comparables entre sí. El teórico que se muestra es aquel <strong>por el cual la orden se dio por pagada</strong>. Al facturarse en Odoo, la orden desaparece de esta bandeja.</p>
                     </div>
                     <div class="table-wrapper">
                         <table class="cxc-table">
@@ -416,16 +423,15 @@
                                     <th>Cliente</th>
                                     <th>Agente Ret. IVA</th>
                                     <th>Fecha</th>
-                                    <th>Abono ($)</th>
-                                    <th>Subtotal Neto ($)</th>
-                                    <th>Total Motor ($)</th>
+                                    <th>Orden Neto ($)</th>
+                                    <th>Estado</th>
+                                    <th>Teórico Neto ($)</th>
                                     <th>Descuento a Aplicar ($ / %)</th>
-                                    <th>Acción</th>
-                                </tr>
+                                <th>Detalle</th></tr>
                             </thead>
                             <tbody id="bandeja1-table-body">
                                 <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes por facturar...</td>
+                                    <td colspan="8" class="table-empty">Cargando órdenes por facturar...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -435,8 +441,8 @@
                 <!-- BANDEJA 2: Órdenes Facturadas Pendientes por Nota de Crédito -->
                 <section class="tray-panel card">
                     <div class="panel-header">
-                        <h2>Bandeja 2: Órdenes Facturadas Pendientes por Nota de Crédito</h2>
-                        <p>Órdenes ya facturadas, pagadas vs algún teórico, sin descuento real pendiente -- solo diferencial cambiario o pronto pago (tolerancia normal del motor, nada que aprobar aquí).</p>
+                        <h2>Bandeja 2: Notas de Crédito por Emitir</h2>
+                        <p>Órdenes ya facturadas y pagadas, a las que hay que emitirles una Nota de Crédito para llevar lo facturado a lo pagado. Todos los montos son <strong>subtotales netos, sin IVA</strong>; la N/C se muestra también con impuesto porque es gravable. El monto ya descuenta lo que se aplicó por la orden, la factura, una N/C previa o una rebaja en el precio. Al emitirla en Odoo, la orden desaparece de esta bandeja.</p>
                     </div>
                     <div class="table-wrapper">
                         <table class="cxc-table">
@@ -445,12 +451,12 @@
                                     <th>Orden (SO)</th>
                                     <th>Cliente</th>
                                     <th>Factura Odoo</th>
-                                    <th>Abono ($)</th>
-                                    <th>Monto N/C ($)</th>
-                                    <th>% N/C</th>
-                                    <th>Concepto N/C</th>
+                                    <th>Fecha</th>
+                                    <th>Factura Neta ($)</th>
                                     <th>Estado</th>
-                                </tr>
+                                    <th>Teórico Neto ($)</th>
+                                    <th>N/C a Emitir ($ / %)</th>
+                                <th>Acción</th></tr>
                             </thead>
                             <tbody id="bandeja2-table-body">
                                 <tr>
@@ -462,101 +468,14 @@
                 </section>
 
                 <!-- BANDEJA "DESCUENTOS PENDIENTES POR APROBAR" (Fase 3, auditoría del ciclo CxC) -->
-                <section class="tray-panel card" style="border-left: 5px solid #d97706;">
+                
+
+
+                <section class="tray-panel card">
                     <div class="panel-header">
-                        <h2>Descuentos Pendientes por Aprobar</h2>
-                        <p>Órdenes facturadas donde el cliente ya pagó lo que corresponde con el descuento teórico del motor, pero ese descuento todavía no existe como NC en Odoo -- hay que aprobarlo y materializarlo allá.</p>
+                        <h2>Bandeja 3: Facturas Pendientes por Comprobante de IVA <span id="bandeja3-count-badge" class="state-badge"></span></h2>
+                        <p>Facturas de clientes Agentes de Retención donde la base imponible ya fue cobrada y falta el comprobante de IVA. Una factura que Odoo ya da por saldada no aparece acá: lo que falte es diferencia cambiaria, no impuesto por cobrar.</p>
                     </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Abono ($)</th>
-                                    <th>Descuento Pendiente ($ / %)</th>
-                                    <th>Incluye Diferencial</th>
-                                    <th>Detalle</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-descuentos-pendientes-table-body">
-                                <tr>
-                                    <td colspan="7" class="table-empty">Cargando descuentos pendientes por aprobar...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- BANDEJA "PENDIENTES POR CERRAR" (movida desde Reporte de Saldos) -->
-                <section class="tray-panel card" style="border-left: 5px solid #94a3b8;">
-                    <div class="panel-header">
-                        <h2>🧾 Pendientes por Cerrar (Saldo ≤ $1)</h2>
-                        <p>Órdenes ya pagadas (saldo residual ≤ $1 contra Teórico BCV o Lista USD), sin factura o con factura casi saldada en Odoo -- listas para cierre administrativo.</p>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Vendedor</th>
-                                    <th>Factura Odoo</th>
-                                    <th>Saldo Desc. BCV ($)</th>
-                                    <th>Saldo Desc. Lista USD ($)</th>
-                                    <th>Saldo Factura Odoo ($)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-pendientes-cerrar-table-body">
-                                <tr>
-                                    <td colspan="7" class="table-empty">Cargando pendientes por cerrar...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- BANDEJA "CANDIDATOS A CIERRE DE FACTURA" (Regla 3 de Diferencial Cambiario -- movida
-                     desde Configuración: es un reporte de trabajo diario de Facturación, no una tarea de
-                     configuración, y Configuración tiene permisos más restringidos que Facturación. -->
-                <details class="tray-panel card" style="border-left: 5px solid #2563eb;">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">🎯 Candidatos a Cierre de Factura (Diferencial Cambiario)</h2>
-                        <p style="margin:0.25rem 0 0">
-                            NO es un descuento automático -- lista órdenes candidatas según el diferencial de mercado del día
-                            (BCV vs Binance) comparado contra el diferencial máximo configurado en Configuración &gt; Descuentos &gt;
-                            Diferencial Cambiario. Gerencia decide manualmente cuánto otorgar por orden; verificar en Odoo antes
-                            de aprobar. Clic para expandir.
-                        </p>
-                    </summary>
-                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>SO</th>
-                                    <th>Cliente</th>
-                                    <th>Teórico VES</th>
-                                    <th>Pagado (eq. BCV)</th>
-                                    <th>% Pagado</th>
-                                    <th>Monto Candidato Máximo</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="dif-candidatos-table-body">
-                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
-
-                <!-- BANDEJA 3: Facturas Pendientes por Comprobante de IVA (colapsable, consulta poco frecuente) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">Bandeja 3: Facturas Pendientes por Pago / Comprobante de IVA (Agentes de Retención) <span id="bandeja3-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Facturas de clientes Agentes de Retención donde la base imponible fue cobrada y está pendiente el comprobante de IVA. Clic para expandir.</p>
-                    </summary>
                     <div class="table-wrapper" style="margin-top:1rem">
                         <table class="cxc-table">
                             <thead>
@@ -577,68 +496,42 @@
                             </tbody>
                         </table>
                     </div>
-                </details>
+                </section>
 
-                <!-- BANDEJA DE AUDITORÍA DE PRECIOS (colapsable, consulta poco frecuente) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">Bandeja de Auditoría de Precios <span id="bandeja-auditoria-precios-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes facturadas cuyo pago cubre la Factura Real en Odoo pero NO cubre ningún Teórico (Lista BS ni Lista USD) -- sospecha de facturación con precio o lista por debajo del estándar autorizado. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
+                <section class="tray-panel card">
+                    <div class="panel-header">
+                        <h2>Bandeja 4: Candidatos a Cierre de Factura (Diferencial Cambiario) <span id="bandeja4-count-badge" class="state-badge"></span></h2>
+                        <p>NO es un descuento automático. Lista órdenes que no cubrieron su teórico pero quedaron cerca, según el diferencial de mercado del día (BCV vs Binance) contra el máximo configurado. Gerencia decide manualmente cuánto otorgar; verificar en Odoo antes de aprobar. Al emitir la N/C o aprobar el descuento, la orden sale de esta lista.</p>
+                    </div>
+                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
+                    <div class="table-wrapper">
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Orden (SO)</th>
+                                    <th>SO</th>
                                     <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
+                                    <th>Teórico VES</th>
+                                    <th>Pagado (eq. BCV)</th>
+                                    <th>% Pagado</th>
+                                    <th>Monto Candidato Máximo</th>
+                                    <th></th>
                                 </tr>
                             </thead>
-                            <tbody id="bandeja-auditoria-precios-table-body">
-                                <tr>
-                                    <td colspan="9" class="table-empty">Cargando órdenes en auditoría de precios...</td>
-                                </tr>
+                            <tbody id="dif-candidatos-table-body">
+                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
                             </tbody>
                         </table>
                     </div>
-                </details>
+                </section>
+                
 
-                <!-- EN PROCESO DE PAGO (colapsable, solo visibilidad -- ya salió de CxC) -->
-                <details class="tray-panel card">
-                    <summary style="cursor:pointer; list-style:none;">
-                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
-                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
-                    </summary>
-                    <div class="table-wrapper" style="margin-top:1rem">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Orden (SO)</th>
-                                    <th>Cliente</th>
-                                    <th>Fecha</th>
-                                    <th>Facturada</th>
-                                    <th>Lista Aplicada</th>
-                                    <th>Teórico Lista BS ($)</th>
-                                    <th>Teórico Lista USD ($)</th>
-                                    <th>Venta Real ($)</th>
-                                    <th>Factura Neta Real ($)</th>
-                                    <th>Motivo</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bandeja-en-proceso-de-pago-table-body">
-                                <tr>
-                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
+                
+
+                
+
+                
+
+                
             </div>
         </div>
 
@@ -651,7 +544,7 @@
                     <div class="panel-header-row">
                         <div>
                             <h2>Priorización de Cobro por Cliente</h2>
-                            <p>Tarjetas ordenadas por color (las más urgentes arriba) y dentro de cada color por monto, de mayor a menor. El tamaño del cuadro también es proporcional al monto adeudado. El color es un ranking relativo entre los clientes con deuda (combina antigüedad y monto) -- no un límite fijo en dólares, así que se recalcula solo según la cartera actual. 🔴 Crítico (25% más urgente) · 🟠 Alto · 🟡 Medio · 🟢 Bajo (25% menos urgente). Clic en una tarjeta para filtrar la tabla de abajo por ese cliente.</p>
+                            <p>Tarjetas ordenadas por color (las más urgentes arriba) y dentro de cada color por monto, de mayor a menor. Cada tarjeta muestra el saldo contra la <strong>Venta Real</strong> de la orden en Odoo y contra el <strong>Teórico Neto de la Lista USD</strong>; la urgencia y el tamaño salen del mayor de esos dos. El color es un ranking relativo entre los clientes con deuda (combina antigüedad y monto) -- no un límite fijo en dólares, así que se recalcula solo según la cartera actual. 🔴 Crítico (25% más urgente) · 🟠 Alto · 🟡 Medio · 🟢 Bajo (25% menos urgente). Clic en una tarjeta para filtrar la tabla de abajo por ese cliente.</p>
                         </div>
                     </div>
 
@@ -857,7 +750,40 @@
                     </div>
                 </section>
             </div>
-        </div>
+        
+<!-- EN PROCESO DE PAGO -- vive en Cobranza, no en Auditoria: son ordenes
+     cuyo pago YA esta vinculado y solo falta que Odoo lo reconcilie. Es
+     seguimiento de cobranza, no un hallazgo que auditar. -->
+                <details class="tray-panel card">
+                    <summary style="cursor:pointer; list-style:none;">
+                        <h2 style="display:inline">En Proceso de Pago <span id="bandeja-en-proceso-de-pago-count-badge" class="state-badge"></span></h2>
+                        <p style="margin:0.25rem 0 0">Órdenes cuyo pago ya está vinculado (FIFO o a mano) pero Odoo todavía no lo reconcilia -- mismo criterio que el estado "En proceso de pago" de una factura en Odoo: ya salieron de Cuentas por Cobrar, solo falta la conciliación bancaria. Clic para expandir.</p>
+                    </summary>
+                    <div class="table-wrapper" style="margin-top:1rem">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Orden (SO)</th>
+                                    <th>Cliente</th>
+                                    <th>Fecha</th>
+                                    <th>Facturada</th>
+                                    <th>Lista Aplicada</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                    <th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bandeja-en-proceso-de-pago-table-body">
+                                <tr>
+                                    <td colspan="10" class="table-empty">Cargando órdenes en proceso de pago...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+                </div>
 
         <!-- Modal: Vincular Pago Manualmente (a cualquier orden del cliente, no solo la sugerida FIFO) -->
         <div id="modal-vincular-manual" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99999; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
@@ -962,6 +888,8 @@
             </div>
         </div>
 
+
+
         <!-- PESTAÑA: VENTAS (teórico vs real, por orden) -->
         <div id="tab-ventas" class="tab-panel">
             <div class="ventas-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -1057,27 +985,69 @@
         <!-- PESTAÑA 4: AUDITORÍA DE COBROS Y PRECIOS -->
         <div id="tab-auditoria" class="tab-panel">
             <div class="auditoria-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <!-- KPIs Resumen de Auditoría -->
+
+
+
+
+                <!-- Balance de comprobación: ¿todas las páginas dicen lo mismo?
+                     Pedido del usuario: "no debería haber discrepancia entre las
+                     páginas, todas tienen que cuadrar como un balance de
+                     comprobación". Cada partida enfrenta dos vistas que deben
+                     coincidir; un descuadre acá es el mismo que él vería
+                     mirando dos pantallas. -->
+                <section class="card" id="balance-comprobacion-panel" style="border-left:5px solid #1f6f5c;">
+                    <div class="panel-header" style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center; gap:1rem;">
+                        <div>
+                            <h2 style="margin:0;">Balance de comprobación</h2>
+                            <p style="margin:.15rem 0 0;">Cada partida compara dos páginas que deben decir lo mismo. Si algo no cuadra, la diferencia está acá.</p>
+                        </div>
+                        <span id="balance-resumen" style="font-weight:600; white-space:nowrap;"></span>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr><th>Partida</th><th>Vista A</th><th style="text-align:right">Valor</th><th>Vista B</th><th style="text-align:right">Valor</th><th style="text-align:right">Diferencia</th></tr>
+                            </thead>
+                            <tbody id="balance-comprobacion-body">
+                                <tr><td colspan="6" class="table-empty">Cargando balance de comprobación...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- KPIs de Auditoría. Cada tarjeta mide UNA sola cosa.
+                     Antes "Discrepancias Pendientes" sumaba tres bandejas que
+                     no comparten unidad -- filas de precio por producto (430),
+                     saldos de factura (503) y residuales de pago (239) -- y
+                     daba 1172, un numero que no correspondia a nada que se
+                     pudiera abrir. Y "Monto Discrepancia" sumaba brechas de
+                     precio por linea con diferencias de saldo, mezclando
+                     conceptos distintos en un solo dolar. -->
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Operaciones Conformes</span>
-                        <span class="kpi-value" style="color: #059669" id="audit-kpi-conformes">0</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Discrepancias Pendientes</span>
-                        <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Anomalías Aceptadas</span>
-                        <span class="kpi-value" style="color: #2563eb" id="audit-kpi-aceptadas">0</span>
-                    </div>
-                    <div class="kpi-card card">
-                        <span class="kpi-label">Monto Discrepancia Pendiente</span>
-                        <span class="kpi-value warning" id="audit-kpi-monto-discrepancia">$0.00</span>
-                    </div>
                     <div class="kpi-card card" style="border-left: 4px solid #dc2626;">
-                        <span class="kpi-label">⚠️ Órdenes con Alerta (Ventas)</span>
-                        <span class="kpi-value danger" id="audit-kpi-ventas-alertas">0</span>
+                        <span class="kpi-label">Órdenes con discrepancia de precio</span>
+                        <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
+                        <span class="kpi-sub" id="audit-kpi-discrepancias-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                    </div>
+                    <div class="kpi-card card" style="border-left: 4px solid #b45309;">
+                        <span class="kpi-label">Órdenes facturadas por debajo</span>
+                        <span class="kpi-value warning" id="audit-kpi-ventas-alertas">0</span>
+                        <span class="kpi-sub" id="audit-kpi-ventas-alertas-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                    </div>
+                    <div class="kpi-card card" style="border-left: 4px solid #6d28d9;">
+                        <span class="kpi-label">Saldos que no cuadran con Odoo</span>
+                        <span class="kpi-value" style="color:#6d28d9" id="audit-kpi-saldos">0</span>
+                        <span class="kpi-sub" id="audit-kpi-saldos-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                    </div>
+                    <div class="kpi-card card" style="border-left: 4px solid #0369a1;">
+                        <span class="kpi-label">Pagos con residual sin aplicar</span>
+                        <span class="kpi-value" style="color:#0369a1" id="audit-kpi-residual">0</span>
+                        <span class="kpi-sub" id="audit-kpi-residual-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                    </div>
+                    <div class="kpi-card card" style="border-left: 4px solid #059669;">
+                        <span class="kpi-label">Aceptadas / reabiertas</span>
+                        <span class="kpi-value" style="color:#059669" id="audit-kpi-aceptadas">0</span>
+                        <span class="kpi-sub" id="audit-kpi-aceptadas-sub" style="font-size:0.75rem; color:#64748b;"></span>
                     </div>
                 </section>
 
@@ -1096,7 +1066,7 @@
                         Alertas de Venta <span class="subtab-badge" id="auditoria-subtab-badge-alertas">0</span>
                     </button>
                     <button type="button" class="subtab-btn" data-subtab="historico" onclick="switchAuditoriaSubtab('historico')">
-                        Histórico Conforme <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
+                        Aceptadas <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
                     </button>
                 </div>
 
@@ -1104,7 +1074,7 @@
                 <div class="subtab-panel active" data-subtab-panel="discrepancias" style="display:flex; flex-direction:column; gap:1.5rem;">
                     <section class="auditoria-panel card">
                         <div class="panel-header">
-                            <h2>Discrepancias y Anomalías Pendientes (Requieren Revisión)</h2>
+                            <h2>Discrepancias de Precio y Descuento (Requieren Revisión)</h2>
                             <p>Precios inferiores a lista oficial, descuentos manuales sin regla e inconsistencias orden vs factura</p>
                         </div>
 
@@ -1116,7 +1086,7 @@
                                         <th>Factura Odoo</th>
                                         <th>Cliente</th>
                                         <th>Vendedor</th>
-                                        <th>Tipo de Anomalía</th>
+                                        <th>Tipo</th>
                                         <th>Detalle</th>
                                         <th>Esperado ($)</th>
                                         <th>Actual ($)</th>
@@ -1153,11 +1123,11 @@
                                         <th>Saldo Residual Factura Odoo ($)</th>
                                         <th>Diferencia ($)</th>
                                         <th>Causa Probable / Diagnóstico</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="discrepancias-facturas-table-body">
                                     <tr>
-                                        <td colspan="9" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
+                                        <td colspan="10" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1167,7 +1137,7 @@
                     <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
                         <div class="panel-header">
                             <h2>Pagos con Residual sin Aplicar</h2>
-                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Pagos donde Odoo aún registra un saldo sin conciliar en la línea contable del propio pago -- invisible en Ventas/Cobranza porque la factura ya cerró en $0. Revisar y aplicar manualmente en Odoo si corresponde.</p>
+                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Dos casos accionables. <strong>Saldo a favor</strong>: sobró plata de un pago ya aplicado -- el cliente tiene crédito y el FIFO lo asigna cuando aparezca una orden contra la cual aplicarlo; mientras tanto figura como saldo a favor en los reportes de CxC. <strong>Sin aplicar</strong>: ni Odoo lo aplicó ni el motor lo tiene vinculado, así que esa plata no está contada en ningún lado. Los pagos enteros que el motor ya vinculó NO salen aquí: esos son "En Proceso de Pago" y viven en Cobranza.</p>
                         </div>
 
                         <div class="table-wrapper large-table">
@@ -1176,12 +1146,12 @@
                                     <tr>
                                         <th>Pago ID</th>
                                         <th>N° Pago Odoo</th>
-                                        <th>Residual sin Aplicar ($)</th>
-                                    </tr>
+                                        <th>Cliente</th><th>Clase</th><th>Residual sin Aplicar</th>
+                                    <th>Moneda</th><th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-residual-table-body">
                                     <tr>
-                                        <td colspan="3" class="table-empty">No hay pagos con residual sin aplicar.</td>
+                                        <td colspan="4" class="table-empty">No hay pagos con residual sin aplicar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1204,11 +1174,11 @@
                                         <th>Residual (Bs.)</th>
                                         <th>Fecha</th>
                                         <th>Referencia</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="ajustes-cambio-huerfanos-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
+                                        <td colspan="7" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1230,11 +1200,11 @@
                                         <th>Importe Local (Bs.)</th>
                                         <th>Monto en Asiento (Bs.)</th>
                                         <th>Diferencia (Bs.)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="pagos-importe-local-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay pagos con importe local desincronizado.</td>
+                                        <td colspan="6" class="table-empty">No hay pagos con importe local desincronizado.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1255,11 +1225,11 @@
                                         <th>Monto Pago ($)</th>
                                         <th>Total Vinculado ($)</th>
                                         <th>Exceso ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-sobreaplicadas-table-body">
                                     <tr>
-                                        <td colspan="4" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
+                                        <td colspan="5" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1281,11 +1251,11 @@
                                         <th>Orden (SO)</th>
                                         <th>Tasa Implícita</th>
                                         <th>Tasa Real (fecha del abono)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="vinculaciones-tasa-implausible-table-body">
                                     <tr>
-                                        <td colspan="5" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
+                                        <td colspan="6" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1308,11 +1278,11 @@
                                         <th>Cant. Entregada</th>
                                         <th>Faltante</th>
                                         <th>Valor Potencial ($)</th>
-                                    </tr>
+                                    <th>Acción</th></tr>
                                 </thead>
                                 <tbody id="devolucion-no-reflejada-table-body">
                                     <tr>
-                                        <td colspan="6" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
+                                        <td colspan="7" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1374,9 +1344,9 @@
                     <section class="auditoria-panel card" id="auditoria-ventas-alertas-panel" style="border-left: 5px solid #dc2626;">
                         <div class="panel-header" style="margin-bottom: 1rem;">
                             <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
-                                <span>⚠️</span> Órdenes con Alerta: Facturado por Debajo de lo Debido
+                                <span>⚠️</span> Facturado por Debajo de lo Debido
                             </h2>
-                            <p style="color: #7f1d1d;">Órdenes YA facturadas cuyo total facturado neto quedó por debajo de la venta neta teórica + impuestos que calcula el motor -- posible faltante de facturación o descuento indebido. Ver también la página Ventas para el histórico completo.</p>
+                            <p style="color: #7f1d1d;">Une los dos criterios que antes vivían en bandejas separadas: facturado neto por debajo del teórico del motor, y pago que cubre la factura real pero ningún teórico (sospecha de lista o precio por debajo del autorizado). Se medían casi las mismas órdenes -- 39 de 41 coincidían -- y la columna Criterio dice cuál disparó. Ver también la página Ventas para el histórico completo.</p>
                         </div>
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
@@ -1389,7 +1359,7 @@
                                         <th>Venta Neta Teórica + Imp.</th>
                                         <th>Facturado Neto</th>
                                         <th>Faltante</th>
-                                    </tr>
+                                    <th>Criterio</th></tr>
                                 </thead>
                                 <tbody id="auditoria-ventas-alertas-body">
                                     <tr><td colspan="7" class="table-empty">Cargando órdenes con alerta...</td></tr>
@@ -1403,26 +1373,16 @@
                 <div class="subtab-panel" data-subtab-panel="historico" style="display:none; flex-direction:column; gap:1.5rem;">
                     <section class="auditoria-panel card">
                         <div class="panel-header">
-                            <h2>Anomalías Aceptadas y Revisadas (Historial Aprobado)</h2>
-                            <p>Registro de discrepancias ya auditadas y aceptadas por dirección/ventas que no serán modificadas en Odoo</p>
+                            <h2>Discrepancias Aceptadas (Historial con Trazabilidad)</h2>
+                            <p>Qué se aceptó, con qué motivo, quién la aceptó y cuándo. La aceptación vale mientras los montos no cambien: si cambian, la discrepancia vuelve a su bandeja marcada como reabierta.</p>
                         </div>
 
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
-                                    <tr>
-                                        <th>ID Anomalía</th>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Tipo de Anomalía</th>
-                                        <th>Discrepancia ($)</th>
-                                        <th>Motivo de Aceptación</th>
-                                        <th>Aprobado Por</th>
-                                        <th>Fecha Revisión</th>
-                                    </tr>
+                                    <tr><th>ID</th><th>Orden</th><th>Factura</th><th>Tipo de discrepancia</th><th>Qué se aceptó</th><th>Motivo</th><th>Quién la aceptó</th><th>Cuándo</th><th>Huella</th></tr>
                                 </thead>
-                                <tbody id="anomalias-aceptadas-table-body">
+                                <tbody id="discrepancias-aceptadas-table-body">
                                     <tr>
                                         <td colspan="9" class="table-empty">No hay anomalías aceptadas en el historial.</td>
                                     </tr>
@@ -1431,35 +1391,7 @@
                         </div>
                     </section>
 
-                    <section class="auditoria-panel card">
-                        <div class="panel-header">
-                            <h2>Operaciones Conformes y Conciliadas (100% Correctas)</h2>
-                            <p>Órdenes y facturas procesadas en estricta conformidad con las listas de precios y reglas del motor</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Fecha</th>
-                                        <th>Monto Original ($)</th>
-                                        <th>Dctos Aplicados ($)</th>
-                                        <th>Monto Neto Conciliado ($)</th>
-                                        <th>Estado Auditoría</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="conformes-table-body">
-                                    <tr>
-                                        <td colspan="8" class="table-empty">Cargando operaciones conformes...</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div id="conformes-pager" class="table-pager"></div>
-                    </section>
+                    
                 </div>
             </div>
         </div>
@@ -1597,6 +1529,269 @@
                 </section>
 
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
+                <!-- FORMULARIO ÚNICO DE REGLAS (paso 4 del plan de unificación).
+                     Reemplaza a los seis formularios por tabla, que ofrecían
+                     cada uno solo su propio subconjunto de campos: no se podía
+                     armar un descuento por producto con ventana de pago, aunque
+                     el motor lo soporta. Los 37 campos son un núcleo común más
+                     un bloque corto por tipo -- el desplegable decide cuál. -->
+                <section class="card" id="regla-unificada-panel" style="border-left:5px solid #1f6f5c;">
+                    <div class="panel-header" style="margin-bottom:1rem;">
+                        <h2>Nueva regla de descuento</h2>
+                        <p>Un solo formulario para los seis tipos. Elige el tipo y aparecen
+                           sus campos propios; lo de arriba vale para todas.</p>
+                    </div>
+                    <form id="form-regla-unificada" onsubmit="return false;">
+
+                        <div class="form-group">
+                            <label>Tipo de regla</label>
+                            <select id="ru-tipo" onchange="cambiarTipoRegla()">
+                                <option value="contado">Pronto pago (contado)</option>
+                                <option value="volumen">Volumen / fidelidad</option>
+                                <option value="recompra">Recompra</option>
+                                <option value="producto">Descuento por producto</option>
+                                <option value="promocion">Promoción / primera compra</option>
+                                <option value="diferencial">Diferencial cambiario</option>
+                                <option value="credito">Días de crédito</option>
+                            </select>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">Identidad y alcance</h3>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:2">
+                                <label>Descripción</label>
+                                <input type="text" id="ru-descripcion" placeholder="Ej: 8% contado Global Oil caja">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Id (vacío = nueva)</label>
+                                <input type="text" id="ru-regla-id" placeholder="automático">
+                            </div>
+                        </div>
+                        <!-- Marca, categoría y presentación NO son texto libre: salen
+                             de Odoo, igual que en los formularios por tipo. Un campo
+                             libre acá invita a escribir "Sinoco" donde el catálogo dice
+                             "SINOCO" y la regla no matchea nunca. La cascada
+                             madre -> subcategoría -> presentación es la misma que ya
+                             usan Pronto Pago y las demás. -->
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Marcas</label>
+                                <div class="m2m-ru-marca-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                    <label><input type="checkbox" class="m2m-ru-marca" value="*" checked> Todas (*)</label>
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Unidad del tramo</label>
+                                <select id="ru-unidad">
+                                    <option value="UNIDADES">Unidades / cajas</option>
+                                    <option value="LITROS">Litros</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1.6">
+                                <label title="La madre filtra qué subcategorías y presentaciones se ofrecen debajo">Categoría madre</label>
+                                <div class="m2m-ru-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="Comercial"> Comercial</label>
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="Industrial"> Industrial</label>
+                                    <label><input type="checkbox" class="m2m-ru-madre" value="*"> Todas (*)</label>
+                                </div>
+                                <label style="display:block; margin-top:8px;" title="Solo las subcategorías reales de Odoo dentro de la madre elegida">Subcategoría</label>
+                                <div class="m2m-ru-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
+                                    <small style="color:var(--text-muted)">Elige una categoría madre para ver sus subcategorías.</small>
+                                </div>
+                                <label style="display:block; margin-top:8px;" title="Envase real (1X6, Tambor, Paila) -- hay reglas que aplican por presentación, no por categoría">Presentación</label>
+                                <div class="m2m-ru-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
+                                    <small style="color:var(--text-muted)">Elige una categoría madre para ver sus presentaciones.</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Vigente desde</label>
+                                <input type="date" id="ru-desde">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Hasta <small style="font-weight:400;opacity:.7">(vacío = sin fin)</small></label>
+                                <input type="date" id="ru-hasta">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Activa</label>
+                                <input type="checkbox" id="ru-activo" checked>
+                            </div>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">A quién aplica</h3>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Listas permitidas</label>
+                                <select id="ru-listas">
+                                    <option value="*">Todas</option>
+                                    <option value="LISTAS_VES">Solo listas VES</option>
+                                    <option value="LISTAS_USD">Solo listas USD</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Nunca aplicar a <small style="font-weight:400;opacity:.7">(gana sobre lo anterior)</small></label>
+                                <select id="ru-listas-excluidas">
+                                    <option value="">— no excluir —</option>
+                                    <option value="LISTAS_USD">Órdenes nacidas en lista USD</option>
+                                    <option value="LISTAS_VES">Órdenes nacidas en lista VES</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Nunca si el pago fue en</label>
+                                <select id="ru-monedas-excluidas">
+                                    <option value="">— ninguna —</option>
+                                    <option value="USD">USD</option>
+                                    <option value="VES">VES</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Ventana de pago</label>
+                                <select id="ru-ventana-tipo">
+                                    <option value="no_aplica">No aplica</option>
+                                    <option value="entrega">Desde la entrega</option>
+                                    <option value="emision">Desde la emisión</option>
+                                    <option value="vencimiento">Desde el vencimiento</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Días de margen</label>
+                                <input type="number" id="ru-ventana-dias" value="0" min="0">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Frecuencia</label>
+                                <select id="ru-frecuencia">
+                                    <option value="recurrente">Recurrente</option>
+                                    <option value="una_vez">Una sola vez por cliente</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Requiere pago previo</label>
+                                <input type="checkbox" id="ru-pago-previo">
+                            </div>
+                        </div>
+
+                        <h3 style="margin:1.2rem 0 .5rem; font-size:.95rem;">El beneficio</h3>
+
+                        <div class="ru-bloque" data-tipos="contado volumen recompra producto">
+                            <div class="form-group" style="max-width:220px">
+                                <label>Porcentaje <small style="font-weight:400;opacity:.7">(0.08 = 8 %)</small></label>
+                                <input type="number" id="ru-porcentaje" step="0.0001" value="0.05">
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="volumen recompra credito producto">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Desde (mínimo)</label>
+                                    <input type="number" id="ru-min" step="0.0001" value="0">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Hasta (máximo)</label>
+                                    <input type="number" id="ru-max" step="0.0001" value="999999">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="volumen">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Se evalúa</label>
+                                    <select id="ru-evaluacion">
+                                        <option value="orden">Por orden</option>
+                                        <option value="acumulado">Acumulado del cliente</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Días de la ventana acumulada</label>
+                                    <input type="number" id="ru-dias-eval" value="30" min="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="promocion producto">
+                            <div class="form-group-row">
+                                <!-- Selector del catálogo, no texto libre: el motor
+                                     compara contra la referencia interna del producto,
+                                     y un id tipeado a mano deja la regla sin efecto
+                                     sin que nadie se entere. Mismo patrón que ya usa
+                                     la promoción de obsequio. -->
+                                <div class="form-group" style="flex:2">
+                                    <label>Productos de regalo <small style="font-weight:400;opacity:.7">(<span id="ru-productos-count">0</span> seleccionados)</small></label>
+                                    <input type="text" id="ru-productos-buscar" placeholder="Buscar por nombre o referencia..." style="margin-bottom:6px">
+                                    <select id="ru-productos" multiple style="min-height:90px"></select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Tipo de regalo</label>
+                                    <select id="ru-regalo">
+                                        <option value="solo_uno">Solo uno</option>
+                                        <option value="conjunto">Conjunto</option>
+                                    </select>
+                                </div>
+                            </div>
+                            </div>
+
+                        <div class="ru-bloque" data-tipos="promocion">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Cantidad de regalo</label>
+                                    <input type="number" id="ru-valor" step="0.01" value="1">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Compra mínima</label>
+                                    <input type="number" id="ru-compra-minima" step="0.01" value="0">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Categorias del descuento
+                                        <span title="Sobre QUE LINEAS se aplica el porcentaje. Vacio = todas. Es distinto del alcance de arriba, que dice que unidades cuentan para la compra minima.">(?)</span>
+                                    </label>
+                                    <select id="ru-categorias-descuento">
+                                        <option value="">Todas las lineas</option>
+                                        <option value="COMERCIAL">Solo Comercial</option>
+                                        <option value="INDUSTRIAL">Solo Industrial</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Descuento si no alcanza</label>
+                                    <input type="number" id="ru-fallback" step="0.0001" value="0">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="diferencial">
+                            <div class="form-group-row">
+                                <div class="form-group" style="flex:1">
+                                    <label>Tipo</label>
+                                    <select id="ru-tipo-dif">
+                                        <option value="fijo_35_ves_usd">Diferencial (cierra la brecha hasta lo pagado)</option>
+                                        <option value="candidato_cierre_factura">Candidatos a cierre (reporte, no descuento)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                    <label>Tope máximo <small style="font-weight:400;opacity:.7">(0.35 = 35 %)</small></label>
+                                    <input type="number" id="ru-tope" step="0.0001" value="0.35">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ru-bloque" data-tipos="credito">
+                            <div class="form-group" style="max-width:220px">
+                                <label>Días de crédito máximos</label>
+                                <input type="number" id="ru-dias-credito" value="30" min="0">
+                            </div>
+                        </div>
+
+                        <div style="margin-top:1.2rem; display:flex; gap:.6rem; align-items:center;">
+                            <button class="btn btn-primary" onclick="guardarReglaUnificada()">Guardar regla</button>
+                            <span id="ru-mensaje" style="font-size:.85rem;"></span>
+                        </div>
+                    </form>
+                </section>
+
                 <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 4px solid var(--accent-primary); background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);">
                     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                         <div>
@@ -1722,113 +1917,18 @@
                         <p>Configura porcentaje por recompras consecutivas, tramo de cajas, ventana de días y uso por mes</p>
                     </div>
 
-                    <form id="recompra-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Marcas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-rec-marca" value="GLOBAL OIL" checked> GLOBAL OIL</label>
-                                        <label><input type="checkbox" class="m2m-rec-marca" value="SINOCO"> SINOCO</label>
-                                        <label><input type="checkbox" class="m2m-rec-marca" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1.6">
-                                    <label title="Elige la(s) categoría(s) madre para filtrar que subcategorías/presentaciones se ofrecen debajo">Categoría Madre (M2M)</label>
-                                    <div class="m2m-rec-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-rec-madre" value="Comercial"> Comercial</label>
-                                        <label><input type="checkbox" class="m2m-rec-madre" value="Industrial"> Industrial</label>
-                                        <label><input type="checkbox" class="m2m-rec-madre" value="*"> Todas (*)</label>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Solo se muestran las subcategorías reales de Odoo dentro de la(s) madre elegida(s); si no eliges madre, aplica a todas">Subcategoría</label>
-                                    <div class="m2m-rec-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Presentación/envase real (ej. 1X6, Tambor, Paila) -- filtrado según la madre/subcategoría elegida">Presentación</label>
-                                    <div class="m2m-rec-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-rec-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-min-cajas" min="1" step="1" value="2" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Cajas/Unidades</label>
-                                <input type="number" id="cfg-rec-max-cajas" min="1" step="1" value="4" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de Medida</label>
-                                <select id="cfg-rec-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo Beneficio</label>
-                                <select id="cfg-rec-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.03 = 3%)</label>
-                                <input type="number" id="cfg-rec-porcentaje" step="0.0001" min="0" max="1" value="0.03" required>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Desde cuándo se cuentan los días de la ventana">Ventana de Pago</label>
-                                <select id="cfg-rec-ventana-tipo">
-                                    <option value="vencimiento" selected>Desde el vencimiento</option>
-                                    <option value="emision">Desde la emisión de la orden</option>
-                                    <option value="entrega">Desde la entrega</option>
-                                    <option value="no_aplica">No aplica</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Días de margen contados desde el punto elegido en 'Ventana de Pago' -- ej. 'Desde el vencimiento' + 3 = aplica hasta 3 días después de vencida">Días de margen</label>
-                                <input type="number" id="cfg-rec-ventana-dias" min="0" step="1" value="3" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Inicio</label>
-                                <input type="date" id="cfg-rec-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Finalización</label>
-                                <input type="date" id="cfg-rec-hasta">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-rec-requiere-pago-previo"> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
-                                <select id="cfg-rec-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-rec-descripcion" rows="2" placeholder="Ej: Aplica si el cliente paga la orden anterior completa y reordena dentro de sus días de crédito + gracia"></textarea>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Regla Recompra</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Reglas de Recompra Registradas</h3>
@@ -1861,117 +1961,18 @@
                         <p>Configura días de gracia, marcas, categorías, listas y porcentaje de pronto pago</p>
                     </div>
 
-                    <form id="pronto-pago-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Marcas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-pp-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
-                                        <label><input type="checkbox" class="m2m-pp-marca" value="SINOCO"> SINOCO</label>
-                                        <label><input type="checkbox" class="m2m-pp-marca" value="*" checked> Todas (*)</label>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1.6">
-                                    <label title="Elige la(s) categoría(s) madre para filtrar que subcategorías/presentaciones se ofrecen debajo">Categoría Madre (M2M)</label>
-                                    <div class="m2m-pp-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-pp-madre" value="Comercial"> Comercial</label>
-                                        <label><input type="checkbox" class="m2m-pp-madre" value="Industrial"> Industrial</label>
-                                        <label><input type="checkbox" class="m2m-pp-madre" value="*"> Todas (*)</label>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Solo se muestran las subcategorías reales de Odoo dentro de la(s) madre elegida(s); si no eliges madre, aplica a todas">Subcategoría</label>
-                                    <div class="m2m-pp-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Presentación/envase real (ej. 1X6, Tambor, Paila) -- filtrado según la madre/subcategoría elegida">Presentación</label>
-                                    <div class="m2m-pp-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-pp-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Compra</label>
-                                <input type="number" id="cfg-pp-min" min="0" value="0">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Compra</label>
-                                <input type="number" id="cfg-pp-max" min="0" value="999999">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de Medida</label>
-                                <select id="cfg-pp-unidad"><option value="USD" selected>USD</option><option value="CAJAS">CAJAS</option><option value="LITROS">LITROS</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo Beneficio</label>
-                                <select id="cfg-pp-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
-                                <input type="number" id="cfg-pp-porcentaje" step="0.0001" value="0.05" required>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Desde cuándo se cuentan los días de la ventana. 'Desde la entrega' es lo usual para pronto pago -- premia pagar cerca de la entrega, no cerca del vencimiento del crédito">Ventana de Pago</label>
-                                <select id="cfg-pp-ventana-tipo">
-                                    <option value="entrega" selected>Desde la entrega</option>
-                                    <option value="emision">Desde la emisión de la orden</option>
-                                    <option value="vencimiento">Desde el vencimiento</option>
-                                    <option value="no_aplica">No aplica</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Días de margen contados desde el punto elegido en 'Ventana de Pago'">Días de margen</label>
-                                <input type="number" id="cfg-pp-ventana-dias" min="0" value="3" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-pp-monedas"><option value="*" selected>Todas (*)</option><option value="USD">Solo USD</option><option value="VES">Solo VES</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-pp-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-pp-hasta">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-pp-requiere-pago-previo" checked> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
-                                <select id="cfg-pp-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-pp-descripcion" rows="2"></textarea>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Pronto Pago</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Reglas de Pronto Pago Configuradas</h3>
@@ -2004,109 +2005,18 @@
                         <p>Define descuentos basados en la cantidad acumulada o por orden comprada por marca y categoría</p>
                     </div>
 
-                    <form id="descuento-volumen-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Marcas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-vol-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
-                                        <label><input type="checkbox" class="m2m-vol-marca" value="SINOCO"> SINOCO</label>
-                                        <label><input type="checkbox" class="m2m-vol-marca" value="*" checked> Todas (*)</label>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1.6">
-                                    <label title="Elige la(s) categoría(s) madre para filtrar que subcategorías/presentaciones se ofrecen debajo">Categoría Madre (M2M)</label>
-                                    <div class="m2m-vol-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-vol-madre" value="Comercial"> Comercial</label>
-                                        <label><input type="checkbox" class="m2m-vol-madre" value="Industrial"> Industrial</label>
-                                        <label><input type="checkbox" class="m2m-vol-madre" value="*"> Todas (*)</label>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Solo se muestran las subcategorías reales de Odoo dentro de la(s) madre elegida(s); si no eliges madre, aplica a todas">Subcategoría</label>
-                                    <div class="m2m-vol-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Presentación/envase real (ej. 1X6, Tambor, Paila) -- filtrado según la madre/subcategoría elegida">Presentación</label>
-                                    <div class="m2m-vol-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-vol-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Volumen (Mínimo)</label>
-                                <input type="number" id="cfg-desc-vol-litros" min="1" required placeholder="Ej: 5000">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Volumen (Máximo)</label>
-                                <input type="number" id="cfg-desc-vol-max" min="1" value="999999">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de Medida</label>
-                                <select id="cfg-desc-vol-unidad"><option value="LITROS" selected>LITROS</option><option value="UNIDADES">UNIDADES</option><option value="USD">USD</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo Beneficio</label>
-                                <select id="cfg-desc-vol-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje Descuento (%)</label>
-                                <input type="number" id="cfg-desc-vol-porcentaje" step="0.0001" min="0" max="1" required placeholder="Ej: 0.12 para 12%">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo de Evaluación</label>
-                                <select id="cfg-desc-vol-tipo-eval" required>
-                                    <option value="orden">Por Orden Individual (Compra en 1 factura)</option>
-                                    <option value="acumulado">Acumulado en el Periodo (Suma de litros en N días)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Días Evaluación (si es Acumulado)</label>
-                                <input type="number" id="cfg-desc-vol-dias-eval" min="0" value="30">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Inicio</label>
-                                <input type="date" id="cfg-desc-vol-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Finalización</label>
-                                <input type="date" id="cfg-desc-vol-hasta">
-                            </div>
-                        </div>
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-desc-vol-requiere-pago-previo"> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
-                                <select id="cfg-desc-vol-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-desc-vol-descripcion" rows="2"></textarea>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Regla de Volumen</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Reglas de Volumen Registradas</h3>
@@ -2139,131 +2049,18 @@
                         <p>Configura obsequios de producto por compra (ej: por 12 cajas 1 de regalo), recurrencia por cliente, marca, tramo mínimo y listas</p>
                     </div>
 
-                    <form id="promo-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Marcas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-promo-marca" value="GLOBAL OIL" checked> GLOBAL OIL</label>
-                                        <label><input type="checkbox" class="m2m-promo-marca" value="SINOCO"> SINOCO</label>
-                                        <label><input type="checkbox" class="m2m-promo-marca" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1.6">
-                                    <label title="Elige la(s) categoría(s) madre para filtrar que subcategorías/presentaciones se ofrecen debajo">Categoría Madre (M2M)</label>
-                                    <div class="m2m-promo-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-promo-madre" value="Comercial"> Comercial</label>
-                                        <label><input type="checkbox" class="m2m-promo-madre" value="Industrial"> Industrial</label>
-                                        <label><input type="checkbox" class="m2m-promo-madre" value="*"> Todas (*)</label>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Solo se muestran las subcategorías reales de Odoo dentro de la(s) madre elegida(s); si no eliges madre, aplica a todas">Subcategoría</label>
-                                    <div class="m2m-promo-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Presentación/envase real (ej. 1X6, Tambor, Paila) -- filtrado según la madre/subcategoría elegida">Presentación</label>
-                                    <div class="m2m-promo-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-promo-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Frecuencia / Aplicación</label>
-                                <select id="cfg-promo-solo-primera">
-                                    <option value="false" selected>Recurrente (En cada compra que cumpla la condición, ej: 12+1)</option>
-                                    <option value="true">Solo 1 vez por Cliente (Únicamente en Primera Compra)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo de Beneficio</label>
-                                <select id="cfg-promo-tipo-beneficio" required>
-                                    <option value="producto" selected>Obsequio de Producto (99.99% descuento)</option>
-                                    <option value="porcentaje">Descuento Porcentual (ej. 2%)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Compra (Tramo Mínimo)</label>
-                                <input type="number" id="cfg-promo-compra-minima" min="0" step="1" value="12" placeholder="Ej: 12">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Compra (Tramo Máximo)</label>
-                                <input type="number" id="cfg-promo-max" min="0" step="1" value="999999">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de Medida</label>
-                                <select id="cfg-promo-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
-                            </div>
-                        </div>
-
-                        <div id="promo-productos-section" class="form-group">
-                            <label>Productos de Obsequio <small style="color:var(--text-muted)">(selecciona uno o varios)</small></label>
-                            <input type="text" id="cfg-promo-productos-buscar" placeholder="Buscar producto por nombre o referencia..." style="margin-bottom:6px">
-                            <select id="cfg-promo-productos" multiple style="min-height:90px"></select>
-                            <small style="color:var(--text-muted); margin-top:4px; display:block">Productos seleccionados: <span id="promo-productos-count">0</span></small>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div id="promo-regalo-tipo-section" class="form-group" style="flex:1">
-                                <label>Modo de Entrega del Obsequio</label>
-                                <select id="cfg-promo-regalo-tipo">
-                                    <option value="solo_uno" selected>Solo uno del catálogo (cliente elige)</option>
-                                    <option value="conjunto">Todos juntos (conjunto completo)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Descuento Fallback si no alcanza mínimo (%)</label>
-                                <input type="number" id="cfg-promo-fallback" step="0.0001" min="0" max="1" value="0.00" placeholder="Ej: 0.00 = sin fallback">
-                            </div>
-                            <div id="promo-porcentaje-section" class="form-group" style="flex:1; display:none;">
-                                <label>Porcentaje Beneficio (%)</label>
-                                <input type="number" id="cfg-promo-valor" step="0.0001" min="0" max="1" placeholder="Ej: 0.02">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Inicio</label>
-                                <input type="date" id="cfg-promo-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha de Finalización</label>
-                                <input type="date" id="cfg-promo-hasta">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-promo-requiere-pago-previo"> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
-                                <select id="cfg-promo-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-promo-descripcion" rows="2"></textarea>
-                        </div>
-
-                        <button type="submit" class="btn-primary">Registrar Regla de Obsequio / Promoción</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Promociones y Reglas de Obsequio Registradas</h3>
@@ -2296,110 +2093,18 @@
                         <p>Promociona SKUs específicos fijando marcas, categorías, tramos, porcentaje y vigencia commercial</p>
                     </div>
 
-                    <form id="producto-promo-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE MANY-TO-MANY (MARCAS, CATEGORÍAS Y LISTAS)</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Marcas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-prod-marca" value="GLOBAL OIL"> GLOBAL OIL</label>
-                                        <label><input type="checkbox" class="m2m-prod-marca" value="SINOCO"> SINOCO</label>
-                                        <label><input type="checkbox" class="m2m-prod-marca" value="*" checked> Todas (*)</label>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1.6">
-                                    <label title="Elige la(s) categoría(s) madre para filtrar que subcategorías/presentaciones se ofrecen debajo">Categoría Madre (M2M)</label>
-                                    <div class="m2m-prod-madre-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-prod-madre" value="Comercial"> Comercial</label>
-                                        <label><input type="checkbox" class="m2m-prod-madre" value="Industrial"> Industrial</label>
-                                        <label><input type="checkbox" class="m2m-prod-madre" value="*"> Todas (*)</label>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Solo se muestran las subcategorías reales de Odoo dentro de la(s) madre elegida(s); si no eliges madre, aplica a todas">Subcategoría</label>
-                                    <div class="m2m-prod-sub-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus subcategorías.</small>
-                                    </div>
-                                    <label style="display:block; margin-top:8px;" title="Presentación/envase real (ej. 1X6, Tambor, Paila) -- filtrado según la madre/subcategoría elegida">Presentación</label>
-                                    <div class="m2m-prod-pres-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; min-height:20px;">
-                                        <small style="color:var(--text-muted)">Elige una categoría madre arriba para ver sus presentaciones.</small>
-                                    </div>
-                                </div>
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-prod-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:2">
-                                <label>Productos / SKUs (selecciona o deja vacio para todos)</label>
-                                <select id="cfg-prod-select" multiple style="min-height:80px"></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Mínimo Compra</label>
-                                <input type="number" id="cfg-prod-min" min="0" value="0">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Máximo Compra</label>
-                                <input type="number" id="cfg-prod-max" min="0" value="999999">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Unidad de Medida</label>
-                                <select id="cfg-prod-unidad"><option value="CAJAS" selected>CAJAS</option><option value="LITROS">LITROS</option><option value="USD">USD</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo Beneficio</label>
-                                <select id="cfg-prod-tipo-benef"><option value="descuento" selected>Descuento (%)</option></select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje (%) (ej: 0.05 = 5%)</label>
-                                <input type="number" id="cfg-prod-porcentaje" step="0.0001" value="0.05" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-prod-monedas"><option value="*" selected>Todas (*)</option><option value="USD">Solo USD</option><option value="VES">Solo VES</option></select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-prod-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-prod-hasta">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-prod-requiere-pago-previo"> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="Línea: el % aplica solo sobre las líneas que hacen match. Subtotal: el mismo % aplica sobre el subtotal completo de la orden">Aplica a</label>
-                                <select id="cfg-prod-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-prod-descripcion" rows="2"></textarea>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Promoción Producto</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Promociones por Producto Registradas</h3>
@@ -2438,85 +2143,18 @@
                         </p>
                     </div>
 
-                    <form id="diferencial-form" class="cxc-form">
-                        <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
-                            <div style="font-weight:700; color:#1e293b; margin-bottom:8px; font-size:0.85rem;">🎯 ALCANCE (LISTAS) -- este descuento se calcula por abono, no por producto/línea, así que no tiene marca/categoría</div>
-                            <div class="form-group-row">
-                                <div class="form-group" style="flex:1">
-                                    <label>Listas Aplicables (M2M)</label>
-                                    <div id="m2m-dif-listas-box" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                                        <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_VES" checked> Listas VES (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-dif-lista" value="LISTAS_USD"> Listas USD (Mapeo)</label>
-                                        <label><input type="checkbox" class="m2m-dif-lista" value="*"> Todas (*)</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:2">
-                                <label>Nombre del Descuento</label>
-                                <input type="text" id="cfg-dif-nombre" placeholder="Ej: 35% Fijo por Pago USD en Lista VES" required>
-                            </div>
-                            <div class="form-group" style="flex:2">
-                                <label>Tipo de Diferencial</label>
-                                <select id="cfg-dif-tipo-diferencial" required>
-                                    <option value="fijo_35_ves_usd">35% Fijo (Factura Lista VES pagada en USD)</option>
-                                    <option value="equiparar_binance">Equiparar Tasa Binance N/C (Pagos acumulados VES a Binance vs Lista USD)</option>
-                                    <option value="candidato_cierre_factura">Candidatos a Cierre de Factura (reporte, activa/desactiva)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Tipo de Cálculo</label>
-                                <select id="cfg-dif-tipo-calculo" required>
-                                    <option value="fijo">Porcentaje Fijo</option>
-                                    <option value="variable">Diferencial Variable (Dinamico)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Porcentaje Fijo (%) (si aplica)</label>
-                                <input type="number" id="cfg-dif-porcentaje-fijo" step="0.0001" value="0.35">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Monedas Aplicables</label>
-                                <select id="cfg-dif-monedas"><option value="*" selected>Todas (*)</option><option value="USD">USD</option><option value="VES">VES</option></select>
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Inicio</label>
-                                <input type="date" id="cfg-dif-desde" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Fecha Finalización</label>
-                                <input type="date" id="cfg-dif-hasta">
-                            </div>
-                        </div>
-
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label title="Si está marcado, esta regla solo aplica una vez la orden/factura ya tiene al menos un pago vinculado">
-                                    <input type="checkbox" id="cfg-dif-requiere-pago-previo" checked> Requiere pago previo
-                                </label>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label title="No aplica para este tipo de descuento (se calcula por abono, no por línea) -- se guarda por consistencia de esquema">Aplica a</label>
-                                <select id="cfg-dif-aplica-a">
-                                    <option value="linea" selected>Línea de producto</option>
-                                    <option value="subtotal">Subtotal de la orden</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-dif-descripcion" rows="2"></textarea>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Regla Diferencial</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Reglas de Diferencial Cambiario Registradas</h3>
@@ -2556,31 +2194,18 @@
                         <p>Rangos de litros de la orden → máximo de días de crédito que Odoo debería otorgar. Uso EXCLUSIVO: genera la alerta "Revisar" en Ventas cuando el plazo real supera este máximo -- NO alimenta la fórmula de Recompra (esa usa el plazo real de la orden anterior).</p>
                     </div>
 
-                    <form id="dias-credito-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>ID de la regla</label>
-                                <input type="text" id="cfg-dc-regla-id" placeholder="Ej: CREDITO_0_500L" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Litros Mínimo</label>
-                                <input type="number" id="cfg-dc-litros-min" min="0" step="0.01" value="0" required>
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Litros Máximo (vacío = sin tope)</label>
-                                <input type="number" id="cfg-dc-litros-max" min="0" step="0.01">
-                            </div>
-                            <div class="form-group" style="flex:1">
-                                <label>Días de Crédito Máximo</label>
-                                <input type="number" id="cfg-dc-dias-max" min="0" required>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Descripción (cómo funciona esta regla)</label>
-                            <textarea id="cfg-dc-descripcion" rows="2" placeholder="Ej: De 0 a 500 Lts: máximo 21 días de crédito."></textarea>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Regla de Días de Crédito</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Reglas de Días de Crédito Registradas</h3>
@@ -2608,34 +2233,18 @@
                         <p>Define pares de descuentos/promociones que no pueden aplicarse simultáneamente. Se aplica el de mayor valor.</p>
                     </div>
 
-                    <form id="exclusion-form" class="cxc-form">
-                        <div class="form-group-row">
-                            <div class="form-group" style="flex:1">
-                                <label>Descuento A</label>
-                                <select id="cfg-excl-tipo-a" required>
-                                    <option value="">Seleccione...</option>
-                                    <option value="primera_compra">Primera Compra</option>
-                                    <option value="recurrencia">Recompra</option>
-                                    <option value="contado">Pronto Pago</option>
-                                    <option value="volumen">Volumen</option>
-                                    <option value="bcv_completo">Diferencial BCV</option>
-                                </select>
-                            </div>
-                            <div style="display:flex;align-items:flex-end;padding-bottom:8px;font-size:1.2rem;color:var(--text-muted)">⟷</div>
-                            <div class="form-group" style="flex:1">
-                                <label>Descuento B (excluyente con A)</label>
-                                <select id="cfg-excl-tipo-b" required>
-                                    <option value="">Seleccione...</option>
-                                    <option value="primera_compra">Primera Compra</option>
-                                    <option value="recurrencia">Recompra</option>
-                                    <option value="contado">Pronto Pago</option>
-                                    <option value="volumen">Volumen</option>
-                                    <option value="bcv_completo">Diferencial BCV</option>
-                                </select>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn-primary">Registrar Exclusión</button>
-                    </form>
+                    <!-- El formulario de esta familia se retiro el 11-sep-2026.
+                         Habia dos maneras de guardar la misma regla y eso era una
+                         trampa: el formulario unico (arriba, "Reglas de Descuento")
+                         cubre las nueve familias campo por campo -- verificado, y las
+                         cinco brechas que aparecian eran renombres. La tabla de abajo
+                         sigue listando las reglas: lo que se fue es el editor viejo,
+                         no la vista. -->
+                    <p class="panel-nota" style="padding:0.75rem 1rem;background:#f1f5f9;border-left:3px solid #0284c7;border-radius:6px;font-size:0.88rem;color:#334155;">
+                        Para crear o editar estas reglas usa el formulario
+                        <strong>Reglas de Descuento</strong>, que es el unico editor.
+                        Abajo siguen listadas las reglas vigentes.
+                    </p>
 
                     <div class="mini-table-wrapper">
                         <h3>Exclusiones Configuradas</h3>
@@ -2703,6 +2312,7 @@
 
                     <form id="pricelist-mapeo-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="savePricelistMapeo(event)">
                         <div class="table-wrapper" style="max-height:420px; overflow-y:auto;">
+                        <div id="pricelist-huecos" style="margin-bottom:0.75rem;"></div>
                             <table class="cxc-table mini">
                                 <thead>
                                     <tr>
@@ -2711,7 +2321,7 @@
                                         <th>Moneda</th>
                                         <th>Categoría</th>
                                         <th>Vigente</th>
-                                    </tr>
+                                    <th title="Desde cuándo esta lista fue la referencia de su grupo">Vigente desde</th><th title="Vacío = sigue siendo la referencia">Hasta</th></tr>
                                 </thead>
                                 <tbody id="pricelist-mapeo-table-body">
                                     <tr><td colspan="5" class="table-empty">Cargando listas de Odoo...</td></tr>
@@ -2937,6 +2547,19 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20260825_1"></script>
+    <script src="/static/app.js?v=20260825_2"></script>
+
+        <!-- Detalle de reglas: de qué regla viene cada peso del descuento
+             sugerido. Antes el motor solo guardaba el "origen" y con cinco
+             reglas de volumen activas no se podía auditar. -->
+        <div id="modal-detalle-reglas" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:1000; align-items:center; justify-content:center; padding:1rem;">
+            <div class="card" style="max-width:900px; width:100%; max-height:85vh; overflow:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <h3 style="margin:0;">Desglose del descuento por regla</h3>
+                    <button class="btn btn-secondary" onclick="cerrarDetalleReglas()" style="padding:0.3rem 0.7rem;">✕</button>
+                </div>
+                <div id="modal-detalle-reglas-body"></div>
+            </div>
+        </div>
 </body>
 </html>

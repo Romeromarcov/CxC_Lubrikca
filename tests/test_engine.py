@@ -7,6 +7,7 @@ alcanzado → candidata a cierre, BCV-completo, y día hábil con feriado.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -382,7 +383,56 @@ def test_diferencial_regla1_fijo_pago_100pct_usd() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
+                tipo_diferencial="fijo_35_ves_usd",
+                porcentaje_fijo=Decimal("0.35"),
+            )
+        ],
+    )
+    res = calcular_factura(inp)
+    bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
+    # El 35 % pasó a ser un TECHO, no un monto plano (cambio de regla
+    # aprobado por el usuario, septiembre 2026, tras revisar S00010). Acá
+    # las dos listas valen lo mismo (P1@BCV = P1@USD = 100) y el cliente
+    # pagó los 100 completos: no queda hueco que cerrar, así que no hay
+    # diferencial. Con la brecha estructural real (~35 % entre lista VES y
+    # lista USD) el techo y el hueco coinciden y el descuento sale entero
+    # -- eso lo cubre test_diferencial_fijo_se_topa_al_hueco_real.
+    assert bcv == []
+    # Y sin descuento no hay nada que revisar: requiere_revision se
+    # levantaba justamente por el diferencial.
+    assert res.requiere_revision is False
+
+
+def test_diferencial_fijo_se_topa_al_hueco_real() -> None:
+    """Con brecha entre listas, el diferencial sale hasta cerrar el hueco.
+
+    Misma orden que arriba pero con la lista USD a 65 (la brecha real de
+    producción): el cliente paga los 65 del teórico USD sobre una lista VES
+    de 100, así que el hueco es 35 -- que además coincide con el techo del
+    35 %.
+    """
+    from cxc.models import DescuentoDiferencialCambiario
+
+    orden = b.orden(primera=False, lista="BCV")
+    linea = b.linea(marca="Sinoco", categoria="*", precio="100")
+    metodo_usd = b.metodo("MU", moneda=Moneda.USD, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="65",
+        moneda_abono=Moneda.USD,
+        tipo_tasa_abono=TipoTasa.BCV,
+        tasa_bcv="36.0",
+        tasa_binance="40.0",
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea],
+        abonos=[(vinc, metodo_usd)],
+        resolver=_resolver(**{"P1@BCV": "100", "P1@USD": "65"}),
+        valid_ves=["BCV"],
+        valid_usd=["USD"],
+        descuentos_diferencial=[
+            DescuentoDiferencialCambiario(
+                regla_id="DIF_MAX",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             )
@@ -391,8 +441,7 @@ def test_diferencial_regla1_fijo_pago_100pct_usd() -> None:
     res = calcular_factura(inp)
     bcv = [d for d in res.descuentos_detalle if d.origen == "bcv_completo"]
     assert len(bcv) == 1
-    assert bcv[0].monto == Decimal("35.00")  # 35% de 100
-    assert res.requiere_revision is True
+    assert bcv[0].monto == Decimal("35.00")
 
 
 def test_diferencial_regla1_no_aplica_con_pago_mixto_sin_regla_equiparar() -> None:
@@ -421,7 +470,6 @@ def test_diferencial_regla1_no_aplica_con_pago_mixto_sin_regla_equiparar() -> No
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             )
@@ -640,9 +688,20 @@ def test_primera_compra_sin_promo_vigente_no_da_nc() -> None:
     assert res.ncs_calculadas == Decimal("0.00")
 
 
-def test_primera_compra_industrial_sin_promos_aplica_2pct() -> None:
-    # First purchase with Industrial products and no active promo
-    # should get 2% discount on Industrial lines
+def test_primera_compra_sin_promos_no_descuenta_nada() -> None:
+    """Sin ninguna promoción configurada ya NO hay descuento.
+
+    Este test tuvo tres vidas y las tres cuentan la misma historia desde más
+    cerca. Asertaba 3,00 (el 2 % de la línea Industrial) porque el respaldo
+    cableado apuntaba a la categoría equivocada. Pasó a 2,00 al corregirla a
+    Comercial. Y ahora es **cero**, porque el respaldo se retiró: el usuario
+    decidió el 11-sep-2026 «crea la regla nueva y elimina la vieja».
+
+    El 2 % sigue existiendo, pero como **regla de la tabla**
+    (``PRIMERA_COMPRA_COMERCIAL_2PCT``) y no como un valor que el motor regala
+    cuando no encuentra configuración. Sin regla cargada no hay descuento, que es
+    justo lo que se buscaba: que sea una decisión y no una ausencia.
+    """
     orden = b.orden(primera=True, lista="BCV")
     linea_ind = b.linea(
         linea_id="L1",
@@ -670,11 +729,39 @@ def test_primera_compra_industrial_sin_promos_aplica_2pct() -> None:
         abonos=[(vinc, metodo)],
         resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),  # no promos configured
     )
-    res = calcular_factura(inp)
-    # Should get 2% of Industrial line (150) = 3.00 NC (nothing on Comercial line)
-    assert res.ncs_calculadas == Decimal("3.00")
-    origenes = {d.origen for d in res.descuentos_detalle}
-    assert "primera_compra" in origenes
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0"), (
+        "sin promoción configurada no hay descuento: el respaldo cableado se retiró"
+    )
+
+
+def test_primera_compra_solo_industrial_no_recibe_nada() -> None:
+    """El caso de las 85 órdenes, y el que más plata mueve.
+
+    De las 119 órdenes que recibieron el respaldo en la copia de producción,
+    **85 no tienen ni una línea Comercial**. Con el respaldo apuntando a
+    Industrial recibían un descuento que no les correspondía; ahora reciben
+    cero. Es la mitad del hallazgo: la base baja un 64 %.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    linea_ind = b.linea(
+        linea_id="L1",
+        producto="P1",
+        marca="Sinoco",
+        categoria="Industrial",
+        precio="150",
+        cantidad="1",
+    )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=[linea_ind],
+        abonos=[(vinc, metodo)],
+        resolver=_resolver(**{"P1@BCV": "150"}),
+    )
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0")
 
 
 def test_orden_con_devolucion_requiere_revision() -> None:
@@ -884,7 +971,8 @@ def test_descuento_por_volumen_litros() -> None:
         regla_id="VOL1",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
     )
@@ -926,8 +1014,8 @@ def test_descuento_por_volumen_unidades_cajas() -> None:
         regla_id="VOL_SINOCO_PAILA_1",
         marca="SINOCO",
         categoria="PAILA",
-        min_cantidad=Decimal("10"),
-        max_cantidad=Decimal("19"),
+        min_unidades=Decimal("10"),
+        max_unidades=Decimal("19"),
         unidad_medida="CAJAS",
         porcentaje=Decimal("0.0452"),
         activo=True,
@@ -945,7 +1033,7 @@ def test_descuento_por_volumen_unidades_cajas() -> None:
     assert res.total_descuentos == Decimal("45.20")
     assert res.total_motor == Decimal("954.80")
 
-    # Over max_cantidad (25 > 19) should not match VOL_SINOCO_PAILA_1
+    # Over max_unidades (25 > 19) should not match VOL_SINOCO_PAILA_1
     linea2 = b.linea(
         producto="SINOCO SAE 20W-50 (PAILA)",
         marca="Sinoco",
@@ -985,7 +1073,8 @@ def test_descuento_volumen_aplica_a_subtotal() -> None:
         regla_id="VOL_SUBTOTAL_1",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         aplica_a="subtotal",
@@ -1032,7 +1121,8 @@ def test_descuento_volumen_subtotal_no_duplica_entre_grupos() -> None:
         regla_id="VOL_WILDCARD",
         marca="*",
         categoria="*",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         aplica_a="subtotal",
@@ -1076,8 +1166,8 @@ def test_recompra_aplica_a_subtotal_deduplica_por_regla() -> None:
         regla_id="REC_SUBTOTAL",
         marca="*",
         categoria="*",
-        min_cajas=1,
-        max_cajas=999,
+        min_unidades=1,
+        max_unidades=999,
         porcentaje=Decimal("0.05"),
         aplica_a="subtotal",
     )
@@ -1379,13 +1469,11 @@ def test_diferencial_regla2_equiparar_sin_exceder_tope() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.50"),
             ),
             DescuentoDiferencialCambiario(
                 regla_id="DIF_EQ",
-                nombre="Equiparar",
                 tipo_diferencial="equiparar_binance",
             ),
         ],
@@ -1396,7 +1484,11 @@ def test_diferencial_regla2_equiparar_sin_exceder_tope() -> None:
     assert res.requiere_revision is True
     assert res.total_descuentos == Decimal("22.11")
     assert res.total_motor == Decimal("36.35")
-    assert any("Equiparación" in d.descripcion for d in res.descuentos_detalle)
+    # El texto dice "Diferencial Cambiario (tope X%, hueco hasta lo
+    # pagado)" desde que las dos ramas se unificaron en una sola regla
+    # (septiembre 2026). Los montos de arriba son los mismos que antes de
+    # unificar, que es lo que importa.
+    assert any("Diferencial Cambiario" in d.descripcion for d in res.descuentos_detalle)
 
 
 def test_diferencial_regla2_equiparar_topada_al_diferencial_maximo() -> None:
@@ -1439,12 +1531,11 @@ def test_diferencial_regla2_equiparar_topada_al_diferencial_maximo() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.35"),
             ),
             DescuentoDiferencialCambiario(
-                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+                regla_id="DIF_EQ", tipo_diferencial="equiparar_binance"
             ),
         ],
     )
@@ -1492,12 +1583,11 @@ def test_diferencial_regla2_bloqueada_por_pago_huerfano() -> None:
         descuentos_diferencial=[
             DescuentoDiferencialCambiario(
                 regla_id="DIF_MAX",
-                nombre="Diferencial máximo",
                 tipo_diferencial="fijo_35_ves_usd",
                 porcentaje_fijo=Decimal("0.50"),
             ),
             DescuentoDiferencialCambiario(
-                regla_id="DIF_EQ", nombre="Equiparar", tipo_diferencial="equiparar_binance"
+                regla_id="DIF_EQ", tipo_diferencial="equiparar_binance"
             ),
         ],
         cliente_tiene_pagos_huerfanos=True,
@@ -1596,8 +1686,13 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
 
         def all_vinculaciones(self):
             # ``run_all`` la consulta para saber qué órdenes facturadas
-            # tienen abono CONCILIADO (y por tanto NC pendiente). Este
-            # fake solo ejercita el filtro de canceladas.
+            # tienen abono (y por tanto NC pendiente). Este fake solo
+            # ejercita el filtro de canceladas.
+            return []
+
+        def all_bandeja(self):
+            # También la consulta, para recalcular órdenes cuya fila vieja
+            # quedaría mintiendo si perdieron su abono.
             return []
 
         def all_lineas(self):
@@ -1608,6 +1703,9 @@ def test_runner_run_all_filters_cancelled_orders() -> None:
 
         def update_vinculaciones(self, vincs):
             pass
+
+        def update_vinculaciones_omitiendo_invalidas(self, vincs):
+            return []
 
     repo = DummyRepo()
     runner = EngineRunner(repo, None, None)
@@ -1686,7 +1784,8 @@ def test_conceptos_descuento_teorico_respeta_listas_aplicables() -> None:
         regla_id="VOL_USD_ONLY",
         marca="Sinoco",
         categoria="Comercial",
-        litros_minimo=Decimal("200"),
+        unidad_medida="LITROS",
+        min_unidades=Decimal("200"),
         porcentaje=Decimal("0.05"),
         activo=True,
         listas_aplicables="USD",
@@ -1831,7 +1930,7 @@ def test_descuento_por_volumen_acumulado_suma_historial_del_cliente() -> None:
         regla_id="VOL_ACUM",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="acumulado",
@@ -1879,7 +1978,7 @@ def test_descuento_por_volumen_acumulado_respeta_ventana_dias_evaluacion() -> No
         regla_id="VOL_ACUM2",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="acumulado",
@@ -1921,7 +2020,7 @@ def test_descuento_por_volumen_orden_ignora_historial() -> None:
         regla_id="VOL_ORDEN",
         marca="Global Oil",
         categoria="Comercial",
-        litros_minimo=Decimal("2500"),
+        min_unidades=Decimal("2500"),
         unidad_medida="LITROS",
         porcentaje=Decimal("0.05"),
         tipo_evaluacion="orden",
@@ -2064,8 +2163,8 @@ def test_descuento_volumen_por_subcategoria_especifica() -> None:
         regla_id="VOL_ELITE",
         marca="Global Oil",
         categoria="Elite",
-        min_cantidad=Decimal("5"),
-        max_cantidad=Decimal("999999"),
+        min_unidades=Decimal("5"),
+        max_unidades=Decimal("999999"),
         unidad_medida="CAJAS",
         porcentaje=Decimal("0.10"),
         activo=True,
@@ -2104,8 +2203,8 @@ def test_descuento_volumen_regla_especifica_no_duplica_con_regla_amplia() -> Non
         regla_id="VOL_COMERCIAL",
         marca="Global Oil",
         categoria="Comercial",
-        min_cantidad=Decimal("5"),
-        max_cantidad=Decimal("999999"),
+        min_unidades=Decimal("5"),
+        max_unidades=Decimal("999999"),
         unidad_medida="CAJAS",
         porcentaje=Decimal("0.05"),
         activo=True,
@@ -2114,8 +2213,8 @@ def test_descuento_volumen_regla_especifica_no_duplica_con_regla_amplia() -> Non
         regla_id="VOL_ELITE",
         marca="Global Oil",
         categoria="Elite",
-        min_cantidad=Decimal("5"),
-        max_cantidad=Decimal("999999"),
+        min_unidades=Decimal("5"),
+        max_unidades=Decimal("999999"),
         unidad_medida="CAJAS",
         porcentaje=Decimal("0.10"),
         activo=True,
@@ -2157,8 +2256,8 @@ def test_descuento_volumen_por_presentacion() -> None:
         regla_id="VOL_GARRAFA",
         marca="Sinoco",
         categoria="GARRAFA",
-        min_cantidad=Decimal("2"),
-        max_cantidad=Decimal("999999"),
+        min_unidades=Decimal("2"),
+        max_unidades=Decimal("999999"),
         unidad_medida="CAJAS",
         porcentaje=Decimal("0.07"),
         activo=True,
@@ -2173,3 +2272,222 @@ def test_descuento_volumen_por_presentacion() -> None:
     res = calcular_factura(inp)
     # Solo la linea GARRAFA (3 * 200 = 600) al 7% = 42.
     assert res.total_descuentos == Decimal("42.00")
+
+
+# --- sobre qué líneas aplica una regla su porcentaje (11-sep-2026) ----------
+
+
+def test_una_regla_sin_categorias_de_descuento_aplica_a_todas_las_lineas() -> None:
+    """El default, y es el comportamiento de siempre.
+
+    El campo nace vacío a propósito: la rama de reglas configuradas sumaba todas
+    las líneas sin excepción, así que una regla vieja no puede cambiar de monto
+    al migrar.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    inp = _inputs(
+        orden=orden,
+        lineas=lineas,
+        abonos=[(vinc, metodo)],
+        promociones=[
+            b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+        ],
+        resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+    )
+    # 2 % de (150 + 100) = 5,00
+    assert calcular_factura(inp).ncs_calculadas == Decimal("5.00")
+
+
+def test_una_regla_de_solo_comercial_no_toca_las_lineas_industrial() -> None:
+    """El campo que hacía falta para configurar el 2 % sin ensanchar la base.
+
+    Es la diferencia que motivó el campo: el respaldo cableado suma solo las
+    líneas Comercial, y sin esto configurarlo como regla de la tabla sumaba las
+    dos categorías. Medido: 122 órdenes de la copia de producción tienen líneas
+    de ambas, así que la brecha no es teórica.
+    """
+    orden = b.orden(primera=True, lista="BCV")
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    promo = b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+    promo.categorias_descuento = "COMERCIAL"
+    inp = _inputs(
+        orden=orden,
+        lineas=lineas,
+        abonos=[(vinc, metodo)],
+        promociones=[promo],
+        resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+    )
+    # 2 % de 100, la Comercial. La Industrial no entra.
+    assert calcular_factura(inp).ncs_calculadas == Decimal("2.00")
+
+
+def test_la_regla_configurada_da_lo_que_daba_el_respaldo_retirado() -> None:
+    """La equivalencia que permitió retirar el respaldo, fijada con su cifra.
+
+    Antes de retirarlo se corrió el A/B sobre las 119 órdenes reales: el respaldo
+    daba 742,24 USD y la regla configurada daba 742,24 USD, con cero órdenes que
+    difirieran. Por eso se pudo eliminar sin mover un peso.
+
+    El respaldo ya no existe, así que la comparación no se puede rehacer contra
+    él. Lo que queda fijado para siempre es la mitad verificable: la regla aplica
+    el 2 % **solo sobre las líneas Comercial**, que es lo que el respaldo hacía.
+    Si alguien le saca el ``categorias_descuento``, el monto cambia y el test lo
+    dice.
+    """
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Industrial",
+                precio="150", cantidad="1"),
+        b.linea(linea_id="L2", producto="P2", marca="Sinoco", categoria="Comercial",
+                precio="100", cantidad="1"),
+    ]
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+
+    def correr(promociones):
+        return calcular_factura(
+            _inputs(
+                orden=b.orden(primera=True, lista="BCV"),
+                lineas=lineas,
+                abonos=[(vinc, metodo)],
+                promociones=promociones,
+                resolver=_resolver(**{"P1@BCV": "150", "P2@BCV": "100"}),
+            )
+        ).ncs_calculadas
+
+    promo = b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+    promo.categorias_descuento = "COMERCIAL"
+    # 2 % de la línea Comercial (100). La Industrial (150) no entra, igual que
+    # hacía el respaldo retirado.
+    assert correr([promo]) == Decimal("2.00")
+    # Y sin ninguna regla, cero: el respaldo cableado ya no existe.
+    assert correr([]) == Decimal("0")
+
+
+def test_el_campo_acepta_varias_categorias_y_los_comodines() -> None:
+    from cxc.engine.discounts import _lineas_del_descuento
+
+    class _P:
+        regla_id = "R1"
+
+        def __init__(self, cats):
+            self.categorias_descuento = cats
+
+    class _L:
+        def __init__(self, cat):
+            self.categoria = cat
+
+    lineas = [_L("Comercial"), _L("Industrial"), _L("")]
+    assert len(_lineas_del_descuento([_P("comercial, industrial")], "R1", lineas)) == 2
+    assert len(_lineas_del_descuento([_P("*")], "R1", lineas)) == 3
+    assert len(_lineas_del_descuento([_P("TODAS")], "R1", lineas)) == 3
+    assert len(_lineas_del_descuento([_P("")], "R1", lineas)) == 3
+    # una regla que no está en la lista no filtra nada: sin saber cuál puso el
+    # porcentaje, filtrar sería adivinar.
+    assert len(_lineas_del_descuento([_P("COMERCIAL")], "OTRA", lineas)) == 3
+
+
+# --- La regla del 2 % de primera compra, tal como la enunció el usuario ----------
+#
+# Quiz del 12-sep-2026, pregunta 6: «El 2 % solo aplica para primeras compras de
+# dos maneras: 1. si no aplica para obsequio; 2. si la compra no fue dentro del
+# período de vigencia del obsequio». Es exactamente lo que ``_calcular_promocion``
+# hace desde siempre --obsequio si alguno califica, si no el porcentaje-- y la
+# regla configurable que el usuario se preguntó si crear ya existe:
+# ``PRIMERA_COMPRA_COMERCIAL_2PCT``, en la tabla. Lo que faltaba era un test que
+# fijara las dos maneras, para que la regla no dependa de que alguien lea el código.
+
+
+def _primera_compra_con(promociones, fecha_orden=None, con_regalo_en_la_orden=True):
+    orden = b.orden(primera=True, lista="BCV")
+    if fecha_orden is not None:
+        orden = replace(orden, fecha=fecha_orden)
+    lineas = [
+        b.linea(linea_id="L1", producto="P1", marca="Sinoco", categoria="Comercial", precio="100")
+    ]
+    if con_regalo_en_la_orden:
+        # El obsequio en la orden sin descontar: así la NC del obsequio es visible
+        # (12,50) y se distingue del 2 % (2,00). Sin la línea del regalo, el
+        # obsequio "aplica" igual pero su NC es cero (ver test_primera_compra_regalo_
+        # fuera_de_orden_no_genera_nc), y el punto de estos tests no se vería.
+        lineas.append(
+            b.linea(
+                linea_id="L2",
+                producto="LIGA",
+                marca="Sinoco",
+                categoria="Comercial",
+                precio="12.50",
+                cantidad="1",
+                descuento="0",
+            )
+        )
+    metodo = b.metodo(moneda=Moneda.VES, tipo_tasa=TipoTasa.BCV, es_contado=False)
+    vinc = b.vinculacion(
+        monto_aplicado="3600", moneda_abono=Moneda.VES, tipo_tasa_abono=TipoTasa.BCV
+    )
+    return _inputs(
+        orden=orden,
+        lineas=lineas,
+        abonos=[(vinc, metodo)],
+        promociones=promociones,
+        resolver=_resolver(**{"P1@BCV": "100", "LIGA@BCV": "12.50"}),
+    )
+
+
+def _dos_por_ciento():
+    return b.promo_primera(tipo_beneficio="porcentaje", valor="0.02", compra_minima="0")
+
+
+def test_regla_del_usuario_1_si_aplica_el_obsequio_NO_se_da_el_2pct() -> None:
+    """Obsequio vigente y alcanzado (LIGA por comprar 1 comercial): la NC es el
+    obsequio (12,50), no el 2 % (2,00), y no los dos."""
+    obsequio = b.promo_primera("LIGA", compra_minima="1", valor="1")
+    res = calcular_factura(_primera_compra_con([obsequio, _dos_por_ciento()]))
+    assert res.ncs_calculadas == Decimal("12.50")
+
+
+def test_regla_del_usuario_1_si_el_obsequio_no_aplica_se_da_el_2pct() -> None:
+    """El obsequio exige 50 unidades y la compra es de 1: no califica, y entonces
+    sí corresponde el 2 %."""
+    obsequio_lejano = b.promo_primera("LIGA", compra_minima="50", valor="1")
+    res = calcular_factura(
+        _primera_compra_con([obsequio_lejano, _dos_por_ciento()], con_regalo_en_la_orden=False)
+    )
+    assert res.ncs_calculadas == Decimal("2.00")
+
+
+def test_regla_del_usuario_2_fuera_de_la_vigencia_del_obsequio_se_da_el_2pct() -> None:
+    """La misma orden, con el obsequio vencido un mes antes: cae al 2 %."""
+    vencido = b.promo_primera("LIGA", compra_minima="1", valor="1", hasta=date(2026, 5, 31))
+    res = calcular_factura(
+        _primera_compra_con(
+            [vencido, _dos_por_ciento()], date(2026, 7, 1), con_regalo_en_la_orden=False
+        )
+    )
+    assert res.ncs_calculadas == Decimal("2.00")
+
+
+def test_regla_del_usuario_dentro_de_la_vigencia_del_obsequio_manda_el_obsequio() -> None:
+    vigente = b.promo_primera("LIGA", compra_minima="1", valor="1", hasta=date(2026, 12, 31))
+    res = calcular_factura(_primera_compra_con([vigente, _dos_por_ciento()], date(2026, 7, 1)))
+    assert res.ncs_calculadas == Decimal("12.50")

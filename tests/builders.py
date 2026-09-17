@@ -26,6 +26,7 @@ from cxc.models import (
     Producto,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
+    SerieTasa,
     TipoBeneficio,
     TipoDescuento,
     TipoFeriado,
@@ -211,11 +212,17 @@ def descuento_volumen(
     hasta: date | None = None,
     requiere_pago_previo: bool = False,
 ) -> DescuentoVolumen:
+    # ``litros_minimo`` desapareció del modelo: el tramo vive en
+    # min/max_unidades y ``unidad_medida`` dice en qué se cuenta. El
+    # parámetro se conserva con su nombre viejo para no tocar los call
+    # sites, y se traduce a una regla de LITROS -- que es lo que estas
+    # pruebas siempre quisieron decir.
     return DescuentoVolumen(
         regla_id=regla_id,
         marca=marca,
         categoria=categoria,
-        litros_minimo=Decimal(litros_minimo),
+        min_unidades=Decimal(litros_minimo),
+        unidad_medida="LITROS",
         porcentaje=Decimal(porcentaje),
         vigencia_desde=desde,
         vigencia_hasta=hasta,
@@ -287,8 +294,8 @@ def descuento_recompra(
     *,
     marca: str = "*",
     categoria: str = "*",
-    min_cajas: int = 1,
-    max_cajas: int = 9999,
+    min_unidades: int = 1,
+    max_unidades: int = 9999,
     porcentaje: str = "0.03",
     vigencia_desde: date = date(2026, 1, 1),
     vigencia_hasta: date | None = None,
@@ -301,8 +308,8 @@ def descuento_recompra(
         regla_id=regla_id,
         marca=marca,
         categoria=categoria,
-        min_cajas=min_cajas,
-        max_cajas=max_cajas,
+        min_unidades=min_unidades,
+        max_unidades=max_unidades,
         porcentaje=Decimal(porcentaje),
         vigencia_desde=vigencia_desde,
         vigencia_hasta=vigencia_hasta,
@@ -435,3 +442,66 @@ def entrega_linea(
         entrega_id=entrega_id,
         producto_id=producto_id,
     )
+
+
+# --- SerieTasas sembrada, para que ningún test caiga al default de 2019 ----
+#
+# El plan de blindaje (Fase 2.1) pedía sembrar tasas en los tests que
+# construyen escenarios sin ellas, porque sin serie ``get_rate_for_datetime``
+# devuelve su último recurso: 36,5 / 38,0, las tasas de **2019**.
+#
+# Medido antes de sembrar: 37 tests tocaban ese default, en 142 llamadas, sobre
+# 13 fechas distintas -- una de marzo de 2026 y el resto entre julio y
+# septiembre. El rango de abajo las cubre todas con margen.
+#
+# Y una corrección al plan, medida: el plan decía que esos tests "asertan
+# cifras calculadas con una tasa falsa". **No es así.** Se cambió el default de
+# 36,5/38,0 a 100/110 y los 121 tests de los archivos afectados siguieron
+# pasando: ninguno depende del VALOR. Lo que dependía del default era otra cosa
+# -- que la función devolviera algo en vez de fallar.
+SERIE_DESDE = date(2026, 1, 1)
+SERIE_HASTA = date(2026, 12, 31)
+SERIE_TASA_BCV = Decimal("36.50")
+SERIE_TASA_BINANCE = Decimal("38.00")
+
+
+def serie_tasas_sembrada(
+    desde: date = SERIE_DESDE,
+    hasta: date = SERIE_HASTA,
+    tasa_bcv: Decimal = SERIE_TASA_BCV,
+    tasa_binance: Decimal = SERIE_TASA_BINANCE,
+) -> list[SerieTasa]:
+    """Una fila de ``SerieTasas`` por día del rango.
+
+    Los valores por defecto son **los mismos 36,50 / 38,00** del último recurso,
+    y eso es deliberado: sembrar la serie no debe cambiar ningún monto que los
+    tests ya asertan. Lo que cambia es que ahora el número viene de un dato
+    presente y no de un default, así que el día que ese default se convierta en
+    error duro (la decisión de la Fase 2.1) estos tests no se enteran.
+
+    Un test que quiera medir el comportamiento SIN tasas no debe usar esto --
+    debe devolver una lista vacía explícitamente, y hay cinco que lo hacen a
+    propósito.
+    """
+    filas: list[SerieTasa] = []
+    dia = desde
+    while dia <= hasta:
+        filas.append(
+            SerieTasa(
+                timestamp=datetime(dia.year, dia.month, dia.day, 22, 0, 0),
+                tasa_bcv=tasa_bcv,
+                tasa_binance=tasa_binance,
+                fuente="sembrada-en-tests",
+                es_heredada=False,
+                capturada_ok=True,
+            )
+        )
+        dia = date.fromordinal(dia.toordinal() + 1)
+    return filas
+
+
+def serie_tasas_sembrada_rows() -> list[dict[str, str]]:
+    """La misma serie en el formato de fila que consumen los mocks de Sheets."""
+    from cxc.sheets import serde
+
+    return [serde.serie_to_row(s) for s in serie_tasas_sembrada()]

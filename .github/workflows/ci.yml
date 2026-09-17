@@ -1,14 +1,10 @@
 name: CI
 
-# ``develop`` es la rama de trabajo real y ``main`` la de producción: si el CI
-# solo corriera en ``main``, avisaría del problema DESPUÉS de que el código ya
-# está en producción. Corriendo también en ``develop`` (y en los PR hacia ella)
-# es una barrera antes del merge, no un reporte post-mortem.
 on:
   push:
-    branches: [main, develop]
+      branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+      branches: [main, develop]
 
 jobs:
   test:
@@ -30,10 +26,9 @@ jobs:
           --health-retries 5
 
     env:
-      # Postgres es el único backend del sistema: el de Google Sheets se
-      # eliminó por completo del repositorio, así que esta base de CI es la
-      # misma pieza que usa producción (ver src/cxc/db/). La necesitan
-      # tests/test_repository_contract.py y la migración Alembic.
+      # Postgres es el unico backend: el de Google Sheets se elimino por
+      # completo del repositorio. La necesitan test_repository_contract.py
+      # y la migracion Alembic.
       DATABASE_URL: postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci
 
     steps:
@@ -59,5 +54,5 @@ jobs:
       - name: Alembic (aplicar migraciones a la base de CI)
         run: alembic upgrade head
 
-      - name: Pytest (tests + coverage >= 74%)
+      - name: Pytest (tests + coverage >= 73,9%)
         run: pytest

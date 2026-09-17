@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 
 class Moneda(StrEnum):
@@ -378,8 +379,6 @@ class DescuentoProntoPago:
     regla_id: str
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "USD"
     tipo_beneficio: str = "descuento"
     # "Ventana de pago" (reemplaza "Días de gracia"): desde cuándo se
@@ -392,7 +391,12 @@ class DescuentoProntoPago:
     ventana_pago_dias: int = 3
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"  # "USD", "VES", "*"
-    listas_aplicables: str = "*"  # "4", "5", "*"
+    listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""  # "4", "5", "*"
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -416,10 +420,16 @@ class DescuentoVolumen:
     regla_id: str
     marca: str = "*"
     categoria: str = "*"
-    litros_minimo: Decimal = Decimal("0")
     porcentaje: Decimal = Decimal("0.05")
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
+    # El tramo va SIEMPRE en este par, y ``unidad_medida`` dice en qué se
+    # cuenta (UNIDADES / LITROS / USD). Antes convivía con
+    # ``litros_minimo``, que era el mismo dato con otro nombre: el
+    # formulario escribía los dos y el motor los desempataba con una
+    # cascada de fallbacks. En producción los 5 registros tenían el mismo
+    # valor en ambos, así que el duplicado solo agregaba formas de
+    # equivocarse. Ver migración de unificación de nombres.
+    min_unidades: Decimal = Decimal("0")
+    max_unidades: Decimal = Decimal("999999")
     unidad_medida: str = "UNIDADES"
     tipo_beneficio: str = "descuento"
     tipo_evaluacion: str = "orden"  # "orden" o "acumulado"
@@ -427,6 +437,11 @@ class DescuentoVolumen:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     activo: bool = True
     # Descuento por volumen depende de la cantidad de la orden, no de pagos.
     requiere_pago_previo: bool = False
@@ -446,13 +461,21 @@ class PromocionPrimeraCompra:
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     descuento_fallback: Decimal = Decimal("0.02")
+    # Qué unidades CALIFICAN para ``compra_minima``. No confundir con
+    # ``categorias_descuento``, que es sobre qué líneas se aplica el porcentaje.
     categorias_aplica: str = "Comercial"
+    # Sobre qué líneas se aplica el porcentaje. Vacío = todas, que es lo que el
+    # motor hacía siempre en la rama de reglas configuradas.
+    categorias_descuento: str = ""
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
-    min_cantidad: Decimal = Decimal("3")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     solo_primera_compra: bool = (
         False  # False = Recurrente (cada compra >= min), True = Solo 1era compra
     )
@@ -471,14 +494,21 @@ class DescuentoRecompra:
     regla_id: str
     marca: str = "GLOBAL OIL"
     categoria: str = "CAJA"
-    min_cajas: int = 2
-    max_cajas: int = 4
-    min_cantidad: Decimal = Decimal("2")
-    max_cantidad: Decimal = Decimal("4")
+    # Rango en el que aplica la regla, en la unidad de ``unidad_medida``
+    # (Unidades / Litros / USD). Reemplaza a min_cajas/max_cajas, que eran
+    # enteros y no admitían litros ni dólares con decimales -- ver la
+    # migración c9e1f2a3b4d5.
+    min_unidades: Decimal = Decimal("2")
+    max_unidades: Decimal = Decimal("4")
     unidad_medida: str = "CAJAS"
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.03")
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 4, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -498,26 +528,16 @@ class DescuentoRecompra:
     ventana_pago_dias: int = 3
 
 
-# --- 3.7g DescuentoFidelizacion (fidelización por litros acumulados) ---------
-@dataclass
-class DescuentoFidelizacion:
-    regla_id: str
-    nombre: str
-    marca: str = "*"
-    min_litros_acumulados: Decimal = Decimal("0")
-    porcentaje: Decimal = Decimal("0.05")
-    categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
-    unidad_medida: str = "LITROS"
-    tipo_beneficio: str = "descuento"
-    listas_aplicables: str = "*"
-    ventana_dias: int = 90
-    vigencia_desde: date = date(2026, 1, 1)
-    vigencia_hasta: date | None = None
-    activo: bool = True
-    # Fidelización depende de litros acumulados, no de pagos.
-    requiere_pago_previo: bool = False
+# --- 3.7g Fidelización -------------------------------------------------------
+# Hubo aquí un dataclass ``DescuentoFidelizacion`` que estaba MUERTO: sin
+# tabla en el esquema, sin método de repositorio y sin una sola lectura en
+# el motor. Las reglas de fidelidad reales de producción
+# (FID_SINOCO_5000L, FID_GLOBAL_2500L) viven en ``descuentos_volumen`` con
+# ``tipo_evaluacion="acumulado"``, que sí está cableado por completo.
+# Se eliminó al auditar el cableado de todas las reglas (septiembre 2026,
+# a pedido del usuario): un modelo de configuración que nadie lee invita a
+# creer que se puede configurar algo que en realidad no hace nada.
+# Ver tests/test_cableado_reglas.py.
 
 
 # --- 3.7e DescuentoProducto (configurable, promoción específica por producto) -
@@ -527,13 +547,18 @@ class DescuentoProducto:
     productos: str = "*"  # CSV de SKUs/IDs de producto o '*'
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
+    min_unidades: Decimal = Decimal("0")
+    max_unidades: Decimal = Decimal("999999")
     unidad_medida: str = "CAJAS"
     tipo_beneficio: str = "descuento"
     porcentaje: Decimal = Decimal("0.05")
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -547,20 +572,31 @@ class DescuentoProducto:
 @dataclass
 class DescuentoDiferencialCambiario:
     regla_id: str
-    nombre: str
+    # ``nombre`` se fusionó con ``descripcion`` (el campo común a todas las
+    # reglas): eran el mismo dato con dos nombres, y solo esta tabla tenía
+    # los dos. Al migrar, el nombre viejo pasó a descripcion donde estaba
+    # vacía -- DIF_35_VES conservó así "35% Fijo VES a USD".
     tipo_diferencial: str = (
         "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
     )
-    tipo_calculo: str = "fijo"  # 'fijo' | 'variable'
+    # DERIVADO de ``tipo_diferencial``, que es el único que el motor lee.
+    # Existía como un segundo selector en Configuración para el mismo
+    # concepto, así que se podía guardar "fijo" en una regla
+    # ``equiparar_binance`` sin que pasara nada. Se quitó del formulario;
+    # la columna se conserva por lo histórico y se completa al guardar.
+    tipo_calculo: str = "fijo"  # 'fijo' | 'variable' -- derivado
     porcentaje_fijo: Decimal = Decimal("0.35")
     marca: str = "*"
     categoria: str = "*"
-    min_cantidad: Decimal = Decimal("0")
-    max_cantidad: Decimal = Decimal("999999")
     unidad_medida: str = "USD"
     tipo_beneficio: str = "descuento"
     monedas_aplicables: str = "*"
     listas_aplicables: str = "*"
+    # Exclusión: "nunca a estas listas". Ver schema.listas_excluidas -- el
+    # usuario razona las reglas así, y decir "nunca a USD" protege mejor
+    # que enumerar lo permitido, porque una lista nueva no entra sin querer.
+    listas_excluidas: str = ""
+    monedas_excluidas: str = ""
     vigencia_desde: date = date(2026, 1, 1)
     vigencia_hasta: date | None = None
     activo: bool = True
@@ -634,6 +670,31 @@ class Vinculacion:
     bcv_variante: str = "USD"
 
 
+@dataclass(frozen=True)
+class AplicacionConciliada:
+    """Un pago aplicado a la factura de una orden, tal como lo hizo Odoo.
+
+    Es la unidad real de la reconciliación: no "el pago 513", sino "los
+    1.782.044,86 del pago 513 que fueron a la factura de S00214". Un mismo
+    pago puede producir varias de estas contra órdenes distintas, y una
+    misma orden puede recibir varias de pagos distintos -- los dos
+    escenarios existen en producción (109 pagos repartidos entre varias
+    facturas; 239 facturas pagadas con varios pagos).
+
+    ``monto`` viene en la moneda del PAGO (``credit_amount_currency`` de
+    ``account.partial.reconcile``), no en la de la factura: es lo que el
+    cliente entregó realmente, que es la cifra con la que trabajan los
+    equivalentes y las reglas de descuento.
+    """
+
+    pago_id: str
+    so_id: str
+    factura_id: str
+    monto: Decimal
+    moneda: Moneda
+    fecha_pago: date
+
+
 # --- 3.10 BandejaFacturacion (salida del motor + trabajo humano) ------------
 @dataclass
 class BandejaFacturacion:
@@ -696,11 +757,32 @@ class VentasTeorico:
 
 @dataclass
 class DescuentoAplicado:
-    """Un componente del desglose de descuentos (apilamiento aditivo)."""
+    """Un componente del desglose de descuentos (apilamiento aditivo).
+
+    ``regla_id`` existe porque sin él no se puede auditar el motor. Lo pidió
+    el usuario (septiembre 2026) al revisar por qué TERA recibía un
+    descuento de volumen que nadie le otorgó: el detalle solo guardaba el
+    ``origen`` ("volumen"), y con cinco reglas de volumen activas era
+    imposible decir cuál de ellas lo produjo sin recalcular a mano.
+
+    ``componentes`` cubre el caso de un descuento que suma VARIAS reglas
+    -- volumen y producto apilan una regla por línea o por subtotal -- y
+    lleva, por cada una, su id, su porcentaje y lo que aportó en monto.
+    """
 
     origen: str  # 'recurrencia' | 'contado' | 'bcv_completo'
     descripcion: str
     monto: Decimal
+    # La regla que lo produjo. Vacío solo cuando el descuento no nace de
+    # una regla configurada (ej. el 2% de primera compra por defecto).
+    regla_id: str = ""
+    # Porcentaje que aplicó esa regla, como fracción (0.1204 = 12,04 %).
+    porcentaje: Decimal | None = None
+    # Monto sobre el que se calculó el porcentaje.
+    base: Decimal | None = None
+    # Desglose cuando intervino más de una regla: cada entrada trae
+    # regla_id, descripcion, monto, porcentaje y base.
+    componentes: list[dict[str, Any]] = field(default_factory=list)
 
 
 # --- 3.11 Conciliacion (computada por la pieza 5) ---------------------------

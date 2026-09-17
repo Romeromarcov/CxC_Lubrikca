@@ -266,8 +266,6 @@ descuentos_pronto_pago = Table(
     Column("regla_id", String, primary_key=True),
     Column("marca", String, nullable=False, server_default="*"),
     Column("categoria", String, nullable=False, server_default="*"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="0"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="USD"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("ventana_pago_tipo", String, nullable=False, server_default="vencimiento"),
@@ -275,6 +273,19 @@ descuentos_pronto_pago = Table(
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -291,10 +302,11 @@ descuentos_volumen = Table(
     Column("regla_id", String, primary_key=True),
     Column("marca", String, nullable=False, server_default="*"),
     Column("categoria", String, nullable=False, server_default="*"),
-    Column("litros_minimo", MONEY, nullable=False, server_default="0"),
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="0"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
+    # El tramo va siempre en min/max_unidades; unidad_medida dice en qué se
+    # cuenta. ``litros_minimo`` era el mismo dato con otro nombre.
+    Column("min_unidades", MONEY, nullable=False, server_default="0"),
+    Column("max_unidades", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="UNIDADES"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("tipo_evaluacion", String, nullable=False, server_default="orden"),
@@ -302,6 +314,19 @@ descuentos_volumen = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
@@ -321,13 +346,38 @@ promocion_primera_compra = Table(
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("descuento_fallback", PCT, nullable=False, server_default="0.02"),
+    # QUE UNIDADES CALIFICAN para el minimo de compra. NO es sobre que lineas se
+    # aplica el descuento -- eso es ``categorias_descuento``, mas abajo. Los dos
+    # campos existen porque son dos preguntas distintas y confundirlas cuesta
+    # plata: el 11-sep-2026 intente reusar este para el descuento y dos tests lo
+    # desmintieron.
     Column("categorias_aplica", String, nullable=False, server_default="Comercial"),
+    # SOBRE QUE LINEAS se aplica el porcentaje. Vacio = todas, que es lo que la
+    # rama de reglas configuradas hacia siempre, asi que una regla vieja no
+    # cambia de comportamiento.
+    #
+    # Existe por el 2 % de primera compra: vive como respaldo cableado que suma
+    # solo las lineas Comercial, y sin este campo configurarlo como regla de la
+    # tabla ensanchaba la base a TODAS las lineas. Medido: 122 ordenes de la copia
+    # de produccion tienen lineas de las dos categorias.
+    Column("categorias_descuento", String, nullable=False, server_default=""),
     Column("marca", String, nullable=False, server_default="GLOBAL OIL"),
     Column("categoria", String, nullable=False, server_default="CAJA"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="3"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("solo_primera_compra", Boolean, nullable=False, server_default="false"),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
@@ -342,14 +392,29 @@ descuentos_recompra = Table(
     Column("regla_id", String, primary_key=True),
     Column("marca", String, nullable=False, server_default="GLOBAL OIL"),
     Column("categoria", String, nullable=False, server_default="CAJA"),
-    Column("min_cajas", Integer, nullable=False, server_default="2"),
-    Column("max_cajas", Integer, nullable=False, server_default="4"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="2"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="4"),
+    # Rango en el que aplica la regla, en la unidad de ``unidad_medida``
+    # (Unidades / Litros / USD). Reemplaza a min_cajas/max_cajas, que eran
+    # enteros y no admitían litros ni dólares con decimales -- ver la
+    # migración c9e1f2a3b4d5.
+    Column("min_unidades", MONEY, nullable=False, server_default="2"),
+    Column("max_unidades", MONEY, nullable=False, server_default="4"),
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("porcentaje", PCT, nullable=False, server_default="0.03"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -368,13 +433,26 @@ descuentos_producto = Table(
     Column("productos", String, nullable=False, server_default="*"),
     Column("marca", String, nullable=False, server_default="*"),
     Column("categoria", String, nullable=False, server_default="*"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="0"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
+    Column("min_unidades", MONEY, nullable=False, server_default="0"),
+    Column("max_unidades", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="CAJAS"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("porcentaje", PCT, nullable=False, server_default="0.05"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -388,18 +466,31 @@ descuentos_diferencial_cambiario = Table(
     "descuentos_diferencial_cambiario",
     metadata,
     Column("regla_id", String, primary_key=True),
-    Column("nombre", String, nullable=False, server_default=""),
+    # ``nombre`` se fusionó con ``descripcion``, el campo que ya tienen
+    # todas las demás reglas: era el mismo dato con dos nombres y solo
+    # esta tabla cargaba los dos.
     Column("tipo_diferencial", String, nullable=False, server_default="fijo_35_ves_usd"),
     Column("tipo_calculo", String, nullable=False, server_default="fijo"),
     Column("porcentaje_fijo", PCT, nullable=False, server_default="0.35"),
     Column("marca", String, nullable=False, server_default="*"),
     Column("categoria", String, nullable=False, server_default="*"),
-    Column("min_cantidad", MONEY, nullable=False, server_default="0"),
-    Column("max_cantidad", MONEY, nullable=False, server_default="999999"),
     Column("unidad_medida", String, nullable=False, server_default="USD"),
     Column("tipo_beneficio", String, nullable=False, server_default="descuento"),
     Column("monedas_aplicables", String, nullable=False, server_default="*"),
     Column("listas_aplicables", String, nullable=False, server_default="*"),
+    # Exclusión, que es como el usuario razona la regla (septiembre 2026):
+    # "cuando dice que aplica a las listas VES, quiere decir que NUNCA debe
+    # aplicar a orden nacida con lista USD, porque aplicaría dos veces el
+    # 35%, pero no que aplique a todas las órdenes en lista VES".
+    #
+    # Decir "aplica a X" obliga a enumerar todo lo permitido y una lista
+    # nueva entra sin querer; decir "nunca a Y" fija la prohibición, que es
+    # lo que de verdad protege. Acepta ids ("3,4") o los tokens
+    # LISTAS_USD / LISTAS_VES. Vacío = no excluye nada.
+    Column("listas_excluidas", String, nullable=False, server_default=""),
+    # Lo mismo para la moneda del pago: "USD" prohíbe la regla cuando el
+    # pago fue en dólares, sin tener que enumerar las permitidas.
+    Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("vigencia_desde", Date, nullable=False),
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
@@ -536,6 +627,16 @@ descuento_aplicado = Table(
     Column("origen", String, nullable=False),
     Column("descripcion", String, nullable=False, server_default=""),
     Column("monto", MONEY, nullable=False),
+    # Qué regla produjo el descuento. Sin esto no se puede auditar el
+    # motor: el detalle solo decía el origen ("volumen") y con cinco
+    # reglas de volumen activas era imposible saber cuál lo dio. Lo pidió
+    # el usuario al revisar el caso TERA. Ver migración a4c2e8f10d3b.
+    Column("regla_id", String, nullable=False, server_default=""),
+    Column("porcentaje", MONEY, nullable=True),
+    Column("base", MONEY, nullable=True),
+    # JSON con el desglose cuando intervino más de una regla (volumen y
+    # producto apilan varias): por cada una, id, porcentaje y aporte.
+    Column("componentes", Text, nullable=False, server_default=""),
 )
 
 # --- 3.11 Conciliacion (computada) -------------------------------------------
@@ -619,13 +720,45 @@ bandeja_auditoria = Table(
 )
 
 # --- AnomaliasAceptadas (waivers de discrepancias de facturación) ----------
-anomalias_aceptadas = Table(
-    "anomalias_aceptadas",
+# Órdenes donde el descuento que calcula el motor NO se le prometió al
+# cliente, así que no debe bajar la cuenta por cobrar ni terminar en una
+# nota de crédito.
+#
+# Decisión del usuario (septiembre 2026): el descuento se asume
+# COMPROMETIDO por defecto -- "casi siempre los vendedores dan el
+# descuento al cliente" -- y las excepciones se marcan a mano. El caso que
+# lo motivó es TERA: el motor le calcula $3.949,79 en S00010 y S00584,
+# pero "a ellos no se les dio ese descuento, pagaron completo y ya".
+#
+# Existe porque el usuario no permite que los vendedores toquen precios ni
+# descuentos en Odoo (hay desajustes históricos, intencionales o no), así
+# que el descuento vive en el motor hasta que administración emita la NC.
+descuentos_no_otorgados = Table(
+    "descuentos_no_otorgados",
     metadata,
-    Column("anomalia_id", String, primary_key=True),
+    Column("so_id", String, primary_key=True),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("marcado_por", String, nullable=False, server_default=""),
+    Column("timestamp_marcado", String, nullable=False, server_default=""),
+)
+
+
+discrepancias_aceptadas = Table(
+    "discrepancias_aceptadas",
+    metadata,
+    Column("discrepancia_id", String, primary_key=True),
     Column("so_id", String, nullable=False, index=True),
     Column("factura_id", String, nullable=False, server_default=""),
-    Column("tipo_anomalia", String, nullable=False, server_default=""),
+    Column("tipo_discrepancia", String, nullable=False, server_default=""),
+    # Huella de los valores que DEFINEN la discrepancia. Aceptarla la
+    # silencia solo mientras esos valores no cambien: si cambian, el
+    # detector la vuelve a mostrar como una discrepancia nueva en vez de
+    # dejarla tapada por una aceptación vieja. Ver ``huella_discrepancia``
+    # y la migración d4f5a6b7c8e9.
+    Column("huella", String, nullable=False, server_default=""),
+    # Qué decía exactamente la discrepancia cuando se aceptó -- la
+    # trazabilidad que pidió el usuario, junto con quién la aceptó.
+    Column("detalle", Text, nullable=False, server_default=""),
     Column("motivo_aceptacion", String, nullable=False, server_default=""),
     Column("aprobado_por", String, nullable=False, server_default=""),
     Column("timestamp_aprobacion", DateTime(timezone=False), nullable=False),

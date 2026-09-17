@@ -31,7 +31,6 @@ from ..models import (
     Feriado,
     LineaOrden,
     MetodoPago,
-    Moneda,
     OrdenVenta,
     PromocionPrimeraCompra,
     ReglaRecurrencia,
@@ -94,6 +93,29 @@ class EngineInputs:
     # hardcodeado de effective_dating._match_lista (comportamiento previo).
     valid_ves: list[str] = field(default_factory=list)
     valid_usd: list[str] = field(default_factory=list)
+    # Pareo VES<->USD de listas de precios (decisión del usuario,
+    # septiembre 2026). El teórico se compara contra la lista con la que
+    # NACIÓ la orden, no contra una lista global: si nació en "Industrial
+    # 3% VES", su teórico VES sale de esa lista y el USD de su par,
+    # "Industrial 3% USD". Es simétrico -- una orden nacida en la lista
+    # USD toma su teórico VES del par VES.
+    #
+    # Mapa ``id de lista -> id de su par``, en las dos direcciones. Una
+    # lista sin par (o una orden sin lista, como las 54 que perdieron su
+    # pricelist en Odoo) cae a la lista global configurada, que es el
+    # comportamiento anterior -- así una lista nueva en Odoo nunca deja
+    # órdenes sin teórico solo por no estar pareada todavía.
+    pares_listas: dict[str, str] = field(default_factory=dict)
+    # Vigencia de cada lista de precios: {"id": {"moneda", "desde", "hasta"}}.
+    # Sirve para responder "¿cuál era la lista VES y cuál la USD el día que
+    # nació ESTA orden?" -- ver ``listas_vigentes_en``.
+    #
+    # Regla del usuario (septiembre 2026): "para todos los periodos hay al
+    # menos una lista para pagos en VES y otra lista para pagos en USD
+    # [...] calcular los teóricos en función de la fecha en la que se generó
+    # la orden (la fecha inicial porque a veces hay órdenes que se tienen
+    # que modificar, pero deben mantener su lista original)".
+    vigencias_listas: dict[str, dict[str, str]] = field(default_factory=dict)
     # Tarea 2 (Lista Histórica de Auditoría): si la orden cae en la
     # excepción histórica, el precio unitario de cada línea sale de este
     # mapa (codigo producto -> precio usd) en vez de la pricelist normal.
@@ -107,6 +129,18 @@ class EngineInputs:
     # OTRA orden) -- ``discounts.py`` se queda puro, sin tocar el repo.
     orden_anterior_cliente: OrdenVenta | None = None
     orden_anterior_cliente_vincs: list[Vinculacion] = field(default_factory=list)
+    # Objetivo de pago de esa orden anterior para el gate de Recompra:
+    # su TEÓRICO neto de descuentos y con impuestos, en la referencia con
+    # la que nació (decisión del usuario, septiembre 2026 -- "debe estar
+    # pagada contra su teórico, que posteriormente debe coincidir con lo
+    # facturado en Odoo con sus notas de crédito").
+    #
+    # Antes se exigía el ``amount_total`` crudo de Odoo, que es el precio
+    # de lista SIN los descuentos que el cliente sí se ganó: de 382
+    # órdenes anteriores con abono, solo 120 lo alcanzaban, y la mediana de
+    # las que no llegaban era 71,8 %. None = sin teórico calculado, y el
+    # gate cae al ``monto_total`` como antes.
+    orden_anterior_objetivo: Decimal | None = None
     # Diferencial Cambiario, regla "Equiparar" (agosto 2026): True si el
     # CLIENTE de esta orden tiene, en Odoo, algún pago sin aplicar/conciliar
     # contra ninguna factura ("pago huérfano" -- mismo concepto que ya usa
@@ -356,21 +390,219 @@ _LISTA_VES_FALLBACK = "BCV"
 # de HOY (id 8) en vez de la vigente para esa fecha.
 _LISTA_USD_HISTORICA = "7"
 
+# Id del 2 % de primera compra que aplica cuando no hay ninguna promoción
+# configurada a la fecha de la orden. No es una regla de la tabla: es el
+# respaldo histórico, y tiene nombre propio para que el desglose lo diga en
+# vez de mostrarlo como "sin regla".
+#
+# El id VIEJO decía INDUSTRIAL, y el código aplicaba el 2 % a las líneas
+# Industrial. Aclaración del usuario (11-sep-2026): **la regla es de Comercial**,
+# solo primera compra, y solo si no se le dio otra promoción de primera compra.
+# "Estaba configurada como un fallback de la regla de primera compra, pero
+# parece que nunca funcionó bien."
+#
+# Medido antes de corregirlo, sobre las 119 órdenes que lo recibieron: la base
+# Industrial suma 103.055,13 y la Comercial 37.111,82 — un 64 % menos. Y **85 de
+# las 119 no tienen NI UNA línea Comercial**, así que no les correspondía nada.
+# El id cambia para que el desglose viejo y el nuevo no se confundan.
+# El id que llevaba el respaldo cableado, RETIRADO el 11-sep-2026 por decisión del
+# usuario ("crea la regla nueva y elimina la vieja"). Se conserva el nombre porque
+# las 119 filas de ``descuento_aplicado`` que ya existen lo tienen escrito, y un
+# desglose histórico que no lo reconozca diría "sin regla" sobre algo que sí tuvo
+# una.
+#
+# El 2 % ahora es una regla de la tabla: ``PRIMERA_COMPRA_COMERCIAL_2PCT``, que se
+# crea con ``scripts/configurar_2pct_primera_compra.py``. Verificado antes de
+# retirar el respaldo: las dos vías dan 742,24 USD sobre las 119 órdenes, con cero
+# diferencias.
+#
+# CONSECUENCIA QUE HAY QUE TENER PRESENTE AL DESPLEGAR: sin el respaldo, si la regla
+# NO está creada en la base, esas 119 órdenes dejan de recibir el 2 % y su deuda
+# sube 742,24 USD. El script tiene que correr con el despliegue, no después.
+_REGLA_FALLBACK_PRIMERA_COMPRA = "FALLBACK_PRIMERA_COMPRA_COMERCIAL_2PCT"
+
+
+# ``categorias_descuento`` que significa "todas". Es el default (vacío) y los
+# comodines que la pantalla puede dejar.
+_CATEGORIAS_TODAS = frozenset({"", "*", "TODAS", "TODOS", "ALL", "GLOBAL"})
+
+
+def _lineas_del_descuento(promos: list[Any], regla_id: str, lineas: list[Any]) -> list[Any]:
+    """Las líneas sobre las que la regla que puso el porcentaje aplica su descuento.
+
+    Se busca la regla por ``regla_id`` y no por posición: el porcentaje sale de un
+    ``max`` sobre varias promociones activas, así que filtrar con la categoría de
+    otra regla aplicaría el descuento a líneas que esa regla no cubre.
+
+    Sin categorías declaradas devuelve **todas**, que es lo que esta rama hacía
+    antes de que el campo existiera. Una regla vieja no cambia de comportamiento.
+
+    Ojo con no confundir este campo con ``categorias_aplica``, que gobierna qué
+    unidades CALIFICAN para ``compra_minima``. Son dos preguntas distintas y hay
+    tests que fijan la segunda.
+    """
+    elegida = next((p for p in promos if getattr(p, "regla_id", "") == regla_id), None)
+    crudo = str(getattr(elegida, "categorias_descuento", "") or "") if elegida else ""
+    pedidas = {c.strip().upper() for c in crudo.split(",") if c.strip()}
+    if not pedidas or pedidas & _CATEGORIAS_TODAS:
+        return list(lineas)
+    return [ln for ln in lineas if (getattr(ln, "categoria", "") or "").strip().upper() in pedidas]
+
+
+def _lista_pareada(inp: EngineInputs, destino_usd: bool) -> str | None:
+    """La lista del par que corresponde a la moneda pedida, o None.
+
+    Parte de la lista de NACIMIENTO de la orden. Si esa lista está en el
+    pareo, devuelve la del lado pedido: la propia si ya es de esa moneda,
+    o su par si es de la otra. None cuando la orden no tiene lista, su
+    lista no está pareada, o el par apunta a una lista que no está
+    configurada -- el llamador cae entonces a la lista global.
+    """
+    nacimiento = str(inp.orden.lista_precios or "").strip()
+    if nacimiento not in inp.pares_listas:
+        # Solo las listas PAREADAS mandan sobre la global. Es deliberado:
+        # las viejas (3, 4, 5, 7, 8, 9) quedaron archivadas y sin parear,
+        # y sus ordenes conservan asi el teorico contra la lista global
+        # con la que se calcularon en su momento -- 340 de 793. Sin esta
+        # guarda, una orden nacida en la 3 pasaria a usar la 3 solo
+        # porque la 3 figura entre las listas VES configuradas, y eso
+        # reescribiria historia.
+        return None
+    validas = set(inp.valid_usd if destino_usd else inp.valid_ves)
+    if nacimiento in validas:
+        return nacimiento
+    par = inp.pares_listas[nacimiento]
+    return par if par in validas else None
+
+
+def _lista_vigente_al_nacer(inp: EngineInputs, *, destino_usd: bool) -> str | None:
+    """La lista de esa moneda que regía el día que nació la orden.
+
+    ``None`` sin vigencias configuradas o sin fecha en la orden -- ahí manda
+    el respaldo del llamador. La guarda de la fecha existe porque varias
+    pruebas arman la orden con un objeto mínimo.
+    """
+    vigencias = getattr(inp, "vigencias_listas", None)
+    if not vigencias:
+        return None
+    fecha = getattr(inp.orden, "fecha", None)
+    if not isinstance(fecha, date):
+        return None
+    ves, usd = listas_vigentes_en(fecha, vigencias, _categoria_de_nacimiento(inp))
+    return usd if destino_usd else ves
+
+
+def _categoria_de_nacimiento(inp: EngineInputs) -> str:
+    """"comercial" / "industrial" según la lista con la que nació la orden.
+
+    Vacío si no se sabe -- ahí la búsqueda de vigencia no filtra por grupo.
+    """
+    vigencias = getattr(inp, "vigencias_listas", None) or {}
+    info = vigencias.get(str(getattr(inp.orden, "lista_precios", "") or "").strip())
+    return str((info or {}).get("categoria") or "")
+
+
+def listas_vigentes_en(
+    fecha: date, vigencias: dict[str, dict[str, str]], categoria: str = ""
+) -> tuple[str | None, str | None]:
+    """(lista VES, lista USD) que regían en ``fecha``, según la vigencia
+    configurada de cada lista.
+
+    Cada entrada trae ``moneda`` ("ves"/"usd") y el rango ``desde``/``hasta``
+    en ISO; un extremo vacío es abierto. Si varias listas de la misma moneda
+    cubren la fecha -- los períodos se solapan en los datos reales, porque
+    una lista nueva convive un tiempo con la anterior -- gana la que arrancó
+    más tarde, que es la vigente.
+
+    ``categoria`` ("comercial" / "industrial") acota la búsqueda al grupo de
+    la orden. Sin eso, en agosto de 2026 la lista 9 ("Industrial 3%", que
+    arrancó el 11-ago) le ganaba a la 5 ("Precio USD Pago VES") solo por ser
+    más nueva -- y no son períodos sucesivos, son grupos distintos que
+    conviven.
+
+    Devuelve ``None`` del lado que no tenga ninguna: el llamador decide el
+    respaldo en vez de que esta función invente una lista.
+    """
+    cat = (categoria or "").strip().lower()
+    mejor: dict[str, tuple[str, str]] = {}
+    for lista_id, info in (vigencias or {}).items():
+        # La Lista Histórica de Auditoría figura en el mapeo para que el
+        # período quede completo y visible en Configuración, pero NO es una
+        # pricelist de Odoo: no se puede resolver un precio contra ella. Su
+        # id no es numérico, y por eso se saltea acá. Las órdenes de esa
+        # ventana las atiende ``orden_es_historica``, que toma el precio VES
+        # de ``precio_bcv_euro`` y el USD de la lista 7 -- ver
+        # ``_precio_unitario_linea`` y ``historical_pricing``.
+        if not str(lista_id).strip().isdigit():
+            continue
+        moneda = str(info.get("moneda") or "").lower()
+        if moneda not in ("ves", "usd"):
+            continue
+        if cat and str(info.get("categoria") or "").strip().lower() != cat:
+            continue
+        desde = str(info.get("desde") or "")
+        hasta = str(info.get("hasta") or "")
+        # Una lista sin fecha de inicio NO es candidata. Sin esta guarda una
+        # lista a medio configurar se lleva toda la historia: con
+        # ``desde`` vacío el rango es abierto hacia atrás, así que las
+        # listas de septiembre (que aún no tenían órdenes cuando se cargó
+        # la vigencia) ganaban fechas de marzo. El respaldo del llamador es
+        # mejor que una referencia inventada.
+        if not desde:
+            continue
+        iso = fecha.isoformat()
+        if iso < desde:
+            continue
+        if hasta and iso > hasta:
+            continue
+        previo = mejor.get(moneda)
+        if previo is None or desde > previo[1]:
+            mejor[moneda] = (str(lista_id), desde)
+    return (
+        mejor["ves"][0] if "ves" in mejor else None,
+        mejor["usd"][0] if "usd" in mejor else None,
+    )
+
 
 def _lista_usd_activa(inp: EngineInputs) -> str:
-    """Id de pricelist USD vigente, según Configuración (``valid_usd``).
+    """Id de pricelist USD contra la que se calcula el teórico.
+
+    Primero la lista de nacimiento vía el pareo (ver ``_lista_pareada`` y
+    ``EngineInputs.pares_listas``); si no hay par, la primera lista USD
+    configurada, que es el comportamiento anterior.
 
     Para órdenes de la ventana histórica (``orden_es_historica``), la
     lista USD vigente ENTONCES era la 7 ("Pago USD Marzo"), no la lista
-    USD configurada hoy -- ver ``_LISTA_USD_HISTORICA``.
+    USD configurada hoy -- ver ``_LISTA_USD_HISTORICA``. Esa excepción
+    gana sobre el pareo: son órdenes anteriores a que existiera.
     """
     if inp.orden_es_historica:
         return _LISTA_USD_HISTORICA
+    pareada = _lista_pareada(inp, destino_usd=True)
+    if pareada:
+        return pareada
+    # Sin par configurado, la referencia es la lista USD que REGÍA el día
+    # que nació la orden -- no la primera de la lista de configuradas, que
+    # es la de hoy y compara una orden de marzo contra precios de
+    # septiembre. Ver ``listas_vigentes_en``.
+    usd_vigente = _lista_vigente_al_nacer(inp, destino_usd=True)
+    if usd_vigente:
+        return usd_vigente
     return inp.valid_usd[0] if inp.valid_usd else _LISTA_USD_FALLBACK
 
 
 def _lista_ves_activa(inp: EngineInputs) -> str:
-    """Id de pricelist VES vigente, según Configuración (``valid_ves``)."""
+    """Id de pricelist VES contra la que se calcula el teórico.
+
+    Misma regla que ``_lista_usd_activa`` del lado VES: la lista de
+    nacimiento vía el pareo, y si no hay par, la primera VES configurada.
+    """
+    pareada = _lista_pareada(inp, destino_usd=False)
+    if pareada:
+        return pareada
+    ves_vigente = _lista_vigente_al_nacer(inp, destino_usd=False)
+    if ves_vigente:
+        return ves_vigente
     return inp.valid_ves[0] if inp.valid_ves else _LISTA_VES_FALLBACK
 
 
@@ -408,10 +640,20 @@ def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
     zaneaban a $0) -- se revierte a la lógica original, la única señal
     confiable es ``cantidad_entregada`` (Odoo mismo la neta correctamente
     cuando la devolución sí está aplicada, ver caso real S00146).
+
+    Bug real (reportado por el usuario, septiembre 2026, orden S00952
+    "PROYECTOS Y DESARROLLO TOMTOM"): ``cantidad_entregada`` puede venir
+    NEGATIVA de Odoo cuando la linea se devolvio entera y ademas la orden
+    se edito dejandola en cantidad 0. Esa linea entraba al teorico con
+    cantidad -4 y precio 1.421,75, o sea RESTANDO 5.687,00 -- el teorico de
+    la orden quedaba en 206,88 en vez de 5.893,88, y con el el descuento
+    calculado. Una linea devuelta aporta CERO, nunca un monto en contra:
+    la devolucion ya se refleja en que no se factura, no en un credito
+    sobre las demas lineas.
     """
     if inp.orden.entregada_completa and inp.orden.tiene_devolucion:
-        return linea.cantidad_entregada
-    return linea.cantidad
+        return max(linea.cantidad_entregada, Decimal("0"))
+    return max(linea.cantidad, Decimal("0"))
 
 
 def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
@@ -554,6 +796,7 @@ def _evaluar_promociones_producto(
                     origen="primera_compra",
                     descripcion=f"NC obsequio conjunto ({', '.join(lista_prod)})",
                     monto=q2(nc),
+                    regla_id=getattr(best_promo, "regla_id", ""),
                 )
         else:  # "solo_uno"
             gifted_in_lines = any(
@@ -575,44 +818,59 @@ def _evaluar_promociones_producto(
                         origen="primera_compra",
                         descripcion=f"NC obsequio ({best_line.producto})",
                         monto=q2(nc),
+                        regla_id=getattr(best_promo, "regla_id", ""),
                     )
     else:
         pct_general = Decimal("0.0")
+        # Qué regla puso el porcentaje. Vacío cuando el 2% sale del
+        # fallback de primera compra, que no viene de ninguna regla
+        # configurada -- distinguirlo es justamente lo que permite auditar
+        # si un descuento lo otorgó una regla o un valor por defecto.
+        regla_pct_general = ""
         if promos_activas:
-            pcts = []
+            pcts: list[tuple[Decimal, str]] = []
             for p in promos_activas:
-                if p.tipo_beneficio == "porcentaje":
-                    pcts.append(p.valor)
-                else:
-                    pcts.append(p.descuento_fallback)
-            pct_general = max(pcts) if pcts else Decimal("0.0")
+                valor_p = p.valor if p.tipo_beneficio == "porcentaje" else p.descuento_fallback
+                pcts.append((valor_p, getattr(p, "regla_id", "")))
+            if pcts:
+                pct_general, regla_pct_general = max(pcts, key=lambda x: x[0])
             if pct_general == 0 and fallback_industrial:
+                # El 2% NO es un valor inventado: es el ``descuento_fallback``
+                # que lleva la propia regla de primera compra, y el usuario
+                # confirmó (septiembre 2026) que es "el único fallback de 2%
+                # autorizado/registrado". Así que se atribuye a esa regla en
+                # vez de reportarse como "sin regla" -- si no, el desglose
+                # haría parecer que el motor regala un 2% que nadie configuró.
                 pct_general = Decimal("0.02")
-        elif fallback_industrial:
-            pct_general = Decimal("0.02")
+                regla_pct_general = next(
+                    (
+                        getattr(p, "regla_id", "")
+                        for p in promos_activas
+                        if getattr(p, "descuento_fallback", None) == Decimal("0.02")
+                    ),
+                    getattr(promos_activas[0], "regla_id", "") if promos_activas else "",
+                )
 
         if promos_activas:
-            nc = sum(_precio_linea(inp, ln, lista) for ln in inp.lineas) * pct_general
-            if nc > 0:
-                detalle_nc = DescuentoAplicado(
-                    origen="primera_compra",
-                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
-                    monto=q2(nc),
-                )
-        elif fallback_industrial:
+            # La regla decide sobre qué líneas aplica su porcentaje. Antes esta
+            # rama sumaba TODAS sin excepción, y por eso configurar el 2 % de
+            # primera compra como regla ensanchaba la base a las Industrial --
+            # justo lo contrario del respaldo, que suma solo las Comercial.
+            # Con el campo vacío el comportamiento es el de antes.
             nc = (
                 sum(
                     _precio_linea(inp, ln, lista)
-                    for ln in inp.lineas
-                    if (ln.categoria or "").upper() == "INDUSTRIAL"
+                    for ln in _lineas_del_descuento(promos_activas, regla_pct_general, inp.lineas)
                 )
                 * pct_general
             )
             if nc > 0:
                 detalle_nc = DescuentoAplicado(
                     origen="primera_compra",
-                    descripcion=f"Descuento primera compra Industrial {pct_general * 100:.2f}%",
+                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
                     monto=q2(nc),
+                    regla_id=regla_pct_general,
+                    porcentaje=pct_general,
                 )
 
     return nc, detalle_nc
@@ -696,8 +954,8 @@ def _calcular_componentes(
                         regla_id="REC_LEGACY",
                         marca="*",
                         categoria="*",
-                        min_cajas=1,
-                        max_cajas=9999,
+                        min_unidades=Decimal("1"),
+                        max_unidades=Decimal("9999"),
                         porcentaje=regla.valor,
                         vigencia_desde=regla.vigencia_desde,
                         vigencia_hasta=regla.vigencia_hasta,
@@ -724,17 +982,46 @@ def _calcular_componentes(
                     if inp.orden_anterior_cliente_vincs
                     else Decimal("0")
                 )
-                pagada_completo = pagado_anterior >= orden_anterior.monto_total - _EPS
+                # El MENOR entre su teórico y lo que Odoo le facturó
+                # (decisión del usuario, septiembre 2026, opción B).
+                #
+                # El teórico solo no alcanza: hay 50 órdenes cuyo teórico
+                # queda POR ENCIMA de lo facturado, y exigirlo le negaría la
+                # recompra a un cliente que pagó todo lo que se le cobró.
+                # Esa discrepancia entre teórico y factura es algo a
+                # auditar aparte -- se vendió por debajo de lista, o el
+                # teórico está mal -- no un motivo para quitarle el
+                # descuento a quien no tuvo nada que ver.
+                #
+                # Y el ``monto_total`` solo tampoco: es el precio de lista
+                # SIN los descuentos que el cliente sí se ganó, y dejaba
+                # afuera a 33 órdenes que habían pagado su teórico completo.
+                candidatos = [orden_anterior.monto_total]
+                if inp.orden_anterior_objetivo is not None:
+                    candidatos.append(inp.orden_anterior_objetivo)
+                objetivo_anterior = min(candidatos)
+                pagada_completo = pagado_anterior >= objetivo_anterior - _EPS
 
             if orden_anterior is not None and pagada_completo:
                 recompra_monto = Decimal("0")
                 # Reglas en modo "subtotal" se deduplican por regla_id: el %
                 # se aplica UNA sola vez sobre precio_base, sin importar
                 # cuántas líneas matcheen esa misma regla.
+                # Los tramos miran el TOTAL de la orden, no cada línea
+                # (decisión del usuario, septiembre 2026). Antes el tramo se
+                # elegía con la cantidad de UNA línea: una orden con tres
+                # líneas de 2 cajas (6 en total) caía en el Tramo 1 (3 %)
+                # en vez del Tramo 2 (5 %), porque ninguna línea sola
+                # llegaba a 5.
+                #
+                # El total se cuenta por regla, sumando solo las líneas que
+                # esa regla matchea por marca/categoría -- una regla acotada
+                # a una marca no debe sumar cajas de otras.
                 reglas_recompra_subtotal: dict[str, Any] = {}
+                lineas_por_regla: dict[str, list[Any]] = {}
+                total_por_regla: dict[str, Decimal] = {}
+                reglas_por_id = {rc.regla_id: rc for rc in recompras_activas}
                 for ln in inp.lineas:
-                    cajas_linea = _cantidad_efectiva(inp, ln)
-                    best_r = None
                     for rc in recompras_activas:
                         marca_ok = (
                             rc.marca == "*"
@@ -755,24 +1042,60 @@ def _calcular_componentes(
                             fecha_entrega=None,
                             dias_credito=orden_anterior.dias_credito,
                         )
-                        if (
-                            marca_ok
-                            and cat_ok
-                            and ventana_ok
-                            and rc.min_cajas <= cajas_linea <= rc.max_cajas
-                            and (best_r is None or rc.porcentaje > best_r.porcentaje)
-                        ):
-                            best_r = rc
-                    if best_r is not None:
-                        if getattr(best_r, "aplica_a", "linea") == "subtotal":
-                            existente = reglas_recompra_subtotal.get(best_r.regla_id)
-                            if existente is None or best_r.porcentaje > existente.porcentaje:
-                                reglas_recompra_subtotal[best_r.regla_id] = best_r
-                        else:
-                            recompra_monto += _precio_linea(inp, ln, lista) * best_r.porcentaje
+                        if marca_ok and cat_ok and ventana_ok:
+                            lineas_por_regla.setdefault(rc.regla_id, []).append(ln)
+                            total_por_regla[rc.regla_id] = total_por_regla.get(
+                                rc.regla_id, Decimal("0")
+                            ) + _cantidad_efectiva(inp, ln)
+
+                # De las reglas cuyo total cae dentro de su tramo, gana la de
+                # mayor porcentaje -- mismo criterio que antes, ahora
+                # decidido una vez por orden en vez de una por línea.
+                mejor = None
+                for regla_id, total in total_por_regla.items():
+                    rc = reglas_por_id[regla_id]
+                    if rc.min_unidades <= total <= rc.max_unidades and (
+                        mejor is None or rc.porcentaje > mejor.porcentaje
+                    ):
+                        mejor = rc
+                componentes_recompra: list[dict[str, Any]] = []
+                if mejor is not None:
+                    if getattr(mejor, "aplica_a", "linea") == "subtotal":
+                        reglas_recompra_subtotal[mejor.regla_id] = mejor
+                    else:
+                        base_rec = sum(
+                            (
+                                _precio_linea(inp, ln, lista)
+                                for ln in lineas_por_regla.get(mejor.regla_id, [])
+                            ),
+                            Decimal("0"),
+                        )
+                        aporte_rec = base_rec * mejor.porcentaje
+                        recompra_monto += aporte_rec
+                        componentes_recompra.append(
+                            {
+                                "regla_id": mejor.regla_id,
+                                "descripcion": "Recompra por línea",
+                                "monto": str(q2(aporte_rec)),
+                                "porcentaje": str(mejor.porcentaje),
+                                "base": str(q2(base_rec)),
+                                "alcance": "línea",
+                            }
+                        )
 
                 for regla_subtotal in reglas_recompra_subtotal.values():
-                    recompra_monto += precio_base * regla_subtotal.porcentaje
+                    aporte_rs = precio_base * regla_subtotal.porcentaje
+                    recompra_monto += aporte_rs
+                    componentes_recompra.append(
+                        {
+                            "regla_id": regla_subtotal.regla_id,
+                            "descripcion": "Recompra sobre subtotal",
+                            "monto": str(q2(aporte_rs)),
+                            "porcentaje": str(regla_subtotal.porcentaje),
+                            "base": str(q2(precio_base)),
+                            "alcance": "subtotal de la orden",
+                        }
+                    )
 
                 if recompra_monto > 0:
                     pct_recompra = recompra_monto
@@ -780,6 +1103,12 @@ def _calcular_componentes(
                         origen="recurrencia",
                         descripcion="Recompra recurrencia",
                         monto=q2(recompra_monto),
+                        componentes=componentes_recompra,
+                        regla_id=(
+                            str(componentes_recompra[0]["regla_id"])
+                            if len(componentes_recompra) == 1
+                            else ""
+                        ),
                     )
 
         # Promociones "Recurrente" (solo_primera_compra=False, ej. 12+1)
@@ -821,20 +1150,106 @@ def _calcular_componentes(
     contado_proy = Decimal("0")
     regla_contado_dominante: DescuentoMarcaCategoria | None = None
     if contado_evaluable:
+        # Regla de negocio del usuario (auditoría de septiembre 2026): una
+        # orden con abonos en las DOS monedas cuenta como USD, y sus abonos
+        # en bolívares se valoran por su equivalente Binance (ver
+        # ``valor_pagado_usd``). Antes bastaba un solo abono en VES para
+        # volver VES a la orden entera, sin importar la proporción: en
+        # producción eso descalificaba 19 órdenes de toda regla marcada
+        # solo para dólares -- incluido el diferencial cambiario del 35% --
+        # y el caso extremo (S00952) tenía 1.624,41 en dólares contra
+        # 175,83 en bolívares. Solo una orden pagada ÍNTEGRAMENTE en
+        # bolívares se evalúa como VES.
+        # Y lo que decide no es la moneda del BILLETE sino el CAMINO por el
+        # que se está evaluando la orden. El usuario lo definió así
+        # (septiembre 2026): "siempre hay dos caminos posibles, ambos se
+        # fijan en USD. uno es pagando en VES a la tasa del BCV y el otro es
+        # pagando en USD en cualquiera de sus formas o en VES a la tasa
+        # Binance".
+        #
+        # ``pura_bcv`` ES ese camino: True cuando se evalúa la lista VES
+        # contra la tasa BCV, False cuando se evalúa la lista USD contra
+        # Binance. Un pago en bolívares valorado a Binance pertenece al
+        # camino USD -- le rinde menos al cliente, que es justamente el
+        # resguardo que el usuario pidió desde el principio: una orden no
+        # puede salir por el teórico USD sin que el pago haya sido en USD o
+        # su equivalente Binance.
+        #
+        # Antes esto miraba solo la moneda de los abonos, así que una orden
+        # pagada íntegramente en bolívares quedaba marcada "VES" en los DOS
+        # caminos y no podía matchear ninguna regla con
+        # monedas_aplicables=USD, ni siquiera evaluándose contra la lista
+        # USD a tasa Binance.
+        #
+        # Alcance real, medido DESPUÉS de escribir el arreglo: de las 216
+        # órdenes pagadas solo en bolívares, las 216 van por ruta BCV y
+        # ninguna por Binance, así que hoy esto no mueve un peso -- cierra
+        # un hueco latente. (Yo le había reportado al usuario que esas 216
+        # perdían el descuento; era falso: en ruta BCV la moneda "VES" es
+        # la correcta y las reglas VES sí les aplican -- 14 de ellas tienen
+        # contado, 12 por PP_AE86B6D6 al 20 % y 2 por PP_DF33F50E al 15 %.)
         moneda_pago = "USD"
-        if inp.abonos:
+        if pura_bcv and inp.abonos:
             monedas_usadas = {
                 pago.moneda.value
                 for _, pago in inp.abonos
                 if hasattr(pago, "moneda") and pago.moneda
             }
-            if "VES" in monedas_usadas:
+            if monedas_usadas == {"VES"}:
                 moneda_pago = "VES"
+
+        # Escalera por ventana de pago (bug encontrado en la auditoría de
+        # reglas, septiembre 2026). Antes se elegía la regla dominante SOLO
+        # por porcentaje mayor y recién después se evaluaba la ventana --
+        # pero contra la ventana de ESA regla, la más cara.
+        #
+        # Con la configuración real de VES eso anulaba el escalón:
+        # PP_AE86B6D6 (20 %, ventana entrega + 3 días) y PP_DF33F50E (15 %,
+        # ventana vencimiento + 3) matchean las dos. Ganaba siempre la de
+        # 20 %, y un cliente que pagaba al vencimiento --que califica para
+        # el 15 %-- se evaluaba contra la ventana del 20 %, no la cumplía y
+        # se quedaba SIN NINGÚN descuento de contado. El 15 % no llegaba a
+        # aplicarse nunca.
+        #
+        # Ahora se descartan primero las reglas cuya ventana ya venció para
+        # la fecha que importa, y entre las que siguen vigentes gana la de
+        # mayor porcentaje. Así la escalera funciona: pagar temprano da
+        # 20 %, pagar al vencimiento da 15 %, pagar tarde no da nada.
+        #
+        # La fecha que importa es la del último abono (es cuando el cliente
+        # efectivamente pagó); sin abonos todavía --el teórico-- es la
+        # fecha de cálculo, mismo criterio que ya usaba la proyección.
+        fechas_abono_contado = [v.hora_pago_confirmada.date() for v, _ in inp.abonos]
+        fecha_ventana = max(fechas_abono_contado) if fechas_abono_contado else inp.fecha_calculo
+        # Antes esto decía "if inp.orden.fecha_entrega is None or
+        # ventana_pago_vigente(...)", y esa guarda SALTEABA la ventana
+        # entera: una orden sin fecha de entrega conservaba el descuento de
+        # contado por tarde que pagara. Era redundante además de dañina,
+        # porque ``limite_ventana_pago`` ya cae solo a la fecha de emisión
+        # (``base = fecha_entrega or fecha_emision``) -- que es exactamente
+        # lo que pidió el usuario: "si no tiene fecha de entrega [...] que
+        # utilice la fecha de la orden".
+        #
+        # Medido contra producción: 141 órdenes de 941 (15 %) no tienen
+        # fecha de entrega, y ninguna recibe hoy descuento de contado, así
+        # que quitar la guarda no mueve un peso -- cierra un hueco latente.
+        descuentos_en_ventana = [
+            r
+            for r in descuentos_ok
+            if ventana_pago_vigente(
+                getattr(r, "ventana_pago_tipo", "entrega"),
+                getattr(r, "ventana_pago_dias", 3),
+                fecha_ventana,
+                fecha_emision=inp.orden.fecha,
+                fecha_entrega=inp.orden.fecha_entrega,
+                dias_credito=inp.orden.dias_credito,
+            )
+        ]
 
         reglas_contado_subtotal: dict[str, Any] = {}
         for ln in inp.lineas:
             d = descuento_vigente(
-                descuentos_ok,
+                descuentos_en_ventana,
                 marca=ln.resolved_marca,
                 categoria=ln.categoria,
                 tipo=TipoDescuento.CONTADO,
@@ -886,7 +1301,18 @@ def _calcular_componentes(
                 fin_ventana_teorico = fin_ventana_contado(
                     inp.orden.fecha_entrega,
                     inp.engine_config.cash_window_business_days,
-                    inp.feriados_tabla,
+                    # Bug real (auditoría de agosto 2026): acá se pasaba
+                    # ``feriados_tabla`` -- la lista de objetos ``Feriado``
+                    # -- donde va el ``frozenset[date]`` de la property
+                    # ``feriados``. ``es_dia_habil`` evalúa ``d not in
+                    # feriados``, y un ``date`` nunca es igual a un
+                    # ``Feriado``, así que los feriados se ignoraban por
+                    # completo en ESTE camino (el teórico, sin abonos): la
+                    # ventana de contado terminaba antes de tiempo y
+                    # ``contado_proy`` se ponía en cero antes de vencer de
+                    # verdad. El otro call site (ventana con abonos reales)
+                    # siempre pasó ``inp.feriados``, que es lo correcto.
+                    inp.feriados,
                 )
             if inp.fecha_calculo > fin_ventana_teorico:
                 contado_proy = Decimal("0")
@@ -1000,26 +1426,32 @@ def _calcular_componentes(
                 litros_eval += lh.cantidad * vol_unit_h
                 cajas_eval += lh.cantidad
 
-        unidad = str(r.unidad_medida or "").upper()
-        is_liters_rule = (unidad == "LITROS") or (
-            r.litros_minimo > 0 and (r.min_cantidad is None or r.min_cantidad == 0)
-        )
-        if is_liters_rule:
-            if litros_eval < r.litros_minimo:
+        # El tramo sale SIEMPRE de min/max_unidades y ``unidad_medida`` dice
+        # en qué se cuenta. Antes había un segundo campo, ``litros_minimo``,
+        # con el mismo dato: el formulario escribía los dos y acá había que
+        # desempatarlos con una cascada de fallbacks -- "es regla de litros
+        # si la unidad dice LITROS, o si litros_minimo tiene algo y
+        # min_unidades no". En producción los 5 registros tenían el mismo
+        # valor en ambos, así que el duplicado solo agregaba formas de
+        # equivocarse. Ver la migración de unificación de nombres.
+        unidad, _declarada = unidad_de_volumen(r)
+        if unidad == UNIDAD_LITROS:
+            if litros_eval < r.min_unidades:
+                continue
+            if r.max_unidades and r.max_unidades < 999999 and litros_eval > r.max_unidades:
                 continue
         else:
             val_eval = cajas_eval if cajas_eval > 0 else litros_eval
-            thresh = r.min_cantidad if (r.min_cantidad and r.min_cantidad > 0) else r.litros_minimo
-            if val_eval < thresh:
+            if val_eval < r.min_unidades:
                 continue
-            if r.max_cantidad and r.max_cantidad < 999999 and val_eval > r.max_cantidad:
+            if r.max_unidades and r.max_unidades < 999999 and val_eval > r.max_unidades:
                 continue
 
         if r.porcentaje <= 0:
             continue
 
-        unidad_tag = "L" if unidad == "LITROS" else " Unid"
-        min_tag = r.litros_minimo if unidad == "LITROS" else r.min_cantidad
+        unidad_tag = "L" if unidad == UNIDAD_LITROS else " Unid"
+        min_tag = r.min_unidades
         tag = f"{r.marca}/{r.categoria} (>{min_tag}{unidad_tag}): {r.porcentaje * 100}%"
         candidatas_vol.append(
             {
@@ -1043,9 +1475,24 @@ def _calcular_componentes(
         else:
             candidatas_linea.append(c)
 
+    # Cada regla que aporta queda registrada con su id, su porcentaje y lo
+    # que puso en monto: es el desglose que pidió el usuario para poder
+    # auditar de dónde sale el descuento (caso TERA, volumen).
+    componentes_vol: list[dict[str, Any]] = []
     for regla_subtotal, tag in reglas_vol_subtotal.values():
-        volumen_desc += precio_base * regla_subtotal.porcentaje
+        aporte = precio_base * regla_subtotal.porcentaje
+        volumen_desc += aporte
         detalles_vol.append(tag)
+        componentes_vol.append(
+            {
+                "regla_id": getattr(regla_subtotal, "regla_id", ""),
+                "descripcion": tag,
+                "monto": str(q2(aporte)),
+                "porcentaje": str(regla_subtotal.porcentaje),
+                "base": str(q2(precio_base)),
+                "alcance": "subtotal de la orden",
+            }
+        )
 
     # Reglas "línea": la MÁS ESPECÍFICA gana las líneas que le hacen match;
     # una regla más general (ej. toda "Industrial") solo cobra sobre las
@@ -1061,8 +1508,19 @@ def _calcular_componentes(
         subt_libre = sum((_precio_linea(inp, ln, lista) for ln in lineas_libres), Decimal("0"))
         if subt_libre <= 0:
             continue
-        volumen_desc += subt_libre * c["regla"].porcentaje
+        aporte_linea = subt_libre * c["regla"].porcentaje
+        volumen_desc += aporte_linea
         detalles_vol.append(c["tag"])
+        componentes_vol.append(
+            {
+                "regla_id": getattr(c["regla"], "regla_id", ""),
+                "descripcion": c["tag"],
+                "monto": str(q2(aporte_linea)),
+                "porcentaje": str(c["regla"].porcentaje),
+                "base": str(q2(subt_libre)),
+                "alcance": f"{len(lineas_libres)} línea(s)",
+            }
+        )
         lineas_reclamadas.update(ln.linea_id for ln in lineas_libres)
 
     if volumen_desc > 0:
@@ -1070,6 +1528,21 @@ def _calcular_componentes(
             origen="volumen",
             descripcion="Dcto volumen " + ", ".join(detalles_vol),
             monto=q2(volumen_desc),
+            # Con una sola regla el id va directo; con varias, el desglose
+            # queda en componentes y el id de arriba se deja vacío para no
+            # atribuirle todo el monto a una de ellas.
+            regla_id=(
+                str(componentes_vol[0]["regla_id"]) if len(componentes_vol) == 1 else ""
+            ),
+            porcentaje=(
+                Decimal(str(componentes_vol[0]["porcentaje"]))
+                if len(componentes_vol) == 1
+                else None
+            ),
+            base=(
+                Decimal(str(componentes_vol[0]["base"])) if len(componentes_vol) == 1 else None
+            ),
+            componentes=componentes_vol,
         )
         # Volumen <-> Recompra es el único par que se resuelve aquí y no por
         # el criterio general de "gana el de mayor valor": volumen anula la
@@ -1085,6 +1558,8 @@ def _calcular_componentes(
     producto_desc = Decimal("0")
     detalle_producto: DescuentoAplicado | None = None
     if descuentos_producto_ok:
+        # Mismo criterio que en Contado: mixto cuenta como USD, solo el
+        # pago íntegramente en bolívares se evalúa como VES.
         moneda_pago_prod = "USD"
         if inp.abonos:
             monedas_usadas_prod = {
@@ -1092,11 +1567,12 @@ def _calcular_componentes(
                 for _, pago in inp.abonos
                 if hasattr(pago, "moneda") and pago.moneda
             }
-            if "VES" in monedas_usadas_prod:
+            if monedas_usadas_prod == {"VES"}:
                 moneda_pago_prod = "VES"
 
         reglas_producto_subtotal: dict[str, Any] = {}
         detalles_prod = []
+        componentes_prod: list[dict[str, Any]] = []
         for ln in inp.lineas:
             d_prod = descuento_producto_vigente(
                 descuentos_producto_ok,
@@ -1115,18 +1591,50 @@ def _calcular_componentes(
                     if existente is None or d_prod.porcentaje > existente.porcentaje:
                         reglas_producto_subtotal[d_prod.regla_id] = d_prod
                 else:
-                    producto_desc += _precio_linea(inp, ln, lista) * d_prod.porcentaje
+                    base_ln = _precio_linea(inp, ln, lista)
+                    aporte_ln = base_ln * d_prod.porcentaje
+                    producto_desc += aporte_ln
                     detalles_prod.append(f"{ln.producto}: {d_prod.porcentaje * 100}%")
+                    componentes_prod.append(
+                        {
+                            "regla_id": getattr(d_prod, "regla_id", ""),
+                            "descripcion": f"{ln.producto}",
+                            "monto": str(q2(aporte_ln)),
+                            "porcentaje": str(d_prod.porcentaje),
+                            "base": str(q2(base_ln)),
+                            "alcance": "línea",
+                        }
+                    )
 
         for regla_subtotal in reglas_producto_subtotal.values():
-            producto_desc += precio_base * regla_subtotal.porcentaje
+            aporte_sub = precio_base * regla_subtotal.porcentaje
+            producto_desc += aporte_sub
             detalles_prod.append(f"{regla_subtotal.regla_id}: {regla_subtotal.porcentaje * 100}%")
+            componentes_prod.append(
+                {
+                    "regla_id": regla_subtotal.regla_id,
+                    "descripcion": regla_subtotal.regla_id,
+                    "monto": str(q2(aporte_sub)),
+                    "porcentaje": str(regla_subtotal.porcentaje),
+                    "base": str(q2(precio_base)),
+                    "alcance": "subtotal de la orden",
+                }
+            )
 
         if producto_desc > 0:
             detalle_producto = DescuentoAplicado(
                 origen="producto",
                 descripcion="Dcto producto " + ", ".join(detalles_prod),
                 monto=q2(producto_desc),
+                regla_id=(
+                    str(componentes_prod[0]["regla_id"]) if len(componentes_prod) == 1 else ""
+                ),
+                porcentaje=(
+                    Decimal(str(componentes_prod[0]["porcentaje"]))
+                    if len(componentes_prod) == 1
+                    else None
+                ),
+                componentes=componentes_prod,
             )
 
     lista_usd_name = _lista_usd_activa(inp)
@@ -1186,54 +1694,80 @@ def _calcular_componentes(
                 inp.valid_usd or None,
             )
         ]
-        regla_max = next(
-            (r for r in reglas_dif_vigentes if r.tipo_diferencial == "fijo_35_ves_usd"), None
-        )
-        regla_equiparar_activa = any(
-            r.tipo_diferencial == "equiparar_binance" for r in reglas_dif_vigentes
+        # UNA sola regla, no dos ramas. El usuario lo pidió tras ver que ya
+        # eran la misma cosa (septiembre 2026): "¿cuál es ahora la
+        # diferencia entre la regla de equiparar y la regla del 35 %?
+        # ¿pueden unificarse?".
+        #
+        # Lo eran. Las dos preguntaban "¿el pago cubre el teórico USD?" y
+        # las dos cerraban la brecha hasta lo pagado, topado al mismo
+        # porcentaje. Lo que las separaba era ``todos_usd_puro`` -- si TODOS
+        # los abonos estaban registrados con moneda USD -- y ese criterio es
+        # frágil: el usuario aclaró que los pagos se registran en VES y que
+        # el equivalente a las tres tasas se calcula solo. Que la regla
+        # dependa de en qué casilla quedó el billete es justo lo que produjo
+        # el caso S00010.
+        #
+        # Además el sustraendo ya era el mismo en la práctica:
+        # ``valor_pagado_usd`` elige el equivalente según
+        # ``tipo_tasa_abono``, que en producción vale BCV en el 100 % de las
+        # 1.467 vinculaciones, o sea que devolvía siempre ``equiv_usd_bcv``
+        # -- exactamente lo que usa ``valor_pagado_bcv_usd``.
+        #
+        # La regla unificada:
+        #   · cobertura medida a BINANCE, el tipo de cambio que menos
+        #     favorece al cliente. Para un pago en dólares las dos
+        #     valoraciones son el monto nominal, así que la vieja rama fija
+        #     entra sin cambiar.
+        #   · brecha medida contra el precio REAL de la línea y contra lo que
+        #     el pago vale en los términos de la factura (BCV).
+        #   · la guarda de pagos huérfanos, que antes solo cubría a la rama
+        #     "equiparar", vale ahora para las dos: es control de calidad
+        #     del dato, no una distinción de negocio.
+        #
+        # El TOPE sale de ``porcentaje_fijo`` de la regla, editable desde
+        # Configuración -> Diferencial Cambiario. Hoy es 0,35.
+        reglas_dif_aplicables = [
+            r
+            for r in reglas_dif_vigentes
+            if r.tipo_diferencial in ("fijo_35_ves_usd", "equiparar_binance")
+        ]
+        regla_max = max(
+            reglas_dif_aplicables, key=lambda r: r.porcentaje_fijo, default=None
         )
 
-        if regla_max is not None:
+        if regla_max is not None and not inp.cliente_tiene_pagos_huerfanos:
             diferencial_maximo = regla_max.porcentaje_fijo
-            todos_usd_puro = all(v.moneda_abono == Moneda.USD for v in vincs)
-
-            # Regla 1: fijo, pago 100% USD, orden pagada según teórico USD.
-            monto_fijo = Decimal("0")
-            if todos_usd_puro:
-                pagado_usd = valor_pagado_usd(vincs)
-                if pagado_usd >= (precio_target_usd or Decimal("0")) - _EPS:
-                    monto_fijo = precio_base * diferencial_maximo
-
-            # Regla 2: "equiparar", pago mixto/Binance, sin huérfanos.
-            monto_equiparar = Decimal("0")
             if (
-                regla_equiparar_activa
-                and not todos_usd_puro
-                and not inp.cliente_tiene_pagos_huerfanos
+                diferencial_maximo > 0
+                and valor_pagado_binance_usd(vincs)
+                >= (precio_target_usd or Decimal("0")) - _EPS
             ):
-                val_binance = valor_pagado_binance_usd(vincs)
-                val_bcv = valor_pagado_bcv_usd(vincs)
-                if (
-                    val_binance >= (precio_target_usd or Decimal("0")) - _EPS
-                    and precio_base > val_bcv
-                ):
-                    otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-                    gap = max(Decimal("0"), precio_base - otros_desc_pre - val_bcv)
-                    monto_equiparar = min(gap, precio_base * diferencial_maximo)
-
-            diferencial_cambiario = max(monto_fijo, monto_equiparar)
-            if diferencial_cambiario > 0:
-                if monto_fijo >= monto_equiparar:
-                    pct_str = f"{diferencial_maximo * 100:.1f}%"
-                    desc_str = f"Diferencial Cambiario fijo ({pct_str}, pago 100% USD)"
-                else:
-                    monto_str = q2(diferencial_cambiario)
-                    desc_str = f"Diferencial Cambiario - Equiparación (${monto_str})"
-                detalle_diferencial = DescuentoAplicado(
-                    origen="bcv_completo",
-                    descripcion=desc_str,
-                    monto=q2(diferencial_cambiario),
+                techo = precio_base * diferencial_maximo
+                otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
+                pagado_en_factura = valor_pagado_bcv_usd(vincs)
+                precio_real_orden = sum(
+                    (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
+                    Decimal("0"),
                 )
+                # Sin líneas con precio propio no hay con qué medir la brecha:
+                # "no sé" no es "cero", así que manda el precio de lista.
+                base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
+                brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
+                diferencial_cambiario = min(techo, brecha)
+                if diferencial_cambiario > 0:
+                    pct_str = f"{diferencial_maximo * 100:.1f}%"
+                    detalle_diferencial = DescuentoAplicado(
+                        origen="bcv_completo",
+                        descripcion=(
+                            f"Diferencial Cambiario (tope {pct_str}, "
+                            f"brecha hasta lo pagado)"
+                        ),
+                        monto=q2(diferencial_cambiario),
+                        regla_id=getattr(regla_max, "regla_id", "") or "",
+                        porcentaje=diferencial_maximo,
+                        base=q2(base_brecha),
+                    )
 
     return _Componentes(
         precio_base=precio_base,
@@ -1569,6 +2103,8 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     if final_contado > 0:
         detalle.append(
             DescuentoAplicado(
+                regla_id=getattr(comp.regla_contado_dominante, "regla_id", "") or "",
+                porcentaje=getattr(comp.regla_contado_dominante, "porcentaje", None),
                 origen="contado",
                 descripcion=(
                     "contado por marca/categoría"
@@ -1623,7 +2159,18 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         precio_base_calculado=q2(comp.precio_base),
         descuentos_detalle=detalle,
         total_descuentos=q2(total_descuentos),
-        ncs_calculadas=q2(comp.nc),
+        # ``final_nc``, no ``comp.nc``: el valor DESPUÉS de aplicar las
+        # exclusiones entre reglas. Bug encontrado en la verificación de
+        # escenarios (septiembre 2026): cuando una exclusión anulaba el
+        # descuento de primera compra --pasa cuando dispara Recompra, que
+        # lo excluye-- el detalle no se emitía (usa ``final_nc``) pero este
+        # campo seguía reportando el valor previo. El resultado era una NC
+        # que la pantalla no podía justificar con ningún renglón.
+        #
+        # ``total_motor`` nunca estuvo mal: ``neto`` ya usaba ``final_nc``.
+        # Medido en producción: 7 filas de 724, por 28,50 en total, todas
+        # con Recompra activa.
+        ncs_calculadas=q2(final_nc),
         total_motor=q2(neto),
         requiere_revision=requiere_revision,
         candidata_a_cierre=candidata,
@@ -1634,3 +2181,44 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         descuentos_teorico_ves=descuentos_teorico_ves,
         descuentos_teorico_usd=descuentos_teorico_usd,
     )
+
+
+# --- la unidad en que se cuenta un tramo de volumen --------------------------
+
+UNIDAD_LITROS = "LITROS"
+UNIDAD_POR_DEFECTO = "UNIDADES"
+
+
+def unidad_de_volumen(regla: Any) -> tuple[str, bool]:
+    """En que unidad se cuenta el tramo de una regla de volumen, y si estaba declarada.
+
+    Trigesimoprimera pieza de la Fase 2.4. El motor decide el tramo con
+    ``unidad == "LITROS"`` y trata cualquier otra cosa como unidades/cajas, pero la
+    pantalla de reglas (``get_todas_reglas_descuento``) se quedo con la cascada
+    ANTERIOR a la migracion de unificacion de nombres:
+
+        u_med = str(getattr(r, "unidad_medida", "") or "").strip()
+        if not u_med or u_med == "None":
+            u_med = "LITROS" if (float(r.litros_minimo) > 0 and ...) else "CAJAS"
+
+    ``litros_minimo`` **ya no existe** en ``DescuentoVolumen`` --la migracion lo
+    elimino porque era el mismo dato con otro nombre-- asi que esa linea es un
+    ``AttributeError`` que el ``except Exception`` del endpoint convierte en **500**.
+    Una sola regla de volumen con la unidad vacia deja en blanco la pantalla de reglas
+    entera, no solo esa fila. Se actualizo el motor y no la pantalla.
+
+    Que el dato malo sea alcanzable no es una hipotesis: la columna es ``nullable=False``
+    con ``server_default="UNIDADES"``, o sea que prohibe NULL pero **admite cadena
+    vacia**, y el ``u_med == "None"`` de ese codigo prueba que la cadena "None" llego
+    ahi alguna vez.
+
+    **El segundo valor es la mitad del asunto.** Con ``False``, la unidad NO estaba en
+    el dato: es la que el motor va a usar de todos modos, y la pantalla tiene que poder
+    decir que la infirio. Adivinar en silencio entre litros y cajas decide si "10"
+    significa diez litros o diez cajas, y de eso depende si un descuento por volumen se
+    otorga o no.
+    """
+    crudo = str(getattr(regla, "unidad_medida", "") or "").strip().upper()
+    if not crudo or crudo == "NONE":
+        return UNIDAD_POR_DEFECTO, False
+    return crudo, True

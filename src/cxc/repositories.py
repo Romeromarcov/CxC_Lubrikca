@@ -19,6 +19,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from .engine.identidad_de_reglas import ORDEN_DE_BUSQUEDA
 from .models import (
     BandejaFacturacion,
     Cliente,
@@ -255,6 +256,34 @@ class Repository(ABC):
         """
 
     @abstractmethod
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        """Como ``update_vinculaciones`` pero una fila que viola una invariante
+
+        de dinero no tumba el lote: se omite, y se devuelve junto con la
+        violación para que el llamador la registre. Es la escritura de los
+        lotes del demonio, donde una fila mala no puede dejar sin escribir a
+        las demás. Ver ``db/invariantes.py``.
+        """
+
+    @abstractmethod
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        """Borra Vinculaciones por id. Devuelve cuántas se borraron.
+
+        Agregado en la auditoría de agosto 2026: no existía forma de
+        eliminar una Vinculación en ningún backend, así que las
+        sugerencias automáticas del daemon (``_auto_vincular_fifo_
+        pendientes``) solo podían acumularse o re-apuntarse, nunca
+        descartarse -- ni siquiera cuando se descubrió que salieron de un
+        disponible inflado (ver ``residual_disponible_por_pago``).
+
+        Solo para sugerencias que hay que rehacer: una Vinculación
+        CONCILIADO refleja una reconciliación real de Odoo y no debe
+        borrarse desde acá.
+        """
+
+    @abstractmethod
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]: ...
 
     @abstractmethod
@@ -301,14 +330,28 @@ class Repository(ABC):
     @abstractmethod
     def set_regla_activo(self, tabla: str, regla_id: str, activo: bool) -> bool: ...
 
+    @abstractmethod
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        """En que tablas de reglas existe ese ``regla_id``, en orden canonico.
+
+        Solo lectura. Devuelve un nombre por tabla FISICA --nunca el alias
+        ``DescuentosMarcaCategoria`` ademas de ``DescuentosProntoPago``, que apuntan
+        a la misma-- para que quien cuente cuantas tablas lo tienen no cuente dos.
+
+        Existe porque ``post_toggle_descuento`` elegia la tabla a tocar probando
+        ``set_regla_activo`` hasta que una respondia, y asi no habia forma de saber
+        si el id tambien estaba en otra. Ver ``engine/identidad_de_reglas.py``.
+        """
+        ...
+
     # --- Tablas de auditoría/histórico -- filas crudas dict[str,str], mismo
     # shape en ambos backends (equivalentes a lo que daba
     # GspreadGateway.read_rows para cada pestaña). ---------------------------
     @abstractmethod
-    def all_anomalias_aceptadas(self) -> list[dict[str, str]]: ...
+    def all_discrepancias_aceptadas(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
-    def append_anomalia_aceptada(self, row: dict[str, str]) -> None: ...
+    def append_discrepancia_aceptada(self, row: dict[str, str]) -> None: ...
 
     # --- Bandeja de Auditoría de Descuentos (motor vs. Odoo -- pendientes y
     # sobre-descuentos, ver engine/discount_audit.py) -- promovidos a
@@ -492,7 +535,7 @@ class InMemoryRepository(Repository):
         self._descuentos_diferencial: list[DescuentoDiferencialCambiario] = []
         self._usuarios: dict[str, dict[str, str]] = {}
         self._pagos_human: dict[str, dict[str, str]] = {}
-        self._anomalias_aceptadas: list[dict[str, str]] = []
+        self._discrepancias_aceptadas: list[dict[str, str]] = []
         self._auditoria: list[dict[str, Any]] = []
         self._listas_precios_historicas: list[dict[str, str]] = []
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
@@ -696,6 +739,21 @@ class InMemoryRepository(Repository):
         for v in vincs:
             self._vinculaciones[v.vinc_id] = v
 
+    def update_vinculaciones_omitiendo_invalidas(
+        self, vincs: list[Vinculacion]
+    ) -> list[tuple[Vinculacion, Any]]:
+        # El repositorio en memoria no impone invariantes (no tiene los CHECK de
+        # la base); escribe todo y no rechaza nada.
+        self.update_vinculaciones(vincs)
+        return []
+
+    def delete_vinculaciones(self, vinc_ids: list[str]) -> int:
+        borradas = 0
+        for vid in vinc_ids:
+            if self._vinculaciones.pop(vid, None) is not None:
+                borradas += 1
+        return borradas
+
     def descuentos_marca_categoria(self) -> list[DescuentoMarcaCategoria]:
         return list(self._descuentos)
 
@@ -799,11 +857,18 @@ class InMemoryRepository(Repository):
                 return True
         return False
 
-    def all_anomalias_aceptadas(self) -> list[dict[str, str]]:
-        return [dict(r) for r in self._anomalias_aceptadas]
+    def tablas_con_regla(self, regla_id: str) -> list[str]:
+        return [
+            tabla
+            for tabla in ORDEN_DE_BUSQUEDA
+            if any(r.regla_id == regla_id for r in (self._regla_list(tabla) or []))
+        ]
 
-    def append_anomalia_aceptada(self, row: dict[str, str]) -> None:
-        self._anomalias_aceptadas.append(dict(row))
+    def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._discrepancias_aceptadas]
+
+    def append_discrepancia_aceptada(self, row: dict[str, str]) -> None:
+        self._discrepancias_aceptadas.append(dict(row))
 
     def all_auditoria(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self._auditoria]

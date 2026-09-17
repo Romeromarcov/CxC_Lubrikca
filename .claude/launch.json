@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cxc-web",
+      "runtimeExecutable": "C:\\Users\\PC\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "cxc.web.app:app", "--port", "8000", "--app-dir", "src"],
+      "port": 8000
+    }
+  ]
+}

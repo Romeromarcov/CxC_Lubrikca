@@ -30,6 +30,7 @@ from typing import Any
 from ..config import OdooConfig
 from ..decimal_utils import to_decimal
 from ..models import (
+    AplicacionConciliada,
     Cliente,
     Entrega,
     EntregaLinea,
@@ -51,6 +52,28 @@ ODOO_DATE_FMT = "%Y-%m-%d"
 # estados validos son draft/in_process/paid/canceled/rejected; un pago
 # confirmado/procesado queda en in_process o paid (ver docs/ODOO_MAPEO.md).
 PAGO_ESTADOS_CONFIRMADOS = ["in_process", "paid"]
+
+
+def so_ids_de_invoice_origin(invoice_origin: str) -> list[str]:
+    """``invoice_origin`` puede nombrar MÁS de una orden.
+
+    Bug real de producción (17-sep-2026): una factura que Odoo arma
+    consolidando varias órdenes de venta guarda ``invoice_origin`` como los
+    nombres separados por ``", "`` -- por ejemplo ``"S00718, S00700"``. Cada
+    sitio que leía ese campo como si fuera un ``so_id`` único (la sync de
+    aplicaciones conciliadas, la lectura de pagos conciliados en vivo) lo
+    escribía tal cual en ``Vinculacion.so_id``, que SÍ tiene clave foránea
+    contra ``ordenes_venta`` -- ninguna orden se llama "S00718, S00700", así
+    que el INSERT violaba la restricción. Y como esas dos escrituras van en
+    lote, la fila mala tumbaba a las demás del mismo ciclo: el demonio dejó
+    de poder escribir Vinculaciones nuevas cada vez que ese pago entraba en
+    el lote, cada cinco minutos, hasta que se corrigió esto.
+
+    Devuelve la lista de nombres (uno solo en el caso normal). Repartir el
+    monto de una factura consolidada entre las órdenes que la componen es
+    una decisión de negocio que este helper NO toma -- ver el llamador.
+    """
+    return [s.strip() for s in (invoice_origin or "").split(",") if s.strip()]
 
 
 def _m2o_id(value: Any) -> str:
@@ -600,6 +623,26 @@ class OdooXmlRpcReader(OdooReader):
         return {k: v[0] for k, v in primeras.items()}
 
     def _facturas_por_origen(self, so_names: list[str]) -> dict[str, str]:
+        """Factura VIGENTE de cada orden.
+
+        Bug real (auditoría de agosto 2026, casos Michele Carfora S00817 y
+        Talleres Leo S00886): una orden puede tener varias facturas cuando
+        se anula la primera con una Nota de Crédito por el total y se
+        vuelve a facturar. Esta función pedía solo ``state = posted`` -- y
+        una factura anulada SIGUE posteada, lo que cambia es su
+        ``payment_state`` a ``reversed`` -- y después colapsaba todas las
+        coincidencias en un dict, quedándose con una arbitraria.
+
+        Resultado medido: 16 de 718 órdenes apuntaban a una factura
+        anulada, entre ellas S00573 (1.362.751), S00479 (1.113.126) y
+        S00294 (1.605.846). El sistema comparaba saldos y descuentos contra
+        un documento que ya no existe comercialmente. Verificado que no era
+        dato viejo: una llamada fresca devolvía igual la factura anulada.
+
+        Ahora se descartan las anuladas y, si quedan varias, gana la más
+        reciente. Una NC PARCIAL no anula: deja la factura en ``not_paid``
+        o ``partial``, así que esa sigue siendo la vigente y no se pierde.
+        """
         if not so_names:
             return {}
         recs = self._search_read(
@@ -609,9 +652,19 @@ class OdooXmlRpcReader(OdooReader):
                 ["move_type", "=", "out_invoice"],
                 ["state", "=", "posted"],
             ],
-            ["id", "invoice_origin"],
+            ["id", "invoice_origin", "payment_state"],
         )
-        return {str(r["invoice_origin"]): str(r["id"]) for r in recs if r.get("invoice_origin")}
+        vigentes: dict[str, int] = {}
+        for r in recs:
+            origen = str(r.get("invoice_origin") or "")
+            if not origen:
+                continue
+            if str(r.get("payment_state") or "") == "reversed":
+                continue  # anulada por NC total
+            fid = int(r["id"])
+            if fid > vigentes.get(origen, 0):
+                vigentes[origen] = fid
+        return {origen: str(fid) for origen, fid in vigentes.items()}
 
     # --- Facturas (espejo inmutable, Fase 0 del plan de consolidación de
     # fuentes) -----------------------------------------------------------------
@@ -745,11 +798,28 @@ class OdooXmlRpcReader(OdooReader):
     # fuentes) -- mitad "factura" de la lógica de descuentos de línea que
     # _leer_descuentos_lineas_odoo arma hoy en vivo. Solo líneas de
     # producto (display_type in [product, False]) -- secciones/notas no
-    # tienen descuento ni monto. -------------------------------------------
+    # tienen descuento ni monto.
+    #
+    # ``move_id.move_type`` -- mismo filtro que ``changed_facturas``, y por
+    # el mismo motivo que ``changed_entregas_lineas`` filtra por
+    # picking_type (ver su comentario). Medido en el Odoo de prueba
+    # (septiembre 2026, Fase 1.3 del plan de blindaje): sin el filtro este
+    # espejo traía 17.167 filas de las cuales 15.380 -- el 89,6% -- eran
+    # líneas de facturas de PROVEEDOR, asientos de diario y movimientos de
+    # pago, sin ninguna relación con la cuenta por cobrar. El único
+    # consumidor de hoy se salvaba porque cruza contra ``invoice_ids`` y
+    # descartaba el resto, así que ningún monto estaba mal; lo que se
+    # arregla es el costo (sincronizar y cargar en memoria diez veces lo
+    # necesario) y la trampa que quedaba armada para el próximo consumidor
+    # que agregara sin ese cruce. ------------------------------------------
     def changed_lineas_factura(self, since: datetime | None) -> list[LineaFactura]:
         recs = self._search_read(
             self.MODEL_MOVE_LINE,
-            self._delta(since) + [["display_type", "in", ["product", False]]],
+            self._delta(since)
+            + [
+                ["display_type", "in", ["product", False]],
+                ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]],
+            ],
             [
                 "id",
                 "move_id",
@@ -936,10 +1006,22 @@ class OdooXmlRpcReader(OdooReader):
         return reembolsos
 
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
+        # Sin filtro por ``is_reconciled``. Estuvo en ``False`` mucho
+        # tiempo y era la causa raíz de que el motor viera menos de un
+        # tercio de la cobranza: en cuanto Odoo terminaba de reconciliar
+        # un pago, el espejo dejaba de traerlo. Medido en producción
+        # (septiembre 2026): 886 pagos conciliados invisibles, 95.939,80
+        # USD y 69.341.862,59 VES sobre 461 órdenes. El efecto no era
+        # dejar de cobrar -- Odoo cobraba igual -- sino que las reglas de
+        # descuento evaluaban esas órdenes como si estuvieran a medio
+        # pagar, y el cliente perdía descuentos que sí se ganó.
+        #
+        # Traerlos no infla el reparto FIFO: ``residual_disponible_por_
+        # pago`` ya consulta ``amount_residual_currency`` en Odoo, y un
+        # pago totalmente reconciliado reporta 0 disponible.
         domain = self._delta(since) + [
             ["payment_type", "=", "inbound"],
             ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
-            ["is_reconciled", "=", False],
         ]
         recs = self._search_read(
             self.MODEL_PAGO,
@@ -1060,6 +1142,169 @@ class OdooXmlRpcReader(OdooReader):
                 result.setdefault(so_name, []).append(p)
 
         return result
+
+    def pagos_por_id(self, pago_ids: list[str]) -> list[Pago]:
+        """Los pagos indicados, sin pasar por la ventana delta.
+
+        ``changed_pagos`` filtra por ``write_date`` de las últimas 48 h --
+        correcto para el sync incremental, inútil para rescatar un pago
+        que Odoo reconcilió hace meses y nunca entró al espejo. Y hace
+        falta rescatarlo: ``vinculaciones.pago_id`` es una clave foránea
+        contra ``pagos``, así que una Vinculación sobre un pago ausente ni
+        siquiera se puede escribir.
+        """
+        ids = [int(p) for p in pago_ids if str(p).isdigit()]
+        if not ids:
+            return []
+        recs = self._read(
+            self.MODEL_PAGO,
+            sorted(set(ids)),
+            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "move_id"],
+        )
+        vendedores = self._vendedor_por_partner(_ids_of(recs, "partner_id"))
+        for r in recs:
+            pid = _m2o_id(r.get("partner_id"))
+            r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
+        return [map_pago(r) for r in recs]
+
+    def aplicaciones_conciliadas(
+        self, so_names: list[str] | None = None
+    ) -> list[AplicacionConciliada]:
+        """Cómo repartió Odoo cada pago entre las facturas, con el monto real.
+
+        Fuente: ``account.partial.reconcile``, que es donde Odoo guarda la
+        reconciliación pieza por pieza. Se recorre la cadena
+
+            account.payment → su asiento → su línea por cobrar
+              → partial.reconcile (lado crédito)
+              → línea por cobrar de la factura (lado débito)
+              → account.move → invoice_origin → sale.order
+
+        y de cada partial se toma ``credit_amount_currency``: lo aplicado
+        EN LA MONEDA DEL PAGO.
+
+        Por qué no sirve ``reconciled_invoice_ids`` (lo que usaba
+        ``pagos_conciliados_por_orden``): da la lista de facturas pero no
+        cuánto fue a cada una, así que un pago repartido entre dos órdenes
+        se contaba COMPLETO en las dos. Con ``partial.reconcile`` el
+        reparto cuadra exacto -- verificado contra las 4 órdenes que
+        salían por la regla 5 del árbol de CxC (S00584, S00638, S00105,
+        S00428): los parciales suman 100,0 % del total de cada factura.
+
+        Los asientos de diferencial cambiario también generan partials,
+        pero no tienen ``account.payment`` detrás y quedan fuera por
+        construcción: solo se parte de líneas de pagos reales.
+        """
+        pagos = self._search_read(
+            self.MODEL_PAGO,
+            [
+                ["payment_type", "=", "inbound"],
+                ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+            ],
+            ["id", "move_id", "currency_id", "date"],
+        )
+        por_move: dict[int, dict[str, Any]] = {}
+        for p in pagos:
+            mid = _m2o_id(p.get("move_id"))
+            if mid:
+                por_move[int(mid)] = p
+        if not por_move:
+            return []
+
+        lineas_pago = self._search_read(
+            self.MODEL_MOVE_LINE,
+            [
+                ["move_id", "in", sorted(por_move)],
+                ["account_type", "=", "asset_receivable"],
+            ],
+            ["id", "move_id"],
+        )
+        linea_a_pago: dict[int, dict[str, Any]] = {}
+        for ln in lineas_pago:
+            mid = _m2o_id(ln.get("move_id"))
+            if mid and int(mid) in por_move:
+                linea_a_pago[int(ln["id"])] = por_move[int(mid)]
+        if not linea_a_pago:
+            return []
+
+        partials = self._search_read(
+            "account.partial.reconcile",
+            [["credit_move_id", "in", sorted(linea_a_pago)]],
+            ["credit_move_id", "debit_move_id", "credit_amount_currency"],
+        )
+        if not partials:
+            return []
+
+        deb_ids = sorted({int(_m2o_id(pr["debit_move_id"])) for pr in partials})
+        lineas_fact = self._read(self.MODEL_MOVE_LINE, deb_ids, ["id", "move_id"])
+        linea_a_factura = {
+            int(ln["id"]): int(_m2o_id(ln["move_id"]))
+            for ln in lineas_fact
+            if _m2o_id(ln.get("move_id"))
+        }
+
+        facturas = self._read(
+            self.MODEL_MOVE,
+            sorted(set(linea_a_factura.values())),
+            ["id", "invoice_origin", "move_type", "state"],
+        )
+        # Una factura "posted" out_invoice normalmente nombra UNA orden. Cuando
+        # Odoo consolida varias órdenes en una sola factura, invoice_origin las
+        # nombra a todas separadas por ", " -- ver so_ids_de_invoice_origin.
+        # Repartir el monto de esta factura entre esas órdenes es una decisión
+        # de negocio (¿por línea? ¿por peso del subtotal?) que esta función no
+        # toma: la factura se excluye y queda avisada, no se inventa un reparto.
+        facturas_multi_so: dict[int, list[str]] = {}
+        factura_a_so: dict[int, str] = {}
+        for f in facturas:
+            if not (
+                f.get("state") == "posted"
+                and f.get("move_type") == "out_invoice"
+                and f.get("invoice_origin")
+            ):
+                continue
+            so_ids_f = so_ids_de_invoice_origin(str(f.get("invoice_origin") or ""))
+            if len(so_ids_f) == 1:
+                factura_a_so[int(f["id"])] = so_ids_f[0]
+            elif len(so_ids_f) > 1:
+                facturas_multi_so[int(f["id"])] = so_ids_f
+        if facturas_multi_so:
+            logger.warning(
+                "aplicaciones_conciliadas: %s factura(s) consolidan varias órdenes y se "
+                "excluyen (no hay forma de repartir el pago entre ellas sin una regla de "
+                "negocio): %s",
+                len(facturas_multi_so),
+                facturas_multi_so,
+            )
+
+        filtro = set(so_names) if so_names is not None else None
+        salida: list[AplicacionConciliada] = []
+        for pr in partials:
+            pago = linea_a_pago.get(int(_m2o_id(pr["credit_move_id"])))
+            if not pago:
+                continue
+            factura_id = linea_a_factura.get(int(_m2o_id(pr["debit_move_id"])))
+            so_id = factura_a_so.get(factura_id) if factura_id else None
+            if not so_id or (filtro is not None and so_id not in filtro):
+                continue
+            monto = _dec(pr.get("credit_amount_currency"))
+            if monto <= 0:
+                continue
+            salida.append(
+                AplicacionConciliada(
+                    pago_id=str(pago["id"]),
+                    so_id=so_id,
+                    factura_id=str(factura_id),
+                    monto=monto,
+                    moneda=(
+                        Moneda.USD
+                        if _m2o_name(pago.get("currency_id")) == "USD"
+                        else Moneda.VES
+                    ),
+                    fecha_pago=_to_datetime(pago.get("date")).date(),
+                )
+            )
+        return salida
 
     def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
         if not partner_ids:

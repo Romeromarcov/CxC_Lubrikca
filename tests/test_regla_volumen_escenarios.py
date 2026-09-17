@@ -23,10 +23,11 @@ PROD = "1033"
 
 def _regla_litros(regla_id="VOL_L", *, marca="*", categoria="*", litros="100", pct="0.05",
                   desde=date(2026, 1, 1), hasta=None):
+    # El umbral vive en min_unidades y unidad_medida dice que son litros;
+    # ya no hay un segundo campo que ponerlo en cero.
     r = b.descuento_volumen(regla_id, marca=marca, categoria=categoria, litros_minimo=litros,
                             porcentaje=pct, desde=desde, hasta=hasta)
     r.unidad_medida = "LITROS"
-    r.min_cantidad = Decimal("0")
     return r
 
 
@@ -35,8 +36,8 @@ def _regla_cajas(regla_id="VOL_C", *, marca="*", categoria="*", minimo="10", max
     r = b.descuento_volumen(regla_id, marca=marca, categoria=categoria, litros_minimo="0",
                             porcentaje=pct)
     r.unidad_medida = "CAJAS"
-    r.min_cantidad = Decimal(minimo)
-    r.max_cantidad = Decimal(maximo)
+    r.min_unidades = Decimal(minimo)
+    r.max_unidades = Decimal(maximo)
     return r
 
 
@@ -78,7 +79,7 @@ def test_volumen_por_cajas_dentro_del_tramo_aplica():
 
 
 def test_volumen_por_cajas_sobre_el_tramo_no_aplica():
-    """``max_cantidad`` acota el tramo: 20 cajas ya no es el tramo 10-19."""
+    """``max_unidades`` acota el tramo: 20 cajas ya no es el tramo 10-19."""
     assert calcular_factura(
         _inp([_regla_cajas(minimo="10", maximo="19")], cantidad="20")
     ).total_descuentos == Decimal("0.00")

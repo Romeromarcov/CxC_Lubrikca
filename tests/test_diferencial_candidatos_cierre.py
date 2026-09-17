@@ -17,7 +17,6 @@ HOY = date(2026, 8, 12)
 def _regla_max(porcentaje: str = "0.35", activo: bool = True) -> DescuentoDiferencialCambiario:
     return DescuentoDiferencialCambiario(
         regla_id="DIF_35_VES",
-        nombre="35% Fijo VES a USD",
         tipo_diferencial="fijo_35_ves_usd",
         porcentaje_fijo=Decimal(porcentaje),
         vigencia_desde=date(2026, 1, 1),
@@ -28,7 +27,6 @@ def _regla_max(porcentaje: str = "0.35", activo: bool = True) -> DescuentoDifere
 def _regla_candidatos(activo: bool = True) -> DescuentoDiferencialCambiario:
     return DescuentoDiferencialCambiario(
         regla_id="DIF_CANDIDATOS_CIERRE",
-        nombre="Candidatos a Cierre de Factura",
         tipo_diferencial="candidato_cierre_factura",
         vigencia_desde=date(2026, 1, 1),
         activo=activo,
@@ -147,7 +145,6 @@ def test_pagado_bcv_no_prorrateado_se_topa_al_100pct() -> None:
 def test_regla_max_vencida_reporte_deshabilitado() -> None:
     regla_vencida = DescuentoDiferencialCambiario(
         regla_id="DIF_35_VES",
-        nombre="35% Fijo VES a USD",
         tipo_diferencial="fijo_35_ves_usd",
         porcentaje_fijo=Decimal("0.35"),
         vigencia_desde=date(2025, 1, 1),

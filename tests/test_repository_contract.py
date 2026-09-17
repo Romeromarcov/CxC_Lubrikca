@@ -194,6 +194,17 @@ def test_vinculaciones_update_individual_y_lote(repo: Repository) -> None:
     repo.update_vinculaciones([])
     assert len(repo.all_vinculaciones()) == 2
 
+    # Borrado por id (agregado en la auditoría de agosto 2026: no existía
+    # forma de descartar una sugerencia automática del daemon).
+    assert repo.delete_vinculaciones(["V2"]) == 1
+    restantes = {v.vinc_id for v in repo.all_vinculaciones()}
+    assert restantes == {"V1"}
+
+    # Ids inexistentes y lote vacío: no-ops seguros.
+    assert repo.delete_vinculaciones(["NO_EXISTE"]) == 0
+    assert repo.delete_vinculaciones([]) == 0
+    assert len(repo.all_vinculaciones()) == 1
+
 
 def test_bandeja_reemplaza_descuentos_detalle_en_cada_upsert(repo: Repository) -> None:
     _seed_cliente_orden_pago(repo)
