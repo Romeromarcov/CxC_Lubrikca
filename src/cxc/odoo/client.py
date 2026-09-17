@@ -54,6 +54,28 @@ ODOO_DATE_FMT = "%Y-%m-%d"
 PAGO_ESTADOS_CONFIRMADOS = ["in_process", "paid"]
 
 
+def so_ids_de_invoice_origin(invoice_origin: str) -> list[str]:
+    """``invoice_origin`` puede nombrar MÁS de una orden.
+
+    Bug real de producción (17-sep-2026): una factura que Odoo arma
+    consolidando varias órdenes de venta guarda ``invoice_origin`` como los
+    nombres separados por ``", "`` -- por ejemplo ``"S00718, S00700"``. Cada
+    sitio que leía ese campo como si fuera un ``so_id`` único (la sync de
+    aplicaciones conciliadas, la lectura de pagos conciliados en vivo) lo
+    escribía tal cual en ``Vinculacion.so_id``, que SÍ tiene clave foránea
+    contra ``ordenes_venta`` -- ninguna orden se llama "S00718, S00700", así
+    que el INSERT violaba la restricción. Y como esas dos escrituras van en
+    lote, la fila mala tumbaba a las demás del mismo ciclo: el demonio dejó
+    de poder escribir Vinculaciones nuevas cada vez que ese pago entraba en
+    el lote, cada cinco minutos, hasta que se corrigió esto.
+
+    Devuelve la lista de nombres (uno solo en el caso normal). Repartir el
+    monto de una factura consolidada entre las órdenes que la componen es
+    una decisión de negocio que este helper NO toma -- ver el llamador.
+    """
+    return [s.strip() for s in (invoice_origin or "").split(",") if s.strip()]
+
+
 def _m2o_id(value: Any) -> str:
     """Odoo devuelve many2one como ``[id, "nombre"]`` o ``False``."""
     if isinstance(value, list | tuple) and value:
@@ -1226,13 +1248,34 @@ class OdooXmlRpcReader(OdooReader):
             sorted(set(linea_a_factura.values())),
             ["id", "invoice_origin", "move_type", "state"],
         )
-        factura_a_so = {
-            int(f["id"]): str(f.get("invoice_origin") or "").strip()
-            for f in facturas
-            if f.get("state") == "posted"
-            and f.get("move_type") == "out_invoice"
-            and f.get("invoice_origin")
-        }
+        # Una factura "posted" out_invoice normalmente nombra UNA orden. Cuando
+        # Odoo consolida varias órdenes en una sola factura, invoice_origin las
+        # nombra a todas separadas por ", " -- ver so_ids_de_invoice_origin.
+        # Repartir el monto de esta factura entre esas órdenes es una decisión
+        # de negocio (¿por línea? ¿por peso del subtotal?) que esta función no
+        # toma: la factura se excluye y queda avisada, no se inventa un reparto.
+        facturas_multi_so: dict[int, list[str]] = {}
+        factura_a_so: dict[int, str] = {}
+        for f in facturas:
+            if not (
+                f.get("state") == "posted"
+                and f.get("move_type") == "out_invoice"
+                and f.get("invoice_origin")
+            ):
+                continue
+            so_ids_f = so_ids_de_invoice_origin(str(f.get("invoice_origin") or ""))
+            if len(so_ids_f) == 1:
+                factura_a_so[int(f["id"])] = so_ids_f[0]
+            elif len(so_ids_f) > 1:
+                facturas_multi_so[int(f["id"])] = so_ids_f
+        if facturas_multi_so:
+            logger.warning(
+                "aplicaciones_conciliadas: %s factura(s) consolidan varias órdenes y se "
+                "excluyen (no hay forma de repartir el pago entre ellas sin una regla de "
+                "negocio): %s",
+                len(facturas_multi_so),
+                facturas_multi_so,
+            )
 
         filtro = set(so_names) if so_names is not None else None
         salida: list[AplicacionConciliada] = []

@@ -233,6 +233,16 @@ TIPOS_QUE_EL_DEMONIO_NO_PUDO_ESCRIBIR = {
         "No hay tasa para la fecha de ese pago en SerieTasas ni en TasasHistoricasAuditoria: "
         "cargarla, y el ciclo siguiente lo toma."
     ),
+    "vinculacion_discrepancia_multi_orden": (
+        "Odoo reconcilio este pago contra mas de una orden a la vez (o contra una factura "
+        "que consolida varias ordenes): no hay forma automatica de repartirlo. Revisar en "
+        "Odoo cual orden corresponde."
+    ),
+    "aplicacion_no_escrita_error_inesperado": (
+        "Una aplicacion de Odoo no se pudo escribir por un error de base no previsto "
+        "(hallazgo real, 17-sep-2026: facturas que consolidan varias ordenes). Revisar el "
+        "detalle -- puede requerir un arreglo de codigo, no solo cargar un dato."
+    ),
 }
 
 

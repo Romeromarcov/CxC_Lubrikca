@@ -143,16 +143,23 @@ def test_lo_que_el_demonio_no_pudo_escribir_se_reporta_por_tipo_con_los_pagos(vi
         {
             "vinculacion_rechazada_por_invariante": ["200", "40"],
             "pago_sin_tasa_para_su_fecha": [str(i) for i in range(1, 12)],
+            "vinculacion_discrepancia_multi_orden": ["1866"],
+            "aplicacion_no_escrita_error_inesperado": [],
         }
     )
     vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe)
 
-    assert informe.evaluados == 2
+    assert informe.evaluados == 4
     por_nombre = {h.nombre: h for h in informe.hallazgos}
+    # El cuarto tipo no aportó filas (lista vacía) y por eso no genera hallazgo --
+    # mismo criterio que "sin filas pendientes no aporta hallazgos" de abajo.
     assert set(por_nombre) == {
         "vinculacion_rechazada_por_invariante",
         "pago_sin_tasa_para_su_fecha",
+        "vinculacion_discrepancia_multi_orden",
     }
+    assert "1 pago(s)" in por_nombre["vinculacion_discrepancia_multi_orden"].detalle
+    assert "1866" in por_nombre["vinculacion_discrepancia_multi_orden"].detalle
     assert all(h.bloque == "demonio" and h.severidad == "MEDIA" for h in informe.hallazgos)
     assert "2 pago(s)" in por_nombre["vinculacion_rechazada_por_invariante"].detalle
     assert "200, 40" in por_nombre["vinculacion_rechazada_por_invariante"].detalle
@@ -164,7 +171,7 @@ def test_lo_que_el_demonio_no_pudo_escribir_se_reporta_por_tipo_con_los_pagos(vi
 def test_sin_filas_pendientes_el_demonio_no_aporta_hallazgos(vigilancia) -> None:
     informe = vigilancia.Informe()
     vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(_con_filas({}), informe)
-    assert informe.evaluados == 2 and informe.hallazgos == []
+    assert informe.evaluados == 4 and informe.hallazgos == []
 
 
 def test_si_la_base_no_responde_es_un_hallazgo_alta_y_no_un_silencio(vigilancia) -> None:
@@ -174,6 +181,6 @@ def test_si_la_base_no_responde_es_un_hallazgo_alta_y_no_un_silencio(vigilancia)
     con.execute.side_effect = RuntimeError("base caída")
     informe = vigilancia.Informe()
     vigilancia.evaluar_lo_que_el_demonio_no_pudo_escribir(con, informe)
-    assert len(informe.hallazgos) == 2
+    assert len(informe.hallazgos) == 4
     for h in informe.hallazgos:
         assert h.severidad == "ALTA" and "no se pudo evaluar" in h.detalle

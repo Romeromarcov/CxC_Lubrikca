@@ -206,7 +206,14 @@ def test_odoo_corrige_al_fifo_cuando_asigno_de_mas() -> None:
     38 conflictos van todos en esta dirección."""
     repo = _RepoFalso([_vinc_local("1206", "S00472", "225192.00")])
     res = _sincronizar_aplicaciones_conciliadas(repo, [_apl("1206", "S00472", "54161.83")])
-    assert res == {"creadas": 0, "corregidas": 1, "sin_cambio": 0, "omitidas": 0, "sin_tasa": []}
+    assert res == {
+        "creadas": 0,
+        "corregidas": 1,
+        "sin_cambio": 0,
+        "omitidas": 0,
+        "sin_tasa": [],
+        "errores": [],
+    }
     assert repo.escritas[0].monto_aplicado == Decimal("54161.83")
 
 
@@ -250,6 +257,7 @@ def test_sin_aplicaciones_no_escribe_nada() -> None:
         "sin_cambio": 0,
         "omitidas": 0,
         "sin_tasa": [],
+        "errores": [],
     }
     assert repo.escritas == []
 
@@ -260,7 +268,14 @@ def test_una_ya_conciliada_con_el_mismo_monto_no_se_reescribe() -> None:
     ya = _vinc_local("513", "S00214", "100", estado=EstadoVinculacion.CONCILIADO)
     repo = _RepoFalso([ya])
     res = _sincronizar_aplicaciones_conciliadas(repo, [_apl("513", "S00214", "100")])
-    assert res == {"creadas": 0, "corregidas": 0, "sin_cambio": 1, "omitidas": 0, "sin_tasa": []}
+    assert res == {
+        "creadas": 0,
+        "corregidas": 0,
+        "sin_cambio": 1,
+        "omitidas": 0,
+        "sin_tasa": [],
+        "errores": [],
+    }
     assert repo.escritas == []
 
 
@@ -278,7 +293,14 @@ def test_una_aplicacion_sin_su_pago_en_el_espejo_se_omite() -> None:
     res = _sincronizar_aplicaciones_conciliadas(
         repo, [_apl("513", "S00214", "100"), _apl("999", "S00300", "50")]
     )
-    assert res == {"creadas": 1, "corregidas": 0, "sin_cambio": 0, "omitidas": 1, "sin_tasa": []}
+    assert res == {
+        "creadas": 1,
+        "corregidas": 0,
+        "sin_cambio": 0,
+        "omitidas": 1,
+        "sin_tasa": [],
+        "errores": [],
+    }
     assert [v.pago_id for v in repo.escritas] == ["513"]
 
 

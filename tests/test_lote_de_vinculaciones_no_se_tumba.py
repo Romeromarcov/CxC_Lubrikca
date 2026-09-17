@@ -434,3 +434,108 @@ def test_el_resync_no_se_cae_por_una_vinculacion_cuya_fecha_nueva_no_tiene_tasa(
     assert [c["pago_id"] for c in sin_tasa] == ["P1"]
     filas = repo.append_auditoria_rows.call_args[0][0]
     assert any(f["tipo_auditoria"] == app.TIPO_AUDITORIA_PAGO_SIN_TASA for f in filas)
+
+
+# --- la factura consolidada que tumbaba el ciclo entero (17-sep-2026) -------------
+#
+# Incidente real de producción: una factura que Odoo arma consolidando dos SO
+# ("S00718, S00700" en invoice_origin) se escribía tal cual en Vinculacion.so_id,
+# que tiene FK contra ordenes_venta. La violación abortaba el INSERT en lote --
+# tanto el de _sincronizar_aplicaciones_conciliadas (el lote entero de cada ciclo)
+# como el de _resincronizar_vinculaciones_con_odoo -- cada cinco minutos, hasta
+# que se corrigió esto. Dos arreglos: la causa (so_ids_de_invoice_origin en
+# odoo/client.py y get_live_pagos_conciliados) y la red (una fila que la base
+# rechaza no corta el resto del lote).
+
+
+def test_el_resync_no_escribe_nada_cuando_la_factura_consolida_dos_ordenes() -> None:
+    """El caso real del pago 1866: había una Vinculación local sana (so_id
+
+    "S00700", de un sync anterior a que Odoo consolidara otra orden en la
+    misma factura). Con so_ids ya separado en {"S00700", "S00718"} (2
+    elementos), la rama que corre es "discrepancia_multi_orden": audita, no
+    intenta escribir ningún Vinculacion.so_id inventado con una coma adentro.
+    """
+    import cxc.web.app as app
+
+    v_local = _vinc("V1", "43476.60", pago_id="1866", so_id="S00700")
+    v_local = v_local.__class__(**{**v_local.__dict__, "estado": EstadoVinculacion.CONCILIADO})
+    repo = MagicMock()
+    repo.all_vinculaciones.return_value = [v_local]
+    repo.all_auditoria.return_value = []
+    repo.all_serie_tasas.return_value = []
+
+    conciliado = {
+        "pago_id": "1866",
+        "so_ids": ["S00700", "S00718"],
+        "monto": 43476.60,
+        "moneda": "USD",
+    }
+    with patch("cxc.web.app.get_live_pagos_conciliados", return_value=[conciliado]):
+        app.invalidar_tasas()
+        cambios = app._resincronizar_vinculaciones_con_odoo(repo, MagicMock())
+
+    repo.update_vinculaciones_omitiendo_invalidas.assert_not_called()
+    repo.update_vinculaciones.assert_not_called()
+    assert any(c["tipo"] == "discrepancia_multi_orden" and c["pago_id"] == "1866" for c in cambios)
+    filas = repo.append_auditoria_rows.call_args[0][0]
+    assert any(f["tipo_auditoria"] == "vinculacion_discrepancia_multi_orden" for f in filas)
+
+
+def test_sincronizar_aplicaciones_una_fila_que_la_base_rechaza_no_corta_las_demas() -> None:
+    """Antes: `repo.update_vinculacion(...)` sin try/except adentro del ``for`` --
+    una excepción en la fila N (una FK, lo que sea) dejaba sin procesar TODAS las
+    aplicaciones que venían después en la misma corrida, no solo esa. Ahora se
+    salta esa fila, queda en ``errores``, y el resto se escribe."""
+    from cxc.models import AplicacionConciliada
+    from cxc.models import Moneda as _Moneda
+
+
+    repo = MagicMock()
+    repo.all_vinculaciones.return_value = []
+    repo.all_pagos.return_value = [MagicMock(pago_id="1"), MagicMock(pago_id="2")]
+    repo.all_serie_tasas.return_value = []
+    repo.all_tasas_historicas_auditoria.return_value = [
+        {
+            "fecha": "2026-09-15",
+            "tasa_bcv_usd": "800.0",
+            "tasa_bcv_euro": "900.0",
+            "tasa_binance_promedio_diario": "900.0",
+        }
+    ]
+    # "1" viola algo en la base (simulado); "2" viene DESPUÉS en el orden
+    # (sorted por (pago_id, so_id)) y tiene que escribirse igual.
+    repo.update_vinculacion.side_effect = [
+        Exception('insert or update on table "vinculaciones" violates foreign key constraint'),
+        None,
+    ]
+
+    aplicaciones = [
+        AplicacionConciliada(
+            pago_id="1",
+            so_id="S00718, S00700",
+            factura_id="F1",
+            monto=Decimal("100"),
+            moneda=_Moneda.USD,
+            fecha_pago=date(2026, 9, 15),
+        ),
+        AplicacionConciliada(
+            pago_id="2",
+            so_id="S00700",
+            factura_id="F2",
+            monto=Decimal("50"),
+            moneda=_Moneda.USD,
+            fecha_pago=date(2026, 9, 15),
+        ),
+    ]
+
+    import cxc.web.app as app
+
+    app.invalidar_tasas()
+    with patch("cxc.web.app.get_repo", return_value=repo):
+        res = app._sincronizar_aplicaciones_conciliadas(repo, aplicaciones)
+
+    assert repo.update_vinculacion.call_count == 2, "las DOS filas se intentaron, no se cortó"
+    assert res["creadas"] == 1
+    assert [e["pago_id"] for e in res["errores"]] == ["1"]
+    assert "foreign key" in res["errores"][0]["motivo"]

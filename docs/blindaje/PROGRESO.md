@@ -20,6 +20,7 @@ Este archivo es el estado; se actualiza al cerrar cada tarea.
 | [2.1 — Ausencia de dato](2.1-ausencia-de-dato.md) | la premisa del plan medida, y el costo real de la decisión |
 | [6 — Deuda medida](6-deuda-medida.md) | los 8 ítems del plan, medidos; el default de 2019 escrito en 1.463 vinculaciones |
 | [escenarios/README.md](../../escenarios/README.md) | el banco de 31 escenarios y sus tres barreras fiscales |
+| [7 — Incidente de producción, 17-sep](7-incidente-produccion.md) | una factura que consolida varias órdenes tumbaba el ciclo del demonio cada 5 min, en vivo |
 
 ## Herramientas nuevas, todas reejecutables
 
@@ -58,8 +59,8 @@ silenciosos es una aproximación por regex, y por eso va con esa nota):
 
 | | 10-sep-2026 | hoy | |
 |---|---:|---:|---|
-| tests | 1.280 | **2.103** | +823 |
-| cobertura total | — | **81,98 %** | la barrera subió de 74 a 74,9 |
+| tests | 1.280 | **2.099** | +819 |
+| cobertura total | — | **82,07 %** | la barrera subió de 74 a 74,9 |
 | cobertura de `app.py` | 62 % | **69,9 %** | |
 | sentencias sin cubrir en `app.py` | 2.361 | **1.538** | −823 |
 | líneas de `app.py` | 17.484 | **16.791** | −693, en 35 piezas; hoy subió ~300 con las guardas y los avisos de «sin tasa» |
@@ -132,6 +133,7 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 
 | Hallazgo | Cuánto | Dónde |
 |---|---|---|
+| **Una factura que consolida varias órdenes tumbaba el ciclo del demonio, en producción, cada 5 min** | encontrado el 17-sep vía logs de Railway, no en QA | [7](7-incidente-produccion.md) · **aplicado** |
 | El default de 2019 está **escrito** en las 1.463 vinculaciones del espejo | 82,7 M aplicados | [6](6-deuda-medida.md) |
 | El reporte de saldos valora con una lista vencida; las otras tres páginas no | 789 órdenes, 194.532,51 VES / 115.805,93 USD de desvío bruto | [3](3-escenarios.md) |
 | Una lista de precios vencida **no puede** marcarse: `rules[0]` gana sobre la fecha | — | [3](3-escenarios.md) |
