@@ -7493,48 +7493,13 @@ def so_ids_en_ventana_historica(repo: Any, ordenes: Any) -> set[str]:
     return salida
 
 
-def orden_en_periodo_historico(repo, orden) -> bool:
-    """True si ``orden`` tiene que usar la referencia histórica (euro) al pagarse.
-
-    **Unificada con la definición del precio el 11-sep-2026, por decisión del
-    usuario: «manda la definición que rige el precio, que es la de la lista
-    histórica».**
-
-    Antes esta función miraba SOLO la ventana de fechas, mientras el precio usaba
-    ``es_orden_historica``, que además trata como histórica a cualquier orden **sin
-    lista asignada** y excluye a las que nacieron en una lista USD válida. Medido
-    sobre las 1.111 órdenes, las dos difieren en **15**, y el efecto era que la
-    venta se valoraba en una referencia y el cobro en otra:
-
-    * **Cuatro sin lista**: S00088 y S00090 (vivas, con vinculaciones -- son los
-      457,51 USD), más S00091 y S00162, las dos canceladas y sin vinculaciones.
-      Su precio salía por la histórica, referenciada al euro, y el pago por la
-      BCV-USD.
-    * **11 órdenes de la ventana con lista USD real** (ej. la #7 «Pago USD
-      Marzo»): el precio ya las trataba como NO históricas —es la excepción
-      documentada del caso SJMG 2012— y el pago las seguía pagando en euro.
-
-    Ahora las dos preguntas se contestan con la misma función, así que no pueden
-    volver a separarse.
-
-    **Esto no mueve ningún equivalente ya congelado.** Se llama sólo al *crear*
-    una vinculación, que es cuando la tasa se fija; las que ya están escritas
-    conservan la suya por diseño contable. Lo que cambia es de qué referencia
-    salen las nuevas.
-    """
-    if orden is None or not isinstance(getattr(orden, "fecha", None), date):
-        return False
-    try:
-        lista_id = str(getattr(orden, "lista_precios", "") or "").strip()
-        usd_ids, _ves_ids = get_valid_pricelists_usd_and_ves(repo)
-        return es_orden_historica(
-            orden.fecha,
-            lista_id,
-            enabled=is_historical_pricelist_enabled(repo),
-            lista_es_usd_valida=lista_id in {str(x).strip() for x in usd_ids},
-        )
-    except Exception:
-        return False
+# ``orden_en_periodo_historico`` (unificada con la definición del precio el
+# 11-sep-2026 -- ver docs/blindaje/6-deuda-medida.md) se retiró el 12-sep-2026:
+# su único llamador era ``resolver_tasa_bcv_vinculacion``, que dejó de necesitarla
+# cuando la decisión 5 del quiz fijó ``is_historical_pricelist_enabled`` en
+# ``False`` para toda ruta de monto real. Con ese selector fijo, esta función
+# devolvía ``False`` para cualquier orden -- código vivo en el sentido de que
+# corría, pero muerto en el sentido de que nunca podía dar otra respuesta.
 
 
 def resolver_tasa_bcv_vinculacion(
@@ -7546,54 +7511,23 @@ def resolver_tasa_bcv_vinculacion(
 ) -> tuple[Decimal, str]:
     """Tasa BCV a aplicar a una Vinculación nueva + su variante ('USD'/'EUR').
 
-    Tarea 2: las órdenes de la ventana histórica (20-Feb al 12-Mar-2026
-    inclusive) se pagaron con la tasa BCV-Euro como referencia, no la BCV-USD
-    normal -- si no hay tasa BCV-Euro capturada en SerieTasas para esa fecha,
-    se cae a la tasa BCV-USD normal (mejor tener algo que bloquear el
-    vínculo) y queda con variante 'USD' igual, para no fingir una tasa que no
-    existe.
+    **Siempre devuelve la BCV-USD que ya traía el llamador, con variante 'USD'.**
+    Decisión del usuario (quiz, 12-sep-2026, pregunta 5): la lista histórica y la
+    vía euro son solo para auditoría, y una Vinculación nueva congela un monto
+    real -- así que ya no puede salir de ahí. `is_historical_pricelist_enabled`
+    (que hasta esa fecha gobernaba esta función a través de
+    `orden_en_periodo_historico`) quedó fija en `False`, con lo que la rama que
+    leía `Tasas(...).bcv_eur(...)` dejó de poder ejecutarse nunca -- se retiró,
+    junto con `orden_en_periodo_historico`, que se quedó sin ningún otro
+    llamador. El hallazgo de "dos definiciones de orden histórica" (ver
+    `docs/blindaje/6-deuda-medida.md`) sigue siendo la referencia de por qué la
+    unificación importaba; lo que cambió es que ahora la respuesta es siempre
+    la misma para las dos preguntas.
+
+    `repo`, `so_id`, `serie_rows` se conservan en la firma para no tocar los
+    cinco llamadores; no se leen.
     """
-    try:
-        orden = repo.get_orden(so_id)
-    except Exception:
-        orden = None
-    if not orden_en_periodo_historico(repo, orden):
-        return tasa_bcv_default, "USD"
-    try:
-        # Acá se está fijando la tasa con la que va a quedar congelada una
-        # Vinculación, así que tiene que ser la vigente de verdad. Hasta el
-        # 11-sep-2026 este comentario decía "fresco, no ``tasas_vigentes``: el
-        # caché de 5 minutos podría ocultar una tasa recién cargada" -- y ese mismo
-        # día ``_all_serie_tasas_rows`` pasó a servir del mismo caché, con lo que el
-        # texto se volvió falso. Lo que hace que siga siendo correcto es otra cosa:
-        # los tres sitios que escriben la serie (scraper, carga manual, import de
-        # Odoo) invalidan el caché al escribir, así que una tasa recién cargada se
-        # ve en la lectura siguiente. Ver ``invalidar_tasas``.
-        #
-        # ``serie_rows`` existe para los dos llamadores que están DENTRO de un
-        # bucle sobre pagos. La nota anterior decía "es una operación puntual,
-        # así que pagar la lectura sale barato", y para cuatro de los seis
-        # llamadores es cierto. Para los otros dos no: leían la serie completa
-        # una vez por fila. Medido en la copia de prueba, 206 vinculaciones caen
-        # en la ventana histórica, así que eran 206 lecturas de las 919 filas de
-        # la serie por ciclo -- la misma forma de N+1 que en su momento dejó la
-        # página de Auditoría en 18 minutos.
-        #
-        # Y hay una razón más fuerte que el rendimiento: esos dos llamadores YA
-        # tienen la serie leída antes del bucle y se la pasan a
-        # ``get_rate_for_datetime`` para la tasa del día. O sea que la tasa USD
-        # salía de un snapshot y la EUR de una lectura fresca, y las dos se
-        # congelan juntas en la misma Vinculación. Pasar la misma serie hace que
-        # el par sea consistente, que es más correcto y no menos.
-        serie = serie_rows if serie_rows is not None else _all_serie_tasas_rows(repo)
-        tasa_eur = Tasas(
-            historicas=repo.all_tasas_historicas_auditoria(),
-            serie=serie,
-        ).bcv_eur(hora_pago)
-    except Exception:
-        tasa_eur = None
-    if tasa_eur and tasa_eur > Decimal("0"):
-        return tasa_eur, "EUR"
+    del repo, so_id, serie_rows
     return tasa_bcv_default, "USD"
 
 

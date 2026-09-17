@@ -1,113 +1,62 @@
-"""La serie se lee una vez por ciclo, no una vez por fila (Fase 6).
+"""``resolver_tasa_bcv_vinculacion``: del N+1 de la Fase 6 a la función trivial de hoy.
 
-El plan listaba «`SerieTasas` se lee sin caché — quedan 24 lecturas directas
-repartidas por `app.py`. Las que pasan las filas por parámetro están bien; las
-otras deberían ir por `tasas_vigentes()`».
-
-Clasificados los 22 sitios (los otros dos son la definición): **21 son el patrón
-que el plan aprueba** — leen una vez y pasan las filas hacia abajo, o son el camino
-de escritura que necesita las filas crudas. Uno no lo era:
+**11-sep-2026.** El plan listaba «`SerieTasas` se lee sin caché — quedan 24 lecturas
+directas repartidas por `app.py`». De los 22 sitios no-definición, 21 seguían el
+patrón que el plan aprueba (leen una vez, pasan las filas hacia abajo); uno no:
 `resolver_tasa_bcv_vinculacion` armaba su propio objeto `Tasas` leyendo la serie
-completa, y **dos de sus seis llamadores lo llaman dentro de un bucle sobre pagos**.
+completa, y dos de sus seis llamadores la invocaban DENTRO de un bucle sobre pagos
+-- 206 vinculaciones en la ventana histórica, 919 filas de serie cada una, por
+ciclo. Se corrigió pasando la serie ya leída (`serie_rows`).
 
-Medido en la copia de prueba: 206 vinculaciones caen en la ventana histórica, que
-es la única rama que llega a esa lectura. En producción son 919 filas de serie por
-cada una, por ciclo.
+**12-sep-2026, un día después.** La decisión 5 del quiz («la vía euro es solo para
+auditoría, no debe modificar los montos reales») fijó `is_historical_pricelist_
+enabled` en `False` para siempre. Esa función gobernaba, a través de
+`orden_en_periodo_historico` (retirada ese mismo día, sin llamador), la única rama
+de `resolver_tasa_bcv_vinculacion` que llegaba a leer la serie o el histórico. Con
+la rama inalcanzable, la función quedó en lo que es hoy: devuelve la tasa BCV-USD
+que ya traía el llamador, con variante 'USD', siempre -- no toca `repo`, no lee
+nada. El N+1 de ayer no se arregló dos veces: la segunda decisión hizo que la
+primera corrección dejara de tener trabajo que hacer.
 
-Y el argumento decisivo no fue el rendimiento: esos dos llamadores **ya** tienen la
-serie leída antes del bucle y se la pasan a `get_rate_for_datetime` para la tasa del
-día. La tasa USD salía de un snapshot y la EUR de una lectura fresca, **y las dos se
-congelan juntas en la misma vinculación**. Pasar la misma serie hace el par
-consistente.
+Estos tests son deliberadamente chicos para el tamaño actual de la función. Los
+argumentos ``so_id``/``serie_rows``/``repo`` se pasan igual porque los cinco
+llamadores no cambiaron -- lo que se fija es que la función los ignora.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from cxc.web.app import resolver_tasa_bcv_vinculacion
 
-# Dentro de la ventana de la Lista Histórica (20-feb a 12-mar-2026 inclusive).
-FECHA_EN_VENTANA = date(2026, 3, 1)
-FECHA_FUERA = date(2026, 6, 1)
 HORA_PAGO = datetime(2026, 3, 1, 10, 0, 0)
 DEFAULT_USD = Decimal("36.5")
 
 
-def _serie(tasa_eur: str) -> list[dict]:
-    return [
-        {
-            "timestamp": "2026-03-01T22:00:00",
-            "tasa_bcv": "36.50",
-            "tasa_binance": "38.00",
-            "tasa_bcv_euro": tasa_eur,
-            "fuente": "test",
-            "es_heredada": "FALSE",
-            "capturada_ok": "TRUE",
-        }
-    ]
+def test_siempre_devuelve_la_tasa_default_con_variante_usd() -> None:
+    repo = MagicMock()
+    tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+    assert (tasa, variante) == (DEFAULT_USD, "USD")
 
 
-class _Repo:
-    """Repo mínimo que cuenta cuántas veces se le pide la serie."""
+def test_no_toca_el_repo_para_nada() -> None:
+    """Ni ``get_orden``, ni ``all_serie_tasas``, ni ``all_tasas_historicas_auditoria``:
 
-    def __init__(self, fecha: date, serie: list[dict] | None = None, lista: str = "12") -> None:
-        self._fecha = fecha
-        self._serie = serie or []
-        self.lecturas_de_serie = 0
-        # La lista con la que nació la orden. Importa desde el 11-sep-2026: al
-        # unificar las dos definiciones de "orden histórica", una orden SIN lista
-        # es histórica sin importar la fecha. El default es una lista cualquiera
-        # que no está entre las USD configuradas, para que los tests de la ventana
-        # sigan midiendo la ventana y no ese caso.
-        self._lista = lista
-
-    def get_orden(self, so_id: str):
-        return SimpleNamespace(so_id=so_id, fecha=self._fecha, lista_precios=self._lista)
-
-    def all_serie_tasas(self):
-        self.lecturas_de_serie += 1
-        # ``_all_serie_tasas_rows`` pasa esto por ``serde.serie_to_row``, así que
-        # acá van objetos, no filas. Se construyen desde el dict de arriba.
-        from cxc.sheets import serde
-
-        return [serde.serie_from_row(r) for r in self._serie]
-
-    def all_tasas_historicas_auditoria(self):
-        return []
-
-    def get_config(self, clave, default=None):
-        # El toggle de la lista histórica, encendido.
-        return "true" if "histor" in clave else default
+    la función no necesita saber nada de la orden ni de las tasas para responder.
+    """
+    repo = MagicMock()
+    resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
+    repo.assert_not_called()
+    assert repo.method_calls == []
 
 
-# Desde el 12-sep-2026 (quiz, pregunta 5) la vía euro no toca montos reales, y la
-# tasa que se congela en una vinculación ES un monto real: `resolver_tasa_bcv_vinculacion`
-# devuelve la BCV-USD del día para toda orden, sin leer la serie. Lo que este archivo
-# fijaba sobre el N+1 sigue valiendo por otra razón: ya no hay lectura que repetir.
-
-
-def _casos():
-    return [
-        ("en la ventana", _Repo(FECHA_EN_VENTANA, _serie("41.00"))),
-        ("fuera de la ventana", _Repo(FECHA_FUERA, _serie("41.00"))),
-        ("sin lista", _Repo(FECHA_FUERA, _serie("41.00"), lista="")),
-    ]
-
-
-def test_toda_orden_congela_la_bcv_usd_y_no_lee_la_serie() -> None:
-    for nombre, repo in _casos():
-        tasa, variante = resolver_tasa_bcv_vinculacion(repo, "S00001", HORA_PAGO, DEFAULT_USD)
-        assert (tasa, variante) == (DEFAULT_USD, "USD"), nombre
-        assert repo.lecturas_de_serie == 0, f"{nombre}: leyó la serie sin necesitarla"
-
-
-def test_con_la_serie_en_la_mano_tampoco_cambia() -> None:
-    repo = _Repo(FECHA_EN_VENTANA)
+def test_pasar_la_serie_no_cambia_nada() -> None:
+    """``serie_rows`` sigue en la firma (los cinco llamadores la pasan); se ignora."""
+    repo = MagicMock()
     tasa, variante = resolver_tasa_bcv_vinculacion(
-        repo, "S00001", HORA_PAGO, DEFAULT_USD, serie_rows=_serie("40.00")
+        repo, "S00001", HORA_PAGO, DEFAULT_USD, serie_rows=[{"tasa_bcv_euro": "40.00"}]
     )
     assert (tasa, variante) == (DEFAULT_USD, "USD")
-    assert repo.lecturas_de_serie == 0
+    assert repo.method_calls == []
