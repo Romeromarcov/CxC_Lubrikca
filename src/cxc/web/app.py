@@ -49,6 +49,7 @@ from cxc.engine.balance import (
 )
 from cxc.engine.conciliacion import (
     campos_de_saldo,
+    clientes_con_pagos_huerfanos,
     repartir_pago_entre_ordenes,
     usd_bcv_a_binance,
 )
@@ -4847,25 +4848,14 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # fuente que el reporte CxC por Cliente (get_conciliaciones_
         # sugerencias) en vez de reimplementar la detección -- ese endpoint
         # ya excluye los huérfanos cerrados manualmente (pagos_huerfanos_
-        # cerrados) y ya dedup por pago_id tomando el saldo MÁXIMO (residual
-        # real sin aplicar). Calculado UNA vez por ciclo de caché, no por
-        # orden -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
+        # cerrados). El dedup por pago_id (saldo MÁXIMO) y el umbral salieron
+        # a ``engine/conciliacion.py::clientes_con_pagos_huerfanos`` (Fase
+        # 2.4, pieza 39). Calculado UNA vez por ciclo de caché, no por orden
+        # -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
         clientes_con_huerfanos: set[str] = set()
         try:
             sugerencias_huerfanas = _get_conciliaciones_sugerencias_sync(cxc_session=None)
-            _pago_saldo_max_h: dict[str, float] = {}
-            _pago_cliente_h: dict[str, str] = {}
-            for s in sugerencias_huerfanas:
-                pid = s.get("pago_id")
-                if not pid:
-                    continue
-                saldo = float(s.get("saldo_pago") or 0.0)
-                if saldo > _pago_saldo_max_h.get(pid, 0.0):
-                    _pago_saldo_max_h[pid] = saldo
-                    _pago_cliente_h[pid] = str(s.get("cliente_id") or "")
-            for pid, saldo in _pago_saldo_max_h.items():
-                if saldo > 0.05 and _pago_cliente_h.get(pid):
-                    clientes_con_huerfanos.add(_pago_cliente_h[pid])
+            clientes_con_huerfanos = clientes_con_pagos_huerfanos(sugerencias_huerfanas)
         except Exception as e_huerf:
             logger.warning(
                 "No se pudieron calcular pagos huérfanos para Diferencial Cambiario: %s", e_huerf

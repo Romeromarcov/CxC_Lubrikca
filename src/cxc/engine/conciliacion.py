@@ -147,3 +147,43 @@ def repartir_pago_entre_ordenes(
         restante -= a_aplicar
         orden["saldo_pendiente"] = saldo - a_aplicar
     return filas, restante
+
+
+# --- qué clientes tienen un pago huérfano que vale la pena avisar ---------
+
+
+def clientes_con_pagos_huerfanos(sugerencias: list[dict[str, Any]]) -> set[str]:
+    """Qué clientes tienen algún pago sin aplicar/conciliar en Odoo, para la
+    regla "Equiparar" del Diferencial Cambiario.
+
+    Novena pieza de la Fase 2.4, extraída de ``_get_reporte_saldos_sync``.
+    ``sugerencias`` es la salida de ``_get_conciliaciones_sugerencias_sync``
+    (dicts con ``pago_id``, ``cliente_id`` y ``saldo_pago``, este último
+    producido por :func:`campos_de_saldo`) -- ya excluye los huérfanos que un
+    humano cerró manualmente (``pagos_huerfanos_cerrados``), así que esta
+    función no vuelve a filtrar eso.
+
+    Un mismo pago puede aparecer más de una vez en ``sugerencias`` (una fila
+    por orden abierta a la que podría aplicarse); se dedupea por ``pago_id``
+    tomando el saldo MÁXIMO -- el residual real sin aplicar, no la suma de
+    las veces que se ofrece. Un pago con ``pago_id`` ausente se descarta: sin
+    id no hay con qué dedupear, y no debería ocurrir en datos reales.
+
+    Usa el mismo umbral que el resto del módulo (``UMBRAL_CUBIERTO``): un
+    residuo de centavos no es un pago huérfano que valga la pena avisar.
+    """
+    saldo_max_por_pago: dict[str, float] = {}
+    cliente_por_pago: dict[str, str] = {}
+    for s in sugerencias:
+        pid = s.get("pago_id")
+        if not pid:
+            continue
+        saldo = float(s.get("saldo_pago") or 0.0)
+        if saldo > saldo_max_por_pago.get(pid, 0.0):
+            saldo_max_por_pago[pid] = saldo
+            cliente_por_pago[pid] = str(s.get("cliente_id") or "")
+    return {
+        cliente_por_pago[pid]
+        for pid, saldo in saldo_max_por_pago.items()
+        if saldo > float(UMBRAL_CUBIERTO) and cliente_por_pago[pid]
+    }
