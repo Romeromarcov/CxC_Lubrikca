@@ -10766,22 +10766,24 @@ async def get_config_volumen():
         rules = repo.descuentos_volumen()
         res = []
         for r in rules:
-            min_q = (
-                r.min_unidades
-                if (getattr(r, "min_unidades", None) is not None and float(r.min_unidades) > 0)
-                else getattr(r, "litros_minimo", 0)
-            )
-            u_med = str(getattr(r, "unidad_medida", "") or "").strip()
-            if not u_med:
-                u_med = (
-                    "LITROS" if (float(r.litros_minimo) > 0 and float(min_q) == 0) else "UNIDADES"
-                )
+            # `litros_minimo` ya no existe en `DescuentoVolumen` -- la migracion de
+            # unificacion de nombres lo elimino porque era el mismo dato que
+            # `min_unidades` con otro nombre. `r.litros_minimo` era un
+            # AttributeError que el `except Exception` de esta funcion convertia en
+            # **500** en TODAS las llamadas (no solo con una regla con la unidad
+            # vacia). Mismo arreglo que ya tiene `get_todas_reglas_descuento` --
+            # ver `engine/discounts.unidad_de_volumen`.
+            min_q = r.min_unidades
+            u_med, _unidad_declarada = unidad_de_volumen(r)
             res.append(
                 {
                     "regla_id": r.regla_id,
                     "marca": r.marca,
                     "categoria": r.categoria,
-                    "litros_minimo": float(r.litros_minimo),
+                    # Se conserva la clave por compatibilidad con quien la lea --
+                    # ahora es el mismo valor que `min_unidades`, no el campo
+                    # borrado.
+                    "litros_minimo": float(min_q),
                     "min_unidades": float(min_q),
                     "max_unidades": float(getattr(r, "max_unidades", 999999)),
                     "unidad_medida": u_med,
@@ -10878,7 +10880,12 @@ async def get_config_diferencial():
         return [
             {
                 "regla_id": r.regla_id,
-                "nombre": r.nombre,
+                # `nombre` se fusiono con `descripcion` en la migracion de
+                # unificacion de nombres (ver el dataclass): `r.nombre` era un
+                # AttributeError que el `except Exception` de esta funcion
+                # convertia en **500** en TODAS las llamadas. Mismo patron que
+                # `get_config_volumen`/`litros_minimo`.
+                "nombre": getattr(r, "descripcion", ""),
                 "tipo_diferencial": r.tipo_diferencial,
                 "tipo_calculo": r.tipo_calculo,
                 "porcentaje_fijo": float(r.porcentaje_fijo),
