@@ -49,6 +49,7 @@ from cxc.engine.balance import (
 )
 from cxc.engine.conciliacion import (
     campos_de_saldo,
+    clientes_con_pagos_huerfanos,
     repartir_pago_entre_ordenes,
     usd_bcv_a_binance,
 )
@@ -89,6 +90,7 @@ from cxc.engine.promedios_tasas import (
     promediar,
     rango_binance_del_dia,
 )
+from cxc.engine.reasignaciones import pago_reasignado_mas_reciente
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -4847,25 +4849,14 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # fuente que el reporte CxC por Cliente (get_conciliaciones_
         # sugerencias) en vez de reimplementar la detección -- ese endpoint
         # ya excluye los huérfanos cerrados manualmente (pagos_huerfanos_
-        # cerrados) y ya dedup por pago_id tomando el saldo MÁXIMO (residual
-        # real sin aplicar). Calculado UNA vez por ciclo de caché, no por
-        # orden -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
+        # cerrados). El dedup por pago_id (saldo MÁXIMO) y el umbral salieron
+        # a ``engine/conciliacion.py::clientes_con_pagos_huerfanos`` (Fase
+        # 2.4, pieza 39). Calculado UNA vez por ciclo de caché, no por orden
+        # -- ver EngineInputs.cliente_tiene_pagos_huerfanos.
         clientes_con_huerfanos: set[str] = set()
         try:
             sugerencias_huerfanas = _get_conciliaciones_sugerencias_sync(cxc_session=None)
-            _pago_saldo_max_h: dict[str, float] = {}
-            _pago_cliente_h: dict[str, str] = {}
-            for s in sugerencias_huerfanas:
-                pid = s.get("pago_id")
-                if not pid:
-                    continue
-                saldo = float(s.get("saldo_pago") or 0.0)
-                if saldo > _pago_saldo_max_h.get(pid, 0.0):
-                    _pago_saldo_max_h[pid] = saldo
-                    _pago_cliente_h[pid] = str(s.get("cliente_id") or "")
-            for pid, saldo in _pago_saldo_max_h.items():
-                if saldo > 0.05 and _pago_cliente_h.get(pid):
-                    clientes_con_huerfanos.add(_pago_cliente_h[pid])
+            clientes_con_huerfanos = clientes_con_pagos_huerfanos(sugerencias_huerfanas)
         except Exception as e_huerf:
             logger.warning(
                 "No se pudieron calcular pagos huérfanos para Diferencial Cambiario: %s", e_huerf
@@ -11597,22 +11588,12 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         # reconcilió contra una orden distinta a la Vinculación local (ver
         # _resincronizar_vinculaciones_con_odoo, corre en cada sync). Se
         # SURFACEA acá -- la corrección automática y su auditoría ya existen.
-        # Se conserva la reasignacion MAS RECIENTE de cada pago. Antes se
-        # quedaba con la ultima fila que devolviera la consulta, que no
-        # tiene orden garantizado -- un pago movido dos veces podia mostrar
-        # el detalle del movimiento viejo.
-        reasignados_por_pago: dict[str, dict[str, str]] = {}
+        # El dedup por pago_id (reasignación MÁS RECIENTE) salió a
+        # ``engine/reasignaciones.py::pago_reasignado_mas_reciente`` (Fase
+        # 2.4, pieza 40).
+        reasignados_por_pago: dict[str, dict[str, Any]] = {}
         try:
-            for row in repo.all_auditoria():
-                if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
-                    pid = str(row.get("pago_id", "")).strip()
-                    if not pid:
-                        continue
-                    previa = reasignados_por_pago.get(pid)
-                    if previa is None or str(row.get("timestamp_audit") or "") >= str(
-                        previa.get("timestamp_audit") or ""
-                    ):
-                        reasignados_por_pago[pid] = row
+            reasignados_por_pago = pago_reasignado_mas_reciente(repo.all_auditoria())
         except Exception as e_aud:
             logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
 
