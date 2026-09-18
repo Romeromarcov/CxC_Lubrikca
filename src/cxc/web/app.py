@@ -90,6 +90,7 @@ from cxc.engine.promedios_tasas import (
     promediar,
     rango_binance_del_dia,
 )
+from cxc.engine.reasignaciones import pago_reasignado_mas_reciente
 from cxc.engine.reportes_historicos import (
     cobranza_por_vendedor,
     cxc_vencida_no_pagada,
@@ -11587,22 +11588,12 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         # reconcilió contra una orden distinta a la Vinculación local (ver
         # _resincronizar_vinculaciones_con_odoo, corre en cada sync). Se
         # SURFACEA acá -- la corrección automática y su auditoría ya existen.
-        # Se conserva la reasignacion MAS RECIENTE de cada pago. Antes se
-        # quedaba con la ultima fila que devolviera la consulta, que no
-        # tiene orden garantizado -- un pago movido dos veces podia mostrar
-        # el detalle del movimiento viejo.
-        reasignados_por_pago: dict[str, dict[str, str]] = {}
+        # El dedup por pago_id (reasignación MÁS RECIENTE) salió a
+        # ``engine/reasignaciones.py::pago_reasignado_mas_reciente`` (Fase
+        # 2.4, pieza 40).
+        reasignados_por_pago: dict[str, dict[str, Any]] = {}
         try:
-            for row in repo.all_auditoria():
-                if row.get("tipo_auditoria") == "vinculacion_revinculada_por_odoo":
-                    pid = str(row.get("pago_id", "")).strip()
-                    if not pid:
-                        continue
-                    previa = reasignados_por_pago.get(pid)
-                    if previa is None or str(row.get("timestamp_audit") or "") >= str(
-                        previa.get("timestamp_audit") or ""
-                    ):
-                        reasignados_por_pago[pid] = row
+            reasignados_por_pago = pago_reasignado_mas_reciente(repo.all_auditoria())
         except Exception as e_aud:
             logger.warning("Error leyendo BandejaAuditoria en /api/cobranza/pagos: %s", e_aud)
 
