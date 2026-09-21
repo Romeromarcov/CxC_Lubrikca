@@ -578,3 +578,105 @@ def test_una_factura_sin_fecha_legible_se_saltea_sin_reventar() -> None:
     )
     p = _partida(partidas, "La tasa de Odoo coincide con el BCV")
     assert p["derecha"]["valor"] == 0.0
+
+
+# --- un reembolso de sobrepago embebido en el mismo asiento del pago -------
+#
+# Hallazgo real de producción (19-sep-2026, pago id 1084): nuestro espejo
+# resta el reembolso al sincronizar (ver `changed_pagos`), pero las tres
+# partidas de pagos leían el `amount`/`amount_ref` CRUDOS de Odoo, sin esa
+# resta. Un pago con reembolso salía nombrado en las tres a la vez -- "plata
+# que falta" y "tasa mal cargada" -- sin que ninguna de las dos cosas fuera
+# cierta. El reembolso acá es 500 de 1.500 (un tercio): números chicos y
+# redondos para que el cálculo se pueda verificar a mano, misma proporción
+# que el caso real (2.372.712,49 de 3.527.329,13 VES, ~67 %).
+
+
+def _odoo_con_pago_y_reembolso(
+    pago_id="1084", amount_bruto=1500.0, amount_ref_bruto=2.0, reembolso=500.0
+):
+    """Odoo tiene el pago vivo con `amount`/`amount_ref` BRUTOS (sin descontar
+    el reembolso), más la línea de crédito en una cuenta `asset_cash` que lo
+    delata."""
+    move_id = 555
+    return _Odoo(
+        {
+            "account.payment": [
+                {
+                    "id": int(pago_id),
+                    "amount": amount_bruto,
+                    "state": "posted",
+                    "currency_id": [2, "VES"],
+                    "amount_ref": amount_ref_bruto,
+                    "move_id": [move_id, "PBAMI/2026/00001"],
+                }
+            ],
+            "account.move.line": [
+                {
+                    "move_id": [move_id, "PBAMI/2026/00001"],
+                    "account_id": [99, "Banco"],
+                    "amount_currency": -reembolso,
+                }
+            ],
+            "account.account": [{"id": 99, "account_type": "asset_cash"}],
+        }
+    )
+
+
+def test_pago_con_reembolso_embebido_cuadra_en_importe_neto_contra_neto() -> None:
+    """1.000 nuestro (ya neto) contra 1.500 bruto de Odoo NO cuadraría (diff
+    500, tolerancia 5). Restando el reembolso de 500 antes de comparar,
+    cuadra."""
+    partidas = _llamar(
+        execute=_odoo_con_pago_y_reembolso(),
+        repo=_Repo(pagos=[_pago_ves(pago_id="1084", monto_ves="1000")]),
+        tasas=_Tasas(usd=Decimal("750")),
+    )
+    p = _partida(partidas, "Pagos: importe en su moneda contra Odoo")
+    assert p["derecha"]["valor"] == pytest.approx(1000.0)
+    assert p["cuadra"] is True
+    assert "reembolso de sobrepago" in p["nota"]
+
+
+def test_pago_con_reembolso_embebido_no_sale_nombrado_como_tasa_mal_cargada() -> None:
+    """`amount_ref` bruto es 2.00 para 1.500 VES (tasa 750, la oficial). Sin
+    netear, la tasa "estampada" que despeja la partida sale de 1.000/2.00 =
+    500 -- una desviación de 33 % que no existe. Neteando, el `amount_ref`
+    también baja a 1.3333 (misma proporción) y la tasa despejada vuelve a
+    dar 750: la oficial, sin desviación."""
+    partidas = _llamar(
+        execute=_odoo_con_pago_y_reembolso(),
+        repo=_Repo(pagos=[_pago_ves(pago_id="1084", monto_ves="1000")]),
+        tasas=_Tasas(usd=Decimal("750")),
+    )
+    p = _partida(partidas, "en los pagos coincide con el BCV")
+    assert p["derecha"]["valor"] == 0.0, p["nota"]
+    assert p["cuadra"] is True
+    assert "1084" not in p["nota"]
+
+
+def test_pago_con_reembolso_embebido_cuadra_en_equivalente_bcv() -> None:
+    """eq_nuestro = 1.000 / 750 = 1,3333. eq_odoo, neteado en la misma
+    proporción que el importe (2.00 * 1000/1500), da lo mismo."""
+    partidas = _llamar(
+        execute=_odoo_con_pago_y_reembolso(),
+        repo=_Repo(pagos=[_pago_ves(pago_id="1084", monto_ves="1000")]),
+        tasas=_Tasas(usd=Decimal("750")),
+    )
+    p = _partida(partidas, "Pagos: equivalente BCV contra Odoo")
+    assert p["izquierda"]["valor"] == pytest.approx(1.33, abs=0.01)
+    assert p["derecha"]["valor"] == pytest.approx(1.33, abs=0.01)
+    assert p["cuadra"] is True
+
+
+def test_un_pago_sin_reembolso_no_pide_las_lineas_del_asiento() -> None:
+    """Si ningun pago vivo trae `move_id`, `montos_reembolsados_en_pagos` ni
+    se llama -- no hay que pagar una consulta extra a Odoo por algo que no
+    puede pasar."""
+    odoo = _odoo_con_pago(amount_ref="750.00")
+    _llamar(
+        execute=odoo,
+        repo=_Repo(pagos=[_pago_ves(monto_ves="82774")]),
+        tasas=_Tasas(usd=Decimal("827.74")),
+    )
+    assert ("account.move.line", "search_read") not in odoo.consultas

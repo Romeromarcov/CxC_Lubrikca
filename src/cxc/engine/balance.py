@@ -34,6 +34,7 @@ from datetime import date
 from typing import Any
 
 from cxc.engine.saldos import saldos_de_la_orden
+from cxc.odoo.client import montos_reembolsados_en_pagos
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,20 @@ TOLERANCIA_POR_DEFECTO = 0.5
 # datos, una partida al 60 % de hoy ya cruzó. El aviso tiene que llegar
 # mientras todavía se puede decidir, no el día que el balance amanece rojo.
 UMBRAL_AL_LIMITE = 0.6
+
+
+def _id_de_m2o(value: Any) -> str:
+    """El id de un campo many2one de Odoo (``[id, "nombre"]`` o ``False``).
+
+    Mismo criterio que ``cxc.odoo.client._m2o_id`` -- no se importa esa
+    función porque es privada de ese módulo; esta es la versión local para
+    los pocos usos que necesita el balance.
+    """
+    if isinstance(value, list | tuple) and value:
+        return str(value[0])
+    if value in (False, None):
+        return ""
+    return str(value)
 
 
 def num(d: Any, k: str) -> float:
@@ -668,22 +683,72 @@ def partidas_externas(
                     [ids_pago],
                     # ``amount_ref`` es el equivalente en dólares que
                     # lleva Odoo: la unidad en la que el usuario pidió
-                    # comparar los pagos.
-                    {"fields": ["amount", "state", "currency_id", "amount_ref"]},
+                    # comparar los pagos. ``move_id`` es para detectar
+                    # reembolsos embebidos -- ver ``reembolsos`` abajo.
+                    {"fields": ["amount", "state", "currency_id", "amount_ref", "move_id"]},
                 )
                 if ids_pago
                 else []
             )
             vivos = [p for p in odoo_pagos if p.get("state") != "cancel"]
+
+            # Algunos pagos traen una devolución de sobrepago embebida en el
+            # MISMO asiento (ver ``montos_reembolsados_en_pagos``): nuestro
+            # espejo ya la resta al sincronizar (``changed_pagos``), pero acá
+            # se está leyendo el ``amount``/``amount_ref`` CRUDOS de Odoo, sin
+            # esa resta. Comparar neto (nuestro) contra bruto (Odoo, sin
+            # corregir) hacía ver un pago con reembolso como "plata que
+            # falta" o "tasa mal cargada" cuando la plata cuadra -- hallazgo
+            # del 19-sep-2026, pago real de producción (id 1084): reembolso
+            # de 2.372.712,49 VES en el mismo asiento, que explicaba solas
+            # las tres partidas de pagos descuadradas.
+            move_ids_vivos = [
+                int(m) for p in vivos if (m := _id_de_m2o(p.get("move_id")))
+            ]
+            reembolsos = (
+                montos_reembolsados_en_pagos(execute, move_ids_vivos)
+                if move_ids_vivos
+                else {}
+            )
+
+            def _neto(p: dict[str, Any]) -> tuple[float, float]:
+                """(amount neto, amount_ref neto) de un pago de Odoo.
+
+                El reembolso está en la moneda PROPIA del pago (misma unidad
+                que ``amount``), así que se resta directo. ``amount_ref`` se
+                reduce en la misma PROPORCIÓN -- no hay una tasa "correcta"
+                más simple que no dependa de lo que se está auditando, y la
+                proporción no lo hace: un pago sin reembolso queda intacto
+                (proporción 1), y uno con reembolso reduce su equivalente
+                exactamente en la parte que se devolvió.
+                """
+                bruto = float(p.get("amount") or 0.0)
+                ref_bruto = float(p.get("amount_ref") or 0.0)
+                move_id = _id_de_m2o(p.get("move_id"))
+                reembolso = float(reembolsos.get(int(move_id), 0)) if move_id else 0.0
+                if reembolso <= 0.0 or bruto <= 0.0:
+                    return bruto, ref_bruto
+                neto = max(0.0, bruto - reembolso)
+                return neto, ref_bruto * (neto / bruto)
+
+            netos_por_id = {int(p["id"]): _neto(p) for p in vivos}
+
             externa(
                 "Pagos: importe en su moneda contra Odoo",
                 "espejo local (VES + USD)",
                 total_ves + total_usd,
                 "account.payment en Odoo",
-                sum(float(p.get("amount") or 0.0) for p in vivos),
+                sum(netos_por_id[int(p["id"])][0] for p in vivos),
                 f"{len(vivos)} pagos vivos en Odoo de {len(pagos)} en el espejo, "
                 f"repartidos en {len(por_diario)} diarios. VES {total_ves:,.2f} + "
-                f"USD {total_usd:,.2f}.",
+                f"USD {total_usd:,.2f}."
+                + (
+                    f" {len(reembolsos)} pago(s) con un reembolso de sobrepago "
+                    "embebido en el mismo asiento -- se compara neto contra "
+                    "neto, igual que hace nuestro espejo al sincronizar."
+                    if reembolsos
+                    else ""
+                ),
                 tolerancia=5.0,
             )
             # El mismo universo de pagos, pero en dólares.
@@ -713,7 +778,10 @@ def partidas_externas(
                     continue
                 moneda = str(getattr(p, "moneda", "") or "USD").upper().replace("MONEDA.", "")
                 monto = float(getattr(p, "monto", 0.0) or 0.0)
-                ref_p = float(m_pago.get("amount_ref") or 0.0)
+                # ``monto`` (nuestro) ya viene NETO de reembolso desde el
+                # sync (``changed_pagos``); ``amount_ref`` neto es el que
+                # calculó ``_neto`` arriba, en la misma proporción.
+                ref_p = netos_por_id.get(int(p.pago_id), (0.0, 0.0))[1]
                 if moneda == "VES":
                     # La tasa oficial del BCV para esa fecha valor,
                     # leída del histórico -- que desde septiembre 2026
@@ -788,7 +856,11 @@ def partidas_externas(
                 ) != "VES":
                     continue
                 nominal = float(getattr(p, "monto", 0.0) or 0.0)
-                ref_val = float(m_val.get("amount_ref") or 0.0)
+                # Neto contra neto -- ver el comentario de ``ref_p`` más
+                # arriba. Con el ``amount_ref`` bruto, un pago con reembolso
+                # embebido salía "con la tasa mal cargada" sin que la tasa
+                # tuviera nada que ver.
+                ref_val = netos_por_id.get(int(p.pago_id), (0.0, 0.0))[1]
                 if nominal <= 0.0 or ref_val <= 0.0:
                     continue
                 oficial = float(

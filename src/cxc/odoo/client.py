@@ -123,6 +123,71 @@ def _ids_of(recs: list[dict[str, Any]], field: str) -> set[int]:
     return out
 
 
+def montos_reembolsados_en_pagos(
+    execute: Callable[..., Any], move_ids: list[int]
+) -> dict[int, Decimal]:
+    """``move_id`` -> monto reembolsado, para pagos donde una devolución de
+
+    sobrepago quedó registrada como una línea EXTRA dentro del MISMO
+    asiento del pago (caso real, agosto 2026, cliente Inversiones Sai
+    2006 -- el cliente pagó de más y la diferencia se le devolvió por
+    banco, todo en un solo asiento manual en vez del flujo normal de
+    Odoo "Registrar Pago" + conciliar).
+
+    Detección genérica (no depende de nombres de cuenta, que pueden
+    variar): CUALQUIER línea de CRÉDITO en el asiento cuya cuenta sea
+    de tipo ``asset_cash`` (banco/efectivo real) es una devolución --
+    un pago de cliente normal SIEMPRE debita ese tipo de cuenta (o la
+    cuenta puente de "recibos pendientes", que es ``asset_current``,
+    nunca ``asset_cash``), jamás la acredita. La cuenta por cobrar
+    (``asset_receivable``) se excluye aparte porque ESA sí se acredita
+    siempre, por la porción que de verdad se aplicó -- no es un
+    reembolso.
+
+    Multi-moneda: se suma ``amount_currency`` (la moneda PROPIA de la
+    línea -- la del pago, no la de la compañía), nunca ``credit``
+    directo -- ``credit``/``debit`` en ``account.move.line`` SIEMPRE
+    están en moneda de la compañía (VES), así que para un pago en USD
+    restar ``credit`` (VES) de ``amount`` (USD) mezclaría unidades sin
+    convertir. ``amount_currency`` ya viene en la moneda de la línea
+    (negativo en el lado crédito), lo mismo que ``Pago.monto``/
+    ``account.payment.amount`` -- misma unidad, resta directa correcta.
+
+    Función a nivel de módulo (antes método de ``OdooXmlRpcReader``, que
+    delega acá) para que ``engine/balance.py`` pueda reusarla sin
+    depender de la clase entera -- ver el hallazgo del 19-sep-2026: el
+    balance comparaba el monto NETO de nuestro espejo contra el monto
+    BRUTO de Odoo para pagos con un reembolso embebido, y eso salía como
+    "tasa mal cargada" o "plata que falta" sin serlo.
+    """
+    if not move_ids:
+        return {}
+    lines = execute(
+        "account.move.line",
+        "search_read",
+        [[["move_id", "in", move_ids], ["credit", ">", 0]]],
+        {"fields": ["move_id", "account_id", "amount_currency"]},
+    )
+    if not lines:
+        return {}
+    account_ids = list(_ids_of(lines, "account_id"))
+    tipos = {
+        a["id"]: a.get("account_type")
+        for a in execute(
+            "account.account", "read", [account_ids], {"fields": ["id", "account_type"]}
+        )
+    }
+    reembolsos: dict[int, Decimal] = {}
+    for ln in lines:
+        acc_id = _m2o_id(ln.get("account_id"))
+        if not acc_id or tipos.get(int(acc_id)) != "asset_cash":
+            continue
+        move_id = int(_m2o_id(ln.get("move_id")))
+        monto_linea = abs(_dec(ln.get("amount_currency")))
+        reembolsos[move_id] = reembolsos.get(move_id, Decimal("0")) + monto_linea
+    return reembolsos
+
+
 def map_cliente(rec: dict[str, Any]) -> Cliente:
     """``name`` sale ``False`` (booleano de Odoo, NUNCA como ``str(False)`` --
 
@@ -952,58 +1017,13 @@ class OdooXmlRpcReader(OdooReader):
 
     # --- Pagos ---------------------------------------------------------------
     def _montos_reembolsados_en_pagos(self, move_ids: list[int]) -> dict[int, Decimal]:
-        """``move_id`` -> monto reembolsado, para pagos donde una devolución de
+        """``move_id`` -> monto reembolsado. Ver ``montos_reembolsados_en_pagos``
 
-        sobrepago quedó registrada como una línea EXTRA dentro del MISMO
-        asiento del pago (caso real, agosto 2026, cliente Inversiones Sai
-        2006 -- el cliente pagó de más y la diferencia se le devolvió por
-        banco, todo en un solo asiento manual en vez del flujo normal de
-        Odoo "Registrar Pago" + conciliar).
-
-        Detección genérica (no depende de nombres de cuenta, que pueden
-        variar): CUALQUIER línea de CRÉDITO en el asiento cuya cuenta sea
-        de tipo ``asset_cash`` (banco/efectivo real) es una devolución --
-        un pago de cliente normal SIEMPRE debita ese tipo de cuenta (o la
-        cuenta puente de "recibos pendientes", que es ``asset_current``,
-        nunca ``asset_cash``), jamás la acredita. La cuenta por cobrar
-        (``asset_receivable``) se excluye aparte porque ESA sí se acredita
-        siempre, por la porción que de verdad se aplicó -- no es un
-        reembolso.
-
-        Multi-moneda: se suma ``amount_currency`` (la moneda PROPIA de la
-        línea -- la del pago, no la de la compañía), nunca ``credit``
-        directo -- ``credit``/``debit`` en ``account.move.line`` SIEMPRE
-        están en moneda de la compañía (VES), así que para un pago en USD
-        restar ``credit`` (VES) de ``amount`` (USD) mezclaría unidades sin
-        convertir. ``amount_currency`` ya viene en la moneda de la línea
-        (negativo en el lado crédito), lo mismo que ``Pago.monto``/
-        ``account.payment.amount`` -- misma unidad, resta directa correcta.
+        (función de módulo): esta es la delegación de instancia, para no
+        romper a los llamadores existentes que pasan ``self._execute``
+        implícito.
         """
-        if not move_ids:
-            return {}
-        lines = self._search_read(
-            self.MODEL_MOVE_LINE,
-            [["move_id", "in", move_ids], ["credit", ">", 0]],
-            ["move_id", "account_id", "amount_currency"],
-        )
-        if not lines:
-            return {}
-        account_ids = list(_ids_of(lines, "account_id"))
-        tipos = {
-            a["id"]: a.get("account_type")
-            for a in self._execute(
-                "account.account", "read", [account_ids], {"fields": ["id", "account_type"]}
-            )
-        }
-        reembolsos: dict[int, Decimal] = {}
-        for ln in lines:
-            acc_id = _m2o_id(ln.get("account_id"))
-            if not acc_id or tipos.get(int(acc_id)) != "asset_cash":
-                continue
-            move_id = int(_m2o_id(ln.get("move_id")))
-            monto_linea = abs(_dec(ln.get("amount_currency")))
-            reembolsos[move_id] = reembolsos.get(move_id, Decimal("0")) + monto_linea
-        return reembolsos
+        return montos_reembolsados_en_pagos(self._execute, move_ids)
 
     def changed_pagos(self, since: datetime | None) -> list[Pago]:
         # Sin filtro por ``is_reconciled``. Estuvo en ``False`` mucho
