@@ -7194,19 +7194,16 @@ def _estado_pago_facturas_desde_odoo(execute: Any, invoice_ids: list[int]) -> di
         return {}
 
 
-_PAYMENT_STATES_SALDADOS = {"paid", "in_payment", "reversed"}
-
-
 def _facturas_confirmadas_pagadas_por_so(
     execute: Any, invoice_ids: list[int], inv_id_to_so: dict[int, str]
 ) -> dict[str, bool]:
-    """True por ``so_id`` si TODAS sus ``out_invoice`` (facturas de venta,
+    """True por ``so_id`` si ``pagada_unificada`` da por saldadas TODAS sus
 
-    nunca NC/ND) tienen ``payment_state`` en Odoo, EN VIVO, dentro de
-    {paid, in_payment, reversed} -- señal DIRECTA y autoritativa de que
-    Odoo ya considera la factura saldada, sin depender de que nuestra
-    propia reconstrucción bottom-up (Vinculaciones, teóricos, saldo de
-    factura neto) llegue independientemente al mismo resultado.
+    ``out_invoice`` (facturas de venta, nunca NC/ND) en Odoo, EN VIVO --
+    señal DIRECTA y autoritativa de que Odoo ya considera la factura
+    saldada, sin depender de que nuestra propia reconstrucción bottom-up
+    (Vinculaciones, teóricos, saldo de factura neto) llegue
+    independientemente al mismo resultado.
 
     Pedido explícito del usuario (agosto 2026, auditoría de saldos de
     CxC): 107 órdenes reales confirmadas en vivo donde Odoo ya daba la
@@ -7215,6 +7212,17 @@ def _facturas_confirmadas_pagadas_por_so(
     se vinculó localmente. Alimenta ``clasificar_estado_cxc`` (regla 5,
     ``factura_pagada_confirmada_odoo``) -- nunca sustituye las reglas 1-4
     existentes, solo cubre el hueco cuando esas no alcanzan.
+
+    **Hasta el 21-sep-2026 esta función tenía su PROPIA lectura** (estado
+    exacto en ``{paid, in_payment, reversed}``, sin la tolerancia de
+    centavos ni la señal de sobreaplicada que ya tiene ``pagada_unificada``
+    desde la decisión 10 del quiz). Eso hacía que Ventas siguiera contando
+    como "por cobrar" órdenes que Reporte de Saldos ya daba por saldadas --
+    medido en producción, 5 órdenes reales (2 de centavos genuinos, sin
+    materialidad; 3 con un sobrepago real de 142,05 USD que la señal
+    ``sobreaplicada`` ya reporta aparte, sin que hiciera falta una segunda
+    regla más estricta escondiéndolo). Se unifica acá también: la misma
+    regla, un solo lugar donde se define.
     """
     if not execute or not invoice_ids:
         return {}
@@ -7223,23 +7231,23 @@ def _facturas_confirmadas_pagadas_por_so(
             "account.move",
             "read",
             [invoice_ids],
-            {"fields": ["id", "move_type", "payment_state"]},
+            {"fields": ["id", "move_type", "payment_state", "amount_residual_usd"]},
         )
     except Exception as e:
         logger.warning("Error consultando facturas confirmadas pagadas en Odoo: %s", e)
         return {}
-    estados_por_so: dict[str, list[str]] = {}
+    facturas_por_so: dict[str, list[dict[str, Any]]] = {}
     for r in recs:
         if r.get("move_type") != "out_invoice":
             continue
         so = inv_id_to_so.get(int(r["id"]))
         if not so:
             continue
-        estados_por_so.setdefault(so, []).append(str(r.get("payment_state") or ""))
+        facturas_por_so.setdefault(so, []).append(r)
     return {
-        so: all(ps in _PAYMENT_STATES_SALDADOS for ps in estados)
-        for so, estados in estados_por_so.items()
-        if estados
+        so: pagada_unificada(facturas).pagada
+        for so, facturas in facturas_por_so.items()
+        if facturas
     }
 
 

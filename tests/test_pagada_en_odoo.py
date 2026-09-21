@@ -263,12 +263,18 @@ class TestPagadaUnificada:
         assert r.pagada and r.sobreaplicada
         assert r.residual_total == Decimal("-116.69")
 
-    def test_las_tres_pantallas_usan_la_regla_unificada(self) -> None:
-        """El usuario dijo «aplicalo» el 12-sep-2026. Tres sitios, la misma función:
-        reporte de saldos, sugerencias de conciliación y auditoría. Si alguno vuelve
-        a una regla propia, esto lo ve."""
+    def test_las_pantallas_usan_la_regla_unificada(self) -> None:
+        """El usuario dijo «aplicalo» el 12-sep-2026: reporte de saldos,
+
+        sugerencias de conciliación y auditoría. Un cuarto sitio se sumó el
+        21-sep-2026 -- ``_facturas_confirmadas_pagadas_por_so`` (regla 5 de
+        ``clasificar_estado_cxc``, que alimenta a Ventas) tenía su PROPIA
+        lectura de estado exacto, sin la tolerancia de centavos ni la señal
+        de sobreaplicada: 5 órdenes reales quedaban "por cobrar" en Ventas
+        que Reporte de Saldos ya daba por saldadas. Si alguno de los cuatro
+        vuelve a una regla propia, esto lo ve."""
         from pathlib import Path
 
         fuente = Path("src/cxc/web/app.py").read_text(encoding="utf-8")
-        assert fuente.count("pagada_unificada(") == 3
+        assert fuente.count("pagada_unificada(") == 4
         assert "pagada_por_estado(" not in fuente and "pagada_por_residual(" not in fuente
