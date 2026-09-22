@@ -865,9 +865,39 @@ def _evaluar_promociones_producto(
                 * pct_general
             )
             if nc > 0:
+                # La etiqueta decía "Descuento primera compra" SIEMPRE, sin
+                # importar si esto corría por el camino de primera compra
+                # real (``fallback_industrial=True``) o por el de
+                # promociones "Recurrente" (``solo_primera_compra=False``,
+                # ver el docstring de esta función). Hallazgo real de
+                # producción (22-sep-2026, orden S01046): una promo
+                # "Recurrente" tipo producto (``PROMO_NUEVO_GLOBAL``, sin
+                # relación con la primera compra del cliente) mostraba
+                # "Descuento primera compra 2.00%" en una orden que era la
+                # compra número 18 del cliente -- confuso aunque el monto
+                # fuera el que la regla realmente otorgaba. Se usa la
+                # descripción propia de la regla cuando existe; si no, un
+                # rótulo genérico que no asume "primera compra".
+                if fallback_industrial:
+                    etiqueta = f"Descuento primera compra {pct_general * 100:.2f}%"
+                else:
+                    regla_ganadora = next(
+                        (
+                            p
+                            for p in promos_activas
+                            if getattr(p, "regla_id", "") == regla_pct_general
+                        ),
+                        None,
+                    )
+                    desc_regla = (
+                        str(getattr(regla_ganadora, "descripcion", "") or "").strip()
+                        if regla_ganadora is not None
+                        else ""
+                    )
+                    etiqueta = desc_regla or f"Descuento recurrente {pct_general * 100:.2f}%"
                 detalle_nc = DescuentoAplicado(
-                    origen="primera_compra",
-                    descripcion=f"Descuento primera compra {pct_general * 100:.2f}%",
+                    origen="primera_compra" if fallback_industrial else "recurrente",
+                    descripcion=etiqueta,
                     monto=q2(nc),
                     regla_id=regla_pct_general,
                     porcentaje=pct_general,
