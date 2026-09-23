@@ -1218,15 +1218,31 @@ def _calcular_componentes(
         # perdían el descuento; era falso: en ruta BCV la moneda "VES" es
         # la correcta y las reglas VES sí les aplican -- 14 de ellas tienen
         # contado, 12 por PP_AE86B6D6 al 20 % y 2 por PP_DF33F50E al 15 %.)
-        moneda_pago = "USD"
-        if pura_bcv and inp.abonos:
-            monedas_usadas = {
-                pago.moneda.value
-                for _, pago in inp.abonos
-                if hasattr(pago, "moneda") and pago.moneda
-            }
-            if monedas_usadas == {"VES"}:
-                moneda_pago = "VES"
+        # Sin abonos todavía (proyección teórica de una orden sin pagos,
+        # ignorar_pago_previo=True -- con abonos reales ``contado_evaluable``
+        # ya exige al menos uno) no hay de dónde leer la moneda real del
+        # pago. Hallazgo real (22-sep-2026, orden S01049, 0 abonos): el
+        # default era "USD" SIEMPRE, sin importar qué camino se estaba
+        # evaluando -- así que la proyección del camino VES/BCV
+        # (``pura_bcv=True``) quedaba excluyendo sus propias reglas de
+        # contado en VES (PP_AE86B6D6, 20 %) y caía en una regla en USD que
+        # ni siquiera debería poder matchear ese camino (PP_GLOBAL_CAJA_08,
+        # 8 %) -- un tercio del descuento real de pronto pago en VES.
+        # El camino que se está evaluando (``pura_bcv``) es la mejor
+        # suposición posible sin abonos: si se proyecta "pagando en VES a
+        # BCV", corresponde asumir un pago en VES.
+        if inp.abonos:
+            moneda_pago = "USD"
+            if pura_bcv:
+                monedas_usadas = {
+                    pago.moneda.value
+                    for _, pago in inp.abonos
+                    if hasattr(pago, "moneda") and pago.moneda
+                }
+                if monedas_usadas == {"VES"}:
+                    moneda_pago = "VES"
+        else:
+            moneda_pago = "VES" if pura_bcv else "USD"
 
         # Escalera por ventana de pago (bug encontrado en la auditoría de
         # reglas, septiembre 2026). Antes se elegía la regla dominante SOLO

@@ -116,11 +116,40 @@ def test_contado_scoped_por_nombre_logico_de_listas_ves():
     assert bandeja.descuentos_teorico_usd == Decimal("0.00")
 
 
-def test_contado_scoped_a_moneda_ves_no_aplica_sin_abonos_en_ves():
-    """Sin abonos, el motor asume moneda de pago USD."""
+def test_contado_scoped_a_moneda_ves_SI_aplica_en_el_teorico_ves_sin_abonos():
+    """Corrección de comportamiento (22-sep-2026, orden real S01049): sin
+
+    abonos todavía, el motor no tiene de dónde leer la moneda real del
+    pago -- pero el camino que se está evaluando (``pura_bcv``, acá el
+    teórico VES/BCV) es la mejor suposición posible. Antes se asumía USD
+    SIEMPRE sin importar el camino, así que una regla scopeada a VES
+    quedaba excluida de su propio teórico VES: la proyección de "pagando
+    en VES" no podía ver un descuento que solo aplica pagando en VES.
+    Caso real: PP_AE86B6D6 (20 %, VES) quedaba afuera y ganaba una regla
+    en USD que ni siquiera debería poder matchear ese camino -- un tercio
+    del descuento real de pronto pago en VES."""
     regla = b.descuento(marca="Sinoco", categoria="CAJA", porcentaje="0.03")
     regla.monedas_aplicables = "VES"
-    assert calcular_factura(_inp([regla])).descuentos_teorico_ves == Decimal("0.00")
+    assert calcular_factura(_inp([regla])).descuentos_teorico_ves == Decimal("30.00")
+
+
+def test_contado_scoped_a_moneda_ves_no_aplica_en_el_teorico_usd_sin_abonos():
+    """Control: el mismo caso de arriba, pero evaluando el camino USD/
+
+    Binance (``pura_bcv=False``) -- ahí sigue sin aplicar, porque una
+    regla scopeada a VES no tiene sentido en el camino en dólares."""
+    regla = b.descuento(marca="Sinoco", categoria="CAJA", porcentaje="0.03")
+    regla.monedas_aplicables = "VES"
+    assert calcular_factura(_inp([regla])).descuentos_teorico_usd == Decimal("0.00")
+
+
+def test_contado_scoped_a_moneda_usd_SI_aplica_en_el_teorico_usd_sin_abonos():
+    """Control simétrico: una regla scopeada a USD sigue aplicando en el
+
+    teórico USD sin abonos -- el default para ese camino no cambió."""
+    regla = b.descuento(marca="Sinoco", categoria="CAJA", porcentaje="0.03")
+    regla.monedas_aplicables = "USD"
+    assert calcular_factura(_inp([regla])).descuentos_teorico_usd == Decimal("24.00")
 
 
 def test_varias_reglas_gana_la_mas_especifica_no_la_de_mayor_porcentaje():
