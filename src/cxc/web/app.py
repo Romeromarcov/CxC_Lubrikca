@@ -10178,6 +10178,7 @@ async def get_config_promociones():
                 "vigencia_hasta": p.vigencia_hasta.isoformat() if p.vigencia_hasta else None,
                 "activo": p.activo,
                 "requiere_pago_previo": p.requiere_pago_previo,
+                "pago_previo_moneda": getattr(p, "pago_previo_moneda", "cualquiera"),
                 "aplica_a": getattr(p, "aplica_a", "linea"),
                 "descripcion": getattr(p, "descripcion", ""),
             }
@@ -10334,6 +10335,10 @@ class ReglaUnificadaRequest(BaseModel):
     monedas_aplicables: str = "*"
     monedas_excluidas: str = ""
     requiere_pago_previo: bool = False
+    # Cuál teórico debe estar CUBIERTO por lo pagado para que la regla
+    # aplique -- "ves" | "usd" | "cualquiera" (default, septiembre 2026).
+    # Ver DescuentoProntoPago.pago_previo_moneda en models.py.
+    pago_previo_moneda: str = "cualquiera"
     aplica_a: str = "linea"
     # Ventana de pago: vive en contado y recompra, y el usuario pidió
     # subirla al bloque común -- "en recompra también tiene una ventana de
@@ -10426,6 +10431,7 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
             "vigencia_hasta": hasta,
             "activo": bool(req.activo),
             "requiere_pago_previo": bool(req.requiere_pago_previo),
+            "pago_previo_moneda": (req.pago_previo_moneda or "cualquiera").strip().lower(),
             "aplica_a": req.aplica_a or "linea",
             "descripcion": req.descripcion or "",
             "tipo_beneficio": req.tipo_beneficio or "descuento",
@@ -10768,6 +10774,7 @@ async def get_config_pronto_pago():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "pago_previo_moneda": getattr(r, "pago_previo_moneda", "cualquiera"),
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
             }
@@ -10816,6 +10823,7 @@ async def get_config_volumen():
                     "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                     "activo": r.activo,
                     "requiere_pago_previo": r.requiere_pago_previo,
+                    "pago_previo_moneda": getattr(r, "pago_previo_moneda", "cualquiera"),
                     "aplica_a": getattr(r, "aplica_a", "linea"),
                     "descripcion": getattr(r, "descripcion", ""),
                 }
@@ -10847,6 +10855,7 @@ async def get_config_recompra():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "pago_previo_moneda": getattr(r, "pago_previo_moneda", "cualquiera"),
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
                 "ventana_pago_tipo": getattr(r, "ventana_pago_tipo", "vencimiento"),
@@ -10882,6 +10891,7 @@ async def get_config_producto():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "pago_previo_moneda": getattr(r, "pago_previo_moneda", "cualquiera"),
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
             }
@@ -10921,6 +10931,7 @@ async def get_config_diferencial():
                 "vigencia_hasta": r.vigencia_hasta.isoformat() if r.vigencia_hasta else None,
                 "activo": r.activo,
                 "requiere_pago_previo": r.requiere_pago_previo,
+                "pago_previo_moneda": getattr(r, "pago_previo_moneda", "cualquiera"),
                 "aplica_a": getattr(r, "aplica_a", "linea"),
                 "descripcion": getattr(r, "descripcion", ""),
             }

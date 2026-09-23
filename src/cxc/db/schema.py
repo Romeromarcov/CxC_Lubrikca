@@ -291,6 +291,7 @@ descuentos_pronto_pago = Table(
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("tipo_descuento", String, nullable=False, server_default="contado"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
@@ -329,6 +330,7 @@ descuentos_volumen = Table(
     Column("monedas_excluidas", String, nullable=False, server_default=""),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
@@ -381,6 +383,7 @@ promocion_primera_compra = Table(
     Column("solo_primera_compra", Boolean, nullable=False, server_default="false"),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
@@ -419,6 +422,7 @@ descuentos_recompra = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
     Column("ventana_pago_tipo", String, nullable=False, server_default="vencimiento"),
@@ -457,6 +461,7 @@ descuentos_producto = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
@@ -495,6 +500,7 @@ descuentos_diferencial_cambiario = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="true"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
@@ -511,6 +517,7 @@ reglas_recurrencia = Table(
     Column("vigencia_hasta", Date, nullable=True),
     Column("activo", Boolean, nullable=False, server_default="true"),
     Column("requiere_pago_previo", Boolean, nullable=False, server_default="false"),
+    Column("pago_previo_moneda", String, nullable=False, server_default="cualquiera"),
     Column("aplica_a", String, nullable=False, server_default="linea"),
     Column("descripcion", Text, nullable=False, server_default=""),
 )
