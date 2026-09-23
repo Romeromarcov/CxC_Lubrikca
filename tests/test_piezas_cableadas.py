@@ -82,6 +82,9 @@ SIN_LLAMADOR_A_PROPOSITO: dict[str, str] = {
     "equivalents.py::es_pago_mixto": (
         "detecta el pago en dos monedas, y lo consume el cálculo de equivalentes"
     ),
+    "equivalents.py::valor_pagado_ves_bcv": (
+        "cobertura de pago_previo_moneda='ves', y la consume discounts.py"
+    ),
     "historical_pricing.py::cargar_mapa_historico": "lo usa el runner del motor",
     "reportes_historicos.py::fetch_out_invoices_due_by": (
         "reporte histórico, invocado por su propio script"
