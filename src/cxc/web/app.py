@@ -14260,16 +14260,45 @@ def _get_ventas_sync(
                 if b
                 else Decimal("0")
             )
+            # Sin ningún pago vinculado todavía, el cálculo REAL de contado
+            # da $0 -- `contado_evaluable` exige al menos un abono (ver
+            # `_calcular_componentes`) -- aunque el vendedor ya haya cargado
+            # el % de pronto pago en la línea de Odoo por adelantado, que es
+            # la práctica normal (se pacta al armar el pedido, antes de que
+            # el cliente pague). Comparar ese $0 contra lo que Odoo ya tiene
+            # marcaba "sobre-descuento" en CASI CUALQUIER orden sin pagos
+            # con contado pre-cargado -- no es una fuga, es contado que
+            # todavía no se confirmó. Hallazgo real (23-sep-2026, S01049):
+            # $1,94 (solo primera compra) contra $19,36 de Odoo.
+            #
+            # Pedido del usuario: mientras no haya pago, dar el beneficio de
+            # la duda hasta lo que el teórico proyecta (que SÍ asume que el
+            # contado aplicaría) -- solo se sigue marcando sobre-descuento si
+            # Odoo tiene MÁS que ese máximo proyectado, que ya no tiene
+            # ninguna regla que lo explique.
+            #
+            # Variable APARTE de `motor_total_descuentos`: esa alimenta
+            # "descuento_motor_total"/"descuento_pendiente_aplicar" y varios
+            # cálculos de saldo más abajo, que no deben moverse por esto --
+            # solo la comparación de sobre-descuento necesita el beneficio
+            # de la duda.
+            motor_total_descuentos_para_sobre_descuento = motor_total_descuentos
+            if not vincs_por_so.get(o.so_id):
+                motor_total_descuentos_para_sobre_descuento = max(
+                    motor_total_descuentos,
+                    Decimal(str(ves_desc_teorico)),
+                    Decimal(str(usd_desc_teorico)),
+                )
             descuento_aplicado_orden = desc_orden_odoo_map.get(o.so_id, 0.0)
             descuento_aplicado_factura = desc_factura_odoo_map.get(o.so_id, 0.0)
             audit_orden = auditar_descuento_orden(
                 so_id=o.so_id,
-                motor_total_descuentos=motor_total_descuentos,
+                motor_total_descuentos=motor_total_descuentos_para_sobre_descuento,
                 odoo_descuento_aplicado=Decimal(str(descuento_aplicado_orden)),
             )
             audit_factura = auditar_descuento_factura(
                 so_id=o.so_id,
-                motor_total_descuentos=motor_total_descuentos,
+                motor_total_descuentos=motor_total_descuentos_para_sobre_descuento,
                 odoo_descuento_factura=Decimal(str(descuento_aplicado_factura)),
             )
             # Tarea 3e/Fase 3: descuento aprobado manualmente desde la

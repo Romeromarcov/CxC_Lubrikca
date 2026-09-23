@@ -418,6 +418,62 @@ def test_descuento_aplicado_orden_coincide_con_motor_es_ok() -> None:
     assert ok["descuento_aplicado_sistema"] == 0.0
 
 
+def test_descuento_aplicado_mayor_al_motor_real_pero_cubierto_por_el_teorico_es_ok() -> None:
+    """Corrección de comportamiento (23-sep-2026, caso real S01049): sin
+
+    ningún pago vinculado, el descuento REAL del motor da $0 para contado
+    (``contado_evaluable`` exige un abono) -- comparar eso directo contra
+    lo que Odoo ya tiene en la línea marcaba "sobre-descuento" en
+    cualquier orden con contado pre-cargado y sin pagos todavía, que es
+    la práctica normal (se pacta al armar el pedido). Con el teórico
+    (que SÍ proyecta el contado) como techo del beneficio de la duda, un
+    7% en la línea de Odoo -- más que el 5% real, pero menos que el 8%
+    que el teórico VES proyecta -- ya no es una fuga.
+
+    ``descuento_motor_total`` (usado en otros lados: DESC. PENDIENTE,
+    saldos) NO se mueve por esto -- solo la validación de sobre-descuento
+    usa el techo proyectado."""
+    lineas = _lineas_orden_estandar()
+    lineas[0] = LineaOrden(
+        linea_id="1",
+        so_id="SO_OK",
+        producto="1",
+        marca="Sinoco",
+        categoria="*",
+        cantidad=Decimal("1"),
+        precio_unitario=Decimal("100"),
+        descuento=Decimal("7.0"),
+    )
+    by_so = _run_get_ventas(lineas=lineas)
+    ok = by_so["SO_OK"]
+    assert ok["descuento_aplicado_orden"] == 7.0
+    assert ok["descuento_motor_total"] == 5.0
+    assert ok["descuento_validacion_orden"] == "ok"
+
+
+def test_descuento_aplicado_mayor_a_cualquier_teorico_sigue_marcando_discrepancia() -> None:
+    """Control: el beneficio de la duda tiene techo -- el 60% en la línea de
+
+    Odoo no lo explica ni el motor real (5%) ni el teórico proyectado más
+    generoso (8% VES). Eso sigue sin regla que lo justifique, y sigue
+    siendo una fuga real que hay que revisar."""
+    lineas = _lineas_orden_estandar()
+    lineas[0] = LineaOrden(
+        linea_id="1",
+        so_id="SO_OK",
+        producto="1",
+        marca="Sinoco",
+        categoria="*",
+        cantidad=Decimal("1"),
+        precio_unitario=Decimal("100"),
+        descuento=Decimal("60.0"),
+    )
+    by_so = _run_get_ventas(lineas=lineas)
+    ok = by_so["SO_OK"]
+    assert ok["descuento_aplicado_orden"] == 60.0
+    assert ok["descuento_validacion_orden"] == "discrepancia"
+
+
 def test_descuento_teorico_ves_y_usd_son_columnas_independientes() -> None:
     """Fase 6: reemplaza "Desc. Motor" -- descuentos_teorico_ves/_usd son
 
