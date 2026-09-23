@@ -8935,7 +8935,20 @@ async def get_bandeja_facturacion():
                     # son las excepciones. Caso TERA: pagaron completo y no
                     # se les dio descuento, asi que emitirles una NC seria
                     # regalarles plata. Ver schema.descuentos_no_otorgados.
-                    if nc_subtotal > 0.05 and o.so_id not in descuentos_no_otorgados_b:
+                    # Pedido del usuario (23-sep-2026): "no incluir en la
+                    # bandeja 2, 3 y 4 las facturas que ya estén totalmente
+                    # pagadas en Odoo". Bandeja 3 ya lo hacía
+                    # (``factura_saldada_odoo``, sep-2026); esta no -- una
+                    # factura que Odoo ya da por saldada (``payment_state``
+                    # paid/in_payment, o residual de centavos/sobreaplicado,
+                    # ver ``pagada_unificada``) no necesita una NC más,
+                    # exista o no una excepción manual en
+                    # ``descuentos_no_otorgados``.
+                    if (
+                        nc_subtotal > 0.05
+                        and o.so_id not in descuentos_no_otorgados_b
+                        and not item.get("factura_saldada_odoo")
+                    ):
                         detalles_b = b.descuentos_detalle if b else []
                         fact_sub = float(item.get("total_facturado_antes_impuestos") or 0.0)
                         # La tasa real de ESTA factura, no una constante: si
@@ -11000,6 +11013,12 @@ def calcular_candidatos_cierre_diferencial(
         if float(item.get("total_nc_aplicada") or 0.0) > 0.05:
             continue
         if float(item.get("descuento_aplicado_sistema") or 0.0) > 0.05:
+            continue
+        # Pedido del usuario (23-sep-2026): una factura que Odoo ya da por
+        # saldada no es candidata a cierre por diferencial -- no hay brecha
+        # que cerrar. Mismo campo que ya usa Bandeja 3
+        # (``factura_saldada_odoo``, ver ``pagada_unificada``).
+        if item.get("factura_saldada_odoo"):
             continue
         teorico_ves = float(item.get("ves_neta_teorica_iva") or 0.0)
         if teorico_ves <= 0:
