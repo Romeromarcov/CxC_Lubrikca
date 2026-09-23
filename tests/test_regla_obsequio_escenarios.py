@@ -311,3 +311,60 @@ def test_teorico_usd_usa_la_lista_usd_no_la_de_nacimiento():
     assert bandeja.teorico_lista_ves == Decimal("500.00")
     assert bandeja.teorico_lista_usd == Decimal("400.00")
     assert bandeja.lista_aplicada == LISTA_VES
+
+
+# --- la etiqueta del respaldo porcentual, según de dónde sale (22-sep-2026) -
+#
+# Hallazgo real: una promoción "Recurrente" (``solo_primera_compra=False``)
+# tipo "producto" cuyo obsequio no matchea cae al respaldo porcentual (mismo
+# camino que ``test_obsequio_no_aplica_si_el_producto_no_esta_en_la_orden``,
+# pero con ``descuento_fallback`` != 0). El monto lo calcula bien la regla;
+# la etiqueta decía "Descuento primera compra" SIEMPRE, aunque la orden no
+# fuera la primera del cliente y la regla ni siquiera estuviera marcada
+# ``solo_primera_compra``. Caso real de producción: orden S01046 (la compra
+# número 18 del cliente), regla ``PROMO_NUEVO_GLOBAL``.
+
+
+def test_recurrente_con_respaldo_porcentual_NO_dice_primera_compra():
+    """Sin llegar a la compra mínima del obsequio (5 < 12), ``prod_promos_
+
+    califican`` queda vacío y recién ahí se cae al respaldo porcentual --
+    mismo camino que ``test_obsequio_no_aplica_bajo_la_compra_minima``, pero
+    con ``descuento_fallback`` != 0 y ``solo_primera_compra=False``."""
+    inp = _orden_con_obsequio(compra_minima="12", cantidad="5", solo_primera_compra=False)
+    inp.promociones_primera_compra[0].descuento_fallback = Decimal("0.02")
+
+    conceptos = conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True)
+
+    assert len(conceptos) == 1
+    assert conceptos[0]["concepto"] == "Descuento recurrente 2.00%"
+    assert "primera compra" not in conceptos[0]["concepto"].lower()
+    assert conceptos[0]["monto"] == Decimal("10.00")  # 2% de 500 (5 cajas x 100)
+
+
+def test_recurrente_con_respaldo_porcentual_usa_la_descripcion_de_la_regla_si_existe():
+    """Si quien configuró la regla le puso una descripción propia, esa gana
+
+    sobre el rótulo genérico -- es más específica y evita inventar un texto
+    que no dice qué regla fue."""
+    inp = _orden_con_obsequio(compra_minima="12", cantidad="5", solo_primera_compra=False)
+    inp.promociones_primera_compra[0].descuento_fallback = Decimal("0.02")
+    inp.promociones_primera_compra[0].descripcion = "Promo 12+1 (respaldo sin obsequio)"
+
+    conceptos = conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True)
+
+    assert conceptos[0]["concepto"] == "Promo 12+1 (respaldo sin obsequio)"
+
+
+def test_primera_compra_real_SI_dice_primera_compra():
+    """Control: el mismo camino porcentual, pero cuando la orden SÍ es la
+
+    primera del cliente, conserva el rótulo original."""
+    inp = _orden_con_obsequio(
+        compra_minima="12", cantidad="5", solo_primera_compra=True, primera=True
+    )
+    inp.promociones_primera_compra[0].descuento_fallback = Decimal("0.02")
+
+    conceptos = conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True)
+
+    assert conceptos[0]["concepto"] == "Descuento primera compra 2.00%"
