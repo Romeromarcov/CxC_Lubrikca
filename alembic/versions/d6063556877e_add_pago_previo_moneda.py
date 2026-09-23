@@ -1,7 +1,7 @@
 """agrega pago_previo_moneda a las tablas de reglas con requiere_pago_previo
 
 Revision ID: d6063556877e
-Revises: 238aafc9bb95
+Revises: e5d2c9a7b3f1
 Create Date: 2026-09-23 00:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'd6063556877e'
-down_revision: Union[str, None] = '238aafc9bb95'
+down_revision: Union[str, None] = 'e5d2c9a7b3f1'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
