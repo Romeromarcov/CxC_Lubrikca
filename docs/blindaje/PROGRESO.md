@@ -176,6 +176,21 @@ Ordenado por lo que costaría no arreglarlo, no por severidad nominal.
 | S01049 (orden real, 0 abonos): el teórico VES calculaba el "Contado por marca/categoría" con `moneda_pago="USD"` **siempre**, sin importar el camino (VES/BCV o USD/Binance) que se estaba proyectando -- sin abonos no hay de dónde leer la moneda real, y el default no miraba `pura_bcv`. La regla VES genérica de 20 % (`PP_AE86B6D6`) quedaba excluida de su propio teórico VES, y ganaba una regla en USD (`PP_GLOBAL_CAJA_08`, 8 %) que ni debería poder matchear ese camino | el teórico VES daba $9,68 (10 %, 2 % primera compra + 8 % de una regla USD); el descuento real ya en la línea de Odoo es 20 % ($19,36) -- la "Discrepancia"/"Facturado de menos" que se veía era en parte un artefacto de esta mala inferencia, no solo la diferencia real del 2 % de primera compra | **aplicado el 22-sep**: sin abonos, `moneda_pago` ahora asume el camino que se está evaluando (`pura_bcv` -- VES para el teórico VES, USD para el teórico USD) en vez de USD siempre; con abonos reales el criterio no cambió. Verificado en vivo: el teórico VES de S01049 pasa a calcular 20 % de contado, igual que Odoo. 3 tests nuevos/corregidos en `tests/test_regla_pronto_pago_escenarios.py` (uno de los viejos afirmaba el comportamiento incorrecto como si fuera el esperado) |
 | Los 6 paneles de solo lectura por familia (Recompra, Pronto Pago, Volumen, Obsequio/Promociones, Producto, Diferencial Cambiario) en Configuración → Descuentos seguían mostrándose bajo el editor único, 100 % redundantes con la Matriz Consolidada (mismas 6 familias, misma data) — confundible con los formularios viejos que sí se retiraron el 11-sep | reportado por vos con captura el 19-sep, confirmado que era diseño intencional (nota del propio HTML) y no un bug de código o de deploy | **aplicado** el 19-sep: los 6 paneles se eliminaron del HTML; "Días de Crédito Máximo por Volumen" y "Exclusiones Mutuas" se conservan (no son de las 6 familias, ni la Matriz Consolidada los cubre) |
 
+## Ideas pendientes, sin caso de uso todavía
+
+**Prioridad configurable entre reglas de Pronto Pago/Contado** (surgió investigando
+S01049, 22-sep-2026). Hoy la regla que gana es simplemente la de mayor porcentaje
+entre las vigentes en la ventana de pago (`engine/discounts.py`, sección "Contado
+por marca×categoría") — una vez resuelto el bug de moneda de esa misma fecha, ese
+criterio ya resuelve el caso real que apareció. El usuario pidió dejar anotada la
+idea de un campo de prioridad explícito, configurable desde el formulario, para el
+día que "mayor porcentaje gana" no sea el criterio correcto (ej.: preferir la regla
+más específica aunque dé menos % que una genérica). **No se implementa sin un caso
+concreto** — agregar el campo ahora sería diseñar para un requisito hipotético.
+Si aparece el caso: el lugar es el mismo bloque de selección (`regla_contado_dominante`
+en `_calcular_componentes`), agregando un campo `prioridad` a `DescuentoMarcaCategoria`
+que desempate antes que el porcentaje, con su UI en el panel de Configuración.
+
 Y lo que hay que hacer con las manos, que es lo más urgente de todo: **rotar la
 credencial de producción** y purgar el valor viejo del historial de git. Rotar sin
 purgar solo cambia qué credencial está expuesta.
