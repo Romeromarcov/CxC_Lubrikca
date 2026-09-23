@@ -94,3 +94,13 @@ def test_no_alcanzar_el_umbral_sigue_excluyendo() -> None:
 
 def test_una_orden_nacida_en_lista_usd_sigue_fuera() -> None:
     assert _ids([_item("S00005", nacio_en_lista_usd=True)]) == set()
+
+
+def test_una_factura_ya_saldada_en_odoo_no_es_candidata() -> None:
+    """Tercera vía por la que un cierre deja de ser candidato (23-sep-2026,
+
+    pedido del usuario): Odoo ya da la factura por saldada -- no hay
+    brecha que cerrar con un diferencial, exista o no una NC/descuento de
+    sistema que lo explique. Mismo campo que ya usa Bandeja 3
+    (``factura_saldada_odoo``)."""
+    assert _ids([_item("S00006", factura_saldada_odoo=True)]) == set()
