@@ -13775,7 +13775,12 @@ def _get_ventas_sync(
             return {"items": [], "kpis": {}, "calculando": True}
         _ventas_computing = True
     try:
-        from cxc.engine.discount_audit import auditar_descuento_factura, auditar_descuento_orden
+        from cxc.engine.discount_audit import (
+            EstadoAuditoria,
+            auditar_descuento_factura,
+            auditar_descuento_orden,
+            hay_sobre_descuento,
+        )
 
         repo = get_repo()
         user = get_current_user_from_cookie(cxc_session)
@@ -14871,8 +14876,30 @@ def _get_ventas_sync(
                     "descuento_motor_total_pct": _pct(
                         float(motor_total_descuentos), precio_base_calculado
                     ),
-                    "descuento_validacion_orden": audit_orden.estado.value,
-                    "descuento_validacion_factura": audit_factura.estado.value,
+                    # Pedido del usuario (22-sep-2026): "no mostrarme discrepancia
+                    # si el motor dice menos [descuento] de lo que se facturó/
+                    # ordenó en Odoo [...] mostrarme una alerta solo si en Odoo
+                    # se ordenó/facturó/cobró menos de lo que dice el motor que
+                    # debió ser" -- o sea, solo el SOBRE-descuento (Odoo aplicó
+                    # más que el motor) es una fuga que vale la pena marcar acá.
+                    # El motor pidiendo más que Odoo ("PENDIENTE por aplicar")
+                    # ya tiene su propio campo (descuento_pendiente_aplicar /
+                    # "DESC. PENDIENTE") -- marcarlo TAMBIÉN como "Discrepancia"
+                    # era ruido duplicado, no una fuga. ``estado``/
+                    # ``enviar_a_bandeja`` de auditar_descuento_orden/_factura NO
+                    # cambian (BandejaAuditoria sigue registrando las dos
+                    # direcciones, ver hay_sobre_descuento); esto es solo el
+                    # rótulo que ve Ventas.
+                    "descuento_validacion_orden": (
+                        audit_orden.estado.value
+                        if hay_sobre_descuento(audit_orden) is not None
+                        else EstadoAuditoria.OK.value
+                    ),
+                    "descuento_validacion_factura": (
+                        audit_factura.estado.value
+                        if hay_sobre_descuento(audit_factura) is not None
+                        else EstadoAuditoria.OK.value
+                    ),
                     # Tarea 3d: descuento que el motor exige y aún no está en Odoo.
                     # Puntos 5-6: se muestra en la sección de totales de la
                     # orden real (junto a venta_bruta_real/venta_neta_real en

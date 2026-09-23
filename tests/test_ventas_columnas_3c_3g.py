@@ -431,13 +431,21 @@ def test_descuento_teorico_ves_y_usd_son_columnas_independientes() -> None:
 
 
 def test_descuento_pendiente_aplicar_cuando_motor_exige_mas_que_odoo() -> None:
-    """El motor calculó 10 de descuento; Odoo solo tiene 3 -> pendiente = 7."""
+    """El motor calculó 10 de descuento; Odoo solo tiene 3 -> pendiente = 7.
+
+    ``descuento_validacion_orden`` da "ok", no "discrepancia" -- corrección
+    de comportamiento (22-sep-2026): que el motor exija más descuento del
+    que Odoo tiene todavía no es una fuga, es plata que al cliente le falta
+    dar y ya la dice ``descuento_pendiente_aplicar`` en su propio campo.
+    Marcarlo TAMBIÉN como "Discrepancia" era ruido duplicado -- ver
+    ``hay_sobre_descuento`` en ``engine/discount_audit.py``, que es la
+    misma regla que ya usa el bloqueo de descuento de sistema adicional."""
     by_so = _run_get_ventas()
     pend = by_so["SO_PENDIENTE"]
     assert pend["descuento_aplicado_orden"] == 3.0
     assert pend["descuento_motor_total"] == 10.0
     assert pend["descuento_pendiente_aplicar"] == 7.0
-    assert pend["descuento_validacion_orden"] == "discrepancia"
+    assert pend["descuento_validacion_orden"] == "ok"
 
 
 def test_orden_real_subtotal_teoricos_resta_el_total_del_motor_de_venta_bruta_real_con_imp() -> (
@@ -497,6 +505,11 @@ def test_orden_real_subtotal_teoricos_no_resta_teorico_si_hay_sobre_descuento() 
     assert ok["orden_real_subtotal_teoricos_bloqueado"] is True
     esperado = round(ok["venta_bruta_real"] * multiplicador, 2)
     assert ok["orden_real_subtotal_teoricos"] == esperado
+    # Control de la corrección del 22-sep-2026 (ver el test de arriba, caso
+    # PENDIENTE): esta SÍ es la dirección que "descuento_validacion_orden"
+    # tiene que seguir marcando -- Odoo aplicó MÁS descuento del que el
+    # motor autoriza, una fuga real, no ruido.
+    assert ok["descuento_validacion_orden"] == "discrepancia"
 
 
 def test_nota_credito_reduce_facturado_neto_logica_reutilizada() -> None:
