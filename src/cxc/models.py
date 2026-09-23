@@ -404,6 +404,12 @@ class DescuentoProntoPago:
     # Pronto pago solo tiene sentido si ya existe al menos un abono
     # vinculado a la orden/factura (ver EngineInputs.abonos).
     requiere_pago_previo: bool = True
+    # Cuál teórico debe estar CUBIERTO por lo pagado para que la regla
+    # aplique -- "ves"/"usd"/"cualquiera" (default, septiembre 2026: la
+    # orden tiene al menos un abono, sin importar si cubre uno u otro
+    # teórico -- comportamiento previo a este campo). Ver
+    # engine/discounts.py::_filtrar_por_pago_previo.
+    pago_previo_moneda: str = "cualquiera"
     # "linea" (% solo sobre las líneas que hacen match) o "subtotal" (mismo %
     # sobre el subtotal completo de la orden) -- ver engine/discounts.py.
     aplica_a: str = "linea"
@@ -445,6 +451,7 @@ class DescuentoVolumen:
     activo: bool = True
     # Descuento por volumen depende de la cantidad de la orden, no de pagos.
     requiere_pago_previo: bool = False
+    pago_previo_moneda: str = "cualquiera"
     aplica_a: str = "linea"
     descripcion: str = ""
 
@@ -482,6 +489,7 @@ class PromocionPrimeraCompra:
     activo: bool = True
     # Promoción de primera compra depende del historial del cliente, no de pagos.
     requiere_pago_previo: bool = False
+    pago_previo_moneda: str = "cualquiera"
     # No cambia el cálculo (ya opera sobre "todas las líneas" o solo
     # Industrial según otra lógica) -- se guarda por consistencia de esquema.
     aplica_a: str = "linea"
@@ -514,6 +522,7 @@ class DescuentoRecompra:
     activo: bool = True
     # Recompra depende del historial de compras del cliente, no de pagos.
     requiere_pago_previo: bool = False
+    pago_previo_moneda: str = "cualquiera"
     aplica_a: str = "linea"
     descripcion: str = ""
     # Ventana de recompra: aplica si la orden anterior del cliente está
@@ -564,6 +573,7 @@ class DescuentoProducto:
     activo: bool = True
     # Descuento por producto depende del producto/orden, no de pagos.
     requiere_pago_previo: bool = False
+    pago_previo_moneda: str = "cualquiera"
     aplica_a: str = "linea"
     descripcion: str = ""
 
@@ -603,6 +613,7 @@ class DescuentoDiferencialCambiario:
     # Diferencial cambiario: por definición se calcula sobre un abono ya
     # vinculado (tasa del abono), requiere pago previo.
     requiere_pago_previo: bool = True
+    pago_previo_moneda: str = "cualquiera"
     # No cambia el cálculo (se calcula por abono, no por línea) -- se guarda
     # por consistencia de esquema.
     aplica_a: str = "linea"
@@ -620,6 +631,7 @@ class ReglaRecurrencia:
     activo: bool = True
     # Legado: recurrencia por historial, no depende de pagos.
     requiere_pago_previo: bool = False
+    pago_previo_moneda: str = "cualquiera"
     aplica_a: str = "linea"
     descripcion: str = ""
 

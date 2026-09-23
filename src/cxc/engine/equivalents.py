@@ -157,6 +157,27 @@ def valor_pagado_usd(vinculaciones: list[Vinculacion]) -> Decimal:
     return total
 
 
+def valor_pagado_ves_bcv(vinculaciones: list[Vinculacion]) -> Decimal:
+    """Σ de los equivalentes VES congelados a tasa BCV oficial.
+
+    Simétrico a ``valor_pagado_bcv_usd`` (mismo patrón que ya usa
+    Diferencial Cambiario para medir cobertura contra el teórico USD, ver
+    ``discounts.py``): sirve para medir si lo pagado cubre el teórico VES
+    de una orden, que está denominado en bolívares (lista VES). No
+    recalcula: suma lo ya estampado por ``congelar_en_vinculacion``.
+    """
+    total = Decimal("0")
+    for v in vinculaciones:
+        eq = v.equiv_ves_bcv
+        if eq is None:
+            raise ValueError(
+                f"Vinculación {v.vinc_id} sin equivalentes congelados; "
+                "llamar congelar_en_vinculacion primero"
+            )
+        total += eq
+    return total
+
+
 def valor_pagado_binance_usd(vinculaciones: list[Vinculacion]) -> Decimal:
     """Σ de los equivalentes USD valuados a Tasa Binance o USD Cash directo."""
     total = Decimal("0")

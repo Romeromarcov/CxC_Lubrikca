@@ -53,6 +53,7 @@ from .equivalents import (
     valor_pagado_bcv_usd,
     valor_pagado_binance_usd,
     valor_pagado_usd,
+    valor_pagado_ves_bcv,
 )
 from .price_resolver import PriceResolver
 
@@ -269,7 +270,12 @@ def _aplicar_exclusiones(
     return resultado
 
 
-def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_ReglaT]:
+def _filtrar_por_pago_previo(
+    reglas: list[_ReglaT],
+    tiene_pago: bool,
+    cubre_ves: bool = True,
+    cubre_usd: bool = True,
+) -> list[_ReglaT]:
     """Tarea 1: excluye reglas con ``requiere_pago_previo=True`` cuando la
     orden/factura aún no tiene ningún abono vinculado (``inp.abonos`` vacío).
 
@@ -289,10 +295,33 @@ def _filtrar_por_pago_previo(reglas: list[_ReglaT], tiene_pago: bool) -> list[_R
     vigente, y deja de proyectarse si venció -- Contado replica esto para
     el caso teórico sin abonos (ver bloque "Teórico sin abonos todavía" en
     ``_calcular_componentes``).
+
+    ``pago_previo_moneda`` (septiembre 2026, pedido del usuario): además de
+    "¿hay al menos un abono?", una regla puede exigir que lo pagado CUBRA
+    (>=) el teórico de una moneda específica -- "ves" | "usd" |
+    "cualquiera" (default, comportamiento previo: cualquier abono basta).
+    ``cubre_ves``/``cubre_usd`` los calcula la llamadora (``_calcular_
+    componentes``) una sola vez por invocación -- ver ahí la medición
+    (mismo patrón que Diferencial Cambiario: cobertura a tasa BCV/Binance
+    contra el precio de la lista VES/USD). En el camino teórico
+    (``ignorar_pago_previo=True``) ambas llegan en ``True`` -- se proyecta
+    el descuento como si el pago -- cuando llegue -- fuera a cubrir esa
+    lista, igual que ya se ignora ``tiene_pago``.
     """
-    if tiene_pago:
-        return reglas
-    return [r for r in reglas if not getattr(r, "requiere_pago_previo", False)]
+    if not tiene_pago:
+        return [r for r in reglas if not getattr(r, "requiere_pago_previo", False)]
+    out = []
+    for r in reglas:
+        if not getattr(r, "requiere_pago_previo", False):
+            out.append(r)
+            continue
+        moneda = getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera"
+        if moneda == "ves" and not cubre_ves:
+            continue
+        if moneda == "usd" and not cubre_usd:
+            continue
+        out.append(r)
+    return out
 
 
 # "Ventana de pago" (reemplaza "Días de gracia" -- pedido explícito del
@@ -927,12 +956,60 @@ def _calcular_componentes(
     # aporte teórico sigue siendo $0 sin importar esta bandera -- no hay
     # forma de proyectarlo sin saber cómo pagará el cliente.
     tiene_pago = True if ignorar_pago_previo else bool(inp.abonos)
-    descuentos_ok = _filtrar_por_pago_previo(inp.descuentos, tiene_pago)
-    descuentos_volumen_ok = _filtrar_por_pago_previo(inp.descuentos_volumen, tiene_pago)
-    descuentos_recompra_ok = _filtrar_por_pago_previo(inp.descuentos_recompra, tiene_pago)
-    promociones_ok = _filtrar_por_pago_previo(inp.promociones_primera_compra, tiene_pago)
-    reglas_recurrencia_ok = _filtrar_por_pago_previo(inp.reglas_recurrencia, tiene_pago)
-    descuentos_producto_ok = _filtrar_por_pago_previo(inp.descuentos_producto, tiene_pago)
+    # ``pago_previo_moneda``: cobertura medida UNA vez por invocación, mismo
+    # patrón que ya usa Diferencial Cambiario para "¿el pago cubre el
+    # teórico USD?" -- abonos valorados a la tasa que menos favorece al
+    # cliente (Binance para USD, BCV para VES) contra el precio de lista de
+    # cada moneda. En el camino teórico (``ignorar_pago_previo=True``) no se
+    # mide -- se proyecta como si cubriera, igual que ``tiene_pago``.
+    if ignorar_pago_previo:
+        cubre_ves = True
+        cubre_usd = True
+    elif not inp.abonos:
+        cubre_ves = False
+        cubre_usd = False
+    else:
+        vincs_cobertura = [v for v, _ in inp.abonos]
+        for v in vincs_cobertura:
+            congelar_en_vinculacion(v)
+        try:
+            precio_target_ves_cov = sum(
+                (_precio_linea(inp, ln, _lista_ves_activa(inp)) for ln in inp.lineas),
+                Decimal("0"),
+            )
+        except KeyError:
+            precio_target_ves_cov = None
+        try:
+            precio_target_usd_cov = sum(
+                (_precio_linea(inp, ln, _lista_usd_activa(inp)) for ln in inp.lineas),
+                Decimal("0"),
+            )
+        except KeyError:
+            precio_target_usd_cov = None
+        cubre_ves = (
+            precio_target_ves_cov is not None
+            and valor_pagado_ves_bcv(vincs_cobertura) >= precio_target_ves_cov - _EPS
+        )
+        cubre_usd = (
+            precio_target_usd_cov is not None
+            and valor_pagado_binance_usd(vincs_cobertura) >= precio_target_usd_cov - _EPS
+        )
+    descuentos_ok = _filtrar_por_pago_previo(inp.descuentos, tiene_pago, cubre_ves, cubre_usd)
+    descuentos_volumen_ok = _filtrar_por_pago_previo(
+        inp.descuentos_volumen, tiene_pago, cubre_ves, cubre_usd
+    )
+    descuentos_recompra_ok = _filtrar_por_pago_previo(
+        inp.descuentos_recompra, tiene_pago, cubre_ves, cubre_usd
+    )
+    promociones_ok = _filtrar_por_pago_previo(
+        inp.promociones_primera_compra, tiene_pago, cubre_ves, cubre_usd
+    )
+    reglas_recurrencia_ok = _filtrar_por_pago_previo(
+        inp.reglas_recurrencia, tiene_pago, cubre_ves, cubre_usd
+    )
+    descuentos_producto_ok = _filtrar_por_pago_previo(
+        inp.descuentos_producto, tiene_pago, cubre_ves, cubre_usd
+    )
     # NOTA (aplica_a línea/subtotal): PromocionPrimeraCompra y
     # DescuentoDiferencialCambiario también tienen el campo `aplica_a` en
     # esquema (por consistencia), pero NO lo leen aquí -- no son cálculos por
@@ -1728,7 +1805,9 @@ def _calcular_componentes(
     if inp.abonos and pura_bcv and es_lista_ves_nativa:
         vincs = [v for v, _ in inp.abonos]
 
-        diferenciales_ok = _filtrar_por_pago_previo(inp.descuentos_diferencial, tiene_pago)
+        diferenciales_ok = _filtrar_por_pago_previo(
+            inp.descuentos_diferencial, tiene_pago, cubre_ves, cubre_usd
+        )
         reglas_dif_vigentes = [
             r
             for r in diferenciales_ok

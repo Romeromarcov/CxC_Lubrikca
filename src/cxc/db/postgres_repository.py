@@ -1554,6 +1554,7 @@ def _row_to_pronto_pago(r: Any) -> DescuentoProntoPago:
         activo=r.activo,
         tipo_descuento=TipoDescuento(r.tipo_descuento),
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
@@ -1577,6 +1578,7 @@ def _row_to_volumen(r: Any) -> DescuentoVolumen:
         monedas_excluidas=getattr(r, "monedas_excluidas", "") or "",
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
@@ -1599,6 +1601,7 @@ def _row_to_recompra(r: Any) -> DescuentoRecompra:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
         ventana_pago_tipo=r.ventana_pago_tipo,
@@ -1624,6 +1627,7 @@ def _row_to_diferencial(r: Any) -> DescuentoDiferencialCambiario:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
@@ -1674,6 +1678,7 @@ def _row_to_producto(r: Any) -> DescuentoProducto:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
@@ -1688,6 +1693,7 @@ def _row_to_regla_recurrencia(r: Any) -> ReglaRecurrencia:
         vigencia_hasta=r.vigencia_hasta,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
@@ -1715,6 +1721,7 @@ def _row_to_promocion(r: Any) -> PromocionPrimeraCompra:
         solo_primera_compra=r.solo_primera_compra,
         activo=r.activo,
         requiere_pago_previo=r.requiere_pago_previo,
+        pago_previo_moneda=getattr(r, "pago_previo_moneda", "cualquiera") or "cualquiera",
         aplica_a=r.aplica_a,
         descripcion=r.descripcion,
     )
