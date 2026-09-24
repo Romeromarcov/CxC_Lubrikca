@@ -1063,6 +1063,66 @@ class PostgresRepository(Repository):
                 ["regla_id"],
             )
 
+    def all_vendedores(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.vendedores)).all()
+        return [
+            {
+                "vendedor_email": r.vendedor_email,
+                "nombre": r.nombre or "",
+                "es_industrial": "true" if r.es_industrial else "false",
+            }
+            for r in rows
+        ]
+
+    def upsert_vendedor(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.vendedores,
+                [
+                    {
+                        "vendedor_email": row["vendedor_email"],
+                        "nombre": row.get("nombre") or "",
+                        "es_industrial": str(row.get("es_industrial", "false")).strip().lower()
+                        not in ("false", "0", "no"),
+                    }
+                ],
+                ["vendedor_email"],
+            )
+
+    def all_clasificaciones_clientes(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.clasificacion_clientes)).all()
+        return [
+            {
+                "cliente_id": r.cliente_id,
+                "es_industrial": "true" if r.es_industrial else "false",
+                "motivo": r.motivo or "",
+                "marcado_por": r.marcado_por or "",
+                "timestamp_marcado": r.timestamp_marcado or "",
+            }
+            for r in rows
+        ]
+
+    def upsert_clasificacion_cliente(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.clasificacion_clientes,
+                [
+                    {
+                        "cliente_id": row["cliente_id"],
+                        "es_industrial": str(row.get("es_industrial", "false")).strip().lower()
+                        not in ("false", "0", "no"),
+                        "motivo": row.get("motivo") or "",
+                        "marcado_por": row.get("marcado_por") or "",
+                        "timestamp_marcado": row.get("timestamp_marcado") or "",
+                    }
+                ],
+                ["cliente_id"],
+            )
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()

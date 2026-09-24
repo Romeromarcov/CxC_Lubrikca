@@ -423,6 +423,30 @@ class Repository(ABC):
     def upsert_regla_dias_credito_volumen(self, row: dict[str, str]) -> None: ...
 
     @abstractmethod
+    def all_vendedores(self) -> list[dict[str, str]]:
+        """Vendedores marcados con su flag ``es_industrial`` (ítem 6,
+
+        clasificación Comercial/Industrial) -- hoy "vendedor" es solo un
+        email suelto repetido en Cliente/OrdenVenta/Pago, sin tabla
+        propia; esta es la primera. Clave natural: ``vendedor_email``.
+        """
+
+    @abstractmethod
+    def upsert_vendedor(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
+    def all_clasificaciones_clientes(self) -> list[dict[str, str]]:
+        """``es_industrial`` por cliente (ítem 6) -- tabla APARTE de
+
+        ``Cliente`` a propósito: el sync de Odoo reconstruye ``Cliente``
+        completo en cada ciclo y borraría el flag en el siguiente sync si
+        viviera ahí. Este dato no existe en Odoo -- lo llena este sistema.
+        """
+
+    @abstractmethod
+    def upsert_clasificacion_cliente(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         """Reemplaza la tabla completa (scripts/cargar_tasas_historicas.py
 
@@ -543,6 +567,8 @@ class InMemoryRepository(Repository):
         self._pagos_tasa_binance_override: dict[str, dict[str, str]] = {}
         self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
         self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
+        self._vendedores: dict[str, dict[str, str]] = {}
+        self._clasificaciones_clientes: dict[str, dict[str, str]] = {}
 
     # --- Configuración genérica -----------------------------------------------
     def get_config(self, key: str) -> str | None:
@@ -936,6 +962,18 @@ class InMemoryRepository(Repository):
 
     def upsert_regla_dias_credito_volumen(self, row: dict[str, str]) -> None:
         self._reglas_dias_credito_volumen[row["regla_id"]] = dict(row)
+
+    def all_vendedores(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._vendedores.values()]
+
+    def upsert_vendedor(self, row: dict[str, str]) -> None:
+        self._vendedores[row["vendedor_email"]] = dict(row)
+
+    def all_clasificaciones_clientes(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._clasificaciones_clientes.values()]
+
+    def upsert_clasificacion_cliente(self, row: dict[str, str]) -> None:
+        self._clasificaciones_clientes[row["cliente_id"]] = dict(row)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)
