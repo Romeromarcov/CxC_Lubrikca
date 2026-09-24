@@ -498,40 +498,6 @@
                     </div>
                 </section>
 
-                <section class="tray-panel card">
-                    <div class="panel-header">
-                        <h2>Bandeja 4: Candidatos a Cierre de Factura (Diferencial Cambiario) <span id="bandeja4-count-badge" class="state-badge"></span></h2>
-                        <p>NO es un descuento automático. Lista órdenes que no cubrieron su teórico pero quedaron cerca, según el diferencial de mercado del día (BCV vs Binance) contra el máximo configurado. Gerencia decide manualmente cuánto otorgar; verificar en Odoo antes de aprobar. Al emitir la N/C o aprobar el descuento, la orden sale de esta lista.</p>
-                    </div>
-                    <div id="dif-candidatos-resumen" style="font-size:0.85rem; color:var(--text-muted); margin:1rem 0 10px;"></div>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>SO</th>
-                                    <th>Cliente</th>
-                                    <th>Teórico VES</th>
-                                    <th>Pagado (eq. BCV)</th>
-                                    <th>% Pagado</th>
-                                    <th>Monto Candidato Máximo</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="dif-candidatos-table-body">
-                                <tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-                
-
-                
-
-                
-
-                
-
-                
             </div>
         </div>
 
@@ -1768,7 +1734,6 @@
                                     <label>Tipo</label>
                                     <select id="ru-tipo-dif">
                                         <option value="fijo_35_ves_usd">Diferencial (cierra la brecha hasta lo pagado)</option>
-                                        <option value="candidato_cierre_factura">Candidatos a cierre (reporte, no descuento)</option>
                                     </select>
                                 </div>
                                 <div class="form-group" style="flex:1">
