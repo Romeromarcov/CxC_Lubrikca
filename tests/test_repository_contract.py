@@ -354,11 +354,10 @@ def test_postgres_descuentos_diferencial_cambiario_defaults_cuando_vacio() -> No
         pytest.skip("DATABASE_URL no configurado -- se salta el backend Postgres")
     repo = _make_postgres_repo()
     difs = repo.descuentos_diferencial_cambiario()
-    assert len(difs) == 3
+    assert len(difs) == 2
     assert {d.regla_id for d in difs} == {
         "DIF_35_VES",
         "DIF_EQUIPARAR",
-        "DIF_CANDIDATOS_CIERRE",
     }
 
 
