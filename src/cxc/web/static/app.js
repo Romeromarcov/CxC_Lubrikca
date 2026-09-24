@@ -1100,9 +1100,17 @@ document.addEventListener("DOMContentLoaded", () => {
                         tray1.forEach(item => {
                             const row = document.createElement("tr");
                             const isAgent = item.wh_iva_agent ? `<span class="state-badge cierre" style="background:#e0f2fe;color:#0369a1">Agente (${item.wh_iva_rate || 75}%)</span>` : '<span class="state-badge">No</span>';
-                            const descText = item.descuento_pendiente_por_aplicar > 0
-                                ? `${fmt(item.descuento_pendiente_por_aplicar)} (${((item.descuento_pendiente_por_aplicar / (item.orden_neto_odoo || 1)) * 100).toFixed(1)}%)`
-                                : '$0.00 (0%)';
+                            // Sin descuento pendiente no se muestra "$0.00
+                            // (0%)": ese badge parecía anunciar un
+                            // descuento de cero en vez de decir que no hay
+                            // nada pendiente que aprobar, y confundía
+                            // contra el modal de Detalle (item 4, pedido
+                            // del usuario, 23-sep -- caso real S00743: ya
+                            // cubierto, nada por aplicar).
+                            const sinPendiente = !(item.descuento_pendiente_por_aplicar > 0);
+                            const descText = sinPendiente
+                                ? '<span style="opacity:0.5">—</span>'
+                                : `${fmt(item.descuento_pendiente_por_aplicar)} (${((item.descuento_pendiente_por_aplicar / (item.orden_neto_odoo || 1)) * 100).toFixed(1)}%)`;
 
                             // Estado: por cuál referencia salió de CxC, y si el
                             // pago está confirmado. Antes de facturar CONCILIADO
@@ -1150,7 +1158,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <td>${fmt(item.orden_neto_odoo || 0)}</td>
                                 <td>${estadoHtml}</td>
                                 <td>${teoricoHtml}</td>
-                                <td><strong style="color:#d97706">${descText}</strong></td>
+                                <td>${sinPendiente ? descText : `<strong style="color:#d97706">${descText}</strong>`}</td>
                                 <td>${btnDetalleReglas(item)}</td>
                             `;
                             bandeja1TableBody.appendChild(row);
@@ -5076,9 +5084,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // origen ("volumen") -- y con cinco reglas de volumen activas era
     // imposible auditar de dónde salía el monto. Ahora cada componente
     // trae su regla_id, su porcentaje y su base.
-    window.verDetalleReglas = function(soId, detalleJson) {
+    window.verDetalleReglas = function(soId, detalleJson, ctxJson) {
         let detalle = [];
         try { detalle = JSON.parse(decodeURIComponent(detalleJson)) || []; } catch (e) { detalle = []; }
+        let ctx = { sugerido: null, motivo: null };
+        try { ctx = Object.assign(ctx, JSON.parse(decodeURIComponent(ctxJson || '')) || {}); } catch (e) { /* sin contexto */ }
         const fmt2 = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
         const pct = (v) => (v === null || v === undefined) ? '—' : (v * 100).toFixed(2) + '%';
         const esc = (t) => String(t === null || t === undefined ? '' : t)
@@ -5114,17 +5124,36 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (!filas) filas = '<tr><td colspan="5" class="table-empty">Esta orden no tiene descuentos calculados por el motor.</td></tr>';
 
+        // Motivo de por qué lo que hay que aplicar AHORA es distinto del
+        // total que calculó el motor por reglas (ver btnDetalleReglas).
+        const MOTIVO_TXT = {
+            topada_por_brecha: "topado: no se puede acreditar más que la brecha real entre lo facturado y lo pagado",
+            sin_brecha: "sin brecha: lo facturado ya coincide con lo pagado, no hay NC que emitir",
+            facturado_bajo_teorico: "lo facturado ya quedó por debajo del teórico -- no hay NC que emitir",
+            sin_facturado: "no se sabe cuánto se facturó todavía -- sale el total del motor, sin topar",
+            cabe_en_la_brecha: "cabe entera en la brecha facturado-pagado",
+        };
+        const hayPendiente = ctx.sugerido !== null && ctx.sugerido !== undefined;
+        const difiere = hayPendiente && Math.abs(ctx.sugerido - total) > 0.01;
+        const bannerPendiente = hayPendiente ? `
+            <div style="margin:0 0 0.75rem;padding:0.6rem 0.8rem;border-radius:6px;background:${difiere ? '#fffbeb' : '#f0fdf4'};border:1px solid ${difiere ? '#fde68a' : '#bbf7d0'};font-size:0.85rem;">
+                <strong>Pendiente por aplicar ahora: ${fmt2(ctx.sugerido)}</strong>
+                ${difiere ? ` -- distinto del total que calculó el motor por reglas (${fmt2(total)}).` : ''}
+                ${ctx.motivo ? `<div style="margin-top:2px;color:#475569;">${esc(MOTIVO_TXT[ctx.motivo] || ctx.motivo)}</div>` : (difiere ? `<div style="margin-top:2px;color:#475569;">Ya cubierto en lo que Odoo/una NC/un descuento de sistema ya reconoció.</div>` : '')}
+            </div>` : '';
+
         const cont = document.getElementById("modal-detalle-reglas-body");
         if (cont) {
             cont.innerHTML = `
                 <p style="margin:0 0 0.75rem;color:#475569;font-size:0.85rem;">
-                    Orden <strong>${esc(soId)}</strong> — de dónde sale el descuento que el motor sugiere.
+                    Orden <strong>${esc(soId)}</strong> — de dónde sale el descuento que el motor calculó.
                     Una fila por regla: si dice <em>sin regla</em>, el monto no viene de ninguna regla configurada.
                 </p>
+                ${bannerPendiente}
                 <div class="table-wrapper"><table class="cxc-table">
                     <thead><tr><th>Origen</th><th>Regla</th><th>Detalle</th><th style="text-align:right">%</th><th style="text-align:right">Monto</th></tr></thead>
                     <tbody>${filas}</tbody>
-                    <tfoot><tr><td colspan="4" style="text-align:right"><strong>Total sugerido</strong></td><td style="text-align:right"><strong>${fmt2(total)}</strong></td></tr></tfoot>
+                    <tfoot><tr><td colspan="4" style="text-align:right"><strong>Total calculado por el motor</strong></td><td style="text-align:right"><strong>${fmt2(total)}</strong></td></tr></tfoot>
                 </table></div>`;
         }
         const modal = document.getElementById("modal-detalle-reglas");
@@ -5229,7 +5258,23 @@ document.addEventListener("DOMContentLoaded", () => {
         const det = item && item.descuentos_detalle ? item.descuentos_detalle : [];
         if (!det.length) return '<span style="opacity:.5;font-size:.75rem">sin reglas</span>';
         const payload = encodeURIComponent(JSON.stringify(det));
-        return `<button class="btn btn-secondary" onclick="verDetalleReglas('${item.so_id}', '${payload}')" style="padding:0.25rem 0.6rem;font-size:0.75rem;" title="Ver de qué reglas viene el descuento sugerido">Detalle</button>`;
+        // La suma de `det` es el TOTAL que calculó el motor por reglas --
+        // no necesariamente lo que hay que aplicar AHORA. Bandeja 1 ya lo
+        // neta contra lo que Odoo/NC/descuento de sistema cubrieron
+        // (`descuento_pendiente_por_aplicar`); Bandeja 2 además lo topa a
+        // la brecha real facturado-pagado (`nc_subtotal`/`nc_motivo`, ver
+        // `topar_nota_de_credito`). Sin esta cifra, el modal parecía
+        // contradecir la fila (item 4, pedido del usuario, órdenes reales
+        // S00743/S00596: la fila decía $0.00 o $19.53 y el modal sumaba
+        // $27.77 / $38.03).
+        const sugerido = (item.nc_subtotal !== undefined && item.nc_subtotal !== null)
+            ? item.nc_subtotal
+            : item.descuento_pendiente_por_aplicar;
+        const ctx = encodeURIComponent(JSON.stringify({
+            sugerido: (typeof sugerido === "number") ? sugerido : null,
+            motivo: item.nc_motivo || null,
+        }));
+        return `<button class="btn btn-secondary" onclick="verDetalleReglas('${item.so_id}', '${payload}', '${ctx}')" style="padding:0.25rem 0.6rem;font-size:0.75rem;" title="Ver de qué reglas viene el descuento total que calculó el motor">Detalle</button>`;
     };
 
     window.btnDescuentoNoOtorgado = function(item, recargar) {
