@@ -100,6 +100,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cfgMetaRecompra = document.getElementById("cfg-meta-recompra");
     const cfgMetaMarcaFallback = document.getElementById("cfg-meta-marca-fallback");
     const cfgMetaAjusteIndustrial = document.getElementById("cfg-meta-ajuste-industrial");
+    const cfgMetaUmbralLitrosIndustrial = document.getElementById("cfg-meta-umbral-litros-industrial");
 
     const tasaForm = document.getElementById("tasa-form");
     const cfgTasaBcv = document.getElementById("cfg-tasa-bcv");
@@ -1534,7 +1535,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbody = document.getElementById("ventas-table-body");
         if (!tbody) return;
         if (!items || items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="16" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="17" class="table-empty">No hay órdenes que coincidan con los filtros seleccionados.</td></tr>';
             return;
         }
         const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -1576,10 +1577,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? `<span class="state-badge" style="background:#dcfce7;color:#15803d;font-weight:600;" title="${item.cxc_confirmado ? 'Pago conciliado en Odoo' : 'En proceso de pago -- vinculado, aún sin conciliar en Odoo'}">✓ ${item.cxc_confirmado ? 'Pagada' : 'En proceso'}</span>`
                 : '<span class="state-badge" style="background:#fee2e2;color:#991b1b;font-weight:600;">✗ Pendiente</span>');
 
+            // Item 6 (clasificación Comercial/Industrial, septiembre 2026):
+            // "≥2 de 4" señales -- solo un badge informativo, con el
+            // desglose en el title. No cambia ningún cálculo todavía.
+            const ciDet = item.clasificacion_ci_detalle || {};
+            const esIndustrial = item.clasificacion_comercial_industrial === "industrial";
+            const ciTitle = `${ciDet.criterios_cumplidos || 0}/4 señales -- ` +
+                `vendedor:${ciDet.vendedor_industrial ? 'sí' : 'no'}, cliente:${ciDet.cliente_industrial ? 'sí' : 'no'}, ` +
+                `lista:${ciDet.lista_industrial ? 'sí' : 'no'}, volumen:${ciDet.volumen_industrial ? 'sí' : 'no'} ` +
+                `(${(ciDet.litros_industriales || 0).toFixed(2)} L de ${(ciDet.umbral_litros || 0).toFixed(2)} L)`;
+            const clasifCell = esIndustrial
+                ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;" title="${ciTitle}">🏭 Industrial</span>`
+                : `<span class="state-badge" style="background:#f1f5f9;color:#64748b;" title="${ciTitle}">Comercial</span>`;
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td><small>${item.fecha_entrega ?? '—'}</small></td>
                 <td>${item.cliente_nombre}</td>
+                <td>${clasifCell}</td>
                 <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
                 <td style="text-align:right">${item.dias_credito ?? 0}</td>
                 <td style="text-align:right" title="Vence: ${item.fecha_vencimiento ?? '—'}">${
@@ -2125,6 +2140,8 @@ document.addEventListener("DOMContentLoaded", () => {
             loadProductoPromo,
             loadDiferencial,
             loadDiasCredito,
+            loadVendedores,
+            loadClasificacionClientes,
             loadTasas,
             loadFeriados,
             populateBrandsAndCategories,
@@ -2166,6 +2183,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (cfgMetaRecompra) cfgMetaRecompra.value = data.descuento_recompra || 0.05;
                 if (cfgMetaMarcaFallback) cfgMetaMarcaFallback.value = data.marca_fallback || "GLOBAL OIL";
                 if (cfgMetaAjusteIndustrial) cfgMetaAjusteIndustrial.value = data.fallback_industrial_ajuste_pct || 0.04;
+                if (cfgMetaUmbralLitrosIndustrial) cfgMetaUmbralLitrosIndustrial.value = data.umbral_litros_clasificacion_industrial || 18.92;
             }
         } catch (err) {
             console.error("Error loading settings meta:", err);
@@ -2180,7 +2198,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 cash_window_business_days: parseInt(cfgMetaDays.value),
                 descuento_recompra: parseFloat(cfgMetaRecompra.value),
                 marca_fallback: (cfgMetaMarcaFallback?.value || "GLOBAL OIL").trim(),
-                fallback_industrial_ajuste_pct: parseFloat(cfgMetaAjusteIndustrial?.value || "0.04")
+                fallback_industrial_ajuste_pct: parseFloat(cfgMetaAjusteIndustrial?.value || "0.04"),
+                umbral_litros_clasificacion_industrial: parseFloat(cfgMetaUmbralLitrosIndustrial?.value || "18.92")
             };
 
             try {
@@ -2452,6 +2471,152 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadDiasCredito = loadDiasCredito;
+
+    // --- Vendedores / Clasificación de Clientes (item 6, clasificación
+    // Comercial/Industrial) --------------------------------------------
+    let _vendedoresCache = [];
+    let _clasifClientesCache = [];
+
+    function _renderVendedores(filtro) {
+        const tbody = document.getElementById("vendedores-table-body");
+        if (!tbody) return;
+        const f = (filtro || "").trim().toLowerCase();
+        const filas = _vendedoresCache.filter(v =>
+            !f || v.vendedor_email.toLowerCase().includes(f) || (v.nombre || "").toLowerCase().includes(f)
+        );
+        if (filas.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Sin vendedores que coincidan.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = "";
+        filas.forEach(v => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td><strong>${v.vendedor_email}</strong></td>
+                <td>${v.nombre || ''}</td>
+                <td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+                    <input type="checkbox" data-vendedor="${v.vendedor_email}" ${v.es_industrial ? 'checked' : ''}>
+                    Industrial
+                </label></td>
+            `;
+            tbody.appendChild(tr);
+        });
+        tbody.querySelectorAll("input[data-vendedor]").forEach(cb => {
+            cb.addEventListener("change", async () => {
+                const email = cb.dataset.vendedor;
+                const v = _vendedoresCache.find(x => x.vendedor_email === email);
+                try {
+                    const res = await fetch("/api/config/vendedores", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            vendedor_email: email,
+                            nombre: v ? v.nombre : "",
+                            es_industrial: cb.checked
+                        })
+                    });
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    if (v) v.es_industrial = cb.checked;
+                } catch (err) {
+                    alert("❌ No se pudo actualizar " + email + ": " + err.message);
+                    cb.checked = !cb.checked;
+                }
+            });
+        });
+    }
+
+    async function loadVendedores() {
+        const tbody = document.getElementById("vendedores-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando vendedores...</td></tr>';
+            const res = await fetch("/api/config/vendedores");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            _vendedoresCache = data.vendedores || [];
+            const search = document.getElementById("vendedores-search");
+            if (search && !search.dataset.listenerAttached) {
+                search.addEventListener("input", () => _renderVendedores(search.value));
+                search.dataset.listenerAttached = "true";
+            }
+            _renderVendedores(search ? search.value : "");
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Error al cargar vendedores.</td></tr>';
+        }
+    }
+    window.loadVendedores = loadVendedores;
+
+    function _renderClasificacionClientes(filtro) {
+        const tbody = document.getElementById("clasificacion-clientes-table-body");
+        if (!tbody) return;
+        const f = (filtro || "").trim().toLowerCase();
+        const filas = _clasifClientesCache.filter(c =>
+            !f || (c.nombre || "").toLowerCase().includes(f) || c.cliente_id.toLowerCase().includes(f)
+        );
+        if (filas.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Sin clientes que coincidan.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = "";
+        filas.slice(0, 200).forEach(c => {
+            const tr = document.createElement("tr");
+            const marcado = c.marcado_por ? `<small>${c.marcado_por}${c.motivo ? ' — ' + c.motivo : ''}</small>` : '';
+            tr.innerHTML = `
+                <td><strong>${c.nombre}</strong><div style="font-size:0.7rem;opacity:0.7">${c.cliente_id}</div></td>
+                <td><input type="checkbox" data-cliente="${c.cliente_id}" ${c.es_industrial ? 'checked' : ''}></td>
+                <td>${marcado}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+        if (filas.length > 200) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td colspan="3" class="table-empty">... y ${filas.length - 200} más. Refina la búsqueda.</td>`;
+            tbody.appendChild(tr);
+        }
+        tbody.querySelectorAll("input[data-cliente]").forEach(cb => {
+            cb.addEventListener("change", async () => {
+                const clienteId = cb.dataset.cliente;
+                let motivo = "";
+                if (cb.checked) {
+                    motivo = prompt(`¿Por qué ${clienteId} es un cliente industrial?`, "") || "";
+                    if (motivo === null) { cb.checked = false; return; }
+                }
+                try {
+                    const res = await fetch("/api/config/clasificacion-cliente", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cliente_id: clienteId, es_industrial: cb.checked, motivo })
+                    });
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    loadClasificacionClientes();
+                } catch (err) {
+                    alert("❌ No se pudo actualizar " + clienteId + ": " + err.message);
+                    cb.checked = !cb.checked;
+                }
+            });
+        });
+    }
+
+    async function loadClasificacionClientes() {
+        const tbody = document.getElementById("clasificacion-clientes-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Cargando clientes...</td></tr>';
+            const res = await fetch("/api/config/clasificacion-clientes");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            _clasifClientesCache = data.clientes || [];
+            const search = document.getElementById("clasificacion-clientes-search");
+            if (search && !search.dataset.listenerAttached) {
+                search.addEventListener("input", () => _renderClasificacionClientes(search.value));
+                search.dataset.listenerAttached = "true";
+            }
+            _renderClasificacionClientes(search ? search.value : "");
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">Error al cargar clientes.</td></tr>';
+        }
+    }
+    window.loadClasificacionClientes = loadClasificacionClientes;
 
     async function loadFeriados() {
         try {

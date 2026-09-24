@@ -922,6 +922,7 @@
                                     <th>Orden (SO)</th>
                                     <th title="Fecha de la entrega efectiva (ALM/OUT, stock.picking saliente en estado 'done') -- mismo criterio que el reporte de Cuentas por Cobrar">Fecha (Entrega)</th>
                                     <th>Cliente</th>
+                                    <th title="Item 6: ≥2 de 4 señales (vendedor, cliente, lista de nacimiento, volumen de líneas industriales) -- solo visibilidad, no cambia ningún cálculo de descuento/crédito/comisión todavía">Comercial/Industrial</th>
                                     <th title="Lista de precios con la que nació la orden">Lista Nacimiento</th>
                                     <th title="Días de crédito reales otorgados por Odoo (payment_term de la orden)">Días Crédito</th>
                                     <th title="Fecha de vencimiento (Fecha Entrega + Días Crédito) y días vencido -- fuente única para las demás páginas (Reporte de Saldos, CxC por Cliente)">Días Vencido</th>
@@ -1489,6 +1490,10 @@
                                 <label title="Cuando un producto no tiene precio propio en una lista Industrial (VES o USD), el fallback al precio de ficha se ajusta por este % de aumento (ej. 0.04 = 4%: el precio de ficha se divide entre 1 - 0.04). El % de fallback USD Comercial (35%) NO se configura aquí -- se lee de la regla vigente 'Diferencial Fijo VES/USD' en Descuentos por Diferencial Cambiario.">Ajuste Fallback Lista Industrial (% aumento)</label>
                                 <input type="number" id="cfg-meta-ajuste-industrial" min="0" max="1" step="0.0001" value="0.04" required>
                             </div>
+                            <div class="form-group" style="flex:1">
+                                <label title="Clasificación Comercial/Industrial de una orden (item 6): litros de líneas de categoría Industrial a partir de los cuales esa señal cuenta como cumplida. Por defecto 18.92 L, el tamaño real de una paila en el catálogo.">Umbral Volumen Industrial (litros)</label>
+                                <input type="number" id="cfg-meta-umbral-litros-industrial" min="0" step="0.01" value="18.92" required>
+                            </div>
                         </div>
                         <button type="submit" class="btn-primary">💾 Guardar Ajustes Generales</button>
                     </form>
@@ -1909,6 +1914,56 @@
                             </thead>
                             <tbody id="dias-credito-table-body">
                                 <tr><td colspan="5" class="table-empty">Cargando reglas de días de crédito...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Vendedores (item 6, clasificacion Comercial/Industrial) -->
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #0f766e;">
+                    <div class="panel-header">
+                        <h2>🏭 Vendedores</h2>
+                        <p>Marca qué vendedores son "industriales" -- una de las cuatro señales de la clasificación Comercial/Industrial de una orden (item 6). Sin campo en Odoo: se llena y edita solo desde acá. La lista incluye todo vendedor visto en Clientes/Órdenes/Pagos, aunque nunca se haya marcado.</p>
+                    </div>
+                    <div class="form-group" style="max-width:320px;margin-bottom:0.75rem;">
+                        <input type="text" id="vendedores-search" placeholder="Buscar por email o nombre...">
+                    </div>
+                    <div class="mini-table-wrapper">
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Email</th>
+                                    <th>Nombre</th>
+                                    <th>Industrial</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vendedores-table-body">
+                                <tr><td colspan="3" class="table-empty">Cargando vendedores...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Clasificación de Clientes (item 6, clasificacion Comercial/Industrial) -->
+                <section class="config-card card" data-subpage="descuentos" style="grid-column: 1 / span 2; border-top: 3px solid #0f766e;">
+                    <div class="panel-header">
+                        <h2>🏭 Clasificación de Clientes</h2>
+                        <p>Marca qué clientes son "industriales" -- otra de las cuatro señales de la clasificación Comercial/Industrial de una orden (item 6). Sin campo en Odoo: se llena y edita solo desde acá.</p>
+                    </div>
+                    <div class="form-group" style="max-width:320px;margin-bottom:0.75rem;">
+                        <input type="text" id="clasificacion-clientes-search" placeholder="Buscar por nombre o ID...">
+                    </div>
+                    <div class="mini-table-wrapper">
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Cliente</th>
+                                    <th>Industrial</th>
+                                    <th>Motivo / marcado por</th>
+                                </tr>
+                            </thead>
+                            <tbody id="clasificacion-clientes-table-body">
+                                <tr><td colspan="3" class="table-empty">Cargando clientes...</td></tr>
                             </tbody>
                         </table>
                     </div>

@@ -320,13 +320,18 @@ def _run_get_ventas(
     facturas: list[Factura] | None = None,
     lineas: list[LineaOrden] | None = None,
     lineas_factura: list[LineaFactura] | None = None,
+    vendedores: list[dict] | None = None,
+    clasificaciones_clientes: list[dict] | None = None,
+    catalogo: list[Producto] | None = None,
 ):
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
     mock_repo.all_descuentos_sistema_aprobados.return_value = descuentos_sistema or []
     mock_repo.all_vinculaciones.return_value = vinculaciones or []
     mock_repo.all_entregas.return_value = []
-    mock_repo.all_catalogo.return_value = []
+    mock_repo.all_catalogo.return_value = catalogo if catalogo is not None else []
+    mock_repo.all_vendedores.return_value = vendedores or []
+    mock_repo.all_clasificaciones_clientes.return_value = clasificaciones_clientes or []
     mock_repo.all_facturas.return_value = (
         facturas if facturas is not None else _facturas_estandar()
     )
@@ -1630,3 +1635,91 @@ def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_sin_euro_para_histori
     assert round(item["pagado_teorico_binance"], 2) == round(16606.59 / 516.8118, 2)
     # Las dos rutas siguen dando numeros DISTINTOS -- cada una con su tasa.
     assert item["pagado_teorico_bcv"] != item["pagado_teorico_binance"]
+
+
+def test_clasificacion_comercial_industrial_sin_ninguna_senal_es_comercial() -> None:
+    """Ítem 6 (23-sep-2026): sin vendedor/cliente/lista/volumen industrial
+
+    marcados, la orden sale "comercial" -- el default seguro.
+    """
+    by_so = _run_get_ventas()
+    ok = by_so["SO_OK"]
+    assert ok["clasificacion_comercial_industrial"] == "comercial"
+    detalle = ok["clasificacion_ci_detalle"]
+    assert detalle["criterios_cumplidos"] == 0
+    assert detalle["vendedor_industrial"] is False
+    assert detalle["cliente_industrial"] is False
+
+
+def test_clasificacion_comercial_industrial_vendedor_y_cliente_bastan() -> None:
+    """Dos de cuatro señales (vendedor + cliente) ya clasifican industrial,
+
+    sin tocar lista ni volumen.
+    """
+    by_so = _run_get_ventas(
+        vendedores=[
+            {"vendedor_email": "ana@lubrikca.com", "nombre": "Ana", "es_industrial": "true"}
+        ],
+        clasificaciones_clientes=[
+            {"cliente_id": "CLI_3C", "es_industrial": "true", "motivo": "", "marcado_por": ""}
+        ],
+    )
+    ok = by_so["SO_OK"]
+    assert ok["clasificacion_comercial_industrial"] == "industrial"
+    detalle = ok["clasificacion_ci_detalle"]
+    assert detalle["criterios_cumplidos"] == 2
+    assert detalle["vendedor_industrial"] is True
+    assert detalle["cliente_industrial"] is True
+    assert detalle["lista_industrial"] is False
+
+
+def test_clasificacion_comercial_industrial_solo_vendedor_no_alcanza() -> None:
+    """Una sola señal (vendedor) no es suficiente -- sigue "comercial"."""
+    by_so = _run_get_ventas(
+        vendedores=[
+            {"vendedor_email": "ana@lubrikca.com", "nombre": "Ana", "es_industrial": "true"}
+        ],
+    )
+    ok = by_so["SO_OK"]
+    assert ok["clasificacion_comercial_industrial"] == "comercial"
+    assert ok["clasificacion_ci_detalle"]["criterios_cumplidos"] == 1
+
+
+def test_clasificacion_comercial_industrial_volumen_cuenta_como_senal() -> None:
+    """Vendedor industrial + suficiente volumen en línea de categoría
+
+    Industrial (18,92 L, el umbral por defecto) -- dos señales, industrial.
+    """
+    lineas = _lineas_orden_estandar()
+    lineas[0] = LineaOrden(
+        linea_id="1",
+        so_id="SO_OK",
+        producto="1",
+        marca="Sinoco",
+        categoria="Industrial",
+        cantidad=Decimal("1"),
+        precio_unitario=Decimal("100"),
+        descuento=Decimal("5.0"),
+    )
+    by_so = _run_get_ventas(
+        lineas=lineas,
+        vendedores=[
+            {"vendedor_email": "ana@lubrikca.com", "nombre": "Ana", "es_industrial": "true"}
+        ],
+        catalogo=[
+            Producto(
+                producto_id="1",
+                codigo="0117",
+                nombre="Producto de prueba",
+                marca="Sinoco",
+                volumen=Decimal("18.92"),
+                peso=Decimal("0"),
+                unidades_por_paleta=Decimal("0"),
+            )
+        ],
+    )
+    ok = by_so["SO_OK"]
+    detalle = ok["clasificacion_ci_detalle"]
+    assert detalle["litros_industriales"] == 18.92
+    assert detalle["volumen_industrial"] is True
+    assert ok["clasificacion_comercial_industrial"] == "industrial"

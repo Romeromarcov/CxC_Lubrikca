@@ -47,6 +47,11 @@ from cxc.engine.balance import (
     partidas_externas,
     partidas_internas,
 )
+from cxc.engine.clasificacion import (
+    UMBRAL_LITROS_INDUSTRIAL_DEFAULT,
+    clasificar_comercial_industrial,
+    litros_de_lineas_industriales,
+)
 from cxc.engine.conciliacion import (
     campos_de_saldo,
     clientes_con_pagos_huerfanos,
@@ -1969,6 +1974,11 @@ class MetaRequest(BaseModel):
     descuento_recompra: float = Field(ge=0, le=1, allow_inf_nan=False)
     marca_fallback: str = "GLOBAL OIL"
     fallback_industrial_ajuste_pct: float = 0.04
+    # Ítem 6 (clasificación Comercial/Industrial, septiembre 2026): litros
+    # de líneas industriales a partir de los cuales esa señal cuenta.
+    umbral_litros_clasificacion_industrial: float = Field(
+        default=18.92, ge=0, allow_inf_nan=False
+    )
 
 
 class FilaMapeoRequest(BaseModel):
@@ -6490,6 +6500,10 @@ async def get_config_meta():
             meta["marca_fallback"] = "GLOBAL OIL"
         if "fallback_industrial_ajuste_pct" not in meta:
             meta["fallback_industrial_ajuste_pct"] = str(_AJUSTE_INDUSTRIAL_PCT_DEFAULT)
+        if "umbral_litros_clasificacion_industrial" not in meta:
+            meta["umbral_litros_clasificacion_industrial"] = str(
+                UMBRAL_LITROS_INDUSTRIAL_DEFAULT
+            )
         return meta
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -6506,6 +6520,9 @@ async def post_config_meta(req: MetaRequest):
         repo.set_config("marca_fallback", req.marca_fallback or "GLOBAL OIL")
         set_marca_fallback(req.marca_fallback)
         set_ajuste_industrial_pct(Decimal(str(req.fallback_industrial_ajuste_pct)), repo)
+        set_umbral_litros_industrial(
+            Decimal(str(req.umbral_litros_clasificacion_industrial)), repo
+        )
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
@@ -6770,6 +6787,30 @@ def set_ajuste_industrial_pct(pct: Decimal, repo=None) -> None:
     if repo is None:
         repo = get_repo()
     repo.set_config("fallback_industrial_ajuste_pct", str(pct))
+
+
+def get_umbral_litros_industrial(repo=None) -> Decimal:
+    """Umbral de litros (líneas de categoría Industrial) para la
+
+    clasificación Comercial/Industrial de una orden (ítem 6, septiembre
+    2026) -- ver ``engine/clasificacion.py``. Configurable vía
+    ``app_settings``; 18,92 L (una paila) si nunca se configuró.
+    """
+    if repo is None:
+        repo = get_repo()
+    try:
+        val = repo.get_config("umbral_litros_clasificacion_industrial")
+        if val:
+            return Decimal(val)
+    except Exception as e:
+        logger.warning("Error leyendo umbral_litros_clasificacion_industrial: %s", e)
+    return UMBRAL_LITROS_INDUSTRIAL_DEFAULT
+
+
+def set_umbral_litros_industrial(litros: Decimal, repo=None) -> None:
+    if repo is None:
+        repo = get_repo()
+    repo.set_config("umbral_litros_clasificacion_industrial", str(litros))
 
 
 def get_diferencial_fijo_pct(repo=None) -> Decimal:
@@ -13726,6 +13767,28 @@ def _get_ventas_sync(
         for ln in repo.all_lineas():
             lineas_por_so.setdefault(ln.so_id, []).append(ln)
 
+        # Clasificación Comercial/Industrial (ítem 6, septiembre 2026):
+        # "≥2 de 4" señales -- vendedor, cliente, lista de nacimiento y
+        # volumen de líneas industriales. Todo precomputado UNA vez fuera
+        # del loop de órdenes (mismo patrón que ``litros_por_so`` un poco
+        # más abajo). Ver ``engine/clasificacion.py``.
+        vendedores_industriales = {
+            v["vendedor_email"]
+            for v in repo.all_vendedores()
+            if str(v.get("es_industrial", "false")).strip().lower() in ("true", "1", "yes")
+        }
+        clientes_industriales = {
+            c["cliente_id"]
+            for c in repo.all_clasificaciones_clientes()
+            if str(c.get("es_industrial", "false")).strip().lower() in ("true", "1", "yes")
+        }
+        _mapeo_listas_clasif = get_pricelist_mapeo(repo)
+        listas_industriales = {
+            pid for pid, m in _mapeo_listas_clasif.items() if m.get("categoria") == "industrial"
+        }
+        volumen_por_producto_clasif = {p.producto_id: float(p.volumen) for p in repo.all_catalogo()}
+        umbral_litros_industrial = get_umbral_litros_industrial(repo)
+
         # Reglas de días de crédito máximo por volumen -- SOLO validación en
         # Ventas contra el plazo real que Odoo otorgó (dias_credito_odoo_map,
         # abajo); NO alimentan la fórmula de recompra.
@@ -14624,11 +14687,38 @@ def _get_ventas_sync(
                         2,
                     )
 
+            _litros_industriales_o = litros_de_lineas_industriales(
+                lineas_por_so.get(o.so_id, []), volumen_por_producto_clasif
+            )
+            _clasif_ci = clasificar_comercial_industrial(
+                vendedor_industrial=(o.vendedor_email or "") in vendedores_industriales,
+                cliente_industrial=str(o.cliente_id) in clientes_industriales,
+                lista_industrial=str(o.lista_precios or "") in listas_industriales,
+                litros_industriales=_litros_industriales_o,
+                umbral_litros=umbral_litros_industrial,
+            )
+
             items.append(
                 {
                     "so_id": o.so_id,
                     "cliente_nombre": clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}"),
                     "vendedor": o.vendedor_email or "Sin Vendedor",
+                    # Ítem 6 (clasificación Comercial/Industrial, septiembre
+                    # 2026): "≥2 de 4" señales -- vendedor, cliente, lista de
+                    # nacimiento y volumen de líneas industriales. Ver
+                    # engine/clasificacion.py. Solo visibilidad por ahora --
+                    # no alimenta ningún cálculo de descuento/crédito/
+                    # comisión todavía (decisión explícita del usuario).
+                    "clasificacion_comercial_industrial": _clasif_ci.clasificacion,
+                    "clasificacion_ci_detalle": {
+                        "criterios_cumplidos": _clasif_ci.criterios_cumplidos,
+                        "vendedor_industrial": _clasif_ci.vendedor_industrial,
+                        "cliente_industrial": _clasif_ci.cliente_industrial,
+                        "lista_industrial": _clasif_ci.lista_industrial,
+                        "volumen_industrial": _clasif_ci.volumen_industrial,
+                        "litros_industriales": float(_clasif_ci.litros_industriales),
+                        "umbral_litros": float(_clasif_ci.umbral_litros),
+                    },
                     "fecha": o.fecha.isoformat(),
                     "facturada": o.facturada,
                     "venta_bruta_real": round(venta_bruta_real, 2),
@@ -15778,6 +15868,136 @@ async def post_descuento_no_otorgado(
                 "y baja de la cuenta por cobrar."
             )
         return {"status": "success", "message": msg}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# --- Vendedores / Clasificación de Clientes (ítem 6, clasificación
+# Comercial/Industrial, septiembre 2026) --------------------------------
+
+
+class VendedorRequest(BaseModel):
+    vendedor_email: str
+    nombre: str = ""
+    es_industrial: bool = False
+
+
+@app.get("/api/config/vendedores")
+async def get_config_vendedores():
+    """Vendedores conocidos (marcados o no) para el panel de Configuración.
+
+    Combina lo ya marcado en ``vendedores`` con cualquier email de
+    vendedor visto en Clientes/Órdenes/Pagos que todavía no tiene fila --
+    así el panel no arranca vacío solo porque nadie lo ha marcado antes.
+    """
+    try:
+        repo = get_repo()
+        marcados = {v["vendedor_email"]: v for v in repo.all_vendedores()}
+        vistos: set[str] = set()
+        for c in repo.all_clientes():
+            if c.vendedor_email:
+                vistos.add(c.vendedor_email)
+        for o in repo.all_ordenes():
+            if o.vendedor_email:
+                vistos.add(o.vendedor_email)
+        for email in vistos - set(marcados):
+            marcados[email] = {"vendedor_email": email, "nombre": "", "es_industrial": "false"}
+        filas = [
+            {
+                "vendedor_email": v["vendedor_email"],
+                "nombre": v.get("nombre") or "",
+                "es_industrial": str(v.get("es_industrial", "false")).strip().lower()
+                in ("true", "1", "yes"),
+            }
+            for v in marcados.values()
+        ]
+        filas.sort(key=lambda v: v["vendedor_email"])
+        return {"vendedores": filas}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/config/vendedores")
+async def post_config_vendedor(req: VendedorRequest):
+    try:
+        repo = get_repo()
+        repo.upsert_vendedor(
+            {
+                "vendedor_email": req.vendedor_email,
+                "nombre": req.nombre,
+                "es_industrial": "true" if req.es_industrial else "false",
+            }
+        )
+        return {"status": "success", "message": f"{req.vendedor_email} actualizado."}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class ClasificacionClienteRequest(BaseModel):
+    cliente_id: str
+    es_industrial: bool
+    motivo: str = ""
+    marcado_por: str = "Dirección / Administración"
+
+
+@app.get("/api/config/clasificacion-clientes")
+async def get_config_clasificacion_clientes():
+    """Todos los clientes con su clasificación actual (industrial o no).
+
+    Campo que NO existe en Odoo (pedido explícito del usuario) -- se
+    llena y edita solo desde acá. Cliente sin fila propia = "comercial"
+    por defecto, no marcado.
+    """
+    try:
+        repo = get_repo()
+        marcados = {c["cliente_id"]: c for c in repo.all_clasificaciones_clientes()}
+        filas = []
+        for c in repo.all_clientes():
+            m = marcados.get(c.cliente_id)
+            filas.append(
+                {
+                    "cliente_id": c.cliente_id,
+                    "nombre": c.nombre,
+                    "es_industrial": (
+                        str(m.get("es_industrial", "false")).strip().lower()
+                        in ("true", "1", "yes")
+                        if m
+                        else False
+                    ),
+                    "motivo": m.get("motivo", "") if m else "",
+                    "marcado_por": m.get("marcado_por", "") if m else "",
+                    "timestamp_marcado": m.get("timestamp_marcado", "") if m else "",
+                }
+            )
+        filas.sort(key=lambda c: c["nombre"])
+        return {"clientes": filas}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/config/clasificacion-cliente")
+async def post_config_clasificacion_cliente(
+    req: ClasificacionClienteRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
+    try:
+        repo = get_repo()
+        repo.upsert_clasificacion_cliente(
+            {
+                "cliente_id": req.cliente_id,
+                "es_industrial": "true" if req.es_industrial else "false",
+                "motivo": req.motivo,
+                "marcado_por": actor_de_la_accion(
+                    get_current_user_from_cookie(cxc_session), req.marcado_por
+                ),
+                "timestamp_marcado": datetime.now().isoformat(),
+            }
+        )
+        return {"status": "success", "message": f"Cliente {req.cliente_id} actualizado."}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e

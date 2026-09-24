@@ -750,6 +750,37 @@ descuentos_no_otorgados = Table(
 )
 
 
+# --- Vendedores (config, septiembre 2026) -- ítem 6 de la lista del usuario:
+# hoy "vendedor" es solo un email suelto repetido en Cliente/OrdenVenta/Pago,
+# sin tabla propia. Nace acá porque hace falta un lugar donde marcar
+# es_industrial por vendedor; el email es la clave natural (no hay otro id
+# estable de vendedor en Odoo que el sistema traiga hoy).
+vendedores = Table(
+    "vendedores",
+    metadata,
+    Column("vendedor_email", String, primary_key=True),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("es_industrial", Boolean, nullable=False, server_default="false"),
+)
+
+# --- ClasificacionClientes (config, septiembre 2026) -- ítem 6. Tabla
+# APARTE de ``clientes`` a propósito: el sync de Odoo reconstruye ``Cliente``
+# completo en cada ciclo (``upsert_clientes``), así que un campo ahí se
+# borraría en el siguiente sync. Este flag no existe en Odoo (pedido
+# explícito del usuario: "habría que llenarlo desde este Sistema, no existe
+# ese campo en odoo"), así que vive en su propia tabla que el sync nunca
+# toca.
+clasificacion_clientes = Table(
+    "clasificacion_clientes",
+    metadata,
+    Column("cliente_id", String, ForeignKey("clientes.cliente_id"), primary_key=True),
+    Column("es_industrial", Boolean, nullable=False, server_default="false"),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("marcado_por", String, nullable=False, server_default=""),
+    Column("timestamp_marcado", String, nullable=False, server_default=""),
+)
+
+
 discrepancias_aceptadas = Table(
     "discrepancias_aceptadas",
     metadata,
