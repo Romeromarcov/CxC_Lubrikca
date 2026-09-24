@@ -98,16 +98,6 @@ _DIFERENCIAL_DEFAULTS = [
         monedas_aplicables="*",
         listas_aplicables="LISTAS_VES",
     ),
-    DescuentoDiferencialCambiario(
-        regla_id="DIF_CANDIDATOS_CIERRE",
-        tipo_diferencial="candidato_cierre_factura",
-        tipo_calculo="variable",
-        porcentaje_fijo=Decimal("0"),
-        unidad_medida="USD",
-        monedas_aplicables="*",
-        listas_aplicables="LISTAS_VES",
-        activo=False,
-    ),
 ]
 
 

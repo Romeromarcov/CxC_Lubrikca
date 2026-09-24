@@ -587,7 +587,14 @@ class DescuentoDiferencialCambiario:
     # los dos. Al migrar, el nombre viejo pasó a descripcion donde estaba
     # vacía -- DIF_35_VES conservó así "35% Fijo VES a USD".
     tipo_diferencial: str = (
-        "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance' | 'candidato_cierre_factura'
+        "fijo_35_ves_usd"  # 'fijo_35_ves_usd' | 'equiparar_binance'
+        # 'candidato_cierre_factura' fue el interruptor de la Bandeja 4
+        # (candidatos a cierre de factura), retirada el 24-sep-2026: medida
+        # contra producción, sus 40 candidatos de ese día resultaron
+        # redundantes o directamente mal etiquetados frente a lo que la
+        # regla automática (arriba) y Bandeja 2 ya calculan con precisión.
+        # El motor ya la ignora (solo lee 'fijo_35_ves_usd'/'equiparar_
+        # binance'); una fila vieja con este valor en la base es inerte.
     )
     # DERIVADO de ``tipo_diferencial``, que es el único que el motor lee.
     # Existía como un segundo selector en Configuración para el mismo

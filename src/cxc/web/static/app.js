@@ -277,7 +277,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadReporte === "function") loadReporte();
             } else if (path === "facturacion") {
                 if (typeof loadBandeja === "function") loadBandeja();
-                if (typeof loadDiferencialCandidatos === "function") loadDiferencialCandidatos();
             } else if (path === "cobranza") {
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
             } else if (path === "ventas") {
@@ -2125,7 +2124,6 @@ document.addEventListener("DOMContentLoaded", () => {
             loadRecompra,
             loadProductoPromo,
             loadDiferencial,
-            loadDiferencialCandidatos,
             loadDiasCredito,
             loadTasas,
             loadFeriados,
@@ -2417,77 +2415,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.loadDescuentosDiferencial = loadDiferencial;
-
-    // Regla 3: candidatos a cierre de factura (reporte, no automático).
-    async function loadDiferencialCandidatos() {
-        const tbody = document.getElementById("dif-candidatos-table-body");
-        const resumen = document.getElementById("dif-candidatos-resumen");
-        if (!tbody) return;
-        try {
-            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Cargando candidatos...</td></tr>';
-            const res = await fetch("/api/diferencial/candidatos-cierre");
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            const data = await res.json();
-            if (!data.habilitado) {
-                const badgeOff = document.getElementById("bandeja4-count-badge");
-                if (badgeOff) badgeOff.textContent = "0";
-                if (resumen) resumen.textContent = data.motivo || "Reporte deshabilitado.";
-                tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Reporte deshabilitado -- falta configurar las reglas necesarias.</td></tr>';
-                return;
-            }
-            if (resumen) {
-                resumen.innerHTML = `Diferencial máximo: <strong>${data.diferencial_maximo_pct}%</strong> &middot; ` +
-                    `Diferencial de hoy (BCV vs Binance): <strong>${data.diferencial_hoy_pct}%</strong> &middot; ` +
-                    `Umbral de % pagado para ser candidata: <strong>${data.umbral_pct_pagado}%</strong>`;
-            }
-            const badge4 = document.getElementById("bandeja4-count-badge");
-            if (badge4) badge4.textContent = String((data.candidatos || []).length);
-            if (!data.candidatos || data.candidatos.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No hay órdenes candidatas hoy.</td></tr>';
-                return;
-            }
-            const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
-            tbody.innerHTML = "";
-            data.candidatos.forEach(c => {
-                const row = document.createElement("tr");
-                row.innerHTML = `
-                    <td><strong>${c.so_id}</strong></td>
-                    <td>${c.cliente_nombre || ''}</td>
-                    <td>${fmt(c.teorico_ves)}</td>
-                    <td>${fmt(c.pagado_bcv)}</td>
-                    <td>${c.pct_pagado}%</td>
-                    <td>${fmt(c.monto_candidato_maximo)}</td>
-                    <td><button type="button" class="btn btn-sm btn-secondary" data-so="${c.so_id}" data-max="${c.monto_candidato_maximo}">Aprobar Descuento</button></td>
-                `;
-                tbody.appendChild(row);
-            });
-            tbody.querySelectorAll("button[data-so]").forEach(btn => {
-                btn.addEventListener("click", async () => {
-                    const soId = btn.dataset.so;
-                    const montoMax = btn.dataset.max;
-                    const monto = prompt(`Monto a aprobar para ${soId} (máximo sugerido: $${montoMax}):`, montoMax);
-                    if (monto === null || monto === "") return;
-                    const motivo = prompt("Motivo (ej: cierre de factura por diferencial cambiario):", "Cierre de factura por diferencial cambiario") || "";
-                    try {
-                        const resp = await fetch("/api/facturacion/aprobar-descuento-sistema", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ so_id: soId, monto: parseFloat(monto), motivo, activo: true })
-                        });
-                        const respData = await resp.json();
-                        if (!resp.ok) throw new Error(respData.detail || "Error");
-                        alert(respData.message || "Descuento aprobado.");
-                        loadDiferencialCandidatos();
-                    } catch (err) {
-                        alert("Error al aprobar el descuento: " + err.message);
-                    }
-                });
-            });
-        } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Error al cargar candidatos.</td></tr>';
-        }
-    }
-    window.loadDiferencialCandidatos = loadDiferencialCandidatos;
 
     const diasCreditoForm = document.getElementById("dias-credito-form");
     // El editor viejo de esta familia se retiro el 11-sep-2026: habia dos
