@@ -59,6 +59,36 @@ def verificar_password(password: str, pwd_hash: str, salt: str) -> bool:
     return hmac.compare_digest(calculated_hash, pwd_hash)
 
 
+# --- Llaves de API de solo lectura (septiembre 2026) -------------------------
+#
+# Pedido del usuario: dar acceso a un sistema externo sin crearle un usuario
+# de Odoo. Mismo principio que las contraseñas -- la llave en crudo se
+# muestra UNA sola vez al crearla y nunca se vuelve a guardar, solo su hash.
+# El middleware que la valida (``web/app.py::exigir_sesion_en_api``) la
+# acepta SOLO en rutas GET, sin importar el endpoint: una llave de API nunca
+# puede escribir, por diseño.
+
+_API_KEY_PREFIX = "cxc_live_"
+
+
+def generar_api_key() -> str:
+    """Una llave nueva en crudo -- se muestra una sola vez a quien la crea."""
+    return _API_KEY_PREFIX + secrets.token_hex(24)
+
+
+def hash_api_key(api_key: str) -> str:
+    """Hash sin sal -- la propia llave YA es aleatoria de sobra (24 bytes);
+
+    una llave de API se compara en cada request, no vale la pena guardar
+    ni recalcular una sal para eso.
+    """
+    return hashlib.sha256(api_key.strip().encode("utf-8")).hexdigest()
+
+
+def verificar_api_key(api_key: str, key_hash: str) -> bool:
+    return hmac.compare_digest(hash_api_key(api_key), key_hash)
+
+
 def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any] | None:
     """Consulta a Odoo para verificar que el correo corresponda a un usuario activo."""
     if not email:

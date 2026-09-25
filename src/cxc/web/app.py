@@ -34,8 +34,11 @@ from cxc.auth import (
     autenticar_usuario,
     buscar_usuario_plataforma,
     crear_session_token,
+    generar_api_key,
+    hash_api_key,
     obtener_usuarios_plataforma,
     registrar_o_actualizar_usuario,
+    verificar_api_key,
     verificar_session_token,
     verificar_usuario_odoo_activo,
 )
@@ -3217,6 +3220,29 @@ def hay_sesion_valida(request: Request) -> bool:
     return get_current_user_from_cookie(request.cookies.get("cxc_session")) is not None
 
 
+def hay_api_key_valida(request: Request) -> bool:
+    """¿Trae una llave de API activa, vía ``Authorization: Bearer ...``?
+
+    Pedido del usuario (25-sep-2026): dar acceso de solo lectura a un
+    sistema externo sin crearle un usuario de Odoo. Se compara contra el
+    hash de cada llave activa (nunca se guarda en crudo) -- pocas llaves
+    en producción, así que recorrerlas todas por request es barato; no
+    hace falta indexar por hash.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return False
+    api_key = auth_header[7:].strip()
+    if not api_key:
+        return False
+    try:
+        activas = [r for r in get_repo().all_api_keys() if r.get("activo") == "true"]
+    except Exception as e:
+        logger.warning("Error leyendo api_keys para autenticar request: %s", e)
+        return False
+    return any(verificar_api_key(api_key, r["key_hash"]) for r in activas)
+
+
 @app.middleware("http")
 async def exigir_sesion_en_api(request: Request, call_next):
     """Toda ruta ``/api/`` exige sesión salvo la lista blanca de arriba.
@@ -3241,13 +3267,19 @@ async def exigir_sesion_en_api(request: Request, call_next):
     Las rutas HTML (``/dashboard``, ``/cobranza``, ...) no pasan por acá:
     son el cascarón de la SPA, no exponen datos, y ya redirigen a
     ``/login`` cuando no hay sesión.
+
+    Llaves de API (25-sep-2026): una alternativa a la cookie de sesión,
+    pero SOLO para ``GET`` -- una llave de API nunca puede escribir, sin
+    importar qué endpoint sea. Se revisa después de la sesión (el caso
+    común) y solo si el método es GET, para no pagar la consulta a
+    ``api_keys`` en cada request de un usuario logueado normal.
     """
     ruta = request.url.path
-    if (
-        ruta.startswith("/api/")
-        and ruta not in _API_RUTAS_PUBLICAS
-        and not hay_sesion_valida(request)
-    ):
+    if ruta.startswith("/api/") and ruta not in _API_RUTAS_PUBLICAS:
+        if hay_sesion_valida(request):
+            return await call_next(request)
+        if request.method == "GET" and hay_api_key_valida(request):
+            return await call_next(request)
         return JSONResponse(status_code=401, content={"detail": "No autenticado"})
     return await call_next(request)
 
@@ -3528,6 +3560,102 @@ async def api_admin_cambiar_rol(
         "status": "success",
         "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}.",
     }
+
+
+class CrearApiKeyRequest(BaseModel):
+    nombre: str = ""
+
+
+class RevocarApiKeyRequest(BaseModel):
+    key_id: str
+    activo: bool = False
+
+
+@app.get("/api/admin/api-keys")
+async def api_admin_list_api_keys(cxc_session: str | None = Cookie(default=None)):
+    """Llaves de API de solo lectura -- nunca devuelve el hash ni la llave
+
+    en crudo, solo metadatos (nombre, quién la creó, cuándo, si está
+    activa).
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] != "admin":
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
+    repo = get_repo()
+    filas = [
+        {
+            "key_id": r["key_id"],
+            "nombre": r.get("nombre") or "",
+            "creado_por": r.get("creado_por") or "",
+            "fecha_creacion": r.get("fecha_creacion") or "",
+            "activo": r.get("activo") == "true",
+        }
+        for r in repo.all_api_keys()
+    ]
+    filas.sort(key=lambda r: r["fecha_creacion"], reverse=True)
+    return filas
+
+
+@app.post("/api/admin/api-keys")
+async def api_admin_crear_api_key(
+    req: CrearApiKeyRequest, cxc_session: str | None = Cookie(default=None)
+):
+    """Crea una llave de API de SOLO LECTURA -- el middleware
+
+    (``exigir_sesion_en_api``) nunca la deja usar fuera de rutas GET, sin
+    importar el endpoint. La llave en crudo se devuelve UNA sola vez acá;
+    solo se guarda su hash, igual que una contraseña -- si se pierde, no
+    hay forma de recuperarla, solo de revocarla y crear otra.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] != "admin":
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
+    repo = get_repo()
+    api_key = generar_api_key()
+    key_id = f"APIKEY_{uuid.uuid4().hex[:12].upper()}"
+    repo.upsert_api_key(
+        {
+            "key_id": key_id,
+            "nombre": req.nombre or "Sin nombre",
+            "key_hash": hash_api_key(api_key),
+            "creado_por": actor_de_la_accion(user, ""),
+            "fecha_creacion": datetime.now().isoformat(),
+            "activo": "true",
+        }
+    )
+    return {
+        "status": "success",
+        "key_id": key_id,
+        "api_key": api_key,
+        "message": (
+            "Guarda esta llave ahora -- no se vuelve a mostrar. "
+            "Úsala como header 'Authorization: Bearer <llave>' -- solo sirve para GET."
+        ),
+    }
+
+
+@app.post("/api/admin/api-keys/revocar")
+async def api_admin_revocar_api_key(
+    req: RevocarApiKeyRequest, cxc_session: str | None = Cookie(default=None)
+):
+    user = get_current_user_from_cookie(cxc_session)
+    if not user or user["rol"] != "admin":
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
+    repo = get_repo()
+    existentes = {r["key_id"]: r for r in repo.all_api_keys()}
+    fila = existentes.get(req.key_id)
+    if not fila:
+        raise HTTPException(status_code=404, detail="Llave no encontrada.")
+    fila["activo"] = "true" if req.activo else "false"
+    repo.upsert_api_key(fila)
+    accion = "reactivada" if req.activo else "revocada"
+    return {"status": "success", "message": f"Llave {req.key_id} {accion}."}
 
 
 @app.post("/api/admin/recalcular-todo")

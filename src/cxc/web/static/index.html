@@ -2041,6 +2041,49 @@
                     </div>
                 </section>
 
+                <!-- Llaves de API de solo lectura (septiembre 2026): acceso para un
+                     sistema externo sin crearle un usuario de Odoo. Solo GET, sin
+                     importar el endpoint -- lo impone el middleware, no esta pantalla. -->
+                <section class="config-card card" data-subpage="usuarios" id="admin-api-keys-panel" style="grid-column: 1 / span 2; border-left: 5px solid #7c3aed;">
+                    <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div>
+                            <h2 style="color: #6d28d9; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>🔑</span> Llaves de API (solo lectura)
+                            </h2>
+                            <p style="color: #475569;">Acceso de un sistema externo a este sistema sin crearle un usuario de Odoo. Una llave SOLO puede leer (GET) -- nunca puede crear, editar ni borrar nada, sin importar qué endpoint use. Se envía como header <code>Authorization: Bearer &lt;llave&gt;</code>.</p>
+                        </div>
+                        <button class="btn btn-secondary" onclick="loadApiKeys()" style="padding: 0.4rem 0.85rem; font-size: 0.82rem;">🔄 Actualizar Lista</button>
+                    </div>
+
+                    <form id="crear-api-key-form" class="cxc-form" style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="form-group" style="flex:1; margin:0;">
+                            <label>Nombre / para qué es</label>
+                            <input type="text" id="api-key-nombre" placeholder="Ej: Integración con [sistema externo]">
+                        </div>
+                        <button type="submit" class="btn-primary" style="white-space:nowrap;">➕ Crear Llave</button>
+                    </form>
+                    <div id="api-key-nueva-aviso" style="display:none; margin-bottom:1rem; padding:0.85rem 1rem; background:#f5f3ff; border:1px solid #c4b5fd; border-radius:8px;"></div>
+
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Nombre</th>
+                                    <th>Creada por</th>
+                                    <th>Fecha</th>
+                                    <th>Estado</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-api-keys-table-body">
+                                <tr>
+                                    <td colspan="5" class="table-empty">Cargando llaves de API...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Mapeo UNIFICADO de Listas de Precio (agosto 2026: reemplaza los 2
                      mapeos separados que había antes -- una sola fuente de verdad por
                      lista, para no arrastrar lógica/endpoints duplicados). -->

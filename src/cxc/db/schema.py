@@ -763,6 +763,27 @@ vendedores = Table(
     Column("es_industrial", Boolean, nullable=False, server_default="false"),
 )
 
+# --- ApiKeys (config, septiembre 2026) -- acceso de SOLO LECTURA para un
+# sistema externo, pedido explícito del usuario: "cómo puedo dar acceso a
+# otro software para que se conecte a nuestro sistema vía API". Nunca se
+# guarda la llave en crudo -- solo su hash (mismo patrón que
+# ``usuarios_plataforma.password_hash``); se muestra una única vez, al
+# crearla. El middleware que la valida (``exigir_sesion_en_api`` en
+# web/app.py) la deja usar SOLO en rutas GET, sin importar qué endpoint
+# sea -- una llave de API nunca puede escribir, por diseño, no por
+# convención de quien la use.
+api_keys = Table(
+    "api_keys",
+    metadata,
+    Column("key_id", String, primary_key=True),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("key_hash", String, nullable=False),
+    Column("creado_por", String, nullable=False, server_default=""),
+    Column("fecha_creacion", String, nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("ultimo_uso", String, nullable=True),
+)
+
 # --- ClasificacionClientes (config, septiembre 2026) -- ítem 6. Tabla
 # APARTE de ``clientes`` a propósito: el sync de Odoo reconstruye ``Cliente``
 # completo en cada ciclo (``upsert_clientes``), así que un campo ahí se

@@ -191,10 +191,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 // evalúa, solo que esta vez con el dato correcto.
                 if (
                     currentUserSession.rol === "admin" &&
-                    typeof loadAdminUsuarios === "function" &&
                     window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0] === "configuracion"
                 ) {
-                    loadAdminUsuarios();
+                    if (typeof loadAdminUsuarios === "function") loadAdminUsuarios();
+                    if (typeof loadApiKeys === "function") loadApiKeys();
                 }
             }
         } catch (err) {
@@ -234,6 +234,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const adminPanel = document.getElementById("admin-user-mgmt-panel");
         if (adminPanel) {
             adminPanel.style.display = isAdm ? "block" : "none";
+        }
+        const apiKeysPanel = document.getElementById("admin-api-keys-panel");
+        if (apiKeysPanel) {
+            apiKeysPanel.style.display = isAdm ? "block" : "none";
         }
 
         const reciboBtnContainer = document.getElementById("btn-generar-recibo-container");
@@ -314,8 +318,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
                 if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
-                if (currentUserSession && currentUserSession.rol === "admin" && typeof loadAdminUsuarios === "function") {
-                    loadAdminUsuarios();
+                if (currentUserSession && currentUserSession.rol === "admin") {
+                    if (typeof loadAdminUsuarios === "function") loadAdminUsuarios();
+                    if (typeof loadApiKeys === "function") loadApiKeys();
                 }
             }
         } catch (err) {
@@ -429,6 +434,89 @@ document.addEventListener("DOMContentLoaded", () => {
             alert("❌ Error de red.");
         }
     };
+
+    // --- Llaves de API de solo lectura (septiembre 2026) -----------------
+    window.loadApiKeys = async function() {
+        const tbody = document.getElementById("admin-api-keys-table-body");
+        if (!tbody) return;
+        try {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando llaves de API...</td></tr>';
+            const res = await fetch("/api/admin/api-keys");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const keys = await res.json();
+            if (keys.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay llaves de API creadas.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = "";
+            keys.forEach(k => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td><strong>${k.nombre}</strong></td>
+                    <td><small>${k.creado_por || '-'}</small></td>
+                    <td><small>${k.fecha_creacion ? k.fecha_creacion.replace("T", " ").split(".")[0] : '-'}</small></td>
+                    <td><span class="state-badge ${k.activo ? 'cierre' : ''}">${k.activo ? 'Activa' : 'Revocada'}</span></td>
+                    <td>
+                        <button class="btn btn-secondary" onclick="toggleApiKey('${k.key_id}', ${!k.activo})" style="padding: 0.3rem 0.65rem; font-size: 0.78rem;">${k.activo ? '🚫 Revocar' : '♻️ Reactivar'}</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Error cargando llaves de API.</td></tr>';
+            console.error(err);
+        }
+    };
+
+    window.toggleApiKey = async function(keyId, nuevoActivo) {
+        if (!nuevoActivo && !confirm("¿Revocar esta llave? El sistema externo que la use dejará de poder conectarse de inmediato.")) return;
+        try {
+            const res = await fetch("/api/admin/api-keys/revocar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key_id: keyId, activo: nuevoActivo })
+            });
+            if (res.ok) {
+                loadApiKeys();
+            } else {
+                const err = await res.json();
+                alert(`❌ Error: ${err.detail || 'No se pudo actualizar la llave'}`);
+            }
+        } catch (err) {
+            alert("❌ Error de red.");
+        }
+    };
+
+    const crearApiKeyForm = document.getElementById("crear-api-key-form");
+    if (crearApiKeyForm) {
+        crearApiKeyForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const nombreInput = document.getElementById("api-key-nombre");
+            const aviso = document.getElementById("api-key-nueva-aviso");
+            try {
+                const res = await fetch("/api/admin/api-keys", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ nombre: nombreInput ? nombreInput.value : "" })
+                });
+                const data = await res.json();
+                if (res.ok && aviso) {
+                    aviso.style.display = "block";
+                    aviso.innerHTML = `
+                        <strong>✅ Llave creada -- guárdala ahora, no se vuelve a mostrar:</strong>
+                        <div style="margin-top:0.5rem;font-family:monospace;background:white;padding:0.6rem;border-radius:6px;border:1px solid #ddd6fe;word-break:break-all;user-select:all;">${data.api_key}</div>
+                        <div style="margin-top:0.5rem;font-size:0.82rem;color:#475569;">Úsala como header <code>Authorization: Bearer ${data.api_key}</code>. Solo sirve para leer (GET) -- nunca puede crear, editar ni borrar nada.</div>
+                    `;
+                    if (nombreInput) nombreInput.value = "";
+                    loadApiKeys();
+                } else {
+                    alert(`❌ Error: ${data.detail || 'No se pudo crear la llave'}`);
+                }
+            } catch (err) {
+                alert("❌ Error de red al crear la llave.");
+            }
+        });
+    }
 
     // Run user session setup
     initUserSession();
