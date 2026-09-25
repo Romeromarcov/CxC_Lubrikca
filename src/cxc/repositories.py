@@ -447,6 +447,18 @@ class Repository(ABC):
     def upsert_clasificacion_cliente(self, row: dict[str, str]) -> None: ...
 
     @abstractmethod
+    def all_api_keys(self) -> list[dict[str, str]]:
+        """Llaves de API de solo lectura para sistemas externos -- nunca
+
+        guarda la llave en crudo, solo su hash. Ver
+        ``web/app.py::exigir_sesion_en_api``, que las acepta SOLO en
+        rutas GET.
+        """
+
+    @abstractmethod
+    def upsert_api_key(self, row: dict[str, str]) -> None: ...
+
+    @abstractmethod
     def replace_tasas_historicas_auditoria(self, rows: list[dict[str, str]]) -> None:
         """Reemplaza la tabla completa (scripts/cargar_tasas_historicas.py
 
@@ -569,6 +581,7 @@ class InMemoryRepository(Repository):
         self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
         self._vendedores: dict[str, dict[str, str]] = {}
         self._clasificaciones_clientes: dict[str, dict[str, str]] = {}
+        self._api_keys: dict[str, dict[str, str]] = {}
 
     # --- Configuración genérica -----------------------------------------------
     def get_config(self, key: str) -> str | None:
@@ -974,6 +987,12 @@ class InMemoryRepository(Repository):
 
     def upsert_clasificacion_cliente(self, row: dict[str, str]) -> None:
         self._clasificaciones_clientes[row["cliente_id"]] = dict(row)
+
+    def all_api_keys(self) -> list[dict[str, str]]:
+        return [dict(r) for r in self._api_keys.values()]
+
+    def upsert_api_key(self, row: dict[str, str]) -> None:
+        self._api_keys[row["key_id"]] = dict(row)
 
     def feriados(self) -> list[Feriado]:
         return list(self._feriados)

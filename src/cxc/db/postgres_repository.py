@@ -1123,6 +1123,42 @@ class PostgresRepository(Repository):
                 ["cliente_id"],
             )
 
+    def all_api_keys(self) -> list[dict[str, str]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.api_keys)).all()
+        return [
+            {
+                "key_id": r.key_id,
+                "nombre": r.nombre or "",
+                "key_hash": r.key_hash,
+                "creado_por": r.creado_por or "",
+                "fecha_creacion": r.fecha_creacion or "",
+                "activo": "true" if r.activo else "false",
+                "ultimo_uso": r.ultimo_uso or "",
+            }
+            for r in rows
+        ]
+
+    def upsert_api_key(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.api_keys,
+                [
+                    {
+                        "key_id": row["key_id"],
+                        "nombre": row.get("nombre") or "",
+                        "key_hash": row["key_hash"],
+                        "creado_por": row.get("creado_por") or "",
+                        "fecha_creacion": row.get("fecha_creacion") or "",
+                        "activo": str(row.get("activo", "true")).strip().lower()
+                        not in ("false", "0", "no"),
+                        "ultimo_uso": row.get("ultimo_uso") or None,
+                    }
+                ],
+                ["key_id"],
+            )
+
     def feriados(self) -> list[Feriado]:
         with self._engine.connect() as conn:
             rows = conn.execute(select(t.feriados)).all()
