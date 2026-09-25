@@ -17,7 +17,9 @@ from cxc.models import EstadoVinculacion, Moneda, Vinculacion
 from cxc.web.app import _detectar_vinculaciones_sobreaplicadas
 
 
-def _vinc(vinc_id, pago_id, so_id, monto_ves, equiv_usd) -> Vinculacion:
+def _vinc(
+    vinc_id, pago_id, so_id, monto_ves, equiv_usd, estado=EstadoVinculacion.PENDIENTE
+) -> Vinculacion:
     return Vinculacion(
         vinc_id=vinc_id,
         pago_id=pago_id,
@@ -29,7 +31,7 @@ def _vinc(vinc_id, pago_id, so_id, monto_ves, equiv_usd) -> Vinculacion:
         es_tasa_heredada=False,
         equiv_usd_bcv=Decimal(equiv_usd),
         equiv_usd_binance=Decimal(equiv_usd),
-        estado=EstadoVinculacion.PENDIENTE,
+        estado=estado,
         moneda_abono=Moneda.VES,
     )
 
@@ -144,3 +146,51 @@ def test_sin_acumulador_tampoco_levanta() -> None:
         {"pago_id": "P_SIN", "monto": "1000", "moneda": "VES", "fecha_pago": "2030-01-01"}
     ]
     assert _detectar_vinculaciones_sobreaplicadas(vincs, pagos_rows, []) == []
+
+
+# --- CONCILIADO manda sobre PENDIENTE (25-sep-2026) -----------------------------
+#
+# Falso positivo real reportado por el usuario: 32 de 34 filas de este chequeo
+# en producción eran una Vinculación CONCILIADO (la real, la que Odoo reconoce)
+# más una o dos PENDIENTE huérfanas -- residuo de una corrida de FIFO anterior a
+# que el pago se conciliara contra OTRA orden. El usuario revisó asientos y
+# contabilidad y, con razón, no encontró ninguna doble aplicación: Odoo mismo ya
+# había descartado esas PENDIENTE.
+
+
+def test_conciliado_mas_pendiente_huerfana_no_es_sobreaplicacion() -> None:
+    """Caso real: pago 1954 ($55) -- CONCILIADO a S00965 por $55 (la real) más
+
+    dos PENDIENTE huérfanas (S00891 $36.23, S00816 $18.77) que sumaban el
+    "doble" sin que hubiera nada que buscar en Odoo.
+    """
+    vincs = [
+        _vinc("V1", "1954", "S00965", "55.00", "55.00", estado=EstadoVinculacion.CONCILIADO),
+        _vinc("V2", "1954", "S00891", "36.23", "36.23"),
+        _vinc("V3", "1954", "S00816", "18.77", "18.77"),
+    ]
+    pagos_rows = [
+        {"pago_id": "1954", "monto": "55.00", "moneda": "USD", "fecha_pago": "2026-07-28"}
+    ]
+
+    assert _detectar_vinculaciones_sobreaplicadas(vincs, pagos_rows, []) == []
+
+
+def test_dos_conciliadas_que_exceden_el_pago_si_se_detectan() -> None:
+    """Caso real: pago 640 ($105) -- DOS Vinculaciones ya CONCILIADO (S00408
+
+    $110.42, S00220 $2.48) suman $112.90, de verdad más de lo que el pago
+    vale. Esta sí es una sobreaplicación real -- CONCILIADO no perdona.
+    """
+    vincs = [
+        _vinc("V1", "640", "S00408", "110.42", "110.42", estado=EstadoVinculacion.CONCILIADO),
+        _vinc("V2", "640", "S00220", "2.48", "2.48", estado=EstadoVinculacion.CONCILIADO),
+    ]
+    pagos_rows = [
+        {"pago_id": "640", "monto": "105.00", "moneda": "USD", "fecha_pago": "2026-07-28"}
+    ]
+
+    resultado = _detectar_vinculaciones_sobreaplicadas(vincs, pagos_rows, [])
+    assert len(resultado) == 1
+    assert resultado[0]["pago_id"] == "640"
+    assert round(resultado[0]["exceso_usd"], 2) == 7.90
