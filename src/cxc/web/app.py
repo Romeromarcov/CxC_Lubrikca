@@ -8642,9 +8642,19 @@ async def get_bandeja_facturacion():
 
         def _tolerancia_retencion(target: float, pagado: float, wh_rate: float) -> bool:
             """True si lo pagado cubre el teórico salvo la porción de IVA
-            retenida (agentes de retención no pagan esa porción en efectivo)."""
+
+            retenida (agentes de retención no pagan esa porción en efectivo).
+
+            Mismo bug que ``sin_datos_teorico`` documenta (caso real
+            S01018, sep-2026): un ``target`` en cero significa "el teórico
+            todavía no se pudo calcular" (orden recién creada, sin líneas
+            sincronizadas todavía), nunca "nada que cobrar" -- el llamador
+            ya filtra ese caso (solo se invoca cuando ``teorico_bs_pagado``/
+            ``_usd_pagado`` son False, que a su vez ya excluyen "sin
+            datos"), pero antes esta función lo revertía a "pagada" igual.
+            """
             if target <= 0.05:
-                return True
+                return False
             subtotal = target / factor_iva_configurado
             iva_retenido = (target - subtotal) * (wh_rate / 100.0)
             return pagado >= target - iva_retenido - 0.05
@@ -14421,18 +14431,41 @@ def _get_ventas_sync(
 
             target_orden = max(0.0, venta_neta_real - descuento_aplicado_sistema)
 
-            estatus_pago_real_orden = _estado_pago_display(
-                val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden
+            # Mismo bug que ``sin_datos_teorico`` documenta (S00368/S00708,
+            # sep-2026), pero en la referencia Venta Real/Factura Neta: un
+            # ``venta_neta_real``/``total_facturado_neto`` en cero significa
+            # "Odoo todavía no tiene el monto real" (orden recién creada,
+            # sin líneas sincronizadas todavía), **nunca** "nada que
+            # cobrar" -- ``_estado_pago`` declara "pagada" cualquier
+            # objetivo <= 0,05 sin distinguir los dos casos. Caso real
+            # S01018 (23-sep-2026, reportado por el usuario): orden "sale"
+            # sin una sola línea todavía, ``monto_total`` en 0 -- salía de
+            # CxC activa y aparecía "Pagada" en Bandeja 1 sin haber
+            # recibido nada.
+            _venta_real_sin_datos = venta_neta_real <= 0.005
+            estatus_pago_real_orden = (
+                "sin_datos"
+                if _venta_real_sin_datos
+                else _estado_pago_display(
+                    val_ref_nacimiento, val_ref_nacimiento_incl_pendiente, target_orden
+                )
             )
 
             if tiene_factura:
                 target_factura = max(0.0, total_facturado_neto - descuento_aplicado_sistema)
-                estatus_pago_real_factura = _estado_pago_display(
-                    val_ref_nacimiento,
-                    val_ref_nacimiento_incl_pendiente,
-                    target_factura,
+                _factura_real_sin_datos = total_facturado_neto <= 0.005
+                estatus_pago_real_factura = (
+                    "sin_datos"
+                    if _factura_real_sin_datos
+                    else _estado_pago_display(
+                        val_ref_nacimiento,
+                        val_ref_nacimiento_incl_pendiente,
+                        target_factura,
+                    )
                 )
             else:
+                target_factura = 0.0
+                _factura_real_sin_datos = True
                 estatus_pago_real_factura = "sin_factura"
 
             # Fase 9 -- bug real (S00696 y similares): antes ambos huecos
@@ -14492,11 +14525,14 @@ def _get_ventas_sync(
                 and usd_neta_teorica_iva is not None
                 and _estado_pago(val_binance, usd_neta_teorica_iva) == "pagada"
             )
-            factura_real_pagada_confirmada = tiene_factura and (
-                _estado_pago(val_ref_nacimiento, target_factura) == "pagada"
+            factura_real_pagada_confirmada = (
+                tiene_factura
+                and not _factura_real_sin_datos
+                and _estado_pago(val_ref_nacimiento, target_factura) == "pagada"
             )
             venta_real_pagada_confirmada = (
-                _estado_pago(val_ref_nacimiento, target_orden) == "pagada"
+                not _venta_real_sin_datos
+                and _estado_pago(val_ref_nacimiento, target_orden) == "pagada"
             )
             # "En proceso de pago" (precedente citado por el usuario: el
             # estado homónimo de Odoo ya saca una factura de CxC aunque
@@ -14515,11 +14551,14 @@ def _get_ventas_sync(
                 and usd_neta_teorica_iva is not None
                 and _estado_pago(val_binance_incl_pendiente, usd_neta_teorica_iva) == "pagada"
             )
-            factura_real_pagada_incl_pendiente = tiene_factura and (
-                _estado_pago(val_ref_nacimiento_incl_pendiente, target_factura) == "pagada"
+            factura_real_pagada_incl_pendiente = (
+                tiene_factura
+                and not _factura_real_sin_datos
+                and _estado_pago(val_ref_nacimiento_incl_pendiente, target_factura) == "pagada"
             )
             venta_real_pagada_incl_pendiente = (
-                _estado_pago(val_ref_nacimiento_incl_pendiente, target_orden) == "pagada"
+                not _venta_real_sin_datos
+                and _estado_pago(val_ref_nacimiento_incl_pendiente, target_orden) == "pagada"
             )
             # Subtotal pagado, IVA no (decisión del usuario, septiembre
             # 2026): el cliente pagó la mercancía y falta el impuesto, sea
@@ -14551,11 +14590,16 @@ def _get_ventas_sync(
                 # Sin teórico calculable se cae al subtotal real de la
                 # orden en Odoo (``amount_untaxed``), que siempre existe.
                 _base_subtotal = venta_bruta_real
+            # Mismo guard que ``_venta_real_sin_datos`` (caso S01018): un
+            # subtotal en cero es "no pude calcular", no "nada que cobrar".
+            _subtotal_sin_datos = _base_subtotal <= 0.005
             subtotal_pagado_confirmado = (
-                _estado_pago(val_ref_nacimiento, _base_subtotal) == "pagada"
+                not _subtotal_sin_datos
+                and _estado_pago(val_ref_nacimiento, _base_subtotal) == "pagada"
             )
             subtotal_pagado_incl_pendiente = (
-                _estado_pago(val_ref_nacimiento_incl_pendiente, _base_subtotal) == "pagada"
+                not _subtotal_sin_datos
+                and _estado_pago(val_ref_nacimiento_incl_pendiente, _base_subtotal) == "pagada"
             )
 
             clasificacion_cxc = clasificar_estado_cxc(
