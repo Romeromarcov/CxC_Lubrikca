@@ -12372,25 +12372,52 @@ def _detectar_vinculaciones_sobreaplicadas(
     tolerancia_usd: Decimal = Decimal("0.05"),
     sin_tasa: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Por cada pago, suma el equivalente USD de TODAS sus Vinculaciones
+    """Por cada pago, suma el equivalente USD de sus Vinculaciones
 
-    (cualquier estado, vía ``_vinc_usd_equiv``) y lo compara contra el
-    monto real del pago en USD -- si la suma excede el monto del pago, hay
-    doble conteo (dos Vinculaciones locales reclamando, entre ambas, más
-    dinero del que el pago realmente tiene). Bug real (agosto 2026, cliente
-    CONSTRUCTORA GRANO AGREGADO): el pago 1267 tenía una Vinculación por su
-    monto completo apuntando a S00608 Y otra Vinculación por una fracción
-    apuntando a S00799 -- juntas sumaban más de lo que el pago vale, un
-    residuo de una corrida de auto-FIFO anterior al fix de
-    ``_vinc_usd_equiv``. Este chequeo detecta cualquier caso similar hacia
-    adelante, sin depender de que un humano lo note por casualidad.
+    CONCILIADO (vía ``_vinc_usd_equiv``) y lo compara contra el monto real
+    del pago en USD -- si la suma excede el monto del pago, hay doble
+    conteo real (dos Vinculaciones que Odoo reconoce, entre ambas,
+    reclamando más dinero del que el pago realmente tiene). Bug real
+    (agosto 2026, cliente CONSTRUCTORA GRANO AGREGADO): el pago 1267 tenía
+    una Vinculación por su monto completo apuntando a S00608 Y otra
+    Vinculación por una fracción apuntando a S00799 -- juntas sumaban más
+    de lo que el pago vale, un residuo de una corrida de auto-FIFO
+    anterior al fix de ``_vinc_usd_equiv``. Este chequeo detecta cualquier
+    caso similar hacia adelante, sin depender de que un humano lo note por
+    casualidad.
+
+    Si el pago ya tiene alguna Vinculación CONCILIADO, solo esas cuentan
+    -- las ``pendiente`` del mismo pago quedan excluidas. Falso positivo
+    real (reportado por el usuario, 25-sep-2026, 32 de 34 filas de este
+    chequeo): una vez que Odoo concilia un pago contra una orden, una
+    Vinculación ``pendiente`` que quedó apuntando a OTRA orden es un
+    residuo huérfano de una corrida de FIFO anterior -- Odoo ya la
+    descartó, no es dinero reclamado de verdad. Sumarla junto a la
+    CONCILIADO real (mismo monto, otra orden) daba sistemáticamente el
+    doble del pago sin que hubiera ninguna doble aplicación que buscar en
+    Odoo -- el usuario revisó asientos y contabilidad y, con razón, no
+    encontró nada. Mismo principio que "Fase 0" del plan de arquitectura
+    de pagos ya aplica en todo el resto del sistema: CONCILIADO manda
+    sobre PENDIENTE.
+
+    Si el pago NO tiene ninguna CONCILIADO todavía, se suman todas sus
+    ``pendiente`` -- ahí sigue vivo el caso original (CONSTRUCTORA GRANO
+    AGREGADO, pago 1267): dos sugerencias de FIFO sin confirmar, ninguna
+    superada por una conciliación real, que entre ambas ya reclaman más
+    de lo que el pago vale.
     """
     if not vincs or not pagos_rows:
         return []
     pagos_by_id = {str(p.get("pago_id", "")).strip(): p for p in pagos_rows if p.get("pago_id")}
-    por_pago: dict[str, Decimal] = {}
+    vincs_por_pago: dict[str, list[Vinculacion]] = {}
     for v in vincs:
-        por_pago[v.pago_id] = por_pago.get(v.pago_id, Decimal("0")) + _vinc_usd_equiv(v)
+        vincs_por_pago.setdefault(v.pago_id, []).append(v)
+
+    por_pago: dict[str, Decimal] = {}
+    for pid, vs in vincs_por_pago.items():
+        conciliadas = [v for v in vs if v.estado == EstadoVinculacion.CONCILIADO]
+        a_sumar = conciliadas if conciliadas else vs
+        por_pago[pid] = sum((_vinc_usd_equiv(v) for v in a_sumar), Decimal("0"))
 
     resultado: list[dict[str, Any]] = []
     for pid, aplicado in por_pago.items():
