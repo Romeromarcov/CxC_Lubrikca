@@ -177,6 +177,25 @@ document.addEventListener("DOMContentLoaded", () => {
                 currentUserSession = await res.json();
                 renderUserProfile(currentUserSession);
                 filterNavbarByPermissions(currentUserSession);
+                // Bug real (25-sep-2026, reportado por el usuario): en una
+                // carga directa de /configuracion (F5, o entrar por URL en
+                // vez de clic en el menú), initCurrentPage() ya corrió y
+                // decidió si cargar la lista de usuarios ANTES de que esta
+                // función (fetch a /api/auth/me, siempre asíncrono) supiera
+                // el rol -- currentUserSession todavía era null, así que el
+                // gate "es admin" nunca se cumplía y el panel se quedaba
+                // colgado en "Cargando..." para siempre, sin ni siquiera
+                // pedir /api/admin/usuarios. Si para cuando el rol SÍ se
+                // conoce ya estamos en Configuración y es admin, se dispara
+                // acá -- la misma condición que initCurrentPage() ya
+                // evalúa, solo que esta vez con el dato correcto.
+                if (
+                    currentUserSession.rol === "admin" &&
+                    typeof loadAdminUsuarios === "function" &&
+                    window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0] === "configuracion"
+                ) {
+                    loadAdminUsuarios();
+                }
             }
         } catch (err) {
             console.error("Error fetching user session:", err);
