@@ -323,6 +323,7 @@ def _run_get_ventas(
     vendedores: list[dict] | None = None,
     clasificaciones_clientes: list[dict] | None = None,
     catalogo: list[Producto] | None = None,
+    ordenes_extra: list[OrdenVenta] | None = None,
 ):
     mock_repo = MagicMock()
     mock_repo._g.read_rows.return_value = []
@@ -346,6 +347,7 @@ def _run_get_ventas(
         _orden("SO_PENDIENTE", lista="4", monto_total="97.00"),
         _orden("SO_NC", lista="4", monto_total="200.00"),
         _orden("SO_ND", lista="5", monto_total="90.00"),
+        *(ordenes_extra or []),
     ]
     # Fase 10: los teóricos VES/USD ya no viven en BandejaFacturacion.
     mock_repo.all_ventas_teoricos.return_value = [
@@ -1723,3 +1725,23 @@ def test_clasificacion_comercial_industrial_volumen_cuenta_como_senal() -> None:
     assert detalle["litros_industriales"] == 18.92
     assert detalle["volumen_industrial"] is True
     assert ok["clasificacion_comercial_industrial"] == "industrial"
+
+
+def test_orden_sin_lineas_y_monto_cero_no_se_marca_pagada() -> None:
+    """Bug real (23-sep-2026, caso S01018 reportado por el usuario): una
+
+    orden "sale" recién creada en Odoo, todavía sin una sola línea
+    sincronizada -- ``monto_total`` en 0 -- salía de CxC activa como
+    "Pagada vs Venta Real" sin haber recibido ningún pago, porque
+    ``_estado_pago`` trata cualquier objetivo <= $0,05 como "ya cubierto".
+    Un monto en cero es "todavía no se pudo calcular", nunca "nada que
+    cobrar" -- mismo principio que ``sin_datos_teorico`` ya aplicaba a los
+    teóricos VES/USD, extendido acá a Venta Real/Factura Neta/Subtotal.
+    """
+    orden_vacia = _orden("SO_ZERO", lista="4", monto_total="0.00")
+    by_so = _run_get_ventas(ordenes_extra=[orden_vacia])
+    zero = by_so["SO_ZERO"]
+    assert zero["venta_real_pagada_confirmada"] is False
+    assert zero["venta_real_pagada_incl_pendiente"] is False
+    assert zero["sale_de_cxc"] is False
+    assert zero["estatus_pago_real_orden"] == "sin_datos"
