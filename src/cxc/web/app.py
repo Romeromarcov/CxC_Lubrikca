@@ -679,7 +679,7 @@ def _facturas_que_odoo_todavia_tiene(execute: Any, invoice_ids: list[int]) -> li
     if not invoice_ids:
         return []
     try:
-        vivos = execute("account.move", "search", [[["id", "in", invoice_ids]]])
+        vivos = execute("account.move", "search", [[["id", "in", invoice_ids]]], {})
     except Exception as e_ids:  # noqa: BLE001 -- se cae al listado original
         logger.warning("No se pudo verificar qué facturas siguen en Odoo: %s", e_ids)
         return list(invoice_ids)
