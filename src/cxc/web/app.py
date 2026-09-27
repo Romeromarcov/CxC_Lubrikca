@@ -8580,7 +8580,16 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
             # ``fila`` devuelve None para no ofrecer una sugerencia, y eso
             # significa que no consume nada -- misma semántica que tenía el
             # ``continue`` de antes, ahora dicha en el docstring del módulo.
-            def _fila(restante_antes, o, monto_aplicar, _p=p, _base=base_item, _sf=saldo_fields):
+            def _fila(
+                restante_antes,
+                o,
+                monto_aplicar,
+                _p=p,
+                _base=base_item,
+                _sf=saldo_fields,
+                _bcv_rate=bcv_rate,
+                _moneda_p=moneda_p,
+            ):
                 item = {
                     **_base,
                     # Residual del pago justo ANTES de aplicar esta sugerencia
@@ -8614,7 +8623,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     # Este campo es el monto correcto para escribir en
                     # ``monto_aplicado``: en la moneda del pago, no en USD.
                     "monto_sugerido_nativo": float(
-                        monto_aplicar * bcv_rate if moneda_p == "VES" else monto_aplicar
+                        monto_aplicar * _bcv_rate if _moneda_p == "VES" else monto_aplicar
                     ),
                     "vendedor": _p["vendedor"] or o["vendedor"],
                 }
