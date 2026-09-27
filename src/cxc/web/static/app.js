@@ -643,13 +643,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 formSoSelect.disabled = false;
                 formMontoAplicar.disabled = false;
                 
-                // If it is VES, we recommend applying the calculated Binance USD amount
-                if (payment.moneda === "VES") {
-                    formMontoAplicar.value = payment.equiv_usd_binance.toFixed(2);
-                } else {
-                    formMontoAplicar.value = payment.monto.toFixed(2);
-                }
-                formMontoAplicar.max = payment.moneda === "VES" ? payment.equiv_usd_binance * 1.5 : payment.monto;
+                // Bug real (27-sep-2026, pago 1187): este campo se manda tal
+                // cual a /api/vincular como "monto_aplicado", que exige la
+                // moneda PROPIA del pago (VES si el pago es en bolívares) --
+                // acá se pre-llenaba con el equivalente en USD, no en VES.
+                // payment.monto ya viene en la moneda nativa (ver
+                // abrirModalVincularManual / selectPayment más arriba).
+                formMontoAplicar.value = payment.monto.toFixed(2);
+                formMontoAplicar.max = payment.monto * 1.5;
                 btnSubmit.disabled = false;
             }
         } catch (err) {
@@ -688,9 +689,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 lblEqBcv.textContent = fmt(eqBcv);
                 lblEqBinance.textContent = fmt(eqBinance);
 
-                // Auto update form amount to apply (using Binance by default)
-                formMontoAplicar.value = eqBinance.toFixed(2);
-                formMontoAplicar.max = eqBinance * 1.5;
+                // El monto a aplicar va en la moneda NATIVA del pago (VES
+                // acá), no en su equivalente USD -- mismo bug que el de
+                // arriba (selectPayment/fetch de órdenes).
+                formMontoAplicar.value = amt.toFixed(2);
+                formMontoAplicar.max = amt * 1.5;
             }
         } catch (err) {
             console.error("Error fetching reference rates:", err);
@@ -4263,7 +4266,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
     let currentSugerenciasList = [];
 
-    window.aprobarSugerenciaIndividual = async function(pago_id, so_id, monto_sugerido) {
+    // monto_sugerido_nativo: bug real (27-sep-2026, pago 1187) -- /api/vincular
+    // exige el monto en la moneda PROPIA del pago (VES si el pago es en
+    // bolívares), no en USD. monto_sugerido sigue siendo USD y solo se usa
+    // para el texto de confirmación.
+    window.aprobarSugerenciaIndividual = async function(pago_id, so_id, monto_sugerido, monto_sugerido_nativo) {
         if (!confirm(`¿Confirmar asociación de $${monto_sugerido.toFixed(2)} del Pago ${pago_id} a la Orden ${so_id}?`)) return;
 
         try {
@@ -4273,7 +4280,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({
                     pago_id: pago_id,
                     so_id: so_id,
-                    monto_aplicado: monto_sugerido
+                    monto_aplicado: monto_sugerido_nativo
                 })
             });
             const data = await res.json();
@@ -4509,7 +4516,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     // requieren juicio humano (duplicados, sin orden). El
                     // botón individual "✓ Vincular" sigue para quien no
                     // quiera esperar al siguiente ciclo.
-                    accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
+                    accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido}, ${item.monto_sugerido_nativo})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
                         <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden</button>`;
                 } else if (sugIdx !== undefined) {
                     accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`

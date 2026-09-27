@@ -3143,6 +3143,12 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
         # orden ($60), no por el monto crudo en VES.
         assert primero["so_id"] == "SO_VES_1"
         assert primero["monto_sugerido"] == 60.0
+        # Bug real (27-sep-2026, pago 1187): /api/vincular y el daemon
+        # exigen el monto en la moneda PROPIA del pago (VES acá), no en USD
+        # -- monto_sugerido_nativo es 60 USD reconvertido a VES con la
+        # misma tasa (36.57), NUNCA el 60.0 crudo que rompía Vinculaciones
+        # enteras al dividirse por la tasa una segunda vez.
+        assert abs(primero["monto_sugerido_nativo"] - 60.0 * 36.57) < 0.05
         # Ambas referencias visibles para un pago VES -- BCV y Binance del
         # mismo monto original (5181.27 / 38.0 ~= $136.35), no solo una.
         assert abs(primero["monto_pago_binance"] - 136.35) < 0.05
@@ -5171,6 +5177,81 @@ def test_e2e_46_auto_vincular_fifo_pendientes():
         # Odoo confirme la reconciliación en el siguiente paso del ciclo.
         assert v.estado == EstadoVinculacion.PENDIENTE
         assert v.confirmado_por == "Auto-FIFO (daemon)"
+
+
+def test_e2e_46b_auto_vincular_fifo_convierte_ves_a_moneda_nativa():
+    """Bug real (reportado por el usuario, 27-sep-2026, pago 1187/cliente
+
+    Inversiones La Bendición del Nazareno, C.A, S00133): el daemon tomaba
+    ``monto_sugerido`` -- el equivalente en USD que calcula el motor FIFO --
+    y lo escribía tal cual en ``monto_aplicado``, un campo que
+    ``_congelar_equivalentes`` espera en la moneda PROPIA del pago. Para un
+    pago en VES, eso metía el número en dólares donde iba el de bolívares:
+    un pago real de Bs. 3.650 (~$100 a tasa 36,5) quedaba "aplicado" como
+    Bs. 100 -- y su equivalente USD, al dividirse por la tasa OTRA VEZ,
+    se hundía a ~$2,74. 144 Vinculaciones ya quedaron así en producción
+    (ver ``scripts/corregir_vinculaciones_monto_usd_en_ves.py``).
+
+    Esta prueba usa las tasas default de la fixture (36,5 BCV / 38,0
+    Binance) para que Bs. 3.650 dé exactamente $100 -- así el bug (de
+    seguir presente) se vería como ``monto_aplicado == Decimal("100.00")``
+    en vez de ``Decimal("3650.00")``.
+    """
+    from cxc.web.app import _auto_vincular_fifo_pendientes
+
+    mock_repo = _mock_repo_with_gateway_bridge()
+    mock_repo._g.read_rows.side_effect = lambda sheet: (
+        [
+            {
+                "pago_id": "P_AUTO_VES",
+                "cliente_id": "CLI_AUTO_VES",
+                "monto": "3650.00",
+                "moneda": "VES",
+                "fecha_pago": "2026-07-15",
+                "vendedor": "juan@lubrikca.com",
+            }
+        ]
+        if sheet == "Pagos"
+        else (
+            [{"cliente_id": "CLI_AUTO_VES", "nombre": "Cliente Auto VES"}]
+            if sheet == "Clientes"
+            else []
+        )
+    )
+
+    mock_repo.all_vinculaciones.return_value = []
+    mock_repo.all_ordenes.return_value = [
+        OrdenVenta(
+            so_id="SO_AUTO_VES_1",
+            cliente_id="CLI_AUTO_VES",
+            vendedor_email="juan@lubrikca.com",
+            fecha=date(2026, 7, 1),
+            fecha_entrega=date(2026, 7, 1),
+            monto_total=Decimal("100.00"),
+            lista_precios="4",
+            es_primera_compra=False,
+        ),
+    ]
+    mock_repo.get_pago.return_value = Pago(
+        pago_id="P_AUTO_VES",
+        cliente_id="CLI_AUTO_VES",
+        monto=Decimal("3650.00"),
+        moneda=Moneda.VES,
+        metodo_pago="Transferencia",
+        fecha_pago=datetime(2026, 7, 15, 10, 0),
+        vendedor_email="juan@lubrikca.com",
+    )
+
+    with patch("cxc.web.app.get_repo", return_value=mock_repo):
+        processed = _auto_vincular_fifo_pendientes(mock_repo)
+
+    assert processed == 1
+    vinc = mock_repo.update_vinculacion.call_args_list[0].args[0]
+    assert vinc.so_id == "SO_AUTO_VES_1"
+    # El monto aplicado va en VES (moneda del pago), NUNCA el equivalente
+    # USD crudo (100.00) que causaba el bug.
+    assert vinc.monto_aplicado == Decimal("3650.00")
+    assert abs(vinc.equiv_usd_bcv - Decimal("100.00")) < Decimal("0.05")
 
 
 def test_e2e_47_auto_vincular_fifo_excluye_sin_orden_y_duplicados():

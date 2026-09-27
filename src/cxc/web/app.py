@@ -8596,6 +8596,26 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     "so_monto_total": float(o["monto_total"]),
                     "so_saldo_pendiente": float(o["saldo_pendiente"]),
                     "monto_sugerido": float(monto_aplicar),
+                    # Bug real (reportado por el usuario, 27-sep-2026, pago
+                    # 1187/cliente Inversiones La Bendición del Nazareno):
+                    # ``monto_sugerido`` está en USD (todo el motor FIFO
+                    # trabaja en ``restante``/``saldo_usd``), pero
+                    # ``/api/vincular``, ``/api/vincular-masivo`` y el daemon
+                    # (``_vincular_masivo_sync``) esperan el monto en la
+                    # moneda PROPIA del pago (VES si el pago es en bolívares)
+                    # -- así lo exige ``_congelar_equivalentes``. El daemon y
+                    # el botón "Vincular" de esta tabla mandaban
+                    # ``monto_sugerido`` tal cual como si fuera nativo: para
+                    # un pago en VES, un pago real de $343 quedaba grabado
+                    # como Bs. 342,83 y su equivalente USD, al dividirse por
+                    # la tasa OTRA VEZ, se hundía a $0,46 -- 144 Vinculaciones
+                    # de "Auto-FIFO (daemon)" ya quedaron así (ver
+                    # ``scripts/corregir_vinculaciones_monto_usd_en_ves.py``).
+                    # Este campo es el monto correcto para escribir en
+                    # ``monto_aplicado``: en la moneda del pago, no en USD.
+                    "monto_sugerido_nativo": float(
+                        monto_aplicar * bcv_rate if moneda_p == "VES" else monto_aplicar
+                    ),
                     "vendedor": _p["vendedor"] or o["vendedor"],
                 }
                 return item if visible_to_user(item["vendedor"]) else None
@@ -9525,8 +9545,11 @@ def _auto_vincular_fifo_pendientes(repo: Any) -> int:
         logger.warning("Error obteniendo sugerencias FIFO para auto-vincular: %s", e)
         return 0
 
+    # ``monto_sugerido`` está en USD -- ``_vincular_masivo_sync`` exige el
+    # monto en la moneda PROPIA del pago (ver "monto_sugerido_nativo" en
+    # ``_fila`` de _get_conciliaciones_sugerencias_sync para el porqué).
     items = [
-        (s["pago_id"], s["so_id"], s["monto_sugerido"])
+        (s["pago_id"], s["so_id"], s["monto_sugerido_nativo"])
         for s in sugerencias
         if s.get("so_id") and not s.get("posible_duplicado") and s.get("monto_sugerido", 0) > 0.05
     ]
