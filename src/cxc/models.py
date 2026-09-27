@@ -234,6 +234,18 @@ class LineaFactura:
     # de la línea, igual que hace la consulta en vivo original
     # (``product_id.name ilike 'descuento'``).
     producto_id: str = ""
+    # Orden de origen de ESTA línea (``account.move.line.sale_line_ids`` ->
+    # ``sale.order.line.order_id``), no de la factura entera -- una factura
+    # puede consolidar líneas de VARIAS órdenes (Odoo lo permite; ``Factura.
+    # so_id``/``OrdenVenta.factura_id`` son de un solo valor y no alcanzan
+    # para ese caso). None si Odoo no la vinculó a ninguna línea de venta
+    # (línea manual, anticipo, etc.) -- no todas las líneas de factura vienen
+    # de una orden. Pedido del usuario (27-sep-2026, caso real: factura de
+    # Corporacion JJP 2023 consolidando S00718 y S00700) -- con este campo se
+    # puede repartir monto/descuento/pago entre las órdenes consolidadas
+    # sumando las líneas que le corresponden a cada una, en vez de dejar la
+    # factura sin dueño para ambas (que es lo que pasaba antes).
+    so_id_linea: str | None = None
 
 
 # --- 3.2f Líneas de Entrega (espejo, agosto 2026 -- Fase 5 del plan de

@@ -63,6 +63,23 @@ def test_map_linea_factura_move_id_sin_lista_no_rompe():
     assert ln.factura_id == "900"
 
 
+def test_map_linea_factura_so_id_linea_por_defecto_es_none():
+    """La mayoría de las líneas no traen dato de reparto -- no todas las
+
+    facturas consolidan varias órdenes, y este campo solo importa cuando sí
+    lo hacen (ver test_lector_aplicaciones.py).
+    """
+    rec = {"id": 5001, "move_id": [900, "F"], "name": "P1", "quantity": 1.0, "price_unit": 1.0}
+    ln = map_linea_factura(rec)
+    assert ln.so_id_linea is None
+
+
+def test_map_linea_factura_acepta_so_id_linea_resuelto():
+    rec = {"id": 5001, "move_id": [900, "F"], "name": "P1", "quantity": 1.0, "price_unit": 1.0}
+    ln = map_linea_factura(rec, so_id_linea="S00718")
+    assert ln.so_id_linea == "S00718"
+
+
 # --- OdooXmlRpcReader.changed_lineas_factura ---------------------------------
 
 
@@ -119,6 +136,64 @@ def test_changed_lineas_factura_solo_trae_facturas_de_cliente():
     assert move_type_clauses == [
         ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]]
     ]
+
+
+def test_changed_lineas_factura_resuelve_so_id_linea_via_sale_line_ids():
+    """Cada línea de factura sabe de qué orden vino -- distinto de
+
+    ``invoice_origin`` (que nombra TODAS las órdenes si la factura consolida
+    varias, sin decir cuál línea es de cuál). Pedido del usuario (27-sep-2026,
+    caso real Corporacion JJP 2023, factura consolidando S00718 y S00700).
+    """
+
+    def fake_execute(model, method, args, kwargs=None):
+        if model == "account.move.line":
+            return [
+                {
+                    "id": 1,
+                    "move_id": [900, "FAC/900"],
+                    "name": "P1",
+                    "quantity": 1.0,
+                    "price_unit": 100.0,
+                    "discount": 0.0,
+                    "price_subtotal": 100.0,
+                    "sale_line_ids": [9001],
+                },
+                {
+                    "id": 2,
+                    "move_id": [900, "FAC/900"],
+                    "name": "P2",
+                    "quantity": 1.0,
+                    "price_unit": 50.0,
+                    "discount": 0.0,
+                    "price_subtotal": 50.0,
+                    "sale_line_ids": [9002],
+                },
+                {
+                    # Línea manual sin línea de venta de origen (anticipo,
+                    # ajuste, etc.) -- so_id_linea debe quedar None, no reventar.
+                    "id": 3,
+                    "move_id": [900, "FAC/900"],
+                    "name": "Ajuste manual",
+                    "quantity": 1.0,
+                    "price_unit": 1.0,
+                    "discount": 0.0,
+                    "price_subtotal": 1.0,
+                    "sale_line_ids": [],
+                },
+            ]
+        if model == "sale.order.line":
+            assert sorted(args[0]) == [9001, 9002]
+            return [
+                {"id": 9001, "order_id": [718, "S00718"]},
+                {"id": 9002, "order_id": [700, "S00700"]},
+            ]
+        return []
+
+    reader = OdooXmlRpcReader.__new__(OdooXmlRpcReader)
+    reader._execute = fake_execute
+    result = {ln.linea_id: ln.so_id_linea for ln in reader.changed_lineas_factura(since=None)}
+    assert result == {"1": "S00718", "2": "S00700", "3": None}
 
 
 def test_los_dos_espejos_de_factura_miran_el_mismo_universo():
@@ -192,10 +267,12 @@ def test_postgres_row_mapping_roundtrip():
         precio_unitario="50",
         descuento="10",
         subtotal="135",
+        so_id_linea="S00718",
     )
     row_dict = _linea_factura_to_row(ln)
     assert row_dict["linea_id"] == "LF9"
     assert row_dict["subtotal"] == Decimal("135")
+    assert row_dict["so_id_linea"] == "S00718"
 
     row = _FakeRow(**row_dict)
     ln_reconstruida = _row_to_linea_factura(row)
