@@ -343,3 +343,107 @@ def test_inv_usd_ratio_map_monto_total_cero_usa_default_uno():
     )
     result = _facturacion_por_so_desde_espejo(repo, {"SO1"})
     assert result["inv_usd_ratio_map"][1] == 1.0
+
+
+# --- Facturas que consolidan varias órdenes (27-sep-2026, caso real
+# Corporacion JJP 2023 C.A: S00718 + S00700 en una sola factura) ------------
+
+
+def test_factura_multi_orden_reparte_por_peso_de_linea():
+    """Factura.so_id queda "S00718, S00700" (el string crudo de Odoo) --
+
+    se reparte 60/40 según el subtotal de las líneas propias de cada orden
+    (LineaFactura.so_id_linea), no se pierde ni se cuenta doble.
+    """
+    repo = InMemoryRepository()
+    repo.upsert_facturas(
+        [
+            b.factura(
+                "F1",
+                so_id="S00718, S00700",
+                move_type="out_invoice",
+                estado="posted",
+                monto_total_signed_usd="1000",
+                monto_sin_impuestos_signed_usd="800",
+            )
+        ]
+    )
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura("LF1", factura_id="F1", subtotal="600", so_id_linea="S00718"),
+            b.linea_factura("LF2", factura_id="F1", subtotal="400", so_id_linea="S00700"),
+        ]
+    )
+    result = _facturacion_por_so_desde_espejo(repo, {"S00718", "S00700"})
+    assert result["facturado_con_imp"] == {"S00718": 600.0, "S00700": 400.0}
+    assert result["facturado_antes_imp"] == {"S00718": 480.0, "S00700": 320.0}
+    # No hay un único so_id por factura para este caso -- inv_id_to_so
+    # queda sin entrada (los consumidores que la usan ya prefieren
+    # so_id_linea cuando existe, ver _descuentos_lineas_desde_espejo).
+    assert result["inv_id_to_so"] == {}
+
+
+def test_factura_multi_orden_sin_lineas_resolubles_reparte_igualitario():
+    """Sin LineaFactura.so_id_linea todavía (sync recién corrido), se
+
+    reparte en partes iguales entre las órdenes nombradas -- aproximación
+    visible, no una factura entera sin dueño para ninguna.
+    """
+    repo = InMemoryRepository()
+    repo.upsert_facturas(
+        [
+            b.factura(
+                "F1",
+                so_id="S00718, S00700",
+                move_type="out_invoice",
+                estado="posted",
+                monto_total_signed_usd="1000",
+            )
+        ]
+    )
+    result = _facturacion_por_so_desde_espejo(repo, {"S00718", "S00700"})
+    assert result["facturado_con_imp"] == {"S00718": 500.0, "S00700": 500.0}
+
+
+def test_factura_multi_orden_nc_tambien_se_reparte():
+    repo = InMemoryRepository()
+    repo.upsert_facturas(
+        [
+            b.factura(
+                "F1",
+                so_id="S00718, S00700",
+                move_type="out_refund",
+                estado="posted",
+                monto_total_signed_usd="100",
+            )
+        ]
+    )
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura("LF1", factura_id="F1", subtotal="75", so_id_linea="S00718"),
+            b.linea_factura("LF2", factura_id="F1", subtotal="25", so_id_linea="S00700"),
+        ]
+    )
+    result = _facturacion_por_so_desde_espejo(repo, {"S00718", "S00700"})
+    assert result["nc_con_imp"] == {"S00718": 75.0, "S00700": 25.0}
+    assert result["facturado_con_imp"] == {}
+
+
+def test_factura_de_una_sola_orden_sigue_llenando_inv_id_to_so():
+    """Guardián: el reparto multi-orden no debe tocar el caso normal."""
+    repo = InMemoryRepository()
+    repo.upsert_facturas(
+        [
+            b.factura(
+                "900",
+                so_id="SO1",
+                move_type="out_invoice",
+                estado="posted",
+                monto_total_signed_usd="1160",
+            )
+        ]
+    )
+    result = _facturacion_por_so_desde_espejo(repo, {"SO1"})
+    assert result["facturado_con_imp"] == {"SO1": 1160.0}
+    assert result["inv_id_to_so"] == {900: "SO1"}
+    assert result["invoice_ids_all"] == [900]

@@ -315,3 +315,66 @@ def test_con_detalle_true_en_lineas_de_factura():
     )
     assert desc_factura == {"SO1": 5.0}
     assert detalle_factura == {"SO1": "Aceite Y: 5.0%"}
+
+
+# --- Factura que consolida varias órdenes (27-sep-2026, caso real
+# Corporacion JJP 2023 C.A) --------------------------------------------------
+
+
+def test_so_id_linea_prevalece_sobre_inv_id_to_so_en_factura_multi_orden():
+    """``inv_id_to_so`` es un solo so_id por factura -- no alcanza cuando la
+
+    factura consolida varias órdenes (queda vacío para ese caso, ver
+    _facturacion_por_so_desde_espejo). Cada línea sabe la suya propia vía
+    ``so_id_linea``, y eso es lo que debe ganar.
+    """
+    repo = InMemoryRepository()
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura(
+                "LF1",
+                factura_id="900",
+                nombre="Aceite S00718",
+                cantidad="1",
+                precio_unitario="100",
+                descuento="10",
+                so_id_linea="S00718",
+            ),
+            b.linea_factura(
+                "LF2",
+                factura_id="900",
+                nombre="Aceite S00700",
+                cantidad="1",
+                precio_unitario="50",
+                descuento="20",
+                so_id_linea="S00700",
+            ),
+        ]
+    )
+    # inv_id_to_so vacío -- refleja lo que _facturacion_por_so_desde_espejo
+    # produce de verdad para una factura multi-orden.
+    _, desc_factura = _descuentos_lineas_desde_espejo(repo, set(), [900], {})
+    assert desc_factura == {"S00718": 10.0, "S00700": 10.0}
+
+
+def test_so_id_linea_ausente_cae_a_inv_id_to_so():
+    """Una línea sin sale_line_ids resoluble (anticipo, ajuste manual)
+
+    sigue funcionando con el mapa singular -- el caso normal, de siempre.
+    """
+    repo = InMemoryRepository()
+    repo.upsert_lineas_factura(
+        [
+            b.linea_factura(
+                "LF1",
+                factura_id="900",
+                nombre="Aceite Y",
+                cantidad="1",
+                precio_unitario="100",
+                descuento="5",
+                so_id_linea=None,
+            )
+        ]
+    )
+    _, desc_factura = _descuentos_lineas_desde_espejo(repo, set(), [900], {900: "SO1"})
+    assert desc_factura == {"SO1": 5.0}
