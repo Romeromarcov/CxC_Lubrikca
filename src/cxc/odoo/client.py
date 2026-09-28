@@ -377,7 +377,7 @@ def map_producto_espejo(
     )
 
 
-def map_linea_factura(rec: dict[str, Any]) -> LineaFactura:
+def map_linea_factura(rec: dict[str, Any], so_id_linea: str | None = None) -> LineaFactura:
     move_raw = rec.get("move_id")
     factura_id = str(move_raw[0]) if isinstance(move_raw, list | tuple) else str(move_raw or "")
     return LineaFactura(
@@ -389,6 +389,7 @@ def map_linea_factura(rec: dict[str, Any]) -> LineaFactura:
         descuento=_dec(rec.get("discount")),
         subtotal=_dec(rec.get("price_subtotal")),
         producto_id=_m2o_id(rec.get("product_id")),
+        so_id_linea=so_id_linea,
     )
 
 
@@ -894,9 +895,49 @@ class OdooXmlRpcReader(OdooReader):
                 "discount",
                 "price_subtotal",
                 "product_id",
+                "sale_line_ids",
             ],
         )
-        return [map_linea_factura(r) for r in recs]
+        # ``sale_line_ids`` (many2many, casi siempre 0 o 1 elemento por línea
+        # de producto) apunta a la línea de venta de origen -- de ahí se saca
+        # la ORDEN de origen de esa línea puntual, distinta de
+        # ``move_id.invoice_origin`` (que nombra TODAS las órdenes de la
+        # factura si Odoo consolidó varias, sin decir cuál línea es de cuál).
+        # Pedido del usuario (27-sep-2026, caso real Corporacion JJP 2023,
+        # factura consolidando S00718 y S00700): con esto se puede repartir
+        # monto/descuento/pago por orden en vez de dejar la factura sin
+        # dueño para ninguna de las dos.
+        todos_los_ids_linea_venta = sorted(
+            {
+                int(sl_id)
+                for r in recs
+                for sl_id in (r.get("sale_line_ids") or [])
+            }
+        )
+        so_por_linea_venta: dict[int, str] = {}
+        if todos_los_ids_linea_venta:
+            lineas_venta = self._read(
+                "sale.order.line", todos_los_ids_linea_venta, ["id", "order_id"]
+            )
+            so_por_linea_venta = {
+                int(lv["id"]): so
+                for lv in lineas_venta
+                if (so := _m2o_name(lv.get("order_id")))
+            }
+        return [
+            map_linea_factura(
+                r,
+                so_id_linea=next(
+                    (
+                        so_por_linea_venta[int(sl_id)]
+                        for sl_id in (r.get("sale_line_ids") or [])
+                        if int(sl_id) in so_por_linea_venta
+                    ),
+                    None,
+                ),
+            )
+            for r in recs
+        ]
 
     # --- LineasEntrega (espejo, Fase 5 del plan de consolidación de
     # fuentes) -- usado por Auditoría (Check 5) para detectar si se
@@ -1271,9 +1312,13 @@ class OdooXmlRpcReader(OdooReader):
         # Una factura "posted" out_invoice normalmente nombra UNA orden. Cuando
         # Odoo consolida varias órdenes en una sola factura, invoice_origin las
         # nombra a todas separadas por ", " -- ver so_ids_de_invoice_origin.
-        # Repartir el monto de esta factura entre esas órdenes es una decisión
-        # de negocio (¿por línea? ¿por peso del subtotal?) que esta función no
-        # toma: la factura se excluye y queda avisada, no se inventa un reparto.
+        # Antes esas facturas se excluían por completo (repartir el pago entre
+        # las órdenes era una decisión de negocio sin dato para tomarla). Ahora
+        # se reparte por PESO DE LÍNEA (ver ``_pesos_por_so_de_facturas``):
+        # cada línea de la factura sabe de qué orden vino (``sale_line_ids``),
+        # así que se puede saber cuánto de la factura es de cada una. Pedido
+        # del usuario (27-sep-2026, caso real Corporacion JJP 2023, factura
+        # consolidando S00718 y S00700).
         facturas_multi_so: dict[int, list[str]] = {}
         factura_a_so: dict[int, str] = {}
         for f in facturas:
@@ -1288,14 +1333,10 @@ class OdooXmlRpcReader(OdooReader):
                 factura_a_so[int(f["id"])] = so_ids_f[0]
             elif len(so_ids_f) > 1:
                 facturas_multi_so[int(f["id"])] = so_ids_f
+
+        pesos_multi_so: dict[int, dict[str, Decimal]] = {}
         if facturas_multi_so:
-            logger.warning(
-                "aplicaciones_conciliadas: %s factura(s) consolidan varias órdenes y se "
-                "excluyen (no hay forma de repartir el pago entre ellas sin una regla de "
-                "negocio): %s",
-                len(facturas_multi_so),
-                facturas_multi_so,
-            )
+            pesos_multi_so = self._pesos_por_so_de_facturas(facturas_multi_so)
 
         filtro = set(so_names) if so_names is not None else None
         salida: list[AplicacionConciliada] = []
@@ -1304,27 +1345,123 @@ class OdooXmlRpcReader(OdooReader):
             if not pago:
                 continue
             factura_id = linea_a_factura.get(int(_m2o_id(pr["debit_move_id"])))
-            so_id = factura_a_so.get(factura_id) if factura_id else None
-            if not so_id or (filtro is not None and so_id not in filtro):
+            if not factura_id:
                 continue
             monto = _dec(pr.get("credit_amount_currency"))
             if monto <= 0:
                 continue
-            salida.append(
-                AplicacionConciliada(
-                    pago_id=str(pago["id"]),
-                    so_id=so_id,
-                    factura_id=str(factura_id),
-                    monto=monto,
-                    moneda=(
-                        Moneda.USD
-                        if _m2o_name(pago.get("currency_id")) == "USD"
-                        else Moneda.VES
-                    ),
-                    fecha_pago=_to_datetime(pago.get("date")).date(),
+            moneda = Moneda.USD if _m2o_name(pago.get("currency_id")) == "USD" else Moneda.VES
+            fecha_pago = _to_datetime(pago.get("date")).date()
+
+            so_id = factura_a_so.get(factura_id)
+            if so_id:
+                if filtro is not None and so_id not in filtro:
+                    continue
+                salida.append(
+                    AplicacionConciliada(
+                        pago_id=str(pago["id"]),
+                        so_id=so_id,
+                        factura_id=str(factura_id),
+                        monto=monto,
+                        moneda=moneda,
+                        fecha_pago=fecha_pago,
+                    )
                 )
-            )
+                continue
+
+            pesos = pesos_multi_so.get(factura_id)
+            if not pesos:
+                continue
+            for so_id_parte, peso in pesos.items():
+                if filtro is not None and so_id_parte not in filtro:
+                    continue
+                monto_parte = (monto * peso).quantize(Decimal("0.000001"))
+                if monto_parte <= 0:
+                    continue
+                salida.append(
+                    AplicacionConciliada(
+                        pago_id=str(pago["id"]),
+                        so_id=so_id_parte,
+                        factura_id=str(factura_id),
+                        monto=monto_parte,
+                        moneda=moneda,
+                        fecha_pago=fecha_pago,
+                    )
+                )
         return salida
+
+    def _pesos_por_so_de_facturas(
+        self, facturas_multi_so: dict[int, list[str]]
+    ) -> dict[int, dict[str, Decimal]]:
+        """Qué fracción de cada factura (que consolida varias órdenes) le
+
+        corresponde a cada una, según el peso de sus propias líneas
+        (``price_subtotal``, sin impuestos -- la tasa de impuesto es la misma
+        para todas las líneas de una factura de venta normal, así que la
+        proporción no cambia si se mide con o sin impuestos).
+
+        Si una factura no tiene NINGUNA línea resoluble a una de sus órdenes
+        nombradas (dato faltante en Odoo, caso raro), se reparte en partes
+        iguales entre las órdenes que ``invoice_origin`` nombra -- mejor un
+        reparto aproximado y visible que dejar la factura entera sin dueño.
+        """
+        ids = sorted(facturas_multi_so)
+        lineas = self._search_read(
+            self.MODEL_MOVE_LINE,
+            [
+                ["move_id", "in", ids],
+                ["display_type", "in", ["product", False]],
+            ],
+            ["move_id", "price_subtotal", "sale_line_ids"],
+        )
+        ids_linea_venta = sorted(
+            {int(sl_id) for ln in lineas for sl_id in (ln.get("sale_line_ids") or [])}
+        )
+        so_por_linea_venta: dict[int, str] = {}
+        if ids_linea_venta:
+            lineas_venta = self._read("sale.order.line", ids_linea_venta, ["id", "order_id"])
+            so_por_linea_venta = {
+                int(lv["id"]): so
+                for lv in lineas_venta
+                if (so := _m2o_name(lv.get("order_id")))
+            }
+
+        subtotal_por_factura_so: dict[int, dict[str, Decimal]] = {}
+        for ln in lineas:
+            factura_id = int(_m2o_id(ln.get("move_id")))
+            if factura_id not in facturas_multi_so:
+                continue
+            so_id = next(
+                (
+                    so_por_linea_venta[int(sl_id)]
+                    for sl_id in (ln.get("sale_line_ids") or [])
+                    if int(sl_id) in so_por_linea_venta
+                ),
+                None,
+            )
+            if not so_id or so_id not in facturas_multi_so[factura_id]:
+                continue
+            bucket = subtotal_por_factura_so.setdefault(factura_id, {})
+            bucket[so_id] = bucket.get(so_id, Decimal("0")) + _dec(ln.get("price_subtotal"))
+
+        pesos: dict[int, dict[str, Decimal]] = {}
+        for factura_id, so_ids_f in facturas_multi_so.items():
+            subtotales = subtotal_por_factura_so.get(factura_id, {})
+            total = sum(subtotales.values(), Decimal("0"))
+            if total > 0:
+                pesos[factura_id] = {so: sub / total for so, sub in subtotales.items()}
+            else:
+                # Sin líneas resolubles -- reparto igualitario como último
+                # recurso, y se deja aviso para que se revise.
+                logger.warning(
+                    "aplicaciones_conciliadas: factura %s consolida %s sin líneas "
+                    "resolubles a ninguna -- reparto igualitario como aproximación.",
+                    factura_id,
+                    so_ids_f,
+                )
+                peso_igual = Decimal("1") / len(so_ids_f)
+                pesos[factura_id] = {so: peso_igual for so in so_ids_f}
+        return pesos
 
     def _vendedor_por_partner(self, partner_ids: set[int]) -> dict[int, str]:
         if not partner_ids:

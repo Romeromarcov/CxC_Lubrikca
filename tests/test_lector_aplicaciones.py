@@ -68,17 +68,27 @@ _FACTURAS = [
 ]
 
 
-def _execute_falso(facturas=None, partials=None):
+def _execute_falso(facturas=None, partials=None, lineas_producto=None, lineas_venta=None):
     facturas = _FACTURAS if facturas is None else facturas
     partials = _PARTIALS if partials is None else partials
+    lineas_producto = [] if lineas_producto is None else lineas_producto
+    lineas_venta = [] if lineas_venta is None else lineas_venta
 
     def execute(model, method, args, kwargs=None):
         if model == "account.payment":
             return _PAGOS
         if model == "account.move.line":
+            dominio = args[0] if args else []
             if method == "search_read":
+                # Las líneas "por cobrar" del pago (account_type) vs. las
+                # líneas de PRODUCTO de una factura (display_type) -- ver
+                # _pesos_por_so_de_facturas, que busca estas últimas.
+                if any(c[0] == "display_type" for c in dominio if isinstance(c, list)):
+                    return lineas_producto
                 return _LINEAS_PAGO
             return [f for f in _LINEAS_FACT if f["id"] in args[0]]
+        if model == "sale.order.line":
+            return [lv for lv in lineas_venta if lv["id"] in args[0]]
         if model == "account.partial.reconcile":
             return partials
         if model == "account.move":
@@ -163,30 +173,67 @@ def test_el_sync_de_pagos_ya_no_esconde_los_conciliados() -> None:
         assert ["is_reconciled", "=", False] not in d
 
 
-# --- la factura que consolida varias órdenes (17-sep-2026) --------------------
+# --- la factura que consolida varias órdenes (17-sep-2026, resuelto con
+# reparto por línea el 27-sep-2026) --------------------------------------------
 #
 # Bug real de producción: una factura con invoice_origin "S00718, S00700" (Odoo
 # la arma consolidando dos SO) se leía como si "S00718, S00700" fuera el nombre
 # de UNA orden. Ese string se escribía en Vinculacion.so_id, que tiene clave
 # foránea contra ordenes_venta -- ninguna orden se llama así, y el INSERT
-# violaba la restricción en cada ciclo del demonio.
+# violaba la restricción en cada ciclo del demonio. Se resolvió primero
+# excluyendo estas facturas (no había forma de repartir el pago); ahora, con
+# ``sale_line_ids`` por línea de factura, sí se puede: caso real reportado por
+# el usuario (Corporacion JJP 2023, S00718 + S00700 en una sola factura).
+_LINEAS_VENTA_MULTI = [
+    {"id": 9001, "order_id": [718, "S00718"]},
+    {"id": 9002, "order_id": [700, "S00700"]},
+]
+# 60% del subtotal es de S00718, 40% de S00700.
+_LINEAS_PRODUCTO_MULTI = [
+    {"move_id": [10119, "F/1"], "price_subtotal": 600.0, "sale_line_ids": [9001]},
+    {"move_id": [10119, "F/1"], "price_subtotal": 400.0, "sale_line_ids": [9002]},
+]
 
 
-def test_una_factura_que_consolida_varias_ordenes_se_excluye_y_no_inventa_reparto() -> None:
-    """La factura 10119 (originalmente S00584) pasa a consolidar dos órdenes.
+def test_una_factura_que_consolida_varias_ordenes_se_reparte_por_peso_de_linea() -> None:
+    """La factura 10119 (originalmente S00584) pasa a consolidar S00718 (60%
 
-    Las DOS aplicaciones que la tocan desaparecen -- la de 1304 (10.985,0) y la
-    de 890 (30.000,0) -- porque no hay forma de saber cuánto de cada una le
-    corresponde a S00718 y cuánto a S00700 sin una regla de negocio. La otra
-    factura del mismo pago 1304 (S00214, sin tocar) sigue entrando normal.
+    del subtotal) y S00700 (40%). Las dos aplicaciones que la tocan -- 1304
+    (10.985,0) y 890 (30.000,0) -- se reparten en esa misma proporción, en vez
+    de desaparecer. La otra factura del mismo pago 1304 (S00214, sin tocar)
+    sigue entrando normal.
     """
     multi = [dict(f) for f in _FACTURAS]
     multi[0]["invoice_origin"] = "S00718, S00700"
-    apps = _leer(facturas=multi)
-    assert {(a.pago_id, a.so_id, a.monto) for a in apps} == {
-        ("1304", "S00214", Decimal("500.0")),
-    }
-    assert not any("," in a.so_id for a in apps)
+    apps = _leer(
+        facturas=multi,
+        lineas_producto=_LINEAS_PRODUCTO_MULTI,
+        lineas_venta=_LINEAS_VENTA_MULTI,
+    )
+    por_clave = {(a.pago_id, a.so_id): a.monto for a in apps}
+    assert por_clave[("1304", "S00214")] == Decimal("500.0")
+    assert por_clave[("1304", "S00718")] == Decimal("6591.000000")  # 10985 * 0.6
+    assert por_clave[("1304", "S00700")] == Decimal("4394.000000")  # 10985 * 0.4
+    assert por_clave[("890", "S00718")] == Decimal("18000.000000")  # 30000 * 0.6
+    assert por_clave[("890", "S00700")] == Decimal("12000.000000")  # 30000 * 0.4
+    assert len(apps) == 5
+
+
+def test_factura_multi_orden_sin_lineas_resolubles_reparte_igualitario() -> None:
+    """Si ninguna línea de la factura consolidada resuelve a una de sus
+
+    órdenes (dato faltante en Odoo), se reparte en partes iguales entre las
+    nombradas en invoice_origin -- mejor una aproximación visible que dejar
+    la factura entera sin dueño para ninguna orden.
+    """
+    multi = [dict(f) for f in _FACTURAS]
+    multi[0]["invoice_origin"] = "S00718, S00700"
+    apps = _leer(facturas=multi)  # sin lineas_producto/lineas_venta -- vacías
+    por_clave = {(a.pago_id, a.so_id): a.monto for a in apps}
+    assert por_clave[("1304", "S00718")] == Decimal("5492.500000")
+    assert por_clave[("1304", "S00700")] == Decimal("5492.500000")
+    assert por_clave[("890", "S00718")] == Decimal("15000.000000")
+    assert por_clave[("890", "S00700")] == Decimal("15000.000000")
 
 
 def test_una_factura_de_una_sola_orden_no_se_toca() -> None:

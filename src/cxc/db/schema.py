@@ -165,6 +165,10 @@ lineas_factura = Table(
     Column("descuento", MONEY, nullable=False, server_default="0"),
     Column("subtotal", MONEY, nullable=False, server_default="0"),
     Column("producto_id", String, nullable=False, server_default=""),
+    # SIN índice de FK a ordenes_venta -- mismo criterio que factura_id/so_id
+    # de arriba: una factura consolidando varias órdenes es un caso real
+    # (Odoo lo permite), y forzar la FK rompería el sync justo en ese caso.
+    Column("so_id_linea", String, nullable=True),
 )
 
 # --- 3.2f LineasEntrega (espejo, sync-owned -- Fase 5 del plan de
