@@ -708,18 +708,33 @@ class OdooXmlRpcReader(OdooReader):
         Ahora se descartan las anuladas y, si quedan varias, gana la más
         reciente. Una NC PARCIAL no anula: deja la factura en ``not_paid``
         o ``partial``, así que esa sigue siendo la vigente y no se pierde.
+
+        Bug real (reportado por el usuario, 27-sep-2026, caso Corporacion
+        JJP 2023 C.A): ``invoice_origin in so_names`` es una IGUALDAD --
+        una factura que consolida varias órdenes trae
+        ``invoice_origin = "S00718, S00700"``, que no calza con NINGÚN
+        nombre exacto, así que esas órdenes quedaban con
+        ``factura_id = None`` aunque sí tenían factura. Se agrega un
+        ``OR`` con ``like ","`` (cualquier invoice_origin con coma, en
+        todo el sistema -- consolidar es raro, el costo extra es bajo) y
+        se resuelve cada nombre con ``so_ids_de_invoice_origin`` en vez de
+        comparar el string crudo, así una orden consolidada SÍ encuentra
+        su factura -- las dos (o más) que comparte con sus hermanas.
         """
         if not so_names:
             return {}
         recs = self._search_read(
             self.MODEL_MOVE,
             [
+                "|",
                 ["invoice_origin", "in", so_names],
+                ["invoice_origin", "like", ","],
                 ["move_type", "=", "out_invoice"],
                 ["state", "=", "posted"],
             ],
             ["id", "invoice_origin", "payment_state"],
         )
+        so_names_set = set(so_names)
         vigentes: dict[str, int] = {}
         for r in recs:
             origen = str(r.get("invoice_origin") or "")
@@ -728,9 +743,12 @@ class OdooXmlRpcReader(OdooReader):
             if str(r.get("payment_state") or "") == "reversed":
                 continue  # anulada por NC total
             fid = int(r["id"])
-            if fid > vigentes.get(origen, 0):
-                vigentes[origen] = fid
-        return {origen: str(fid) for origen, fid in vigentes.items()}
+            for so_id in so_ids_de_invoice_origin(origen):
+                if so_id not in so_names_set:
+                    continue
+                if fid > vigentes.get(so_id, 0):
+                    vigentes[so_id] = fid
+        return {so_id: str(fid) for so_id, fid in vigentes.items()}
 
     # --- Facturas (espejo inmutable, Fase 0 del plan de consolidación de
     # fuentes) -----------------------------------------------------------------

@@ -7127,6 +7127,32 @@ def _facturacion_por_so_desde_espejo(
             origen_id = padre.factura_origen_id
         return None
 
+    # Pesos por (factura_id, so_id) para facturas que CONSOLIDAN varias
+    # órdenes -- ``Factura.so_id`` en ese caso es el string crudo de Odoo
+    # ("S00718, S00700"), que nunca calza con un so_id individual. Mismo
+    # criterio que ``_pesos_por_so_de_facturas`` en odoo/client.py (para el
+    # reparto de PAGOS): proporción del ``subtotal`` de las líneas propias
+    # de cada orden (``LineaFactura.so_id_linea``) contra el total de la
+    # factura. Caso real, Corporacion JJP 2023 C.A (27-sep-2026).
+    subtotal_por_factura_so: dict[str, dict[str, float]] = {}
+    for lf in repo.all_lineas_factura():
+        if not lf.so_id_linea:
+            continue
+        bucket = subtotal_por_factura_so.setdefault(lf.factura_id, {})
+        bucket[lf.so_id_linea] = bucket.get(lf.so_id_linea, 0.0) + float(lf.subtotal)
+
+    def _pesos_de_factura(factura_id: str, so_ids_f: list[str]) -> dict[str, float]:
+        subtotales = subtotal_por_factura_so.get(factura_id, {})
+        subtotales = {so: sub for so, sub in subtotales.items() if so in so_ids_f}
+        total = sum(subtotales.values())
+        if total > 0.005:
+            return {so: sub / total for so, sub in subtotales.items()}
+        # Sin líneas resolubles todavía (sync recién corrido, o dato
+        # faltante en Odoo) -- reparto igualitario como aproximación
+        # visible, nunca una factura entera sin dueño para ninguna orden.
+        peso_igual = 1.0 / len(so_ids_f)
+        return {so: peso_igual for so in so_ids_f}
+
     facturado_con_imp: dict[str, float] = {}
     facturado_antes_imp: dict[str, float] = {}
     nc_con_imp: dict[str, float] = {}
@@ -7144,25 +7170,43 @@ def _facturacion_por_so_desde_espejo(
     for f in facturas:
         if f.estado != "posted":
             continue
-        so = _resolver_so(f)
-        if not so or so not in so_set:
+        so_resuelto = _resolver_so(f)
+        if not so_resuelto:
             continue
-        con_imp = abs(float(f.monto_total_signed_usd))
-        antes_imp = abs(float(f.monto_sin_impuestos_signed_usd))
-        if f.move_type == "out_refund":
-            nc_con_imp[so] = nc_con_imp.get(so, 0.0) + con_imp
-        elif f.es_nota_debito:
-            nd_con_imp[so] = nd_con_imp.get(so, 0.0) + con_imp
+        so_ids_f = so_ids_de_invoice_origin(so_resuelto)
+        con_imp_total = abs(float(f.monto_total_signed_usd))
+        antes_imp_total = abs(float(f.monto_sin_impuestos_signed_usd))
+        if len(so_ids_f) <= 1:
+            pesos = {so_resuelto: 1.0}
         else:
-            facturado_con_imp[so] = facturado_con_imp.get(so, 0.0) + con_imp
-            facturado_antes_imp[so] = facturado_antes_imp.get(so, 0.0) + antes_imp
-            if f.wh_iva_aplicado:
-                wh_iva_aplicado_por_so[so] = True
+            pesos = _pesos_de_factura(f.factura_id, so_ids_f)
 
+        for so, peso in pesos.items():
+            if so not in so_set:
+                continue
+            con_imp = con_imp_total * peso
+            antes_imp = antes_imp_total * peso
+            if f.move_type == "out_refund":
+                nc_con_imp[so] = nc_con_imp.get(so, 0.0) + con_imp
+            elif f.es_nota_debito:
+                nd_con_imp[so] = nd_con_imp.get(so, 0.0) + con_imp
+            else:
+                facturado_con_imp[so] = facturado_con_imp.get(so, 0.0) + con_imp
+                facturado_antes_imp[so] = facturado_antes_imp.get(so, 0.0) + antes_imp
+                if f.wh_iva_aplicado:
+                    wh_iva_aplicado_por_so[so] = True
+
+        # invoice_ids_all/inv_usd_ratio_map SÍ incluyen la factura aunque
+        # consolide varias órdenes -- ``_descuentos_lineas_desde_espejo`` la
+        # necesita en su universo para leer sus líneas. ``inv_id_to_so`` (un
+        # solo so_id por factura) queda sin entrada en ese caso: no hay un
+        # único so_id que poner ahí, y esa lectura ya prefiere
+        # ``LineaFactura.so_id_linea`` cuando existe.
         if f.so_id and f.move_type in ("out_invoice", "out_refund") and f.factura_id.isdigit():
             fid = int(f.factura_id)
             invoice_ids_all.append(fid)
-            inv_id_to_so[fid] = f.so_id
+            if len(so_ids_f) == 1:
+                inv_id_to_so[fid] = f.so_id
             amount_total_raw = float(f.monto_total)
             inv_usd_ratio_map[fid] = (
                 abs(float(f.monto_total_signed_usd)) / amount_total_raw
@@ -7491,7 +7535,14 @@ def _descuentos_lineas_desde_espejo(
         fid = int(lf.factura_id)
         if fid not in invoice_ids_set:
             continue
-        so_name = inv_id_to_so.get(fid, "")
+        # ``lf.so_id_linea`` (línea por línea, ver models.py) prevalece sobre
+        # ``inv_id_to_so`` (un solo so_id por factura): una factura que
+        # consolida varias órdenes tiene MÁS de un so_id válido, y el mapa
+        # singular solo alcanza para el caso normal de una orden por
+        # factura. Sin este fallback a la línea, el descuento de una
+        # factura consolidada se perdía entero (no calzaba con ningún
+        # so_name) -- caso real, Corporacion JJP 2023 C.A (27-sep-2026).
+        so_name = lf.so_id_linea or inv_id_to_so.get(fid, "")
         if not so_name:
             continue
         d = descuento_de_linea(

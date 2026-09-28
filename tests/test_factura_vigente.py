@@ -98,3 +98,34 @@ def test_sin_ordenes_no_consulta_nada() -> None:
     reader = _reader([])
     reader._search_read = _explota  # type: ignore[method-assign]
     assert reader._facturas_por_origen([]) == {}
+
+
+# --- Factura que consolida varias órdenes (27-sep-2026, caso real
+# Corporacion JJP 2023 C.A) --------------------------------------------------
+
+
+def test_factura_que_consolida_dos_ordenes_calza_con_las_dos() -> None:
+    """Bug real: ``invoice_origin in so_names`` es una igualdad -- una
+
+    factura con ``invoice_origin = "S00718, S00700"`` no calzaba con
+    ninguno de los dos nombres exactos, así que las dos órdenes quedaban
+    con ``factura_id = None`` aunque sí tenían factura.
+    """
+    reader = _reader(
+        [
+            {"id": 13239, "invoice_origin": "S00718, S00700", "payment_state": "not_paid"},
+        ]
+    )
+    assert reader._facturas_por_origen(["S00718", "S00700"]) == {
+        "S00718": "13239",
+        "S00700": "13239",
+    }
+
+
+def test_factura_multi_orden_no_calza_con_ordenes_ajenas() -> None:
+    reader = _reader(
+        [
+            {"id": 13239, "invoice_origin": "S00718, S00700", "payment_state": "not_paid"},
+        ]
+    )
+    assert reader._facturas_por_origen(["S00718"]) == {"S00718": "13239"}
