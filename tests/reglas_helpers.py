@@ -21,6 +21,7 @@ from cxc.engine.price_resolver import DictPriceResolver
 CFG = EngineConfig(
     cash_window_business_days=3,
     bcv_complete_formula="differential_over_binance",
+    iva_rate=Decimal("0"),  # los montos de estos escenarios ya son sin IVA
 )
 
 # Ids de pricelist usados por los escenarios -- deliberadamente numéricos,

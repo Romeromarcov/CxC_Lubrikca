@@ -422,8 +422,21 @@ class EngineRunner:
             ),
             orden_anterior_cliente_vincs=orden_anterior_cliente_vincs,
             historial_cliente_lineas=historial_cliente_lineas,
+            retencion_iva_fraccion=self._retencion_iva_fraccion(orden.cliente_id),
         )
         return inputs
+
+    def _retencion_iva_fraccion(self, cliente_id: str) -> Decimal:
+        """Fraccion del IVA que el cliente retiene (0 si no es agente)."""
+        try:
+            cliente = self._repo.get_cliente(str(cliente_id))
+            if cliente is None or cliente.wh_iva_agent is not True:
+                return Decimal("0")
+            fraccion = Decimal(str(cliente.wh_iva_rate)) / Decimal("100")
+        except Exception as e:
+            logger.warning("Cliente %s ilegible para la retencion de IVA: %s", cliente_id, e)
+            return Decimal("0")
+        return min(Decimal("1"), max(Decimal("0"), fraccion))
 
     def _calcular(
         self,
