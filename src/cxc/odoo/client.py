@@ -981,10 +981,10 @@ class OdooXmlRpcReader(OdooReader):
         return [map_entrega_linea(r) for r in recs]
 
     # --- Barrido de borrados -------------------------------------------------
-    # Para pagos es el MISMO universo que ``changed_pagos`` (un cobro que dejó de
-    # estar confirmado ya no cuenta en el espejo); para las demás tablas el
-    # dominio es deliberadamente AMPLIO: solo se borra lo que Odoo ya no tiene
-    # bajo ningún concepto, nunca lo que tiene pero el sync no trae.
+    # Pagos y líneas de factura usan el MISMO universo que su ``changed_*`` (un cobro
+    # que dejó de estar confirmado, o una línea que ya no es de una factura de
+    # cliente, no cuenta en el espejo); facturas y líneas de entrega usan un dominio
+    # AMPLIO: solo se borra lo que Odoo ya no tiene bajo ningún concepto.
     def ids_vigentes(self, tabla: str) -> set[str] | None:
         dominios: dict[str, tuple[str, list[Any]]] = {
             "pagos": (
@@ -995,7 +995,15 @@ class OdooXmlRpcReader(OdooReader):
                 self.MODEL_MOVE,
                 [["move_type", "in", ["out_invoice", "out_refund", "out_debit"]]],
             ),
-            "lineas_factura": (self.MODEL_MOVE_LINE, []),
+            # Mismo universo que ``changed_lineas_factura`` (el espejo ya se limpio de
+            # las lineas de proveedores y asientos de diario, 30-sep-2026).
+            "lineas_factura": (
+                self.MODEL_MOVE_LINE,
+                [
+                    ["display_type", "in", ["product", False]],
+                    ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]],
+                ],
+            ),
             "lineas_entrega": (self.MODEL_STOCK_MOVE_LINE, []),
         }
         if tabla not in dominios:
