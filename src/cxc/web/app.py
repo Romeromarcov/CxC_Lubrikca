@@ -2842,6 +2842,13 @@ async def run_sync_in_background():
                 result = sync.run(datetime.now(), sync_catalogo=_sync_catalogo_hoy)
                 if _sync_catalogo_hoy:
                     _last_catalogo_sync_date = date.today()
+                    # Una vez al día, junto con el catálogo: el delta no ve borrados.
+                    try:
+                        _barrido = sync.barrer_borrados()
+                        if _barrido["borradas"] or _barrido["pagos_bloqueados"]:
+                            print(f"FastAPI Daemon: barrido de borrados: {_barrido}")
+                    except Exception as e_barrido:
+                        logger.warning("Barrido de borrados falló: %s", e_barrido)
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0

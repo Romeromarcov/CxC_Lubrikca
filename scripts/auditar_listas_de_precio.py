@@ -171,13 +171,17 @@ def main() -> int:
         f"   USD -> {con_guarda_usd}"
     )
     print(
-        f"  sin la guarda (_get_reporte_saldos_sync, app.py 4434): BCV -> {sin_guarda_ves}"
+        f"  sin la guarda (claves viejas, ya no las lee ninguna pantalla): BCV -> {sin_guarda_ves}"
         f"   USD -> {sin_guarda_usd}"
     )
     if (sin_guarda_ves, sin_guarda_usd) == (con_guarda_ves, con_guarda_usd):
         print("  COINCIDEN: en esta base la guarda que falta no cambia la eleccion.")
         return 0
-    print("  DIFIEREN: el reporte de saldos valora con otra lista que las otras tres paginas.")
+    print(
+        "  DIFIEREN: solo si alguna pantalla volviera a leer las claves viejas. El reporte de"
+    )
+    print("  saldos ya usa el mapeo unificado (listas_configuradas): lo de abajo es un")
+    print("  ESCENARIO hipotetico, no una diferencia que hoy viva en ninguna pantalla.")
 
     # --- 3. cuanta plata hay entre las dos elecciones -----------------------
     print()

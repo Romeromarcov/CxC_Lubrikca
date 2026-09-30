@@ -154,6 +154,67 @@ class IncrementalSync:
         )
         return result
 
+    # Tablas del barrido y su tope de seguridad: si "sobran" más que esto, lo más
+    # probable es que la consulta a Odoo vino incompleta, no que se borró todo.
+    TABLAS_BARRIDO = ("pagos", "facturas", "lineas_factura", "lineas_entrega")
+    BARRIDO_MAX_ABSOLUTO = 500
+    BARRIDO_MAX_FRACCION = 0.10
+
+    def barrer_borrados(self) -> dict[str, Any]:
+        """Borra del espejo las filas que Odoo ya no tiene.
+
+        El delta por ``write_date`` no puede ver una eliminación (auditoría de
+        septiembre 2026: 8 pagos, 5 facturas y 1.184 líneas de factura seguían en
+        el espejo sin existir en Odoo). Por tabla: toma los ids del espejo, luego
+        los ids vigentes de Odoo (en ESE orden, para que una fila nacida entre las
+        dos lecturas no parezca borrada), y borra la diferencia.
+
+        Salvaguardas: si Odoo devuelve vacío o el lector no sabe contestar, la
+        tabla se omite; si la diferencia supera el tope, no se borra nada y queda
+        en ``omitidas``. Un pago con Vinculaciones NO se borra -- las Vinculaciones
+        son trabajo humano que el sync no toca -- y queda en ``pagos_bloqueados``
+        para depurarlo a mano.
+        """
+        borradas: dict[str, int] = {}
+        omitidas: dict[str, str] = {}
+        pagos_bloqueados: list[str] = []
+        for tabla in self.TABLAS_BARRIDO:
+            try:
+                en_espejo = self._repo.ids_espejo(tabla)
+                vigentes = self._reader.ids_vigentes(tabla)
+            except NotImplementedError:
+                omitidas[tabla] = "el backend no soporta el barrido"
+                continue
+            if vigentes is None:
+                omitidas[tabla] = "el lector no sabe listar los ids de Odoo"
+                continue
+            if not vigentes:
+                omitidas[tabla] = "Odoo devolvio cero registros; no se borra nada"
+                logger.warning("Barrido de borrados: %s omitida (Odoo devolvio vacio).", tabla)
+                continue
+            sobran = sorted(en_espejo - vigentes)
+            tope = max(self.BARRIDO_MAX_ABSOLUTO, int(len(en_espejo) * self.BARRIDO_MAX_FRACCION))
+            if len(sobran) > tope:
+                omitidas[tabla] = f"{len(sobran)} filas sobran, por encima del tope de {tope}"
+                logger.warning("Barrido de borrados: %s omitida: %s", tabla, omitidas[tabla])
+                continue
+            if tabla == "pagos" and sobran:
+                con_vinculaciones = self._repo.pago_ids_con_vinculaciones(sobran)
+                pagos_bloqueados = sorted(con_vinculaciones)
+                sobran = [i for i in sobran if i not in con_vinculaciones]
+                if pagos_bloqueados:
+                    logger.warning(
+                        "Barrido de borrados: %s pago(s) ya no existen en Odoo pero tienen "
+                        "Vinculaciones y se conservan: %s",
+                        len(pagos_bloqueados),
+                        ", ".join(pagos_bloqueados),
+                    )
+            if sobran:
+                borradas[tabla] = self._repo.borrar_espejo(tabla, sobran)
+        if borradas:
+            logger.info("Barrido de borrados: %s", borradas)
+        return {"borradas": borradas, "omitidas": omitidas, "pagos_bloqueados": pagos_bloqueados}
+
     def reconciliar_lineas_borradas(
         self, ordenes: list[OrdenVenta], lineas: list[LineaOrden]
     ) -> int:

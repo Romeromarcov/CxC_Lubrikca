@@ -294,6 +294,44 @@ class PostgresRepository(Repository):
             rows = conn.execute(select(t.facturas)).all()
         return [_row_to_factura(r) for r in rows]
 
+    # --- Barrido de borrados ---------------------------------------------------
+    # Lista blanca: solo tablas-espejo SIN dependientes de trabajo humano.
+    _TABLAS_BARRIDO = {
+        "pagos": ("pagos", "pago_id"),
+        "facturas": ("facturas", "factura_id"),
+        "lineas_factura": ("lineas_factura", "linea_id"),
+        "lineas_entrega": ("lineas_entrega", "linea_id"),
+    }
+
+    def ids_espejo(self, tabla: str) -> set[str]:
+        nombre, col = self._TABLAS_BARRIDO[tabla]
+        tabla_sa = getattr(t, nombre)
+        with self._engine.connect() as conn:
+            return {str(r[0]) for r in conn.execute(select(tabla_sa.c[col])).all()}
+
+    def borrar_espejo(self, tabla: str, ids: list[str]) -> int:
+        nombre, col = self._TABLAS_BARRIDO[tabla]
+        tabla_sa = getattr(t, nombre)
+        borradas = 0
+        with self._engine.begin() as conn:
+            for i in range(0, len(ids), 500):
+                lote = ids[i : i + 500]
+                borradas += conn.execute(
+                    tabla_sa.delete().where(tabla_sa.c[col].in_(lote))
+                ).rowcount
+        return borradas
+
+    def pago_ids_con_vinculaciones(self, pago_ids: list[str]) -> set[str]:
+        if not pago_ids:
+            return set()
+        with self._engine.connect() as conn:
+            filas = conn.execute(
+                select(t.vinculaciones.c.pago_id)
+                .where(t.vinculaciones.c.pago_id.in_(pago_ids))
+                .distinct()
+            ).all()
+        return {str(r[0]) for r in filas}
+
     def upsert_entregas(self, filas: list[Entrega]) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.entregas, [_entrega_to_row(e) for e in filas], ["entrega_id"])
