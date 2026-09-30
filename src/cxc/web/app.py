@@ -1583,13 +1583,14 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
 
 
 def _depurar_pendientes_contradichas_por_odoo(repo: Any) -> dict[str, int]:
-    """Odoo manda: retira las Vinculaciones PENDIENTE de pagos que Odoo ya concilió.
+    """Odoo manda: retira o achica las Vinculaciones PENDIENTE que Odoo ya contradijo.
 
-    Ver ``engine/pendientes_contra_odoo`` para la regla y para lo que NO se toca
-    (parciales legítimos y propuestas ambiguas). Corre cada ciclo, después del resync
-    con Odoo, así una propuesta contradicha desaparece en cuanto Odoo concilia.
+    Ver ``engine/pendientes_contra_odoo`` para la regla. Corre cada ciclo, después del
+    resync con Odoo: una propuesta contradicha desaparece (o se achica a lo que Odoo dejó
+    sin conciliar) en cuanto Odoo concilia.
     """
-    clasificacion = clasificar_pendientes(repo.all_vinculaciones(), repo.all_pagos())
+    fechas_orden = {o.so_id: o.fecha for o in repo.all_ordenes()}
+    clasificacion = clasificar_pendientes(repo.all_vinculaciones(), repo.all_pagos(), fechas_orden)
     if clasificacion.a_retirar:
         logger.info(
             "Pendientes retiradas porque Odoo ya concilio el pago: %s",
@@ -1598,9 +1599,18 @@ def _depurar_pendientes_contradichas_por_odoo(repo: Any) -> dict[str, int]:
             ),
         )
         repo.delete_vinculaciones([v.vinc_id for v in clasificacion.a_retirar])
+    if clasificacion.a_ajustar:
+        logger.info(
+            "Pendientes achicadas a lo que Odoo dejo sin conciliar: %s",
+            ", ".join(
+                f"{v.pago_id}->{v.so_id} ({v.monto_aplicado})" for v in clasificacion.a_ajustar
+            ),
+        )
+        for v in clasificacion.a_ajustar:
+            repo.update_vinculacion(v)
     return {
         "retiradas": len(clasificacion.a_retirar),
-        "ambiguas": len(clasificacion.ambiguas),
+        "ajustadas": len(clasificacion.a_ajustar),
     }
 
 
@@ -4228,8 +4238,11 @@ def recalculate_all_orders():
         # desaparece. Va DESPUÉS del resync y ANTES de marcar pendientes a revisar.
         try:
             dep = _depurar_pendientes_contradichas_por_odoo(repo)
-            if dep["retiradas"]:
-                print(f"Pendientes contradichas por Odoo retiradas: {dep['retiradas']}.")
+            if dep["retiradas"] or dep["ajustadas"]:
+                print(
+                    f"Pendientes contradichas por Odoo: {dep['retiradas']} retirada(s), "
+                    f"{dep['ajustadas']} achicada(s)."
+                )
         except Exception as e_dep:
             print(f"Error depurando pendientes contradichas por Odoo: {e_dep}", file=sys.stderr)
 

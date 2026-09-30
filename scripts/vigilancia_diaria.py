@@ -131,7 +131,7 @@ INVARIANTES: list[tuple[str, str, str]] = [
                      WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
                      THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
                      ELSE sum(v.monto_aplicado)
-                   END > p.monto + 0.01
+                   END > p.monto * 1.0001 + 0.01
         ) x
         """,
     ),

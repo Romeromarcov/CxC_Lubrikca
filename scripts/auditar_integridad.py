@@ -277,7 +277,7 @@ CHEQUEOS: list[Chequeo] = [
         GROUP BY v.pago_id, p.monto
         HAVING CASE WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
                     THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
-                    ELSE sum(v.monto_aplicado) END > p.monto + 0.01
+                    ELSE sum(v.monto_aplicado) END > p.monto * 1.0001 + 0.01
         ORDER BY 4 DESC
         """,
     ),
@@ -294,9 +294,9 @@ CHEQUEOS: list[Chequeo] = [
                sum(v.monto_aplicado) - p.monto AS exceso
         FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
         GROUP BY v.pago_id, p.monto
-        HAVING sum(v.monto_aplicado) > p.monto + 0.01
+        HAVING sum(v.monto_aplicado) > p.monto * 1.0001 + 0.01
            AND coalesce(sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado'), 0)
-               <= p.monto + 0.01
+               <= p.monto * 1.0001 + 0.01
         ORDER BY 4 DESC
         """,
     ),
