@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from ..models import LineaOrden, OrdenVenta
+from ..models import EstadoVinculacion, LineaOrden, OrdenVenta
 from ..odoo.client import OdooReader
 from ..repositories import Repository
 
@@ -200,6 +200,24 @@ class IncrementalSync:
                 continue
             if tabla == "pagos" and sobran:
                 con_vinculaciones = self._repo.pago_ids_con_vinculaciones(sobran)
+                # Odoo manda: un pago que Odoo ya no tiene y cuyas vinculaciones son
+                # todas PENDIENTE (propuestas sin confirmar) se retira junto con ellas.
+                # Si alguna esta CONCILIADA (Odoo la habia confirmado) se conserva y se
+                # reporta: eso es plata aplicada y lo decide una persona.
+                por_pago: dict[str, list[Any]] = {}
+                for v in self._repo.all_vinculaciones():
+                    if str(v.pago_id) in con_vinculaciones:
+                        por_pago.setdefault(str(v.pago_id), []).append(v)
+                solo_pendientes = {
+                    pid
+                    for pid, vs in por_pago.items()
+                    if all(v.estado == EstadoVinculacion.PENDIENTE for v in vs)
+                }
+                if solo_pendientes:
+                    self._repo.delete_vinculaciones(
+                        [v.vinc_id for pid in solo_pendientes for v in por_pago[pid]]
+                    )
+                    con_vinculaciones = con_vinculaciones - solo_pendientes
                 pagos_bloqueados = sorted(con_vinculaciones)
                 sobran = [i for i in sobran if i not in con_vinculaciones]
                 if pagos_bloqueados:

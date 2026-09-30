@@ -4434,7 +4434,15 @@ document.addEventListener("DOMContentLoaded", () => {
         };
         filtered = [...filtered].sort(sorters[sortBy] || sorters.pago_fecha_desc);
 
-        if (countBadge) countBadge.textContent = `${filtered.length} Pagos`;
+        // Una sola fila por pago (pedido del usuario, 30-sep-2026): un pago repartido
+        // entre varias órdenes aparece una vez, con sus órdenes dentro de la fila.
+        const grupos = [];
+        const idxGrupo = {};
+        filtered.forEach(i => {
+            if (idxGrupo[i.pago_id] === undefined) { idxGrupo[i.pago_id] = grupos.length; grupos.push([]); }
+            grupos[idxGrupo[i.pago_id]].push(i);
+        });
+        if (countBadge) countBadge.textContent = `${grupos.length} Pagos`;
 
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos para el filtro seleccionado.</td></tr>';
@@ -4458,22 +4466,18 @@ document.addEventListener("DOMContentLoaded", () => {
         currentSugerenciasList.forEach((it, idx) => { idxByPagoSug[it.sugerencia_id] = idx; });
 
         const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
-        const pagoCounts = {};
-        filtered.forEach(i => { pagoCounts[i.pago_id] = (pagoCounts[i.pago_id] || 0) + 1; });
-        const pagoSeen = {};
-
         const estadoBadge = {
             pendiente: '<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:700;">⏳ Pendiente</span>',
             vinculado_local: '<span class="badge" style="background:#dbeafe; color:#1e40af; font-weight:700;">🔗 Vinculado</span>',
             conciliado_odoo: '<span class="badge" style="background:#dcfce7; color:#166534; font-weight:700;">✓ Conciliado (Odoo)</span>',
         };
 
-        tbody.innerHTML = filtered.map(item => {
-            const total = pagoCounts[item.pago_id];
-            pagoSeen[item.pago_id] = (pagoSeen[item.pago_id] || 0) + 1;
+        tbody.innerHTML = grupos.map(grupo => {
+            const item = grupo[0];
+            const total = grupo.length;
             const pagoCell = `<strong>${item.pago_id}</strong>`
                 + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
-                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} órdenes -- no está duplicado">reparto ${pagoSeen[item.pago_id]}/${total}</small>` : '');
+                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} órdenes -- no está duplicado">cubre ${total} órdenes</small>` : '');
 
             const montoCell = item.moneda_pago === "VES"
                 ? `Bs. ${Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`
@@ -4483,31 +4487,39 @@ document.addEventListener("DOMContentLoaded", () => {
                 <span style="font-size:0.72rem; color:#d97706; display:block;">Binance: ${fmt(item.monto_pago_binance_usd)}</span>
                 <span style="font-size:0.72rem; color:#7c3aed; display:block;">EUR: ${fmt(item.monto_pago_eur)}</span>`;
 
-            const ordenCell = item.so_id
-                ? `<span class="badge blue">${item.so_id}</span>` + (item.factura_id ? `<br><small>${item.factura_id}</small>` : '')
-                : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`;
+            const estadoCorto = {
+                pendiente: '⏳',
+                vinculado_local: '🔗',
+                conciliado_odoo: '✓',
+            };
+            const ordenCell = grupo.map(it => it.so_id
+                ? `<div style="margin-bottom:3px;"><span class="badge blue">${it.so_id}</span>`
+                    + (total > 1 ? ` <small title="${(estadoBadge[it.estado] || it.estado).replace(/<[^>]*>/g, '')}">${estadoCorto[it.estado] || ''}</small>` : '')
+                    + (it.factura_id ? `<br><small>${it.factura_id}</small>` : '') + `</div>`
+                : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`).join('');
 
             const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`;
 
             const alertas = [];
-            if (item.posible_duplicado) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
+            if (grupo.some(g => g.posible_duplicado)) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
             // Evento pasado, no estado actual: sin la fecha se leia como
             // una contradiccion junto a "Pendiente". No lo es -- Odoo pudo
             // haber aplicado parte del pago a otra orden y el resto seguir
             // sin conciliar.
-            if (item.reasignado_por_odoo) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:600;">🔄 Odoo lo movió${item.reasignado_fecha ? ` el ${item.reasignado_fecha}` : ''}</span>`);
+            if (grupo.some(g => g.reasignado_por_odoo)) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:600;">🔄 Odoo lo movió${item.reasignado_fecha ? ` el ${item.reasignado_fecha}` : ''}</span>`);
             const alertasCell = alertas.length ? alertas.join('<br>') : '<span style="color:#94a3b8;">-</span>';
 
             const reciboCell = item.recibido
                 ? `<span class="semaphore green" title="Entregado a Administración">✓ Recibido</span>`
                 : `<span class="semaphore yellow">⏳ Pendiente</span>`;
 
-            const tieneSugerencia = !!item.so_id;
-            const sugIdx = idxByPagoSug[item.sugerencia_id];
             let accionesExtra = '';
             let checkboxCell = '<td></td>';
-            if (item.estado === "pendiente") {
-                if (tieneSugerencia && !item.posible_duplicado && sugIdx !== undefined) {
+            for (const it of grupo.filter(g => g.estado === "pendiente")) {
+                const tieneSugerencia = !!it.so_id;
+                const sugIdx = idxByPagoSug[it.sugerencia_id];
+                const etiquetaOrden = total > 1 && it.so_id ? ` ${it.so_id}` : '';
+                if (tieneSugerencia && !it.posible_duplicado && sugIdx !== undefined) {
                     // Aprobación masiva retirada (pedido del usuario,
                     // 2026-08-22): Auto-FIFO (daemon) ya vincula estas
                     // filas automáticamente cada ciclo -- el botón "Bulk"
@@ -4516,11 +4528,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     // requieren juicio humano (duplicados, sin orden). El
                     // botón individual "✓ Vincular" sigue para quien no
                     // quiera esperar al siguiente ciclo.
-                    accionesExtra = `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${item.pago_id}', '${item.so_id}', ${item.monto_sugerido}, ${item.monto_sugerido_nativo})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular</button>
-                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden</button>`;
+                    accionesExtra += `<button class="btn btn-sm btn-primary" onclick="aprobarSugerenciaIndividual('${it.pago_id}', '${it.so_id}', ${it.monto_sugerido}, ${it.monto_sugerido_nativo})" style="padding:3px 8px; font-size:0.75rem;">✓ Vincular${etiquetaOrden}</button>
+                        <button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.72rem;">✏️ Otra orden${etiquetaOrden}</button>`;
                 } else if (sugIdx !== undefined) {
-                    accionesExtra = `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente</button>`
-                        + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${item.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
+                    accionesExtra += `<button class="btn btn-sm btn-secondary" onclick="abrirModalVincularManual(${sugIdx})" style="padding:3px 8px; font-size:0.75rem;">🔗 Vincular manualmente${etiquetaOrden}</button>`
+                        + (!tieneSugerencia ? `<button class="btn btn-sm btn-secondary" onclick="cerrarPagoHuerfano('${it.pago_id}')" style="padding:3px 8px; font-size:0.7rem; color:#92400e;">💰 Cerrar a favor de la empresa</button>` : '');
                 }
             }
             // Independiente del estado (corrección del usuario,
@@ -4543,7 +4555,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>${montoCell}</td>
                     <td>${tasasCell}</td>
                     <td>${ordenCell}</td>
-                    <td>${estadoBadge[item.estado] || item.estado}</td>
+                    <td>${[...new Set(grupo.map(g => g.estado))].map(e => estadoBadge[e] || e).join('<br>')}</td>
                     <td>${alertasCell}</td>
                     <td>${reciboCell}</td>
                     <td>

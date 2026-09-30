@@ -92,6 +92,7 @@ from cxc.engine.pagada_en_odoo import (
     pagada_unificada,
 )
 from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
+from cxc.engine.pendientes_contra_odoo import clasificar_pendientes
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.promedios_tasas import (
     FILAS_DE_RESPALDO,
@@ -1581,6 +1582,28 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
 
 
 
+def _depurar_pendientes_contradichas_por_odoo(repo: Any) -> dict[str, int]:
+    """Odoo manda: retira las Vinculaciones PENDIENTE de pagos que Odoo ya concilió.
+
+    Ver ``engine/pendientes_contra_odoo`` para la regla y para lo que NO se toca
+    (parciales legítimos y propuestas ambiguas). Corre cada ciclo, después del resync
+    con Odoo, así una propuesta contradicha desaparece en cuanto Odoo concilia.
+    """
+    clasificacion = clasificar_pendientes(repo.all_vinculaciones(), repo.all_pagos())
+    if clasificacion.a_retirar:
+        logger.info(
+            "Pendientes retiradas porque Odoo ya concilio el pago: %s",
+            ", ".join(
+                f"{v.pago_id}->{v.so_id} ({v.monto_aplicado})" for v in clasificacion.a_retirar
+            ),
+        )
+        repo.delete_vinculaciones([v.vinc_id for v in clasificacion.a_retirar])
+    return {
+        "retiradas": len(clasificacion.a_retirar),
+        "ambiguas": len(clasificacion.ambiguas),
+    }
+
+
 def _detectar_vinculaciones_pendientes_a_revisar(
     repo: Any, dias_umbral_facturada: int = 2
 ) -> list[dict[str, Any]]:
@@ -1620,12 +1643,6 @@ def _detectar_vinculaciones_pendientes_a_revisar(
     except Exception:
         existing_audit_rows = []
     today_str = hoy.isoformat()
-    existing_audit_keys = {
-        (r.get("so_id", ""), r.get("tipo_auditoria", ""))
-        for r in existing_audit_rows
-        if str(r.get("timestamp_audit", ""))[:10] == today_str
-    }
-
     revisar: list[dict[str, Any]] = []
     for v in vincs_pendientes:
         o = ordenes_map.get(v.so_id)
@@ -1663,29 +1680,37 @@ def _detectar_vinculaciones_pendientes_a_revisar(
             }
         )
 
-    nuevas_rows = [
-        r
-        for r in revisar
-        if (r["so_id"], "vinculacion_pendiente_revisar") not in existing_audit_keys
-    ]
-    if nuevas_rows:
-        ahora = datetime.now()
-        audit_rows = [
+    # UNA fila de auditoría por PAGO (pedido del usuario, 30-sep-2026: no repetir
+    # pagos): un pago repartido entre varias órdenes lista todas sus órdenes en el
+    # mismo renglón, en vez de un renglón por orden.
+    por_pago: dict[str, list[dict[str, Any]]] = {}
+    for r in revisar:
+        por_pago.setdefault(str(r["pago_id"]), []).append(r)
+    audit_ids_existentes = {str(r.get("audit_id", "")) for r in existing_audit_rows}
+    audit_rows = []
+    ahora = datetime.now()
+    for pago_id, filas in por_pago.items():
+        audit_id = f"VINC_STALE_{pago_id}_{today_str}"
+        if audit_id in audit_ids_existentes:
+            continue
+        ordenes_txt = ", ".join(sorted({str(f["so_id"]) for f in filas}))
+        motivos = " | ".join(dict.fromkeys(str(f["motivo"]) for f in filas))
+        audit_rows.append(
             {
-                "audit_id": f"VINC_STALE_{r['vinc_id']}_{today_str}",
-                "so_id": r["so_id"],
+                "audit_id": audit_id,
+                "so_id": filas[0]["so_id"],
                 "tipo_auditoria": "vinculacion_pendiente_revisar",
                 "motor_calcula_usd": None,
                 "odoo_registrado_usd": None,
                 "diferencia_usd": None,
                 "detalle_odoo": "",
-                "detalle_motor": r["motivo"],
+                "detalle_motor": f"Pago {pago_id} -> {ordenes_txt}: {motivos}",
                 "estado": "pendiente_revision",
                 "revisado_por": "",
                 "timestamp_audit": ahora.isoformat(),
             }
-            for r in nuevas_rows
-        ]
+        )
+    if audit_rows:
         try:
             repo.append_auditoria_rows(audit_rows)
         except Exception as e_aud:
@@ -4198,6 +4223,15 @@ def recalculate_all_orders():
                     print(f"Re-vinculación por Odoo: {len(cambios)} discrepancia(s) revisada(s).")
             except Exception as e_relink:
                 print(f"Error re-sincronizando Vinculaciones con Odoo: {e_relink}", file=sys.stderr)
+
+        # Odoo manda: una propuesta PENDIENTE sobre un pago que Odoo ya concilió
+        # desaparece. Va DESPUÉS del resync y ANTES de marcar pendientes a revisar.
+        try:
+            dep = _depurar_pendientes_contradichas_por_odoo(repo)
+            if dep["retiradas"]:
+                print(f"Pendientes contradichas por Odoo retiradas: {dep['retiradas']}.")
+        except Exception as e_dep:
+            print(f"Error depurando pendientes contradichas por Odoo: {e_dep}", file=sys.stderr)
 
         # Fase 2 (plan de arquitectura de pagos): corre DESPUÉS del resync
         # de Odoo -- así una Vinculación que este mismo ciclo se promovió a

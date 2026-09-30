@@ -127,3 +127,35 @@ def test_backend_sin_soporte_no_tumba_el_sync():
     r = IncrementalSync(repo, lector).barrer_borrados()
     assert r["borradas"] == {}
     assert set(r["omitidas"]) == set(IncrementalSync.TABLAS_BARRIDO)
+
+
+def _vinc(vinc_id, pago_id, estado):
+    from . import builders as b
+
+    return b.vinculacion(vinc_id, pago_id=pago_id, estado=estado)
+
+
+def test_pago_borrado_en_odoo_con_solo_pendientes_se_retira_con_ellas():
+    from cxc.models import EstadoVinculacion
+
+    repo = _RepoBarrido({"pagos": {"10", "11"}}, con_vinculaciones={"11"})
+    repo.update_vinculacion(_vinc("V1", "11", EstadoVinculacion.PENDIENTE))
+    lector = _LectorBarrido({"pagos": {"10"}})
+    r = IncrementalSync(repo, lector).barrer_borrados()
+    assert r["pagos_bloqueados"] == []
+    assert r["borradas"] == {"pagos": 1}
+    assert repo.espejo["pagos"] == {"10"}
+    assert repo.all_vinculaciones() == []
+
+
+def test_pago_borrado_en_odoo_con_una_conciliada_se_conserva():
+    from cxc.models import EstadoVinculacion
+
+    repo = _RepoBarrido({"pagos": {"10", "11"}}, con_vinculaciones={"11"})
+    repo.update_vinculacion(_vinc("V1", "11", EstadoVinculacion.PENDIENTE))
+    repo.update_vinculacion(_vinc("V2", "11", EstadoVinculacion.CONCILIADO))
+    lector = _LectorBarrido({"pagos": {"10"}})
+    r = IncrementalSync(repo, lector).barrer_borrados()
+    assert r["pagos_bloqueados"] == ["11"]
+    assert repo.espejo["pagos"] == {"10", "11"}
+    assert len(repo.all_vinculaciones()) == 2
