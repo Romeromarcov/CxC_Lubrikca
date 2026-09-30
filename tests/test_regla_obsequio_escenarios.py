@@ -368,3 +368,76 @@ def test_primera_compra_real_SI_dice_primera_compra():
     conceptos = conceptos_descuento_teorico(inp, LISTA_VES, pura_bcv=True)
 
     assert conceptos[0]["concepto"] == "Descuento primera compra 2.00%"
+
+
+# --- El obsequio puede ser cualquier producto de cualquiera de las promos -------
+# (confirmado por el usuario, 30-sep-2026: liga de frenos, elevador de octanaje o
+# Clasico 20W50 -- los dos primeros de una promo y el tercero de otra).
+
+PROD_OTRA_PROMO = "1060"
+
+
+def _promo(producto, compra_minima, regla_id):
+    promo = b.promo_primera(
+        producto=producto,
+        compra_minima=compra_minima,
+        regalo_tipo="solo_uno",
+        categorias_aplica="*",
+    )
+    promo.regla_id = regla_id
+    return promo
+
+
+def _orden_dos_promos(lineas):
+    return inputs(
+        orden=b.orden(fecha=date(2026, 6, 1), lista=LISTA_VES),
+        lineas=lineas,
+        promociones=[
+            _promo(f"{PROD_REGALO},{PROD_OTRO}", "3", "PROMO_NUEVO_GLOBAL"),
+            _promo(PROD_OTRA_PROMO, "12", "PROMO_12_MAS_1"),
+        ],
+        price_resolver=resolver(precios_ambas_listas(PROD_REGALO, PROD_OTRO, PROD_OTRA_PROMO)),
+    )
+
+
+def test_obsequio_de_la_promo_menos_exigente_tambien_cuenta():
+    """La orden califica para las dos promos pero solo trae el producto de la de
+    menor compra minima: antes ganaba la mas exigente (12) y no habia obsequio."""
+    inp = _orden_dos_promos(
+        [
+            b.linea("L1", producto=PROD_REGALO, categoria="CAJA", cantidad="14", precio="100"),
+        ]
+    )
+    bandeja = calcular_factura(inp)
+    assert bandeja.ncs_calculadas == Decimal("100.00")
+    assert any(d.regla_id == "PROMO_NUEVO_GLOBAL" for d in bandeja.descuentos_detalle)
+
+
+def test_con_productos_de_ambas_promos_se_regala_el_de_mayor_valor():
+    inp = _orden_dos_promos(
+        [
+            b.linea("L1", producto=PROD_REGALO, categoria="CAJA", cantidad="8", precio="100"),
+            b.linea("L2", producto=PROD_OTRA_PROMO, categoria="CAJA", cantidad="8", precio="160"),
+        ]
+    )
+    bandeja = calcular_factura(inp)
+    assert bandeja.ncs_calculadas == Decimal("160.00")
+    assert any(d.regla_id == "PROMO_12_MAS_1" for d in bandeja.descuentos_detalle)
+
+
+def test_si_ya_regalaron_un_producto_de_otra_promo_no_se_cobra_otro_obsequio():
+    inp = _orden_dos_promos(
+        [
+            b.linea("L1", producto=PROD_REGALO, categoria="CAJA", cantidad="8", precio="100"),
+            b.linea(
+                "L2",
+                producto=PROD_OTRA_PROMO,
+                categoria="CAJA",
+                cantidad="1",
+                precio="160",
+                descuento="100",
+            ),
+        ]
+    )
+    # 8 + 1 cajas califican (>=3) pero ya hay un obsequio en la orden.
+    assert calcular_factura(inp).ncs_calculadas == Decimal("0.00")

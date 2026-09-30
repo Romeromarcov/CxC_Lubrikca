@@ -86,6 +86,7 @@ from cxc.engine.listas import (
     reglas_duplicadas,
     vigencia_efectiva,
 )
+from cxc.engine.nc_contra_motor import evaluar_ncs_contra_motor
 from cxc.engine.notas_de_credito import factor_de_impuesto, topar_nota_de_credito
 from cxc.engine.pagada_en_odoo import (
     pagada_unificada,
@@ -13179,6 +13180,45 @@ async def get_balance_comprobacion():
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/auditoria/nc-vs-motor")
+async def get_nc_vs_motor(solo_fuera: bool = False):
+    """NC de descuento emitidas en Odoo contra lo que calcula el motor.
+
+    ``solo_fuera=true`` devuelve solo las que no coinciden (NC mayor o menor que el
+    motor). Ver ``engine/nc_contra_motor`` para el alcance y las exclusiones.
+    """
+    try:
+        repo = get_repo()
+        hallazgos = evaluar_ncs_contra_motor(
+            repo.all_facturas(), repo.all_lineas_factura(), repo.all_catalogo(), repo.all_bandeja()
+        )
+    except Exception as e:
+        logger.exception("Error en /api/auditoria/nc-vs-motor")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if solo_fuera:
+        hallazgos = [h for h in hallazgos if h.veredicto != "coincide"]
+    resumen: dict[str, int] = {}
+    for h in hallazgos:
+        resumen[h.veredicto] = resumen.get(h.veredicto, 0) + 1
+    return {
+        "resumen": resumen,
+        "items": [
+            {
+                "so_id": h.so_id,
+                "ncs": h.ncs,
+                "ultima_nc": h.ultima_nc,
+                "nc_usd": float(h.nc_usd),
+                "motor_usd": float(h.motor_usd),
+                "precio_base": float(h.precio_base),
+                "diferencia": float(h.diferencia),
+                "pct_base": float(h.pct_base),
+                "veredicto": h.veredicto,
+            }
+            for h in hallazgos
+        ],
+    }
 
 
 @app.get("/api/auditoria")
