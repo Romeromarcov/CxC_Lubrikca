@@ -120,9 +120,18 @@ INVARIANTES: list[tuple[str, str, str]] = [
         "lo aplicado de un pago nunca supera el pago",
         "Se estaria aplicando plata que no entro.",
         """
+        -- CONCILIADO manda sobre PENDIENTE (criterio del usuario, 25-sep-2026): si el
+        -- pago ya tiene conciliadas solo cuentan esas; sin ninguna, se suman las
+        -- pendientes (dos sugerencias sin confirmar que reclaman mas que el pago).
         SELECT count(*) AS filas FROM (
-            SELECT v.pago_id FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
-            GROUP BY v.pago_id, p.monto HAVING sum(v.monto_aplicado) > p.monto + 0.01
+            SELECT v.pago_id
+            FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
+            GROUP BY v.pago_id, p.monto
+            HAVING CASE
+                     WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
+                     THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
+                     ELSE sum(v.monto_aplicado)
+                   END > p.monto + 0.01
         ) x
         """,
     ),

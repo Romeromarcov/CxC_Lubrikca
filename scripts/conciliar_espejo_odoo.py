@@ -154,7 +154,12 @@ PARTIDAS: list[Partida] = [
         tabla="lineas_factura",
         clave_espejo="linea_id",
         modelo="account.move.line",
-        dominio=[["display_type", "in", ["product", False]]],
+        # Mismo universo que ``changed_lineas_factura``: solo lineas de facturas,
+        # NC y ND de cliente (sin proveedores ni asientos de diario).
+        dominio=[
+            ["display_type", "in", ["product", False]],
+            ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]],
+        ],
     ),
 ]
 
