@@ -155,6 +155,11 @@ class EngineInputs:
     # ``EngineRunner.build_inputs``, que no tiene la data de conciliación
     # con Odoo que sí tiene ``get_reporte_saldos``).
     cliente_tiene_pagos_huerfanos: bool = False
+    # Fraccion (0-1) del IVA que el cliente NO paga en efectivo porque es
+    # agente de retencion (``wh_iva_rate`` / 100). 0 para un cliente normal.
+    # Sirve para llevar lo PAGADO (que incluye IVA) a la misma base sin IVA
+    # que ``precio_base`` en el Diferencial Cambiario -- ver ese bloque.
+    retencion_iva_fraccion: Decimal = Decimal("0")
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -1915,15 +1920,25 @@ def _calcular_componentes(
                 # Sin teórico USD (target<=0) no hay contra qué medir
                 # cobertura -- se trata como cobertura completa, igual que el
                 # gate binario anterior dejaba pasar cuando el target era 0.
+                # Los pagos incluyen IVA; ``precio_base``/``precio_target_usd``
+                # y las lineas NO. Comparar los dos tal cual subestimaba la
+                # brecha (caso Elisa S00468: pago $693 con IVA contra base
+                # sin IVA daba $175,71 de diferencial; la NC correcta era
+                # $357,51 sin IVA). Se lleva lo pagado a base sin IVA. Un
+                # agente de retencion no paga la parte retenida del IVA, asi
+                # que su pago solo lleva ``1 - retencion`` del IVA.
+                factor_iva = Decimal("1") + inp.engine_config.iva_rate * (
+                    Decimal("1") - inp.retencion_iva_fraccion
+                )
                 target = precio_target_usd or Decimal("0")
                 if target <= 0:
                     cobertura = Decimal("1")
                 else:
-                    ratio = valor_pagado_binance_usd(vincs) / target
+                    ratio = valor_pagado_binance_usd(vincs) / factor_iva / target
                     cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
                 techo = precio_base * diferencial_maximo
                 otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-                pagado_en_factura = valor_pagado_bcv_usd(vincs)
+                pagado_en_factura = valor_pagado_bcv_usd(vincs) / factor_iva
                 precio_real_orden = sum(
                     (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
                     Decimal("0"),

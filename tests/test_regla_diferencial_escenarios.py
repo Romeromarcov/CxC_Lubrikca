@@ -271,3 +271,42 @@ def test_porcentaje_fijo_configurado_es_el_que_se_usa():
         _inp([_regla("fijo_35_ves_usd", pct="0.10")], abonos=_abono_usd())
     )
     assert bandeja.total_descuentos == Decimal("100.00")
+
+
+# --- IVA en los pagos (30-sep-2026, caso Elisa Alejandra Jimenez/S00468) -----
+# Lo pagado incluye IVA; la base y el teorico no. Se lleva lo pagado a base
+# sin IVA. Estos escenarios usan iva_rate=16% (los demas de este archivo usan 0).
+
+
+def _inp_con_iva(abonos, retencion="0"):
+    from dataclasses import replace
+
+    from cxc.config import EngineConfig
+
+    base = _inp([_regla("fijo_35_ves_usd")], abonos=abonos)
+    cfg = EngineConfig(
+        cash_window_business_days=3,
+        bcv_complete_formula="differential_over_binance",
+        iva_rate=Decimal("0.16"),
+    )
+    return replace(base, engine_config=cfg, retencion_iva_fraccion=Decimal(retencion))
+
+
+def test_el_pago_con_iva_se_lleva_a_base_sin_iva_antes_de_medir_la_brecha():
+    """Pago de 928 con IVA = 800 sin IVA (928 / 1,16): mismo resultado que
+    pagar 800 en un escenario sin IVA -- el hueco es 200."""
+    bandeja = calcular_factura(_inp_con_iva(_abono_usd("928")))
+    assert bandeja.total_descuentos == Decimal("200.00")
+
+
+def test_un_agente_de_retencion_al_100_paga_sin_iva():
+    """Retiene todo el IVA: lo que paga YA es base sin IVA, no se divide."""
+    bandeja = calcular_factura(_inp_con_iva(_abono_usd("800"), retencion="1"))
+    assert bandeja.total_descuentos == Decimal("200.00")
+
+
+def test_un_agente_de_retencion_al_75_paga_parte_del_iva():
+    """Retiene 75%: paga 25% del IVA, o sea factor 1 + 0,16 * 0,25 = 1,04.
+    832 / 1,04 = 800 -> hueco de 200."""
+    bandeja = calcular_factura(_inp_con_iva(_abono_usd("832"), retencion="0.75"))
+    assert bandeja.total_descuentos == Decimal("200.00")

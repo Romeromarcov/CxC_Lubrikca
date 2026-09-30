@@ -270,7 +270,9 @@ def test_e2e_04_discount_engine_evaluation():
 
     from cxc.config import EngineConfig
 
-    cfg = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    cfg = EngineConfig(
+        cash_window_business_days=3, bcv_complete_formula="full", iva_rate=Decimal("0")
+    )
     resolver = MagicMock()
     resolver.volumen.return_value = Decimal("100.0")
     resolver.precio.return_value = Decimal("10.00")
