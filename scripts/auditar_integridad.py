@@ -261,16 +261,23 @@ CHEQUEOS: list[Chequeo] = [
         "sobreaplicacion_del_pago",
         "montos",
         "ALTA",
-        "Las vinculaciones CONCILIADAS de un pago suman mas que el pago. Se esta "
-        "aplicando plata que no entro. (Las pendientes son propuestas sin "
-        "confirmar y no cuentan aqui: ver sobreaplicacion_con_pendientes.)",
+        "Las vinculaciones de un pago suman mas que el pago. CONCILIADO manda sobre "
+        "PENDIENTE (criterio del usuario, 25-sep-2026): si el pago ya tiene "
+        "conciliadas solo cuentan esas; sin ninguna, se suman las pendientes. Se esta "
+        "aplicando plata que no entro. (Ver sobreaplicacion_con_pendientes.)",
         """
-        SELECT v.pago_id, p.monto AS pago, sum(v.monto_aplicado) AS aplicado,
-               sum(v.monto_aplicado) - p.monto AS exceso
+        SELECT v.pago_id, p.monto AS pago,
+               CASE WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
+                    THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
+                    ELSE sum(v.monto_aplicado) END AS aplicado,
+               CASE WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
+                    THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
+                    ELSE sum(v.monto_aplicado) END - p.monto AS exceso
         FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
-        WHERE v.estado::text = 'conciliado'
         GROUP BY v.pago_id, p.monto
-        HAVING sum(v.monto_aplicado) > p.monto + 0.01
+        HAVING CASE WHEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado') > 0
+                    THEN sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado')
+                    ELSE sum(v.monto_aplicado) END > p.monto + 0.01
         ORDER BY 4 DESC
         """,
     ),
