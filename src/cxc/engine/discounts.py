@@ -636,13 +636,50 @@ def _lista_ves_activa(inp: EngineInputs) -> str:
 
 
 def _determinar_lista(inp: EngineInputs, pura_bcv: bool) -> str:
-    """Paso 1 (sección 4.2): la lista la define el método de pago.
+    """Paso 1 (sección 4.2): la base de precio es la PISTA NATIVA de la
 
-    Gana sobre la lista especial de nacimiento. Sin abonos aún, se usa la lista
-    de nacimiento como techo provisional.
+    orden -- la familia de lista (VES o USD) en la que nació --, sin
+    importar en qué moneda se terminó pagando. Sin abonos aún, se usa la
+    lista de nacimiento cruda como techo provisional (sin cambios).
+
+    Bug real (reportado por el usuario, 27-sep-2026, casos reales SJMG
+    S00061 vs Comercializadora 1108 S00811): esta función usaba
+    ``pura_bcv`` (``es_ruta_bcv_pura``, que mira ``tipo_tasa_abono``) para
+    elegir la lista -- pero ``tipo_tasa_abono`` se graba SIEMPRE en BCV al
+    crear una Vinculación (ver ``post_vincular``/``_vincular_masivo_sync``
+    en web/app.py), sin importar la moneda real del pago. ``pura_bcv`` es
+    entonces efectivamente SIEMPRE ``True`` en producción, así que TODA
+    orden con al menos un abono se valuaba contra la lista VES, incluso
+    una nacida y pagada en una lista USD nativa. S00061 nació en la lista
+    #7 (USD) y el motor usaba la #3 (VES pareada, ~40% más cara) para el
+    mismo % de descuento -- inflaba el monto. S00811, nacida en lista VES
+    y pagada en VES, ya caía bien por coincidencia.
+
+    Se probó primero un arreglo basado en la MONEDA del pago -- pero eso
+    rompe el Diferencial Cambiario Y ``total_motor`` para una orden VES
+    NATIVA pagada en USD: esa regla exige ``listas_aplicables=LISTAS_VES``
+    (compara contra esta misma lista) y su premisa ENTERA es medir la
+    brecha entre el precio de lista VES y lo pagado en USD -- si la orden
+    pasa a evaluarse en USD, la brecha desaparece por construcción y el
+    total facturable (``precio_base``) también se hunde de más, sin que
+    ninguna regla lo compense.
+
+    Una orden USD nativa SIEMPRE usa la lista USD -- no hay "camino de
+    pago" que la baje a VES, el bug reportado no dejaba otra salida. Una
+    orden VES nativa conserva el criterio de siempre (``pura_bcv``): si el
+    pago mezcla rutas BCV y Binance (o es puro Binance), migra a la lista
+    USD -- la más conservadora -- exactamente como antes de este cambio;
+    solo si el camino es 100% BCV se queda en VES. Así el Diferencial
+    sigue aplicando para una orden VES nativa pagada en USD puro (mismo
+    ``tipo_tasa_abono=BCV`` hardcodeado, mismo comportamiento de siempre),
+    y la migración a Binance de una orden VES nativa tampoco se pierde.
     """
     if not inp.abonos:
         return inp.orden.lista_precios
+    listas_usd_validas = set(inp.valid_usd) if inp.valid_usd else set()
+    es_lista_usd_nativa = str(inp.orden.lista_precios) in listas_usd_validas
+    if es_lista_usd_nativa:
+        return _lista_usd_activa(inp)
     return _lista_ves_activa(inp) if pura_bcv else _lista_usd_activa(inp)
 
 
@@ -1863,11 +1900,27 @@ def _calcular_componentes(
 
         if regla_max is not None and not inp.cliente_tiene_pagos_huerfanos:
             diferencial_maximo = regla_max.porcentaje_fijo
-            if (
-                diferencial_maximo > 0
-                and valor_pagado_binance_usd(vincs)
-                >= (precio_target_usd or Decimal("0")) - _EPS
-            ):
+            if diferencial_maximo > 0:
+                # Cobertura PROPORCIONAL, no todo-o-nada (rediseño pedido por
+                # el usuario, 28-sep-2026, caso real Elisa Alejandra Jiménez
+                # Suárez/S00468: pagó $693 de los $780 que exige el teórico
+                # USD -- 88,8% de cobertura -- y el gate binario ("o cubre el
+                # 100% o no le toca nada") le daba $0 de diferencial pese a
+                # haber pagado siempre en divisas. Antes de este cambio, un
+                # pago de $779,99 (99,9%) y uno de $10 (1,3%) daban EXACTAMENTE
+                # lo mismo: cero. Ahora el que pagó más cerca del teórico se
+                # lleva proporcionalmente más -- a cobertura 100% el resultado
+                # es idéntico al de antes (mismo min(techo, brecha)).
+                #
+                # Sin teórico USD (target<=0) no hay contra qué medir
+                # cobertura -- se trata como cobertura completa, igual que el
+                # gate binario anterior dejaba pasar cuando el target era 0.
+                target = precio_target_usd or Decimal("0")
+                if target <= 0:
+                    cobertura = Decimal("1")
+                else:
+                    ratio = valor_pagado_binance_usd(vincs) / target
+                    cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
                 techo = precio_base * diferencial_maximo
                 otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
                 pagado_en_factura = valor_pagado_bcv_usd(vincs)
@@ -1879,14 +1932,17 @@ def _calcular_componentes(
                 # "no sé" no es "cero", así que manda el precio de lista.
                 base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
                 brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
-                diferencial_cambiario = min(techo, brecha)
+                diferencial_cambiario = min(techo, brecha) * cobertura
                 if diferencial_cambiario > 0:
                     pct_str = f"{diferencial_maximo * 100:.1f}%"
+                    cobertura_str = (
+                        f", cobertura {cobertura * 100:.0f}%" if cobertura < 1 else ""
+                    )
                     detalle_diferencial = DescuentoAplicado(
                         origen="bcv_completo",
                         descripcion=(
                             f"Diferencial Cambiario (tope {pct_str}, "
-                            f"brecha hasta lo pagado)"
+                            f"brecha hasta lo pagado{cobertura_str})"
                         ),
                         monto=q2(diferencial_cambiario),
                         regla_id=getattr(regla_max, "regla_id", "") or "",

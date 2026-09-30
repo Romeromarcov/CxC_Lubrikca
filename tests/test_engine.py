@@ -102,7 +102,7 @@ def _orden_anterior_pagada(
 
 
 def test_apilamiento_sinoco_recompra_contado_6pct() -> None:
-    orden = b.orden(primera=False)
+    orden = b.orden(primera=False, lista="USD")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
     # Abono USD que liquida el neto optimista (100 - 6 = 94) dentro de ventana.
@@ -122,6 +122,7 @@ def test_apilamiento_sinoco_recompra_contado_6pct() -> None:
         resolver=_resolver(**{"P1@USD": "100"}),
         orden_anterior=orden_ant,
         orden_anterior_vincs=vincs_ant,
+        valid_usd=["USD"],
     )
     res = calcular_factura(inp)
     assert res.lista_aplicada == "USD"
@@ -134,7 +135,7 @@ def test_apilamiento_sinoco_recompra_contado_6pct() -> None:
 
 
 def test_apilamiento_global_oil_sintetico_recompra_contado_11pct() -> None:
-    orden = b.orden(primera=False)
+    orden = b.orden(primera=False, lista="USD")
     linea = b.linea(
         marca="Global Oil",
         categoria="Comercial sintéticos",
@@ -163,6 +164,7 @@ def test_apilamiento_global_oil_sintetico_recompra_contado_11pct() -> None:
         resolver=_resolver(**{"P1@USD": "100"}),
         orden_anterior=orden_ant,
         orden_anterior_vincs=vincs_ant,
+        valid_usd=["USD"],
     )
     res = calcular_factura(inp)
     # 3% + 8% = 11%
@@ -176,7 +178,7 @@ def test_recompra_no_aplica_sin_orden_anterior() -> None:
     """Sin orden anterior del cliente (primer pedido), Recompra no puede
 
     evaluarse -- no hay pago previo que verificar ni ventana que contar."""
-    orden = b.orden(primera=False)
+    orden = b.orden(primera=False, lista="USD")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
     vinc = b.vinculacion(
@@ -190,6 +192,7 @@ def test_recompra_no_aplica_sin_orden_anterior() -> None:
         abonos=[(vinc, metodo)],
         descuentos_recompra=[b.descuento_recompra("REC1", marca="*", categoria="*")],
         resolver=_resolver(**{"P1@USD": "100"}),
+        valid_usd=["USD"],
     )
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}
@@ -197,7 +200,7 @@ def test_recompra_no_aplica_sin_orden_anterior() -> None:
 
 
 def test_recompra_no_aplica_si_orden_anterior_no_pagada_completo() -> None:
-    orden = b.orden(primera=False)
+    orden = b.orden(primera=False, lista="USD")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
     vinc = b.vinculacion(
@@ -222,6 +225,7 @@ def test_recompra_no_aplica_si_orden_anterior_no_pagada_completo() -> None:
         resolver=_resolver(**{"P1@USD": "100"}),
         orden_anterior=orden_ant,
         orden_anterior_vincs=[vinc_ant],
+        valid_usd=["USD"],
     )
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}
@@ -236,7 +240,7 @@ def test_recompra_no_aplica_fuera_de_la_ventana_credito_mas_gracia() -> None:
     # orden_anterior: fecha 2026-01-01, 15 dias credito -- ventana real
     # (con dias_gracia=3 de la regla) = hasta el 2026-01-19. Esta orden
     # llega el 2026-06-01, muy fuera de ventana.
-    orden = b.orden(primera=False, fecha=date(2026, 6, 1))
+    orden = b.orden(primera=False, fecha=date(2026, 6, 1), lista="USD")
     linea = b.linea(marca="Sinoco", categoria="*", precio="100", cantidad="1")
     metodo = b.metodo(moneda=Moneda.USD, es_contado=True)
     vinc = b.vinculacion(
@@ -255,6 +259,7 @@ def test_recompra_no_aplica_fuera_de_la_ventana_credito_mas_gracia() -> None:
         resolver=_resolver(**{"P1@USD": "100"}),
         orden_anterior=orden_ant,
         orden_anterior_vincs=vincs_ant,
+        valid_usd=["USD"],
     )
     res = calcular_factura(inp)
     origenes = {d.origen for d in res.descuentos_detalle}

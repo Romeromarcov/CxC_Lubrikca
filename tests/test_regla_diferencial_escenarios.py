@@ -105,11 +105,48 @@ def test_el_35_pct_sigue_siendo_el_tope_cuando_el_hueco_es_mayor():
     assert bandeja.total_descuentos == Decimal("199.00")
 
 
-def test_regla_fijo_no_aplica_si_el_pago_no_cubre_el_teorico_usd():
-    """Se exige la orden pagada 100% según el teórico USD (800)."""
+def test_regla_fijo_da_diferencial_proporcional_si_el_pago_no_cubre_el_teorico_usd():
+    """Cobertura PROPORCIONAL, no todo-o-nada (rediseño 28-sep-2026, caso
+
+    real Elisa Alejandra Jiménez Suárez/S00468: pagó 88,8% del teórico USD,
+    siempre en divisas, y el gate binario anterior le daba $0 -- el mismo
+    resultado que a alguien que hubiera pagado solo el 1%).
+
+    Acá el pago (500) cubre 500/800 = 62,5% del teórico USD (800). El
+    techo (350) y la brecha (1000 - 500 = 500) siguen calculándose igual
+    que con cobertura completa; lo nuevo es que el resultado final se
+    multiplica por esa cobertura: min(350, 500) * 0,625 = 218,75.
+    """
     bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("500")))
 
-    assert bandeja.total_descuentos == Decimal("0.00")
+    assert bandeja.total_descuentos == Decimal("218.75")
+
+
+def test_regla_fijo_no_da_nada_sin_ningun_pago_en_divisas():
+    """Cobertura 0% -- el diferencial se hunde a $0 igual que antes, no
+
+    porque haya un piso explícito sino porque 0 * lo que sea da 0."""
+    bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("0.01")))
+
+    assert bandeja.total_descuentos < Decimal("1.00")
+
+
+def test_cobertura_100_pct_da_exactamente_lo_mismo_que_el_gate_binario_de_antes():
+    """Guardián de no-regresión: a cobertura completa, el resultado es
+
+    IDÉNTICO al que daba el gate todo-o-nada -- el rediseño solo cambia
+    el caso de cobertura parcial, nunca el de cobertura completa."""
+    bandeja = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("800")))
+    assert bandeja.total_descuentos == Decimal("200.00")
+
+
+def test_la_descripcion_solo_menciona_la_cobertura_cuando_es_parcial():
+    parcial = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("500")))
+    completa = calcular_factura(_inp([_regla("fijo_35_ves_usd")], abonos=_abono_usd("800")))
+    detalle_parcial = next(d for d in parcial.descuentos_detalle if d.origen == "bcv_completo")
+    detalle_completa = next(d for d in completa.descuentos_detalle if d.origen == "bcv_completo")
+    assert "cobertura" in detalle_parcial.descripcion
+    assert "cobertura" not in detalle_completa.descripcion
 
 
 def test_regla_equiparar_aplica_con_pago_ves_sin_huerfanos():
