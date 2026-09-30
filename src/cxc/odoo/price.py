@@ -290,7 +290,14 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
         precio: Decimal | None = None
         es_fallback = False
         if prod_id:
+            n_vencidas = len(self._reglas_vencidas)
             precio = self._precio_fijo_en_lista(pricelist_id, prod_id, fecha)
+            if len(self._reglas_vencidas) > n_vencidas:
+                # El precio salio de una regla que NO cubre la fecha de la orden:
+                # para el motor es lo mismo que no tener precio en una lista
+                # vigente (``fue_fallback``) -- decision del usuario, 30-sep-2026:
+                # en ese caso manda el precio que quedo en la propia orden.
+                es_fallback = True
             if precio is None and self._fallback_ficha is None:
                 # Comportamiento anterior (sin FallbackFichaConfig): probar
                 # otras pricelists configuradas antes de rendirse a la

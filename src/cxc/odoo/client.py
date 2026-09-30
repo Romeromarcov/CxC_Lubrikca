@@ -501,6 +501,12 @@ class OdooReader(ABC):
     def changed_entregas_lineas(self, since: datetime | None) -> list[EntregaLinea]:
         return []
 
+    # Barrido de borrados: ids que Odoo TODAVÍA tiene de una tabla-espejo.
+    # ``None`` = este lector no sabe contestarlo (fakes de test): el barrido
+    # omite la tabla en vez de asumir que Odoo la tiene vacía.
+    def ids_vigentes(self, tabla: str) -> set[str] | None:
+        return None
+
 
 class OdooXmlRpcReader(OdooReader):
     MODEL_PARTNER = "res.partner"
@@ -973,6 +979,37 @@ class OdooXmlRpcReader(OdooReader):
             ["id", "picking_id", "product_id"],
         )
         return [map_entrega_linea(r) for r in recs]
+
+    # --- Barrido de borrados -------------------------------------------------
+    # Pagos y líneas de factura usan el MISMO universo que su ``changed_*`` (un cobro
+    # que dejó de estar confirmado, o una línea que ya no es de una factura de
+    # cliente, no cuenta en el espejo); facturas y líneas de entrega usan un dominio
+    # AMPLIO: solo se borra lo que Odoo ya no tiene bajo ningún concepto.
+    def ids_vigentes(self, tabla: str) -> set[str] | None:
+        dominios: dict[str, tuple[str, list[Any]]] = {
+            "pagos": (
+                self.MODEL_PAGO,
+                [["payment_type", "=", "inbound"], ["state", "in", PAGO_ESTADOS_CONFIRMADOS]],
+            ),
+            "facturas": (
+                self.MODEL_MOVE,
+                [["move_type", "in", ["out_invoice", "out_refund", "out_debit"]]],
+            ),
+            # Mismo universo que ``changed_lineas_factura`` (el espejo ya se limpio de
+            # las lineas de proveedores y asientos de diario, 30-sep-2026).
+            "lineas_factura": (
+                self.MODEL_MOVE_LINE,
+                [
+                    ["display_type", "in", ["product", False]],
+                    ["move_id.move_type", "in", ["out_invoice", "out_refund", "out_debit"]],
+                ],
+            ),
+            "lineas_entrega": (self.MODEL_STOCK_MOVE_LINE, []),
+        }
+        if tabla not in dominios:
+            return None
+        modelo, dominio = dominios[tabla]
+        return {str(r["id"]) for r in self._search_read(modelo, dominio, ["id"])}
 
     # --- LineasOrden ---------------------------------------------------------
     def changed_lineas(self, since: datetime | None) -> list[LineaOrden]:

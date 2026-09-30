@@ -59,6 +59,33 @@ _HUERFANOS = [
 def _chequeos_huerfanos() -> list[Chequeo]:
     salida = []
     for nombre, tabla, col, destino, col_destino, sev in _HUERFANOS:
+        if tabla == "facturas":
+            # Una factura consolidada guarda ``invoice_origin`` como los nombres
+            # separados por coma ("S00718, S00700"); cada nombre es una orden
+            # valida (ver ``so_ids_de_invoice_origin``), no una referencia rota.
+            salida.append(
+                Chequeo(
+                    nombre=nombre,
+                    familia="huerfanos",
+                    severidad=sev,
+                    porque=(
+                        "facturas.so_id nombra una orden que no existe (se separan las "
+                        "facturas consolidadas por coma antes de comparar). La fila sigue "
+                        "contando en los reportes que agregan por esta tabla y desaparece "
+                        "en los que agregan por la otra."
+                    ),
+                    sql="""
+                        SELECT trim(t.so) AS referencia_rota, count(*) AS filas
+                        FROM facturas h
+                        CROSS JOIN LATERAL unnest(string_to_array(h.so_id, ',')) AS t(so)
+                        LEFT JOIN ordenes_venta d ON d.so_id = trim(t.so)
+                        WHERE h.so_id IS NOT NULL AND h.so_id <> ''
+                          AND trim(t.so) <> '' AND d.so_id IS NULL
+                        GROUP BY 1 ORDER BY 2 DESC
+                    """,
+                )
+            )
+            continue
         salida.append(
             Chequeo(
                 nombre=nombre,
@@ -234,14 +261,35 @@ CHEQUEOS: list[Chequeo] = [
         "sobreaplicacion_del_pago",
         "montos",
         "ALTA",
-        "Las vinculaciones de un pago suman mas que el pago. Se esta aplicando "
-        "plata que no entro.",
+        "Las vinculaciones CONCILIADAS de un pago suman mas que el pago. Se esta "
+        "aplicando plata que no entro. (Las pendientes son propuestas sin "
+        "confirmar y no cuentan aqui: ver sobreaplicacion_con_pendientes.)",
+        """
+        SELECT v.pago_id, p.monto AS pago, sum(v.monto_aplicado) AS aplicado,
+               sum(v.monto_aplicado) - p.monto AS exceso
+        FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
+        WHERE v.estado::text = 'conciliado'
+        GROUP BY v.pago_id, p.monto
+        HAVING sum(v.monto_aplicado) > p.monto + 0.01
+        ORDER BY 4 DESC
+        """,
+    ),
+    Chequeo(
+        "sobreaplicacion_con_pendientes",
+        "montos",
+        "MEDIA",
+        "Conciliadas + pendientes de un pago suman mas que el pago, y las "
+        "conciliadas solas no. Son propuestas viejas que Odoo contradijo al "
+        "conciliar el pago contra otra orden: no mueven los reportes (solo leen "
+        "conciliadas) pero hay que depurarlas o confirmarlas.",
         """
         SELECT v.pago_id, p.monto AS pago, sum(v.monto_aplicado) AS aplicado,
                sum(v.monto_aplicado) - p.monto AS exceso
         FROM vinculaciones v JOIN pagos p ON p.pago_id = v.pago_id
         GROUP BY v.pago_id, p.monto
         HAVING sum(v.monto_aplicado) > p.monto + 0.01
+           AND coalesce(sum(v.monto_aplicado) FILTER (WHERE v.estado::text = 'conciliado'), 0)
+               <= p.monto + 0.01
         ORDER BY 4 DESC
         """,
     ),
@@ -353,13 +401,19 @@ CHEQUEOS: list[Chequeo] = [
         "facturada_sin_factura",
         "estados",
         "MEDIA",
-        "Marcada como facturada pero sin ninguna factura en el espejo. O la "
+        "Marcada como facturada pero sin ninguna factura en el espejo (las facturas "
+        "consolidadas por coma cuentan para cada orden que nombran). O la "
         "bandera quedo vieja, o la factura se borro en Odoo.",
         """
         SELECT o.so_id, o.monto_total, o.monto_facturado, o.factura_id
         FROM ordenes_venta o
         WHERE o.facturada
-          AND NOT EXISTS (SELECT 1 FROM facturas f WHERE f.so_id = o.so_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM facturas f
+              WHERE o.so_id = ANY (
+                  ARRAY(SELECT trim(x) FROM unnest(string_to_array(f.so_id, ',')) AS x)
+              )
+          )
         ORDER BY o.monto_total DESC
         """,
     ),

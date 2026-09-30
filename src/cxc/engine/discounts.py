@@ -758,7 +758,46 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
             assert isinstance(precio_ves, Decimal)
             if precio_ves > Decimal("0"):
                 return precio_ves
-    return inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
+    precio = inp.price_resolver.precio(linea.producto, lista, fecha=inp.orden.fecha)
+    if inp.price_resolver.fue_fallback(linea.producto, lista):
+        precio_orden = _precio_de_la_orden(inp, linea, lista)
+        if precio_orden is not None:
+            return precio_orden
+    return precio
+
+
+# USD = VES x 0.65: la lista USD es la VES con el Diferencial Cambiario del 35% ya
+# descontado (mismo porcentaje que ``FallbackFichaConfig.diferencial_fijo_pct`` y que
+# la regla ``fijo_35_ves_usd``).
+_FACTOR_USD_SOBRE_VES = Decimal("0.65")
+
+
+def _lista_es_usd(inp: EngineInputs, lista: str) -> bool:
+    return str(lista) in set(inp.valid_usd) or str(lista) == _LISTA_USD_FALLBACK
+
+
+def _precio_de_la_orden(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal | None:
+    """Precio de la línea según la propia orden, cuando la lista no tiene uno vigente.
+
+    Decisión del usuario (30-sep-2026): si el producto no tiene precio en una lista
+    vigente para el período de la orden, el precio que quedó en la orden se toma
+    como cierto. La orden nació en una lista VES o USD; si se pide la misma moneda
+    se devuelve tal cual, y si se pide la otra se convierte con el 35% de diferencial
+    (VES -> USD: x 0.65; USD -> VES: / 0.65).
+
+    ``None`` si la línea no trae precio (obsequios a cero, datos incompletos): ahí
+    sigue mandando lo que resolvió el resolvedor.
+    """
+    precio_orden = linea.precio_unitario
+    if precio_orden is None or precio_orden <= Decimal("0"):
+        return None
+    nativa_usd = _lista_es_usd(inp, str(inp.orden.lista_precios))
+    pedida_usd = _lista_es_usd(inp, lista)
+    if nativa_usd == pedida_usd:
+        return precio_orden
+    if pedida_usd:  # la orden nació en VES, se pide el USD
+        return precio_orden * _FACTOR_USD_SOBRE_VES
+    return precio_orden / _FACTOR_USD_SOBRE_VES  # la orden nació en USD, se pide el VES
 
 
 def _precio_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> Decimal:
@@ -870,26 +909,51 @@ def _evaluar_promociones_producto(
                     regla_id=getattr(best_promo, "regla_id", ""),
                 )
         else:  # "solo_uno"
+            # El obsequio puede ser CUALQUIER producto de CUALQUIERA de las promos
+            # que calificaron (confirmado por el usuario, 30-sep-2026: liga de
+            # frenos, elevador de octanaje o Clasico 20W50 -- los dos primeros de
+            # PROMO_NUEVO_GLOBAL, el tercero de PROMO_12_MAS_1). Antes solo se
+            # miraban los productos de la promo con mayor compra minima, y una
+            # orden que regalaba el producto de la otra quedaba sin NC de obsequio.
+            promos_solo_uno = [
+                p for p in prod_promos_califican if p.regalo_tipo != "conjunto"
+            ]
+            productos_por_promo = [
+                (p, {x.strip() for x in p.productos.split(",") if x.strip()})
+                for p in promos_solo_uno
+            ]
+            # Un obsequio ya entregado en la orden cuenta aunque sea de una promo que
+            # la orden no alcanza a calificar (p. ej. 9 cajas no llegan al minimo de
+            # 12 de PROMO_12_MAS_1, pero el Clasico regalado igual ya es el obsequio).
+            productos_ya_regalables = set()
+            for p in promos_activas:
+                if p.tipo_beneficio == "producto" and p.regalo_tipo != "conjunto":
+                    productos_ya_regalables |= {
+                        x.strip() for x in p.productos.split(",") if x.strip()
+                    }
             gifted_in_lines = any(
-                ln.descuento >= Decimal("99.9") for ln in inp.lineas if ln.producto in lista_prod
+                ln.descuento >= Decimal("99.9")
+                for ln in inp.lineas
+                if ln.producto in productos_ya_regalables
             )
             if not gifted_in_lines:
-                matching_lines = [
-                    ln
+                candidatos = [
+                    (ln, promo)
+                    for promo, prods in productos_por_promo
                     for ln in inp.lineas
-                    if ln.producto in lista_prod and ln.descuento < Decimal("99.9")
+                    if ln.producto in prods and ln.descuento < Decimal("99.9")
                 ]
-                if matching_lines:
-                    best_line = max(
-                        matching_lines,
-                        key=lambda ln: min(ln.cantidad, best_promo.valor) * ln.precio_unitario,
+                if candidatos:
+                    best_line, promo_regalo = max(
+                        candidatos,
+                        key=lambda c: min(c[0].cantidad, c[1].valor) * c[0].precio_unitario,
                     )
-                    nc = min(best_line.cantidad, best_promo.valor) * best_line.precio_unitario
+                    nc = min(best_line.cantidad, promo_regalo.valor) * best_line.precio_unitario
                     detalle_nc = DescuentoAplicado(
                         origen="primera_compra",
                         descripcion=f"NC obsequio ({best_line.producto})",
                         monto=q2(nc),
-                        regla_id=getattr(best_promo, "regla_id", ""),
+                        regla_id=getattr(promo_regalo, "regla_id", ""),
                     )
     else:
         pct_general = Decimal("0.0")

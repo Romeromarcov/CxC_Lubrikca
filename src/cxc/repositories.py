@@ -148,6 +148,19 @@ class Repository(ABC):
     def all_facturas(self) -> list[Factura]:
         raise NotImplementedError("all_facturas solo está implementado en PostgresRepository.")
 
+    # Barrido de borrados (un registro borrado en Odoo no deja ``write_date``, así
+    # que el delta nunca lo ve): solo PostgresRepository.
+    def ids_espejo(self, tabla: str) -> set[str]:
+        raise NotImplementedError("ids_espejo solo está implementado en PostgresRepository.")
+
+    def borrar_espejo(self, tabla: str, ids: list[str]) -> int:
+        raise NotImplementedError("borrar_espejo solo está implementado en PostgresRepository.")
+
+    def pago_ids_con_vinculaciones(self, pago_ids: list[str]) -> set[str]:
+        raise NotImplementedError(
+            "pago_ids_con_vinculaciones solo está implementado en PostgresRepository."
+        )
+
     def upsert_entregas(self, filas: list[Entrega]) -> None:
         raise NotImplementedError(
             "upsert_entregas solo está implementado en PostgresRepository."
