@@ -987,9 +987,15 @@ class OdooXmlRpcReader(OdooReader):
     # AMPLIO: solo se borra lo que Odoo ya no tiene bajo ningún concepto.
     def ids_vigentes(self, tabla: str) -> set[str] | None:
         dominios: dict[str, tuple[str, list[Any]]] = {
+            # Los pagos en BORRADOR cuentan como existentes: al editar la fecha o la tasa
+            # de un pago ya conciliado, Odoo lo pasa a borrador unos minutos (caso real
+            # S00913, 1-oct-2026, 14:22 a 14:23) y el barrido no debe tratarlo como borrado.
             "pagos": (
                 self.MODEL_PAGO,
-                [["payment_type", "=", "inbound"], ["state", "in", PAGO_ESTADOS_CONFIRMADOS]],
+                [
+                    ["payment_type", "=", "inbound"],
+                    ["state", "in", [*PAGO_ESTADOS_CONFIRMADOS, "draft"]],
+                ],
             ),
             "facturas": (
                 self.MODEL_MOVE,
