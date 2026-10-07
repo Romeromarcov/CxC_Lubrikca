@@ -131,3 +131,120 @@ def test_un_pago_que_no_esta_en_el_espejo_no_se_evalua_aqui():
     r = clasificar_pendientes([_v("a", "S1", "100", PEND)], [])
     assert r.a_retirar == []
     assert r.a_ajustar == []
+
+
+# --- Conciliadas que Odoo no tiene / discrepancias resueltas ----------------------------
+
+from cxc.engine.pendientes_contra_odoo import (  # noqa: E402
+    conciliadas_que_odoo_no_tiene,
+    discrepancias_resueltas,
+)
+
+
+def test_conciliada_local_que_odoo_ya_no_reparte_se_retira():
+    """Pago 14: Odoo reparte S00046 y S01135; quedaban S00188 y S00170 de reparto viejo."""
+    vs = [
+        _v("a", "S00046", "129.96", CONC, pago="14"),
+        _v("b", "S01135", "0.04", CONC, pago="14"),
+        _v("c", "S00188", "0.04", CONC, pago="14"),
+        _v("d", "S00170", "0.04", CONC, pago="14"),
+    ]
+    odoo = {("14", "S00046"): Decimal("129.96"), ("14", "S01135"): Decimal("0.04")}
+    assert _ids(conciliadas_que_odoo_no_tiene(vs, odoo)) == ["c", "d"]
+
+
+def test_si_odoo_no_reconcilia_el_pago_no_se_retira_nada_aqui():
+    vs = [_v("a", "S1", "100", CONC, pago="P9")]
+    assert conciliadas_que_odoo_no_tiene(vs, {("P1", "S2"): Decimal("5")}) == []
+
+
+def test_las_pendientes_no_se_tocan_en_esta_regla():
+    vs = [_v("a", "S1", "100", PEND, pago="P1")]
+    assert conciliadas_que_odoo_no_tiene(vs, {("P1", "S2"): Decimal("100")}) == []
+
+
+def test_discrepancia_resuelta_cuando_lo_local_es_el_reparto_de_odoo():
+    vs = [_v("a", "S1", "80", CONC, pago="P1"), _v("b", "S2", "20", CONC, pago="P1")]
+    odoo = {("P1", "S1"): Decimal("80"), ("P1", "S2"): Decimal("20")}
+    assert discrepancias_resueltas(["P1"], vs, odoo) == ["P1"]
+
+
+def test_discrepancia_abierta_si_un_monto_difiere():
+    vs = [_v("a", "S1", "80", CONC, pago="P1"), _v("b", "S2", "20", CONC, pago="P1")]
+    odoo = {("P1", "S1"): Decimal("80"), ("P1", "S2"): Decimal("25")}
+    assert discrepancias_resueltas(["P1"], vs, odoo) == []
+
+
+def test_discrepancia_abierta_si_falta_un_par():
+    vs = [_v("a", "S1", "80", CONC, pago="P1")]
+    odoo = {("P1", "S1"): Decimal("80"), ("P1", "S2"): Decimal("20")}
+    assert discrepancias_resueltas(["P1"], vs, odoo) == []
+
+
+def test_discrepancia_resuelta_si_odoo_ya_no_concilia_el_pago():
+    vs = [_v("a", "S1", "80", PEND, pago="P1")]
+    assert discrepancias_resueltas(["P1"], vs, {}) == ["P1"]
+
+
+def test_alinear_con_el_reparto_de_odoo_retira_residuos_y_cierra_discrepancias():
+    """De punta a punta con el repositorio en memoria: pago 14 (residuos viejos) y un pago
+    cuya discrepancia ya coincide con Odoo."""
+    from cxc.models import AplicacionConciliada
+    from cxc.repositories import InMemoryRepository
+    from cxc.web.app import _alinear_con_el_reparto_de_odoo
+
+    repo = InMemoryRepository()
+    for v in (
+        _v("a", "S46", "129.96", CONC, pago="14"),
+        _v("b", "S1135", "0.04", CONC, pago="14"),
+        _v("c", "S188", "0.04", CONC, pago="14"),  # residuo
+        _v("d", "S1", "80", CONC, pago="P2"),
+        _v("e", "S2", "20", CONC, pago="P2"),
+    ):
+        repo.update_vinculacion(v)
+    repo.append_auditoria_rows(
+        [
+            {
+                "audit_id": f"A{p}",
+                "so_id": "S1",
+                "pago_id": p,
+                "tipo_auditoria": "vinculacion_discrepancia_multi_orden",
+                "estado": "pendiente_revision",
+            }
+            for p in ("14", "P2")
+        ]
+    )
+
+    def app(pago, so, monto):
+        return AplicacionConciliada(
+            pago_id=pago,
+            so_id=so,
+            factura_id="F",
+            monto=Decimal(monto),
+            moneda=Moneda.USD,
+            fecha_pago=date(2026, 9, 1),
+        )
+
+    apps = [
+        app("14", "S46", "129.96"),
+        app("14", "S1135", "0.04"),
+        app("P2", "S1", "80"),
+        app("P2", "S2", "20"),
+    ]
+    r = _alinear_con_el_reparto_de_odoo(repo, apps)
+    assert r == {"retiradas": 1, "cerradas": 2}
+    assert sorted(v.vinc_id for v in repo.all_vinculaciones()) == ["a", "b", "d", "e"]
+    assert {x["audit_id"]: x["estado"] for x in repo.all_auditoria()} == {
+        "A14": "revisado",
+        "AP2": "revisado",
+    }
+
+
+def test_sin_aplicaciones_de_odoo_no_se_toca_nada():
+    from cxc.repositories import InMemoryRepository
+    from cxc.web.app import _alinear_con_el_reparto_de_odoo
+
+    repo = InMemoryRepository()
+    repo.update_vinculacion(_v("a", "S1", "100", CONC, pago="P1"))
+    assert _alinear_con_el_reparto_de_odoo(repo, []) == {"retiradas": 0, "cerradas": 0}
+    assert len(repo.all_vinculaciones()) == 1

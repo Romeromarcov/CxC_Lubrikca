@@ -92,7 +92,11 @@ from cxc.engine.pagada_en_odoo import (
     pagada_unificada,
 )
 from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
-from cxc.engine.pendientes_contra_odoo import clasificar_pendientes
+from cxc.engine.pendientes_contra_odoo import (
+    clasificar_pendientes,
+    conciliadas_que_odoo_no_tiene,
+    discrepancias_resueltas,
+)
 from cxc.engine.precios_rapidos import ResolverRapidoDePrecios
 from cxc.engine.promedios_tasas import (
     FILAS_DE_RESPALDO,
@@ -1582,6 +1586,50 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
 
 
 
+def _alinear_con_el_reparto_de_odoo(
+    repo: Any, aplicaciones: list[AplicacionConciliada]
+) -> dict[str, int]:
+    """Odoo manda sobre las CONCILIADAS locales y sobre las discrepancias «multi-orden».
+
+    1. Una conciliada local cuyo par (pago, orden) Odoo ya no reconcilia se retira (residuo de
+       un reparto anterior; caso real pago 14).
+    2. Las filas de auditoría «vinculacion_discrepancia_multi_orden» se cierran cuando lo local ya
+       coincide con el reparto de Odoo: medido el 7-oct-2026, 194 de 196 estaban abiertas
+       aunque el caso ya estaba resuelto.
+
+    Sin aplicaciones de Odoo (consulta vacía o fallida) no se toca nada.
+    """
+    if not aplicaciones:
+        return {"retiradas": 0, "cerradas": 0}
+    totales = agrupar_aplicaciones(aplicaciones)
+    vincs = repo.all_vinculaciones()
+    huerfanas = conciliadas_que_odoo_no_tiene(vincs, totales)
+    if huerfanas:
+        logger.info(
+            "Conciliadas retiradas porque Odoo ya no reconcilia ese par: %s",
+            ", ".join(f"{v.pago_id}->{v.so_id} ({v.monto_aplicado})" for v in huerfanas),
+        )
+        repo.delete_vinculaciones([v.vinc_id for v in huerfanas])
+        vincs = repo.all_vinculaciones()
+    filas = [
+        r
+        for r in repo.all_auditoria()
+        if r.get("tipo_auditoria") == "vinculacion_discrepancia_multi_orden"
+        and r.get("estado") == "pendiente_revision"
+    ]
+    resueltos = set(
+        discrepancias_resueltas(sorted({str(r.get("pago_id")) for r in filas}), vincs, totales)
+    )
+    cerradas = 0
+    for r in filas:
+        if str(r.get("pago_id")) in resueltos:
+            repo.update_auditoria_estado(
+                str(r["audit_id"]), "revisado", "Sistema (lo local ya coincide con Odoo)"
+            )
+            cerradas += 1
+    return {"retiradas": len(huerfanas), "cerradas": cerradas}
+
+
 def _depurar_pendientes_contradichas_por_odoo(repo: Any) -> dict[str, int]:
     """Odoo manda: retira o achica las Vinculaciones PENDIENTE que Odoo ya contradijo.
 
@@ -2885,6 +2933,14 @@ async def run_sync_in_background():
                             print(f"FastAPI Daemon: barrido de borrados: {_barrido}")
                     except Exception as e_barrido:
                         logger.warning("Barrido de borrados falló: %s", e_barrido)
+                else:
+                    # Entre barridos completos, los pagos se revisan cada ciclo.
+                    try:
+                        _barrido_p = sync.barrer_borrados(("pagos",))
+                        if _barrido_p["borradas"] or _barrido_p["pagos_bloqueados"]:
+                            print(f"FastAPI Daemon: barrido de pagos: {_barrido_p}")
+                    except Exception as e_barrido_p:
+                        logger.warning("Barrido de pagos falló: %s", e_barrido_p)
                 if result.total > 0:
                     _REPORTE_SALDOS_CACHE["data"] = None
                     _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
@@ -4189,6 +4245,15 @@ def recalculate_all_orders():
                         repo.upsert_pagos(rescatados)
                         print(f"Pagos conciliados rescatados del histórico: {len(rescatados)}.")
                 res_apl = _sincronizar_aplicaciones_conciliadas(repo, aplicaciones)
+                try:
+                    alin = _alinear_con_el_reparto_de_odoo(repo, aplicaciones)
+                    if alin["retiradas"] or alin["cerradas"]:
+                        print(
+                            f"Reparto de Odoo: {alin['retiradas']} conciliada(s) residual(es) "
+                            f"retirada(s), {alin['cerradas']} discrepancia(s) cerrada(s)."
+                        )
+                except Exception as e_alin:
+                    print(f"Error alineando con el reparto de Odoo: {e_alin}", file=sys.stderr)
                 if res_apl.get("sin_tasa"):
                     print(
                         f"Aplicaciones de Odoo sin tasa para su fecha: "

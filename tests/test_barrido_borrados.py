@@ -159,3 +159,11 @@ def test_pago_borrado_en_odoo_con_una_conciliada_se_conserva():
     assert r["pagos_bloqueados"] == ["11"]
     assert repo.espejo["pagos"] == {"10", "11"}
     assert len(repo.all_vinculaciones()) == 2
+
+
+def test_se_puede_acotar_el_barrido_a_una_tabla():
+    repo = _RepoBarrido({"pagos": {"1", "2"}, "facturas": {"1", "2"}})
+    lector = _LectorBarrido({"pagos": {"1"}, "facturas": {"1"}})
+    r = IncrementalSync(repo, lector).barrer_borrados(("pagos",))
+    assert r["borradas"] == {"pagos": 1}
+    assert repo.espejo["facturas"] == {"1", "2"}

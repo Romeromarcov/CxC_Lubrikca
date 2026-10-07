@@ -160,7 +160,7 @@ class IncrementalSync:
     BARRIDO_MAX_ABSOLUTO = 500
     BARRIDO_MAX_FRACCION = 0.10
 
-    def barrer_borrados(self) -> dict[str, Any]:
+    def barrer_borrados(self, tablas: tuple[str, ...] | None = None) -> dict[str, Any]:
         """Borra del espejo las filas que Odoo ya no tiene.
 
         El delta por ``write_date`` no puede ver una eliminación (auditoría de
@@ -174,11 +174,15 @@ class IncrementalSync:
         en ``omitidas``. Un pago con Vinculaciones NO se borra -- las Vinculaciones
         son trabajo humano que el sync no toca -- y queda en ``pagos_bloqueados``
         para depurarlo a mano.
+
+        ``tablas`` acota el barrido (por defecto todas). Los pagos se barren en CADA ciclo
+        del daemon -- es una sola consulta de ids -- para que uno cancelado en Odoo salga
+        del espejo en minutos y no a las 24 h (caso real: pago 2179, cancelado a las 18:29).
         """
         borradas: dict[str, int] = {}
         omitidas: dict[str, str] = {}
         pagos_bloqueados: list[str] = []
-        for tabla in self.TABLAS_BARRIDO:
+        for tabla in tablas or self.TABLAS_BARRIDO:
             try:
                 en_espejo = self._repo.ids_espejo(tabla)
                 vigentes = self._reader.ids_vigentes(tabla)
