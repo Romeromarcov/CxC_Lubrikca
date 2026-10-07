@@ -108,3 +108,58 @@ def clasificar_pendientes(
             else:
                 queda -= v.monto_aplicado
     return DepuracionPendientes(a_retirar=a_retirar, a_ajustar=a_ajustar)
+
+
+# --- Odoo manda tambien sobre las CONCILIADAS y sobre las discrepancias abiertas ----------
+
+
+def conciliadas_que_odoo_no_tiene(
+    vinculaciones: list[Vinculacion],
+    totales_odoo: dict[tuple[str, str], Decimal],
+) -> list[Vinculacion]:
+    """Vinculaciones CONCILIADAS cuyo par (pago, orden) Odoo ya no reconcilia.
+
+    Solo se miran los pagos que Odoo SI reconcilia hoy (tienen al menos un par en
+    ``totales_odoo``): ahi la lista de pares de Odoo es completa, y una conciliada local que
+    no esta en ella es un residuo de un reparto anterior. Caso real: pago 14, Odoo reparte
+    129,96 a S00046 y 0,04 a S01135, y quedaban dos filas locales de 0,04 a S00188 y S00170.
+    Un pago que Odoo ya no reconcilia en absoluto lo maneja el resync (pasa a PENDIENTE).
+    """
+    pagos_con_reparto = {pago for pago, _ in totales_odoo}
+    return [
+        v
+        for v in vinculaciones
+        if v.estado == EstadoVinculacion.CONCILIADO
+        and str(v.pago_id) in pagos_con_reparto
+        and (str(v.pago_id), v.so_id) not in totales_odoo
+    ]
+
+
+def discrepancias_resueltas(
+    pagos_auditados: list[str],
+    vinculaciones: list[Vinculacion],
+    totales_odoo: dict[tuple[str, str], Decimal],
+) -> list[str]:
+    """Pagos cuya discrepancia «multi-orden» ya no existe porque lo local coincide con Odoo.
+
+    Se cierra cuando (a) Odoo ya no reconcilia el pago (lo local queda pendiente, no hay nada
+    que comparar) o (b) las conciliadas locales son exactamente los pares y montos del reparto
+    de Odoo. Medido el 7-oct-2026: 194 de 196 filas abiertas estaban en uno de esos casos.
+    """
+    odoo_por_pago: dict[str, dict[str, Decimal]] = {}
+    for (pago, so), monto in totales_odoo.items():
+        odoo_por_pago.setdefault(pago, {})[so] = monto
+    locales: dict[str, dict[str, Decimal]] = {}
+    for v in vinculaciones:
+        if v.estado == EstadoVinculacion.CONCILIADO:
+            locales.setdefault(str(v.pago_id), {})[v.so_id] = v.monto_aplicado
+
+    resueltos: list[str] = []
+    for pago in pagos_auditados:
+        odoo = odoo_por_pago.get(str(pago), {})
+        local = locales.get(str(pago), {})
+        if not odoo or set(odoo) == set(local) and all(
+            abs(odoo[so] - local[so]) <= Decimal("0.02") for so in odoo
+        ):
+            resueltos.append(str(pago))
+    return resueltos

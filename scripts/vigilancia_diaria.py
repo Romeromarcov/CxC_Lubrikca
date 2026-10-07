@@ -168,9 +168,14 @@ INVARIANTES: list[tuple[str, str, str]] = [
         "Un teorico en cero saca la orden de la cuenta por cobrar sin que nadie cobre. "
         "Es la forma que toma 'sin datos no es cero'.",
         """
+        -- Las devueltas por completo quedan fuera: ahi el cero es correcto (la mercancia
+        -- volvio y no hay nada que cobrar). Las mira ``devuelta_completa_con_factura_viva``.
         SELECT count(*) AS filas FROM ventas_teoricos t
         WHERE t.teorico_ves <= 0 AND t.teorico_usd <= 0
           AND EXISTS (SELECT 1 FROM lineas_orden l WHERE l.so_id = t.so_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM ordenes_venta o WHERE o.so_id = t.so_id AND o.tiene_devolucion
+          )
         """,
     ),
 ]
