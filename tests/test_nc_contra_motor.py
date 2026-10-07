@@ -143,3 +143,48 @@ def test_nc_con_producto_que_si_forma_parte_del_monto_no_es_descuento():
     facturas[1].monto_sin_impuestos = Decimal("115.00")  # 35 de descuento + 80 de producto
     lineas.append(b.linea_factura("LF9", factura_id="11", producto_id="900", subtotal="80"))
     assert evaluar_ncs_contra_motor(facturas, lineas, catalogo, [_bandeja()]) == []
+
+
+# --- Decisiones comerciales ------------------------------------------------------
+# Caso S00913: la regla da 8% de pronto pago y comercialmente se dio 6%.
+
+
+def _evaluar_con(nc_usd, *, decisiones=None, no_otorgados=None):
+    facturas, lineas, catalogo = _escenario(nc_usd)
+    return evaluar_ncs_contra_motor(
+        facturas,
+        lineas,
+        catalogo,
+        [_bandeja()],
+        decisiones_comerciales=decisiones,
+        descuentos_no_otorgados=no_otorgados,
+    )
+
+
+def test_una_nc_menor_con_decision_comercial_deja_de_ser_anomalia():
+    (h,) = _evaluar_con(
+        "30.00", decisiones={"S1": {"motivo": "pronto pago 6% y no 8%", "marcado_por": "Admin"}}
+    )
+    assert h.veredicto == "decision_comercial"
+    assert h.decision_motivo == "pronto pago 6% y no 8%"
+    assert h.decidido_por == "Admin"
+
+
+def test_una_nc_mayor_con_decision_comercial_tambien_queda_documentada():
+    (h,) = _evaluar_con("73.35", decisiones={"S1": {"motivo": "acuerdo con el cliente"}})
+    assert h.veredicto == "decision_comercial"
+
+
+def test_el_remanente_no_otorgado_explica_una_nc_menor_que_el_motor():
+    (h,) = _evaluar_con("20.00", no_otorgados={"S1": {"motivo": "pagaron completo"}})
+    assert h.veredicto == "decision_comercial"
+
+
+def test_no_otorgado_no_justifica_una_nc_mayor_que_el_motor():
+    (h,) = _evaluar_con("73.35", no_otorgados={"S1": {"motivo": "pagaron completo"}})
+    assert h.veredicto == NC_MAYOR
+
+
+def test_si_coincide_con_el_motor_la_decision_no_cambia_nada():
+    (h,) = _evaluar_con("35.00", decisiones={"S1": {"motivo": "x"}})
+    assert h.veredicto == COINCIDE

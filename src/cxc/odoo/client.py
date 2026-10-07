@@ -980,6 +980,12 @@ class OdooXmlRpcReader(OdooReader):
         )
         return [map_entrega_linea(r) for r in recs]
 
+    @staticmethod
+    def _corte_borradores() -> datetime:
+        from datetime import timedelta
+
+        return datetime.utcnow() - timedelta(hours=48)
+
     # --- Barrido de borrados -------------------------------------------------
     # Pagos y líneas de factura usan el MISMO universo que su ``changed_*`` (un cobro
     # que dejó de estar confirmado, o una línea que ya no es de una factura de
@@ -987,14 +993,22 @@ class OdooXmlRpcReader(OdooReader):
     # AMPLIO: solo se borra lo que Odoo ya no tiene bajo ningún concepto.
     def ids_vigentes(self, tabla: str) -> set[str] | None:
         dominios: dict[str, tuple[str, list[Any]]] = {
-            # Los pagos en BORRADOR cuentan como existentes: al editar la fecha o la tasa
-            # de un pago ya conciliado, Odoo lo pasa a borrador unos minutos (caso real
-            # S00913, 1-oct-2026, 14:22 a 14:23) y el barrido no debe tratarlo como borrado.
+            # Un pago en BORRADOR solo cuenta como existente si se tocó hace poco: al
+            # editar la fecha o la tasa de un pago ya conciliado, Odoo lo pasa a borrador
+            # unos minutos (caso real S00913, 1-oct-2026, 14:22 a 14:23) y el barrido no
+            # debe tratarlo como borrado. Pero los vendedores dejan borradores abandonados
+            # y crean otro pago nuevo (decision del usuario, 7-oct-2026): un borrador sin
+            # tocar hace mas de 48 h ya no cuenta y sale del espejo.
             "pagos": (
                 self.MODEL_PAGO,
                 [
+                    "&",
                     ["payment_type", "=", "inbound"],
-                    ["state", "in", [*PAGO_ESTADOS_CONFIRMADOS, "draft"]],
+                    "|",
+                    ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+                    "&",
+                    ["state", "=", "draft"],
+                    ["write_date", ">", self._corte_borradores().strftime(ODOO_DATETIME_FMT)],
                 ],
             ),
             "facturas": (
