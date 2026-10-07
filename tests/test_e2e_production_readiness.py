@@ -5516,3 +5516,41 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
         assert item["sale_de_cxc"] is True
         assert item["cxc_confirmado"] is False
         assert item["bandeja_destino"] == "facturacion_1"
+
+
+def test_e2e_resync_pendiente_sobrante_no_reabre_la_discrepancia_multi_orden():
+    """Odoo manda (7-oct-2026): si las CONCILIADAS locales ya son exactamente las ordenes que
+    Odoo reconcilio, una PENDIENTE que quede en el mismo pago es una propuesta sobre lo que
+    Odoo dejo sin conciliar -- no una discrepancia. Antes reabria la revision manual en cada
+    ciclo (42 pagos reabiertos justo despues de cerrarlos)."""
+    from cxc.models import EstadoVinculacion
+    from cxc.web.app import _resincronizar_vinculaciones_con_odoo
+
+    def vinc(vinc_id, so, estado):
+        return Vinculacion(
+            vinc_id=vinc_id,
+            pago_id="100",
+            so_id=so,
+            monto_aplicado=Decimal("250.00"),
+            hora_pago_confirmada=datetime(2026, 7, 1),
+            tasa_bcv_aplicada=Decimal("40.0"),
+            tasa_binance_aplicada=Decimal("45.0"),
+            es_tasa_heredada=False,
+            moneda_abono=Moneda.USD,
+            estado=estado,
+            confirmado_por="Odoo (reconciliación)",
+        )
+
+    mock_repo = MagicMock()
+    mock_repo.all_vinculaciones.return_value = [
+        vinc("V1", "SO_C", EstadoVinculacion.CONCILIADO),
+        vinc("V2", "SO_D", EstadoVinculacion.CONCILIADO),
+        vinc("V3", "SO_E", EstadoVinculacion.PENDIENTE),  # propuesta sobrante
+    ]
+    mock_repo.all_auditoria.return_value = []
+
+    cambios = _resincronizar_vinculaciones_con_odoo(
+        mock_repo, _fake_execute_pago_conciliado(["SO_C", "SO_D"])
+    )
+
+    assert not any(c.get("tipo") == "discrepancia_multi_orden" for c in cambios)
