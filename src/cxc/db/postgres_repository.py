@@ -720,6 +720,42 @@ class PostgresRepository(Repository):
                     encontradas.append(tabla)
         return encontradas
 
+    def all_decisiones_comerciales(self) -> dict[str, dict[str, str]]:
+        """``so_id`` -> decision comercial documentada (ver ``schema.decisiones_comerciales``)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(t.decisiones_comerciales)).all()
+        return {
+            r.so_id: {
+                "so_id": r.so_id,
+                "motivo": r.motivo,
+                "marcado_por": r.marcado_por,
+                "timestamp_marcado": r.timestamp_marcado,
+            }
+            for r in rows
+        }
+
+    def append_decision_comercial(self, row: dict[str, str]) -> None:
+        with self._engine.begin() as conn:
+            _upsert(
+                conn,
+                t.decisiones_comerciales,
+                [
+                    {
+                        "so_id": row["so_id"],
+                        "motivo": row.get("motivo", ""),
+                        "marcado_por": row.get("marcado_por", ""),
+                        "timestamp_marcado": row.get("timestamp_marcado", ""),
+                    }
+                ],
+                ["so_id"],
+            )
+
+    def delete_decision_comercial(self, so_id: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                t.decisiones_comerciales.delete().where(t.decisiones_comerciales.c.so_id == so_id)
+            )
+
     def all_descuentos_no_otorgados(self) -> dict[str, dict[str, str]]:
         """``so_id`` -> quién marcó que ese descuento NO se le dio al cliente.
 

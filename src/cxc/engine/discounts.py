@@ -10,7 +10,8 @@ El motor es una función PURA: recibe dataclasses, devuelve una
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, TypeVar
@@ -408,6 +409,8 @@ def ventana_pago_vigente(
 # histórica) en vez de la 8 (la lista USD real activa). Se eliminaron esas
 # variables por completo -- Configuración (``valid_pricelists_usd/ves``)
 # es ahora la ÚNICA fuente de verdad de qué pricelist es USD/VES.
+logger = logging.getLogger(__name__)
+
 _LISTA_USD_FALLBACK = "USD"
 _LISTA_VES_FALLBACK = "BCV"
 
@@ -686,6 +689,69 @@ def _determinar_lista(inp: EngineInputs, pura_bcv: bool) -> str:
     if es_lista_usd_nativa:
         return _lista_usd_activa(inp)
     return _lista_ves_activa(inp) if pura_bcv else _lista_usd_activa(inp)
+
+
+# Cuanto puede separarse el precio cobrado del de una lista y seguir contando como «el de
+# esa lista» (redondeos de Odoo, centavos de conversion).
+_TOLERANCIA_PISTA_POR_PRECIO = Decimal("0.02")
+
+
+def _con_pista_por_precio(inp: EngineInputs) -> EngineInputs:
+    """La pista (VES o USD) de la orden la decide el PRECIO QUE SE COBRO, no la etiqueta.
+
+    Caso real S00913 (1-oct-2026): pricelist «Pago USD» pero la linea a 86,21, que es el
+    precio de la lista VES (la USD daba 56,03 = 86,21 x 0,65). El motor la trataba como
+    USD nativa -- el 35% ya vendria dentro del precio -- y no daba Diferencial Cambiario,
+    cuando la factura salio al precio VES y ese 35% hubo que darlo por NC. Resultado: 5,60
+    de descuento en vez de ~31,6.
+
+    Si el precio de las lineas coincide con la lista de la OTRA moneda y no con la de la
+    etiqueta, la orden se evalua en esa otra pista. Si ambas listas dan lo mismo, si la
+    orden es historica (tiene su propia lista) o si falta algun precio, no se toca nada.
+    Medido en produccion: 4 de 148 ordenes etiquetadas USD y 18 de 736 etiquetadas VES.
+    """
+    if inp.orden_es_historica or not inp.lineas:
+        return inp
+    etiqueta_usd = _lista_es_usd(inp, str(inp.orden.lista_precios))
+    ves_name = _lista_ves_activa(inp)
+    usd_name = _lista_usd_activa(inp)
+    cobrado = Decimal("0")
+    en_ves = Decimal("0")
+    en_usd = Decimal("0")
+    try:
+        for ln in inp.lineas:
+            if ln.descuento >= Decimal("99.9"):
+                continue  # obsequio: no representa el precio de lista
+            cantidad = _cantidad_efectiva(inp, ln)
+            cobrado += ln.precio_unitario * cantidad
+            en_ves += _precio_unitario_linea(inp, ln, ves_name) * cantidad
+            en_usd += _precio_unitario_linea(inp, ln, usd_name) * cantidad
+    except KeyError:
+        return inp  # sin precio en alguna lista: no hay con que comparar
+
+    def cerca(a: Decimal, b: Decimal) -> bool:
+        return b > 0 and abs(a - b) <= b * _TOLERANCIA_PISTA_POR_PRECIO
+
+    if cerca(en_ves, en_usd) or cobrado <= 0:
+        return inp
+    destino: str | None = None
+    if etiqueta_usd and cerca(cobrado, en_ves) and not cerca(cobrado, en_usd):
+        destino = ves_name
+    elif not etiqueta_usd and cerca(cobrado, en_usd) and not cerca(cobrado, en_ves):
+        destino = usd_name
+    if destino is None:
+        return inp
+    logger.info(
+        "Orden %s: etiqueta de lista %s pero el precio cobrado (%s) es el de la lista %s "
+        "(VES %s / USD %s) -- se evalua en esa pista.",
+        inp.orden.so_id,
+        inp.orden.lista_precios,
+        cobrado,
+        destino,
+        en_ves,
+        en_usd,
+    )
+    return replace(inp, orden=replace(inp.orden, lista_precios=destino))
 
 
 def _cantidad_efectiva(inp: EngineInputs, linea: LineaOrden) -> Decimal:
@@ -2249,6 +2315,7 @@ def calcular_teorico_orden_con_fallback(inp: EngineInputs) -> dict[str, Any]:
 
 def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
     """Calcula la fila de BandejaFacturacion para una orden (cierre híbrido)."""
+    inp = _con_pista_por_precio(inp)
     cfg = inp.engine_config
     vincs = [v for v, _ in inp.abonos]
     for v in vincs:

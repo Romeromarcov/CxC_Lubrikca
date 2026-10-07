@@ -26,6 +26,7 @@ from ..models import BandejaFacturacion, Factura, LineaFactura, Producto
 COINCIDE = "coincide"
 NC_MAYOR = "nc_mayor_que_motor"
 NC_MENOR = "nc_menor_que_motor"
+DECISION_COMERCIAL = "decision_comercial"
 
 TOLERANCIA_ABSOLUTA = Decimal("1.00")
 TOLERANCIA_RELATIVA = Decimal("0.02")  # sobre la base de la orden
@@ -42,6 +43,9 @@ class HallazgoNC:
     diferencia: Decimal  # nc_usd - motor_usd
     pct_base: Decimal  # nc_usd / precio_base (0 si no hay base)
     veredicto: str
+    # Si la diferencia con el motor esta documentada como decision comercial: motivo y quien.
+    decision_motivo: str = ""
+    decidido_por: str = ""
 
 
 def _ids_producto_descuento(catalogo: list[Producto]) -> set[str]:
@@ -53,7 +57,11 @@ def evaluar_ncs_contra_motor(
     lineas_factura: list[LineaFactura],
     catalogo: list[Producto],
     bandejas: list[BandejaFacturacion],
+    decisiones_comerciales: dict[str, dict[str, str]] | None = None,
+    descuentos_no_otorgados: dict[str, dict[str, str]] | None = None,
 ) -> list[HallazgoNC]:
+    decisiones = decisiones_comerciales or {}
+    no_otorgados = descuentos_no_otorgados or {}
     ids_descuento = _ids_producto_descuento(catalogo)
     if not ids_descuento:
         return []
@@ -99,6 +107,16 @@ def evaluar_ncs_contra_motor(
             veredicto = NC_MENOR
         else:
             veredicto = COINCIDE
+        # Una diferencia documentada ya no es una anomalia: o se decidio comercialmente
+        # (en cualquier direccion), o se marco que el remanente NO se otorgo (la NC quedo
+        # por debajo del motor a proposito).
+        decision = decisiones.get(so_id)
+        if decision is None and veredicto == NC_MENOR:
+            decision = no_otorgados.get(so_id)
+        if decision is not None and veredicto != COINCIDE:
+            veredicto = DECISION_COMERCIAL
+        else:
+            decision = None
         hallazgos.append(
             HallazgoNC(
                 so_id=so_id,
@@ -110,6 +128,8 @@ def evaluar_ncs_contra_motor(
                 diferencia=diferencia.quantize(Decimal("0.01")),
                 pct_base=(nc_usd / base).quantize(Decimal("0.0001")) if base > 0 else Decimal("0"),
                 veredicto=veredicto,
+                decision_motivo=(decision or {}).get("motivo", ""),
+                decidido_por=(decision or {}).get("marcado_por", ""),
             )
         )
     hallazgos.sort(key=lambda h: abs(h.diferencia), reverse=True)

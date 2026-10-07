@@ -754,6 +754,21 @@ descuentos_no_otorgados = Table(
 )
 
 
+# --- Decisiones comerciales (7-oct-2026). Documenta que la NC de una orden difiere del
+# motor A PROPOSITO (p. ej. S00913: la regla da 8% de pronto pago y comercialmente se dio 6%).
+# No cambia ningun monto: solo le dice a la comparacion NC-contra-motor que esa diferencia ya
+# esta decidida y por quien. Para el remanente que no se va a dar, sigue valiendo
+# ``descuentos_no_otorgados``; para una NC por ENCIMA de la regla, esta es la unica marca.
+decisiones_comerciales = Table(
+    "decisiones_comerciales",
+    metadata,
+    Column("so_id", String, primary_key=True),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("marcado_por", String, nullable=False, server_default=""),
+    Column("timestamp_marcado", String, nullable=False, server_default=""),
+)
+
+
 # --- Vendedores (config, septiembre 2026) -- ítem 6 de la lista del usuario:
 # hoy "vendedor" es solo un email suelto repetido en Cliente/OrdenVenta/Pago,
 # sin tabla propia. Nace acá porque hace falta un lugar donde marcar

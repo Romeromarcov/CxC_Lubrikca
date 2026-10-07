@@ -13229,6 +13229,12 @@ async def get_balance_comprobacion():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _si_existe(repo: Any, metodo: str) -> dict[str, dict[str, str]]:
+    """Resultado de un metodo opcional del repositorio ({} si el backend no lo tiene)."""
+    fn = getattr(repo, metodo, None)
+    return fn() if callable(fn) else {}
+
+
 @app.get("/api/auditoria/nc-vs-motor")
 async def get_nc_vs_motor(solo_fuera: bool = False):
     """NC de descuento emitidas en Odoo contra lo que calcula el motor.
@@ -13239,13 +13245,18 @@ async def get_nc_vs_motor(solo_fuera: bool = False):
     try:
         repo = get_repo()
         hallazgos = evaluar_ncs_contra_motor(
-            repo.all_facturas(), repo.all_lineas_factura(), repo.all_catalogo(), repo.all_bandeja()
+            repo.all_facturas(),
+            repo.all_lineas_factura(),
+            repo.all_catalogo(),
+            repo.all_bandeja(),
+            decisiones_comerciales=_si_existe(repo, "all_decisiones_comerciales"),
+            descuentos_no_otorgados=_si_existe(repo, "all_descuentos_no_otorgados"),
         )
     except Exception as e:
         logger.exception("Error en /api/auditoria/nc-vs-motor")
         raise HTTPException(status_code=500, detail=str(e)) from e
     if solo_fuera:
-        hallazgos = [h for h in hallazgos if h.veredicto != "coincide"]
+        hallazgos = [h for h in hallazgos if h.veredicto not in ("coincide", "decision_comercial")]
     resumen: dict[str, int] = {}
     for h in hallazgos:
         resumen[h.veredicto] = resumen.get(h.veredicto, 0) + 1
@@ -13262,6 +13273,8 @@ async def get_nc_vs_motor(solo_fuera: bool = False):
                 "diferencia": float(h.diferencia),
                 "pct_base": float(h.pct_base),
                 "veredicto": h.veredicto,
+                "decision_motivo": h.decision_motivo,
+                "decidido_por": h.decidido_por,
             }
             for h in hallazgos
         ],
@@ -16243,6 +16256,52 @@ async def post_descuento_no_otorgado(
                 f"{req.so_id}: el descuento vuelve a contar como comprometido "
                 "y baja de la cuenta por cobrar."
             )
+        return {"status": "success", "message": msg}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+class MarcarDecisionComercialRequest(BaseModel):
+    """Documenta que la NC de ESTA orden difiere del motor por una decision comercial."""
+
+    so_id: str
+    motivo: str = ""
+    marcado_por: str = "Dirección / Administración"
+    # False revierte la marca.
+    vigente: bool = True
+
+
+@app.post("/api/ventas/decision-comercial")
+async def post_decision_comercial(
+    req: MarcarDecisionComercialRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """No cambia ningun monto: la comparacion NC-contra-motor deja de tratar la diferencia
+    de esta orden como anomalia y muestra el motivo y quien la decidio.
+
+    Caso que lo motivo: S00913, la regla da 8% de pronto pago y comercialmente se dio 6%.
+    """
+    try:
+        repo = get_repo()
+        if req.vigente:
+            repo.append_decision_comercial(
+                {
+                    "so_id": req.so_id,
+                    "motivo": req.motivo,
+                    "marcado_por": actor_de_la_accion(
+                        get_current_user_from_cookie(cxc_session), req.marcado_por
+                    ),
+                    "timestamp_marcado": datetime.now().isoformat(),
+                }
+            )
+            msg = (
+                f"{req.so_id}: la diferencia con el motor queda documentada como "
+                "decisión comercial."
+            )
+        else:
+            repo.delete_decision_comercial(req.so_id)
+            msg = f"{req.so_id}: se quitó la marca de decisión comercial."
         return {"status": "success", "message": msg}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
