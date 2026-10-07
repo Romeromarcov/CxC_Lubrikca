@@ -1400,6 +1400,15 @@ def _resincronizar_vinculaciones_con_odoo(repo: Any, execute: Any) -> list[dict[
         if not so_ids_odoo:
             continue
 
+        # Odoo manda: si las CONCILIADAS locales ya son exactamente las órdenes que Odoo
+        # reconcilió, las PENDIENTES que queden en ese pago son propuestas sobre lo que Odoo
+        # dejó sin conciliar (o residuos que ``_depurar_pendientes_contradichas_por_odoo``
+        # retira): no son una discrepancia con Odoo y no deben reabrir la revisión manual cada
+        # ciclo (medido el 7-oct-2026: 42 pagos reabiertos así justo después de cerrarlos).
+        conciliadas_locales = [v for v in vincs_locales if v.estado == EstadoVinculacion.CONCILIADO]
+        if conciliadas_locales and {v.so_id for v in conciliadas_locales} == so_ids_odoo:
+            vincs_locales = conciliadas_locales
+
         so_ids_locales = {v.so_id for v in vincs_locales}
         if so_ids_locales == so_ids_odoo:
             # Ya coincide -- Odoo confirma que la asignación es correcta.
