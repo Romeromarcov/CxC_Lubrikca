@@ -33,11 +33,11 @@ _VOID = {
 _ESPERADO = {
     "bandeja-en-proceso-de-pago-table-body": "tab-cobranza",
     "bandeja1-table-body": "tab-facturacion",
-    "auditoria-ventas-alertas-body": "tab-auditoria",
+    # Auditoria consolidada (9-oct-2026): ordenes, pagos, entregas y aceptadas.
+    "aud-ordenes-body": "tab-auditoria",
+    "aud-pagos-body": "tab-auditoria",
+    "aud-entregas-body": "tab-auditoria",
     "discrepancias-aceptadas-table-body": "tab-auditoria",
-    "auditoria-descuentos-body": "tab-auditoria",
-    "discrepancias-facturas-table-body": "tab-auditoria",
-    "pagos-residual-table-body": "tab-auditoria",
     "ventas-table-body": "tab-ventas",
 }
 

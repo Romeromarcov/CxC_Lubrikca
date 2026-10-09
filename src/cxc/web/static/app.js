@@ -311,7 +311,6 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (path === "auditoria") {
                 if (typeof loadBalanceComprobacion === "function") loadBalanceComprobacion();
                 if (typeof loadAuditoria === "function") loadAuditoria();
-                if (typeof loadAuditoriaVentasAlertas === "function") loadAuditoriaVentasAlertas();
             } else if (path === "inventario") {
                 if (typeof loadInventario === "function") loadInventario();
             } else if (path === "configuracion") {
@@ -2103,117 +2102,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     window.abrirModalPagosOrden = abrirModalPagosOrden;
     window.cerrarModalPagosOrden = cerrarModalPagosOrden;
-
-    // ── Bandeja Auditoría de Descuentos y NCs ─────────────────────────────────
-    async function loadAuditoriaDescuentos() {
-        const tbody = document.getElementById("auditoria-descuentos-body");
-        if (!tbody) return;
-        tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Cargando...</td></tr>';
-
-        const tipoVal = document.getElementById("audit-tipo-filter")?.value || "";
-        const estadoVal = document.getElementById("audit-estado-filter")?.value || "";
-        const params = new URLSearchParams();
-        if (tipoVal) params.set("tipo", tipoVal);
-        if (estadoVal) params.set("estado", estadoVal);
-
-        try {
-            const res = await fetch(`/api/auditoria-descuentos?${params.toString()}`);
-            if (!res.ok) {
-                tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error al cargar la bandeja de auditoría.</td></tr>';
-                return;
-            }
-            const data = await res.json();
-            const items = data.items || [];
-
-            const badge = document.getElementById("audit-count-badge");
-            if (badge) {
-                if (items.length > 0) {
-                    badge.textContent = `${items.length} discrepancia${items.length !== 1 ? 's' : ''}`;
-                    badge.style.display = "inline";
-                } else {
-                    badge.style.display = "none";
-                }
-            }
-            const subtabBadge = document.getElementById("auditoria-subtab-badge-descuentos");
-            if (subtabBadge) subtabBadge.textContent = String(items.length);
-
-            if (items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="table-empty" style="color:#059669;">✅ Sin discrepancias detectadas</td></tr>';
-                return;
-            }
-
-            const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-            const tipoLabel = { descuento_orden: '📋 Desc. Orden', descuento_factura: '🧾 Desc. Factura', nota_credito: '📄 Nota de Crédito' };
-            const estadoBadge = {
-                pendiente: '<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">⏳ Pendiente</span>',
-                revisado: '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">👁 Revisado</span>',
-                aprobado: '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">✅ Aprobado</span>',
-                rechazado: '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;">❌ Rechazado</span>',
-            };
-
-            tbody.innerHTML = "";
-            items.forEach(item => {
-                const tr = document.createElement("tr");
-                const dif = parseFloat(item.diferencia_usd || 0);
-                const difColor = dif > 0 ? '#dc2626' : (dif < 0 ? '#d97706' : '#059669');
-                const difIcon = dif > 0 ? '▲' : (dif < 0 ? '▼' : '=');
-                const ts = (item.timestamp_audit || '').substring(0, 16).replace('T', ' ');
-                const auditId = item.audit_id || '';
-                const estado = item.estado || 'pendiente';
-
-                tr.innerHTML = `
-                    <td><strong>${item.so_id || '-'}</strong></td>
-                    <td>${tipoLabel[item.tipo_auditoria] || item.tipo_auditoria || '-'}</td>
-                    <td><strong style="color:#2563eb;">${fmt(item.motor_calcula_usd)}</strong></td>
-                    <td><strong style="color:#475569;">${fmt(item.odoo_registrado_usd)}</strong></td>
-                    <td><strong style="color:${difColor};">${difIcon} ${fmt(Math.abs(dif))}</strong></td>
-                    <td><small style="color:#64748b;" title="${item.detalle_odoo || ''}">${(item.detalle_odoo || '-').substring(0,50)}${(item.detalle_odoo || '').length > 50 ? '…' : ''}</small></td>
-                    <td><small style="color:#64748b;" title="${item.detalle_motor || ''}">${(item.detalle_motor || '-').substring(0,50)}${(item.detalle_motor || '').length > 50 ? '…' : ''}</small></td>
-                    <td>${estadoBadge[estado] || estado}</td>
-                    <td><small>${ts}</small></td>
-                    <td>
-                        ${estado === 'pendiente' ? `
-                        <button onclick="marcarAuditoria('${auditId}','revisado')" style="padding:3px 8px;border-radius:5px;background:#dbeafe;color:#1d4ed8;border:none;cursor:pointer;font-size:0.75rem;margin-bottom:3px;">Marcar Revisado</button>
-                        <button onclick="marcarAuditoria('${auditId}','aprobado')" style="padding:3px 8px;border-radius:5px;background:#dcfce7;color:#15803d;border:none;cursor:pointer;font-size:0.75rem;">Aprobar</button>
-                        ` : `<span style="color:#94a3b8;font-size:0.75rem;">${item.revisado_por || '-'}</span>`}
-                    </td>
-                `;
-                tbody.appendChild(tr);
-            });
-        } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">Error de red al cargar la bandeja de auditoría.</td></tr>';
-            console.error("Error loadAuditoriaDescuentos:", err);
-        }
-    }
-
-    // Exposed globally so inline onclick buttons can call it
-    window.marcarAuditoria = async function(auditId, nuevoEstado) {
-        try {
-            const res = await fetch(`/api/auditoria-descuentos/${encodeURIComponent(auditId)}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ audit_id: auditId, estado: nuevoEstado }),
-            });
-            if (res.ok) {
-                loadAuditoriaDescuentos();
-            } else {
-                const data = await res.json();
-                alert(`Error al actualizar: ${data.detail || res.statusText}`);
-            }
-        } catch (err) {
-            console.error("Error marcarAuditoria:", err);
-        }
-    };
-
-    // Wire up audit filters and refresh button
-    const auditRefreshBtn = document.getElementById("audit-refresh-btn");
-    if (auditRefreshBtn) {
-        auditRefreshBtn.addEventListener("click", loadAuditoriaDescuentos);
-    }
-    ["audit-tipo-filter", "audit-estado-filter"].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener("change", loadAuditoriaDescuentos);
-    });
 
     // Form submit handlers for new discount panels
     const recompraForm = document.getElementById("recompra-form");
@@ -4796,356 +4684,226 @@ document.addEventListener("DOMContentLoaded", () => {
     // Initial Load for Dashboard
     loadTasasPromedios();
     
-    // --- Load Auditoría Data & Invoice Residual Discrepancies ---
-    // Paginación real de "Operaciones Conformes" (antes se cortaba a las
-    // primeras 100 filas sin forma de ver el resto) -- 50 filas por página.
-    let conformesFullList = [];
-    let conformesPage = 1;
-    const CONFORMES_PAGE_SIZE = 50;
-
-    function renderConformesPage() {
-        const bodyConformes = document.getElementById("conformes-table-body");
-        const pagerEl = document.getElementById("conformes-pager");
-        if (!bodyConformes) return;
-        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-        const escapeHtml = (str) => {
-            if (str === null || str === undefined) return '';
-            return String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        };
-
-        if (conformesFullList.length === 0) {
-            bodyConformes.innerHTML = '<tr><td colspan="8" class="table-empty">No hay operaciones conformes cargadas.</td></tr>';
-            if (pagerEl) pagerEl.innerHTML = "";
-            return;
-        }
-
-        const totalPages = Math.max(1, Math.ceil(conformesFullList.length / CONFORMES_PAGE_SIZE));
-        conformesPage = Math.min(Math.max(1, conformesPage), totalPages);
-        const start = (conformesPage - 1) * CONFORMES_PAGE_SIZE;
-        const pageItems = conformesFullList.slice(start, start + CONFORMES_PAGE_SIZE);
-
-        bodyConformes.innerHTML = pageItems.map(c => `
-            <tr>
-                <td><strong>${escapeHtml(c.so_id)}</strong></td>
-                <td>${escapeHtml(c.factura_id)}</td>
-                <td>${escapeHtml(c.cliente_nombre)}</td>
-                <td><small>${c.fecha ? c.fecha.substring(0, 10) : ''}</small></td>
-                <td>${fmt(c.monto_original)}</td>
-                <td>${fmt(c.descuentos_aplicados)}</td>
-                <td><strong style="color:#059669;">${fmt(c.monto_neto_conciliado)}</strong></td>
-                <td><span class="state-badge cierre" style="background:#dcfce7; color:#15803d; font-weight:600;">${escapeHtml(c.estado)}</span></td>
-            </tr>
-        `).join('');
-
-        if (pagerEl) {
-            pagerEl.innerHTML = `
-                <button type="button" class="btn-secondary" id="conformes-prev-btn" ${conformesPage <= 1 ? 'disabled' : ''}>← Anterior</button>
-                <span>Página ${conformesPage} de ${totalPages} (${conformesFullList.length} operaciones conformes)</span>
-                <button type="button" class="btn-secondary" id="conformes-next-btn" ${conformesPage >= totalPages ? 'disabled' : ''}>Siguiente →</button>
-            `;
-            const prevBtn = document.getElementById("conformes-prev-btn");
-            const nextBtn = document.getElementById("conformes-next-btn");
-            if (prevBtn) prevBtn.addEventListener("click", () => { conformesPage -= 1; renderConformesPage(); });
-            if (nextBtn) nextBtn.addEventListener("click", () => { conformesPage += 1; renderConformesPage(); });
-        }
-    }
+    // --- Auditoría consolidada (9-oct-2026) --------------------------------------------
+    // Una fila por orden con TODOS sus hallazgos (antes ~12 paneles listaban la misma realidad
+    // varias veces), y los pagos y las entregas en sus propias tablas. Fuente única:
+    // /api/auditoria/consolidada.
+    let audData = null;
+    const AUD_COLOR = {
+        PRECIO: ["#fee2e2", "#b91c1c"], FACTURA: ["#ffedd5", "#c2410c"],
+        DESCUENTO: ["#fef3c7", "#92400e"], NC: ["#ede9fe", "#6d28d9"],
+        ENTREGA: ["#dbeafe", "#1d4ed8"], SALDO: ["#e2e8f0", "#475569"],
+    };
+    const audFmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
+    const audEsc = (str) => (str === null || str === undefined) ? '' : String(str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
     async function loadAuditoria() {
-        const bodyDisc = document.getElementById("discrepancias-table-body");
-        const bodyFacturas = document.getElementById("discrepancias-facturas-table-body");
-        const bodyAceptadas = document.getElementById("discrepancias-aceptadas-table-body");
-        const bodyConformes = document.getElementById("conformes-table-body");
-        const bodyResidual = document.getElementById("pagos-residual-table-body");
-        const bodyAjustesHuerfanos = document.getElementById("ajustes-cambio-huerfanos-table-body");
-        const bodyImporteLocal = document.getElementById("pagos-importe-local-table-body");
-        const bodySobreaplicadas = document.getElementById("vinculaciones-sobreaplicadas-table-body");
-        const bodyTasaImplausible = document.getElementById("vinculaciones-tasa-implausible-table-body");
-        const bodyDevolucionNoReflejada = document.getElementById("devolucion-no-reflejada-table-body");
-
-
-        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-        const escapeHtml = (str) => {
-            if (str === null || str === undefined) return '';
-            return String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        };
-
+        const body = document.getElementById("aud-ordenes-body");
+        if (body) body.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando auditoría...</td></tr>';
+        const minimo = parseFloat(document.getElementById("aud-monto-minimo")?.value || "25");
+        const saldos = document.getElementById("aud-incluir-saldos")?.checked ? "true" : "false";
         try {
-            if (bodyDisc) bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td></tr>';
-            if (bodyFacturas) bodyFacturas.innerHTML = '<tr><td colspan="9" class="table-empty">Cargando discrepancias con facturas Odoo...</td></tr>';
-
-            const res = await fetch("/api/auditoria");
-            if (res.ok) {
-                const data = await res.json();
-                
-                const conformes = data.operaciones_conformes || [];
-                const discrepancias = data.discrepancias || [];
-                const discFacturas = data.discrepancias_facturas_odoo || [];
-                const aceptadas = data.discrepancias_aceptadas || [];
-                const pagosResidual = data.pagos_con_residual_sin_aplicar || [];
-                const ajustesHuerfanos = data.ajustes_cambio_huerfanos || [];
-                const pagosImporteLocal = data.pagos_importe_local_desincronizado || [];
-                const vinculacionesSobreaplicadas = data.vinculaciones_sobreaplicadas || [];
-                const vinculacionesTasaImplausible = data.vinculaciones_tasa_implausible || [];
-                const devolucionNoReflejada = data.devolucion_no_reflejada_en_cantidad || [];
-
-                // Cada KPI mide UNA cosa y se puede abrir. El numero grande
-                // cuenta ORDENES (o pagos), no filas: la bandeja de precios
-                // emite una fila por producto, asi que 430 filas eran 223
-                // ordenes y el conteo de filas no le decia nada a nadie.
-                const setKpi = (id, valor, sub) => {
-                    const el = document.getElementById(id);
-                    if (el) el.textContent = valor;
-                    const elSub = document.getElementById(id + "-sub");
-                    if (elSub) elSub.textContent = sub || "";
-                };
-                const ordenesDisc = new Set(discrepancias.map(d => d.so_id)).size;
-                const montoDisc = discrepancias.reduce((a, x) => a + (x.diferencia_monto || 0), 0);
-                setKpi("audit-kpi-discrepancias", String(ordenesDisc),
-                       `${discrepancias.length} hallazgos · ${fmt(montoDisc)} en brechas de precio`);
-
-                const montoSaldos = discFacturas.reduce((a, x) => a + Math.abs(x.diferencia || 0), 0);
-                setKpi("audit-kpi-saldos", String(new Set(discFacturas.map(d => d.so_id)).size),
-                       `${fmt(montoSaldos)} de diferencia contra Odoo`);
-
-                const resUsd = pagosResidual.filter(p => (p.moneda || 'USD').toUpperCase() !== 'VES');
-                const resVes = pagosResidual.length - resUsd.length;
-                const montoResUsd = resUsd.reduce((a, x) => a + Math.abs(x.residual_sin_aplicar_usd || 0), 0);
-                setKpi("audit-kpi-residual", String(pagosResidual.length),
-                       `${fmt(montoResUsd)} en USD · ${resVes} pagos en Bs`);
-
-                const reabiertas = [].concat(discrepancias, discFacturas, pagosResidual,
-                                             vinculacionesSobreaplicadas, vinculacionesTasaImplausible,
-                                             devolucionNoReflejada, ajustesHuerfanos)
-                                     .filter(x => x && x.reabierta).length;
-                setKpi("audit-kpi-aceptadas", String(aceptadas.length),
-                       reabiertas > 0 ? `${reabiertas} reabiertas: cambiaron los montos` : "ninguna reabierta");
-
-                const badgeDiscrepancias = document.getElementById("auditoria-subtab-badge-discrepancias");
-                if (badgeDiscrepancias) badgeDiscrepancias.textContent = String(ordenesDisc);
-                const badgeHistorico = document.getElementById("auditoria-subtab-badge-historico");
-                if (badgeHistorico) badgeHistorico.textContent = String(aceptadas.length);
-
-
-                // Render Discrepancias de Precios / Reglas
-                if (bodyDisc) {
-                    if (discrepancias.length === 0) {
-                        bodyDisc.innerHTML = '<tr><td colspan="11" class="table-empty" style="color:#059669">✅ No se detectaron discrepancias de precios ni descuentos en el sistema.</td></tr>';
-                    } else {
-                        bodyDisc.innerHTML = discrepancias.map(d => `
-                            <tr>
-                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
-                                <td><span class="state-badge">${escapeHtml(d.factura_id || 'N/A')}</span></td>
-                                <td>${escapeHtml(d.cliente_nombre)}</td>
-                                <td><small>${escapeHtml(d.vendedor)}</small></td>
-                                <td><span class="state-badge" style="background:#fef2f2; color:#dc2626; font-weight:600;">${escapeHtml(d.tipo)}</span></td>
-                                <td><small>${escapeHtml(d.detalle)}</small></td>
-                                <td>${fmt(d.esperado)}</td>
-                                <td>${fmt(d.actual)}</td>
-                                <td><strong style="color:#dc2626;">${fmt(d.diferencia_monto)}</strong></td>
-                                <td>${(d.diferencia_porcentaje || 0).toFixed(1)}%</td>
-                                <td>
-                                    ${btnAceptarDiscrepancia(d)}
-                                </td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Discrepancias Saldo CxC vs Residual Factura Odoo
-                if (bodyFacturas) {
-                    if (discFacturas.length === 0) {
-                        bodyFacturas.innerHTML = '<tr><td colspan="9" class="table-empty" style="color:#059669">✅ Excelente: Todos los saldos de deudores en CxC coinciden con las facturas de Odoo.</td></tr>';
-                    } else {
-                        bodyFacturas.innerHTML = discFacturas.map(d => `
-                            <tr>
-                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
-                                <td><span class="state-badge" style="background:#e0f2fe; color:#0369a1; font-weight:600;">${escapeHtml(d.factura_id)}</span></td>
-                                <td>${escapeHtml(d.cliente_nombre)}</td>
-                                <td><small>${escapeHtml(d.vendedor)}</small></td>
-                                <td><small>${d.fecha ? d.fecha.substring(0, 10) : ''}</small></td>
-                                <td><strong style="color:#6d28d9;">${fmt(d.saldo_cxc)}</strong></td>
-                                <td><strong style="color:#0369a1;">${fmt(d.saldo_factura_odoo)}</strong></td>
-                                <td><strong style="color:#dc2626;">${fmt(d.diferencia)}</strong></td>
-                                <td><span style="font-size:0.78rem; color:#475569;">${escapeHtml(d.causa_probable)}</span></td>
-                                <td>${btnAceptarDiscrepancia(d)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Anomalías Aceptadas
-                if (bodyAceptadas) {
-                    if (aceptadas.length === 0) {
-                        bodyAceptadas.innerHTML = '<tr><td colspan="9" class="table-empty">No hay discrepancias aceptadas en el historial.</td></tr>';
-                    } else {
-                        bodyAceptadas.innerHTML = aceptadas.map(a => `
-                            <tr>
-                                <td><small><code>${escapeHtml(a.discrepancia_id || '')}</code></small></td>
-                                <td><strong>${escapeHtml(a.so_id || '')}</strong></td>
-                                <td>${escapeHtml(a.factura_id || 'N/A')}</td>
-                                <td><span class="state-badge">${escapeHtml(a.tipo_discrepancia || '')}</span></td>
-                                <td><small>${escapeHtml(a.detalle || a.detalle_aceptado || 'Sin detalle registrado')}</small></td>
-                                <td><small>${escapeHtml(a.motivo_aceptacion || '')}</small></td>
-                                <td><small><strong>${escapeHtml(a.aprobado_por || '')}</strong></small></td>
-                                <td><small>${a.timestamp_aprobacion ? a.timestamp_aprobacion.substring(0, 16).replace('T', ' ') : '-'}</small></td>
-                                <td><small><code style="font-size:0.68rem; color:#64748b;">${escapeHtml(a.huella || '')}</code></small></td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Operaciones Conformes (paginado, ver renderConformesPage)
-                if (bodyConformes) {
-                    conformesFullList = conformes;
-                    conformesPage = 1;
-                    renderConformesPage();
-                }
-
-                // Render Pagos con Residual sin Aplicar (ver
-                // _detectar_pagos_con_residual_sin_aplicar -- bug real,
-                // cliente TERA, agosto 2026).
-                if (bodyResidual) {
-                    if (pagosResidual.length === 0) {
-                        bodyResidual.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ Ningún pago tiene residual sin aplicar en su línea contable.</td></tr>';
-                    } else {
-                        const fmtVesRes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
-                        bodyResidual.innerHTML = pagosResidual.map(p => `
-                            <tr>
-                                <td><strong>${escapeHtml(p.pago_id)}</strong></td>
-                                <td>${escapeHtml(p.numero_pago_odoo)}</td>
-                                <td>${escapeHtml(p.cliente_nombre || '—')}</td>
-                                <td>${p.clase === 'remanente'
-                                    ? '<span class="state-badge" style="background:#ecfdf5;color:#059669;font-weight:600;">Saldo a favor</span>'
-                                    : '<span class="state-badge" style="background:#fef2f2;color:#dc2626;font-weight:600;">Sin aplicar</span>'}</td>
-                                <td><strong style="color:#dc2626;">${(p.moneda || 'USD').toUpperCase() === 'VES' ? fmtVesRes(p.residual_sin_aplicar_usd) : fmt(p.residual_sin_aplicar_usd)}</strong></td>
-                                <td><span class="state-badge">${escapeHtml(p.moneda || 'USD')}</span></td>
-                                <td>${btnAceptarDiscrepancia(p)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Ajustes de Cambio Huérfanos (ver
-                // _detectar_ajustes_cambio_huerfanos -- bug real de Odoo,
-                // agosto 2026: desvincular un pago no cancela su Ajuste
-                // Cambio).
-                if (bodyAjustesHuerfanos) {
-                    if (ajustesHuerfanos.length === 0) {
-                        bodyAjustesHuerfanos.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:#059669">✅ No hay ajustes de cambio huérfanos detectados.</td></tr>';
-                    } else {
-                        const fmtVes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
-                        bodyAjustesHuerfanos.innerHTML = ajustesHuerfanos.map(a => `
-                            <tr>
-                                <td><span class="state-badge" style="background:#fef2f2; color:#dc2626; font-weight:600;">${escapeHtml(a.move_name)}</span></td>
-                                <td><strong>${escapeHtml(a.so_id || '—')}</strong></td>
-                                <td>${escapeHtml(a.factura_numero || '—')}</td>
-                                <td><strong style="color:#dc2626;">${fmtVes(a.residual_ves)}</strong></td>
-                                <td><small>${a.fecha ? String(a.fecha).substring(0, 10) : ''}</small></td>
-                                <td><small title="${escapeHtml(a.ref)}" style="color:#64748b;">${escapeHtml((a.ref || '').substring(0, 60))}${(a.ref || '').length > 60 ? '…' : ''}</small></td>
-                                <td>${btnAceptarDiscrepancia(a)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Pagos con Importe Local Desincronizado (ver
-                // _detectar_pagos_con_importe_local_desincronizado --
-                // bug real de Odoo, agosto 2026, método de detección
-                // propuesto por el usuario).
-                if (bodyImporteLocal) {
-                    if (pagosImporteLocal.length === 0) {
-                        bodyImporteLocal.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ningún pago tiene el importe local desincronizado de su asiento.</td></tr>';
-                    } else {
-                        const fmtVes = (v) => 'Bs. ' + Number(v || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 });
-                        bodyImporteLocal.innerHTML = pagosImporteLocal.map(p => `
-                            <tr>
-                                <td><strong>${escapeHtml(p.pago_id)}</strong></td>
-                                <td>${escapeHtml(p.numero_pago_odoo)}</td>
-                                <td>${fmtVes(p.importe_local_ves)}</td>
-                                <td>${fmtVes(p.monto_asiento_ves)}</td>
-                                <td><strong style="color:#dc2626;">${fmtVes(p.diferencia_ves)}</strong></td>
-                                <td>${btnAceptarDiscrepancia(p)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-                // Render Vinculaciones Sobreaplicadas (ver
-                // _detectar_vinculaciones_sobreaplicadas -- bug real, pago
-                // 1267/Grano Agregado, agosto 2026: dos Vinculaciones
-                // reclamando entre ambas más de lo que el pago vale).
-                if (bodySobreaplicadas) {
-                    if (vinculacionesSobreaplicadas.length === 0) {
-                        bodySobreaplicadas.innerHTML = '<tr><td colspan="4" class="table-empty" style="color:#059669">✅ Ningún pago tiene Vinculaciones que sumen más de lo que vale.</td></tr>';
-                    } else {
-                        bodySobreaplicadas.innerHTML = vinculacionesSobreaplicadas.map(v => `
-                            <tr>
-                                <td><strong>${escapeHtml(v.pago_id)}</strong></td>
-                                <td>${fmt(v.monto_pago_usd)}</td>
-                                <td>${fmt(v.total_vinculado_usd)}</td>
-                                <td><strong style="color:#dc2626;">${fmt(v.exceso_usd)}</strong></td>
-                                <td>${btnAceptarDiscrepancia(v)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Tasa Implícita Implausible (ver
-                // _detectar_vinculaciones_tasa_implicita_implausible --
-                // forma general del bug de confundir Bs con USD).
-                if (bodyTasaImplausible) {
-                    if (vinculacionesTasaImplausible.length === 0) {
-                        bodyTasaImplausible.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Ninguna Vinculación tiene una tasa implícita fuera de rango.</td></tr>';
-                    } else {
-                        bodyTasaImplausible.innerHTML = vinculacionesTasaImplausible.map(v => `
-                            <tr>
-                                <td><strong>${escapeHtml(v.vinc_id)}</strong></td>
-                                <td>${escapeHtml(v.pago_id)}</td>
-                                <td>${escapeHtml(v.so_id)}</td>
-                                <td><strong style="color:#dc2626;">${(v.tasa_implicita || 0).toFixed(4)}</strong></td>
-                                <td>${(v.tasa_real || 0).toFixed(4)} <small style="color:#94a3b8;">(${(v.diferencia_pct || 0).toFixed(1)}% off)</small></td>
-                                <td>${btnAceptarDiscrepancia(v)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
-
-                // Render Faltante de Devolución por Línea (ver
-                // _detectar_devolucion_no_reflejada_en_cantidad -- compara
-                // cantidad pedida vs entregada, igual que la propia
-                // pantalla de la orden en Odoo).
-                if (bodyDevolucionNoReflejada) {
-                    if (devolucionNoReflejada.length === 0) {
-                        bodyDevolucionNoReflejada.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:#059669">✅ Ninguna orden con devolución tiene un faltante sin reflejar.</td></tr>';
-                    } else {
-                        bodyDevolucionNoReflejada.innerHTML = devolucionNoReflejada.map(d => `
-                            <tr>
-                                <td><strong>${escapeHtml(d.so_id)}</strong></td>
-                                <td>${escapeHtml(d.producto_codigo)} <small style="color:#64748b;">${escapeHtml(d.producto_nombre)}</small></td>
-                                <td>${d.cantidad_ordenada}</td>
-                                <td>${d.cantidad_entregada}</td>
-                                <td><strong style="color:#dc2626;">${d.faltante}</strong></td>
-                                <td>${fmt(d.valor_potencial_afectado)}</td>
-                                <td>${btnAceptarDiscrepancia(d)}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
+            const res = await fetch(
+                `/api/auditoria/consolidada?monto_minimo=${isNaN(minimo) ? 25 : minimo}&incluir_saldos=${saldos}`,
+                { cache: "no-store" });
+            if (!res.ok) {
+                if (body) body.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar la auditoría.</td></tr>';
+                return;
             }
+            audData = await res.json();
+            renderAuditoria();
         } catch (err) {
             console.error("Error al cargar la auditoría:", err);
+            if (body) body.innerHTML = '<tr><td colspan="6" class="table-empty">Error de red al cargar la auditoría.</td></tr>';
         }
     }
     window.loadAuditoria = loadAuditoria;
+
+    function renderAuditoria() {
+        if (!audData) return;
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        const r = audData.resumen || {};
+
+        // --- Órdenes (filtros del lado del cliente) ---
+        const activos = new Set(Array.from(document.querySelectorAll("[data-aud-codigo]:checked"))
+            .map(c => c.dataset.audCodigo));
+        const q = (document.getElementById("aud-ordenes-buscar")?.value || "").trim().toLowerCase();
+        const ordenes = (audData.ordenes || []).map(o => Object.assign({}, o, {
+            visibles: o.hallazgos.filter(h => activos.has(h.codigo)),
+        })).filter(o => o.visibles.length > 0 && (!q ||
+            [o.so_id, o.cliente, o.vendedor].some(t => String(t || "").toLowerCase().includes(q))));
+        const body = document.getElementById("aud-ordenes-body");
+        if (body) {
+            if (ordenes.length === 0) {
+                body.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:#059669">✅ Nada por revisar con estos filtros.</td></tr>';
+            } else {
+                body.innerHTML = ordenes.slice(0, 400).map(o => {
+                    const chips = o.visibles.map(h => {
+                        const [bg, fg] = AUD_COLOR[h.codigo] || ["#f1f5f9", "#334155"];
+                        const monto = h.monto > 0 ? ` ${audFmt(h.monto)}` : '';
+                        return `<span class="state-badge" style="background:${bg}; color:${fg}; font-weight:600; margin:1px; display:inline-block;" title="Fuentes: ${audEsc((h.fuentes || []).join(', '))}">${audEsc(h.etiqueta)}${monto}</span>`;
+                    }).join(' ');
+                    const detalle = o.visibles.map(h =>
+                        `<div><small><strong>${audEsc(h.etiqueta)}:</strong> ${audEsc((h.detalle || '').substring(0, 160))}</small></div>`).join('');
+                    const aceptables = o.visibles.flatMap(h => h.aceptar || []).filter(a => a && a.discrepancia_id);
+                    const tieneNC = o.visibles.some(h => h.codigo === 'NC');
+                    const acciones = [
+                        aceptables.length ? `<button class="btn btn-secondary" onclick="aceptarHallazgos('${encodeURIComponent(JSON.stringify(aceptables.map(audPayloadAceptar)))}')" style="padding:0.25rem 0.6rem; font-size:0.75rem;">Aceptar${aceptables.length > 1 ? ' (' + aceptables.length + ')' : ''}</button>` : '',
+                        tieneNC ? `<button class="btn btn-secondary" onclick="decisionComercial('${audEsc(o.so_id)}')" title="Documenta que la NC difiere del motor a propósito" style="padding:0.25rem 0.6rem; font-size:0.75rem;">Decisión comercial</button>` : '',
+                    ].filter(Boolean).join(' ');
+                    return `<tr>
+                        <td><strong>${audEsc(o.so_id)}</strong><br><small style="color:#64748b;">${audEsc(o.fecha)}</small></td>
+                        <td>${audEsc(o.cliente)}</td>
+                        <td><small>${audEsc(o.vendedor)}</small></td>
+                        <td>${chips}</td>
+                        <td>${detalle}</td>
+                        <td>${acciones}</td>
+                    </tr>`;
+                }).join('') + (ordenes.length > 400 ? `<tr><td colspan="6" class="table-empty">Mostrando 400 de ${ordenes.length}: afina con los filtros o la búsqueda.</td></tr>` : '');
+            }
+        }
+        setTxt("aud-ordenes-conteo", `${ordenes.length} de ${r.ordenes || 0} órdenes`);
+        const ocultos = document.getElementById("aud-saldos-ocultos");
+        if (ocultos) ocultos.textContent = r.saldos_vs_odoo_ocultos ? `(${r.saldos_vs_odoo_ocultos} ocultos)` : '';
+
+        // --- Pagos y vinculaciones ---
+        const pagos = audData.pagos || [];
+        const bodyPagos = document.getElementById("aud-pagos-body");
+        if (bodyPagos) {
+            bodyPagos.innerHTML = pagos.length === 0
+                ? '<tr><td colspan="7" class="table-empty" style="color:#059669">✅ Sin pagos ni vinculaciones por revisar.</td></tr>'
+                : pagos.map(p => {
+                    const monto = p.moneda === 'VES'
+                        ? 'Bs. ' + Number(p.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 })
+                        : (p.monto ? audFmt(p.monto) : '—');
+                    return `<tr>
+                        <td><span class="state-badge">${audEsc(p.tipo)}</span></td>
+                        <td><strong>${audEsc(p.pago)}</strong></td>
+                        <td><small>${audEsc(p.referencia)}</small></td>
+                        <td>${audEsc(p.cliente)}</td>
+                        <td><small>${audEsc((p.detalle || '').substring(0, 160))}</small></td>
+                        <td>${monto}</td>
+                        <td>${p.aceptar ? btnAceptarDiscrepancia(p.aceptar) : ''}</td>
+                    </tr>`;
+                }).join('');
+        }
+
+        // --- Entregas y devoluciones ---
+        const entregas = audData.entregas || [];
+        const bodyEntregas = document.getElementById("aud-entregas-body");
+        if (bodyEntregas) {
+            bodyEntregas.innerHTML = entregas.length === 0
+                ? '<tr><td colspan="5" class="table-empty" style="color:#059669">✅ Sin entregas ni devoluciones por revisar.</td></tr>'
+                : entregas.map(e => `<tr>
+                    <td><span class="state-badge">${audEsc(e.tipo)}</span></td>
+                    <td><strong>${audEsc(e.so_id)}</strong></td>
+                    <td><small>${audEsc((e.detalle || '').substring(0, 200))}</small></td>
+                    <td>${e.monto ? audFmt(e.monto) : '—'}</td>
+                    <td>${e.aceptar ? btnAceptarDiscrepancia(e.aceptar) : ''}</td>
+                </tr>`).join('');
+        }
+
+        // --- Aceptadas ---
+        const aceptadas = audData.aceptadas || [];
+        const bodyAceptadas = document.getElementById("discrepancias-aceptadas-table-body");
+        if (bodyAceptadas) {
+            bodyAceptadas.innerHTML = aceptadas.length === 0
+                ? '<tr><td colspan="9" class="table-empty">No hay discrepancias aceptadas en el historial.</td></tr>'
+                : aceptadas.map(a => `<tr>
+                    <td><small><code>${audEsc(a.discrepancia_id || '')}</code></small></td>
+                    <td><strong>${audEsc(a.so_id || '')}</strong></td>
+                    <td>${audEsc(a.factura_id || 'N/A')}</td>
+                    <td><span class="state-badge">${audEsc(a.tipo_discrepancia || '')}</span></td>
+                    <td><small>${audEsc(a.detalle || a.detalle_aceptado || 'Sin detalle registrado')}</small></td>
+                    <td><small>${audEsc(a.motivo_aceptacion || '')}</small></td>
+                    <td><small><strong>${audEsc(a.aprobado_por || a.aceptada_por || '')}</strong></small></td>
+                    <td><small>${(a.timestamp_aprobacion || a.aceptada_en) ? String(a.timestamp_aprobacion || a.aceptada_en).substring(0, 16).replace('T', ' ') : '-'}</small></td>
+                    <td><small><code style="font-size:0.68rem; color:#64748b;">${audEsc(a.huella || '')}</code></small></td>
+                </tr>`).join('');
+        }
+
+        // --- KPIs y contadores ---
+        const montoOrdenes = (audData.ordenes || []).reduce((a, o) => a + (o.monto_mayor || 0), 0);
+        const porCodigo = r.ordenes_por_codigo || {};
+        setTxt("audit-kpi-ordenes", String(r.ordenes || 0));
+        setTxt("audit-kpi-ordenes-sub", Object.keys(porCodigo).length
+            ? Object.entries(porCodigo).map(([c, n]) => `${(AUD_COLOR[c] ? c : c)} ${n}`).join(' · ') : "");
+        setTxt("audit-kpi-pagos", String(r.pagos || 0));
+        setTxt("audit-kpi-pagos-sub", "residuales, ajustes, sobreaplicadas, propuestas");
+        setTxt("audit-kpi-entregas", String(r.entregas || 0));
+        setTxt("audit-kpi-entregas-sub", "faltantes de devolución y entregas sin fecha");
+        const reabiertas = [].concat(pagos.map(p => p.aceptar), entregas.map(e => e.aceptar))
+            .filter(x => x && x.reabierta).length;
+        setTxt("audit-kpi-aceptadas", String(r.aceptadas || 0));
+        setTxt("audit-kpi-aceptadas-sub", reabiertas > 0 ? `${reabiertas} reabiertas: cambiaron los montos` : "ninguna reabierta");
+        setTxt("auditoria-subtab-badge-ordenes", String(r.ordenes || 0));
+        setTxt("auditoria-subtab-badge-pagos", String(r.pagos || 0));
+        setTxt("auditoria-subtab-badge-entregas", String(r.entregas || 0));
+        setTxt("auditoria-subtab-badge-historico", String(r.aceptadas || 0));
+    }
+
+    function audPayloadAceptar(item) {
+        return {
+            discrepancia_id: item.discrepancia_id,
+            so_id: String(item.so_id || ''),
+            factura_id: String(item.factura_id || 'N/A'),
+            tipo_discrepancia: String(item.tipo_discrepancia || ''),
+            huella: String(item.huella || ''),
+            detalle: String(item.detalle || item.causa_probable || '')
+        };
+    }
+
+    // Acepta de una vez todas las filas aceptables de una orden: pide el motivo UNA vez.
+    window.aceptarHallazgos = async function(encoded) {
+        const filas = JSON.parse(decodeURIComponent(encoded));
+        const motivo = prompt(
+            `Motivo para aceptar ${filas.length} hallazgo(s) de ${filas[0].so_id}:\n\n` +
+            `Salen de la lista y pasan al historial. Si los montos que los originaron cambian, vuelven a aparecer.`,
+            "Revisado y aceptado en auditoría");
+        if (motivo === null) return;
+        const quien = prompt("¿Quién lo acepta?", "Dirección / Auditor");
+        if (quien === null) return;
+        try {
+            for (const f of filas) {
+                const res = await fetch("/api/auditoria/aceptar-discrepancia", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(Object.assign({}, f, { motivo_aceptacion: motivo, aprobado_por: quien }))
+                });
+                if (!res.ok) { alert("❌ Error al aceptar un hallazgo."); break; }
+            }
+            loadAuditoria();
+        } catch (err) {
+            console.error("Error aceptando hallazgos:", err);
+        }
+    };
+
+    // Documenta que la NC de la orden difiere del motor a propósito (no cambia ningún monto).
+    window.decisionComercial = async function(soId) {
+        const motivo = prompt(`Decisión comercial sobre ${soId}: ¿por qué la NC difiere del motor?`, "");
+        if (motivo === null || !motivo.trim()) return;
+        try {
+            const res = await fetch("/api/ventas/decision-comercial", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ so_id: soId, motivo: motivo.trim() })
+            });
+            if (res.ok) loadAuditoria(); else alert("❌ No se pudo registrar la decisión comercial.");
+        } catch (err) {
+            console.error("Error registrando la decisión comercial:", err);
+        }
+    };
+
+    document.querySelectorAll("[data-aud-codigo]").forEach(el => {
+        el.addEventListener("change", () => {
+            // "Saldo ≠ Odoo" llega del servidor solo si se pide: hay que recargar.
+            if (el.id === "aud-incluir-saldos") loadAuditoria(); else renderAuditoria();
+        });
+    });
+    document.getElementById("aud-ordenes-buscar")?.addEventListener("input", () => renderAuditoria());
+    document.getElementById("aud-monto-minimo")?.addEventListener("change", () => loadAuditoria());
 
     // Balance de comprobación: enfrenta dos páginas por partida y dice si
     // cuadran. Lo pidió el usuario para poder auditar que todo cierre sin
@@ -5201,77 +4959,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.loadBalanceComprobacion = loadBalanceComprobacion;
 
-    async function loadAuditoriaVentasAlertas() {
-        const tbody = document.getElementById("auditoria-ventas-alertas-body");
-        const kpiEl = document.getElementById("audit-kpi-ventas-alertas");
-        if (!tbody && !kpiEl) return;
-        const fmt = (val) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-        const escapeHtml = (str) => {
-            if (str === null || str === undefined) return '';
-            return String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        };
-        try {
-            const res = await fetch("/api/ventas?t=" + Date.now(), { cache: "no-store" });
-            if (!res.ok) {
-                if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error al cargar órdenes con alerta.</td></tr>';
-                return;
-            }
-            const data = await res.json();
-            // Las dos bandejas de precios se fusionaron: medían casi las
-            // mismas órdenes (39 de 41 coincidían en producción), pero
-            // cada una veía algo que la otra no. En vez de borrar una y
-            // perder esos casos, se unen y la columna Criterio dice cuál
-            // de los dos disparó.
-            let porPrecio = new Set();
-            try {
-                const resB = await fetch("/api/bandeja?t=" + Date.now(), { cache: "no-store" });
-                if (resB.ok) {
-                    const dataB = await resB.json();
-                    porPrecio = new Set((dataB.auditoria_precios || []).map(x => x.so_id));
-                }
-            } catch (e) { /* si /api/bandeja falla, queda solo el criterio de venta */ }
-
-            const porItem = new Map();
-            for (const it of (data.items || [])) {
-                if (it.alerta || porPrecio.has(it.so_id)) {
-                    const criterios = [];
-                    if (it.alerta) criterios.push("facturado &lt; teórico");
-                    if (porPrecio.has(it.so_id)) criterios.push("cubre factura, ningún teórico");
-                    porItem.set(it.so_id, Object.assign({}, it, { criterios: criterios.join(" + ") }));
-                }
-            }
-            const alertas = Array.from(porItem.values());
-            if (kpiEl) kpiEl.textContent = String(alertas.length);
-            const badgeAlertas = document.getElementById("auditoria-subtab-badge-alertas");
-            if (badgeAlertas) badgeAlertas.textContent = String(alertas.length);
-            if (!tbody) return;
-            if (alertas.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="table-empty" style="color:#059669">✅ No hay órdenes facturadas por debajo de lo debido.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = alertas.map(it => `
-                <tr>
-                    <td><strong>${escapeHtml(it.so_id)}</strong></td>
-                    <td>${escapeHtml(it.cliente_nombre)}</td>
-                    <td><small>${escapeHtml(it.vendedor)}</small></td>
-                    <td><small>${escapeHtml(it.fecha)}</small></td>
-                    <td>${fmt((it.total_facturado_neto || 0) + (it.diferencia || 0))}</td>
-                    <td>${fmt(it.total_facturado_neto)}</td>
-                    <td><strong style="color:#b91c1c;">${fmt(it.diferencia)}</strong></td>
-                    <td><small style="color:#7f1d1d;">${it.criterios || ''}</small></td>
-                </tr>
-            `).join('');
-        } catch (err) {
-            if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar órdenes con alerta.</td></tr>';
-            console.error(err);
-        }
-    }
-    window.loadAuditoriaVentasAlertas = loadAuditoriaVentasAlertas;
 
     // Sub-navegación de la página Auditoría (Discrepancias / Descuentos y
     // NCs / Alertas de Venta / Histórico Conforme) -- agrupa lo que antes

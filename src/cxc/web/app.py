@@ -45,6 +45,12 @@ from cxc.auth import (
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
 from cxc.engine.abonos import fusionar_abonos
+from cxc.engine.auditoria_consolidada import (
+    consolidar_entregas,
+    consolidar_ordenes,
+    consolidar_pagos,
+)
+from cxc.engine.auditoria_filas import clave_por_pago, sincronizar_filas
 from cxc.engine.balance import (
     crear_partida,
     partidas_externas,
@@ -1710,7 +1716,6 @@ def _detectar_vinculaciones_pendientes_a_revisar(
         existing_audit_rows = repo.all_auditoria()
     except Exception:
         existing_audit_rows = []
-    today_str = hoy.isoformat()
     revisar: list[dict[str, Any]] = []
     for v in vincs_pendientes:
         o = ordenes_map.get(v.so_id)
@@ -1754,18 +1759,15 @@ def _detectar_vinculaciones_pendientes_a_revisar(
     por_pago: dict[str, list[dict[str, Any]]] = {}
     for r in revisar:
         por_pago.setdefault(str(r["pago_id"]), []).append(r)
-    audit_ids_existentes = {str(r.get("audit_id", "")) for r in existing_audit_rows}
-    audit_rows = []
     ahora = datetime.now()
+    actuales = []
     for pago_id, filas in por_pago.items():
-        audit_id = f"VINC_STALE_{pago_id}_{today_str}"
-        if audit_id in audit_ids_existentes:
-            continue
         ordenes_txt = ", ".join(sorted({str(f["so_id"]) for f in filas}))
         motivos = " | ".join(dict.fromkeys(str(f["motivo"]) for f in filas))
-        audit_rows.append(
+        actuales.append(
             {
-                "audit_id": audit_id,
+                "audit_id": f"VINC_STALE_{pago_id}",
+                "pago_id": pago_id,
                 "so_id": filas[0]["so_id"],
                 "tipo_auditoria": "vinculacion_pendiente_revisar",
                 "motor_calcula_usd": None,
@@ -1778,11 +1780,23 @@ def _detectar_vinculaciones_pendientes_a_revisar(
                 "timestamp_audit": ahora.isoformat(),
             }
         )
-    if audit_rows:
-        try:
+    # Una fila abierta por PAGO, con id estable: se refresca en el lugar, y se cierra sola
+    # cuando el pago ya no necesita revision (antes: una fila nueva por dia, 3.969 acumuladas).
+    audit_rows, a_cerrar = sincronizar_filas(
+        existing_audit_rows,
+        actuales,
+        tipos={"vinculacion_pendiente_revisar"},
+        clave=clave_por_pago,
+        id_estable=lambda f: f"VINC_STALE_{f['pago_id']}",
+        comparar_detalle=True,
+    )
+    try:
+        if audit_rows:
             repo.append_auditoria_rows(audit_rows)
-        except Exception as e_aud:
-            logger.warning("Error guardando auditoría de Vinculaciones pendientes: %s", e_aud)
+        for audit_id in a_cerrar:
+            repo.update_auditoria_estado(audit_id, "resuelto", "Sistema (ya no requiere revision)")
+    except Exception as e_aud:
+        logger.warning("Error guardando auditoría de Vinculaciones pendientes: %s", e_aud)
 
     return revisar
 
@@ -2839,6 +2853,152 @@ def _detectar_facturado_por_debajo(repo: Any, dias: int = 60) -> list[dict[str, 
             }
         )
     return filas
+
+
+_AUDITORIA_CONSOLIDADA_CACHE: dict[tuple[bool, float, float], tuple[float, dict[str, Any]]] = {}
+
+
+@app.get("/api/auditoria/consolidada")
+async def get_auditoria_consolidada(
+    incluir_saldos: bool = False, monto_minimo: float = 25.0, pct_minimo: float = 5.0
+):
+    """Todo lo que Auditoria pide revisar, sin repetir: por orden, por pago y por entrega.
+
+    Une las fuentes que antes eran ~12 paneles (ver ``engine/auditoria_consolidada``). Las
+    diferencias de saldo contra Odoo (479, casi todas «retenciones o ajustes») quedan fuera salvo
+    ``incluir_saldos=true``. Las diferencias de PRECIO solo cuentan si son materiales
+    (``monto_minimo`` USD y ``pct_minimo`` %): un descuento de linea de 3% no es una alerta.
+    """
+    try:
+        ahora_ts = time.time()
+        clave_cache = (incluir_saldos, monto_minimo, pct_minimo)
+        en_cache = _AUDITORIA_CONSOLIDADA_CACHE.get(clave_cache)
+        if en_cache and ahora_ts - en_cache[0] < 60:
+            return en_cache[1]
+        repo = get_repo()
+        aud, ventas = await asyncio.gather(
+            get_auditoria(), get_ventas(vendedor=None, cxc_session=None)
+        )
+        if hasattr(aud, "body"):
+            aud = json.loads(aud.body)
+        if hasattr(ventas, "body"):
+            ventas = json.loads(ventas.body)
+
+        filas_aud = repo.all_auditoria()
+        abiertas = [r for r in filas_aud if r.get("estado") in ("pendiente", "pendiente_revision")]
+        # De la bandeja solo cuenta el sentido AUDITABLE: Odoo con MAS descuento/NC que el motor
+        # (diferencia negativa). El otro sentido (el motor calcula mas) es el descuento pendiente
+        # por aplicar, el flujo normal de NC por emitir que ya tiene su pantalla en Ventas.
+        bandeja = [
+            r
+            for r in abiertas
+            if r.get("tipo_auditoria") != "vinculacion_pendiente_revisar"
+            and float(r.get("diferencia_usd") or 0) < 0
+        ]
+        pendientes_a_revisar = [
+            r for r in abiertas if r.get("tipo_auditoria") == "vinculacion_pendiente_revisar"
+        ]
+
+        facturas = repo.all_facturas()
+        nc = [
+            {
+                "so_id": h.so_id,
+                "diferencia": float(h.diferencia),
+                "nc_usd": float(h.nc_usd),
+                "motor_usd": float(h.motor_usd),
+            }
+            for h in evaluar_ncs_contra_motor(
+                facturas,
+                repo.all_lineas_factura(),
+                repo.all_catalogo(),
+                repo.all_bandeja(),
+                decisiones_comerciales=_si_existe(repo, "all_decisiones_comerciales"),
+                descuentos_no_otorgados=_si_existe(repo, "all_descuentos_no_otorgados"),
+            )
+            if h.veredicto not in ("coincide", "decision_comercial")
+        ]
+        usd_ids, _ves = get_valid_pricelists_usd_and_ves(repo)
+        ordenes_repo = repo.all_ordenes()
+        por_debajo = [
+            {
+                "so_id": a.so_id,
+                "tipo": a.tipo,
+                "diferencia_usd": float(a.diferencia),
+                "detalle": a.detalle,
+            }
+            for a in evaluar_facturado_por_debajo(
+                ordenes_repo,
+                repo.all_lineas(),
+                repo.all_ventas_teoricos(),
+                facturas,
+                {str(x) for x in usd_ids},
+            )
+        ]
+        clientes = {c.cliente_id: c.nombre for c in repo.all_clientes()}
+        info_orden = {
+            o.so_id: {
+                "cliente": clientes.get(o.cliente_id, ""),
+                "vendedor": o.vendedor_email or "",
+                "fecha": o.fecha.isoformat(),
+            }
+            for o in ordenes_repo
+        }
+        saldos_todos = aud.get("discrepancias_facturas_odoo", [])
+
+        def _material(monto: float, base: float) -> bool:
+            return monto >= monto_minimo and (base <= 0 or monto / base * 100 >= pct_minimo)
+
+        discrepancias = [
+            d
+            for d in aud.get("discrepancias", [])
+            if d.get("tipo") != "Precio Inferior a Lista"
+            or _material(
+                float(d.get("diferencia_monto") or 0), float(d.get("esperado") or 0)
+            )
+        ]
+        ventas_alerta = [
+            it
+            for it in ventas.get("items", [])
+            if it.get("alerta")
+            and _material(
+                float(it.get("diferencia") or 0),
+                float(it.get("total_facturado_neto") or 0) + float(it.get("diferencia") or 0),
+            )
+        ]
+        filas_ordenes = consolidar_ordenes(
+            discrepancias=discrepancias,
+            ventas_con_alerta=ventas_alerta,
+            bandeja=bandeja,
+            nc_fuera_de_regla=nc,
+            por_debajo=por_debajo,
+            saldos=saldos_todos if incluir_saldos else [],
+            info_orden=info_orden,
+        )
+        pagos = consolidar_pagos(aud, pendientes_a_revisar)
+        entregas = consolidar_entregas(aud)
+        por_codigo: dict[str, int] = {}
+        for f in filas_ordenes:
+            for h in f["hallazgos"]:
+                por_codigo[h["codigo"]] = por_codigo.get(h["codigo"], 0) + 1
+        resultado = {
+            "ordenes": filas_ordenes,
+            "pagos": pagos,
+            "entregas": entregas,
+            "aceptadas": aud.get("discrepancias_aceptadas", []),
+            "resumen": {
+                "ordenes": len(filas_ordenes),
+                "ordenes_por_codigo": por_codigo,
+                "pagos": len(pagos),
+                "entregas": len(entregas),
+                "aceptadas": len(aud.get("discrepancias_aceptadas", [])),
+                "saldos_vs_odoo_ocultos": 0 if incluir_saldos else len(saldos_todos),
+            },
+        }
+        _AUDITORIA_CONSOLIDADA_CACHE[clave_cache] = (ahora_ts, resultado)
+        return resultado
+    except Exception as e:
+        logger.exception("Error en /api/auditoria/consolidada")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/auditoria/facturado-por-debajo")
@@ -4546,6 +4706,9 @@ async def get_auditoria_descuentos(
         rows = repo.all_auditoria()
         if estado:
             rows = [r for r in rows if r.get("estado", "") == estado]
+        else:
+            # Las filas que el sistema cerro solo (ya no hay discrepancia) no se listan.
+            rows = [r for r in rows if r.get("estado", "") != "resuelto"]
         if tipo:
             rows = [r for r in rows if r.get("tipo_auditoria", "") == tipo]
         return {"items": rows, "total": len(rows)}
@@ -5266,16 +5429,8 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             existing_audit_rows = repo.all_auditoria()
         except Exception:
             existing_audit_rows = []
-        # Key: (so_id, tipo_auditoria) — only append if not already recorded today
-        from datetime import date as _date
-
-        _today_str = _date.today().isoformat()
-        existing_audit_keys: set[tuple[str, str]] = {
-            (r.get("so_id", ""), r.get("tipo_auditoria", ""))
-            for r in existing_audit_rows
-            if str(r.get("timestamp_audit", ""))[:10] == _today_str
-        }
-
+        # Una fila abierta por (orden, tipo): ver engine/auditoria_filas.
+        _evaluadas_audit: set[str] = set()
         new_audit_rows: list[dict] = []
         for o in ordenes:
             live_state = so_odoo_data.get(o.so_id, {}).get("state")
@@ -5642,26 +5797,23 @@ def _get_reporte_saldos_sync(refresh: bool = False):
 
             # Collect audit rows in memory (persisted in 1 single batch call outside loop)
             _now_iso = datetime.now().isoformat()
+            _evaluadas_audit.add(o.so_id)
             for _ar in [audit_orden, audit_factura, audit_nc]:
                 if _ar.enviar_a_bandeja:
-                    _key = (o.so_id, _ar.tipo.value)
-                    if _key not in existing_audit_keys:
-                        new_audit_rows.append(
-                            {
-                                "audit_id": f"{o.so_id}_{_ar.tipo.value}_{_today_str}",
-                                "so_id": o.so_id,
-                                "tipo_auditoria": _ar.tipo.value,
-                                "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
-                                "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
-                                "diferencia_usd": round(float(_ar.diferencia_usd), 4),
-                                "detalle_odoo": _ar.detalle_odoo,
-                                "detalle_motor": _ar.detalle_motor,
-                                "estado": "pendiente",
-                                "revisado_por": "",
-                                "timestamp_audit": _now_iso,
-                            }
-                        )
-                        existing_audit_keys.add(_key)
+                    new_audit_rows.append(
+                        {
+                            "so_id": o.so_id,
+                            "tipo_auditoria": _ar.tipo.value,
+                            "motor_calcula_usd": round(float(_ar.motor_calcula_usd), 4),
+                            "odoo_registrado_usd": round(float(_ar.odoo_registrado_usd), 4),
+                            "diferencia_usd": round(float(_ar.diferencia_usd), 4),
+                            "detalle_odoo": _ar.detalle_odoo,
+                            "detalle_motor": _ar.detalle_motor,
+                            "estado": "pendiente",
+                            "revisado_por": "",
+                            "timestamp_audit": _now_iso,
+                        }
+                    )
 
             # Build audit summary for the report row
             has_any_discrepancy = any(
@@ -5798,11 +5950,21 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             )
 
         # Single batch write for new audit rows to avoid Google Sheets API rate limits
-        if new_audit_rows:
-            try:
-                repo.append_auditoria_rows(new_audit_rows)
-            except Exception as e_aud:
-                logger.warning("Error guardando lote de auditoría: %s", e_aud)
+        try:
+            filas_auditoria, cierres_auditoria = sincronizar_filas(
+                existing_audit_rows,
+                new_audit_rows,
+                tipos={"descuento_orden", "descuento_factura", "nota_credito"},
+                evaluadas=_evaluadas_audit,
+            )
+            if filas_auditoria:
+                repo.append_auditoria_rows(filas_auditoria)
+            for _audit_id in cierres_auditoria:
+                repo.update_auditoria_estado(
+                    _audit_id, "resuelto", "Sistema (ya no hay discrepancia)"
+                )
+        except Exception as e_aud:
+            logger.warning("Error guardando lote de auditoría: %s", e_aud)
 
         # Orden mas reciente primero (por numero de SO, creciente con el tiempo
         # en Odoo) -- sin esto, las ordenes nuevas quedaban al final de una
@@ -16658,15 +16820,8 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
         existing_audit_rows = repo.all_auditoria()
     except Exception:
         existing_audit_rows = []
-    _today_str = date.today().isoformat()
-    existing_keys: set[tuple[str, str]] = {
-        (r.get("so_id", ""), r.get("tipo_auditoria", ""))
-        for r in existing_audit_rows
-        if str(r.get("timestamp_audit", ""))[:10] == _today_str
-    }
-
     _ahora_iso = datetime.now().isoformat()
-    filas: list[dict] = []
+    actuales: list[dict] = []
     for so_id in so_ids:
         bandeja = bandeja_map.get(so_id)
         motor_total_descuentos = Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
@@ -16683,13 +16838,8 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
         for ar in (audit_orden, audit_factura):
             if not (ar.enviar_a_bandeja and ar.diferencia_usd < 0):
                 continue
-            key = (so_id, ar.tipo.value)
-            if key in existing_keys:
-                continue
-            existing_keys.add(key)
-            filas.append(
+            actuales.append(
                 {
-                    "audit_id": f"{so_id}_{ar.tipo.value}_{_today_str}",
                     "so_id": so_id,
                     "tipo_auditoria": ar.tipo.value,
                     "motor_calcula_usd": round(float(ar.motor_calcula_usd), 4),
@@ -16702,6 +16852,23 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
                     "timestamp_audit": _ahora_iso,
                 }
             )
+    # Una fila abierta por (orden, tipo): se refresca en el lugar y se cierra sola cuando el
+    # sobre-descuento desaparece. Este generador solo gobierna el sobre-descuento (diferencia
+    # negativa); las filas con diferencia positiva son de Reporte de Saldos.
+    filas, a_cerrar = sincronizar_filas(
+        existing_audit_rows,
+        actuales,
+        tipos={"descuento_orden", "descuento_factura"},
+        evaluadas=set(so_ids),
+        puede_cerrar=lambda f: float(f.get("diferencia_usd") or 0) < 0,
+    )
+    for audit_id in a_cerrar:
+        try:
+            repo.update_auditoria_estado(
+                audit_id, "resuelto", "Sistema (ya no hay sobre-descuento)"
+            )
+        except Exception as e_cierre:
+            logger.warning("No se pudo cerrar la fila de auditoria %s: %s", audit_id, e_cierre)
     return filas
 
 
