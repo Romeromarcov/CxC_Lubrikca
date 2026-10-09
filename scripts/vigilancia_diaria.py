@@ -498,15 +498,21 @@ def evaluar_pagada_en_odoo(informe: Informe) -> None:
             )
         )
     if por_causa:
+        # Informativo, NO una discrepancia entre pantallas: todas las pantallas usan
+        # ``pagada_unificada`` (por estado, mas tolerancia de centavos, y las anuladas nunca
+        # cuentan como cobradas) desde el 12 y el 21 de septiembre de 2026. Lo que se mide
+        # aqui es cuantas ordenes habrian caido distinto con cada regla VIEJA por separado.
+        # Antes este hallazgo decia «las pantallas no coinciden», que era falso.
         resumen = ", ".join(f"{c}: {n}" for c, n in sorted(por_causa.items()))
         informe.hallazgos.append(
             Hallazgo(
                 "pagada",
-                "dos_definiciones",
-                "MEDIA",
-                f"{sum(por_causa.values())} de {len(por_so)} ordenes con factura "
-                f"discrepan entre las dos definiciones de 'pagada en Odoo' "
-                f"({resumen}). Las pantallas no coinciden en que ordenes cuentan.",
+                "reglas_viejas_discrepan",
+                "BAJA",
+                f"{sum(por_causa.values())} de {len(por_so)} ordenes con factura caen distinto "
+                f"con las dos reglas VIEJAS de 'pagada' ({resumen}). Las pantallas ya usan "
+                f"la regla unificada (anuladas no cuentan como cobradas, centavos si); esto "
+                f"es solo el tamano de lo que la unificacion resolvio.",
             )
         )
 
