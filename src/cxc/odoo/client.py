@@ -819,17 +819,98 @@ class OdooXmlRpcReader(OdooReader):
         return facturas
 
     def _atribuir_nc_manuales(self, recs: list[dict[str, Any]], facturas: list[Factura]) -> None:
-        """Da factura origen a las NC manuales leyendo la factura anotada en su ``ref``.
+        """Da factura origen a las NC manuales (sin ``reversed_entry_id``).
 
-        Solo si el numero identifica UNA factura de cliente publicada: si hay duda, la NC queda
-        sin atribuir (mejor sin orden que con la orden equivocada).
+        Dos senales, de la mas fuerte a la mas debil:
+
+        1. **La conciliacion contable**: la linea por cobrar de la NC esta conciliada
+           (``account.partial.reconcile``) contra la factura a la que aplica. Es lo que Odoo
+           mismo usa para saldar la factura, asi que no depende de lo que alguien escribio.
+        2. **El numero de factura anotado en el ``ref``** de la NC.
+
+        Solo se atribuye si la senal identifica UNA factura de cliente publicada: con duda, la NC
+        queda sin atribuir (mejor sin orden que con la orden equivocada).
         """
         pendientes = [
-            (f, numeros_de_factura_en_referencia(r.get("ref"), f.numero))
+            (r, f)
             for r, f in zip(recs, facturas, strict=True)
             if f.move_type == "out_refund" and not f.factura_origen_id
         ]
-        numeros = sorted({n for _, ns in pendientes for n in ns})
+        if not pendientes:
+            return
+        por_conciliacion = self._facturas_conciliadas_con(
+            [int(f.factura_id) for _, f in pendientes]
+        )
+        sin_resolver: list[tuple[dict[str, Any], Factura]] = []
+        for r, f in pendientes:
+            ids = por_conciliacion.get(int(f.factura_id), set())
+            if len(ids) == 1:
+                f.factura_origen_id = str(next(iter(ids)))
+            else:
+                sin_resolver.append((r, f))
+        self._atribuir_por_referencia(sin_resolver)
+
+    def _facturas_conciliadas_con(self, nc_ids: list[int]) -> dict[int, set[int]]:
+        """``id de NC`` -> facturas de cliente publicadas contra las que esta conciliada."""
+        try:
+            lineas = self._search_read(
+                self.MODEL_MOVE_LINE,
+                [["move_id", "in", nc_ids], ["account_type", "=", "asset_receivable"]],
+                ["id", "move_id", "matched_debit_ids", "matched_credit_ids"],
+            )
+            nc_por_linea = {int(ln["id"]): int(ln["move_id"][0]) for ln in lineas}
+            parciales_ids = sorted(
+                {
+                    int(p)
+                    for ln in lineas
+                    for p in [*ln["matched_debit_ids"], *ln["matched_credit_ids"]]
+                }
+            )
+            if not parciales_ids:
+                return {}
+            parciales = self._read(
+                "account.partial.reconcile", parciales_ids, ["debit_move_id", "credit_move_id"]
+            )
+            pares: list[tuple[int, int]] = []  # (nc_id, id de la linea contraparte)
+            for p in parciales:
+                d, c = int(p["debit_move_id"][0]), int(p["credit_move_id"][0])
+                if c in nc_por_linea:
+                    pares.append((nc_por_linea[c], d))
+                if d in nc_por_linea:
+                    pares.append((nc_por_linea[d], c))
+            if not pares:
+                return {}
+            contra = self._read(
+                self.MODEL_MOVE_LINE, sorted({ln for _, ln in pares}), ["id", "move_id"]
+            )
+            move_de_linea = {int(ln["id"]): int(ln["move_id"][0]) for ln in contra}
+            moves = self._read(
+                self.MODEL_MOVE,
+                sorted(set(move_de_linea.values())),
+                ["id", "move_type", "state"],
+            )
+            validas = {
+                int(m["id"])
+                for m in moves
+                if m["move_type"] == "out_invoice" and m["state"] == "posted"
+            }
+        except Exception as e:  # noqa: BLE001 -- sin la atribucion el sync sigue valiendo
+            logger.warning("No se pudo leer la conciliacion de NC manuales: %s", e)
+            return {}
+        resultado: dict[int, set[int]] = {}
+        for nc_id, linea in pares:
+            mv = move_de_linea.get(linea)
+            if mv in validas:
+                resultado.setdefault(nc_id, set()).add(mv)
+        return resultado
+
+    def _atribuir_por_referencia(
+        self, pendientes: list[tuple[dict[str, Any], Factura]]
+    ) -> None:
+        pendientes_ref = [
+            (f, numeros_de_factura_en_referencia(r.get("ref"), f.numero)) for r, f in pendientes
+        ]
+        numeros = sorted({n for _, ns in pendientes_ref for n in ns})
         if not numeros:
             return
         try:
@@ -842,13 +923,13 @@ class OdooXmlRpcReader(OdooReader):
                 ],
                 ["id", "name"],
             )
-        except Exception as e:  # noqa: BLE001 -- sin la atribucion el sync sigue valiendo
+        except Exception as e:  # noqa: BLE001
             logger.warning("No se pudo resolver la factura origen de NC manuales: %s", e)
             return
         por_numero: dict[str, list[str]] = {}
         for c in candidatas:
             por_numero.setdefault(str(c["name"]), []).append(str(c["id"]))
-        for f, ns in pendientes:
+        for f, ns in pendientes_ref:
             ids = {i for n in ns for i in por_numero.get(n, [])}
             if len(ids) == 1:
                 f.factura_origen_id = next(iter(ids))
