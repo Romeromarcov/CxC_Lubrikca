@@ -299,6 +299,26 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
     )
 
 
+_NUMERO_DE_FACTURA = re.compile(r"(?<!\d)(\d{8})(?!\d)")
+
+
+def numeros_de_factura_en_referencia(ref: Any, propio: str = "") -> list[str]:
+    """Numeros de factura de 8 digitos que aparecen en el campo ``ref`` de una NC manual.
+
+    Las NC creadas a mano (sin «Revertir» en Odoo) no traen ``reversed_entry_id`` y quedaban sin
+    orden: 7 NC por $2.567,62 el 8-oct-2026. En su referencia, la persona que la emite anota
+    la factura a la que aplica (p. ej. ``00000535 |  Origen: S00571 CAP: ...``). Se excluye el
+    numero de la propia NC.
+    """
+    if not ref:
+        return []
+    vistos: list[str] = []
+    for n in _NUMERO_DE_FACTURA.findall(str(ref)):
+        if n != propio and n not in vistos:
+            vistos.append(n)
+    return vistos
+
+
 def map_factura_espejo(rec: dict[str, Any]) -> Factura:
     move_type = str(rec.get("move_type", "") or "out_invoice")
     debit_origin_id = _m2o_id(rec.get("debit_origin_id"))
@@ -791,9 +811,47 @@ class OdooXmlRpcReader(OdooReader):
                 "reversed_entry_id",
                 "debit_origin_id",
                 "wh_iva",
+                "ref",
             ],
         )
-        return [map_factura_espejo(r) for r in recs]
+        facturas = [map_factura_espejo(r) for r in recs]
+        self._atribuir_nc_manuales(recs, facturas)
+        return facturas
+
+    def _atribuir_nc_manuales(self, recs: list[dict[str, Any]], facturas: list[Factura]) -> None:
+        """Da factura origen a las NC manuales leyendo la factura anotada en su ``ref``.
+
+        Solo si el numero identifica UNA factura de cliente publicada: si hay duda, la NC queda
+        sin atribuir (mejor sin orden que con la orden equivocada).
+        """
+        pendientes = [
+            (f, numeros_de_factura_en_referencia(r.get("ref"), f.numero))
+            for r, f in zip(recs, facturas, strict=True)
+            if f.move_type == "out_refund" and not f.factura_origen_id
+        ]
+        numeros = sorted({n for _, ns in pendientes for n in ns})
+        if not numeros:
+            return
+        try:
+            candidatas = self._search_read(
+                self.MODEL_MOVE,
+                [
+                    ["name", "in", numeros],
+                    ["move_type", "=", "out_invoice"],
+                    ["state", "=", "posted"],
+                ],
+                ["id", "name"],
+            )
+        except Exception as e:  # noqa: BLE001 -- sin la atribucion el sync sigue valiendo
+            logger.warning("No se pudo resolver la factura origen de NC manuales: %s", e)
+            return
+        por_numero: dict[str, list[str]] = {}
+        for c in candidatas:
+            por_numero.setdefault(str(c["name"]), []).append(str(c["id"]))
+        for f, ns in pendientes:
+            ids = {i for n in ns for i in por_numero.get(n, [])}
+            if len(ids) == 1:
+                f.factura_origen_id = next(iter(ids))
 
     # --- Entregas (espejo inmutable, Fase 0 del plan de consolidación de
     # fuentes) -----------------------------------------------------------------

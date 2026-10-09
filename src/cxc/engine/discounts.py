@@ -28,6 +28,7 @@ from ..models import (
     DescuentoRecompra,
     DescuentoVolumen,
     EstadoBandeja,
+    EstadoVinculacion,
     ExclusionRegla,
     Feriado,
     LineaOrden,
@@ -161,6 +162,12 @@ class EngineInputs:
     # Sirve para llevar lo PAGADO (que incluye IVA) a la misma base sin IVA
     # que ``precio_base`` en el Diferencial Cambiario -- ver ese bloque.
     retencion_iva_fraccion: Decimal = Decimal("0")
+    # La base de los descuentos es el MONTO REAL de la orden: el precio de cada linea menos su
+    # propio descuento de linea (decision del usuario, 8-oct-2026). Caso real: S00719 tiene un
+    # 3% de descuento en cada linea, la orden vale 1.878,31 y no 1.936,40; la NC correcta fue el
+    # 35% de 1.878,31. ``False`` deja el precio de lista bruto: es lo que usa el teorico de
+    # Ventas (``ventas_teoricos``), que es el punto de comparacion de «lo que debio facturarse».
+    base_con_descuento_de_linea: bool = True
 
     @property
     def feriados(self) -> frozenset[date]:
@@ -724,8 +731,9 @@ def _con_pista_por_precio(inp: EngineInputs) -> EngineInputs:
                 continue  # obsequio: no representa el precio de lista
             cantidad = _cantidad_efectiva(inp, ln)
             cobrado += ln.precio_unitario * cantidad
-            en_ves += _precio_unitario_linea(inp, ln, ves_name) * cantidad
-            en_usd += _precio_unitario_linea(inp, ln, usd_name) * cantidad
+            bruto = replace(inp, base_con_descuento_de_linea=False)
+            en_ves += _precio_unitario_linea(bruto, ln, ves_name) * cantidad
+            en_usd += _precio_unitario_linea(bruto, ln, usd_name) * cantidad
     except KeyError:
         return inp  # sin precio en alguna lista: no hay con que comparar
 
@@ -828,8 +836,22 @@ def _precio_unitario_linea(inp: EngineInputs, linea: LineaOrden, lista: str) -> 
     if inp.price_resolver.fue_fallback(linea.producto, lista):
         precio_orden = _precio_de_la_orden(inp, linea, lista)
         if precio_orden is not None:
-            return precio_orden
-    return precio
+            precio = precio_orden
+    return precio * _factor_descuento_de_linea(inp, linea)
+
+
+def _factor_descuento_de_linea(inp: EngineInputs, linea: LineaOrden) -> Decimal:
+    """``1 - descuento/100`` de la linea, para llevar el precio al monto real de la orden.
+
+    Un obsequio (descuento >= 99,9%) NO se toca: el motor lo valora a precio completo para
+    poder calcular su NC. Tampoco las ordenes historicas, que traen su propia lista.
+    """
+    if not inp.base_con_descuento_de_linea or inp.orden_es_historica:
+        return Decimal("1")
+    d = linea.descuento
+    if d <= Decimal("0") or d >= Decimal("99.9"):
+        return Decimal("1")
+    return Decimal("1") - d / Decimal("100")
 
 
 # USD = VES x 0.65: la lista USD es la VES con el Diferencial Cambiario del 35% ya
@@ -2060,17 +2082,33 @@ def _calcular_componentes(
                 factor_iva = Decimal("1") + inp.engine_config.iva_rate * (
                     Decimal("1") - inp.retencion_iva_fraccion
                 )
+                # Odoo manda: con la orden YA facturada, solo lo que Odoo concilio cuenta como
+                # pagado. Las PENDIENTES son propuestas del FIFO sobre pagos que Odoo no repartio
+                # a esta factura y, sumadas, pasaban la factura y dejaban el diferencial en cero
+                # (caso S00542: 1.199 conciliados mas 779 pendientes daban $0; sin las pendientes,
+                # $646). Sin factura aun no hay nada que Odoo pueda conciliar: ahi las propuestas
+                # son la unica senal de pago y se conservan.
+                vincs_pagado = (
+                    [v for v in vincs if v.estado == EstadoVinculacion.CONCILIADO]
+                    if inp.orden.facturada
+                    else vincs
+                )
                 target = precio_target_usd or Decimal("0")
                 if target <= 0:
                     cobertura = Decimal("1")
                 else:
-                    ratio = valor_pagado_binance_usd(vincs) / factor_iva / target
+                    ratio = valor_pagado_binance_usd(vincs_pagado) / factor_iva / target
                     cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
                 techo = precio_base * diferencial_maximo
                 otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-                pagado_en_factura = valor_pagado_bcv_usd(vincs) / factor_iva
+                pagado_en_factura = valor_pagado_bcv_usd(vincs_pagado) / factor_iva
                 precio_real_orden = sum(
-                    (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
+                    (
+                        _cantidad_efectiva(inp, ln)
+                        * ln.precio_unitario
+                        * _factor_descuento_de_linea(inp, ln)
+                        for ln in inp.lineas
+                    ),
                     Decimal("0"),
                 )
                 # Sin líneas con precio propio no hay con qué medir la brecha:
@@ -2282,6 +2320,9 @@ def calcular_teorico_orden_con_fallback(inp: EngineInputs) -> dict[str, Any]:
     es la única razón para re-verificar un teórico ya guardado: si la lista
     se completa después con el precio faltante, el teórico cambiaría.
     """
+    # Punto de comparacion FIJO de «lo que debio facturarse»: precio de lista bruto, sin el
+    # descuento de linea de la orden (asi se puede alertar cuando se factura por debajo).
+    inp = replace(inp, base_con_descuento_de_linea=False)
     # Mismo freeze de equivalentes que calcular_factura -- _calcular_
     # componentes (via BCV-completo) exige v.equiv_usd_bcv ya congelado.
     for v, _ in inp.abonos:

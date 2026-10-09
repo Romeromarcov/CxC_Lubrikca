@@ -75,6 +75,7 @@ from cxc.engine.equivalents import (
     valor_pagado_binance_usd,
 )
 from cxc.engine.facturado import facturado_de_orden
+from cxc.engine.facturado_por_debajo import evaluar_facturado_por_debajo
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.identidad_de_reglas import aviso_de_ambiguedad, elegir_tabla_de_regla
 from cxc.engine.kpis_de_saldos import diferencia_de_kpis, kpis_de_filas
@@ -2798,6 +2799,84 @@ def resolve_vendedor_validado(
     return vendedor, mismatch
 
 
+def _detectar_facturado_por_debajo(repo: Any, dias: int = 60) -> list[dict[str, Any]]:
+    """Filas de Auditoría para las ordenes que se venden o facturan por debajo de lo debido.
+
+    Ver ``engine/facturado_por_debajo``. Solo ordenes de los ultimos ``dias`` (el resto de la
+    cartera se consulta en ``/api/auditoria/facturado-por-debajo``) y solo las que NO tienen ya
+    una fila: el ``audit_id`` es estable, asi que revisar una fila no la reabre cada ciclo.
+    """
+    usd_ids, _ves = get_valid_pricelists_usd_and_ves(repo)
+    ordenes = repo.all_ordenes()
+    recientes = {o.so_id for o in ordenes if (date.today() - o.fecha).days <= dias}
+    alertas = evaluar_facturado_por_debajo(
+        ordenes,
+        repo.all_lineas(),
+        repo.all_ventas_teoricos(),
+        repo.all_facturas(),
+        {str(x) for x in usd_ids},
+    )
+    existentes = {str(r.get("audit_id")) for r in repo.all_auditoria()}
+    ahora = datetime.now().isoformat()
+    filas = []
+    for a in alertas:
+        audit_id = f"FACT_DEBAJO_{a.tipo}_{a.so_id}"
+        if a.so_id not in recientes or audit_id in existentes:
+            continue
+        filas.append(
+            {
+                "audit_id": audit_id,
+                "so_id": a.so_id,
+                "tipo_auditoria": "facturado_por_debajo_de_lo_debido",
+                "motor_calcula_usd": float(a.esperado),
+                "odoo_registrado_usd": float(a.real),
+                "diferencia_usd": float(a.diferencia),
+                "detalle_odoo": a.tipo,
+                "detalle_motor": a.detalle,
+                "estado": "pendiente_revision",
+                "revisado_por": "",
+                "timestamp_audit": ahora,
+            }
+        )
+    return filas
+
+
+@app.get("/api/auditoria/facturado-por-debajo")
+async def get_facturado_por_debajo():
+    """Toda la cartera que se vende o factura por debajo de lo debido (solo informativa)."""
+    try:
+        repo = get_repo()
+        usd_ids, _ves = get_valid_pricelists_usd_and_ves(repo)
+        alertas = evaluar_facturado_por_debajo(
+            repo.all_ordenes(),
+            repo.all_lineas(),
+            repo.all_ventas_teoricos(),
+            repo.all_facturas(),
+            {str(x) for x in usd_ids},
+        )
+    except Exception as e:
+        logger.exception("Error en /api/auditoria/facturado-por-debajo")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    resumen: dict[str, int] = {}
+    for a in alertas:
+        resumen[a.tipo] = resumen.get(a.tipo, 0) + 1
+    return {
+        "resumen": resumen,
+        "items": [
+            {
+                "so_id": a.so_id,
+                "tipo": a.tipo,
+                "esperado_usd": float(a.esperado),
+                "real_usd": float(a.real),
+                "diferencia_usd": float(a.diferencia),
+                "pct": float(a.pct),
+                "detalle": a.detalle,
+            }
+            for a in alertas
+        ],
+    }
+
+
 def _correr_auditoria_sobre_descuento_diaria(repo) -> None:
     """Envoltorio del daemon (ver ``run_sync_in_background``) para
 
@@ -2813,6 +2892,16 @@ def _correr_auditoria_sobre_descuento_diaria(repo) -> None:
             print(f"FastAPI Daemon: {len(filas)} sobre-descuento(s) nuevo(s) en Auditoría.")
     except Exception as e_aud:
         print(f"Error detectando sobre-descuentos (daemon): {e_aud}", file=sys.stderr)
+    try:
+        filas_debajo = _detectar_facturado_por_debajo(repo)
+        if filas_debajo:
+            repo.append_auditoria_rows(filas_debajo)
+            print(
+                f"FastAPI Daemon: {len(filas_debajo)} orden(es) por debajo de lo debido "
+                "en Auditoría."
+            )
+    except Exception as e_debajo:
+        print(f"Error detectando facturado por debajo (daemon): {e_debajo}", file=sys.stderr)
 
 
 async def run_sync_in_background():
