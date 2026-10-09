@@ -982,368 +982,134 @@
                     </div>
                 </section>
 
-                <!-- KPIs de Auditoría. Cada tarjeta mide UNA sola cosa.
-                     Antes "Discrepancias Pendientes" sumaba tres bandejas que
-                     no comparten unidad -- filas de precio por producto (430),
-                     saldos de factura (503) y residuales de pago (239) -- y
-                     daba 1172, un numero que no correspondia a nada que se
-                     pudiera abrir. Y "Monto Discrepancia" sumaba brechas de
-                     precio por linea con diferencias de saldo, mezclando
-                     conceptos distintos en un solo dolar. -->
+                <!-- Auditoría consolidada (9-oct-2026). Antes eran ~12 paneles que listaban
+                     varias veces la misma realidad (medido: "Alertas de venta" contenía al 94% de
+                     "orden/factura por debajo"; la bandeja de NC estaba 100% dentro de la de
+                     descuento de orden). Ahora: UNA fila por orden con todos sus hallazgos, y los
+                     pagos y las entregas en sus propias tablas. Fuente: /api/auditoria/consolidada. -->
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
                     <div class="kpi-card card" style="border-left: 4px solid #dc2626;">
-                        <span class="kpi-label">Órdenes con discrepancia de precio</span>
-                        <span class="kpi-value danger" id="audit-kpi-discrepancias">0</span>
-                        <span class="kpi-sub" id="audit-kpi-discrepancias-sub" style="font-size:0.75rem; color:#64748b;"></span>
-                    </div>
-                    <div class="kpi-card card" style="border-left: 4px solid #b45309;">
-                        <span class="kpi-label">Órdenes facturadas por debajo</span>
-                        <span class="kpi-value warning" id="audit-kpi-ventas-alertas">0</span>
-                        <span class="kpi-sub" id="audit-kpi-ventas-alertas-sub" style="font-size:0.75rem; color:#64748b;"></span>
-                    </div>
-                    <div class="kpi-card card" style="border-left: 4px solid #6d28d9;">
-                        <span class="kpi-label">Saldos que no cuadran con Odoo</span>
-                        <span class="kpi-value" style="color:#6d28d9" id="audit-kpi-saldos">0</span>
-                        <span class="kpi-sub" id="audit-kpi-saldos-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                        <span class="kpi-label">Órdenes por revisar</span>
+                        <span class="kpi-value danger" id="audit-kpi-ordenes">0</span>
+                        <span class="kpi-sub" id="audit-kpi-ordenes-sub" style="font-size:0.75rem; color:#64748b;"></span>
                     </div>
                     <div class="kpi-card card" style="border-left: 4px solid #0369a1;">
-                        <span class="kpi-label">Pagos con residual sin aplicar</span>
-                        <span class="kpi-value" style="color:#0369a1" id="audit-kpi-residual">0</span>
-                        <span class="kpi-sub" id="audit-kpi-residual-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                        <span class="kpi-label">Pagos y vinculaciones</span>
+                        <span class="kpi-value" style="color:#0369a1" id="audit-kpi-pagos">0</span>
+                        <span class="kpi-sub" id="audit-kpi-pagos-sub" style="font-size:0.75rem; color:#64748b;"></span>
+                    </div>
+                    <div class="kpi-card card" style="border-left: 4px solid #6d28d9;">
+                        <span class="kpi-label">Entregas y devoluciones</span>
+                        <span class="kpi-value" style="color:#6d28d9" id="audit-kpi-entregas">0</span>
+                        <span class="kpi-sub" id="audit-kpi-entregas-sub" style="font-size:0.75rem; color:#64748b;"></span>
                     </div>
                     <div class="kpi-card card" style="border-left: 4px solid #059669;">
-                        <span class="kpi-label">Aceptadas / reabiertas</span>
+                        <span class="kpi-label">Aceptadas</span>
                         <span class="kpi-value" style="color:#059669" id="audit-kpi-aceptadas">0</span>
                         <span class="kpi-sub" id="audit-kpi-aceptadas-sub" style="font-size:0.75rem; color:#64748b;"></span>
                     </div>
                 </section>
 
-                <!-- Sub-navegación de Auditoría: agrupa las 7 tablas (que antes
-                     vivían todas en un solo scroll largo) en 4 categorías por
-                     tipo de auditoría -- ninguna tabla se eliminó, solo se
-                     reorganizó para reducir el scroll. -->
                 <div class="subtab-nav" role="tablist">
-                    <button type="button" class="subtab-btn active" data-subtab="discrepancias" onclick="switchAuditoriaSubtab('discrepancias')">
-                        Discrepancias <span class="subtab-badge" id="auditoria-subtab-badge-discrepancias">0</span>
+                    <button type="button" class="subtab-btn active" data-subtab="ordenes" onclick="switchAuditoriaSubtab('ordenes')">
+                        Órdenes <span class="subtab-badge" id="auditoria-subtab-badge-ordenes">0</span>
                     </button>
-                    <button type="button" class="subtab-btn" data-subtab="descuentos" onclick="switchAuditoriaSubtab('descuentos')">
-                        Descuentos y NCs <span class="subtab-badge" id="auditoria-subtab-badge-descuentos">0</span>
+                    <button type="button" class="subtab-btn" data-subtab="pagos" onclick="switchAuditoriaSubtab('pagos')">
+                        Pagos y vinculaciones <span class="subtab-badge" id="auditoria-subtab-badge-pagos">0</span>
                     </button>
-                    <button type="button" class="subtab-btn" data-subtab="alertas-venta" onclick="switchAuditoriaSubtab('alertas-venta')">
-                        Alertas de Venta <span class="subtab-badge" id="auditoria-subtab-badge-alertas">0</span>
+                    <button type="button" class="subtab-btn" data-subtab="entregas" onclick="switchAuditoriaSubtab('entregas')">
+                        Entregas y devoluciones <span class="subtab-badge" id="auditoria-subtab-badge-entregas">0</span>
                     </button>
                     <button type="button" class="subtab-btn" data-subtab="historico" onclick="switchAuditoriaSubtab('historico')">
                         Aceptadas <span class="subtab-badge" id="auditoria-subtab-badge-historico">0</span>
                     </button>
                 </div>
 
-                <!-- SUB-PESTAÑA: DISCREPANCIAS (Sección 2 + 2B) -->
-                <div class="subtab-panel active" data-subtab-panel="discrepancias" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- ÓRDENES: una fila por orden, con todos sus hallazgos -->
+                <div class="subtab-panel active" data-subtab-panel="ordenes" style="display:flex; flex-direction:column; gap:1.5rem;">
                     <section class="auditoria-panel card">
                         <div class="panel-header">
-                            <h2>Discrepancias de Precio y Descuento (Requieren Revisión)</h2>
-                            <p>Precios inferiores a lista oficial, descuentos manuales sin regla e inconsistencias orden vs factura</p>
+                            <h2>Órdenes por revisar</h2>
+                            <p>Cada orden aparece una sola vez con todo lo que se le señaló. Primero las que tienen más hallazgos y más plata en juego.</p>
                         </div>
-
+                        <div id="aud-ordenes-filtros" style="display:flex; gap:0.6rem 1rem; flex-wrap:wrap; align-items:center; margin-bottom:1rem; font-size:0.85rem;">
+                            <label><input type="checkbox" data-aud-codigo="PRECIO" checked> Precio bajo la lista</label>
+                            <label><input type="checkbox" data-aud-codigo="FACTURA" checked> Factura &lt; orden</label>
+                            <label><input type="checkbox" data-aud-codigo="DESCUENTO" checked> Descuento vs motor</label>
+                            <label><input type="checkbox" data-aud-codigo="NC" checked> NC vs motor</label>
+                            <label><input type="checkbox" data-aud-codigo="ENTREGA" checked> Entrega ≠ orden</label>
+                            <label><input type="checkbox" data-aud-codigo="SALDO" id="aud-incluir-saldos"> Saldo ≠ Odoo <small style="color:#64748b;" id="aud-saldos-ocultos"></small></label>
+                            <label>Monto mínimo $ <input type="number" id="aud-monto-minimo" value="25" min="0" step="5" style="width:5rem;"></label>
+                            <input type="search" id="aud-ordenes-buscar" placeholder="Buscar orden, cliente o vendedor" style="min-width:16rem; padding:0.35rem 0.6rem;">
+                            <span id="aud-ordenes-conteo" style="color:#64748b;"></span>
+                        </div>
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
                                     <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
+                                        <th>Orden</th>
                                         <th>Cliente</th>
                                         <th>Vendedor</th>
-                                        <th>Tipo</th>
+                                        <th>Hallazgos</th>
                                         <th>Detalle</th>
-                                        <th>Esperado ($)</th>
-                                        <th>Actual ($)</th>
-                                        <th>Discrepancia ($)</th>
-                                        <th>% Discrepancia</th>
                                         <th>Acción</th>
                                     </tr>
                                 </thead>
-                                <tbody id="discrepancias-table-body">
-                                    <tr>
-                                        <td colspan="11" class="table-empty">Cargando auditoría de discrepancias...</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Discrepancias de Saldo Deudor: Motor CxC vs. Facturas Odoo</h2>
-                            <p>Órdenes facturadas donde el saldo deudor según el motor CxC difiere del saldo residual mostrado en Odoo para la factura</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Cliente</th>
-                                        <th>Vendedor</th>
-                                        <th>Fecha Orden</th>
-                                        <th>Saldo CxC ($)</th>
-                                        <th>Saldo Residual Factura Odoo ($)</th>
-                                        <th>Diferencia ($)</th>
-                                        <th>Causa Probable / Diagnóstico</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="discrepancias-facturas-table-body">
-                                    <tr>
-                                        <td colspan="10" class="table-empty">No hay discrepancias registradas entre CxC y Facturas Odoo.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Pagos con Residual sin Aplicar</h2>
-                            <p title="Un pago puede quedar con un remanente sin conciliar en SU PROPIA línea contable de Cuentas por Cobrar aunque la factura ya muestre residual $0 -- Odoo cierra la reconciliación desde el lado de la factura y el remanente queda invisible en cualquier reporte que solo mire eso. Se lee directo de la línea contable del pago (amount_residual_currency / reconciled), sin adivinar nada.">Dos casos accionables. <strong>Saldo a favor</strong>: sobró plata de un pago ya aplicado -- el cliente tiene crédito y el FIFO lo asigna cuando aparezca una orden contra la cual aplicarlo; mientras tanto figura como saldo a favor en los reportes de CxC. <strong>Sin aplicar</strong>: ni Odoo lo aplicó ni el motor lo tiene vinculado, así que esa plata no está contada en ningún lado. Los pagos enteros que el motor ya vinculó NO salen aquí: esos son "En Proceso de Pago" y viven en Cobranza.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Pago ID</th>
-                                        <th>N° Pago Odoo</th>
-                                        <th>Cliente</th><th>Clase</th><th>Residual sin Aplicar</th>
-                                    <th>Moneda</th><th>Acción</th></tr>
-                                </thead>
-                                <tbody id="pagos-residual-table-body">
-                                    <tr>
-                                        <td colspan="4" class="table-empty">No hay pagos con residual sin aplicar.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Ajustes de Cambio Huérfanos</h2>
-                            <p title="Bug real de Odoo: al desvincular un pago de una factura (romper la conciliación), el asiento de Ajuste Cambio (journal Exchange Difference) que Odoo generó para esa reconciliación no se cancela automáticamente -- queda posted, restando un residual que ya no corresponde a ninguna reconciliación real. Se detecta por su propia línea contable (reconciled=False), sin recalcular ninguna tasa. Cubre facturas de venta (Cuentas por Cobrar) Y de compra (Cuentas por Pagar, pagos enviados a proveedores).">Asientos de "Ajuste Cambio" en Odoo que quedaron sueltos (posted, pero sin ninguna reconciliación real detrás) -- normalmente porque se desvinculó el pago que los originó. Cubre pagos recibidos y enviados. Hay que revisarlos y cancelarlos manualmente en Odoo.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Asiento</th>
-                                        <th>Orden (SO)</th>
-                                        <th>Factura Odoo</th>
-                                        <th>Residual (Bs.)</th>
-                                        <th>Fecha</th>
-                                        <th>Referencia</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="ajustes-cambio-huerfanos-table-body">
-                                    <tr>
-                                        <td colspan="7" class="table-empty">No hay ajustes de cambio huérfanos detectados.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Pagos con "Importe Local" Desincronizado</h2>
-                            <p title="Bug real de Odoo: editar la fecha o la tasa de un pago YA reconciliado hace que Odoo recalcule el equivalente en Bs con la tasa del DÍA DE LA EDICIÓN, no la que se puso -- pero el asiento contable ya posteado se queda con el monto VES viejo. Se detecta comparando el equivalente en Bs del pago (Importe Local para USD, o el propio Importe para VES) contra el monto Bs de la propia línea contable (método propuesto directamente por el usuario). Cubre pagos recibidos de clientes Y enviados a proveedores, en ambas monedas nativas.">Pagos donde el equivalente en Bs. registrado ya no coincide con el monto que su propio asiento contable tiene posteado -- señal de que el pago se editó después de reconciliado. Cubre recibidos y enviados, VES y USD. Hay que revisar y corregir en Odoo.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Pago ID</th>
-                                        <th>N° Pago Odoo</th>
-                                        <th>Importe Local (Bs.)</th>
-                                        <th>Monto en Asiento (Bs.)</th>
-                                        <th>Diferencia (Bs.)</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="pagos-importe-local-table-body">
-                                    <tr>
-                                        <td colspan="6" class="table-empty">No hay pagos con importe local desincronizado.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Vinculaciones Sobreaplicadas</h2>
-                            <p title="Caso real (agosto 2026, cliente Grano Agregado, pago 1267): dos Vinculaciones locales apuntando a órdenes distintas reclamaban, entre ambas, más dinero del que el pago realmente vale -- residuo de una corrida de auto-FIFO anterior al fix de _vinc_usd_equiv. Suma el equivalente USD de TODAS las Vinculaciones de cada pago (cualquier estado) y lo compara contra el monto real del pago.">Pagos cuyas Vinculaciones locales suman, entre todas, más de lo que el pago realmente vale -- señal de doble conteo. Revisar y corregir la asignación en Cobranza.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Pago ID</th>
-                                        <th>Monto Pago ($)</th>
-                                        <th>Total Vinculado ($)</th>
-                                        <th>Exceso ($)</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="vinculaciones-sobreaplicadas-table-body">
-                                    <tr>
-                                        <td colspan="5" class="table-empty">No hay Vinculaciones sobreaplicadas.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Tasa Implícita Fuera de Rango</h2>
-                            <p title="Forma general del bug de confundir Bs con USD (o congelar una tasa equivocada): la tasa implícita de una Vinculación en VES (monto_aplicado / equiv_usd_bcv) debe parecerse a la tasa BCV real de esa fecha (SerieTasas/TasasHistoricasAuditoria). Si difieren en más de ~15%, el equivalente USD ya congelado está mal aunque no haya sobreaplicación ni ningún otro chequeo lo detecte.">Vinculaciones en Bs. cuya tasa implícita (monto aplicado ÷ equivalente USD) no se parece a ninguna tasa BCV real de esa fecha. Revisar y recalcular el equivalente.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Vinc ID</th>
-                                        <th>Pago ID</th>
-                                        <th>Orden (SO)</th>
-                                        <th>Tasa Implícita</th>
-                                        <th>Tasa Real (fecha del abono)</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="vinculaciones-tasa-implausible-table-body">
-                                    <tr>
-                                        <td colspan="6" class="table-empty">No hay Vinculaciones con tasa implícita fuera de rango.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section class="auditoria-panel card" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header">
-                            <h2>Faltante de Devolución por Línea</h2>
-                            <p title="Compara cantidad pedida vs entregada por línea, igual que la propia pantalla de la orden en Odoo -- solo para órdenes con devolución registrada. Un faltante real indica que hace falta el ajuste de cantidad en la orden y/o la Nota de Crédito en la factura.">Líneas de órdenes con devolución donde la cantidad entregada es menor a la pedida -- verificar si falta el ajuste en la orden y/o la Nota de Crédito en la factura.</p>
-                        </div>
-
-                        <div class="table-wrapper large-table">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Producto</th>
-                                        <th>Cant. Ordenada</th>
-                                        <th>Cant. Entregada</th>
-                                        <th>Faltante</th>
-                                        <th>Valor Potencial ($)</th>
-                                    <th>Acción</th></tr>
-                                </thead>
-                                <tbody id="devolucion-no-reflejada-table-body">
-                                    <tr>
-                                        <td colspan="7" class="table-empty">No hay órdenes con devolución con faltante sin reflejar.</td>
-                                    </tr>
+                                <tbody id="aud-ordenes-body">
+                                    <tr><td colspan="6" class="table-empty">Cargando auditoría...</td></tr>
                                 </tbody>
                             </table>
                         </div>
                     </section>
                 </div>
 
-                <!-- SUB-PESTAÑA: DESCUENTOS Y NCs -->
-                <div class="subtab-panel" data-subtab-panel="descuentos" style="display:none;">
-                    <section class="auditoria-panel card" id="auditoria-descuentos-panel" style="border-left: 5px solid #f59e0b;">
-                        <div class="panel-header" style="margin-bottom: 1rem;">
-                            <h2 style="color: #b45309; display: flex; align-items: center; gap: 0.5rem;">
-                                <span>⚠️</span> Bandeja de Auditoría: Discrepancias en Descuentos y Notas de Crédito
-                            </h2>
-                            <p style="color: #92400e;">Órdenes donde los descuentos u NCs registrados en Odoo difieren de lo calculado por el motor. El sistema marca — el humano revisa.</p>
-                        </div>
-                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center;">
-                            <select id="audit-tipo-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                                <option value="">Todos los tipos</option>
-                                <option value="descuento_orden">Desc. Orden</option>
-                                <option value="descuento_factura">Desc. Factura</option>
-                                <option value="nota_credito">Nota de Crédito</option>
-                            </select>
-                            <select id="audit-estado-filter" style="padding:0.4rem 0.75rem; border-radius:6px; border:1px solid #d97706; background:#fffbeb; font-size:0.85rem;">
-                                <option value="">Todos los estados</option>
-                                <option value="pendiente">Pendiente</option>
-                                <option value="revisado">Revisado</option>
-                                <option value="aprobado">Aprobado</option>
-                            </select>
-                            <button id="audit-refresh-btn" style="padding:0.4rem 1rem; border-radius:6px; background:#f59e0b; color:#fff; border:none; cursor:pointer; font-size:0.85rem; font-weight:600;">🔄 Actualizar</button>
-                            <span id="audit-count-badge" style="padding:0.3rem 0.75rem; border-radius:999px; background:#fef3c7; color:#b45309; font-size:0.78rem; font-weight:700; display:none;"></span>
-                        </div>
-                        <div class="table-wrapper" style="overflow-x:auto;">
-                            <table class="data-table" style="font-size:0.8rem;">
-                                <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Tipo Discrepancia</th>
-                                        <th>Motor Calcula ($)</th>
-                                        <th>Odoo Registra ($)</th>
-                                        <th>Diferencia ($)</th>
-                                        <th>Detalle Odoo</th>
-                                        <th>Detalle Motor</th>
-                                        <th>Estado</th>
-                                        <th>Fecha Registro</th>
-                                        <th>Acción</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="auditoria-descuentos-body">
-                                    <tr><td colspan="10" class="table-empty">Cargando bandeja de auditoría...</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-                </div>
-
-                <!-- SUB-PESTAÑA: ALERTAS DE VENTA -->
-                <div class="subtab-panel" data-subtab-panel="alertas-venta" style="display:none;">
-                    <section class="auditoria-panel card" id="auditoria-ventas-alertas-panel" style="border-left: 5px solid #dc2626;">
-                        <div class="panel-header" style="margin-bottom: 1rem;">
-                            <h2 style="color: #b91c1c; display: flex; align-items: center; gap: 0.5rem;">
-                                <span>⚠️</span> Facturado por Debajo de lo Debido
-                            </h2>
-                            <p style="color: #7f1d1d;">Une los dos criterios que antes vivían en bandejas separadas: facturado neto por debajo del teórico del motor, y pago que cubre la factura real pero ningún teórico (sospecha de lista o precio por debajo del autorizado). Se medían casi las mismas órdenes -- 39 de 41 coincidían -- y la columna Criterio dice cuál disparó. Ver también la página Ventas para el histórico completo.</p>
+                <!-- PAGOS Y VINCULACIONES -->
+                <div class="subtab-panel" data-subtab-panel="pagos" style="display:none; flex-direction:column; gap:1.5rem;">
+                    <section class="auditoria-panel card">
+                        <div class="panel-header">
+                            <h2>Pagos y vinculaciones por revisar</h2>
+                            <p>Residuales sin aplicar, ajustes de cambio huérfanos, importes desincronizados, vinculaciones que suman más que el pago y propuestas sin confirmar por Odoo.</p>
                         </div>
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
-                                    <tr>
-                                        <th>Orden (SO)</th>
-                                        <th>Cliente</th>
-                                        <th>Vendedor</th>
-                                        <th>Fecha</th>
-                                        <th>Venta Neta Teórica + Imp.</th>
-                                        <th>Facturado Neto</th>
-                                        <th>Faltante</th>
-                                    <th>Criterio</th></tr>
+                                    <tr><th>Tipo</th><th>Pago</th><th>Referencia</th><th>Cliente / Orden</th><th>Detalle</th><th>Monto</th><th>Acción</th></tr>
                                 </thead>
-                                <tbody id="auditoria-ventas-alertas-body">
-                                    <tr><td colspan="7" class="table-empty">Cargando órdenes con alerta...</td></tr>
+                                <tbody id="aud-pagos-body">
+                                    <tr><td colspan="7" class="table-empty">Cargando...</td></tr>
                                 </tbody>
                             </table>
                         </div>
                     </section>
                 </div>
 
-                <!-- SUB-PESTAÑA: HISTÓRICO CONFORME (aceptadas + conformes) -->
+                <!-- ENTREGAS Y DEVOLUCIONES -->
+                <div class="subtab-panel" data-subtab-panel="entregas" style="display:none; flex-direction:column; gap:1.5rem;">
+                    <section class="auditoria-panel card">
+                        <div class="panel-header">
+                            <h2>Entregas y devoluciones por revisar</h2>
+                            <p>Faltante de devolución por línea (cantidad pedida contra entregada, como en la orden de Odoo) y órdenes entregadas sin fecha de entrega.</p>
+                        </div>
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr><th>Tipo</th><th>Orden</th><th>Detalle</th><th>Valor afectado</th><th>Acción</th></tr>
+                                </thead>
+                                <tbody id="aud-entregas-body">
+                                    <tr><td colspan="5" class="table-empty">Cargando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- ACEPTADAS (historial con trazabilidad) -->
                 <div class="subtab-panel" data-subtab-panel="historico" style="display:none; flex-direction:column; gap:1.5rem;">
                     <section class="auditoria-panel card">
                         <div class="panel-header">
                             <h2>Discrepancias Aceptadas (Historial con Trazabilidad)</h2>
                             <p>Qué se aceptó, con qué motivo, quién la aceptó y cuándo. La aceptación vale mientras los montos no cambien: si cambian, la discrepancia vuelve a su bandeja marcada como reabierta.</p>
                         </div>
-
                         <div class="table-wrapper large-table">
                             <table class="cxc-table">
                                 <thead>
@@ -1357,8 +1123,6 @@
                             </table>
                         </div>
                     </section>
-
-                    
                 </div>
             </div>
         </div>
