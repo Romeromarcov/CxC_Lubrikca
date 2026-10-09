@@ -356,13 +356,20 @@ CHEQUEOS: list[Chequeo] = [
         "orden_cancelada_con_entrega",
         "estados",
         "ALTA",
-        "Orden cancelada que igual salio del deposito. La mercancia se entrego "
-        "y la orden ya no se persigue. Nunca deberia irse callada.",
+        "Orden cancelada cuya mercancia salio del deposito Y NO VOLVIO: alguna linea "
+        "conserva cantidad_entregada neta positiva (lo entregado menos lo devuelto). "
+        "Una cancelada que salio y regreso por completo queda en cero y NO es un hallazgo "
+        "(el 7-oct-2026 las 19 de la lista eran asi: se verifico contra los movimientos de "
+        "stock de Odoo, neto cero en las 21 con movimientos). Mirar solo el estado de "
+        "entrega fue el mismo error que ya documenta engine/universo.py.",
         """
         SELECT o.so_id, o.estado_orden, o.estado_entrega, o.monto_total, o.fecha_entrega
         FROM ordenes_venta o
         WHERE o.estado_orden = 'cancel'
           AND (o.entregada_completa OR o.estado_entrega IN ('full', 'partial'))
+          AND EXISTS (
+              SELECT 1 FROM lineas_orden l WHERE l.so_id = o.so_id AND l.cantidad_entregada > 0
+          )
         ORDER BY o.monto_total DESC
         """,
     ),
@@ -384,6 +391,14 @@ CHEQUEOS: list[Chequeo] = [
         FROM ordenes_venta o
         JOIN entregas e ON e.so_id = o.so_id
         WHERE o.entregada_completa
+          -- Una cancelada cuya mercancia ya volvio por completo (neto cero) no importa para el
+          -- universo de cobranza: el bandera de entrega no decide nada ahi.
+          AND NOT (
+              o.estado_orden = 'cancel'
+              AND NOT EXISTS (
+                  SELECT 1 FROM lineas_orden l WHERE l.so_id = o.so_id AND l.cantidad_entregada > 0
+              )
+          )
         GROUP BY o.so_id, o.estado_orden, o.monto_total, o.estado_entrega
         HAVING count(*) FILTER (WHERE e.tipo = 'outgoing') > 0
            AND count(*) FILTER (WHERE e.tipo = 'outgoing' AND e.estado = 'cancel')
