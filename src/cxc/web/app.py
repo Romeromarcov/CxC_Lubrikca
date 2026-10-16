@@ -49,6 +49,7 @@ from cxc.engine.auditoria_consolidada import (
     consolidar_entregas,
     consolidar_ordenes,
     consolidar_pagos,
+    solo_pagos_por_aplicar,
 )
 from cxc.engine.auditoria_filas import clave_por_pago, sincronizar_filas
 from cxc.engine.balance import (
@@ -2855,23 +2856,21 @@ def _detectar_facturado_por_debajo(repo: Any, dias: int = 60) -> list[dict[str, 
     return filas
 
 
-_AUDITORIA_CONSOLIDADA_CACHE: dict[tuple[bool, float, float], tuple[float, dict[str, Any]]] = {}
+_AUDITORIA_CONSOLIDADA_CACHE: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
 
 
 @app.get("/api/auditoria/consolidada")
-async def get_auditoria_consolidada(
-    incluir_saldos: bool = False, monto_minimo: float = 25.0, pct_minimo: float = 5.0
-):
+async def get_auditoria_consolidada(monto_minimo: float = 25.0, pct_minimo: float = 5.0):
     """Todo lo que Auditoria pide revisar, sin repetir: por orden, por pago y por entrega.
 
-    Une las fuentes que antes eran ~12 paneles (ver ``engine/auditoria_consolidada``). Las
-    diferencias de saldo contra Odoo (479, casi todas «retenciones o ajustes») quedan fuera salvo
-    ``incluir_saldos=true``. Las diferencias de PRECIO solo cuentan si son materiales
+    Une las fuentes que antes eran ~12 paneles (ver ``engine/auditoria_consolidada``). De las
+    diferencias de saldo contra Odoo solo se conservan las accionables (pago por aplicar); el resto,
+    «retenciones o ajustes», se descarta. Las diferencias de PRECIO solo cuentan si son materiales
     (``monto_minimo`` USD y ``pct_minimo`` %): un descuento de linea de 3% no es una alerta.
     """
     try:
         ahora_ts = time.time()
-        clave_cache = (incluir_saldos, monto_minimo, pct_minimo)
+        clave_cache = (monto_minimo, pct_minimo)
         en_cache = _AUDITORIA_CONSOLIDADA_CACHE.get(clave_cache)
         if en_cache and ahora_ts - en_cache[0] < 60:
             return en_cache[1]
@@ -2971,7 +2970,7 @@ async def get_auditoria_consolidada(
             bandeja=bandeja,
             nc_fuera_de_regla=nc,
             por_debajo=por_debajo,
-            saldos=saldos_todos if incluir_saldos else [],
+            saldos=solo_pagos_por_aplicar(saldos_todos),
             info_orden=info_orden,
         )
         pagos = consolidar_pagos(aud, pendientes_a_revisar)
@@ -2991,7 +2990,7 @@ async def get_auditoria_consolidada(
                 "pagos": len(pagos),
                 "entregas": len(entregas),
                 "aceptadas": len(aud.get("discrepancias_aceptadas", [])),
-                "saldos_vs_odoo_ocultos": 0 if incluir_saldos else len(saldos_todos),
+                "saldos_descartados": len(saldos_todos) - len(solo_pagos_por_aplicar(saldos_todos)),
             },
         }
         _AUDITORIA_CONSOLIDADA_CACHE[clave_cache] = (ahora_ts, resultado)

@@ -4703,10 +4703,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const body = document.getElementById("aud-ordenes-body");
         if (body) body.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando auditoría...</td></tr>';
         const minimo = parseFloat(document.getElementById("aud-monto-minimo")?.value || "25");
-        const saldos = document.getElementById("aud-incluir-saldos")?.checked ? "true" : "false";
         try {
             const res = await fetch(
-                `/api/auditoria/consolidada?monto_minimo=${isNaN(minimo) ? 25 : minimo}&incluir_saldos=${saldos}`,
+                `/api/auditoria/consolidada?monto_minimo=${isNaN(minimo) ? 25 : minimo}`,
                 { cache: "no-store" });
             if (!res.ok) {
                 if (body) body.innerHTML = '<tr><td colspan="6" class="table-empty">Error al cargar la auditoría.</td></tr>';
@@ -4765,8 +4764,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
         setTxt("aud-ordenes-conteo", `${ordenes.length} de ${r.ordenes || 0} órdenes`);
-        const ocultos = document.getElementById("aud-saldos-ocultos");
-        if (ocultos) ocultos.textContent = r.saldos_vs_odoo_ocultos ? `(${r.saldos_vs_odoo_ocultos} ocultos)` : '';
 
         // --- Pagos y vinculaciones ---
         const pagos = audData.pagos || [];
@@ -4897,10 +4894,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     document.querySelectorAll("[data-aud-codigo]").forEach(el => {
-        el.addEventListener("change", () => {
-            // "Saldo ≠ Odoo" llega del servidor solo si se pide: hay que recargar.
-            if (el.id === "aud-incluir-saldos") loadAuditoria(); else renderAuditoria();
-        });
+        el.addEventListener("change", () => renderAuditoria());
     });
     document.getElementById("aud-ordenes-buscar")?.addEventListener("input", () => renderAuditoria());
     document.getElementById("aud-monto-minimo")?.addEventListener("change", () => loadAuditoria());
