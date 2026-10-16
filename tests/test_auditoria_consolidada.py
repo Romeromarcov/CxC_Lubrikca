@@ -148,3 +148,17 @@ def test_consolidar_entregas_junta_devoluciones_y_entregas_sin_fecha():
         "Entregada sin fecha",
         "Faltante de devolución por línea",
     ]
+
+
+def test_solo_se_conservan_las_diferencias_de_saldo_que_se_resuelven_aplicando_un_pago():
+    from cxc.engine.auditoria_consolidada import solo_pagos_por_aplicar
+
+    saldos = [
+        {
+            "so_id": "S1",
+            "causa_probable": "Abono / Pago registrado en CxC pero pendiente de aplicar en Odoo",
+        },
+        {"so_id": "S2", "causa_probable": "Diferencia por retenciones o ajustes en factura Odoo"},
+        {"so_id": "S3", "causa_probable": ""},
+    ]
+    assert [s["so_id"] for s in solo_pagos_por_aplicar(saldos)] == ["S1"]

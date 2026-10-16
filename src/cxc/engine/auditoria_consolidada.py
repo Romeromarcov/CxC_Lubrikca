@@ -22,8 +22,19 @@ ETIQUETAS = {
     "DESCUENTO": "Descuento vs motor",
     "NC": "NC vs motor",
     "ENTREGA": "Entrega ≠ orden",
-    "SALDO": "Saldo ≠ Odoo",
+    "SALDO": "Pago por aplicar en Odoo",
 }
+
+# Causa con la que el motor clasifica la diferencia de saldo que SI tiene accion: hay un pago
+# registrado en CxC que falta aplicar en Odoo. La otra causa, «Diferencia por retenciones o
+# ajustes en factura Odoo» (430 de 494 el 16-oct-2026), es un cajon de sastre sin accion posible
+# y se descarta.
+_CAUSA_PAGO_POR_APLICAR = "pendiente de aplicar"
+
+
+def solo_pagos_por_aplicar(saldos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """De las diferencias de saldo contra Odoo, solo las que se resuelven aplicando un pago."""
+    return [s for s in saldos if _CAUSA_PAGO_POR_APLICAR in str(s.get("causa_probable") or "")]
 
 _TIPO_DISCREPANCIA_A_CODIGO = {
     "Precio Inferior a Lista": "PRECIO",
