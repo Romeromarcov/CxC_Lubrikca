@@ -52,7 +52,27 @@ logger = logging.getLogger("cxc.engine")
 VERSION_DESGLOSE_MOTOR = "8"
 
 
-def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str:
+def _huella_de_abonos(vinculaciones: list[Vinculacion], orden: OrdenVenta) -> str:
+    """Lo que de los pagos mueve el teorico: cuales son, cuanto, cuando y en que estado.
+
+    Incluye ademas ``facturada`` y la fecha de entrega, porque cambian que pagos cuentan (con
+    la orden facturada solo cuenta lo que Odoo concilio) y si el pago cae en la ventana del
+    contado. No incluye los equivalentes congelados ni las tasas: se estampan despues de la
+    primera vez que se calcula y moverian la huella sin que nada de fondo haya cambiado.
+    """
+    if not vinculaciones:
+        return ""
+    partes = sorted(
+        f"{v.vinc_id}|{v.monto_aplicado}|{v.estado.value}|{v.hora_pago_confirmada:%Y-%m-%d}"
+        for v in vinculaciones
+    )
+    partes.append(f"facturada={bool(orden.facturada)}|entrega={orden.fecha_entrega}")
+    return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:12]
+
+
+def fingerprint_lineas(
+    lineas: list[LineaOrden], lista_precios: str = "", abonos: str = ""
+) -> str:
     """Huella determinista de las líneas de una orden (agosto 2026, hallazgo
 
     real orden S00792: el teórico quedó mostrando una línea de producto que
@@ -69,6 +89,12 @@ def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str
     el pareo si influye: una orden que cambia de lista en Odoo, sin tocar
     sus lineas, tiene que recalcular su teorico, y sin esto la huella no
     se moveria.
+
+    ``abonos`` (octubre 2026, S01226) es la huella de lo pagado -- ver ``_huella_de_abonos``. El
+    teorico incluye el diferencial cambiario y el contado, que dependen de los pagos: uno
+    calculado ANTES de que el pago se vinculara mostraba cero descuento para siempre, porque
+    nada lo volvia a calcular. Vacia (sin pagos) no altera la huella, asi que las ordenes sin
+    pagos conservan la que ya tenian.
     """
     partes = sorted(
         f"{ln.linea_id}|{ln.producto}|{ln.cantidad}|{ln.precio_unitario}|{ln.descuento}"
@@ -76,6 +102,8 @@ def fingerprint_lineas(lineas: list[LineaOrden], lista_precios: str = "") -> str
     )
     partes.append(f"__lista__|{str(lista_precios or '').strip()}")
     partes.append(f"__motor__|{VERSION_DESGLOSE_MOTOR}")
+    if abonos:
+        partes.append(f"__abonos__|{abonos}")
     return hashlib.sha256("\n".join(partes).encode("utf-8")).hexdigest()[:16]
 
 
@@ -586,6 +614,9 @@ class EngineRunner:
         for e in self._repo.all_entregas():
             if e.so_id:
                 entregas_index.setdefault(e.so_id, []).append(e)
+        vincs_index: dict[str, list[Vinculacion]] = {}
+        for v in self._repo.all_vinculaciones():
+            vincs_index.setdefault(v.so_id, []).append(v)
         procesadas = 0
         for o in self._repo.all_ordenes():
             if limite is not None and procesadas >= limite:
@@ -603,7 +634,9 @@ class EngineRunner:
                     continue
             existente = existentes.get(o.so_id)
             fingerprint_actual = fingerprint_lineas(
-                lineas_index.get(o.so_id, []), str(o.lista_precios or "")
+                lineas_index.get(o.so_id, []),
+                str(o.lista_precios or ""),
+                _huella_de_abonos(vincs_index.get(o.so_id, []), o),
             )
             if (
                 existente is not None
