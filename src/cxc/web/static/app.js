@@ -1911,9 +1911,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         </tr>
                         <tr>
                             <td>Real Orden${refBadge('orden')}</td>
-                            <td style="text-align:right">${fmt(item.venta_bruta_real)}</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real + (item.descuento_aplicado_orden || 0))}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_aplicado_orden, item.descuento_aplicado_orden_pct)}</td>
-                            <td style="text-align:right">${fmt(item.venta_bruta_real - item.descuento_aplicado_orden)}</td>
+                            <td style="text-align:right">${fmt(item.venta_bruta_real)}</td>
                             <td style="text-align:right"><strong>${fmt(item.venta_neta_real)}</strong></td>
                             <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
                             <td style="text-align:right"><strong>${fmt(saldoRealOrden)}</strong></td>
@@ -1921,9 +1921,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         </tr>
                         <tr>
                             <td>Real Factura${refBadge('factura')}</td>
-                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos)}</td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos + (item.descuento_aplicado_factura || 0))}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_aplicado_factura, item.descuento_aplicado_factura_pct)}</td>
-                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos - item.descuento_aplicado_factura)}</td>
+                            <td style="text-align:right">${fmt(item.total_facturado_antes_impuestos)}</td>
                             <td style="text-align:right"><strong>${fmt(item.total_facturado_neto)}</strong></td>
                             <td style="text-align:right">${fmt(item.monto_pagado_factura_odoo)}</td>
                             <td style="text-align:right"><strong>${naVal(saldoRealFactura)}</strong></td>

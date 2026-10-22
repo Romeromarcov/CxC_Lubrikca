@@ -132,3 +132,34 @@ def facturado_de_orden(
         tiene_factura=bruto_con > CERO,
         falta_nc_por_devolucion=falta_nc,
     )
+
+
+def facturado_de_menos(
+    *,
+    tiene_factura: bool,
+    facturado_neto: float,
+    iva_retenido: float,
+    teorico_neto_con_impuestos: float,
+    venta_neta_real: float,
+    tolerancia: float = 0.05,
+) -> bool:
+    """¿Se facturó menos de lo que correspondía? (la alerta «Facturado de menos»)
+
+    Dos comparaciones que la versión anterior hacía mal, ambas con S01226:
+
+    1. **Misma base.** ``facturado_neto`` ya descuenta el IVA retenido (regla 2 de
+       ``facturado_de_orden``) y el teórico lleva el IVA completo: un cliente agente de
+       retención aparecía siempre «facturado de menos» por el IVA que no paga en efectivo.
+       Se le devuelve el IVA retenido a lo facturado antes de comparar.
+    2. **Lo vendido manda.** El descuento que ya está en el precio de la línea (diferencial
+       cambiario, contado) baja lo que vale la orden, y facturar lo que se vendió no es
+       facturar de menos. Lo esperado es el menor entre el teórico y la orden real; si la
+       orden se vendió por debajo de lo que corresponde, eso lo señalan la validación
+       orden/factura y ``facturado_por_debajo``, no esta alerta.
+    """
+    if not tiene_factura:
+        return False
+    esperado = teorico_neto_con_impuestos
+    if venta_neta_real > CERO:
+        esperado = min(esperado, venta_neta_real)
+    return (facturado_neto + iva_retenido) < esperado - tolerancia
