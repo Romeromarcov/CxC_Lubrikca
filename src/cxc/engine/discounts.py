@@ -194,6 +194,11 @@ class _Componentes:
     regla_contado_dominante: DescuentoMarcaCategoria | None = None
     producto: Decimal = Decimal("0")
     detalle_producto: DescuentoAplicado | None = None
+    # Diferencial cambiario que la orden YA lleva metido en el precio de sus lineas (descuento de
+    # linea puesto a mano para llevar el monto VES a la tasa Binance). No se le debe nada mas por
+    # ese concepto (``diferencial_cambiario`` es 0), pero el diferencial SI aplica: excluye al
+    # contado. Es la parte de la brecha medida contra el precio de lista.
+    diferencial_en_precio: Decimal = Decimal("0")
 
 
 _ReglaT = TypeVar("_ReglaT")
@@ -246,6 +251,13 @@ def normalizar_componente_descuento(nombre: str) -> str:
     return _ALIAS_COMPONENTES.get(limpio, limpio)
 
 
+def _prevalece_diferencial(comp: _Componentes) -> frozenset[str]:
+    """El diferencial gana sus pares excluyentes cuando aplica, esté cobrado o ya en el precio."""
+    if comp.diferencial_cambiario > 0 or comp.diferencial_en_precio > 0:
+        return frozenset({"bcv_completo"})
+    return frozenset()
+
+
 def _pares_exclusion(exclusiones: list[ExclusionRegla]) -> set[tuple[str, str]]:
     """Pares (a, b) activos, canonizados y en ambos sentidos."""
     pares: set[tuple[str, str]] = set()
@@ -260,11 +272,18 @@ def _pares_exclusion(exclusiones: list[ExclusionRegla]) -> set[tuple[str, str]]:
 
 
 def _aplicar_exclusiones(
-    valores: dict[str, Decimal], exclusiones: list[ExclusionRegla]
+    valores: dict[str, Decimal],
+    exclusiones: list[ExclusionRegla],
+    prevalece: frozenset[str] = frozenset(),
 ) -> dict[str, Decimal]:
     """Anula el menor de cada par excluyente ("se aplica el de mayor valor",
 
     tal como lo describe el panel de Configuración). Devuelve un dict nuevo.
+
+    ``prevalece``: componentes que ganan el par SIN importar el monto. Hoy solo el diferencial
+    cambiario (``bcv_completo``), y solo cuando aplica: si se le dio el diferencial al cliente
+    no le corresponde además el contado (decisión del usuario, 22-oct-2026, S01226). Sigue
+    siendo configurable: el par tiene que estar en ``exclusiones`` para que surta efecto.
     """
     resultado = dict(valores)
     for ex in exclusiones:
@@ -273,6 +292,10 @@ def _aplicar_exclusiones(
         ta = normalizar_componente_descuento(ex.regla_tipo_a)
         tb = normalizar_componente_descuento(ex.regla_tipo_b)
         if ta not in resultado or tb not in resultado:
+            continue
+        if (ta in prevalece) != (tb in prevalece):
+            perdedor = tb if ta in prevalece else ta
+            resultado[perdedor] = Decimal("0")
             continue
         va, vb = resultado[ta], resultado[tb]
         if va > 0 and vb > 0:
@@ -1991,6 +2014,7 @@ def _calcular_componentes(
     # candidatos aparte (ver endpoint de candidatos de cierre) que gerencia
     # aprueba manualmente vía "Aprobar Descuento de Sistema".
     diferencial_cambiario = Decimal("0")
+    diferencial_en_precio = Decimal("0")
     detalle_diferencial: DescuentoAplicado | None = None
 
     listas_ves_validas = set(inp.valid_ves) if inp.valid_ves else {_lista_ves_activa(inp)}
@@ -2100,7 +2124,15 @@ def _calcular_componentes(
                     ratio = valor_pagado_binance_usd(vincs_pagado) / factor_iva / target
                     cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
                 techo = precio_base * diferencial_maximo
-                otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
+                # Si el par contado <-> diferencial está excluyente, el diferencial prevalece y
+                # el contado no se resta de la brecha (no le va a corresponder).
+                excluye_contado = ("contado", "bcv_completo") in _pares_exclusion(
+                    inp.exclusiones
+                )
+                otros_desc_pre = (
+                    nc + pct_recompra + (Decimal("0") if excluye_contado else contado_proy)
+                    + volumen_desc
+                )
                 pagado_en_factura = valor_pagado_bcv_usd(vincs_pagado) / factor_iva
                 precio_real_orden = sum(
                     (
@@ -2116,6 +2148,21 @@ def _calcular_componentes(
                 base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
                 brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
                 diferencial_cambiario = min(techo, brecha) * cobertura
+                # ¿Y si el precio ya lo trae? Lo mismo, medido contra el precio de LISTA de las
+                # líneas (sin su descuento): lo que el cliente pagó queda por debajo de la lista
+                # por la brecha del diferencial. Si la brecha contra lo real es 0 pero contra la
+                # lista no, el diferencial ya está en el precio.
+                precio_lista_lineas = sum(
+                    (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
+                    Decimal("0"),
+                )
+                if diferencial_cambiario <= 0 and precio_lista_lineas > 0:
+                    brecha_lista = max(
+                        Decimal("0"), precio_lista_lineas - otros_desc_pre - pagado_en_factura
+                    )
+                    diferencial_en_precio = (
+                        min(precio_lista_lineas * diferencial_maximo, brecha_lista) * cobertura
+                    )
                 if diferencial_cambiario > 0:
                     pct_str = f"{diferencial_maximo * 100:.1f}%"
                     cobertura_str = (
@@ -2147,6 +2194,7 @@ def _calcular_componentes(
         regla_contado_dominante=regla_contado_dominante,
         producto=producto_desc,
         detalle_producto=detalle_producto,
+        diferencial_en_precio=diferencial_en_precio,
         flags={
             "contado_evaluable": contado_evaluable,
             "promo_sin_precio": promo_sin_precio,
@@ -2415,6 +2463,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             "producto": comp.producto,
         },
         inp.exclusiones,
+        _prevalece_diferencial(comp),
     )
 
     descuentos_optimista = (
@@ -2453,6 +2502,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
             "producto": comp.producto,
         },
         inp.exclusiones,
+        _prevalece_diferencial(comp),
     )
 
     final_nc = valores["primera_compra"]
@@ -2548,6 +2598,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         teorico_lista_usd=teorico_usd,
         descuentos_teorico_ves=descuentos_teorico_ves,
         descuentos_teorico_usd=descuentos_teorico_usd,
+        diferencial_en_precio=q2(comp.diferencial_en_precio),
     )
 
 

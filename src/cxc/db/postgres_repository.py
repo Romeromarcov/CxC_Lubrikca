@@ -1962,6 +1962,7 @@ def _bandeja_to_row(b: BandejaFacturacion) -> dict[str, Any]:
         "teorico_lista_usd": b.teorico_lista_usd,
         "descuentos_teorico_ves": b.descuentos_teorico_ves,
         "descuentos_teorico_usd": b.descuentos_teorico_usd,
+        "diferencial_en_precio": b.diferencial_en_precio,
     }
 
 
@@ -1983,6 +1984,7 @@ def _row_to_bandeja(r: Any, descuentos: Sequence[DescuentoAplicado]) -> BandejaF
         teorico_lista_usd=r.teorico_lista_usd,
         descuentos_teorico_ves=r.descuentos_teorico_ves,
         descuentos_teorico_usd=r.descuentos_teorico_usd,
+        diferencial_en_precio=r.diferencial_en_precio,
     )
 
 

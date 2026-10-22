@@ -740,6 +740,9 @@ class BandejaFacturacion:
     candidata_a_cierre: bool = False
     aprobado_por: str | None = None
     estado: EstadoBandeja = EstadoBandeja.CALCULADO
+    # Diferencial cambiario que la orden ya lleva metido en el precio de sus lineas. NO suma al
+    # total de descuentos (la base ya lo trae); la validacion contra Odoo lo reconoce.
+    diferencial_en_precio: Decimal = Decimal("0")
     # Tarea 3 (rediseño de Ventas) -- equivalentes/teóricos por lista,
     # calculados una vez por el motor (mismo precio_resolver que
     # precio_base_calculado) para que Ventas/Auditoría los lean sin

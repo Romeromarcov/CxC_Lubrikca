@@ -585,6 +585,7 @@ bandeja_facturacion = Table(
     Column("teorico_lista_usd", MONEY, nullable=False, server_default="0"),
     Column("descuentos_teorico_ves", MONEY, nullable=False, server_default="0"),
     Column("descuentos_teorico_usd", MONEY, nullable=False, server_default="0"),
+    Column("diferencial_en_precio", MONEY, nullable=False, server_default="0"),
 )
 
 # --- VentasTeoricos (Fase 10) -----------------------------------------------
