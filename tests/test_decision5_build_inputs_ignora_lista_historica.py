@@ -36,7 +36,7 @@ from cxc.repositories import InMemoryRepository
 
 from . import builders as b
 
-CFG = EngineConfig(cash_window_business_days=3, bcv_complete_formula="differential_over_binance")
+CFG = EngineConfig(cash_window_business_days=3)
 
 
 def _repo_con_orden(lista: str, fecha: date) -> InMemoryRepository:

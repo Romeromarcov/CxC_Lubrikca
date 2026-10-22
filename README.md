@@ -1,187 +1,146 @@
 # Sistema de Cobros y Conciliación — Lubrikca (CxC)
 
-Backend determinístico que reemplaza el flujo Google Forms + IMPORTRANGE por un
-sistema **Odoo ↔ Google Sheets/AppSheet** con motor de descuentos y capa de
-conciliación de facturación.
-
-> Fuente de verdad: [`Especificacion_Sistema_Cobros_Lubrikca.md`](Especificacion_Sistema_Cobros_Lubrikca.md).
-> Este repo implementa las **piezas backend** de esa especificación. Lo que queda
-> manual (AppSheet, credenciales, automated actions de Odoo) está en
-> [`SETUP.md`](SETUP.md). Decisiones ante ambigüedad: [`TODO.md`](TODO.md).
+Aplicación web (FastAPI + PostgreSQL) que espeja Odoo en modo **solo lectura**,
+calcula con un motor determinístico lo que cada orden *debería* facturar
+(descuentos, tasas BCV/Binance, notas de crédito) y lo contrasta contra lo que
+Odoo realmente facturó y cobró.
 
 Principio rector: **el sistema enmarca y marca; el humano revisa lo que se sale
 del marco.** Ningún humano carga solo con un número que mueve dinero sin que el
-sistema lo contraste contra algo verificable.
+sistema lo contraste contra algo verificable. Odoo es la única autoridad
+contable: este sistema **nunca escribe en Odoo**.
+
+> Las reglas de negocio de origen están en
+> [`Especificacion_Sistema_Cobros_Lubrikca.md`](Especificacion_Sistema_Cobros_Lubrikca.md)
+> (secciones 4–7 vigentes; la arquitectura de esa especificación está superada,
+> ver su encabezado). Decisiones de negocio tomadas ante ambigüedad:
+> [`TODO.md`](TODO.md). Puesta en marcha y operación: [`SETUP.md`](SETUP.md).
 
 ---
 
-## Piezas implementadas
+## Cómo está armado
 
-| # | Pieza | Módulo | Entrypoint |
-|---|---|---|---|
-| 1 | Scraper de tasas horario → SerieTasas | `cxc.scraper` | `python -m cxc.run_scraper` |
-| 2 | Sync incremental delta Odoo→Sheets | `cxc.sync` | `python -m cxc.run_sync` |
-| 4 | Motor de descuentos → BandejaFacturacion | `cxc.engine` | `python -m cxc.run_engine` |
-| 5 | Conciliación motor vs Odoo → semáforo | `cxc.reconciliation` | `python -m cxc.run_reconcile` |
-| 6 | Auditoría hora declarada vs banco | `cxc.audit` | (librería; ver abajo) |
+Un único proceso web (`Procfile`: `uvicorn cxc.web.app:app`) que además arranca
+dos demonios en segundo plano (`startup_event` en `src/cxc/web/app.py`):
 
-La **pieza 3 (AppSheet)** es interfaz humana y **no se codifica** aquí (ver
-`SETUP.md`).
+| Demonio | Qué hace | Frecuencia |
+|---|---|---|
+| `run_sync_in_background` | Sync incremental Odoo → Postgres (clientes, órdenes, líneas, pagos, facturas, entregas, catálogo), sincronización de aplicaciones conciliadas y de NC, recálculo del motor y conciliación. Catálogo y recálculo completo, una vez por día. | cada 5 min |
+| `run_scraper_in_background` | Captura tasas BCV (USD y EUR, scraping directo del sitio) y Binance P2P en `serie_tasas`. | cada hora, entre las 6:00 y las 22:00 (Caracas) |
 
-Las dos capas de soporte:
-- **Persistencia** (`cxc.sheets`): `SheetsRepository` sobre Google Sheets.
-- **Adaptador Odoo** (`cxc.odoo`): XML-RPC **solo lectura** (Odoo es la única
-  autoridad contable; *Sheets nunca escribe a Odoo* — write-back purista).
-
----
-
-## Arquitectura
+Al arrancar, `startup_event` también aplica `alembic upgrade head` como red de
+seguridad si la fase `release` del `Procfile` no corrió.
 
 ```
-Odoo (autoridad contable, solo lectura)
-  │  XML-RPC delta (write_date > cursor)
-  ▼
-cxc.sync ──► Google Sheets (espejo) ──┐
-                                       │
-cxc.scraper ──► SerieTasas (append)    ├─► cxc.engine ──► BandejaFacturacion
-                                       │       (neto-objetivo, apilamiento,
-AppSheet ──► Vinculaciones ────────────┘        contado, BCV-completo, cierre)
-                                               │
-                                               ▼
-                              cxc.reconciliation ──► semáforo verde/amarillo/rojo
-                              cxc.audit ──► desvíos hora declarada vs banco
+Odoo (XML-RPC, solo lectura)
+   │  delta por write_date
+   ▼
+cxc.sync ──► Postgres ◄── cxc.scraper (BCV + Binance → serie_tasas, solo append)
+                │
+                ├─► cxc.engine   motor: teórico por lista, descuentos, equivalentes
+                │                congelados por abono, saldos, auditorías
+                ├─► cxc.reconciliation   motor vs factura real de Odoo → semáforo
+                └─► cxc.web   API REST (≈100 endpoints) + SPA estática
+                                (dashboard, facturación, conciliaciones, cobranza,
+                                 ventas, reporte, auditoría, inventario, configuración)
 ```
 
-**Regla de oro de la plomería** (sección 1.2): tres mundos de datos que no se
-cruzan en escritura — *espejo de Odoo* (solo el sync), *trabajo humano*
-(Vinculaciones/Bandeja, el sync **nunca** las toca) y *auditoría inmutable*
-(SerieTasas, solo append). El código lo garantiza por construcción y hay un test
-que lo verifica (`tests/test_sync.py::test_sync_nunca_toca_vinculaciones_ni_serietasas`).
+**Tres mundos de datos que no se cruzan en escritura:** *espejo de Odoo*
+(escribe solo el sync), *trabajo humano* (vinculaciones, decisiones, reglas de
+descuento — el sync nunca las toca) y *auditoría inmutable* (`serie_tasas`, solo
+append). Lo verifica `tests/test_sync.py`.
+
+### Mapa del código (`src/cxc/`)
+
+| Paquete | Contenido |
+|---|---|
+| `web/` | `app.py` (API, auth por cookie y por llave de API, demonios) y `static/` (SPA en JS plano) |
+| `engine/` | Lógica pura de dinero: `discounts.py` (motor), `runner.py` (cablea repo + precios), `balance.py`, `saldos.py`, `listas.py`, `equivalents.py`, `acotar_pago.py`, auditorías (`auditoria_*`, `nc_contra_motor.py`, `pagos_duplicados.py`, `reversadas.py`…) |
+| `db/` | `schema.py` (tablas, SQLAlchemy Core), `postgres_repository.py`, `invariantes.py` (restricciones de base) |
+| `odoo/` | `client.py` (lector XML-RPC), `price.py` (precio por pricelist) |
+| `sync/` | `incremental.py` (sync delta) |
+| `scraper/` | BCV, Binance y el orquestador `rates_scraper.py` |
+| `reconciliation/` | Semáforo motor vs Odoo |
+| `audit/` | `HourAuditor` (hora declarada vs banco). **Librería sin cablear**: ningún endpoint ni demonio la usa hoy |
+| `sheets/` | Solo `serde.py`: conversión dataclass ↔ fila (resto del backend Google Sheets retirado en agosto 2026) |
+| `repositories.py` | Interfaz `Repository` e `InMemoryRepository` (para tests) |
+
+Migraciones: `alembic/versions/` (45). Scripts operativos y de auditoría:
+`scripts/`. Banco de escenarios contra un Odoo de prueba: `escenarios/`
+([README](escenarios/README.md)).
 
 ---
 
-## Requisitos
+## Desarrollo
 
-- Python **3.11+**
-- Una cuenta de servicio de Google con acceso al Google Sheet.
-- Un usuario/API key de Odoo con permisos de lectura.
-
-Toda la configuración entra por **variables de entorno** (no hay secretos en el
-repo). Ver [`.env.example`](.env.example) y `SETUP.md`.
-
----
-
-## Instalación
+Requisitos: Python 3.11+, Docker (para el Postgres local).
 
 ```bash
 python -m venv .venv
-# Windows:  .venv\Scripts\activate
-# Linux/mac: source .venv/bin/activate
-pip install -r requirements.txt        # runtime
-pip install -r requirements-dev.txt    # + tests/lint/types
+.venv\Scripts\activate                 # Linux/mac: source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+cp .env.example .env                   # completar con valores reales (no se versiona)
+
+docker compose up -d                   # Postgres 16 igual al del CI
+export DATABASE_URL=postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci   # PowerShell: $env:DATABASE_URL = "..."
+alembic upgrade head
+
+PYTHONPATH=src uvicorn cxc.web.app:app --reload     # dashboard en http://localhost:8000
 ```
 
-Copia la plantilla de entorno y rellénala:
+### Las tres barreras
 
 ```bash
-cp .env.example .env   # editar con valores reales (queda fuera de git)
+./scripts/barreras.sh          # secretos + ruff + mypy + pytest con cobertura
+./scripts/barreras.sh rapido   # sin cobertura
 ```
 
----
+- `ruff check .` — lint (incluye `scripts/` y `escenarios/`).
+- `mypy` — estricto; `cxc.web.app` está exento (`ignore_errors`).
+- `pytest` — suite hermética (sin red: Odoo y scrapers mockeados). **Necesita
+  `DATABASE_URL`**: sin Postgres fallan ~40 tests que ejercitan `get_repo()`.
+  El umbral de cobertura (`--cov-fail-under` en `pyproject.toml`) es un
+  trinquete sobre el valor real medido, no un objetivo; el CI usa el mismo.
 
-## Cómo correr cada pieza
+CI: `.github/workflows/ci.yml` (ruff → mypy → `alembic upgrade head` → pytest)
+sobre un servicio Postgres 16, en cada push/PR a `main` y `develop`.
 
-Cada entrypoint lee la configuración del entorno, arma los adaptadores reales
-(Google Sheets + Odoo) y ejecuta una corrida.
+### Banco de escenarios
 
-```bash
-# Pieza 1 — capturar tasas BCV + Binance del bucket horario (correr cada hora)
-python -m cxc.run_scraper
-
-# Pieza 2 — refrescar el espejo de Odoo en Sheets (delta por write_date)
-python -m cxc.run_sync
-
-# Pieza 4 — calcular la BandejaFacturacion de las órdenes con abonos
-python -m cxc.run_engine
-
-# Pieza 5 — conciliar motor vs factura real de Odoo (semáforo)
-python -m cxc.run_reconcile
-```
-
-**Pieza 6 (auditoría hora vs banco)** se usa como librería porque el formato del
-estado de cuenta varía por banco; importa el extracto a `BankMovement` y corre:
-
-```python
-from cxc.audit import HourAuditor, BankMovement
-from cxc.config import HourAuditConfig
-
-auditor = HourAuditor(HourAuditConfig.from_env())
-hallazgos = auditor.auditar(vinculaciones, movimientos_banco)  # solo excepciones
-```
-
-### Despliegue en Railway
-
-Cada pieza es un proceso independiente. Configurar como **cron jobs**:
-
-| Pieza | Frecuencia sugerida | Comando |
-|---|---|---|
-| Scraper | cada hora (`0 * * * *`) | `python -m cxc.run_scraper` |
-| Sync | cada 15 min | `python -m cxc.run_sync` |
-| Motor | cada 15–30 min | `python -m cxc.run_engine` |
-| Conciliación | diaria | `python -m cxc.run_reconcile` |
-
-Variables de entorno: cargar las de `.env.example` en el panel de Railway.
-Detalles en `SETUP.md`.
-
----
-
-## Tests, lint y tipos
-
-```bash
-pytest          # tests + cobertura (gate >= 90%)
-ruff check .    # lint
-mypy            # tipos (estricto)
-```
-
-Los tests **no usan red**: Odoo y Sheets están mockeados (in-memory) y el scraper
-de Binance/BCV se prueba con fixtures capturados (`tests/fixtures/`). La función
-de red de cada cliente es inyectable, así que el scraper de **producción** pega
-directo al endpoint público de Binance sin credenciales.
-
-CI (GitHub Actions, `.github/workflows/ci.yml`) corre ruff + mypy + pytest en
-cada push/PR a `main`.
+`./scripts/escenarios.sh` corre `escenarios/` contra el Odoo de QA (escribe por
+red, tarda minutos, no es parte de la suite normal). Ver
+[`escenarios/README.md`](escenarios/README.md).
 
 ---
 
 ## Reglas de negocio clave (resumen)
 
-- **Disparador neto-objetivo, no nominal** (4.0): la orden nunca se paga al total
-  nominal; el motor persigue el *neto esperado* según la ruta de pago.
-- **Apilamiento aditivo** (4.1): los descuentos se suman (no "gana el mayor").
-  Ej.: Sinoco recompra + contado = **6%**; Global Oil sintético + recompra = **11%**.
-- **Reselección de lista por método** (4.2): el método de pago define la lista y
-  **gana** sobre la lista especial de nacimiento. Se lee el precio real de esa
-  pricelist en Odoo (no se multiplica por un factor).
-- **Contado por ventana de días hábiles** (4.6): `[entrega, entrega + 3 hábiles]`,
-  saltando fines de semana **y** la tabla de Feriados. Vencido → pasa a crédito y
-  pierde el contado.
-- **Equivalentes congelados por abono** (3.9b): cada abono congela sus 4
-  equivalentes contra la tasa estampada de su bucket horario; jamás se recalculan.
-- **Mezcla → Binance** (3.9b): si algún abono salió de la ruta BCV, la orden no
-  cumple "completo en BCV" y migra a VES@Binance (la más conservadora).
-- **Cierre híbrido** (4.7): el motor marca *candidata a cierre*; Administración
+- **Neto-objetivo, no nominal:** la orden nunca se paga al total nominal; el
+  motor persigue el neto esperado según la ruta de pago.
+- **Apilamiento aditivo:** los descuentos se suman (no "gana el mayor").
+- **Lista por método de pago:** el método define la lista y gana sobre la de
+  nacimiento; el precio se lee de la pricelist real de Odoo (no se multiplica
+  por un factor), con fallback configurable a la ficha del producto.
+- **Contado por ventana de días hábiles** desde la entrega completa, saltando
+  fines de semana y la tabla `feriados`. Vencido → crédito y pierde el contado.
+- **Equivalentes congelados por abono:** cada abono congela sus equivalentes
+  contra la tasa estampada de su bucket horario; no se recalculan.
+- **Mezcla → Binance:** si algún abono salió de la ruta BCV, la orden pierde el
+  descuento de diferencial por pago "100% BCV".
+- **Diferencial cambiario** (`fijo_35_ves_usd`, `equiparar_binance`): ver
+  `TODO.md` §1.
+- **Cierre híbrido:** el motor marca *candidata a cierre*; Administración
   confirma.
-- **Effective dating** (8.4): los % de descuento tienen vigencia por fecha; una
-  orden vieja se audita con el % que regía entonces.
+- **Effective dating:** los % de descuento tienen vigencia por fecha; una orden
+  vieja se audita con el % que regía entonces.
 
----
+## Documentación
 
-## Qué quedó manual (ver `SETUP.md`)
-
-- **App AppSheet** (pieza 3): vinculación pago↔orden, bandeja de aprobación,
-  security filters `USEREMAIL()`, validaciones de monto.
-- **Credenciales/secretos**: service account de Google, API key de Odoo.
-- **Automated actions de Odoo** y normalización de marca/categoría a nivel de
-  producto (prerequisito del motor, sección 8.3).
-- **Creación del Google Sheet** con las pestañas y cabeceras esperadas.
-- **Mapeo de pricelists** USD/BCV → ids de Odoo (`ODOO_PRICELIST_*`).
+| Documento | Contenido |
+|---|---|
+| [`SETUP.md`](SETUP.md) | Variables de entorno, despliegue en Railway, migraciones, prerrequisitos en Odoo |
+| [`TODO.md`](TODO.md) | Decisiones de negocio ante ambigüedad y pendientes de confirmar |
+| [`docs/ODOO_MAPEO.md`](docs/ODOO_MAPEO.md) | Qué modelos y campos de Odoo lee el sistema |
+| [`docs/blindaje/PROGRESO.md`](docs/blindaje/PROGRESO.md) | Libro de a bordo del plan de blindaje (sep-2026): mediciones, hallazgos e incidentes |
+| [`escenarios/README.md`](escenarios/README.md) | Banco de escenarios de error humano |

@@ -19,7 +19,7 @@ from cxc.engine.historical_pricing import cargar_mapa_historico, es_orden_histor
 from cxc.engine.price_resolver import DictPriceResolver
 from cxc.models import LineaOrden, OrdenVenta
 
-CFG = EngineConfig(cash_window_business_days=3, bcv_complete_formula="differential_over_binance")
+CFG = EngineConfig(cash_window_business_days=3)
 
 
 def test_mapa_se_indexa_por_producto_id_odoo_no_por_codigo():

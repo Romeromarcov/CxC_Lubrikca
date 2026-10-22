@@ -1,5 +1,14 @@
 # Rediseño CxC_Lubrikca — Descuentos unificados, `requiere_pago_previo`, Ventas/Auditoría, Configuración en subpáginas
 
+> **Estado del documento (octubre 2026): bitácora histórica de agosto 2026.** Las
+> tareas descritas están implementadas, pero varias partes están superadas:
+> `DescuentoBCVCompleto` fue retirado (ver `TODO.md` §1), el backend Google Sheets
+> (`REPO_BACKEND=sheets`) ya no existe, y las migraciones citadas ya están
+> aplicadas. Se conserva por las referencias del código a las Tareas 2–4 y al
+> diseño de Configuración en subpáginas. No usarlo como descripción del
+> comportamiento actual: eso es el código y `README.md`.
+
+
 Estado: Tarea 1 implementada y probada. Tarea 2 cerrada por hallazgo de
 auditoría (no había nada que unificar; el flujo reactivo Cobranza→Ventas
 queda diseñado, no implementado). Tarea 3 implementada completa (3a-3g:

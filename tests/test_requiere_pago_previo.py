@@ -25,7 +25,6 @@ from . import builders as b
 
 CFG = EngineConfig(
     cash_window_business_days=3,
-    bcv_complete_formula="differential_over_binance",
 )
 
 

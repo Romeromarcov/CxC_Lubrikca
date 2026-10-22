@@ -146,8 +146,8 @@ def test_si_el_guardado_falla_el_patch_NO_dice_ok(repo) -> None:
     assert r.status_code == 500
 
 
-@pytest.mark.parametrize("rol", ["vendedor", "cobranza", ""])
-def test_solo_admin_y_contabilidad_pueden_cambiar_el_estado(repo, rol) -> None:
+@pytest.mark.parametrize("rol", ["ventas", "tesoreria", "gerente_ventas", "contabilidad", ""])
+def test_solo_admin_y_auditor_pueden_cambiar_el_estado(repo, rol) -> None:
     r = _patch(repo, {"rol": rol, "nombre": "Quien"})
     assert r.status_code == 403
     repo.update_auditoria_estado.assert_not_called()
@@ -173,9 +173,9 @@ def test_el_audit_id_que_manda_es_el_de_la_RUTA_no_el_del_cuerpo(repo) -> None:
 
 def test_quien_reviso_sale_del_nombre_y_si_no_del_email(repo) -> None:
     """Y nunca queda vacío: una fila de auditoría sin revisor no sirve para auditar."""
-    _patch(repo, {"rol": "contabilidad", "email": "c@lubrikca.test"})
+    _patch(repo, {"rol": "auditor", "email": "c@lubrikca.test"})
     assert repo.update_auditoria_estado.call_args.kwargs["revisado_por"] == "c@lubrikca.test"
 
     repo.update_auditoria_estado.reset_mock()
-    _patch(repo, {"rol": "contabilidad"})
+    _patch(repo, {"rol": "auditor"})
     assert repo.update_auditoria_estado.call_args.kwargs["revisado_por"] == "desconocido"

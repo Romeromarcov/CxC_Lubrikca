@@ -103,7 +103,6 @@ def _run_get_detalle():
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -207,7 +206,6 @@ def test_detalle_teorico_conceptos_muestra_reglas_que_aplican_por_lista() -> Non
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -254,7 +252,6 @@ def test_detalle_pagos_trae_vinculaciones_de_la_orden() -> None:
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -341,7 +338,6 @@ def test_detalle_real_factura_convierte_ves_a_usd_con_ratio_de_la_factura() -> N
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -431,7 +427,6 @@ def test_detalle_pagos_usa_account_payment_directo_si_no_hay_vinculaciones() -> 
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -522,7 +517,6 @@ def test_detalle_pagos_odoo_calcula_equivalentes_bcv_binance_y_totales() -> None
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
@@ -601,7 +595,6 @@ def test_detalle_pago_de_odoo_con_fecha_sin_tasa_no_pierde_los_pagos_de_odoo() -
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0"),
     )
     fake_config.odoo = MagicMock()
