@@ -154,6 +154,7 @@ from cxc.odoo.client import (
     PAGO_ESTADOS_CONFIRMADOS,
     OdooXmlRpcReader,
     _connect,
+    parse_payment_term_days,
     so_ids_de_invoice_origin,
 )
 from cxc.odoo.price import FallbackFichaConfig, OdooPriceResolver
@@ -390,21 +391,6 @@ def get_live_delivered_not_returned(so_names: list[str], execute: Any = None) ->
     """
     delivered, _ = get_live_entregas_info(so_names, execute)
     return delivered
-
-
-def _parse_payment_term_days(t_name: str) -> int:
-    """Días de crédito otorgados según el nombre del payment term de Odoo.
-
-    Fuente única (agosto 2026) -- usada por ``get_ventas`` y
-    ``_get_reporte_saldos_sync``; antes esta última tenía su propia copia
-    idéntica como closure local (``parse_term_days``)."""
-    if not t_name:
-        return 0
-    t_low = t_name.lower().strip()
-    if "immediate" in t_low or "contado" in t_low:
-        return 0
-    m = re.search(r"(\d+)\s*(dias|días|days|day|día)", t_low)
-    return int(m.group(1)) if m else 0
 
 
 # Caché por-partner (agosto 2026, mismo patrón que _SO_STATE_CACHE/
@@ -2537,7 +2523,7 @@ def invalidar_tasas() -> None:
     _SERIE_ROWS_CACHE["ts"] = 0.0
 
 
-def get_rate_for_datetime(dt: datetime, rows: list[dict] = None) -> tuple[Decimal, Decimal]:
+def get_rate_for_datetime(dt: datetime, rows: list[dict] | None = None) -> tuple[Decimal, Decimal]:
     """Tasa BCV/Binance más cercana a ``dt``.
 
     Orden de fuentes, unificado en ``cxc.rates.Tasas`` (septiembre 2026):
@@ -3493,19 +3479,32 @@ def _aplicar_migraciones_pendientes() -> None:
         )
 
 
+_TAREAS_DEMONIO: set[asyncio.Task] = set()
+
+
 @app.on_event("startup")
 async def startup_event():
     # Red de seguridad: si la fase `release` de Railway no corrió (o falló
     # en silencio), esto evita que el proceso `web` sirva requests contra
-    # un esquema desactualizado -- ver docs/REDISENO_DESCUENTOS_UNIFICADOS.md,
-    # sección "Checklist de migraciones Alembic".
+    # un esquema desactualizado -- ver SETUP.md, sección
+    # «Base de datos y migraciones».
     _aplicar_migraciones_pendientes()
     # Start the synchronization and scraping daemon loops in the background
-    asyncio.create_task(run_sync_in_background())
-    asyncio.create_task(run_scraper_in_background())
+    # Se guardan las referencias: el loop de eventos solo mantiene referencias
+    # débiles a las tareas, y una tarea sin referencia puede ser recogida por
+    # el GC a mitad de ejecución (documentación de asyncio.create_task).
+    _TAREAS_DEMONIO.add(asyncio.create_task(run_sync_in_background()))
+    _TAREAS_DEMONIO.add(asyncio.create_task(run_scraper_in_background()))
 
 
 SECRET_KEY = os.environ.get("SESSION_SECRET", "lubrikca_cxc_secret_key_2026")
+if "SESSION_SECRET" not in os.environ:
+    # El valor por defecto está en el repositorio: cualquiera que lo lea puede
+    # firmar un token de sesión válido. En producción SESSION_SECRET es obligatoria.
+    logger.warning(
+        "SESSION_SECRET no está definida: se usa la clave por defecto del código, "
+        "que es pública. Definila en el entorno."
+    )
 
 
 class LoginRequest(BaseModel):
@@ -3668,7 +3667,7 @@ async def serve_login(cxc_session: str | None = Cookie(default=None)):
 
 
 @app.get("/logout")
-async def handle_logout_get(response: Response):
+async def handle_logout_get():
     res = RedirectResponse(url="/login")
     res.delete_cookie(key="cxc_session")
     return res
@@ -4728,12 +4727,12 @@ async def patch_auditoria_estado(
     cxc_session: str | None = Cookie(default=None),
 ):
     """Actualiza el estado de una fila de auditoría (revisado/aprobado/rechazado).
-    Solo accesible por usuarios con rol 'admin' o 'contabilidad'.
+    Solo accesible por usuarios con rol 'admin' o 'auditor' (Auditoría y Contabilidad).
     """
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
-    if user.get("rol") not in ("admin", "contabilidad"):
+    if user.get("rol") not in ("admin", "auditor"):
         raise HTTPException(status_code=403, detail="Sin permisos para actualizar auditoría")
     try:
         repo = get_repo()
@@ -5842,7 +5841,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 fecha_delivery = o.fecha.isoformat()
 
             term_name = odoo_info.get("payment_term_name") or "Contado"
-            dias_credito = _parse_payment_term_days(term_name)
+            dias_credito = parse_payment_term_days(term_name)
 
             dt_venc, dias_vencido = _fecha_y_dias_vencido(
                 {
@@ -14617,7 +14616,7 @@ def _get_ventas_sync(
                         term_name = (
                             term[1] if isinstance(term, list | tuple) and len(term) > 1 else ""
                         )
-                        dias_credito_odoo_map[sname] = _parse_payment_term_days(term_name)
+                        dias_credito_odoo_map[sname] = parse_payment_term_days(term_name)
 
                 # Monto pagado BCV/USD (Binance) -- columnas nuevas, cada
                 # ruta con SU PROPIA tasa del día del pago (no duplicadas

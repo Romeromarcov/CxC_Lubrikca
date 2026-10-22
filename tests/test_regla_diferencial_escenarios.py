@@ -286,7 +286,6 @@ def _inp_con_iva(abonos, retencion="0"):
     base = _inp([_regla("fijo_35_ves_usd")], abonos=abonos)
     cfg = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
         iva_rate=Decimal("0.16"),
     )
     return replace(base, engine_config=cfg, retencion_iva_fraccion=Decimal(retencion))

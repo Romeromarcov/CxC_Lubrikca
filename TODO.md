@@ -1,159 +1,109 @@
-# TODO — Ambigüedades y decisiones tomadas
+# Decisiones de negocio y pendientes de confirmar
 
-Regla seguida (instrucción del proyecto): ante ambigüedad se sigue el documento;
-si el documento **no lo cubre**, se elige la opción **más conservadora (no regalar
-descuento)** y se anota aquí. Cada punto indica qué decidió el código y qué falta
-confirmar con negocio.
+Regla seguida: ante ambigüedad se sigue la especificación; si no la cubre, se
+elige la opción **más conservadora (no regalar descuento)** y se anota aquí. Cada
+punto dice qué decidió el código y qué falta confirmar con negocio.
 
 ---
 
-## Decisiones de negocio a confirmar (impactan dinero)
+## Por confirmar con negocio (impactan dinero)
 
-### 1. Fórmula del descuento Diferencial Cambiario (sección 4.3c) — ✅ DECIDIDA (rediseñada agosto 2026)
-El mecanismo legado "BCV-completo" (tasa diaria fija por gerencia, tabla
-`DescuentoBCVCompleto`) fue **retirado por completo** (código y tabla
-eliminados, commit `a415446` en adelante) y reemplazado por dos reglas
-configurables en `DescuentoDiferencialCambiario` (`tipo_diferencial`),
-implementadas en el bloque "(c) Diferencial Cambiario" de
-`src/cxc/engine/discounts.py` (función `_calcular_componentes`). Solo aplican
-a órdenes nacidas en lista VES, con abonos vinculados:
+### 1. Diferencial Cambiario (spec 4.3c) — decidida, rediseñada en agosto 2026
+El mecanismo anterior («BCV-completo», tabla `DescuentoBCVCompleto`) se retiró
+por completo. Hoy son dos reglas configurables en `descuentos_diferencial_cambiario`
+(`tipo_diferencial`), implementadas en `_calcular_componentes`
+(`src/cxc/engine/discounts.py`). Solo aplican a órdenes nacidas en lista VES con
+abonos vinculados:
 
-- **Fija (`fijo_35_ves_usd`):** si el cliente pagó el 100% del teórico USD
-  exclusivamente en abonos 100% USD → descuento fijo de `porcentaje_fijo`
-  (35% por defecto) sobre el precio base en VES.
-- **Equiparar (`equiparar_binance`):** si pagó (mezcla o 100% Binance) el 100%
-  del teórico USD, pero valorado a tasa BCV el pago queda corto frente al
-  precio VES → nota de crédito que cierra esa brecha, topada al mismo
-  `porcentaje_fijo`. Requiere que el cliente no tenga pagos huérfanos abiertos
-  en Odoo.
-- Se aplica el **mayor** de los dos montos si ambas reglas califican.
-- Existe además una tercera regla (`candidato_cierre_factura`) que **no** es
-  un descuento automático del motor: habilita el reporte de "candidatos a
-  cierre de factura" (`GET /api/diferencial/candidatos-cierre`,
-  `calcular_candidatos_cierre_diferencial` en `src/cxc/web/app.py`), que
-  gerencia usa para aprobar manualmente descuentos vía
+- **`fijo_35_ves_usd`:** si el cliente pagó el 100 % del teórico USD
+  exclusivamente en abonos 100 % USD → descuento fijo de `porcentaje_fijo`
+  (35 % por defecto) sobre el precio base en VES.
+- **`equiparar_binance`:** si pagó (mezcla o 100 % Binance) el 100 % del teórico
+  USD, pero valorado a tasa BCV el pago queda corto frente al precio VES → nota
+  de crédito que cierra esa brecha, topada al mismo `porcentaje_fijo`. Exige que
+  el cliente no tenga pagos huérfanos abiertos en Odoo.
+- Si ambas califican se aplica el **mayor** de los dos montos.
+- Una tercera, `candidato_cierre_factura`, no es descuento automático: habilita el
+  reporte de candidatos a cierre (`GET /api/diferencial/candidatos-cierre`) que
+  gerencia usa para aprobar manualmente vía
   `POST /api/facturacion/aprobar-descuento-sistema`.
-- Si no hay fila vigente y activa de `fijo_35_ves_usd` → no se otorga ningún
-  descuento por diferencial cambiario (conservador, igual que antes).
+- Sin fila vigente y activa de `fijo_35_ves_usd` no se otorga nada (conservador).
 
-### 2. Sesgo de la tasa Binance (sección 5.1)
-`(5 compra + 5 venta)/10` es un punto medio. El doc lo marca como **decisión de
-negocio a confirmar**. Implementado tal cual; parametrizable en nº de filas.
+### 2. Sesgo de la tasa Binance (spec 5.1)
+`(5 compra + 5 venta)/10` es un punto medio. Implementado tal cual y
+parametrizable (`BINANCE_P2P_ROWS`); queda por confirmar que ese sesgo es el
+deseado.
 
 ---
 
-## Ambigüedades resueltas de forma conservadora (no regalar descuento)
+## Ambigüedades resueltas de forma conservadora
 
-### 3. Contado ya NO depende del método de pago — ✅ DECIDIDO
-Aclaración de negocio: **cualquier método puede ser contado o crédito**, y
-**todos manejan ambas tasas** (BCV/Binance). Lo que determina el contado es
-**pagar el neto total dentro del plazo** (ventana de días hábiles desde la
-entrega completa), no el método. La ruta BCV/Binance se estampa **por abono** en
-la Vinculación (humano). `MetodosPago` queda como catálogo informativo; sus
-columnas `es_contado`/`tipo_tasa` no las usa el motor.
+### 3. El contado no depende del método de pago — decidido
+Cualquier método puede ser contado o crédito y todos manejan ambas tasas
+(BCV/Binance). Lo que determina el contado es **pagar el neto total dentro del
+plazo** (ventana de días hábiles desde la entrega completa). La ruta BCV/Binance
+se estampa **por abono** en la vinculación. `metodos_pago` es catálogo
+informativo; sus columnas `es_contado`/`tipo_tasa` no las usa el motor.
 
-### 3b. Entrega completa y devoluciones — ✅ PARCIAL (falta confirmar recálculo)
-- **El plazo de contado arranca con la ENTREGA COMPLETA** (`delivery_status =
-  full`). Si está `pending`/`partial`, `fecha_entrega` queda None y el contado no
-  se evalúa (no arrancó el plazo). Implementado en el sync.
-- **Devoluciones:** se detectan (pickings con `return_id`) y marcan
-  `OrdenVenta.tiene_devolucion` → la orden queda `requiere_revision = TRUE` y es
-  visible para seguimiento. `LineaOrden.cantidad_entregada` (qty_delivered, neta
-  de devoluciones) se sincroniza para verla en AppSheet.
-- **Recálculo con devolución — ✅ DECIDIDO (opción D):** si la orden está
-  entregada completa **y** tiene devolución, el motor factura sobre
-  `cantidad_entregada` (qty_delivered, neta de la devolución). Esto implementa
-  "pedida − devuelta" y, a la vez, evita el doble descuento si la SO ya fue
-  modificada para ajustar cantidades (en ese caso `cantidad_entregada` ya coincide
-  con la cantidad ajustada). Si no hay devolución, se usa la cantidad pedida. La
-  orden sigue marcándose `requiere_revision` para verificación humana.
+### 3b. Entrega completa y devoluciones — decidido
+- El plazo de contado arranca con la **entrega completa** (`delivery_status =
+  full`). Si está `pending`/`partial`, `fecha_entrega` queda vacía y el contado no
+  se evalúa.
+- Las devoluciones se detectan (pickings con `return_id`) y marcan
+  `tiene_devolucion` → la orden queda `requiere_revision`.
+- Con orden entregada completa **y** devolución, el motor factura sobre
+  `cantidad_entregada` (`qty_delivered`, neta de devolución): implementa
+  «pedida − devuelta» y evita el doble descuento si la SO ya se ajustó en Odoo.
 
 ### 4. `fecha_entrega` ausente → sin contado
-Si la orden no tiene fecha de entrega (ancla de la ventana, 4.6), el contado **no
-se evalúa** (no se puede verificar la ventana) → no se otorga. (Conservador.)
+Sin ancla para la ventana (spec 4.6) el contado no se evalúa ni se otorga.
 
-### 5. Mezcla de rutas → Binance (3.9b)
-Si cualquier abono salió de la ruta BCV, la orden migra a `lista USD` (VES@Binance)
-y **pierde** BCV-completo. "Ante la duda, el sistema no regala el mejor descuento."
-
----
-
-## Decisiones de modelado (no cambian el resultado de negocio, se documentan)
-
-### 6. Valoración canónica en USD
-El "35% nunca entra al cálculo" (4.2): ambas listas (USD/BCV) entregan un precio
-en **USD** (distinto nivel de precio), leído de la pricelist real de Odoo. El
-neto-objetivo se compara en USD sumando los `equiv_usd_*` congelados por abono
-(4.4). Se evita así una tasa fantasma VES→USD. Las pricelists de Odoo deben estar
-expresadas en USD (ver `ODOO_PRICELIST_USD/BCV` en SETUP.md).
-
-### 7. Bandas del semáforo de conciliación (sección 7)
-El texto del doc mezcla "≈0" con "≤ redondeo". Implementadas tres bandas claras:
-```
-|dif| <= tolerancia_redondeo           -> VERDE
-tolerancia_redondeo < |dif| <= roja    -> AMARILLO
-|dif| > tolerancia_roja                -> ROJO
-```
-Tolerancias configurables (`RECON_TOLERANCE_ROUNDING`, `RECON_TOLERANCE_RED`).
-
-### 8. Fallback del scraper ante fallo de UNA sola fuente (5.3)
-Si falla Binance **o** BCV, se hereda la **fila completa** del último bucket
-(`es_heredada=TRUE`, `capturada_ok=FALSE`), para no mezclar una tasa fresca con
-una heredada en la misma fila (consistencia de auditoría). Alternativa (heredar
-solo la fuente caída) descartada por claridad de auditoría.
-
-### 9. Desempates de effective dating
-- `DescuentosMarcaCategoria`: mayor especificidad (marca exacta pesa más que
-  categoría exacta) → menor porcentaje (conservador) → `regla_id`.
-- `ReglasRecurrencia`: `vigencia_desde` más reciente → menor `valor`.
-
-### 10. `EstadoFactura` embebido en `OrdenesVenta`
-El doc lista `EstadoFactura` como tabla-espejo; sus campos (`facturada`,
-`factura_id`, `monto_facturado`) viven en `OrdenesVenta` (3.2). No se crea una
-pestaña separada.
-
-### 11. Emparejamiento abono↔banco en la auditoría (6.3)
-Por **monto exacto**; si hay varios candidatos, el de hora más cercana a la
-declarada. Sin movimiento que calce → hallazgo de prioridad ALTA.
-
-### 12. `requiere_revision` de la Bandeja
-Se marca TRUE si hay tasa heredada, si aplicó BCV-completo (calculado, no
-tabulado) o si el contado se negó por vencimiento (transición contado→crédito).
-
-### 13. Cursor del sync
-Avanza al `now` de inicio de corrida (no al máximo `write_date` leído) para no
-perder filas escritas durante la lectura. Trade-off: posible re-lectura de
-solapados (idempotente por upsert).
+### 5. Mezcla de rutas → Binance (spec 3.9b)
+Si algún abono salió de la ruta BCV, la orden no cumple «pagada 100 % en BCV» y
+pierde los beneficios que lo exigen. «Ante la duda, el sistema no regala el mejor
+descuento.»
 
 ---
 
-## 🚩 Precio por pricelist en Odoo 18 (bloqueante del motor en producción)
+## Decisiones de modelado (no cambian el resultado de negocio)
 
-Verificado contra el QA: el motor no puede leer el precio de un producto en una
-pricelist por los métodos asumidos:
-- `product.pricelist.price_get` → **removido en Odoo 18**.
-- `product.pricelist._get_product_price` / `_get_products_price` → privados, **no
-  invocables por XML-RPC**.
-- `product.pricelist.item` de las listas 4 y 5 → **vacío** (los precios no salen
-  de items simples; podrían venir de fórmula, lista base o del `list_price`).
+6. **Valoración canónica en USD.** Ambas listas entregan precio en USD; el
+   neto-objetivo se compara en USD sumando los equivalentes congelados por abono
+   (spec 4.4). Se evita una tasa fantasma VES→USD.
+7. **Semáforo de conciliación.** `|dif| ≤ RECON_TOLERANCE_ROUNDING` → verde;
+   `≤ RECON_TOLERANCE_RED` → amarillo; mayor → rojo.
+8. **Fallback del scraper (spec 5.3).** Si falla Binance **o** BCV se hereda la
+   fila completa del último bucket (`es_heredada`, `capturada_ok = false`) para no
+   mezclar tasa fresca con heredada en una misma fila. Tres fallos consecutivos
+   disparan alerta.
+9. **Desempates de effective dating.** Marca/categoría: mayor especificidad
+   (marca exacta pesa más que categoría exacta) → menor porcentaje → `regla_id`.
+   Recurrencia: `vigencia_desde` más reciente → menor `valor`.
+10. **Estado de factura** vive en `ordenes_venta` (`facturada`, `factura_id`,
+    `monto_facturado`) y en la tabla `facturas`; no hay tabla separada.
+11. **Emparejamiento abono ↔ banco (spec 6.3)**, en la librería `cxc.audit`
+    (hoy sin cablear a la app): por monto exacto; con varios candidatos, el de
+    hora más cercana; sin calce → hallazgo de prioridad alta.
+12. **`requiere_revision`** se marca si hay tasa heredada, si aplicó un
+    diferencial cambiario calculado, o si el contado se negó por vencimiento.
+13. **Cursor del sync.** Avanza al `now` de inicio de corrida (no al máximo
+    `write_date` leído) para no perder filas escritas durante la lectura; puede
+    releer solapados (idempotente por upsert).
 
-Opciones para producción (decisión de negocio + Odoo):
-1. **Usar el precio de la línea ya sincronizado** cuando la lista aplicada = lista
-   de nacimiento de la orden. En este negocio TODAS las órdenes nacen en la
-   pricelist 5 ("Precio USD Pago VES"); si la ruta de pago es VES/BCV, la lista
-   aplicada es la 5 y el precio de la línea sirve directo (es lo que usa el demo).
-2. Si se paga en USD (lista 4), exponer ese precio: crear un endpoint/acción en
-   Odoo, sincronizar una tabla `Precios(producto, lista, precio)`, o confirmar la
-   relación entre la lista 4 y la 5 (¿factor fijo? ¿misma base list_price?).
+---
 
-Hasta resolverlo, el motor opera por ruta BCV/VES con precios de línea (caso real
-mayoritario). `OdooPriceResolver` queda como esqueleto a calibrar.
+## Deuda técnica conocida
 
-## Integraciones específicas del entorno (ver SETUP.md)
-
-- **`fecha_entrega` desde `stock.picking`** (3.2): el reader lee un campo
-  `fecha_entrega` en `sale.order`; exponerlo desde el despacho en Odoo.
-- **`OdooPriceResolver`**: usa `product.pricelist.price_get`. Verificar contra la
-  versión de Odoo del cliente; es el único punto de ajuste del precio por lista.
-- **Nombres de campo de Odoo** en `cxc/odoo/client.py` (constantes `FIELDS_*`):
-  ajustar si difieren del entorno.
+- **Sesión sin expiración.** El token de `cxc_session` es `email.firma` (HMAC
+  truncado a 64 bits) sin fecha de vencimiento ni revocación. Ver
+  `crear_session_token` en `src/cxc/auth.py`.
+- **Roles nominales.** Los cinco roles tienen las nueve páginas; solo algunas
+  acciones de escritura distinguen rol (ver `SETUP.md` §4).
+- **`cxc.audit.HourAuditor`** (hora declarada vs banco) está implementada y
+  probada pero ningún endpoint ni demonio la usa.
+- **`is_historical_pricelist_enabled`** devuelve `False` siempre (decisión del
+  12-sep-2026: la lista histórica es solo para auditoría); las ramas que dependen
+  de ella en `web/app.py` son código inalcanzable.
+- **`src/cxc/sheets/`** solo conserva `serde.py` del backend Google Sheets
+  retirado; casi todas sus funciones `*_from_row`/`*_to_row` solo las ejercitan
+  tests.

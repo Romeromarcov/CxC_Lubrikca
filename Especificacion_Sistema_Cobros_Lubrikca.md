@@ -1,5 +1,16 @@
 # Especificación Técnica — Sistema de Cobros y Conciliación de Facturación (Lubrikca)
 
+> **Estado del documento (octubre 2026).** Es la especificación *original* (v1.0).
+> Siguen vigentes las **reglas de negocio**: secciones 0, 4 (motor de descuentos),
+> 5 (tasas), 6 (sello de hora) y 7 (conciliación). Está **superada** la
+> arquitectura: las secciones 1, 2, 3, 8.2, 9 y 10 describen Google Sheets +
+> AppSheet como almacén e interfaz. El sistema real usa PostgreSQL y un
+> dashboard web propio (`src/cxc/web/`); los nombres de tablas y campos de la
+> sección 3 son los de entonces. Para la arquitectura actual ver `README.md`,
+> para el esquema `src/cxc/db/schema.py`, y para las decisiones posteriores
+> `TODO.md`. Donde este documento y el código discrepan, manda el código.
+
+
 **Versión:** 1.0 — Plano de implementación
 **Contexto:** Reemplazo del flujo Google Forms + IMPORTRANGE por un sistema Odoo ↔ Google Sheets/AppSheet con motor de descuentos determinístico y capa de conciliación de facturación.
 

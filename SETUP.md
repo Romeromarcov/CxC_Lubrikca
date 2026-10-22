@@ -1,108 +1,123 @@
-# SETUP — Configuración manual y operativa (lo que NO se codifica)
+# SETUP — Configuración y operación
 
-Este documento cubre todo lo que el backend **no** automatiza: credenciales/
-secretos y automated actions de Odoo. El código backend está listo para
-correr sin editarse una vez que esto esté en su lugar.
+Todo lo que el código no hace por sí solo: variables de entorno, base de datos,
+despliegue y prerrequisitos en Odoo.
 
 ---
 
 ## 1. Variables de entorno
 
-El backend se configura 100% por env vars (sin secretos en el repo). Copiar
-`.env.example` a `.env` y rellenar. En Railway, cargarlas en el panel del
-servicio.
+El backend se configura 100 % por variables de entorno (sin secretos en el repo).
+Copiar `.env.example` a `.env` en local; en Railway, cargarlas en el panel del
+servicio. Los defaults entre paréntesis salen de `src/cxc/config.py`.
 
-### Odoo (XML-RPC, solo lectura)
+### Obligatorias
+
 | Var | Descripción |
 |---|---|
-| `ODOO_URL` | URL de la instancia (ej. `https://miempresa.odoo.com`) |
-| `ODOO_DB` | Nombre de la base |
-| `ODOO_USERNAME` | Usuario de integración |
-| `ODOO_PASSWORD` | **API key** de Odoo (no la contraseña de un humano) |
-| `ODOO_PRICELIST_USD` | Id de la `product.pricelist` USD (motor) |
-| `ODOO_PRICELIST_BCV` | Id de la `product.pricelist` BCV (motor) |
+| `DATABASE_URL` | Cadena de Postgres. Railway la inyecta al agregar el addon. Sin ella la app no puede leer ni escribir (`get_repo()` lanza `RuntimeError`) |
+| `ODOO_URL`, `ODOO_DB` | Instancia y base de Odoo |
+| `ODOO_USERNAME`, `ODOO_PASSWORD` | Usuario de integración y su **API key** de Odoo (*Preferencias → Seguridad de la cuenta → API Keys*), no la clave de un humano. Solo lectura |
+| `SESSION_SECRET` | Clave con la que se firman las cookies de sesión. **Obligatoria en producción**: si falta, la app arranca con una clave por defecto que está en el código fuente (público) y lo advierte en el log |
 
-> Crear la API key en Odoo: *Preferencias → Seguridad de la cuenta → API Keys*.
+### Motor y listas de precio
 
-### Scraper Binance (parametrizado — único punto de ajuste si cambia el formato)
-`BINANCE_P2P_URL`, `BINANCE_P2P_ASSET`, `BINANCE_P2P_FIAT`,
-`BINANCE_P2P_TRADE_TYPE_BUY/SELL`, `BINANCE_P2P_ROWS`,
-`BINANCE_P2P_ADV_LIST_PATH`, `BINANCE_P2P_PRICE_PATH`. Ver `.env.example`.
+| Var | Default | Descripción |
+|---|---|---|
+| `CASH_WINDOW_BUSINESS_DAYS` | 3 | Días hábiles de la ventana de contado desde la entrega completa |
+| `ENGINE_LISTA_USD` / `ENGINE_LISTA_BCV` | 4 / 5 | Listas lógicas del motor (ver `.env.example`) |
+| `ODOO_PRICELIST_USD` / `ODOO_PRICELIST_BCV` | — | Id de `product.pricelist` de Odoo para cada lista lógica |
+| `ENGINE_VALID_PRICELISTS_VES` / `_USD` | `5,3` / `4,8,USD` | Listas consideradas válidas por moneda |
+| `ENGINE_IVA_RATE` | 0.16 | IVA aplicado a las ventas teóricas |
+| `ENGINE_IGTF_RATE`, `ENGINE_IGTF_ACTIVO` | 0.03, falso | IGTF (hoy desactivado) |
 
-### BCV, alertas, motor, conciliación, auditoría
-Ver `.env.example` (todos con default sensato).
+El mapeo vigente de listas de precio se administra además desde la página
+**Configuración** (`/api/config/pricelist-mapeo`, `/api/config/listas-precio`).
 
----
+### Scrapers, alertas, conciliación
 
-## 2. Esquema de datos
-
-El backend usa PostgreSQL como único almacén (ver `src/cxc/db/schema.py` para
-el esquema completo y `alembic/versions/` para el historial de migraciones).
-El `Procfile` corre `alembic upgrade head` en cada deploy (fase `release`); no
-requiere preparación manual de tablas.
-
-> Nota histórica: el sistema usó Google Sheets como backend antes de la
-> migración a Postgres. Ese backend (`SheetsRepository`) se retiró por
-> completo del código en agosto 2026 -- ver `docs/REDISENO_DESCUENTOS_
-> UNIFICADOS.md` para el contexto de la migración.
-
----
-
-## 3. App AppSheet (pieza 3 — interfaz humana, superada por el dashboard web)
-
-> Nota: esta sección describe el diseño original (AppSheet sobre Google
-> Sheets). El sistema hoy usa el dashboard web (`src/cxc/web/`) como interfaz
-> humana -- Cobranza, Ventas, Auditoría, Configuración. Se conserva esta
-> sección solo como referencia histórica del diseño de validaciones/security
-> filters; no aplica a la implementación actual.
-
-No se codifica aquí. Construir en AppSheet sobre el mismo Sheet:
-
-### 3.1 Mapeo de identidad (BLOQUEANTE — sección 8.1)
-`USEREMAIL()` en los security filters exige que **el email de login del rep =
-`vendedor_email` en Odoo**. Verificar esta consistencia **antes que nada**; si
-falla, los filtros fallan en silencio.
-
-### 3.2 Validaciones que sobreviven en AppSheet (sección 8.2)
-- Dropdown de orden (`Valid_If`): solo órdenes del mismo cliente del pago, con
-  saldo y `facturada = FALSE`.
-- Monto aplicado: `> 0`, `<= saldo_sin_aplicar` del pago y `<=` saldo de la orden.
-- Security filter en tablas-espejo: `[vendedor_email] = USEREMAIL()`.
-- Sellos: `confirmado_por` con Initial value `USEREMAIL()` (read-only);
-  `timestamp_registro` con `NOW()`.
-
-### 3.3 Sello de hora del pago (sección 6)
-La hora oficial la fija **Administración** (no el vendedor) seleccionándola del
-**bucket horario de SerieTasas** (dropdown de horas capturadas), nunca tecleada
-libre. La tasa BCV/Binance de ese bucket queda estampada en `Vinculaciones` y de
-ahí se congelan los 4 equivalentes.
-
-### 3.4 Bandeja de aprobación (cierre híbrido, sección 4.7)
-El motor marca `candidata_a_cierre`; Administración **confirma** y aprueba en
-AppSheet. Revisa solo lo marcado `requiere_revision`.
+`BINANCE_P2P_*` y `BINANCE_REQUEST_TIMEOUT_SECONDS` (parametrizan URL, par,
+profundidad y rutas del JSON: es el único punto de ajuste si Binance cambia el
+formato), `BCV_URL`, `BCV_USD_REGEX`, `BCV_REQUEST_TIMEOUT_SECONDS`,
+`SCRAPER_FAIL_ALERT_THRESHOLD` (3), `ALERT_TELEGRAM_BOT_TOKEN` /
+`ALERT_TELEGRAM_CHAT_ID` / `ALERT_TELEGRAM_API_URL` (opcionales: sin ellas las
+alertas solo se loguean), `RECON_TOLERANCE_ROUNDING` (0.01) y
+`RECON_TOLERANCE_RED` (1.00): |dif| ≤ redondeo → verde, ≤ rojo → amarillo,
+mayor → rojo. `HOUR_AUDIT_*` solo afectan a la librería `cxc.audit`, que hoy no
+está cableada a la app.
 
 ---
 
-## 4. Odoo — prerequisitos (no se codifican)
+## 2. Base de datos y migraciones
 
-- **Normalización de marca/categoría** a nivel de producto (sección 8.3): los
-  descuentos por contado dependen de leer marca y categoría consistentes. Si hoy
-  no están normalizadas, hacerlo es prerequisito del motor.
-- **`fecha_entrega` desde el despacho** (`stock.picking`, sección 3.2): el motor
-  no la puede inferir. Exponerla en `sale.order` (campo computado/relacionado) o
-  ajustar el reader para leerla del picking.
-- **Automated actions**: cualquier automatización dentro de Odoo (estados,
-  campos calculados) se configura en Odoo, no aquí.
+PostgreSQL es el único almacén (`src/cxc/db/schema.py` define las tablas;
+`alembic/versions/` guarda el historial, 45 migraciones).
 
-> El backend **solo lee** de Odoo. La facturación es **manual** en Odoo
-> (write-back purista); la pieza 5 detecta desviaciones, no las previene.
+- `Procfile` ejecuta `alembic upgrade head` en la fase `release` de cada deploy.
+- Como respaldo, `startup_event` repite `alembic upgrade head` al arrancar el
+  proceso web (best-effort: si falla, la app sigue y registra el error). Nació de
+  un deploy en el que la fase `release` no corrió y `/api/ventas` devolvió 500 por
+  columnas inexistentes.
+- **Checklist al agregar una migración:** crearla con `alembic revision`,
+  correr `alembic upgrade head` contra el Postgres local
+  (`docker compose up -d`), y confirmar que el job de CI queda verde (también la
+  aplica).
+
+### Entorno local
+
+```bash
+docker compose up -d
+export DATABASE_URL=postgresql://cxc:cxc_ci_pw@localhost:5432/cxc_ci
+alembic upgrade head
+```
+
+Esa base es la misma que usa el CI. Los scripts de `scripts/` leen el `.env`
+local: sin indicar el `.env` de producción auditan la base local, no la de
+producción.
 
 ---
 
-## 5. Decisión de negocio pendiente antes de producción
+## 3. Despliegue (Railway)
 
-- **Sesgo de la tasa Binance** (sección 5.1): el promedio (5 compra + 5 venta)/10
-  es un punto medio. Confirmar que es el sesgo deseado.
-- **Fórmula del descuento BCV-completo** (sección 4.3c): el default es
-  `(binance − bcv)/binance` por abono. Confirmar y, si difiere, ajustar
-  `BCV_COMPLETE_FORMULA` / la función en `cxc/engine/discounts.py`. Ver `TODO.md`.
+Un solo servicio web; no hay cron jobs separados: los demonios de sync y de
+scraping viven dentro del proceso (ver README). Procesos del `Procfile`:
+
+```
+web:     PYTHONPATH=src uvicorn cxc.web.app:app --host 0.0.0.0 --port $PORT
+release: alembic upgrade head
+```
+
+Operación periódica fuera del proceso web (cron externo, a gusto de
+Administración): `scripts/vigilancia_diaria.py` (alertas diarias de
+invariantes y pagos sobreaplicados) y `scripts/verificar_tasas_contra_bcv.py`
+(contrasta el histórico de tasas con las series oficiales del BCV).
+
+---
+
+## 4. Acceso y roles
+
+La autenticación es por cookie de sesión firmada (`cxc_session`) o, solo para
+`GET`, por llave de API (`/api/admin/api-keys`). Toda ruta `/api/` exige una de
+las dos salvo una lista blanca (login, registro de contraseña). Roles
+(`usuarios_plataforma.rol`): `admin`, `gerente_ventas`, `tesoreria`, `auditor`,
+`ventas`. Las nueve páginas están habilitadas para todos; las acciones
+administrativas (usuarios, roles, llaves de API) exigen `admin`, el recálculo
+total `admin` o `gerente_ventas`, y el cambio de estado en la bandeja de
+auditoría de descuentos `admin` o `auditor`.
+
+---
+
+## 5. Odoo — prerrequisitos (no se codifican)
+
+- **Marca y categoría normalizadas** a nivel de producto: los descuentos por
+  marca × categoría dependen de leerlas consistentes.
+- **Vendedor:** el sistema usa `user_id.login` como identidad del vendedor; debe
+  coincidir con el correo con el que la persona entra al dashboard.
+- **Pricelists** con reglas de precio fijo en USD; si una lista no tiene regla
+  para un producto, el resolver cae a la ficha del producto con el ajuste
+  configurado (`FallbackFichaConfig`). Ver [`docs/ODOO_MAPEO.md`](docs/ODOO_MAPEO.md).
+- La facturación y las notas de crédito son **manuales en Odoo**; el sistema
+  detecta desviaciones, no las previene.
+- Las tablas de configuración de negocio (reglas de descuento, feriados, metas,
+  tasas) se mantienen desde la página **Configuración** del dashboard, no por
+  variables de entorno.

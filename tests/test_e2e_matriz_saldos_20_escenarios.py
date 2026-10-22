@@ -43,7 +43,7 @@ from .test_e2e_production_readiness import client  # noqa: F401 (reutiliza el mi
 
 def _fake_config():
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
     return fake_config
 
 

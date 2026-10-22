@@ -27,7 +27,7 @@ from cxc.repositories import InMemoryRepository
 
 from . import builders as b
 
-CFG = EngineConfig(cash_window_business_days=3, bcv_complete_formula="differential_over_binance")
+CFG = EngineConfig(cash_window_business_days=3)
 PRECIOS = {("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("100")}
 
 

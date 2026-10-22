@@ -401,7 +401,6 @@ def _run_get_ventas(
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -898,7 +897,6 @@ def test_estatus_pago_usa_pagos_odoo_directos_sin_vinculaciones() -> None:
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1016,7 +1014,6 @@ def test_revisar_motivo_devolucion_entrega_de_mas_y_cancelada_sin_devolver() -> 
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1104,7 +1101,6 @@ def test_ventas_ya_no_valora_ninguna_orden_con_la_lista_historica() -> None:
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1235,7 +1231,6 @@ def test_revisar_motivo_dias_credito_excede_maximo_por_volumen() -> None:
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1323,7 +1318,6 @@ def test_descuento_aplicado_factura_convierte_ves_a_usd_con_ratio_de_la_factura(
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1401,7 +1395,6 @@ def test_dias_credito_y_fecha_entrega_en_ventas() -> None:
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1514,7 +1507,6 @@ def test_notas_debito_y_credito_reales_sin_invoice_origin_ni_out_invoice() -> No
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -1616,7 +1608,6 @@ def test_pagado_teorico_bcv_y_binance_usan_rutas_distintas_sin_euro_para_histori
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (

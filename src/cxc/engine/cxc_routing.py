@@ -105,7 +105,6 @@ saldo real, motor) -- esos siguen exigiendo CONCILIADO, sin excepción.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 from enum import StrEnum
 
 
@@ -167,7 +166,6 @@ def clasificar_estado_cxc(
     factura_pagada_confirmada_odoo: bool = False,
     subtotal_pagado: bool = False,
     subtotal_pagado_incl_pendiente: bool = False,
-    tolerance: Decimal = Decimal("0.05"),
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
 
@@ -214,11 +212,9 @@ def clasificar_estado_cxc(
     siendo exclusivamente sobre Vinculaciones PENDIENTE nuestras, un
     concepto distinto).
 
-    `tolerance` se documenta pero no se usa dentro de esta función —
-    la tolerancia ya debe haberse aplicado al calcular los flags de
-    entrada (misma epsilon 0.05 que usan las columnas de estatus de
-    pago existentes). Se recibe como parámetro para dejar explícito el
-    contrato y facilitar tests que quieran variarla en el futuro.
+    La tolerancia (epsilon 0.05, la misma de las columnas de estatus de
+    pago) ya debe haberse aplicado al calcular los flags de entrada: esta
+    función solo combina booleanos.
     """
     if teorico_usd_pagado:
         bandeja = BandejaDestino.FACTURACION_2 if facturada else BandejaDestino.FACTURACION_1

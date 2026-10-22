@@ -271,7 +271,7 @@ def test_e2e_04_discount_engine_evaluation():
     from cxc.config import EngineConfig
 
     cfg = EngineConfig(
-        cash_window_business_days=3, bcv_complete_formula="full", iva_rate=Decimal("0")
+        cash_window_business_days=3, iva_rate=Decimal("0")
     )
     resolver = MagicMock()
     resolver.volumen.return_value = Decimal("100.0")
@@ -336,7 +336,7 @@ def test_e2e_05_reconciliation_trays():
     from cxc.config import EngineConfig
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -855,7 +855,7 @@ def test_e2e_12_bandeja1_agente_retencion_subtotal_pagado():
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -945,7 +945,7 @@ def test_e2e_13_bandeja2_concepto_real_de_nc():
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1052,7 +1052,7 @@ def test_e2e_14_bandeja3_iva_estimado_sobre_total_motor_no_bruto():
     mock_repo.all_tasas_historicas_auditoria.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1155,7 +1155,7 @@ def test_e2e_14c_bandeja3_sale_si_odoo_ya_marco_wh_iva_aplicado():
     mock_repo.all_catalogo.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1239,7 +1239,7 @@ def test_e2e_14d_bandeja3_entra_aunque_cliente_no_sea_agente_de_retencion():
     mock_repo.all_tasas_historicas_auditoria.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1327,7 +1327,7 @@ def test_e2e_14e_bandeja_descuentos_pendientes_aprobar_separada_de_nc():
     mock_repo.all_catalogo.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1422,7 +1422,7 @@ def test_e2e_14f_ventas_retencion_confirmada_reduce_saldo_igual_que_nc():
     fake_config = MagicMock()
     from cxc.config import EngineConfig
 
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1526,7 +1526,7 @@ def test_e2e_14b_bandeja_auditoria_precios_pagado_vs_factura_no_vs_teoricos():
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1615,7 +1615,7 @@ def test_e2e_reporte_cxc_cliente_agrupa_por_cliente_con_pago_huerfano_negativo()
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1718,7 +1718,7 @@ def test_e2e_reporte_cxc_cliente_referencia_usa_numero_real_de_factura():
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -1796,7 +1796,7 @@ def test_e2e_reporte_cxc_cliente_pago_ves_usa_ruta_correcta_por_columna():
     ]
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -2702,7 +2702,6 @@ def test_e2e_24_ventas_reporte_teorico_vs_real_y_alerta():
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )  # iva_rate=0.16, igtf_activo=False por defecto
 
     def fake_execute(model, method, args, kwargs=None):
@@ -2810,7 +2809,6 @@ def test_e2e_24b_ventas_expone_lista_nacimiento_y_teoricos_por_lista():
     fake_config = MagicMock()
     fake_config.engine = EngineConfig(
         cash_window_business_days=3,
-        bcv_complete_formula="differential_over_binance",
     )
 
     with (
@@ -5017,7 +5015,7 @@ def test_e2e_cobranza_saldo_orden_usa_4_columnas_en_tiempo_real():
     mock_repo.all_auditoria.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),
@@ -5493,7 +5491,7 @@ def test_e2e_50_vinculacion_pendiente_no_cuenta_como_pagado_real_en_ventas():
     mock_repo.all_conciliaciones.return_value = []
 
     fake_config = MagicMock()
-    fake_config.engine = EngineConfig(cash_window_business_days=3, bcv_complete_formula="full")
+    fake_config.engine = EngineConfig(cash_window_business_days=3)
 
     with (
         patch("cxc.web.app.get_repo", return_value=mock_repo),

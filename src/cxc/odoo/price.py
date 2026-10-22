@@ -3,7 +3,7 @@
 El motor lee el precio REAL del producto en la pricelist que aplica (no
 multiplica por un factor). En producción esto consulta Odoo; el mapeo de nombre
 lógico de lista (USD/BCV) → id de pricelist en Odoo es parametrizable y se
-documenta en SETUP.md (es específico del entorno, como las credenciales).
+se administra desde Configuración (``/api/config/pricelist-mapeo``) y SETUP.md.
 
 Excepción, agregada agosto 2026 (pedido explícito del usuario, ver
 ``FallbackFichaConfig``): SOLO cuando la pricelist pedida no tiene ninguna
@@ -115,11 +115,10 @@ class OdooPriceResolver(PriceResolver):  # pragma: no cover - red externa (Odoo)
     ``pricelist_ids`` mapea el nombre lógico de lista del motor (p. ej. "USD",
     "BCV") al id de la ``product.pricelist`` correspondiente en Odoo.
 
-    ⚠️ CALIBRAR PARA ODOO 18 (ver TODO.md): ``price_get`` fue removido en Odoo 18
-    y los métodos privados no son invocables por XML-RPC. Para la ruta BCV/VES
-    (lista de nacimiento) usar ``DictPriceResolver`` con el ``precio_unitario`` de
-    las líneas ya sincronizadas; para la lista USD definir el método real con
-    Odoo. Este resolver queda como esqueleto.
+    En Odoo 18 ``price_get`` no existe y los métodos privados de la pricelist no
+    son invocables por XML-RPC, así que el precio se obtiene leyendo las reglas de
+    ``product.pricelist.item`` de la lista (ver ``_precio_fijo_en_lista``). Si la
+    lista no tiene regla para el producto se aplica el fallback a la ficha.
     """
 
     def __init__(

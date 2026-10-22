@@ -51,8 +51,6 @@ from typing import Any
 #   es plausible y no es un duplicado.
 # * ``fecha`` -- truncada al día. Deliberado: el mismo pago cargado dos veces
 #   suele tener horas distintas.
-CAMPOS_DE_LA_CLAVE = ("cliente_id", "monto", "moneda", "metodo_pago", "fecha")
-
 
 def _monto(valor: Any) -> Decimal:
     """El monto a dos decimales. Lo ilegible vale cero y agrupa con los ceros.
