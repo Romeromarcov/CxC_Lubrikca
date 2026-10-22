@@ -1707,9 +1707,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><small title="${item.lista_nacimiento ?? ''}">${item.lista_nacimiento_label ?? '—'}</small></td>
                 <td style="text-align:right">${item.dias_credito ?? 0}</td>
                 <td style="text-align:right" title="Vence: ${item.fecha_vencimiento ?? '—'}">${
-                    (item.dias_vencido || 0) > 0
-                        ? `<strong style="color:#dc2626">${item.dias_vencido} d</strong>`
-                        : '<span style="color:#059669">Vigente</span>'
+                    (item.saldo_cxc || 0) <= 0
+                        ? '<span style="color:#059669">Pagada</span>'
+                        : (item.dias_vencido || 0) > 0
+                            ? `<strong style="color:#dc2626">${item.dias_vencido} d</strong>`
+                            : '<span style="color:#059669">Vigente</span>'
                 }</td>
                 <td>${facturadaCell}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
