@@ -81,7 +81,7 @@ from cxc.engine.equivalents import (
     valor_pagado_bcv_usd,
     valor_pagado_binance_usd,
 )
-from cxc.engine.facturado import facturado_de_orden
+from cxc.engine.facturado import facturado_de_menos, facturado_de_orden
 from cxc.engine.facturado_por_debajo import evaluar_facturado_por_debajo
 from cxc.engine.historical_pricing import es_orden_historica
 from cxc.engine.identidad_de_reglas import aviso_de_ambiguedad, elegir_tabla_de_regla
@@ -15170,7 +15170,13 @@ def _get_ventas_sync(
                 # la orden.
                 diferencia = round(venta_neta_teorica_impuestos - venta_neta_real, 2)
 
-            alerta = tiene_factura and (total_facturado_neto < venta_neta_teorica_impuestos - 0.05)
+            alerta = facturado_de_menos(
+                tiene_factura=tiene_factura,
+                facturado_neto=total_facturado_neto,
+                iva_retenido=iva_retenido_confirmado,
+                teorico_neto_con_impuestos=venta_neta_teorica_impuestos,
+                venta_neta_real=venta_neta_real,
+            )
             if alerta:
                 total_alertas += 1
 
@@ -15571,12 +15577,15 @@ def _get_ventas_sync(
                     # Y porcentaje en todos los campos de descuento (pedido
                     # explícito del usuario).
                     "descuento_aplicado_orden": round(descuento_aplicado_orden, 2),
+                    # ``venta_bruta_real`` (amount_untaxed) ya viene CON el descuento
+                    # de línea: el porcentaje se mide contra lo que valía antes.
                     "descuento_aplicado_orden_pct": _pct(
-                        descuento_aplicado_orden, venta_bruta_real
+                        descuento_aplicado_orden, venta_bruta_real + descuento_aplicado_orden
                     ),
                     "descuento_aplicado_factura": round(descuento_aplicado_factura, 2),
                     "descuento_aplicado_factura_pct": _pct(
-                        descuento_aplicado_factura, total_facturado_antes_impuestos
+                        descuento_aplicado_factura,
+                        total_facturado_antes_impuestos + descuento_aplicado_factura,
                     ),
                     "descuento_motor_total": round(float(motor_total_descuentos), 2),
                     "descuento_motor_total_pct": _pct(
