@@ -144,6 +144,10 @@ def test_escenario_a_descuento_ya_aplicado_en_odoo_conciliado_saldo_cero():
         # CxC confirmada y el saldo consolidado es 0.
         assert item["pagada"] is True
         assert item["saldo_cxc"] == 0.0
+        # Pagada no es vencida: aunque la fecha de vencimiento ya pasó,
+        # la antigüedad es 0 (la fecha de vencimiento se sigue informando).
+        assert item["fecha_vencimiento"] < date.today().isoformat()
+        assert item["dias_vencido"] == 0
 
 
 def test_escenario_c_descuento_motor_pendiente_no_se_confunde_con_pagado():

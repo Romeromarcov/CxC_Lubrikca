@@ -15818,7 +15818,11 @@ def _get_ventas_sync(
             item_actual = items[-1]
             dt_venc, dias_venc = _fecha_y_dias_vencido(item_actual, today_ventas)
             item_actual["fecha_vencimiento"] = dt_venc.isoformat() if dt_venc else None
-            item_actual["dias_vencido"] = dias_venc
+            # Una orden sin saldo no está vencida: está pagada. La fecha de
+            # vencimiento se conserva (informativa), pero la antigüedad es 0.
+            item_actual["dias_vencido"] = (
+                0 if float(item_actual.get("saldo_cxc") or 0) <= 0 else dias_venc
+            )
 
         items.sort(key=lambda it: str(it["so_id"]), reverse=True)
 
