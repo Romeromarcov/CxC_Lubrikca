@@ -178,7 +178,9 @@ def test_diferencia_pequena_dentro_de_tolerancia_no_bloquea():
 # ventana vence y el total del motor baja a su valor confirmado. ------------
 
 
-def _repo_con_orden(*, total_descuentos: str, descuento_linea_pct: str) -> InMemoryRepository:
+def _repo_con_orden(
+    *, total_descuentos: str, descuento_linea_pct: str, diferencial_en_precio: str = "0"
+) -> InMemoryRepository:
     from datetime import date as _date
 
     repo = InMemoryRepository()
@@ -204,6 +206,7 @@ def _repo_con_orden(*, total_descuentos: str, descuento_linea_pct: str) -> InMem
             precio_base_calculado=Decimal("100.00"),
             total_descuentos=Decimal(total_descuentos),
             total_motor=Decimal("100.00") - Decimal(total_descuentos),
+            diferencial_en_precio=Decimal(diferencial_en_precio),
         )
     )
     repo.upsert_lineas(
@@ -320,3 +323,30 @@ class TestUnidadDeVolumen:
         unidad, declarada = unidad_de_volumen(SimpleNamespace(unidad_medida=""))
         assert unidad != "LITROS" and unidad != "CAJAS"
         assert not declarada
+
+
+def test_batch_no_marca_como_sobre_descuento_el_diferencial_que_ya_viene_en_el_precio():
+    """S01226: la linea trae 31,45 % (diferencial + contado); el motor cobra el contado (8 %) y
+    reconoce el diferencial como ``diferencial_en_precio``. Juntos igualan lo de Odoo."""
+    repo = _repo_con_orden(
+        total_descuentos="8.00", descuento_linea_pct="31.45", diferencial_en_precio="23.45"
+    )
+    assert _detectar_sobre_descuentos_batch(repo) == []
+
+
+def test_batch_si_marca_el_exceso_sobre_lo_que_el_motor_reconoce_incluido_el_diferencial():
+    repo = _repo_con_orden(
+        total_descuentos="8.00", descuento_linea_pct="40.0", diferencial_en_precio="23.45"
+    )
+    filas = _detectar_sobre_descuentos_batch(repo)
+    assert len(filas) == 1
+    assert filas[0]["diferencia_usd"] < 0
+
+
+def test_el_chequeo_reactivo_tambien_suma_el_diferencial_en_el_precio():
+    from cxc.web.app import _detectar_sobre_descuento_vigente
+
+    repo = _repo_con_orden(
+        total_descuentos="8.00", descuento_linea_pct="31.45", diferencial_en_precio="23.45"
+    )
+    assert _detectar_sobre_descuento_vigente(repo, "SO_BATCH") is None
