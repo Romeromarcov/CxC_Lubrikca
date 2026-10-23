@@ -5758,7 +5758,11 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 continue
 
             # ── Auditoría de descuentos: motor vs Odoo ────────────────────────────
-            motor_desc_usd = Decimal(str(total_descuentos_monto))
+            # + el diferencial que la orden ya trae en el precio de sus lineas: es un descuento
+            # que el motor reconoce, no un exceso.
+            motor_desc_usd = Decimal(str(total_descuentos_monto)) + (
+                Decimal(str(b.diferencial_en_precio)) if b else Decimal("0")
+            )
             motor_ncs_usd = Decimal(str(b.ncs_calculadas if b else 0))
 
             audit_orden = auditar_descuento_orden(
@@ -16789,6 +16793,21 @@ class AprobarDescuentoSistemaRequest(BaseModel):
     activo: bool = True
 
 
+def _motor_total_para_auditar(bandeja: Any) -> Decimal:
+    """Lo que el motor reconoce como descuento de la orden, para compararlo con lo de Odoo.
+
+    Es el total que se cobra mas el diferencial cambiario que la orden ya lleva en el precio de
+    sus lineas (``diferencial_en_precio``): sin sumarlo, ese descuento -- legitimo, es el que el
+    vendedor calcula a mano -- aparecia como sobre-descuento (66 filas falsas en Auditoria al
+    desplegar el diferencial, S01226).
+    """
+    if bandeja is None:
+        return Decimal("0")
+    return Decimal(str(bandeja.total_descuentos)) + Decimal(
+        str(getattr(bandeja, "diferencial_en_precio", 0) or 0)
+    )
+
+
 def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
     """Agosto 2026 -- versión batch (TODAS las órdenes) de
 
@@ -16840,7 +16859,7 @@ def _detectar_sobre_descuentos_batch(repo) -> list[dict]:
     actuales: list[dict] = []
     for so_id in so_ids:
         bandeja = bandeja_map.get(so_id)
-        motor_total_descuentos = Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
+        motor_total_descuentos = _motor_total_para_auditar(bandeja)
         audit_orden = auditar_descuento_orden(
             so_id=so_id,
             motor_total_descuentos=motor_total_descuentos,
@@ -16919,7 +16938,7 @@ def _detectar_sobre_descuento_vigente(repo, so_id: str):
     if orden is None:
         return None
     bandeja = repo.get_bandeja(so_id)
-    motor_total_descuentos = Decimal(str(bandeja.total_descuentos)) if bandeja else Decimal("0")
+    motor_total_descuentos = _motor_total_para_auditar(bandeja)
 
     espejo_fact = _facturacion_por_so_desde_espejo(repo, {so_id})
     desc_orden_map, desc_factura_map = _descuentos_lineas_desde_espejo(
