@@ -3568,7 +3568,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load Promociones Primera Compra
     const TIPO_LABELS = {
         "primera_compra": "Primera Compra", "recurrencia": "Recompra",
-        "contado": "Pronto Pago", "volumen": "Volumen", "bcv_completo": "Diferencial BCV"
+        "contado": "Pronto Pago", "contado_ves": "Pronto Pago en VES (camino BCV)", "volumen": "Volumen", "bcv_completo": "Diferencial BCV"
     };
 
     async function loadPromociones() {

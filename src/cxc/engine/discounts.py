@@ -194,6 +194,11 @@ class _Componentes:
     regla_contado_dominante: DescuentoMarcaCategoria | None = None
     producto: Decimal = Decimal("0")
     detalle_producto: DescuentoAplicado | None = None
+    # Diferencial cambiario que la orden YA lleva metido en el precio de sus lineas (descuento de
+    # linea puesto a mano para llevar el monto VES a la tasa Binance). No se le debe nada mas por
+    # ese concepto (``diferencial_cambiario`` es 0), pero el diferencial SI aplica: excluye al
+    # contado. Es la parte de la brecha medida contra el precio de lista.
+    diferencial_en_precio: Decimal = Decimal("0")
 
 
 _ReglaT = TypeVar("_ReglaT")
@@ -206,6 +211,7 @@ COMPONENTES_DESCUENTO = (
     "primera_compra",
     "recurrencia",
     "contado",
+    "contado_ves",
     "volumen",
     "bcv_completo",
     "producto",
@@ -1448,9 +1454,12 @@ def _calcular_componentes(
     contado_evaluable = (
         bool(inp.abonos) or ignorar_pago_previo
     ) and inp.orden.fecha_entrega is not None
-    contado_proy = Decimal("0")
-    regla_contado_dominante: DescuentoMarcaCategoria | None = None
-    if contado_evaluable:
+    def _evaluar_contado(
+        como_usd: bool,
+    ) -> tuple[Decimal, DescuentoMarcaCategoria | None, str]:
+        """Contado proyectado y regla dominante; ``como_usd`` fuerza evaluar el pago como USD."""
+        contado_proy = Decimal("0")
+        regla_contado_dominante: DescuentoMarcaCategoria | None = None
         # Regla de negocio del usuario (auditoría de septiembre 2026): una
         # orden con abonos en las DOS monedas cuenta como USD, y sus abonos
         # en bolívares se valoran por su equivalente Binance (ver
@@ -1514,6 +1523,8 @@ def _calcular_componentes(
                     moneda_pago = "VES"
         else:
             moneda_pago = "VES" if pura_bcv else "USD"
+        if como_usd:
+            moneda_pago = "USD"
 
         # Escalera por ventana de pago (bug encontrado en la auditoría de
         # reglas, septiembre 2026). Antes se elegía la regla dominante SOLO
@@ -1634,6 +1645,14 @@ def _calcular_componentes(
             if inp.fecha_calculo > fin_ventana_teorico:
                 contado_proy = Decimal("0")
                 regla_contado_dominante = None
+        return contado_proy, regla_contado_dominante, moneda_pago
+
+    moneda_contado = ""
+    if contado_evaluable:
+        contado_proy, regla_contado_dominante, moneda_contado = _evaluar_contado(False)
+    else:
+        contado_proy = Decimal("0")
+        regla_contado_dominante = None
 
     # (d) Descuento por Volumen (Litros o Unidades/Cajas) -- evaluado POR
     # REGLA, no agrupando primero por (marca, categoría raíz). Hallazgo de
@@ -1990,148 +2009,191 @@ def _calcular_componentes(
     # NO es un descuento automático del motor -- es un reporte de
     # candidatos aparte (ver endpoint de candidatos de cierre) que gerencia
     # aprueba manualmente vía "Aprobar Descuento de Sistema".
-    diferencial_cambiario = Decimal("0")
-    detalle_diferencial: DescuentoAplicado | None = None
+    def _evaluar_diferencial(
+        contado_para_brecha: Decimal,
+    ) -> tuple[Decimal, Decimal, DescuentoAplicado | None]:
+        """Diferencial cobrable, diferencial ya metido en el precio, y su detalle."""
+        diferencial_cambiario = Decimal("0")
+        diferencial_en_precio = Decimal("0")
+        detalle_diferencial: DescuentoAplicado | None = None
 
-    listas_ves_validas = set(inp.valid_ves) if inp.valid_ves else {_lista_ves_activa(inp)}
-    es_lista_ves_nativa = str(inp.orden.lista_precios) in listas_ves_validas
+        listas_ves_validas = set(inp.valid_ves) if inp.valid_ves else {_lista_ves_activa(inp)}
+        es_lista_ves_nativa = str(inp.orden.lista_precios) in listas_ves_validas
 
-    if inp.abonos and pura_bcv and es_lista_ves_nativa:
-        vincs = [v for v, _ in inp.abonos]
+        if inp.abonos and pura_bcv and es_lista_ves_nativa:
+            vincs = [v for v, _ in inp.abonos]
 
-        diferenciales_ok = _filtrar_por_pago_previo(
-            inp.descuentos_diferencial, tiene_pago, cubre_ves, cubre_usd
-        )
-        reglas_dif_vigentes = [
-            r
-            for r in diferenciales_ok
-            if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
-            and _match_lista(
-                getattr(r, "listas_aplicables", "*"),
-                lista,
-                inp.valid_ves or None,
-                inp.valid_usd or None,
+            diferenciales_ok = _filtrar_por_pago_previo(
+                inp.descuentos_diferencial, tiene_pago, cubre_ves, cubre_usd
             )
-        ]
-        # UNA sola regla, no dos ramas. El usuario lo pidió tras ver que ya
-        # eran la misma cosa (septiembre 2026): "¿cuál es ahora la
-        # diferencia entre la regla de equiparar y la regla del 35 %?
-        # ¿pueden unificarse?".
-        #
-        # Lo eran. Las dos preguntaban "¿el pago cubre el teórico USD?" y
-        # las dos cerraban la brecha hasta lo pagado, topado al mismo
-        # porcentaje. Lo que las separaba era ``todos_usd_puro`` -- si TODOS
-        # los abonos estaban registrados con moneda USD -- y ese criterio es
-        # frágil: el usuario aclaró que los pagos se registran en VES y que
-        # el equivalente a las tres tasas se calcula solo. Que la regla
-        # dependa de en qué casilla quedó el billete es justo lo que produjo
-        # el caso S00010.
-        #
-        # Además el sustraendo ya era el mismo en la práctica:
-        # ``valor_pagado_usd`` elige el equivalente según
-        # ``tipo_tasa_abono``, que en producción vale BCV en el 100 % de las
-        # 1.467 vinculaciones, o sea que devolvía siempre ``equiv_usd_bcv``
-        # -- exactamente lo que usa ``valor_pagado_bcv_usd``.
-        #
-        # La regla unificada:
-        #   · cobertura medida a BINANCE, el tipo de cambio que menos
-        #     favorece al cliente. Para un pago en dólares las dos
-        #     valoraciones son el monto nominal, así que la vieja rama fija
-        #     entra sin cambiar.
-        #   · brecha medida contra el precio REAL de la línea y contra lo que
-        #     el pago vale en los términos de la factura (BCV).
-        #   · la guarda de pagos huérfanos, que antes solo cubría a la rama
-        #     "equiparar", vale ahora para las dos: es control de calidad
-        #     del dato, no una distinción de negocio.
-        #
-        # El TOPE sale de ``porcentaje_fijo`` de la regla, editable desde
-        # Configuración -> Diferencial Cambiario. Hoy es 0,35.
-        reglas_dif_aplicables = [
-            r
-            for r in reglas_dif_vigentes
-            if r.tipo_diferencial in ("fijo_35_ves_usd", "equiparar_binance")
-        ]
-        regla_max = max(
-            reglas_dif_aplicables, key=lambda r: r.porcentaje_fijo, default=None
-        )
+            reglas_dif_vigentes = [
+                r
+                for r in diferenciales_ok
+                if _vigente(r.vigencia_desde, r.vigencia_hasta, r.activo, fecha_orden)
+                and _match_lista(
+                    getattr(r, "listas_aplicables", "*"),
+                    lista,
+                    inp.valid_ves or None,
+                    inp.valid_usd or None,
+                )
+            ]
+            # UNA sola regla, no dos ramas. El usuario lo pidió tras ver que ya
+            # eran la misma cosa (septiembre 2026): "¿cuál es ahora la
+            # diferencia entre la regla de equiparar y la regla del 35 %?
+            # ¿pueden unificarse?".
+            #
+            # Lo eran. Las dos preguntaban "¿el pago cubre el teórico USD?" y
+            # las dos cerraban la brecha hasta lo pagado, topado al mismo
+            # porcentaje. Lo que las separaba era ``todos_usd_puro`` -- si TODOS
+            # los abonos estaban registrados con moneda USD -- y ese criterio es
+            # frágil: el usuario aclaró que los pagos se registran en VES y que
+            # el equivalente a las tres tasas se calcula solo. Que la regla
+            # dependa de en qué casilla quedó el billete es justo lo que produjo
+            # el caso S00010.
+            #
+            # Además el sustraendo ya era el mismo en la práctica:
+            # ``valor_pagado_usd`` elige el equivalente según
+            # ``tipo_tasa_abono``, que en producción vale BCV en el 100 % de las
+            # 1.467 vinculaciones, o sea que devolvía siempre ``equiv_usd_bcv``
+            # -- exactamente lo que usa ``valor_pagado_bcv_usd``.
+            #
+            # La regla unificada:
+            #   · cobertura medida a BINANCE, el tipo de cambio que menos
+            #     favorece al cliente. Para un pago en dólares las dos
+            #     valoraciones son el monto nominal, así que la vieja rama fija
+            #     entra sin cambiar.
+            #   · brecha medida contra el precio REAL de la línea y contra lo que
+            #     el pago vale en los términos de la factura (BCV).
+            #   · la guarda de pagos huérfanos, que antes solo cubría a la rama
+            #     "equiparar", vale ahora para las dos: es control de calidad
+            #     del dato, no una distinción de negocio.
+            #
+            # El TOPE sale de ``porcentaje_fijo`` de la regla, editable desde
+            # Configuración -> Diferencial Cambiario. Hoy es 0,35.
+            reglas_dif_aplicables = [
+                r
+                for r in reglas_dif_vigentes
+                if r.tipo_diferencial in ("fijo_35_ves_usd", "equiparar_binance")
+            ]
+            regla_max = max(
+                reglas_dif_aplicables, key=lambda r: r.porcentaje_fijo, default=None
+            )
 
-        if regla_max is not None and not inp.cliente_tiene_pagos_huerfanos:
-            diferencial_maximo = regla_max.porcentaje_fijo
-            if diferencial_maximo > 0:
-                # Cobertura PROPORCIONAL, no todo-o-nada (rediseño pedido por
-                # el usuario, 28-sep-2026, caso real Elisa Alejandra Jiménez
-                # Suárez/S00468: pagó $693 de los $780 que exige el teórico
-                # USD -- 88,8% de cobertura -- y el gate binario ("o cubre el
-                # 100% o no le toca nada") le daba $0 de diferencial pese a
-                # haber pagado siempre en divisas. Antes de este cambio, un
-                # pago de $779,99 (99,9%) y uno de $10 (1,3%) daban EXACTAMENTE
-                # lo mismo: cero. Ahora el que pagó más cerca del teórico se
-                # lleva proporcionalmente más -- a cobertura 100% el resultado
-                # es idéntico al de antes (mismo min(techo, brecha)).
-                #
-                # Sin teórico USD (target<=0) no hay contra qué medir
-                # cobertura -- se trata como cobertura completa, igual que el
-                # gate binario anterior dejaba pasar cuando el target era 0.
-                # Los pagos incluyen IVA; ``precio_base``/``precio_target_usd``
-                # y las lineas NO. Comparar los dos tal cual subestimaba la
-                # brecha (caso Elisa S00468: pago $693 con IVA contra base
-                # sin IVA daba $175,71 de diferencial; la NC correcta era
-                # $357,51 sin IVA). Se lleva lo pagado a base sin IVA. Un
-                # agente de retencion no paga la parte retenida del IVA, asi
-                # que su pago solo lleva ``1 - retencion`` del IVA.
-                factor_iva = Decimal("1") + inp.engine_config.iva_rate * (
-                    Decimal("1") - inp.retencion_iva_fraccion
-                )
-                # Odoo manda: con la orden YA facturada, solo lo que Odoo concilio cuenta como
-                # pagado. Las PENDIENTES son propuestas del FIFO sobre pagos que Odoo no repartio
-                # a esta factura y, sumadas, pasaban la factura y dejaban el diferencial en cero
-                # (caso S00542: 1.199 conciliados mas 779 pendientes daban $0; sin las pendientes,
-                # $646). Sin factura aun no hay nada que Odoo pueda conciliar: ahi las propuestas
-                # son la unica senal de pago y se conservan.
-                vincs_pagado = (
-                    [v for v in vincs if v.estado == EstadoVinculacion.CONCILIADO]
-                    if inp.orden.facturada
-                    else vincs
-                )
-                target = precio_target_usd or Decimal("0")
-                if target <= 0:
-                    cobertura = Decimal("1")
-                else:
-                    ratio = valor_pagado_binance_usd(vincs_pagado) / factor_iva / target
-                    cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
-                techo = precio_base * diferencial_maximo
-                otros_desc_pre = nc + pct_recompra + contado_proy + volumen_desc
-                pagado_en_factura = valor_pagado_bcv_usd(vincs_pagado) / factor_iva
-                precio_real_orden = sum(
-                    (
-                        _cantidad_efectiva(inp, ln)
-                        * ln.precio_unitario
-                        * _factor_descuento_de_linea(inp, ln)
-                        for ln in inp.lineas
-                    ),
-                    Decimal("0"),
-                )
-                # Sin líneas con precio propio no hay con qué medir la brecha:
-                # "no sé" no es "cero", así que manda el precio de lista.
-                base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
-                brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
-                diferencial_cambiario = min(techo, brecha) * cobertura
-                if diferencial_cambiario > 0:
-                    pct_str = f"{diferencial_maximo * 100:.1f}%"
-                    cobertura_str = (
-                        f", cobertura {cobertura * 100:.0f}%" if cobertura < 1 else ""
+            if regla_max is not None and not inp.cliente_tiene_pagos_huerfanos:
+                diferencial_maximo = regla_max.porcentaje_fijo
+                if diferencial_maximo > 0:
+                    # Cobertura PROPORCIONAL, no todo-o-nada (rediseño pedido por
+                    # el usuario, 28-sep-2026, caso real Elisa Alejandra Jiménez
+                    # Suárez/S00468: pagó $693 de los $780 que exige el teórico
+                    # USD -- 88,8% de cobertura -- y el gate binario ("o cubre el
+                    # 100% o no le toca nada") le daba $0 de diferencial pese a
+                    # haber pagado siempre en divisas. Antes de este cambio, un
+                    # pago de $779,99 (99,9%) y uno de $10 (1,3%) daban EXACTAMENTE
+                    # lo mismo: cero. Ahora el que pagó más cerca del teórico se
+                    # lleva proporcionalmente más -- a cobertura 100% el resultado
+                    # es idéntico al de antes (mismo min(techo, brecha)).
+                    #
+                    # Sin teórico USD (target<=0) no hay contra qué medir
+                    # cobertura -- se trata como cobertura completa, igual que el
+                    # gate binario anterior dejaba pasar cuando el target era 0.
+                    # Los pagos incluyen IVA; ``precio_base``/``precio_target_usd``
+                    # y las lineas NO. Comparar los dos tal cual subestimaba la
+                    # brecha (caso Elisa S00468: pago $693 con IVA contra base
+                    # sin IVA daba $175,71 de diferencial; la NC correcta era
+                    # $357,51 sin IVA). Se lleva lo pagado a base sin IVA. Un
+                    # agente de retencion no paga la parte retenida del IVA, asi
+                    # que su pago solo lleva ``1 - retencion`` del IVA.
+                    factor_iva = Decimal("1") + inp.engine_config.iva_rate * (
+                        Decimal("1") - inp.retencion_iva_fraccion
                     )
-                    detalle_diferencial = DescuentoAplicado(
-                        origen="bcv_completo",
-                        descripcion=(
-                            f"Diferencial Cambiario (tope {pct_str}, "
-                            f"brecha hasta lo pagado{cobertura_str})"
+                    # Odoo manda: con la orden YA facturada, solo lo que Odoo concilio cuenta
+                    # como pagado. Las PENDIENTES son propuestas del FIFO sobre pagos que Odoo
+                    # no repartio a esta factura y, sumadas, pasaban la factura y dejaban el
+                    # diferencial en cero (caso S00542: 1.199 conciliados mas 779 pendientes
+                    # daban $0; sin las pendientes, $646). Sin factura aun no hay nada que Odoo
+                    # pueda conciliar: ahi las propuestas son la unica senal de pago y se
+                    # conservan.
+                    vincs_pagado = (
+                        [v for v in vincs if v.estado == EstadoVinculacion.CONCILIADO]
+                        if inp.orden.facturada
+                        else vincs
+                    )
+                    target = precio_target_usd or Decimal("0")
+                    if target <= 0:
+                        cobertura = Decimal("1")
+                    else:
+                        ratio = valor_pagado_binance_usd(vincs_pagado) / factor_iva / target
+                        cobertura = min(Decimal("1"), max(Decimal("0"), ratio))
+                    techo = precio_base * diferencial_maximo
+                    otros_desc_pre = nc + pct_recompra + contado_para_brecha + volumen_desc
+                    pagado_en_factura = valor_pagado_bcv_usd(vincs_pagado) / factor_iva
+                    precio_real_orden = sum(
+                        (
+                            _cantidad_efectiva(inp, ln)
+                            * ln.precio_unitario
+                            * _factor_descuento_de_linea(inp, ln)
+                            for ln in inp.lineas
                         ),
-                        monto=q2(diferencial_cambiario),
-                        regla_id=getattr(regla_max, "regla_id", "") or "",
-                        porcentaje=diferencial_maximo,
-                        base=q2(base_brecha),
+                        Decimal("0"),
                     )
+                    # Sin líneas con precio propio no hay con qué medir la brecha:
+                    # "no sé" no es "cero", así que manda el precio de lista.
+                    base_brecha = precio_real_orden if precio_real_orden > 0 else precio_base
+                    brecha = max(Decimal("0"), base_brecha - otros_desc_pre - pagado_en_factura)
+                    diferencial_cambiario = min(techo, brecha) * cobertura
+                    # ¿Y si el precio ya lo trae? Lo mismo, medido contra el precio de LISTA de las
+                    # líneas (sin su descuento): lo que el cliente pagó queda por debajo de la lista
+                    # por la brecha del diferencial. Si la brecha contra lo real es 0 pero contra la
+                    # lista no, el diferencial ya está en el precio.
+                    precio_lista_lineas = sum(
+                        (_cantidad_efectiva(inp, ln) * ln.precio_unitario for ln in inp.lineas),
+                        Decimal("0"),
+                    )
+                    if diferencial_cambiario <= 0 and precio_lista_lineas > 0:
+                        brecha_lista = max(
+                            Decimal("0"), precio_lista_lineas - otros_desc_pre - pagado_en_factura
+                        )
+                        diferencial_en_precio = (
+                            min(precio_lista_lineas * diferencial_maximo, brecha_lista) * cobertura
+                        )
+                    if diferencial_cambiario > 0:
+                        pct_str = f"{diferencial_maximo * 100:.1f}%"
+                        cobertura_str = (
+                            f", cobertura {cobertura * 100:.0f}%" if cobertura < 1 else ""
+                        )
+                        detalle_diferencial = DescuentoAplicado(
+                            origen="bcv_completo",
+                            descripcion=(
+                                f"Diferencial Cambiario (tope {pct_str}, "
+                                f"brecha hasta lo pagado{cobertura_str})"
+                            ),
+                            monto=q2(diferencial_cambiario),
+                            regla_id=getattr(regla_max, "regla_id", "") or "",
+                            porcentaje=diferencial_maximo,
+                            base=q2(base_brecha),
+                        )
+        return diferencial_cambiario, diferencial_en_precio, detalle_diferencial
+
+    diferencial_cambiario, diferencial_en_precio, detalle_diferencial = _evaluar_diferencial(
+        contado_proy
+    )
+
+    # El diferencial cambiario cambia el camino del pago. Un pago en bolívares que se le
+    # reconoce al cliente al tipo de cambio Binance es, para efectos del contado, un pago en
+    # USD: aplican las reglas de contado en dólares (8 %, 6 %, 3 %) y NO las propias del camino
+    # BCV en bolívares (20 %, 15 %). Decisión del usuario (22-oct-2026, S01226: se le dio
+    # diferencial y contado del 8 %; el 20 % no aplicaba). Configurable: el par «contado_ves» <->
+    # «bcv_completo» en la tabla de exclusiones; sin él, el contado se evalúa como antes.
+    if (
+        contado_evaluable
+        and moneda_contado == "VES"
+        and (diferencial_cambiario > 0 or diferencial_en_precio > 0)
+        and ("contado_ves", "bcv_completo") in _pares_exclusion(inp.exclusiones)
+    ):
+        contado_proy, regla_contado_dominante, _ = _evaluar_contado(True)
+        diferencial_cambiario, diferencial_en_precio, detalle_diferencial = (
+            _evaluar_diferencial(contado_proy)
+        )
 
     return _Componentes(
         precio_base=precio_base,
@@ -2147,6 +2209,7 @@ def _calcular_componentes(
         regla_contado_dominante=regla_contado_dominante,
         producto=producto_desc,
         detalle_producto=detalle_producto,
+        diferencial_en_precio=diferencial_en_precio,
         flags={
             "contado_evaluable": contado_evaluable,
             "promo_sin_precio": promo_sin_precio,
@@ -2548,6 +2611,7 @@ def calcular_factura(inp: EngineInputs) -> BandejaFacturacion:
         teorico_lista_usd=teorico_usd,
         descuentos_teorico_ves=descuentos_teorico_ves,
         descuentos_teorico_usd=descuentos_teorico_usd,
+        diferencial_en_precio=q2(comp.diferencial_en_precio),
     )
 
 

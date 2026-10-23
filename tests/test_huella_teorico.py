@@ -87,3 +87,71 @@ def test_la_version_del_desglose_invalida_lo_ya_calculado() -> None:
     finally:
         runner.VERSION_DESGLOSE_MOTOR = original
     assert fingerprint_lineas(_LINEAS, "15") == huella_antes
+
+
+# --- los pagos entran en la huella (S01226) ----------------------------------------------------
+
+
+def _vinc(vinc_id="V1", monto="100", estado=None, dia=5):
+    from datetime import datetime
+
+    from cxc.models import EstadoVinculacion
+    from tests import builders as b
+
+    return b.vinculacion(
+        vinc_id,
+        monto_aplicado=monto,
+        hora=datetime(2026, 10, dia, 10, 0),
+        estado=estado or EstadoVinculacion.CONCILIADO,
+    )
+
+
+def _orden(**kw):
+    from tests import builders as b
+
+    return b.orden(**kw)
+
+
+def test_sin_pagos_la_huella_es_la_de_siempre():
+    """Las ordenes sin pagos conservan la huella que ya tenian: no se recalculan de golpe."""
+    from cxc.engine.runner import _huella_de_abonos
+
+    assert _huella_de_abonos([], _orden()) == ""
+    assert fingerprint_lineas(_LINEAS, "15", "") == fingerprint_lineas(_LINEAS, "15")
+
+
+def test_vincular_un_pago_mueve_la_huella():
+    """El teorico calculado antes del pago tiene que recalcularse cuando el pago llega."""
+    from cxc.engine.runner import _huella_de_abonos
+
+    orden = _orden()
+    sin_pago = fingerprint_lineas(_LINEAS, "15", _huella_de_abonos([], orden))
+    con_pago = fingerprint_lineas(_LINEAS, "15", _huella_de_abonos([_vinc()], orden))
+    assert con_pago != sin_pago
+
+
+def test_cambia_con_el_monto_el_estado_o_el_dia_del_pago():
+    from cxc.engine.runner import _huella_de_abonos
+    from cxc.models import EstadoVinculacion
+
+    orden = _orden()
+    base = _huella_de_abonos([_vinc()], orden)
+    assert _huella_de_abonos([_vinc(monto="150")], orden) != base
+    assert _huella_de_abonos([_vinc(estado=EstadoVinculacion.PENDIENTE)], orden) != base
+    assert _huella_de_abonos([_vinc(dia=9)], orden) != base
+
+
+def test_cambia_cuando_la_orden_se_factura_porque_cambia_que_pagos_cuentan():
+    from cxc.engine.runner import _huella_de_abonos
+
+    vincs = [_vinc()]
+    assert _huella_de_abonos(vincs, _orden(facturada=False)) != _huella_de_abonos(
+        vincs, _orden(facturada=True)
+    )
+
+
+def test_es_estable_aunque_los_pagos_lleguen_en_otro_orden():
+    from cxc.engine.runner import _huella_de_abonos
+
+    a, c = _vinc("V1"), _vinc("V2", monto="50")
+    assert _huella_de_abonos([a, c], _orden()) == _huella_de_abonos([c, a], _orden())

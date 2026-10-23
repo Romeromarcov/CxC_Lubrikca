@@ -14898,10 +14898,15 @@ def _get_ventas_sync(
             # cálculos de saldo más abajo, que no deben moverse por esto --
             # solo la comparación de sobre-descuento necesita el beneficio
             # de la duda.
-            motor_total_descuentos_para_sobre_descuento = motor_total_descuentos
+            # El diferencial cambiario que la orden ya lleva en el precio de sus líneas SÍ es
+            # un descuento que el motor reconoce (no se le debe nada más, pero tampoco es un
+            # exceso): sin sumarlo, el 31 % puesto a mano en S01226 se leía como sobre-descuento.
+            motor_total_descuentos_para_sobre_descuento = motor_total_descuentos + (
+                Decimal(str(b.diferencial_en_precio)) if b else Decimal("0")
+            )
             if not vincs_por_so.get(o.so_id):
                 motor_total_descuentos_para_sobre_descuento = max(
-                    motor_total_descuentos,
+                    motor_total_descuentos_para_sobre_descuento,
                     Decimal(str(ves_desc_teorico)),
                     Decimal(str(usd_desc_teorico)),
                 )

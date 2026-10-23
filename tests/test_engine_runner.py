@@ -348,6 +348,38 @@ def test_run_teoricos_pendientes_no_recalcula_si_ya_existe_sin_fallback() -> Non
     assert segundo.teorico_usd == Decimal("100.00")  # sin cambios
 
 
+def test_run_teoricos_pendientes_recalcula_cuando_llega_un_pago() -> None:
+    """S01226: el teorico se calculo ANTES de que se vinculara el pago y nunca se recalculo.
+
+    El contado (y el diferencial) dependen de los pagos, asi que un teorico calculado sin ellos
+    mostraba cero descuento para siempre. Ahora la huella incluye los pagos: al llegar uno, el
+    teorico se vuelve a calcular; sin cambios, queda fijo.
+    """
+    vinc = _seed().vinculaciones_de_orden("SO1")[0]
+    resolver = DictPriceResolver({("P1", "USD"): Decimal("100"), ("P1", "BCV"): Decimal("90")})
+
+    sin_pago = InMemoryRepository()
+    sin_pago.upsert_clientes([b.cliente("C1")])
+    sin_pago.upsert_ordenes([b.orden("SO1", cliente_id="C1", primera=False)])
+    sin_pago.upsert_lineas(
+        [b.linea("L1", so_id="SO1", marca="Sinoco", categoria="*", precio="100")]
+    )
+    sin_pago.add_descuento(b.descuento("D1", marca="Sinoco", categoria="*", porcentaje="0.03"))
+    runner = EngineRunner(sin_pago, resolver, CFG)
+
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 1
+    antes = sin_pago.get_ventas_teorico("SO1")
+    assert antes is not None
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0  # sin cambios: fijo
+
+    sin_pago.add_vinculacion(vinc)
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 1  # llego el pago: se recalcula
+    assert runner.run_teoricos_pendientes(date(2026, 6, 8)) == 0  # y vuelve a quedar fijo
+    despues = sin_pago.get_ventas_teorico("SO1")
+    assert despues is not None
+    assert despues.lineas_fingerprint != antes.lineas_fingerprint
+
+
 def test_run_teoricos_pendientes_recalcula_si_estaba_marcado_fallback() -> None:
     """Un teórico marcado usa_fallback SÍ se re-verifica en la siguiente
 
