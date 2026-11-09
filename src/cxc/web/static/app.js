@@ -1123,6 +1123,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.applyReporteClienteFilters = applyReporteClienteFilters;
 
+    // Excel de Cuentas por Cobrar: el servidor aplica los mismos filtros y
+    // orden que applyReporteClienteFilters, así el archivo coincide con la tabla.
+    function descargarReporteCxcExcel() {
+        const params = new URLSearchParams();
+        const antiguedadVal = document.getElementById("reporte-cliente-antiguedad-filter")?.value || "*";
+        const vendedorVal = document.getElementById("reporte-cliente-vendedor-filter")?.value || "*";
+        const sortVal = document.getElementById("reporte-cliente-sort")?.value || "saldo_desc";
+        const searchVal = (document.getElementById("reporte-cliente-search")?.value || "").trim();
+        if (antiguedadVal !== "*") params.set("antiguedad", antiguedadVal);
+        if (vendedorVal !== "*") params.set("vendedor", vendedorVal);
+        if (sortVal !== "saldo_desc") params.set("sort", sortVal);
+        if (searchVal) params.set("search", searchVal);
+        window.location.href = "/api/reporte-cxc-cliente/excel?" + params.toString();
+    }
+    window.descargarReporteCxcExcel = descargarReporteCxcExcel;
+
     async function loadReporteCxcCliente() {
         const tbody = document.getElementById("reporte-cxc-cliente-table-body");
         if (!tbody) return;
