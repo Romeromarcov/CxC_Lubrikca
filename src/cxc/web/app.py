@@ -163,6 +163,7 @@ from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
 from cxc.sync.incremental import IncrementalSync
+from cxc.web import reporte_cxc_excel
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -6740,6 +6741,34 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/reporte-cxc-cliente/excel")
+async def get_reporte_cxc_cliente_excel(
+    antiguedad: str = "*",
+    vendedor: str = "*",
+    search: str = "",
+    sort: str = "saldo_desc",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Reporte de Cuentas por Cobrar en Excel (página Reporte de Saldos).
+
+    Reusa ``get_reporte_cxc_cliente`` tal cual -- no recalcula ningún
+    saldo -- y le aplica los mismos filtros y orden que la tabla «Cuentas
+    por Cobrar por Cliente» en el navegador. Ver
+    ``cxc.web.reporte_cxc_excel``.
+    """
+    datos = await get_reporte_cxc_cliente(cxc_session)
+    clientes = reporte_cxc_excel.filtrar_y_ordenar(
+        datos.get("clientes") or [], antiguedad, vendedor, search, sort
+    )
+    contenido = reporte_cxc_excel.construir_libro(clientes, antiguedad, vendedor, search)
+    filename = f"cuentas_por_cobrar_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(contenido),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/config/tasas")
