@@ -86,3 +86,8 @@ no_implicit_optional = true
 [[tool.mypy.overrides]]
 module = "cxc.web.app"
 ignore_errors = true
+
+# openpyxl no trae stubs; lo usa cxc.web.reporte_cxc_excel (export a Excel).
+[[tool.mypy.overrides]]
+module = ["openpyxl", "openpyxl.*"]
+ignore_missing_imports = true
