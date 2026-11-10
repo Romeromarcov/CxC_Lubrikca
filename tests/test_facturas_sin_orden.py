@@ -131,3 +131,159 @@ def test_en_la_vista_por_vendedor_cuenta_en_los_tramos_no_como_pago():
     assert v["antiguedad"]["1_30"] == 316.06
     assert v["pagos_sin_aplicar"] == 0.0
     assert v["n_ordenes"] == 1
+
+
+# --- Cobranza: el pago repartido entre una orden y una factura sin orden ---------------
+
+
+def _sugerencias_con(vincs, residual):
+    """Pago P1 de 1.000 USD; Odoo dice que le queda ``residual`` sin aplicar."""
+    from decimal import Decimal
+
+    import cxc.web.app as app_mod
+    from cxc.web.app import _get_conciliaciones_sugerencias_sync
+
+    repo = MagicMock()
+    repo.all_ordenes.return_value = []
+    repo.all_vinculaciones.return_value = vincs
+    repo.all_clientes.return_value = []
+    repo.all_serie_tasas.return_value = []
+    repo.all_tasas_historicas_auditoria.return_value = [
+        {
+            "fecha": "2026-07-02",
+            "tasa_bcv_usd": "100.0",
+            "tasa_bcv_euro": "110.0",
+            "tasa_binance_promedio_diario": "120.0",
+        }
+    ]
+    filas = [
+        {
+            "pago_id": "P1",
+            "cliente_id": "C1",
+            "monto": "1000",
+            "moneda": "USD",
+            "fecha_pago": "2026-07-02",
+        }
+    ]
+    app_mod.invalidar_tasas()
+    with (
+        patch("cxc.web.app.get_repo", return_value=repo),
+        patch("cxc.web.app._all_pagos_rows", return_value=filas),
+        patch("cxc.web.app._connect", return_value=lambda *a, **k: []),
+        patch("cxc.web.app.AppConfig.from_env"),
+        patch("cxc.web.app.get_reconciled_pago_ids_odoo", return_value=set()),
+        patch(
+            "cxc.web.app.residual_disponible_por_pago",
+            return_value={"P1": Decimal(str(residual))},
+        ),
+    ):
+        return [s for s in _get_conciliaciones_sugerencias_sync(None) if s["pago_id"] == "P1"]
+
+
+def _vinc_pendiente(monto):
+    from datetime import datetime
+    from decimal import Decimal
+
+    from cxc.models import EstadoVinculacion, Moneda, Vinculacion
+
+    return Vinculacion(
+        vinc_id="V1",
+        pago_id="P1",
+        so_id="S01025",
+        monto_aplicado=Decimal(str(monto)),
+        hora_pago_confirmada=datetime(2026, 7, 2),
+        tasa_bcv_aplicada=Decimal("100"),
+        tasa_binance_aplicada=Decimal("120"),
+        es_tasa_heredada=False,
+        estado=EstadoVinculacion.PENDIENTE,
+        moneda_abono=Moneda.USD,
+    )
+
+
+def test_el_remanente_ya_cubierto_por_una_pendiente_no_se_vuelve_a_sugerir():
+    """Caso TERA, pago 2231: Odoo aplicó 900 a una factura sin orden y deja 100;
+    esos 100 ya los cubre una Vinculación PENDIENTE. Antes salía otra sugerencia
+    de 100 hacia la misma orden ("Pendiente" + "Vinculado" en Cobranza)."""
+    assert _sugerencias_con([_vinc_pendiente(100)], residual=100) == []
+
+
+def test_si_la_pendiente_cubre_solo_parte_del_remanente_se_sugiere_lo_que_falta():
+    (fila,) = _sugerencias_con([_vinc_pendiente(40)], residual=100)
+    assert abs(fila["saldo_pago"] - 60.0) < 0.01
+
+
+def _execute_odoo_sin_orden(model, method, args, kw=None):
+    if model == "account.payment":
+        return [{"id": 2231, "move_id": [9001, "PBBAN/2026/00032"]}]
+    if model == "account.move.line" and method == "search_read":
+        return [{"id": 501, "move_id": [9001, "PBBAN/2026/00032"]}]
+    if model == "account.partial.reconcile":
+        return [
+            # a la factura sin orden
+            {
+                "credit_move_id": [501, ""],
+                "debit_move_id": [701, ""],
+                "credit_amount_currency": 1295994.98,
+            },
+            # a la factura de la orden (no se cuenta acá)
+            {
+                "credit_move_id": [501, ""],
+                "debit_move_id": [702, ""],
+                "credit_amount_currency": 1000.0,
+            },
+        ]
+    if model == "account.move.line" and method == "read":
+        return [{"id": 701, "move_id": [21000, "00000900"]}, {"id": 702, "move_id": [21001, "F1"]}]
+    raise AssertionError((model, method))
+
+
+def test_cobranza_muestra_la_parte_que_fue_a_la_factura_sin_orden():
+    from cxc.web.app import _filas_de_facturas_sin_orden
+
+    conciliados = [
+        {
+            "pago_id": "2231",
+            "cliente_nombre": "TERA",
+            "fecha_pago": "2026-09-25",
+            "monto_ref_usd": 1550.0,
+            "moneda": "VES",
+            "monto_original": 1326276.88,
+            "residual_pago_usd": 0.0,
+            "facturas": [
+                {
+                    "move_id": 21000,
+                    "factura_id": "00000900",
+                    "so_id": "",
+                    "tipo": "out_invoice",
+                    "residual_usd": 0.0,
+                },
+                {
+                    "move_id": 21001,
+                    "factura_id": "F1",
+                    "so_id": "S01025",
+                    "tipo": "out_invoice",
+                    "residual_usd": 5.0,
+                },
+            ],
+        },
+        # sin Vinculación local: ya sale por la rama "conciliado directo en Odoo"
+        {"pago_id": "1813", "facturas": [{"move_id": 1, "so_id": "", "tipo": "out_invoice"}]},
+    ]
+    (fila,) = _filas_de_facturas_sin_orden(_execute_odoo_sin_orden, conciliados, {"2231"})
+    assert fila["pago_id"] == "2231"
+    assert fila["factura_id"] == "00000900"
+    assert fila["so_id"] == ""
+    assert fila["estado"] == "CONCILIADO"
+    assert abs(fila["monto_aplicado"] - 1295994.98) < 0.01
+
+
+def test_si_odoo_falla_cobranza_sigue_sin_esa_fila():
+    from cxc.web.app import _filas_de_facturas_sin_orden
+
+    def roto(*a, **k):
+        raise RuntimeError("odoo caído")
+
+    conciliados = [
+        {"pago_id": "2231", "facturas": [{"move_id": 1, "so_id": "", "tipo": "out_invoice"}]}
+    ]
+    assert _filas_de_facturas_sin_orden(roto, conciliados, {"2231"}) == []

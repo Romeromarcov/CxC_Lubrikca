@@ -611,6 +611,7 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
         invs = [invoices_map[i] for i in inv_ids if i in invoices_map]
         facturas = [
             {
+                "move_id": int(i["id"]),
                 "factura_id": str(i.get("name", "")),
                 "so_id": str(i.get("invoice_origin") or ""),
                 "monto_usd": float(i.get("amount_total_signed_usd") or 0.0),
@@ -665,6 +666,145 @@ def get_live_pagos_conciliados(execute: Any) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _aplicado_a_facturas_sin_orden(
+    execute: Any, facturas_por_pago: dict[str, set[int]]
+) -> dict[str, dict[int, Decimal]]:
+    """Cuánto de cada pago aplicó Odoo a cada factura SIN orden, en la moneda del pago.
+
+    ``facturas_por_pago``: pago_id -> ids (``account.move``) de sus facturas sin orden.
+    Devuelve pago_id -> id de factura -> monto. Mismo recorrido que
+    ``OdooXmlRpcReader.aplicaciones_con_y_sin_orden`` (``partial.reconcile``,
+    ``credit_amount_currency``) pero solo para estos pagos: lo usa el historial
+    de Cobranza, que corre en cada carga de la página.
+    """
+    pago_ids = sorted(int(p) for p in facturas_por_pago if str(p).isdigit())
+    if not pago_ids:
+        return {}
+    pagos = execute("account.payment", "read", [pago_ids], {"fields": ["id", "move_id"]})
+    move_a_pago: dict[int, str] = {}
+    for p in pagos:
+        mv = p.get("move_id")
+        if isinstance(mv, list | tuple) and mv:
+            move_a_pago[int(mv[0])] = str(p["id"])
+    if not move_a_pago:
+        return {}
+    lineas = execute(
+        "account.move.line",
+        "search_read",
+        [[["move_id", "in", sorted(move_a_pago)], ["account_type", "=", "asset_receivable"]]],
+        {"fields": ["id", "move_id"]},
+    )
+    linea_a_pago = {
+        int(ln["id"]): move_a_pago[int(ln["move_id"][0])]
+        for ln in lineas
+        if isinstance(ln.get("move_id"), list | tuple) and int(ln["move_id"][0]) in move_a_pago
+    }
+    if not linea_a_pago:
+        return {}
+    partials = execute(
+        "account.partial.reconcile",
+        "search_read",
+        [[["credit_move_id", "in", sorted(linea_a_pago)]]],
+        {"fields": ["credit_move_id", "debit_move_id", "credit_amount_currency"]},
+    )
+    deb_ids = sorted(
+        {
+            int(pr["debit_move_id"][0])
+            for pr in partials
+            if isinstance(pr.get("debit_move_id"), list | tuple)
+        }
+    )
+    if not deb_ids:
+        return {}
+    lineas_fact = execute("account.move.line", "read", [deb_ids], {"fields": ["id", "move_id"]})
+    linea_a_factura = {
+        int(ln["id"]): int(ln["move_id"][0])
+        for ln in lineas_fact
+        if isinstance(ln.get("move_id"), list | tuple) and ln["move_id"]
+    }
+    salida: dict[str, dict[int, Decimal]] = {}
+    for pr in partials:
+        pid = linea_a_pago.get(int(pr["credit_move_id"][0]))
+        fid = linea_a_factura.get(int(pr["debit_move_id"][0]))
+        if pid is None or fid is None or fid not in facturas_por_pago.get(pid, set()):
+            continue
+        monto = abs(parse_decimal_safe(str(pr.get("credit_amount_currency") or "0")))
+        por_fact = salida.setdefault(pid, {})
+        por_fact[fid] = por_fact.get(fid, Decimal("0")) + monto
+    return salida
+
+
+def _filas_de_facturas_sin_orden(
+    execute: Any, conciliados_odoo: list[dict[str, Any]], vinculados_pago_ids: set[str]
+) -> list[dict[str, Any]]:
+    """Filas de historial para lo que Odoo aplicó a facturas SIN orden de pagos
+    que además tienen Vinculaciones locales.
+
+    Esos pagos se saltan en la rama "conciliado directo en Odoo" del historial
+    (para no duplicarlos), así que la parte que fue a la factura sin orden no se
+    veía en Cobranza: el pago aparecía entero contra la orden (caso TERA, pago
+    2231, nov-2026). Una fila por factura, con el monto que dice
+    ``partial.reconcile``. Best-effort: si la consulta falla, no agrega nada.
+    """
+    sin_orden_por_pago: dict[str, set[int]] = {}
+    info: dict[str, dict[str, Any]] = {}
+    for p in conciliados_odoo:
+        if p["pago_id"] not in vinculados_pago_ids:
+            continue
+        ids = {
+            int(f["move_id"])
+            for f in p.get("facturas", [])
+            if not f.get("so_id") and f.get("tipo") == "out_invoice" and f.get("move_id")
+        }
+        if ids:
+            sin_orden_por_pago[p["pago_id"]] = ids
+            info[p["pago_id"]] = p
+    if not sin_orden_por_pago:
+        return []
+    try:
+        montos = _aplicado_a_facturas_sin_orden(execute, sin_orden_por_pago)
+    except Exception as e_apl:  # noqa: BLE001 -- best-effort, la vista sigue
+        logger.warning("No se pudo leer lo aplicado a facturas sin orden: %s", e_apl)
+        return []
+    filas: list[dict[str, Any]] = []
+    for pid, por_fact in montos.items():
+        p = info[pid]
+        for f in p["facturas"]:
+            monto = por_fact.get(int(f.get("move_id") or 0))
+            if not monto:
+                continue
+            filas.append(
+                {
+                    "vinc_id": None,
+                    "pago_id": pid,
+                    "cliente_nombre": p["cliente_nombre"],
+                    "fecha_pago": p["fecha_pago"],
+                    "monto_pago_usd": p["monto_ref_usd"],
+                    "sin_tasa_para_su_fecha": False,
+                    "monto_aplicado": float(monto),
+                    "moneda": p["moneda"],
+                    "so_id": "",
+                    "factura_id": f["factura_id"],
+                    "facturas": [f],
+                    "factura_sin_orden": True,
+                    "residual_pago_usd": p["residual_pago_usd"],
+                    "residual_facturas_usd": f["residual_usd"],
+                    "confirmado_por": "Odoo",
+                    "estado": "CONCILIADO",
+                    "origen": "Odoo (factura sin orden)",
+                    "tasa_bcv": None,
+                    "tasa_binance": None,
+                    "bcv_variante": "USD",
+                    "editable": False,
+                    "metodo_pago_id": "",
+                    "metodo_pago_nombre": p.get("metodo_pago") or "",
+                    "monto_original": p["monto_original"],
+                    "vendedor_email": p.get("vendedor_email") or "",
+                }
+            )
+    return filas
 
 
 def _facturas_que_odoo_todavia_tiene(execute: Any, invoice_ids: list[int]) -> list[int]:
@@ -8946,10 +9086,21 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
 
         linked_pago = {}
         linked_so = {}
+        # Lo que las Vinculaciones PENDIENTE ya reclaman de cada pago. Odoo no
+        # las conoce, así que siguen dentro de su residual: hay que restarlas
+        # del tope por residual (ver abajo). Nativo cuando la moneda coincide
+        # con la del pago, para no mezclar tasas; si no, en USD.
+        # pago_id -> moneda_abono -> (monto nativo, equivalente USD)
+        pend_pago: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
         for v in vincs:
             usd_equiv = _vinc_usd_equiv(v)
             linked_pago[v.pago_id] = linked_pago.get(v.pago_id, Decimal("0")) + usd_equiv
             linked_so[v.so_id] = linked_so.get(v.so_id, Decimal("0")) + usd_equiv
+            if v.estado == EstadoVinculacion.PENDIENTE:
+                mon_v = v.moneda_abono.value if v.moneda_abono else "USD"
+                por_mon = pend_pago.setdefault(v.pago_id, {})
+                nat, usd = por_mon.get(mon_v, (Decimal("0"), Decimal("0")))
+                por_mon[mon_v] = (nat + v.monto_aplicado, usd + usd_equiv)
 
         # Hasta el 12-sep-2026 acá vivía un tercer caso de lo mismo que
         # `resolver_tasa_bcv_vinculacion` (ver `docs/blindaje/2.4-modularizar.md`,
@@ -9070,9 +9221,26 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
             # propia: ``monto_orig_usd`` puede venir del ``amount_ref`` que
             # calculó Odoo con la tasa de ESE pago, así que aplicar otra
             # tasa al residual mezclaría criterios.
+            #
+            # Al residual se le restan las Vinculaciones PENDIENTE del pago:
+            # Odoo no las conoce, así que siguen contadas en su residual. Sin
+            # restarlas, un pago que Odoo aplicó en parte a una factura SIN
+            # orden (caso TERA, pago 2231, nov-2026) volvía a ofrecer su
+            # remanente aunque una Vinculación PENDIENTE ya lo cubría. Cuando
+            # todo lo conciliado en Odoo tiene su Vinculación local esto da lo
+            # mismo que antes (monto - vinculado).
             residual_raw = residual_odoo.get(pid)
             if residual_raw is not None and monto_orig_raw > Decimal("0"):
-                disponible_odoo_usd = monto_orig_usd * (residual_raw / monto_orig_raw)
+                residual_neto = residual_raw
+                pend_usd_extra = Decimal("0")
+                for mon_v, (nat, usd) in pend_pago.get(pid, {}).items():
+                    if mon_v == moneda:
+                        residual_neto -= nat
+                    else:
+                        pend_usd_extra += usd
+                disponible_odoo_usd = (
+                    monto_orig_usd * (residual_neto / monto_orig_raw) - pend_usd_extra
+                )
                 saldo_usd = min(saldo_usd, disponible_odoo_usd)
 
             if saldo_usd > Decimal("0.05"):
@@ -12098,7 +12266,11 @@ def _get_pagos_historial_sync():
             config = AppConfig.from_env()
             execute = _connect(config.odoo)
             if execute:
-                for p in get_live_pagos_conciliados(execute):
+                conciliados_odoo = get_live_pagos_conciliados(execute)
+                historial.extend(
+                    _filas_de_facturas_sin_orden(execute, conciliados_odoo, vinculados_pago_ids)
+                )
+                for p in conciliados_odoo:
                     pago_id = p["pago_id"]
                     if pago_id in vinculados_pago_ids:
                         continue  # ya vino por la Vinculacion local, no duplicar
