@@ -4572,7 +4572,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const total = grupo.length;
             const pagoCell = `<strong>${item.pago_id}</strong>`
                 + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
-                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} órdenes -- no está duplicado">cubre ${total} órdenes</small>` : '');
+                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} documentos -- no está duplicado">cubre ${total} ${grupo.every(g => g.so_id) ? 'órdenes' : 'documentos'}</small>` : '');
 
             const montoCell = item.moneda_pago === "VES"
                 ? `Bs. ${Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`
@@ -4587,11 +4587,20 @@ document.addEventListener("DOMContentLoaded", () => {
                 vinculado_local: '🔗',
                 conciliado_odoo: '✓',
             };
+            // Sin orden pero conciliado en Odoo contra una factura: es una factura
+            // sin orden de venta (flete, servicio...). Se muestra la factura, no
+            // "Sin orden" -- eso queda para el pago que de verdad no tiene destino.
+            const esFacturaSinOrden = (it) => !it.so_id && it.estado === 'conciliado_odoo'
+                && it.factura_id && it.factura_id !== 'N/A';
             const ordenCell = grupo.map(it => it.so_id
                 ? `<div style="margin-bottom:3px;"><span class="badge blue">${it.so_id}</span>`
                     + (total > 1 ? ` <small title="${(estadoBadge[it.estado] || it.estado).replace(/<[^>]*>/g, '')}">${estadoCorto[it.estado] || ''}</small>` : '')
                     + (it.factura_id ? `<br><small>${it.factura_id}</small>` : '') + `</div>`
-                : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`).join('');
+                : esFacturaSinOrden(it)
+                    ? `<div style="margin-bottom:3px;"><span class="badge" style="background:#f1f5f9; color:#334155;" title="Factura sin orden de venta">Fact. ${it.factura_id}</span>`
+                        + (total > 1 ? ` <small title="Conciliado (Odoo)">✓</small>` : '')
+                        + `<br><small style="color:#64748b;">sin orden</small></div>`
+                    : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`).join('');
 
             const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`;
 
