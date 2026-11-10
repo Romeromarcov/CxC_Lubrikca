@@ -1634,15 +1634,20 @@ def _alinear_con_el_reparto_de_odoo(
     return {"retiradas": len(huerfanas), "cerradas": cerradas}
 
 
-def _depurar_pendientes_contradichas_por_odoo(repo: Any) -> dict[str, int]:
+def _depurar_pendientes_contradichas_por_odoo(
+    repo: Any, aplicado_sin_orden: dict[str, Decimal] | None = None
+) -> dict[str, int]:
     """Odoo manda: retira o achica las Vinculaciones PENDIENTE que Odoo ya contradijo.
 
     Ver ``engine/pendientes_contra_odoo`` para la regla. Corre cada ciclo, después del
     resync con Odoo: una propuesta contradicha desaparece (o se achica a lo que Odoo dejó
-    sin conciliar) en cuanto Odoo concilia.
+    sin conciliar) en cuanto Odoo concilia. ``aplicado_sin_orden`` suma lo conciliado
+    contra facturas sin orden (fletes, cargos directos) -- ver ``AplicacionSinOrden``.
     """
     fechas_orden = {o.so_id: o.fecha for o in repo.all_ordenes()}
-    clasificacion = clasificar_pendientes(repo.all_vinculaciones(), repo.all_pagos(), fechas_orden)
+    clasificacion = clasificar_pendientes(
+        repo.all_vinculaciones(), repo.all_pagos(), fechas_orden, aplicado_sin_orden
+    )
     if clasificacion.a_retirar:
         logger.info(
             "Pendientes retiradas porque Odoo ya concilio el pago: %s",
@@ -4480,6 +4485,10 @@ def recalculate_all_orders():
         except Exception as e_fifo:
             print(f"Error en auto-vinculación FIFO: {e_fifo}", file=sys.stderr)
 
+        # Lo que Odoo concilió contra facturas SIN orden, por pago (moneda del
+        # pago). None si no se pudo leer: entonces «Odoo manda» depura solo con
+        # lo conciliado contra órdenes, como antes -- nunca retira de más.
+        aplicado_sin_orden: dict[str, Decimal] | None = None
         if execute:
             # Va ANTES del resync clásico: éste trae el reparto real de
             # Odoo (montos parciales por par pago/orden) y deja las
@@ -4488,7 +4497,12 @@ def recalculate_all_orders():
             # _sincronizar_aplicaciones_conciliadas.
             try:
                 reader_apps = OdooXmlRpcReader(config.odoo, execute)
-                aplicaciones = reader_apps.aplicaciones_conciliadas()
+                aplicaciones, apps_sin_orden = reader_apps.aplicaciones_con_y_sin_orden()
+                aplicado_sin_orden = {}
+                for a in apps_sin_orden:
+                    aplicado_sin_orden[a.pago_id] = (
+                        aplicado_sin_orden.get(a.pago_id, Decimal("0")) + a.monto
+                    )
                 # Rescate de los pagos que la ventana delta nunca alcanza
                 # (Odoo los reconcilió hace meses). Sin esto la clave
                 # foránea de vinculaciones.pago_id impide escribir su
@@ -4559,7 +4573,7 @@ def recalculate_all_orders():
         # Odoo manda: una propuesta PENDIENTE sobre un pago que Odoo ya concilió
         # desaparece. Va DESPUÉS del resync y ANTES de marcar pendientes a revisar.
         try:
-            dep = _depurar_pendientes_contradichas_por_odoo(repo)
+            dep = _depurar_pendientes_contradichas_por_odoo(repo, aplicado_sin_orden)
             if dep["retiradas"] or dep["ajustadas"]:
                 print(
                     f"Pendientes contradichas por Odoo: {dep['retiradas']} retirada(s), "
@@ -6392,6 +6406,102 @@ def _fecha_y_dias_vencido(item: dict[str, Any], today: date) -> tuple[date | Non
     return dt_venc, max(0, (today - dt_venc).days)
 
 
+def _facturas_sin_orden_con_saldo() -> list[dict[str, Any]]:
+    """Facturas de cliente SIN orden de venta que todavía tienen saldo, en vivo.
+
+    Cualquier ``out_invoice`` publicada sin ``invoice_origin`` -- un flete,
+    un servicio, cualquier cargo emitido directo en Odoo. Es deuda del
+    cliente igual que la factura de una orden, pero como Ventas y el árbol
+    de CxC se arman desde las órdenes, nunca aparecía en los reportes.
+    Pedido del usuario (noviembre 2026, caso TERA): «puede ser cualquier
+    factura sin orden, no lo atemos solo a flete».
+
+    El saldo es ``amount_residual_usd`` («Importe adeudado Ref.»), el saldo
+    en dólares que calcula Odoo con SU tasa -- criterio del usuario: el
+    saldo en USD, no en VES, y la tasa que vale es la de Odoo (mismo campo
+    que ``residual_usd_de_factura`` usa para las facturas de órdenes).
+
+    Best-effort: si Odoo no responde devuelve [] y el reporte sale sin
+    estas facturas, como antes, en vez de caerse.
+    """
+    try:
+        config = AppConfig.from_env()
+        execute = _connect(config.odoo)
+        if not execute:
+            return []
+        recs = execute(
+            "account.move",
+            "search_read",
+            [
+                [
+                    ["move_type", "=", "out_invoice"],
+                    ["state", "=", "posted"],
+                    ["invoice_origin", "=", False],
+                    ["payment_state", "not in", ["paid", "in_payment", "reversed"]],
+                ]
+            ],
+            {
+                "fields": [
+                    "id",
+                    "name",
+                    "partner_id",
+                    "invoice_date",
+                    "invoice_date_due",
+                    "invoice_user_id",
+                    "amount_total_signed_usd",
+                    "amount_residual_usd",
+                    "invoice_origin",
+                    "move_type",
+                ]
+            },
+        )
+    except Exception as e:
+        logger.warning("No se pudieron leer las facturas sin orden de Odoo: %s", e)
+        return []
+
+    hoy = date.today()
+    salida: list[dict[str, Any]] = []
+    for r in recs or []:
+        # Se revisa también acá y no solo en el dominio: una factura de orden
+        # colada aquí se contaría dos veces (ya está en su orden).
+        if not isinstance(r, dict) or r.get("invoice_origin"):
+            continue
+        if r.get("move_type", "out_invoice") != "out_invoice":
+            continue
+        try:
+            saldo_usd = float(r.get("amount_residual_usd") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if saldo_usd <= 0.05:
+            continue
+        partner = r.get("partner_id")
+        if not (isinstance(partner, list | tuple) and len(partner) > 1):
+            continue
+        user = r.get("invoice_user_id")
+        vence_raw = r.get("invoice_date_due") or r.get("invoice_date")
+        try:
+            vence = datetime.strptime(str(vence_raw)[:10], "%Y-%m-%d").date()
+            dias_vencido = max(0, (hoy - vence).days)
+        except (TypeError, ValueError):
+            dias_vencido = 0
+        salida.append(
+            {
+                "factura_id": str(r["id"]),
+                "numero": str(r.get("name") or r["id"]),
+                "cliente_id": str(partner[0]),
+                "cliente_nombre": str(partner[1]),
+                "vendedor": (
+                    str(user[1]) if isinstance(user, list | tuple) and len(user) > 1 else None
+                ),
+                "fecha": str(r.get("invoice_date") or "")[:10] or None,
+                "dias_vencido": dias_vencido,
+                "total_usd": round(float(r.get("amount_total_signed_usd") or 0.0), 2),
+                "saldo_usd": round(saldo_usd, 2),
+            }
+        )
+    return salida
+
+
 @app.get("/api/reporte-cxc-cliente")
 async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)):
     """Cuentas por Cobrar agrupadas por CLIENTE, estilo "Aged Receivable"
@@ -6676,6 +6786,35 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     # el pago; None si no hay orden sugerida (el reporte por
                     # vendedor cae entonces al vendedor unico del cliente).
                     "vendedor": (item_sugerido or {}).get("vendedor") or None,
+                }
+            )
+
+        # Facturas sin orden (fletes, servicios, cualquier cargo directo):
+        # deuda igual que una orden, con el saldo en USD que da Odoo. No
+        # tienen teórico propio, así que las 4 referencias muestran el mismo
+        # saldo -- lo que la factura dice que se debe.
+        facturas_sin_orden = await asyncio.to_thread(_facturas_sin_orden_con_saldo)
+        for fso in facturas_sin_orden:
+            c = _cliente_row(fso["cliente_id"], fso["cliente_nombre"])
+            saldo = fso["saldo_usd"]
+            for k in _CXC_CLIENTE_SALDOS:
+                c["saldos"][k] += saldo
+            c["dias_vencido_max"] = max(c["dias_vencido_max"], fso["dias_vencido"])
+            if fso["vendedor"]:
+                c["vendedores"].add(fso["vendedor"])
+            original = fso["total_usd"] or saldo
+            c["documentos"].append(
+                {
+                    "tipo": "factura_sin_orden",
+                    "factura_id": fso["factura_id"],
+                    "factura_numero": fso["numero"],
+                    "fecha": fso["fecha"],
+                    "facturada": True,
+                    "dias_vencido": fso["dias_vencido"],
+                    "montos_originales": dict.fromkeys(_CXC_CLIENTE_SALDOS, original),
+                    "saldos": dict.fromkeys(_CXC_CLIENTE_SALDOS, saldo),
+                    "descripcion": f"Factura {fso['numero']} (sin orden)",
+                    "vendedor": fso["vendedor"],
                 }
             )
 

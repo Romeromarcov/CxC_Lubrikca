@@ -31,6 +31,7 @@ from ..config import OdooConfig
 from ..decimal_utils import to_decimal
 from ..models import (
     AplicacionConciliada,
+    AplicacionSinOrden,
     Cliente,
     Entrega,
     EntregaLinea,
@@ -1365,7 +1366,18 @@ class OdooXmlRpcReader(OdooReader):
     def aplicaciones_conciliadas(
         self, so_names: list[str] | None = None
     ) -> list[AplicacionConciliada]:
+        """Lo aplicado a facturas de órdenes. Ver ``aplicaciones_con_y_sin_orden``."""
+        return self.aplicaciones_con_y_sin_orden(so_names)[0]
+
+    def aplicaciones_con_y_sin_orden(
+        self, so_names: list[str] | None = None
+    ) -> tuple[list[AplicacionConciliada], list[AplicacionSinOrden]]:
         """Cómo repartió Odoo cada pago entre las facturas, con el monto real.
+
+        Devuelve dos listas de la misma pasada (sin consultas extra): lo
+        aplicado a facturas de órdenes y lo aplicado a facturas de cliente
+        SIN orden (``invoice_origin`` vacío: fletes, servicios, cualquier
+        cargo directo). Ver ``AplicacionSinOrden``.
 
         Fuente: ``account.partial.reconcile``, que es donde Odoo guarda la
         reconciliación pieza por pieza. Se recorre la cadena
@@ -1404,7 +1416,7 @@ class OdooXmlRpcReader(OdooReader):
             if mid:
                 por_move[int(mid)] = p
         if not por_move:
-            return []
+            return [], []
 
         lineas_pago = self._search_read(
             self.MODEL_MOVE_LINE,
@@ -1420,7 +1432,7 @@ class OdooXmlRpcReader(OdooReader):
             if mid and int(mid) in por_move:
                 linea_a_pago[int(ln["id"])] = por_move[int(mid)]
         if not linea_a_pago:
-            return []
+            return [], []
 
         partials = self._search_read(
             "account.partial.reconcile",
@@ -1428,7 +1440,7 @@ class OdooXmlRpcReader(OdooReader):
             ["credit_move_id", "debit_move_id", "credit_amount_currency"],
         )
         if not partials:
-            return []
+            return [], []
 
         deb_ids = sorted({int(_m2o_id(pr["debit_move_id"])) for pr in partials})
         lineas_fact = self._read(self.MODEL_MOVE_LINE, deb_ids, ["id", "move_id"])
@@ -1455,12 +1467,12 @@ class OdooXmlRpcReader(OdooReader):
         # consolidando S00718 y S00700).
         facturas_multi_so: dict[int, list[str]] = {}
         factura_a_so: dict[int, str] = {}
+        facturas_sin_orden: set[int] = set()
         for f in facturas:
-            if not (
-                f.get("state") == "posted"
-                and f.get("move_type") == "out_invoice"
-                and f.get("invoice_origin")
-            ):
+            if not (f.get("state") == "posted" and f.get("move_type") == "out_invoice"):
+                continue
+            if not f.get("invoice_origin"):
+                facturas_sin_orden.add(int(f["id"]))
                 continue
             so_ids_f = so_ids_de_invoice_origin(str(f.get("invoice_origin") or ""))
             if len(so_ids_f) == 1:
@@ -1474,6 +1486,7 @@ class OdooXmlRpcReader(OdooReader):
 
         filtro = set(so_names) if so_names is not None else None
         salida: list[AplicacionConciliada] = []
+        sin_orden: list[AplicacionSinOrden] = []
         for pr in partials:
             pago = linea_a_pago.get(int(_m2o_id(pr["credit_move_id"])))
             if not pago:
@@ -1486,6 +1499,18 @@ class OdooXmlRpcReader(OdooReader):
                 continue
             moneda = Moneda.USD if _m2o_name(pago.get("currency_id")) == "USD" else Moneda.VES
             fecha_pago = _to_datetime(pago.get("date")).date()
+
+            if factura_id in facturas_sin_orden:
+                sin_orden.append(
+                    AplicacionSinOrden(
+                        pago_id=str(pago["id"]),
+                        factura_id=str(factura_id),
+                        monto=monto,
+                        moneda=moneda,
+                        fecha_pago=fecha_pago,
+                    )
+                )
+                continue
 
             so_id = factura_a_so.get(factura_id)
             if so_id:
@@ -1522,7 +1547,7 @@ class OdooXmlRpcReader(OdooReader):
                         fecha_pago=fecha_pago,
                     )
                 )
-        return salida
+        return salida, sin_orden
 
     def _pesos_por_so_de_facturas(
         self, facturas_multi_so: dict[int, list[str]]
