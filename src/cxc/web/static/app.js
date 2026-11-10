@@ -1125,7 +1125,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Excel de Cuentas por Cobrar: el servidor aplica los mismos filtros y
     // orden que applyReporteClienteFilters, así el archivo coincide con la tabla.
-    function descargarReporteCxcExcel() {
+    // Se baja con fetch (no window.location) para poder mostrar "Generando..."
+    // durante los ~5 s que tarda el servidor y avisar si falla.
+    async function descargarReporteCxcExcel(btn) {
         const params = new URLSearchParams();
         const antiguedadVal = document.getElementById("reporte-cliente-antiguedad-filter")?.value || "*";
         const vendedorVal = document.getElementById("reporte-cliente-vendedor-filter")?.value || "*";
@@ -1135,7 +1137,29 @@ document.addEventListener("DOMContentLoaded", () => {
         if (vendedorVal !== "*") params.set("vendedor", vendedorVal);
         if (sortVal !== "saldo_desc") params.set("sort", sortVal);
         if (searchVal) params.set("search", searchVal);
-        window.location.href = "/api/reporte-cxc-cliente/excel?" + params.toString();
+        const textoOriginal = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "⏳ Generando Excel..."; }
+        try {
+            const res = await fetch("/api/reporte-cxc-cliente/excel?" + params.toString(), { cache: "no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const blob = await res.blob();
+            const cd = res.headers.get("content-disposition") || "";
+            const m = cd.match(/filename="?([^";]+)"?/);
+            const nombre = m ? m[1] : `cuentas_por_cobrar_${new Date().toISOString().slice(0, 10)}.xlsx`;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = nombre;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+            console.error("Error descargando el Excel de Cuentas por Cobrar:", err);
+            alert("No se pudo generar el Excel de Cuentas por Cobrar (" + err.message + "). Intenta de nuevo.");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = textoOriginal; }
+        }
     }
     window.descargarReporteCxcExcel = descargarReporteCxcExcel;
 
