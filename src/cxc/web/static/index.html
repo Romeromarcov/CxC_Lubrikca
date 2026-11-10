@@ -505,6 +505,14 @@
         <div id="tab-reporte" class="tab-panel">
             <div class="reporte-layout">
 
+                <!-- Sub-pestañas del Reporte de Saldos (mismo patrón que Auditoría) -->
+                <div class="subtab-nav" role="tablist" style="margin-bottom: 1.5rem;">
+                    <button type="button" class="subtab-btn active" data-rep-subtab="cliente" onclick="switchReporteSubtab('cliente')">👤 Por Cliente</button>
+                    <button type="button" class="subtab-btn" data-rep-subtab="vendedor" onclick="switchReporteSubtab('vendedor')">🧑‍💼 Por Vendedor</button>
+                </div>
+
+                <div class="subtab-panel active" data-rep-subtab-panel="cliente">
+
                 <!-- Grilla de priorización de cobro por cliente -->
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
@@ -603,6 +611,62 @@
                         </table>
                     </div>
                 </section>
+
+                </div>
+
+                <!-- Cuentas por Cobrar agrupadas por VENDEDOR -->
+                <div class="subtab-panel" data-rep-subtab-panel="vendedor" style="display:none;">
+                <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2>Cuentas por Cobrar por Vendedor</h2>
+                            <p>Saldo pendiente por vendedor, repartido orden por orden: si un cliente compra con dos vendedores, cada uno ve solo sus órdenes, y la suma de todos los vendedores coincide con el total de la vista por cliente. La antigüedad (Vigente a +90 días) se mide sobre el saldo de <strong>Venta Real</strong>; los pagos sin aplicar van en su propia columna, así que tramos + pagos sin aplicar = Venta Real. Clic en un vendedor para ver sus clientes.</p>
+                        </div>
+                        <div class="filter-actions">
+                            <button type="button" class="btn-secondary" onclick="loadReporteCxcVendedor()">🔄 Actualizar</button>
+                            <button type="button" class="btn-secondary" onclick="descargarReporteVendedorExcel(this)" title="Descarga las cuentas por cobrar por vendedor: Resumen por Vendedor, Vendedor - Cliente y Detalle por Documento">📥 Descargar Excel</button>
+                        </div>
+                    </div>
+
+                    <div class="filter-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
+                        <select id="reporte-vendedor-sort" style="padding: 0.5rem 0.85rem; border-radius: 8px; border: 1px solid hsl(var(--border-card)); font-family: inherit; font-size: 0.85rem; background: white;">
+                            <option value="saldo_desc">Ordenar: Mayor Saldo</option>
+                            <option value="saldo_asc">Ordenar: Menor Saldo</option>
+                            <option value="vencido_desc">Ordenar: Mayor Monto Vencido</option>
+                            <option value="vendedor_asc">Ordenar: Vendedor (A-Z)</option>
+                        </select>
+                        <input type="text" id="reporte-vendedor-search" placeholder="🔍 Buscar vendedor...">
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th></th>
+                                    <th>Vendedor</th>
+                                    <th>Clientes</th>
+                                    <th>Días Vencido (máx)</th>
+                                    <th>Vigente ($)</th>
+                                    <th>1-30 días ($)</th>
+                                    <th>31-60 días ($)</th>
+                                    <th>61-90 días ($)</th>
+                                    <th>+90 días ($)</th>
+                                    <th title="Pagos del cliente que ya entraron y no están aplicados a ninguna orden (restan)">Pagos sin Aplicar ($)</th>
+                                    <th>Venta Real ($)</th>
+                                    <th>Teórico Lista USD ($)</th>
+                                    <th>Teórico Lista BS ($)</th>
+                                    <th>Factura Neta Real ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reporte-cxc-vendedor-table-body">
+                                <tr>
+                                    <td colspan="14" class="table-empty">Abre esta pestaña para cargar el reporte por vendedor...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                </div>
 
             </div>
         </div>
@@ -2098,7 +2162,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261110_1"></script>
+    <script src="/static/app.js?v=20261110_2"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco
