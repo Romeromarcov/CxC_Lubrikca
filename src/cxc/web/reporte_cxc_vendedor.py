@@ -43,6 +43,7 @@ from cxc.web.reporte_cxc_excel import (
     _encabezado,
     _fecha,
     _num,
+    columnas_documento,
     tramo_antiguedad,
 )
 
@@ -87,7 +88,8 @@ def _sumar(acc: dict[str, Any], doc: dict[str, Any]) -> None:
         if v is not None:
             acc["saldos"][k] += float(v)
     venta_real = float(saldos.get("venta_real") or 0.0)
-    if doc.get("tipo") == "orden":
+    # Una factura sin orden es deuda igual que una orden: cuenta en los tramos.
+    if doc.get("tipo") in ("orden", "factura_sin_orden"):
         dv = int(doc.get("dias_vencido") or 0)
         acc["n_ordenes"] += 1
         acc["dias_vencido_max"] = max(acc["dias_vencido_max"], dv)
@@ -243,7 +245,7 @@ def _escribir_filas(
 
 
 def _hoja_resumen(ws: Worksheet, vendedores: list[dict[str, Any]], parametros: str) -> None:
-    columnas = ["Vendedor", "Nº Clientes", "Nº Órdenes", "Días Vencido (máx)", *_COLS_MONTO]
+    columnas = ["Vendedor", "Nº Clientes", "Nº Documentos", "Días Vencido (máx)", *_COLS_MONTO]
     _encabezado(ws, "Cuentas por Cobrar por Vendedor — Lubrikca", parametros, columnas)
     filas = [
         [v["vendedor"], v["n_clientes"], v["n_ordenes"], v["dias_vencido_max"], *_valores_monto(v)]
@@ -260,7 +262,7 @@ def _hoja_vendedor_cliente(
         "Vendedor",
         "Cliente",
         "ID Cliente",
-        "Nº Órdenes",
+        "Nº Documentos",
         "Días Vencido (máx)",
         *_COLS_MONTO,
     ]
@@ -302,17 +304,13 @@ def _hoja_detalle(ws: Worksheet, vendedores: list[dict[str, Any]], parametros: s
         for vc in v["clientes"]:
             for d in vc["documentos"]:
                 fila += 1
-                es_orden = d.get("tipo") == "orden"
                 orig = d.get("montos_originales") or {}
                 saldos = d.get("saldos") or {}
                 dv = int(d.get("dias_vencido") or 0)
                 valores = [
                     v["vendedor"],
                     vc["cliente_nombre"],
-                    "Orden" if es_orden else "Pago sin aplicar",
-                    d.get("so_id") if es_orden else None,
-                    d.get("factura_numero") if es_orden else None,
-                    None if es_orden else (d.get("numero_pago_odoo") or d.get("pago_id")),
+                    *columnas_documento(d),
                     d.get("descripcion"),
                     _fecha(d.get("fecha")),
                     dv,

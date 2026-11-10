@@ -64,6 +64,25 @@ def tramo_antiguedad(dias_vencido: int) -> str:
     return "+90 días"
 
 
+TIPOS_DOCUMENTO = {
+    "orden": "Orden",
+    "factura_sin_orden": "Factura sin orden",
+    "pago_huerfano": "Pago sin aplicar",
+}
+
+
+def columnas_documento(d: dict[str, Any]) -> list[Any]:
+    """Tipo, Orden, Factura y Pago de un documento, para las hojas de detalle."""
+    tipo = str(d.get("tipo") or "")
+    es_pago = tipo == "pago_huerfano"
+    return [
+        TIPOS_DOCUMENTO.get(tipo, tipo),
+        d.get("so_id") if tipo == "orden" else None,
+        None if es_pago else d.get("factura_numero"),
+        (d.get("numero_pago_odoo") or d.get("pago_id")) if es_pago else None,
+    ]
+
+
 def _match_antiguedad(dv: int, antiguedad: str) -> bool:
     checks: dict[str, Callable[[int], bool]] = {
         "vencido_total": lambda d: d > 0,
@@ -236,17 +255,13 @@ def _hoja_detalle(ws: Worksheet, clientes: list[dict[str, Any]], parametros: str
     for c in clientes:
         for d in c.get("documentos") or []:
             fila += 1
-            es_orden = d.get("tipo") == "orden"
             originales = d.get("montos_originales") or {}
             saldos = d.get("saldos") or {}
             dv = int(d.get("dias_vencido") or 0)
             valores = [
                 c.get("cliente_nombre") or c.get("cliente_id"),
                 c.get("vendedor") or "Sin Vendedor",
-                "Orden" if es_orden else "Pago sin aplicar",
-                d.get("so_id") if es_orden else None,
-                d.get("factura_numero") if es_orden else None,
-                None if es_orden else (d.get("numero_pago_odoo") or d.get("pago_id")),
+                *columnas_documento(d),
                 d.get("descripcion"),
                 _fecha(d.get("fecha")),
                 dv,

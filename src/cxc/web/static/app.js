@@ -1034,7 +1034,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     const orig = d.montos_originales || {};
                     const ref = d.tipo === 'orden'
                         ? (d.factura_numero ? `${d.so_id} / ${d.factura_numero}` : d.so_id)
-                        : (d.numero_pago_odoo || d.pago_id);
+                        : d.tipo === 'factura_sin_orden'
+                            ? `Factura ${d.factura_numero} (sin orden)`
+                            : (d.numero_pago_odoo || d.pago_id);
                     return `
                     <tr>
                         <td>${ref}</td>
@@ -1239,7 +1241,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     tr.innerHTML = `
                         <td></td>
                         <td style="padding-left:1.5rem">${esc(c.cliente_nombre)}</td>
-                        <td><small>${c.n_ordenes} ord.</small></td>
+                        <td><small>${c.n_ordenes} doc.</small></td>
                         <td>${c.dias_vencido_max || 0}</td>
                         ${_celdasMontoVendedor(c, colorFmt)}
                     `;

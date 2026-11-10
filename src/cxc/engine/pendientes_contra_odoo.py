@@ -67,8 +67,17 @@ def clasificar_pendientes(
     vinculaciones: list[Vinculacion],
     pagos: list[Pago],
     fechas_orden: dict[str, date] | None = None,
+    aplicado_sin_orden: dict[str, Decimal] | None = None,
 ) -> DepuracionPendientes:
+    """``aplicado_sin_orden``: por pago, lo que Odoo concilió contra facturas de
+    cliente SIN orden (fletes, servicios, cualquier cargo directo), en la moneda
+    del pago. Cuenta igual que lo conciliado contra órdenes: es plata del pago
+    que ya no está disponible para ninguna orden. Caso real (noviembre 2026,
+    TERA): el pago 1814 se concilió contra el flete 00000797 y su pendiente
+    sobre S00792/S01025 nunca se retiraba. Ver ``AplicacionSinOrden``.
+    """
     fechas_orden = fechas_orden or {}
+    aplicado_sin_orden = aplicado_sin_orden or {}
     monto_por_pago = {str(p.pago_id): p.monto for p in pagos}
     por_pago: dict[str, list[Vinculacion]] = {}
     for v in vinculaciones:
@@ -85,7 +94,7 @@ def clasificar_pendientes(
         conciliado = sum(
             (v.monto_aplicado for v in vincs if v.estado == EstadoVinculacion.CONCILIADO),
             Decimal("0"),
-        )
+        ) + aplicado_sin_orden.get(pago_id, Decimal("0"))
         if conciliado > 0 and conciliado >= monto - tol:
             a_retirar.extend(pendientes)
             continue

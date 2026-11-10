@@ -726,6 +726,31 @@ class AplicacionConciliada:
     fecha_pago: date
 
 
+@dataclass(frozen=True)
+class AplicacionSinOrden:
+    """Un pago aplicado por Odoo a una factura de cliente SIN orden de venta.
+
+    Facturas emitidas directo en Odoo, sin ``invoice_origin`` (fletes,
+    servicios, cualquier cargo que no salió de una ``sale.order``). Son
+    deuda del cliente igual que las de una orden, y el pago conciliado con
+    ellas ya no está disponible para ninguna orden.
+
+    Caso real (noviembre 2026, cliente TERA): los pagos 1814 y 2231 se
+    conciliaron en Odoo contra dos facturas de flete, pero el Auto-FIFO los
+    había asignado antes a órdenes del cliente y esas vinculaciones nunca se
+    retiraban, porque «Odoo manda» solo miraba conciliaciones contra
+    facturas de órdenes. Ver ``engine/pendientes_contra_odoo``.
+
+    ``monto`` va en la moneda del PAGO, igual que ``AplicacionConciliada``.
+    """
+
+    pago_id: str
+    factura_id: str
+    monto: Decimal
+    moneda: Moneda
+    fecha_pago: date
+
+
 # --- 3.10 BandejaFacturacion (salida del motor + trabajo humano) ------------
 @dataclass
 class BandejaFacturacion:

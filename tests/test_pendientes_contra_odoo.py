@@ -248,3 +248,44 @@ def test_sin_aplicaciones_de_odoo_no_se_toca_nada():
     repo.update_vinculacion(_v("a", "S1", "100", CONC, pago="P1"))
     assert _alinear_con_el_reparto_de_odoo(repo, []) == {"retiradas": 0, "cerradas": 0}
     assert len(repo.all_vinculaciones()) == 1
+
+
+# --- Facturas sin orden (caso TERA, noviembre 2026) ---------------------------------------
+
+
+def test_lo_conciliado_contra_una_factura_sin_orden_retira_las_pendientes():
+    """Pago 1813 (Grano Agregado): Odoo lo concilió COMPLETO contra un flete sin orden, pero
+    el Auto-FIFO lo había asignado a S01053. La pendiente sobra."""
+    r = clasificar_pendientes(
+        [_v("a", "S01053", "456730.02", PEND)],
+        [b.pago("P1", monto="456730.02", moneda=Moneda.VES)],
+        aplicado_sin_orden={"P1": Decimal("456730.02")},
+    )
+    assert _ids(r.a_retirar) == ["a"]
+    assert r.a_ajustar == []
+
+
+def test_lo_que_odoo_dejo_sin_aplicar_tras_el_flete_queda_en_la_orden_mas_antigua():
+    """Pago 1814 (TERA): 530.278 VES, Odoo aplicó 519.614,22 al flete 00000797. El FIFO lo
+    había repartido 481.902,10 a S00792 y 38.672,18 a S01025. Quedan 10.663,78 -> la más
+    antigua se achica a eso y la otra se retira."""
+    r = clasificar_pendientes(
+        [_v("a", "S00792", "481902.1045", PEND), _v("b", "S01025", "38672.1791", PEND)],
+        [b.pago("P1", monto="530278", moneda=Moneda.VES)],
+        fechas_orden={"S00792": date(2026, 8, 1), "S01025": date(2026, 9, 10)},
+        aplicado_sin_orden={"P1": Decimal("519614.22")},
+    )
+    assert _ids(r.a_retirar) == ["b"]
+    (ajustada,) = r.a_ajustar
+    assert ajustada.vinc_id == "a"
+    assert ajustada.monto_aplicado == Decimal("10663.78")
+
+
+def test_sin_dato_de_facturas_sin_orden_se_comporta_como_antes():
+    vincs = [_v("a", "S1", "100", PEND)]
+    pagos = [b.pago("P1", monto="100")]
+    assert clasificar_pendientes(vincs, pagos, aplicado_sin_orden=None) == clasificar_pendientes(
+        vincs, pagos
+    )
+    r = clasificar_pendientes(vincs, pagos, aplicado_sin_orden={"OTRO": Decimal("100")})
+    assert r.a_retirar == [] and r.a_ajustar == []

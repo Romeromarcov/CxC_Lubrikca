@@ -358,7 +358,8 @@ def test_el_demonio_deja_el_pago_sin_tasa_en_la_bandeja() -> None:
             return 0
 
     lector = MagicMock()
-    lector.aplicaciones_conciliadas.return_value = []
+    # El daemon lee en una sola pasada lo aplicado a órdenes y a facturas sin orden.
+    lector.aplicaciones_con_y_sin_orden.return_value = ([], [])
     with (
         patch("cxc.web.app.get_repo", return_value=repo),
         patch("cxc.web.app._connect", return_value=MagicMock()),

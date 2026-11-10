@@ -251,3 +251,42 @@ def test_so_ids_de_invoice_origin() -> None:
     assert so_ids_de_invoice_origin("") == []
     assert so_ids_de_invoice_origin(None) == []  # type: ignore[arg-type]
     assert so_ids_de_invoice_origin("  S00700  ") == ["S00700"]
+
+
+# --- Facturas sin orden (fletes, servicios, cualquier cargo directo) ---------------------
+
+
+def test_lo_aplicado_a_una_factura_sin_orden_sale_en_su_propia_lista() -> None:
+    """Caso TERA (noviembre 2026): el 1304 paga 500 a una factura SIN invoice_origin. No
+    es de ninguna orden, pero tampoco puede desaparecer: ese dinero ya no está disponible."""
+    facturas = [
+        _FACTURAS[0],
+        {"id": 10120, "invoice_origin": False, "move_type": "out_invoice", "state": "posted"},
+    ]
+    con_orden, sin_orden = OdooXmlRpcReader(
+        _CFG, _execute_falso(facturas=facturas)
+    ).aplicaciones_con_y_sin_orden()
+    assert {(a.pago_id, a.so_id) for a in con_orden} == {("1304", "S00584"), ("890", "S00584")}
+    assert [(a.pago_id, a.factura_id, a.monto) for a in sin_orden] == [
+        ("1304", "10120", Decimal("500.0"))
+    ]
+
+
+def test_una_nota_de_credito_sin_origen_no_cuenta_como_factura_sin_orden() -> None:
+    facturas = [
+        _FACTURAS[0],
+        {"id": 10120, "invoice_origin": False, "move_type": "out_refund", "state": "posted"},
+    ]
+    _, sin_orden = OdooXmlRpcReader(
+        _CFG, _execute_falso(facturas=facturas)
+    ).aplicaciones_con_y_sin_orden()
+    assert sin_orden == []
+
+
+def test_aplicaciones_conciliadas_sigue_devolviendo_solo_las_de_ordenes() -> None:
+    facturas = [
+        _FACTURAS[0],
+        {"id": 10120, "invoice_origin": False, "move_type": "out_invoice", "state": "posted"},
+    ]
+    apps = _leer(facturas=facturas)
+    assert all(a.so_id == "S00584" for a in apps)
