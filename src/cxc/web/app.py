@@ -163,7 +163,7 @@ from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
 from cxc.sync.incremental import IncrementalSync
-from cxc.web import reporte_cxc_excel
+from cxc.web import reporte_cxc_excel, reporte_cxc_vendedor
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -6634,6 +6634,10 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                         + (" (facturada)" if facturada else " (sin facturar)")
                     ),
                     "bandeja_destino": item.get("bandeja_destino"),
+                    # Vendedor de ESTA orden: un cliente puede tener ordenes
+                    # de varios vendedores, y el reporte por vendedor reparte
+                    # documento por documento (ver reporte_cxc_vendedor).
+                    "vendedor": item.get("vendedor") or "Sin Vendedor",
                 }
             )
 
@@ -6668,6 +6672,10 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
                     "dias_vencido": 0,
                     "saldos": {k: round(v, 2) for k, v in saldos_pago.items()},
                     "descripcion": f"Pago sin aplicar ({info.get('moneda_pago') or 'USD'})",
+                    # Vendedor de la orden a la que el FIFO sugiere aplicar
+                    # el pago; None si no hay orden sugerida (el reporte por
+                    # vendedor cae entonces al vendedor unico del cliente).
+                    "vendedor": (item_sugerido or {}).get("vendedor") or None,
                 }
             )
 
@@ -6764,6 +6772,38 @@ async def get_reporte_cxc_cliente_excel(
     )
     contenido = reporte_cxc_excel.construir_libro(clientes, antiguedad, vendedor, search)
     filename = f"cuentas_por_cobrar_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(contenido),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/reporte-cxc-vendedor")
+async def get_reporte_cxc_vendedor(cxc_session: str | None = Cookie(default=None)):
+    """Cuentas por Cobrar agrupadas por VENDEDOR.
+
+    Reparte, documento por documento, lo que ya devuelve
+    ``get_reporte_cxc_cliente`` -- no recalcula saldos. La suma de todos
+    los vendedores es el total de la vista por cliente. Ver
+    ``cxc.web.reporte_cxc_vendedor``.
+    """
+    datos = await get_reporte_cxc_cliente(cxc_session)
+    vendedores = reporte_cxc_vendedor.agrupar_por_vendedor(datos.get("clientes") or [])
+    return {"vendedores": vendedores, "totales": reporte_cxc_vendedor.totales(vendedores)}
+
+
+@app.get("/api/reporte-cxc-vendedor/excel")
+async def get_reporte_cxc_vendedor_excel(
+    search: str = "",
+    sort: str = "saldo_desc",
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Excel de Cuentas por Cobrar por Vendedor, con los filtros de la tabla."""
+    datos = await get_reporte_cxc_vendedor(cxc_session)
+    vendedores = reporte_cxc_vendedor.filtrar_y_ordenar(datos["vendedores"], search, sort)
+    contenido = reporte_cxc_vendedor.construir_libro(vendedores, search)
+    filename = f"cuentas_por_cobrar_por_vendedor_{date.today().isoformat()}.xlsx"
     return StreamingResponse(
         io.BytesIO(contenido),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

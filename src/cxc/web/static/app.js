@@ -1127,7 +1127,33 @@ document.addEventListener("DOMContentLoaded", () => {
     // orden que applyReporteClienteFilters, así el archivo coincide con la tabla.
     // Se baja con fetch (no window.location) para poder mostrar "Generando..."
     // durante los ~5 s que tarda el servidor y avisar si falla.
-    async function descargarReporteCxcExcel(btn) {
+    async function _descargarExcel(url, btn, nombrePorDefecto) {
+        const textoOriginal = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "⏳ Generando Excel..."; }
+        try {
+            const res = await fetch(url, { cache: "no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const blob = await res.blob();
+            const cd = res.headers.get("content-disposition") || "";
+            const m = cd.match(/filename="?([^";]+)"?/);
+            const nombre = m ? m[1] : `${nombrePorDefecto}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+            const objUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = objUrl;
+            a.download = nombre;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+        } catch (err) {
+            console.error("Error descargando el Excel:", err);
+            alert("No se pudo generar el Excel (" + err.message + "). Intenta de nuevo.");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = textoOriginal; }
+        }
+    }
+
+    function descargarReporteCxcExcel(btn) {
         const params = new URLSearchParams();
         const antiguedadVal = document.getElementById("reporte-cliente-antiguedad-filter")?.value || "*";
         const vendedorVal = document.getElementById("reporte-cliente-vendedor-filter")?.value || "*";
@@ -1137,31 +1163,168 @@ document.addEventListener("DOMContentLoaded", () => {
         if (vendedorVal !== "*") params.set("vendedor", vendedorVal);
         if (sortVal !== "saldo_desc") params.set("sort", sortVal);
         if (searchVal) params.set("search", searchVal);
-        const textoOriginal = btn ? btn.textContent : "";
-        if (btn) { btn.disabled = true; btn.textContent = "⏳ Generando Excel..."; }
-        try {
-            const res = await fetch("/api/reporte-cxc-cliente/excel?" + params.toString(), { cache: "no-store" });
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            const blob = await res.blob();
-            const cd = res.headers.get("content-disposition") || "";
-            const m = cd.match(/filename="?([^";]+)"?/);
-            const nombre = m ? m[1] : `cuentas_por_cobrar_${new Date().toISOString().slice(0, 10)}.xlsx`;
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = nombre;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        } catch (err) {
-            console.error("Error descargando el Excel de Cuentas por Cobrar:", err);
-            alert("No se pudo generar el Excel de Cuentas por Cobrar (" + err.message + "). Intenta de nuevo.");
-        } finally {
-            if (btn) { btn.disabled = false; btn.textContent = textoOriginal; }
-        }
+        return _descargarExcel("/api/reporte-cxc-cliente/excel?" + params.toString(), btn, "cuentas_por_cobrar");
     }
     window.descargarReporteCxcExcel = descargarReporteCxcExcel;
+
+    // ── Reporte de Saldos: sub-pestañas Por Cliente / Por Vendedor ────────
+    let fullVendedoresCxc = null;  // null = todavía no cargado
+
+    window.switchReporteSubtab = function(name) {
+        document.querySelectorAll(".subtab-btn[data-rep-subtab]").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.repSubtab === name);
+        });
+        document.querySelectorAll(".subtab-panel[data-rep-subtab-panel]").forEach(panel => {
+            panel.style.display = (panel.dataset.repSubtabPanel === name) ? "block" : "none";
+        });
+        // Se carga al abrir la pestaña: el cálculo tarda unos segundos y la
+        // mayoría de las visitas solo miran la vista por cliente.
+        if (name === "vendedor" && fullVendedoresCxc === null) loadReporteCxcVendedor();
+    };
+
+    const _TRAMOS = ["vigente", "1_30", "31_60", "61_90", "mas_90"];
+
+    function _celdasMontoVendedor(acc, colorFmt) {
+        const a = acc.antiguedad || {};
+        const s = acc.saldos || {};
+        return _TRAMOS.map(k => `<td>${colorFmt(a[k])}</td>`).join("") +
+            `<td>${colorFmt(acc.pagos_sin_aplicar)}</td>` +
+            `<td>${colorFmt(s.venta_real)}</td>` +
+            `<td>${colorFmt(s.teorico_usd)}</td>` +
+            `<td>${colorFmt(s.teorico_bs)}</td>` +
+            `<td>${colorFmt(s.factura_real)}</td>`;
+    }
+
+    function renderReporteVendedorTable(vendedores) {
+        const tbody = document.getElementById("reporte-cxc-vendedor-table-body");
+        if (!tbody) return;
+        const fmt = (v) => new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v || 0);
+        const colorFmt = (v) => {
+            if (v == null) return "-";
+            if (Math.abs(v) < 0.005) return '<span style="color:#94a3b8">$0.00</span>';
+            return `<span style="color:${v > 0 ? '#dc2626' : '#059669'}"><strong>${fmt(v)}</strong></span>`;
+        };
+        const esc = (t) => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+        if (!vendedores.length) {
+            tbody.innerHTML = '<tr><td colspan="14" class="table-empty">No hay vendedores que coincidan con la búsqueda.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = "";
+        vendedores.forEach((v, idx) => {
+            const row = document.createElement("tr");
+            row.style.cursor = "pointer";
+            const toggleId = `cxc-vend-toggle-${idx}`;
+            row.innerHTML = `
+                <td><span id="${toggleId}">▶</span></td>
+                <td><strong>${esc(v.vendedor)}</strong></td>
+                <td>${v.n_clientes}</td>
+                <td>${v.dias_vencido_max || 0}</td>
+                ${_celdasMontoVendedor(v, colorFmt)}
+            `;
+            const filasClientes = [];
+            row.addEventListener("click", () => {
+                const toggle = document.getElementById(toggleId);
+                if (filasClientes.length) {
+                    filasClientes.splice(0).forEach(r => r.remove());
+                    if (toggle) toggle.textContent = "▶";
+                    return;
+                }
+                if (toggle) toggle.textContent = "▼";
+                let ultimo = row;
+                (v.clientes || []).forEach(c => {
+                    const tr = document.createElement("tr");
+                    tr.style.background = "#f8fafc";
+                    tr.style.fontSize = "0.9em";
+                    tr.innerHTML = `
+                        <td></td>
+                        <td style="padding-left:1.5rem">${esc(c.cliente_nombre)}</td>
+                        <td><small>${c.n_ordenes} ord.</small></td>
+                        <td>${c.dias_vencido_max || 0}</td>
+                        ${_celdasMontoVendedor(c, colorFmt)}
+                    `;
+                    ultimo.after(tr);
+                    ultimo = tr;
+                    filasClientes.push(tr);
+                });
+            });
+            tbody.appendChild(row);
+        });
+
+        // Fila de totales de lo que se está viendo.
+        const t = { antiguedad: {}, saldos: {}, pagos_sin_aplicar: 0 };
+        _TRAMOS.forEach(k => { t.antiguedad[k] = vendedores.reduce((s, v) => s + (v.antiguedad[k] || 0), 0); });
+        ["venta_real", "teorico_usd", "teorico_bs", "factura_real"].forEach(k => {
+            t.saldos[k] = vendedores.reduce((s, v) => s + (v.saldos[k] || 0), 0);
+        });
+        t.pagos_sin_aplicar = vendedores.reduce((s, v) => s + (v.pagos_sin_aplicar || 0), 0);
+        const totalRow = document.createElement("tr");
+        totalRow.style.borderTop = "2px solid #cbd5e1";
+        totalRow.style.fontWeight = "600";
+        totalRow.innerHTML = `
+            <td></td>
+            <td>TOTAL (${vendedores.length} vendedor${vendedores.length !== 1 ? 'es' : ''})</td>
+            <td>${vendedores.reduce((s, v) => s + v.n_clientes, 0)}</td>
+            <td></td>
+            ${_celdasMontoVendedor(t, colorFmt)}
+        `;
+        tbody.appendChild(totalRow);
+    }
+
+    function applyReporteVendedorFilters() {
+        if (!fullVendedoresCxc) return;
+        const sortVal = document.getElementById("reporte-vendedor-sort")?.value || "saldo_desc";
+        const searchVal = (document.getElementById("reporte-vendedor-search")?.value || "").toLowerCase().trim();
+        const vencido = (v) => _TRAMOS.filter(k => k !== "vigente").reduce((s, k) => s + (v.antiguedad[k] || 0), 0);
+        const filtered = fullVendedoresCxc
+            .filter(v => !searchVal || (v.vendedor || "").toLowerCase().includes(searchVal))
+            .sort((a, b) => {
+                switch (sortVal) {
+                    case "saldo_asc": return (a.saldo_priorizacion || 0) - (b.saldo_priorizacion || 0);
+                    case "vencido_desc": return vencido(b) - vencido(a);
+                    case "vendedor_asc": return (a.vendedor || "").localeCompare(b.vendedor || "");
+                    default: return (b.saldo_priorizacion || 0) - (a.saldo_priorizacion || 0);
+                }
+            });
+        renderReporteVendedorTable(filtered);
+    }
+
+    async function loadReporteCxcVendedor() {
+        const tbody = document.getElementById("reporte-cxc-vendedor-table-body");
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="14" class="table-empty">Cargando cuentas por cobrar por vendedor...</td></tr>';
+        try {
+            const res = await fetch("/api/reporte-cxc-vendedor", { cache: "no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            fullVendedoresCxc = data.vendedores || [];
+            const sortEl = document.getElementById("reporte-vendedor-sort");
+            if (sortEl && !sortEl.dataset.listenerAttached) {
+                sortEl.addEventListener("change", applyReporteVendedorFilters);
+                sortEl.dataset.listenerAttached = "true";
+            }
+            const searchEl = document.getElementById("reporte-vendedor-search");
+            if (searchEl && !searchEl.dataset.listenerAttached) {
+                searchEl.addEventListener("input", applyReporteVendedorFilters);
+                searchEl.dataset.listenerAttached = "true";
+            }
+            applyReporteVendedorFilters();
+        } catch (err) {
+            console.error("Error loading reporte-cxc-vendedor:", err);
+            tbody.innerHTML = '<tr><td colspan="14" class="table-empty">Error al cargar cuentas por cobrar por vendedor.</td></tr>';
+        }
+    }
+    window.loadReporteCxcVendedor = loadReporteCxcVendedor;
+
+    function descargarReporteVendedorExcel(btn) {
+        const params = new URLSearchParams();
+        const sortVal = document.getElementById("reporte-vendedor-sort")?.value || "saldo_desc";
+        const searchVal = (document.getElementById("reporte-vendedor-search")?.value || "").trim();
+        if (sortVal !== "saldo_desc") params.set("sort", sortVal);
+        if (searchVal) params.set("search", searchVal);
+        return _descargarExcel("/api/reporte-cxc-vendedor/excel?" + params.toString(), btn, "cuentas_por_cobrar_por_vendedor");
+    }
+    window.descargarReporteVendedorExcel = descargarReporteVendedorExcel;
 
     async function loadReporteCxcCliente() {
         const tbody = document.getElementById("reporte-cxc-cliente-table-body");
