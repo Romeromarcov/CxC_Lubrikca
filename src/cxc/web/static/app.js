@@ -267,6 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "reporte": "tab-reporte",
             "auditoria": "tab-auditoria",
             "inventario": "tab-inventario",
+            "bancos": "tab-bancos",
             "configuracion": "tab-config"
         };
 
@@ -313,6 +314,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadAuditoria === "function") loadAuditoria();
             } else if (path === "inventario") {
                 if (typeof loadInventario === "function") loadInventario();
+            } else if (path === "bancos") {
+                if (typeof loadBancos === "function") loadBancos();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
@@ -5494,6 +5497,248 @@ document.addEventListener("DOMContentLoaded", () => {
             if (typeof loadTasasPromedios === "function") loadTasasPromedios();
         }
     }, 30000);
+
+    // ===================================================================
+    // BANCOS: ingesta de estados de cuenta (fase 1). Ver docs/BANCOS.md.
+    // ===================================================================
+    const _bancosEsc = (v) => String(v == null ? "" : v)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    const _bancosNum = new Intl.NumberFormat("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const _bancosTasa = new Intl.NumberFormat("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    const _bancosMonto = (v) => v == null ? "—" : _bancosNum.format(v);
+    const _bancosFecha = (iso) => {
+        if (!iso) return "—";
+        const [a, m, d] = String(iso).slice(0, 10).split("-");
+        return `${d}/${m}/${a}`;
+    };
+    const _BANCOS_MAX_FILAS = 1000;
+    let _bancosMovimientos = [];
+    let _bancosParsersCargados = false;
+
+    async function _bancosGet(url) {
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+        return data;
+    }
+
+    async function _bancosCargarParsers() {
+        if (_bancosParsersCargados) return;
+        const data = await _bancosGet("/api/bancos/parsers");
+        const opciones = data.bancos.map(b => `<option value="${_bancosEsc(b)}">${_bancosEsc(b)}</option>`).join("");
+        document.getElementById("bancos-carga-banco").innerHTML = `<option value="">Banco...</option>${opciones}`;
+        document.getElementById("bancos-mov-banco").innerHTML = `<option value="">Todos los bancos</option>${opciones}`;
+        _bancosParsersCargados = true;
+    }
+
+    async function loadBancosSaldos() {
+        const body = document.getElementById("bancos-saldos-body");
+        try {
+            const data = await _bancosGet("/api/bancos/saldos");
+            const alertas = data.cuentas.reduce((n, c) => n + c.alertas.length, 0);
+            document.getElementById("bancos-total-usd").textContent = "$ " + _bancosMonto(data.total_usd);
+            document.getElementById("bancos-total-ves").textContent = "Bs " + _bancosMonto(data.total_ves);
+            document.getElementById("bancos-n-cuentas").textContent = data.cuentas.length;
+            document.getElementById("bancos-sin-tasa").textContent = data.cuentas_sin_tasa.length
+                ? "Sin tasa (fuera del total): " + data.cuentas_sin_tasa.join(", ")
+                : "Todas convertidas";
+            const nAlertas = document.getElementById("bancos-n-alertas");
+            nAlertas.textContent = alertas;
+            nAlertas.style.color = alertas ? "#e11d48" : "";
+            if (!data.cuentas.length) {
+                body.innerHTML = `<tr><td colspan="9" class="table-empty">Todavía no hay estados de cuenta cargados.</td></tr>`;
+                return;
+            }
+            body.innerHTML = data.cuentas.map(c => {
+                const estado = c.alertas.length
+                    ? `<span class="semaphore rojo">Revisar</span><div style="font-size:0.72rem; color:#be123c; margin-top:0.3rem;">${c.alertas.map(_bancosEsc).join("<br>")}</div>`
+                    : `<span class="semaphore verde">Cuadra</span>`;
+                return `<tr>
+                    <td><strong>${_bancosEsc(c.banco)}</strong></td>
+                    <td>${_bancosEsc(c.moneda)}</td>
+                    <td>${_bancosFecha(c.fecha_corte)}</td>
+                    <td style="text-align:right;">${_bancosMonto(c.saldo)}</td>
+                    <td style="text-align:right;">${c.tasa_bcv == null ? "—" : _bancosTasa.format(c.tasa_bcv)}</td>
+                    <td style="text-align:right;">${_bancosMonto(c.saldo_usd)}</td>
+                    <td style="text-align:right;">${_bancosMonto(c.saldo_ves)}</td>
+                    <td>${c.cortes}${c.cortes_sin_cuadrar ? ` <span style="color:#be123c;">(${c.cortes_sin_cuadrar} sin cuadrar)</span>` : ""}</td>
+                    <td>${estado}</td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="9" class="table-empty">❌ ${_bancosEsc(err.message)}</td></tr>`;
+        }
+    }
+
+    async function loadBancosArchivos() {
+        const body = document.getElementById("bancos-archivos-body");
+        try {
+            const data = await _bancosGet("/api/bancos/archivos");
+            if (!data.archivos.length) {
+                body.innerHTML = `<tr><td colspan="10" class="table-empty">Sin archivos cargados.</td></tr>`;
+                return;
+            }
+            body.innerHTML = data.archivos.map(a => `<tr>
+                <td style="white-space:nowrap;">${_bancosFecha(a.cargado_en)} ${_bancosEsc(String(a.cargado_en || "").slice(11, 16))}</td>
+                <td><strong>${_bancosEsc(a.banco)}</strong></td>
+                <td>${_bancosEsc(a.nombre_archivo)}</td>
+                <td style="white-space:nowrap;">${_bancosFecha(a.fecha_desde)} – ${_bancosFecha(a.fecha_hasta)}</td>
+                <td style="text-align:right;">${a.n_movimientos}</td>
+                <td style="text-align:right;">${a.n_nuevos}</td>
+                <td style="text-align:right;">${_bancosMonto(a.saldo_final)}</td>
+                <td>${a.cuadra ? '<span class="semaphore verde">Sí</span>' : '<span class="semaphore rojo">No</span>'}</td>
+                <td style="font-size:0.75rem; color:#475569; max-width:360px;">${_bancosEsc(a.observaciones) || "—"}</td>
+                <td style="font-size:0.75rem;">${_bancosEsc(a.cargado_por)}</td>
+            </tr>`).join("");
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="10" class="table-empty">❌ ${_bancosEsc(err.message)}</td></tr>`;
+        }
+    }
+
+    function _bancosFiltros(conCategoria) {
+        const p = new URLSearchParams();
+        const banco = document.getElementById("bancos-mov-banco").value;
+        const desde = document.getElementById("bancos-mov-desde").value;
+        const hasta = document.getElementById("bancos-mov-hasta").value;
+        if (banco) p.set("banco", banco);
+        if (desde) p.set("desde", desde);
+        if (hasta) p.set("hasta", hasta);
+        if (conCategoria) {
+            const cat = document.getElementById("bancos-mov-categoria").value;
+            if (cat) p.set("categoria", cat);
+        }
+        return p;
+    }
+
+    function _renderBancosMovimientos() {
+        const body = document.getElementById("bancos-mov-body");
+        const q = (document.getElementById("bancos-mov-buscar").value || "").trim().toUpperCase();
+        const filas = q
+            ? _bancosMovimientos.filter(m => m.descripcion.toUpperCase().includes(q) || m.referencia.toUpperCase().includes(q))
+            : _bancosMovimientos;
+        const deb = filas.reduce((s, m) => s + m.debito, 0);
+        const cre = filas.reduce((s, m) => s + m.credito, 0);
+        document.getElementById("bancos-mov-resumen").textContent =
+            `${filas.length} movimientos · Débitos ${_bancosMonto(deb)} · Créditos ${_bancosMonto(cre)}` +
+            (filas.length > _BANCOS_MAX_FILAS ? ` · se muestran los primeros ${_BANCOS_MAX_FILAS}; usa los filtros o el Excel` : "");
+        if (!filas.length) {
+            body.innerHTML = `<tr><td colspan="8" class="table-empty">Sin movimientos para estos filtros.</td></tr>`;
+            return;
+        }
+        body.innerHTML = filas.slice(0, _BANCOS_MAX_FILAS).map(m => {
+            const porRevisar = m.categoria.includes("por_revisar");
+            return `<tr>
+                <td style="white-space:nowrap;">${_bancosFecha(m.fecha)}</td>
+                <td>${_bancosEsc(m.banco)}</td>
+                <td>${_bancosEsc(m.referencia) || "—"}</td>
+                <td>${_bancosEsc(m.descripcion)}</td>
+                <td style="text-align:right; color:${m.debito ? "#be123c" : "#94a3b8"};">${m.debito ? _bancosMonto(m.debito) : "—"}</td>
+                <td style="text-align:right; color:${m.credito ? "#047857" : "#94a3b8"};">${m.credito ? _bancosMonto(m.credito) : "—"}</td>
+                <td style="text-align:right;">${_bancosMonto(m.saldo)}</td>
+                <td><span class="state-badge${porRevisar ? " abierta" : ""}" title="Regla: ${_bancosEsc(m.regla)}">${_bancosEsc(m.categoria)}</span></td>
+            </tr>`;
+        }).join("");
+    }
+
+    async function loadBancosMovimientos() {
+        const body = document.getElementById("bancos-mov-body");
+        body.innerHTML = `<tr><td colspan="8" class="table-empty">Cargando...</td></tr>`;
+        try {
+            const data = await _bancosGet("/api/bancos/movimientos?" + _bancosFiltros(true).toString());
+            _bancosMovimientos = data.movimientos;
+            const sel = document.getElementById("bancos-mov-categoria");
+            const actual = sel.value;
+            const cats = new Set([...sel.options].map(o => o.value).filter(Boolean));
+            _bancosMovimientos.forEach(m => cats.add(m.categoria));
+            sel.innerHTML = `<option value="">Todas las categorías</option>` +
+                [...cats].sort().map(c => `<option value="${_bancosEsc(c)}">${_bancosEsc(c)}</option>`).join("");
+            sel.value = actual;
+            _renderBancosMovimientos();
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="8" class="table-empty">❌ ${_bancosEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadBancosMovimientos = loadBancosMovimientos;
+
+    async function _bancosRol() {
+        // En una carga directa de /bancos, initCurrentPage() corre antes de que
+        // initUserSession() termine (mismo caso que Configuración, 25-sep-2026):
+        // si la sesión todavía no está, se pide el rol acá.
+        if (currentUserSession) return currentUserSession.rol;
+        try {
+            const res = await fetch("/api/auth/me");
+            return res.ok ? (await res.json()).rol : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async function loadBancos() {
+        const esAdmin = (await _bancosRol()) === "admin";
+        document.getElementById("bancos-carga-panel").style.display = esAdmin ? "block" : "none";
+        try {
+            await _bancosCargarParsers();
+        } catch (err) {
+            console.error("Bancos: no se pudo cargar la lista de bancos", err);
+        }
+        await Promise.all([loadBancosSaldos(), loadBancosArchivos(), loadBancosMovimientos()]);
+    }
+    window.loadBancos = loadBancos;
+
+    window.descargarBancosExcel = function() {
+        window.location.href = "/api/bancos/consolidado.xlsx";
+    };
+
+    window.descargarBancosCsvOdoo = function() {
+        const p = _bancosFiltros(false).toString();
+        window.location.href = "/api/bancos/odoo-extracto.csv" + (p ? "?" + p : "");
+    };
+
+    const _bancosBuscarEl = document.getElementById("bancos-mov-buscar");
+    if (_bancosBuscarEl) _bancosBuscarEl.addEventListener("input", _renderBancosMovimientos);
+    const _bancosCatEl = document.getElementById("bancos-mov-categoria");
+    if (_bancosCatEl) _bancosCatEl.addEventListener("change", loadBancosMovimientos);
+
+    const _bancosForm = document.getElementById("bancos-carga-form");
+    if (_bancosForm) {
+        _bancosForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const banco = document.getElementById("bancos-carga-banco").value;
+            const input = document.getElementById("bancos-carga-archivo");
+            const btn = document.getElementById("bancos-carga-btn");
+            const out = document.getElementById("bancos-carga-resultado");
+            if (!banco || !input.files.length) return;
+            const fd = new FormData();
+            fd.append("banco", banco);
+            fd.append("archivo", input.files[0]);
+            btn.disabled = true;
+            out.innerHTML = `<p style="color:#475569;">Procesando ${_bancosEsc(input.files[0].name)}...</p>`;
+            try {
+                const res = await fetch("/api/bancos/importar", { method: "POST", body: fd });
+                const r = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(r.detail || `Error ${res.status}`);
+                const color = r.ya_cargado ? "#475569" : (r.cuadra ? "#047857" : "#b45309");
+                const titulo = r.ya_cargado
+                    ? "Este archivo ya estaba cargado: no se agregó nada."
+                    : `${r.nuevos} movimientos nuevos de ${r.movimientos} (${_bancosFecha(r.desde)} – ${_bancosFecha(r.hasta)}).`;
+                const cuadra = r.cuadra
+                    ? "La cadena de saldos cuadra al céntimo."
+                    : "⚠️ La cadena de saldos NO cuadra: se guardó igual, revisa las observaciones.";
+                out.innerHTML = `<div style="border-left:4px solid ${color}; padding:0.5rem 0.85rem; background:#f8fafc; border-radius:6px;">
+                    <strong style="color:${color};">${_bancosEsc(r.banco)} · ${_bancosEsc(r.archivo)}</strong>
+                    <div>${titulo} ${cuadra}</div>
+                    ${r.observaciones ? `<div style="font-size:0.75rem; color:#475569; margin-top:0.25rem;">${_bancosEsc(r.observaciones)}</div>` : ""}
+                </div>`;
+                input.value = "";
+                await Promise.all([loadBancosSaldos(), loadBancosArchivos(), loadBancosMovimientos()]);
+            } catch (err) {
+                out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_bancosEsc(err.message)}</div>`;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
 
     // SPA navigation click handling for nav links and dashboard cards
     document.querySelectorAll(".nav-link").forEach(link => {

@@ -32,6 +32,7 @@
             <a href="/ventas" class="tab-btn nav-link" data-page="ventas" style="text-decoration: none;">💰 Ventas</a>
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
             <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
+            <a href="/bancos" class="tab-btn nav-link" data-page="bancos" style="text-decoration: none;">🏦 Bancos</a>
             <a href="/inventario" class="tab-btn nav-link" data-page="inventario" style="text-decoration: none;">📦 Inventario</a>
             <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
         </nav>
@@ -1274,6 +1275,143 @@
         </div>
 
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
+        <!-- PESTAÑA: BANCOS (ingesta de estados de cuenta, fase 1). Fuente: /api/bancos/*.
+             Solo admin y auditor; cargar archivos, solo admin. Ver docs/BANCOS.md. -->
+        <div id="tab-bancos" class="tab-panel">
+            <div class="bancos-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+
+                <!-- Saldos consolidados -->
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">🏦 Saldos Consolidados</h2>
+                            <p style="color:#475569; margin:0;">Saldo que reporta el banco en el último corte cargado de cada cuenta, convertido con la tasa BCV de la fecha de corte. Las cuentas pueden tener cortes de fechas distintas.</p>
+                        </div>
+                        <div class="filter-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" class="btn-secondary" onclick="loadBancos()">🔄 Actualizar</button>
+                            <button type="button" class="btn-secondary" onclick="descargarBancosExcel()" title="Hojas: Saldos, Movimientos y Categorías">📥 Descargar Excel</button>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                        <div class="card kpi-card"><h3>Total USD</h3><p id="bancos-total-usd">—</p><span>Suma de las cuentas con tasa</span></div>
+                        <div class="card kpi-card"><h3>Total VES</h3><p id="bancos-total-ves">—</p><span>Suma de las cuentas con tasa</span></div>
+                        <div class="card kpi-card"><h3>Cuentas</h3><p id="bancos-n-cuentas">—</p><span id="bancos-sin-tasa">&nbsp;</span></div>
+                        <div class="card kpi-card"><h3>Alertas</h3><p id="bancos-n-alertas">—</p><span>Cortes que no cuadran o huecos entre cortes</span></div>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Banco</th>
+                                    <th>Moneda</th>
+                                    <th>Fecha corte</th>
+                                    <th style="text-align:right;">Saldo</th>
+                                    <th style="text-align:right;">Tasa BCV</th>
+                                    <th style="text-align:right;">Saldo USD</th>
+                                    <th style="text-align:right;">Saldo VES</th>
+                                    <th>Cortes</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bancos-saldos-body">
+                                <tr><td colspan="9" class="table-empty">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Carga de estados de cuenta (solo admin) -->
+                <section class="card" id="bancos-carga-panel" style="padding:1.5rem; display:none;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">📤 Cargar Estado de Cuenta</h2>
+                            <p style="color:#475569; margin:0;">El archivo se guarda tal cual llegó y no se puede modificar. Subir el mismo archivo otra vez, o un corte que se solapa con otro, solo agrega los movimientos que faltaban.</p>
+                        </div>
+                    </div>
+                    <form id="bancos-carga-form" style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                        <select id="bancos-carga-banco" class="filter-select" required>
+                            <option value="">Banco...</option>
+                        </select>
+                        <input type="file" id="bancos-carga-archivo" accept=".xlsx,.xls" required style="font-family:inherit; font-size:0.85rem;">
+                        <button type="submit" class="btn-primary" id="bancos-carga-btn" style="padding:0.55rem 1.1rem;">Cargar</button>
+                    </form>
+                    <div id="bancos-carga-resultado" style="margin-top:1rem;"></div>
+                </section>
+
+                <!-- Archivos cargados -->
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">🗂️ Archivos Cargados</h2>
+                            <p style="color:#475569; margin:0;">Cada carga con su período, cuántos movimientos trajo, cuántos eran nuevos y si su cadena de saldos cuadra al céntimo.</p>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Cargado</th>
+                                    <th>Banco</th>
+                                    <th>Archivo</th>
+                                    <th>Período</th>
+                                    <th style="text-align:right;">Movs</th>
+                                    <th style="text-align:right;">Nuevos</th>
+                                    <th style="text-align:right;">Saldo final</th>
+                                    <th>Cuadra</th>
+                                    <th>Observaciones</th>
+                                    <th>Por</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bancos-archivos-body">
+                                <tr><td colspan="10" class="table-empty">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Movimientos -->
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">📋 Movimientos</h2>
+                            <p style="color:#475569; margin:0;">Movimientos únicos de todos los bancos, clasificados por reglas. "CSV para Odoo" descarga las líneas de extracto con los mismos filtros (banco y fechas), para importarlas en el diario del banco.</p>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="bancos-mov-banco" class="filter-select"><option value="">Todos los bancos</option></select>
+                        <label style="font-size:0.8rem; color:#475569;">Desde <input type="date" id="bancos-mov-desde" class="filter-select"></label>
+                        <label style="font-size:0.8rem; color:#475569;">Hasta <input type="date" id="bancos-mov-hasta" class="filter-select"></label>
+                        <select id="bancos-mov-categoria" class="filter-select"><option value="">Todas las categorías</option></select>
+                        <input type="text" id="bancos-mov-buscar" class="filter-select" placeholder="Buscar descripción o referencia" style="cursor:text; min-width:220px;">
+                        <button type="button" class="btn-secondary" onclick="loadBancosMovimientos()">🔍 Filtrar</button>
+                        <button type="button" class="btn-secondary" onclick="descargarBancosCsvOdoo()" title="account.bank.statement.line para el asistente de importación de Odoo">📥 CSV para Odoo</button>
+                    </div>
+                    <p id="bancos-mov-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Banco</th>
+                                    <th>Referencia</th>
+                                    <th>Descripción</th>
+                                    <th style="text-align:right;">Débito</th>
+                                    <th style="text-align:right;">Crédito</th>
+                                    <th style="text-align:right;">Saldo banco</th>
+                                    <th>Categoría</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bancos-mov-body">
+                                <tr><td colspan="8" class="table-empty">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+
         <div id="tab-config" class="tab-panel">
             <div class="config-subnav tab-navigation" role="tablist" aria-label="Subpáginas de Configuración" style="margin-bottom:1rem;">
                 <button type="button" class="tab-btn config-subnav-btn active" data-config-subpage="descuentos">💰 Descuentos</button>
@@ -2162,7 +2300,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261110_4"></script>
+    <script src="/static/app.js?v=20261112_2"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco

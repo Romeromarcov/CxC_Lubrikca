@@ -26,12 +26,15 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
+    LargeBinary,
     MetaData,
     Numeric,
     String,
@@ -950,4 +953,62 @@ fechas_historicas = Table(
     metadata,
     Column("so_id", String, primary_key=True),
     Column("fecha_historica", Date, nullable=False),
+)
+
+# --- Bancos (fase 1 de la ingesta bancaria, nov-2026) ------------------------
+# Tercer mundo de datos: ni espejo de Odoo ni trabajo humano. ``bancos_archivos``
+# guarda cada estado de cuenta TAL CUAL llegó (bytes + sha256): es la evidencia y
+# permite re-parsear si un parser cambia. Es solo-append: la migración le pone un
+# trigger que rechaza UPDATE y DELETE. ``bancos_movimientos`` es el modelo canónico,
+# deduplicado por ``huella`` (ver ``cxc.bancos.modelos``); un corte solapado no
+# duplica: sus movimientos ya vistos se ignoran.
+bancos_archivos = Table(
+    "bancos_archivos",
+    metadata,
+    Column("archivo_id", Integer, primary_key=True, autoincrement=True),
+    Column("sha256", String(64), nullable=False, unique=True),
+    Column("banco", String, nullable=False, index=True),
+    Column("cuenta", String, nullable=False),
+    Column("moneda", String(3), nullable=False),
+    Column("nombre_archivo", String, nullable=False),
+    Column("contenido", LargeBinary, nullable=False),
+    Column("cargado_en", DateTime(timezone=False), nullable=False),
+    Column("cargado_por", String, nullable=False, server_default=""),
+    Column("n_movimientos", Integer, nullable=False),
+    Column("n_nuevos", Integer, nullable=False),
+    Column("fecha_desde", Date, nullable=True),
+    Column("fecha_hasta", Date, nullable=True),
+    Column("saldo_inicial", MONEY, nullable=True),
+    Column("saldo_final", MONEY, nullable=True),
+    Column("saldo_inicial_derivado", Boolean, nullable=False, server_default="false"),
+    Column("cuadra", Boolean, nullable=False),
+    Column("observaciones", Text, nullable=False, server_default=""),
+)
+
+bancos_movimientos = Table(
+    "bancos_movimientos",
+    metadata,
+    Column("huella", String(24), primary_key=True),
+    Column("unique_import_id", String, nullable=False, unique=True),
+    Column("banco", String, nullable=False),
+    Column("cuenta", String, nullable=False),
+    Column("moneda", String(3), nullable=False),
+    Column("fecha", Date, nullable=False),
+    Column("referencia", String, nullable=False, server_default=""),
+    Column("correlativo", String, nullable=False, server_default=""),
+    Column("descripcion", Text, nullable=False, server_default=""),
+    Column("codigo", String, nullable=False, server_default=""),
+    Column("debito", MONEY, nullable=False),
+    Column("credito", MONEY, nullable=False),
+    Column("saldo", MONEY, nullable=True),
+    Column("orden", Integer, nullable=False),
+    Column("categoria", String, nullable=False),
+    Column("regla", String, nullable=False),
+    Column(
+        "archivo_id", Integer, ForeignKey("bancos_archivos.archivo_id"), nullable=False, index=True
+    ),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    CheckConstraint("debito >= 0", name="ck_bmov_debito_no_negativo"),
+    CheckConstraint("credito >= 0", name="ck_bmov_credito_no_negativo"),
+    Index("ix_bmov_banco_fecha", "banco", "fecha"),
 )

@@ -87,7 +87,8 @@ no_implicit_optional = true
 module = "cxc.web.app"
 ignore_errors = true
 
-# openpyxl no trae stubs; lo usa cxc.web.reporte_cxc_excel (export a Excel).
+# openpyxl y xlrd no traen stubs; los usan cxc.web.reporte_cxc_excel (export a
+# Excel) y cxc.bancos.parsers (estados de cuenta .xlsx y .xls).
 [[tool.mypy.overrides]]
-module = ["openpyxl", "openpyxl.*"]
+module = ["openpyxl", "openpyxl.*", "xlrd", "xlrd.*"]
 ignore_missing_imports = true
