@@ -19,16 +19,18 @@ class Regla:
 
 REGLAS: list[Regla] = [
     Regla("nomina_devuelta", "nomina_devuelta", r"N[OÓ]MINA DEVUELTO", "credito"),
-    Regla("nomina", "nomina", r"N[OÓ]MINA", "debito"),
-    Regla("interes_islr", "impuesto_retencion", r"INT\.?\s*ISLR"),
-    Regla("interes", "interes_ganado", r"\bINTERES(ES)?\b", "credito"),
+    # Antes que "nomina": "Comisión servicio pago de nómina" es una comisión, no nómina.
     Regla(
         "comision",
         "comision_bancaria",
-        r"^COM[\s.]|^COMIS|COMISI[OÓ]N|CARGO POR SERVICIO|MANTENIMIENTO DE CUENTA|ENVIO DE SMS|"
-        r"EMISION ESTADO|USO (DE )?CANAL|PIN INVALIDO|CEDULA INVALIDA|SERVICIO MENSAJERIA",
+        r"^COM[\s.]|^COMIS|^COM(SERV|ENVIO)|COMISI[OÓ]N|CARGO POR SERVICIO|"
+        r"MANTENIMIENTO DE CUENTA|^MANT AFIL|ENVIO DE SMS|EMISION ESTADO|USO (DE )?CANAL|"
+        r"PIN INVALIDO|CEDULA INVALIDA|SERVICIO MENSAJERIA|SALDO INSUFICIENTE",
         "debito",
     ),
+    Regla("nomina", "nomina", r"N[OÓ]MINA", "debito"),
+    Regla("interes_islr", "impuesto_retencion", r"INT\.?\s*ISLR"),
+    Regla("interes", "interes_ganado", r"\bINTERES(ES)?\b", "credito"),
     Regla("impuesto", "impuesto", r"PAGO IMPUESTOS|SENIAT"),
     Regla("parafiscal", "parafiscal", r"\bIVSS\b|BANAVIH|\bINCES\b"),
     Regla(
