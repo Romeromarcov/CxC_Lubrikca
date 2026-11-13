@@ -37,6 +37,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, Field
 
+from cxc import permisos as accesos
 from cxc.auth import (
     NOMBRES_ROLES,
     ROLES_PERMISOS,
@@ -3692,6 +3693,14 @@ class CambiarRolRequest(BaseModel):
     nuevo_rol: str
 
 
+def _ajustes_de_acceso(repo: Any, email: str) -> dict[str, bool]:
+    """Ajustes de permisos de una persona (ver ``cxc.permisos``). Solo Postgres los guarda."""
+    engine = getattr(repo, "_engine", None)
+    if engine is None:
+        return {}
+    return accesos.ajustes_de(engine, email)
+
+
 def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, Any] | None:
     if not cxc_session:
         return None
@@ -3709,7 +3718,10 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
             "nombre": u_row.get("nombre_odoo") or email,
             "rol": rol,
             "nombre_rol": NOMBRES_ROLES.get(rol, "Ventas"),
-            "permisos": ROLES_PERMISOS.get(rol, ["reporte"]),
+            # Base del rol + los ajustes que el administrador le hizo a esta persona.
+            # Si los ajustes no se pueden leer, no hay sesión (cae al except): mejor
+            # eso que devolverle a alguien un permiso que se le quitó.
+            "permisos": accesos.efectivos(rol, _ajustes_de_acceso(repo, email)),
         }
     except Exception as e:
         logger.warning("Error buscando usuario de sesión %s: %s", email, e)
@@ -3724,7 +3736,6 @@ _API_RUTAS_PUBLICAS = frozenset(
         "/api/auth/login",
         "/api/auth/logout",
         "/api/auth/register-password",
-        "/api/auth/reset-password",
     }
 )
 
@@ -3934,6 +3945,9 @@ async def api_auth_login(req: LoginRequest):
         user_info, err_msg = autenticar_usuario(execute, repo, req.email, req.password)
         if not user_info:
             raise HTTPException(status_code=401, detail=err_msg or "Credenciales inválidas")
+        user_info["permisos"] = accesos.efectivos(
+            user_info["rol"], _ajustes_de_acceso(repo, user_info["email"])
+        )
 
         token = crear_session_token(req.email, SECRET_KEY)
         first_perm = user_info["permisos"][0] if user_info["permisos"] else "reporte"
@@ -3961,6 +3975,16 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
+
+        # Solo el PRIMER ingreso: si la cuenta ya tiene contraseña, esto permitía a
+        # cualquiera que conociera un correo de Odoo pisarla y entrar como esa persona.
+        existente = buscar_usuario_plataforma(repo, req.email)
+        if existente and existente.get("password_hash"):
+            raise HTTPException(
+                status_code=409,
+                detail="Esta cuenta ya tiene contraseña. Si la olvidaste, pide a un "
+                "administrador que la restablezca.",
+            )
 
         odoo_user = verificar_usuario_odoo_activo(execute, req.email)
         if not odoo_user:
@@ -4004,11 +4028,18 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
 
 
 @app.post("/api/auth/reset-password")
-async def api_auth_reset_password(req: ResetPasswordRequest):
+async def api_auth_reset_password(
+    req: ResetPasswordRequest, cxc_session: str | None = Cookie(default=None)
+):
+    # Solo un administrador con sesión. Antes era pública: con saber el correo de
+    # alguien activo en Odoo se le cambiaba la contraseña y se entraba como esa
+    # persona (incluido un administrador).
+    _admin_de_accesos(cxc_session)
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
+        existente = buscar_usuario_plataforma(repo, req.email) or {}
 
         odoo_user = verificar_usuario_odoo_activo(execute, req.email)
         if not odoo_user:
@@ -4022,7 +4053,7 @@ async def api_auth_reset_password(req: ResetPasswordRequest):
             email=req.email,
             password=req.password,
             nombre_odoo=odoo_user.get("name") or "",
-            activo=True,
+            activo=existente.get("activo") != "FALSE",
         )
         return {"status": "success", "message": "Contraseña restablecida exitosamente."}
     except HTTPException:
@@ -4049,19 +4080,106 @@ async def api_admin_list_usuarios(cxc_session: str | None = Cookie(default=None)
         )
     repo = get_repo()
     rows = obtener_usuarios_plataforma(repo)
+    engine = getattr(repo, "_engine", None)
+    ajustes = accesos.todos_los_ajustes(engine) if engine is not None else {}
     clean_rows = []
     for r in rows:
+        rol = r.get("rol", "ventas")
+        propios = ajustes.get(str(r.get("email") or ""), {})
         clean_rows.append(
             {
                 "email": r.get("email"),
                 "nombre_odoo": r.get("nombre_odoo"),
-                "rol": r.get("rol", "ventas"),
-                "nombre_rol": NOMBRES_ROLES.get(r.get("rol", "ventas"), "Ventas"),
+                "rol": rol,
+                "nombre_rol": NOMBRES_ROLES.get(rol, "Ventas"),
                 "activo": r.get("activo") == "TRUE",
                 "fecha_registro": r.get("fecha_registro"),
+                "permisos": accesos.efectivos(rol, propios),
+                "ajustes": propios,
             }
         )
     return clean_rows
+
+
+def _admin_de_accesos(cxc_session: str | None) -> dict[str, Any]:
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    if user["rol"] != accesos.ROL_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
+    return user
+
+
+@app.get("/api/admin/permisos/catalogo")
+async def api_admin_catalogo_permisos(cxc_session: str | None = Cookie(default=None)):
+    """Lo que el panel de accesos necesita para dibujarse: roles con su base y permisos."""
+    _admin_de_accesos(cxc_session)
+    return {
+        "roles": [
+            {"rol": rol, "nombre": NOMBRES_ROLES.get(rol, rol), "base": accesos.efectivos(rol)}
+            for rol in accesos.BASE_POR_ROL
+        ],
+        "permisos": [
+            {**p, "editable": p["clave"] in accesos.EDITABLES} for p in accesos.CATALOGO
+        ],
+    }
+
+
+class CambiarAccesoRequest(BaseModel):
+    rol: str | None = None
+    activo: bool | None = None
+    # Lista COMPLETA de lo que la persona debe poder hacer (lo marcado en el panel).
+    permisos: list[str] | None = None
+    comentario: str = ""
+
+
+def _aplicar_acceso(user: dict[str, Any], email: str, req: CambiarAccesoRequest) -> dict[str, Any]:
+    email = email.strip().lower()
+    if email == str(user.get("email") or "").strip().lower() and (
+        (req.rol is not None and req.rol != accesos.ROL_ADMIN) or req.activo is False
+    ):
+        # Quien administra no puede sacarse a sí mismo: dejaría el panel sin nadie.
+        raise HTTPException(
+            status_code=400,
+            detail="No puedes quitarte el rol de Administrador ni desactivarte a ti mismo.",
+        )
+    try:
+        return accesos.cambiar_acceso(
+            get_repo()._engine,
+            email,
+            por=str(user.get("email") or user.get("nombre") or "desconocido"),
+            rol=req.rol,
+            activo=req.activo,
+            permisos=req.permisos,
+            comentario=req.comentario,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.") from e
+    except accesos.AccesoInvalido as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.put("/api/admin/usuarios/{email}/acceso")
+async def api_admin_cambiar_acceso(
+    email: str, req: CambiarAccesoRequest, cxc_session: str | None = Cookie(default=None)
+):
+    """Rol, activo y permisos de una persona, en un solo cambio que queda en la bitácora."""
+    user = _admin_de_accesos(cxc_session)
+    return _aplicar_acceso(user, email, req)
+
+
+@app.get("/api/admin/accesos/bitacora")
+async def api_admin_bitacora_accesos(
+    email: str | None = None,
+    limite: int = 200,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _admin_de_accesos(cxc_session)
+    return {
+        "cambios": accesos.bitacora(get_repo()._engine, email, max(1, min(limite, 1000)))
+    }
 
 
 @app.post("/api/admin/cambiar-rol")
@@ -4075,12 +4193,8 @@ async def api_admin_cambiar_rol(
         )
     if req.nuevo_rol not in ROLES_PERMISOS:
         raise HTTPException(status_code=400, detail=f"Rol '{req.nuevo_rol}' no es válido.")
-    repo = get_repo()
-    u_row = buscar_usuario_plataforma(repo, req.email)
-    if not u_row:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
-    u_row["rol"] = req.nuevo_rol
-    repo.upsert_usuario_plataforma(u_row)
+    # Mismo camino que el panel de accesos: conserva los ajustes y deja bitácora.
+    _aplicar_acceso(user, req.email, CambiarAccesoRequest(rol=req.nuevo_rol))
     return {
         "status": "success",
         "message": f"Rol de {req.email} actualizado a {NOMBRES_ROLES.get(req.nuevo_rol)}.",
@@ -4197,10 +4311,10 @@ async def api_admin_recalcular_todo(
     necesiten, sin depender de que algo cambie primero en Odoo.
     """
     user = get_current_user_from_cookie(cxc_session)
-    if not user or user["rol"] not in ("admin", "gerente_ventas"):
+    if not accesos.tiene(user, "sistema.recalcular"):
         raise HTTPException(
             status_code=403,
-            detail="Acceso denegado: Se requiere rol Administrador o Gerente de Ventas",
+            detail="Acceso denegado: falta el permiso Recalcular todo",
         )
     background_tasks.add_task(recalculate_all_orders)
     return {
@@ -4911,7 +5025,7 @@ async def patch_auditoria_estado(
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
-    if user.get("rol") not in ("admin", "auditor"):
+    if not accesos.tiene(user, "auditoria.decidir"):
         raise HTTPException(status_code=403, detail="Sin permisos para actualizar auditoría")
     try:
         repo = get_repo()
@@ -17956,20 +18070,19 @@ def _get_reporte_diario_sync(
 
 # --- BANCOS: ingesta de estados de cuenta (fase 1) ---------------------------
 #
-# Ver ``cxc.bancos``. Cargar un archivo es escritura (solo admin); leer saldos y
-# movimientos es para admin y auditor -- los saldos bancarios no son para todos los
-# roles. Nada de esto escribe en Odoo: el CSV de líneas de extracto lo importa una
+# Ver ``cxc.bancos``. Cada endpoint exige un permiso de ``cxc.permisos`` (bancos.cargar,
+# bancos.ver, bancos.conciliar); antes era por rol. Por defecto solo admin (todo) y
+# auditor (ver) los tienen: los saldos bancarios no son para todos. Quien solo carga
+# archivos no ve saldos consolidados ni movimientos. Nada de esto escribe en Odoo:
+# el CSV de líneas de extracto lo importa una
 # persona en el diario del banco.
 
-_ROLES_BANCOS_LECTURA = ("admin", "auditor")
-
-
-def _usuario_bancos(cxc_session: str | None, *, escribir: bool) -> dict[str, Any]:
+def _usuario_bancos(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
+    """La sesión, si tiene AL MENOS UNO de los permisos (ver ``cxc.permisos``)."""
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
-    permitidos = ("admin",) if escribir else _ROLES_BANCOS_LECTURA
-    if user.get("rol") not in permitidos:
+    if not any(accesos.tiene(user, p) for p in permisos):
         raise HTTPException(status_code=403, detail="Sin permisos para bancos")
     return user
 
@@ -18012,7 +18125,7 @@ def _jsonable(v: Any) -> Any:
 
 @app.get("/api/bancos/parsers")
 async def bancos_parsers(cxc_session: str | None = Cookie(default=None)):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.cargar", "bancos.ver", "bancos.conciliar")
     return {"bancos": sorted(BANCOS_PARSERS)}
 
 
@@ -18027,7 +18140,7 @@ async def bancos_importar(
     saldos y agrega solo los movimientos que no se conocían. Idempotente: subir el
     mismo archivo, o un corte solapado, no duplica nada.
     """
-    user = _usuario_bancos(cxc_session, escribir=True)
+    user = _usuario_bancos(cxc_session, "bancos.cargar")
     contenido = await archivo.read()
     try:
         prep = bancos_preparar(contenido, archivo.filename or "archivo", banco)
@@ -18056,7 +18169,7 @@ async def bancos_importar(
 
 @app.get("/api/bancos/archivos")
 async def bancos_archivos_cargados(cxc_session: str | None = Cookie(default=None)):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.cargar", "bancos.ver")
     filas = bancos_repo.archivos(_engine_bancos())
     return {"archivos": [{k: _jsonable(v) for k, v in f.items()} for f in filas]}
 
@@ -18064,7 +18177,7 @@ async def bancos_archivos_cargados(cxc_session: str | None = Cookie(default=None
 @app.get("/api/bancos/saldos")
 async def bancos_saldos(cxc_session: str | None = Cookie(default=None)):
     """Saldo por cuenta (último corte), convertido con la tasa BCV de la fecha de corte."""
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver")
     cons = bancos_consolidar(bancos_repo.cortes(_engine_bancos()), _tasa_bcv_bancos())
     return {
         "cuentas": [
@@ -18097,7 +18210,7 @@ async def bancos_movimientos_listado(
     categoria: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver")
     movs = bancos_repo.movimientos(
         _engine_bancos(),
         banco=banco,
@@ -18128,7 +18241,7 @@ async def bancos_movimientos_listado(
 
 @app.get("/api/bancos/consolidado.xlsx")
 async def bancos_consolidado_excel(cxc_session: str | None = Cookie(default=None)):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver")
     engine = _engine_bancos()
     cons = bancos_consolidar(bancos_repo.cortes(engine), _tasa_bcv_bancos())
     contenido = bancos_exportar.libro_consolidado(bancos_repo.movimientos(engine), cons)
@@ -18148,7 +18261,7 @@ async def bancos_csv_odoo(
     cxc_session: str | None = Cookie(default=None),
 ):
     """CSV de ``account.bank.statement.line`` para el asistente de importación de Odoo."""
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver")
     movs = bancos_repo.movimientos(
         _engine_bancos(),
         banco=banco,
@@ -18199,7 +18312,7 @@ async def bancos_conciliacion_generar(
     Lee de Odoo (solo lectura) los pagos de cada diario en el rango de sus
     movimientos. Las propuestas que alguien ya decidió no se tocan.
     """
-    _usuario_bancos(cxc_session, escribir=True)
+    _usuario_bancos(cxc_session, "bancos.conciliar")
     engine = _engine_bancos()
     movs = _bancos_reclasificar(bancos_repo.movimientos(engine, banco=banco))
     por_banco: dict[str, list[BancosMovimiento]] = {}
@@ -18260,7 +18373,7 @@ async def bancos_conciliacion_listar(
     hasta: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver", "bancos.conciliar")
     filas = bancos_repo.propuestas(
         _engine_bancos(),
         banco=banco,
@@ -18285,7 +18398,7 @@ async def bancos_conciliacion_decidir(
     req: BancosDecisionRequest,
     cxc_session: str | None = Cookie(default=None),
 ):
-    user = _usuario_bancos(cxc_session, escribir=True)
+    user = _usuario_bancos(cxc_session, "bancos.conciliar")
     try:
         r = bancos_repo.decidir(
             _engine_bancos(),
@@ -18308,6 +18421,6 @@ async def bancos_conciliacion_auditoria(
     huella: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
-    _usuario_bancos(cxc_session, escribir=False)
+    _usuario_bancos(cxc_session, "bancos.ver", "bancos.conciliar")
     filas = bancos_repo.decisiones(_engine_bancos(), huella=huella)
     return {"items": [{k: _jsonable(v) for k, v in f.items()} for f in filas]}

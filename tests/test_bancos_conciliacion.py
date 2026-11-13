@@ -33,6 +33,7 @@ from cxc.bancos.conciliacion import (
 )
 from cxc.bancos.ingesta import MovimientoClasificado
 from cxc.bancos.modelos import MovimientoBancario
+from cxc.permisos import efectivos
 
 HOY = date(2026, 10, 15)
 
@@ -211,7 +212,7 @@ def test_pagos_candidatos_lee_pagos_y_rif_del_cliente():
 
 client = TestClient(__import__("cxc.web.app", fromlist=["app"]).app)
 ADMIN = {"email": "admin@x.test", "rol": "admin", "permisos": []}
-AUDITOR = {"email": "aud@x.test", "rol": "auditor", "permisos": []}
+AUDITOR = {"email": "aud@x.test", "rol": "auditor", "permisos": efectivos("auditor")}
 VENDEDOR = {"email": "v@x.test", "rol": "vendedor", "permisos": []}
 
 

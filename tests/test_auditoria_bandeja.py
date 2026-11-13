@@ -31,6 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import cxc.web.app as app
+from cxc.permisos import efectivos
 
 _FILAS = [
     {"audit_id": "A1", "estado": "pendiente", "tipo_auditoria": "descuento_orden"},
@@ -173,9 +174,10 @@ def test_el_audit_id_que_manda_es_el_de_la_RUTA_no_el_del_cuerpo(repo) -> None:
 
 def test_quien_reviso_sale_del_nombre_y_si_no_del_email(repo) -> None:
     """Y nunca queda vacío: una fila de auditoría sin revisor no sirve para auditar."""
-    _patch(repo, {"rol": "auditor", "email": "c@lubrikca.test"})
+    auditor = {"rol": "auditor", "permisos": efectivos("auditor")}
+    _patch(repo, {**auditor, "email": "c@lubrikca.test"})
     assert repo.update_auditoria_estado.call_args.kwargs["revisado_por"] == "c@lubrikca.test"
 
     repo.update_auditoria_estado.reset_mock()
-    _patch(repo, {"rol": "auditor"})
+    _patch(repo, auditor)
     assert repo.update_auditoria_estado.call_args.kwargs["revisado_por"] == "desconocido"

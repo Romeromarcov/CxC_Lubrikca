@@ -46,7 +46,8 @@ Tablas:
 - `bancos_movimientos`: una fila por movimiento real, con clave `huella`. Un corte
   solapado o re-subido no duplica nada.
 
-Endpoints (cargar: solo `admin`; leer: `admin` y `auditor`):
+Endpoints. Cada uno exige un permiso (ver "Permisos" abajo): `bancos.cargar` para importar
+(y ver la lista de archivos), `bancos.ver` para el resto:
 
 | Método | Ruta | Qué hace |
 |---|---|---|
@@ -113,9 +114,9 @@ corregida, rechazada; regenerar no toca las ya decididas) y `bancos_decisiones`
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| POST | `/api/bancos/conciliacion/generar` | (admin) Lee pagos de Odoo y guarda propuestas; filtro `banco` |
+| POST | `/api/bancos/conciliacion/generar` | (`bancos.conciliar`) Lee pagos de Odoo y guarda propuestas; filtro `banco` |
 | GET | `/api/bancos/conciliacion` | Propuestas con filtros `banco`, `estado`, `tipo`, `desde`, `hasta` |
-| POST | `/api/bancos/conciliacion/{huella}/decidir` | (admin) `accion`: aprobar, rechazar, corregir (`pago_id` o `cuenta`), reabrir |
+| POST | `/api/bancos/conciliacion/{huella}/decidir` | (`bancos.conciliar`) `accion`: aprobar, rechazar, corregir (`pago_id` o `cuenta`), reabrir |
 | GET | `/api/bancos/conciliacion/auditoria` | La bitácora; filtro `huella` |
 
 Las reglas de clasificación se aplican de nuevo al generar, así que una regla
@@ -138,6 +139,21 @@ duplicado `lixie-dev-lubrika-qa1-….dev.odoo.com` (el de `.env.qa`) ya no exist
 de escribir el push hace falta una rama de staging nueva en Odoo.sh (o un Odoo 18 local),
 y la misma barrera del banco de escenarios: el código que escribe se niega a correr si
 `ODOO_URL` no lleva `.dev.odoo.com`.
+
+## Permisos
+
+Los da el administrador en Configuración → Usuarios (ver `src/cxc/permisos.py`). El rol
+da una base y a cada persona se le agregan o quitan permisos; cada cambio queda en
+`accesos_bitacora` (solo-append). La página Bancos se abre sola si la persona tiene
+cualquiera de estos:
+
+| Permiso | Qué deja hacer | Por defecto |
+|---|---|---|
+| `bancos.cargar` | Subir estados de cuenta y ver la lista de archivos cargados | admin |
+| `bancos.ver` | Saldos, movimientos, cola de pre-conciliación, bitácora, Excel y CSV | admin, auditor |
+| `bancos.conciliar` | Generar propuestas y aprobar / corregir / rechazar / reabrir | admin |
+
+Quien solo carga no ve saldos consolidados ni movimientos.
 
 ## Seguridad
 

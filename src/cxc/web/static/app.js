@@ -239,16 +239,20 @@ document.addEventListener("DOMContentLoaded", () => {
         if (apiKeysPanel) {
             apiKeysPanel.style.display = isAdm ? "block" : "none";
         }
+        const bitacoraAccesos = document.getElementById("admin-accesos-bitacora-panel");
+        if (bitacoraAccesos) {
+            bitacoraAccesos.style.display = isAdm ? "block" : "none";
+        }
 
         const reciboBtnContainer = document.getElementById("btn-generar-recibo-container");
         if (reciboBtnContainer) {
-            const canGenerateReceipt = ["admin", "tesoreria", "gerente_ventas"].includes(user.rol);
+            const canGenerateReceipt = isAdm || perms.includes("cobranza.recibo");
             reciboBtnContainer.style.display = canGenerateReceipt ? "block" : "none";
         }
 
         const recalcularTodoContainer = document.getElementById("recalcular-todo-container");
         if (recalcularTodoContainer) {
-            const canRecalcularTodo = ["admin", "gerente_ventas"].includes(user.rol);
+            const canRecalcularTodo = isAdm || perms.includes("sistema.recalcular");
             recalcularTodoContainer.style.display = canRecalcularTodo ? "block" : "none";
         }
     }
@@ -355,62 +359,232 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
+    // --- Panel de accesos (nov-2026): rol como base + ajustes por persona. ---
+    // Ver cxc/permisos.py. Cada cambio queda en la bitácora de accesos.
+    const _accEsc = (v) => String(v == null ? "" : v)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    let _accCatalogo = null;
+    let _accUsuarios = [];
+    let _accAbierto = null;
+
+    async function _accCargarCatalogo() {
+        if (_accCatalogo) return _accCatalogo;
+        const res = await fetch("/api/admin/permisos/catalogo");
+        if (!res.ok) throw new Error("No se pudo leer el catálogo de permisos");
+        _accCatalogo = await res.json();
+        return _accCatalogo;
+    }
+
+    function _accBase(rol) {
+        const r = (_accCatalogo.roles || []).find(x => x.rol === rol);
+        return new Set(r ? r.base : []);
+    }
+
+    function _accNombreRol(rol) {
+        const r = _accCatalogo ? (_accCatalogo.roles || []).find(x => x.rol === rol) : null;
+        return r ? r.nombre : rol;
+    }
+
+    function _accNombres() {
+        return _accCatalogo ? Object.fromEntries(_accCatalogo.permisos.map(p => [p.clave, p.nombre])) : {};
+    }
+
+    function _accResumen(u) {
+        if (u.rol === "admin") return '<span style="color:#475569;">Todo (Administrador)</span>';
+        const nombres = _accNombres();
+        const ajustes = Object.entries(u.ajustes || {});
+        const mas = ajustes.filter(([, v]) => v).map(([k]) => nombres[k] || k);
+        const menos = ajustes.filter(([, v]) => !v).map(([k]) => nombres[k] || k);
+        if (!mas.length && !menos.length) return '<span style="color:#64748b;">Lo del rol</span>';
+        return [
+            ...mas.map(n => `<span class="acc-chip acc-mas">+ ${_accEsc(n)}</span>`),
+            ...menos.map(n => `<span class="acc-chip acc-menos">− ${_accEsc(n)}</span>`),
+        ].join(" ");
+    }
+
+    function _accFila(u, i) {
+        const nombre = u.nombre_odoo && u.nombre_odoo !== u.email
+            ? `<div style="font-size:0.78rem; color:#64748b;">${_accEsc(u.nombre_odoo)}</div>` : "";
+        return `<tr>
+            <td><strong>${_accEsc(u.email)}</strong>${nombre}</td>
+            <td>${_accEsc(_accNombreRol(u.rol))}</td>
+            <td style="max-width:360px;">${_accResumen(u)}</td>
+            <td><span class="state-badge ${u.activo ? "cierre" : ""}">${u.activo ? "Activo" : "Desactivado"}</span></td>
+            <td style="white-space:nowrap;">
+                <button type="button" class="btn btn-primary" data-acc-editar="${i}" style="padding:0.3rem 0.65rem; font-size:0.78rem;">${_accAbierto === i ? "Cerrar" : "Editar accesos"}</button>
+                <button type="button" class="btn btn-secondary" data-acc-clave="${i}" style="padding:0.3rem 0.65rem; font-size:0.78rem;">🔒 Restablecer clave</button>
+            </td>
+        </tr>` + (_accAbierto === i ? `<tr class="acc-editor-fila"><td colspan="5">${_accEditor(u, i)}</td></tr>` : "");
+    }
+
+    function _accCasillas(rol, marcados) {
+        const base = _accBase(rol);
+        const esAdmin = rol === "admin";
+        const hayBancos = [...marcados].some(c => c.startsWith("bancos."));
+        const grupos = {};
+        _accCatalogo.permisos.forEach(p => { (grupos[p.grupo] = grupos[p.grupo] || []).push(p); });
+        return Object.entries(grupos).map(([grupo, ps]) => `
+            <fieldset class="acc-grupo">
+                <legend>${_accEsc(grupo)}</legend>
+                ${ps.map(p => {
+                    let on = esAdmin || marcados.has(p.clave);
+                    if (!esAdmin && p.clave === "bancos") on = hayBancos;
+                    if (p.clave === "dashboard") on = true;
+                    const fijo = esAdmin || !p.editable;
+                    const difiere = !esAdmin && p.editable && on !== base.has(p.clave);
+                    const marca = difiere
+                        ? ` <span class="acc-chip ${on ? "acc-mas" : "acc-menos"}">${on ? "agregado" : "quitado"}</span>` : "";
+                    return `<label class="acc-permiso${fijo ? " acc-fijo" : ""}">
+                        <input type="checkbox" data-acc-permiso="${_accEsc(p.clave)}" ${on ? "checked" : ""} ${fijo ? "disabled" : ""}>
+                        <span><strong>${_accEsc(p.nombre)}</strong>${marca}<small>${_accEsc(p.descripcion)}</small></span>
+                    </label>`;
+                }).join("")}
+            </fieldset>`).join("");
+    }
+
+    function _accEditor(u, i) {
+        const opciones = _accCatalogo.roles.map(r =>
+            `<option value="${_accEsc(r.rol)}" ${r.rol === u.rol ? "selected" : ""}>${_accEsc(r.nombre)}</option>`).join("");
+        const yo = !!(currentUserSession && currentUserSession.email === u.email);
+        const bloqueo = yo ? ' disabled title="No puedes cambiar tu propio rol ni desactivarte"' : "";
+        return `<div class="acc-editor" data-acc-i="${i}">
+            <div class="acc-editor-top">
+                <label>Rol (base) <select data-acc-rol class="filter-select"${bloqueo}>${opciones}</select></label>
+                <label class="acc-activo"><input type="checkbox" data-acc-activo ${u.activo ? "checked" : ""}${bloqueo}> Activo</label>
+            </div>
+            <p class="acc-nota">Marca lo que esta persona debe poder hacer. Lo que difiere de su rol queda señalado como <em>agregado</em> o <em>quitado</em>. Si cambias el rol, se cargan los permisos base de ese rol.</p>
+            <div class="acc-casillas">${_accCasillas(u.rol, new Set(u.permisos))}</div>
+            <div class="acc-editor-pie">
+                <input type="text" data-acc-comentario class="filter-select" placeholder="Motivo del cambio (queda en la bitácora)" maxlength="300">
+                <button type="button" class="btn btn-primary" data-acc-guardar="${i}">Guardar</button>
+                <button type="button" class="btn btn-secondary" data-acc-cancelar>Cancelar</button>
+                <span data-acc-msg class="acc-msg"></span>
+            </div>
+        </div>`;
+    }
+
+    function _accRender() {
+        const tbody = document.getElementById("admin-usuarios-table-body");
+        if (!tbody) return;
+        if (!_accUsuarios.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay usuarios registrados en la plataforma.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = _accUsuarios.map(_accFila).join("");
+    }
+
     window.loadAdminUsuarios = async function() {
         const tbody = document.getElementById("admin-usuarios-table-body");
         if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando usuarios...</td></tr>';
         try {
-            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Cargando lista de usuarios de la plataforma...</td></tr>';
+            await _accCargarCatalogo();
             const res = await fetch("/api/admin/usuarios");
-            if (res.ok) {
-                const users = await res.json();
-                if (users.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay usuarios registrados en la plataforma.</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = "";
-                users.forEach(u => {
-                    const row = document.createElement("tr");
-                    row.innerHTML = `
-                        <td><strong>${u.email}</strong></td>
-                        <td>${u.nombre_odoo || u.email}</td>
-                        <td>
-                            <select onchange="cambiarRolUsuario('${u.email}', this.value)" style="padding: 0.35rem 0.65rem; border-radius: 6px; border: 1px solid #cbd5e1; font-family: inherit; font-size: 0.82rem; background: white; font-weight: 500;">
-                                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Administrador / Gerencia</option>
-                                <option value="tesoreria" ${u.rol === 'tesoreria' ? 'selected' : ''}>Tesorería y Cobranza</option>
-                                <option value="auditor" ${u.rol === 'auditor' ? 'selected' : ''}>Auditoría y Contabilidad</option>
-                                <option value="ventas" ${u.rol === 'ventas' ? 'selected' : ''}>Ventas y Comercial</option>
-                            </select>
-                        </td>
-                        <td><small>${u.fecha_registro ? u.fecha_registro.replace("T", " ").split(".")[0] : '-'}</small></td>
-                        <td><span class="state-badge ${u.activo ? 'cierre' : ''}">${u.activo ? 'Activo en Odoo' : 'Inactivo'}</span></td>
-                        <td>
-                            <button class="btn btn-secondary" onclick="adminResetPassword('${u.email}')" style="padding: 0.3rem 0.65rem; font-size: 0.78rem;">🔒 Restablecer Clave</button>
-                        </td>
-                    `;
-                    tbody.appendChild(row);
-                });
-            }
+            if (!res.ok) throw new Error((await res.json()).detail || "Error en servidor");
+            _accUsuarios = await res.json();
+            _accAbierto = null;
+            _accRender();
+            loadAccesosBitacora();
         } catch (err) {
-            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error cargando lista de usuarios.</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="5" class="table-empty">❌ ${_accEsc(err.message)}</td></tr>`;
             console.error(err);
         }
     };
 
-    window.cambiarRolUsuario = async function(email, nuevoRol) {
+    async function _accGuardar(i, editor) {
+        const u = _accUsuarios[i];
+        const msg = editor.querySelector("[data-acc-msg]");
+        const permisos = [...editor.querySelectorAll("[data-acc-permiso]")]
+            .filter(c => c.checked && !c.disabled).map(c => c.dataset.accPermiso);
+        const cuerpo = {
+            rol: editor.querySelector("[data-acc-rol]").value,
+            activo: editor.querySelector("[data-acc-activo]").checked,
+            permisos,
+            comentario: editor.querySelector("[data-acc-comentario]").value,
+        };
+        msg.textContent = "Guardando...";
+        msg.style.color = "#475569";
         try {
-            const res = await fetch("/api/admin/cambiar-rol", {
-                method: "POST",
+            const res = await fetch(`/api/admin/usuarios/${encodeURIComponent(u.email)}/acceso`, {
+                method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, nuevo_rol: nuevoRol })
+                body: JSON.stringify(cuerpo),
             });
-            if (res.ok) {
-                alert(`✅ Rol de ${email} actualizado correctamente.`);
-            } else {
-                const err = await res.json();
-                alert(`❌ Error al cambiar rol: ${err.detail || 'Error en servidor'}`);
-            }
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Error en servidor");
+            Object.assign(u, { rol: data.rol, activo: data.activo, permisos: data.permisos, ajustes: data.ajustes });
+            _accAbierto = null;
+            _accRender();
+            loadAccesosBitacora();
         } catch (err) {
-            alert("❌ Error de red al cambiar rol.");
+            msg.textContent = "❌ " + err.message;
+            msg.style.color = "#be123c";
+        }
+    }
+
+    document.addEventListener("click", (ev) => {
+        const t = ev.target.closest("[data-acc-editar],[data-acc-clave],[data-acc-guardar],[data-acc-cancelar]");
+        if (!t) return;
+        if (t.dataset.accEditar !== undefined) {
+            const i = Number(t.dataset.accEditar);
+            _accAbierto = _accAbierto === i ? null : i;
+            _accRender();
+        } else if (t.dataset.accClave !== undefined) {
+            adminResetPassword(_accUsuarios[Number(t.dataset.accClave)].email);
+        } else if (t.dataset.accGuardar !== undefined) {
+            _accGuardar(Number(t.dataset.accGuardar), t.closest(".acc-editor"));
+        } else {
+            _accAbierto = null;
+            _accRender();
+        }
+    });
+
+    document.addEventListener("change", (ev) => {
+        const editor = ev.target.closest(".acc-editor");
+        if (!editor) return;
+        const rol = editor.querySelector("[data-acc-rol]").value;
+        let marcados;
+        if (ev.target.matches("[data-acc-rol]")) {
+            marcados = _accBase(rol);
+        } else if (ev.target.matches("[data-acc-permiso]")) {
+            marcados = new Set([...editor.querySelectorAll("[data-acc-permiso]")]
+                .filter(c => c.checked).map(c => c.dataset.accPermiso));
+        } else {
+            return;
+        }
+        editor.querySelector(".acc-casillas").innerHTML = _accCasillas(rol, marcados);
+    });
+
+    function _accDiff(c) {
+        const a = c.antes, d = c.despues, partes = [];
+        const nombres = _accNombres();
+        if (a.rol !== d.rol) partes.push(`Rol: ${_accEsc(_accNombreRol(a.rol))} → ${_accEsc(_accNombreRol(d.rol))}`);
+        if (a.activo !== d.activo) partes.push(d.activo ? "Activado" : "Desactivado");
+        const antes = new Set(a.permisos), despues = new Set(d.permisos);
+        const mas = d.permisos.filter(p => !antes.has(p)).map(p => nombres[p] || p);
+        const menos = a.permisos.filter(p => !despues.has(p)).map(p => nombres[p] || p);
+        if (mas.length) partes.push(`<span class="acc-chip acc-mas">+ ${mas.map(_accEsc).join(", ")}</span>`);
+        if (menos.length) partes.push(`<span class="acc-chip acc-menos">− ${menos.map(_accEsc).join(", ")}</span>`);
+        return partes.join(" · ") || "Sin cambios visibles";
+    }
+
+    window.loadAccesosBitacora = async function() {
+        const tbody = document.getElementById("admin-accesos-bitacora-body");
+        if (!tbody) return;
+        try {
+            const res = await fetch("/api/admin/accesos/bitacora?limite=100");
+            if (!res.ok) throw new Error((await res.json()).detail || "Error en servidor");
+            const { cambios } = await res.json();
+            tbody.innerHTML = cambios.length ? cambios.map(c => `<tr>
+                <td style="white-space:nowrap;">${_accEsc(c.cambiado_en.replace("T", " "))}</td>
+                <td>${_accEsc(c.email)}</td>
+                <td>${_accDiff(c)}</td>
+                <td>${_accEsc(c.comentario || "")}</td>
+                <td>${_accEsc(c.usuario)}</td>
+            </tr>`).join("") : '<tr><td colspan="5" class="table-empty">Todavía no hay cambios de acceso registrados.</td></tr>';
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="5" class="table-empty">❌ ${_accEsc(err.message)}</td></tr>`;
         }
     };
 
@@ -5662,30 +5836,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.loadBancosMovimientos = loadBancosMovimientos;
 
-    async function _bancosRol() {
+    async function _bancosSesion() {
         // En una carga directa de /bancos, initCurrentPage() corre antes de que
         // initUserSession() termine (mismo caso que Configuración, 25-sep-2026):
-        // si la sesión todavía no está, se pide el rol acá.
-        if (currentUserSession) return currentUserSession.rol;
+        // si la sesión todavía no está, se pide acá.
+        if (currentUserSession) return currentUserSession;
         try {
             const res = await fetch("/api/auth/me");
-            return res.ok ? (await res.json()).rol : null;
+            return res.ok ? await res.json() : null;
         } catch (err) {
             return null;
         }
     }
 
     async function loadBancos() {
-        const esAdmin = (await _bancosRol()) === "admin";
-        document.getElementById("bancos-carga-panel").style.display = esAdmin ? "block" : "none";
-        document.getElementById("bancos-conc-generar").style.display = esAdmin ? "" : "none";
-        _bancosConcAdmin = esAdmin;
+        // Cada sección según el permiso de la persona (cxc/permisos.py); la API
+        // exige lo mismo, esto solo evita mostrar lo que respondería 403.
+        const u = await _bancosSesion();
+        const puede = (p) => !!u && (u.rol === "admin" || (u.permisos || []).includes(p));
+        const cargar = puede("bancos.cargar"), ver = puede("bancos.ver"), conciliar = puede("bancos.conciliar");
+        const mostrar = (id, si) => { const el = document.getElementById(id); if (el) el.style.display = si ? "" : "none"; };
+        mostrar("bancos-carga-panel", cargar);
+        mostrar("bancos-saldos-panel", ver);
+        mostrar("bancos-archivos-panel", cargar || ver);
+        mostrar("bancos-mov-panel", ver);
+        mostrar("bancos-conc-panel", ver || conciliar);
+        mostrar("bancos-conc-generar", conciliar);
+        _bancosConcAdmin = conciliar;
         try {
             await _bancosCargarParsers();
         } catch (err) {
             console.error("Bancos: no se pudo cargar la lista de bancos", err);
         }
-        await Promise.all([loadBancosSaldos(), loadBancosArchivos(), loadBancosMovimientos(), loadBancosConciliacion()]);
+        await Promise.all([
+            ver ? loadBancosSaldos() : null,
+            cargar || ver ? loadBancosArchivos() : null,
+            ver ? loadBancosMovimientos() : null,
+            ver || conciliar ? loadBancosConciliacion() : null,
+        ]);
     }
     window.loadBancos = loadBancos;
 

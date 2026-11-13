@@ -994,3 +994,29 @@ body {
     font-size: 0.85rem;
     color: #475569;
 }
+
+/* --- Panel de accesos (Configuración → Usuarios) --- */
+.acc-chip { display:inline-block; padding:0.1rem 0.45rem; border-radius:999px; font-size:0.72rem; font-weight:600; margin:0.1rem 0; }
+.acc-mas { background:#dcfce7; color:#166534; }
+.acc-menos { background:#fee2e2; color:#991b1b; }
+.acc-wrapper { max-height:none; } /* el editor se abre dentro de la tabla: sin scroll interno */
+.acc-editor-fila > td { background:#f8fafc; }
+.acc-editor { padding:0.5rem 0.25rem; }
+.acc-editor-top { display:flex; gap:1.25rem; align-items:center; flex-wrap:wrap; font-size:0.85rem; color:#334155; }
+.acc-editor-top label { display:flex; gap:0.5rem; align-items:center; }
+.acc-nota { color:#64748b; font-size:0.8rem; margin:0.75rem 0; }
+.acc-casillas { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:0.75rem; }
+.acc-grupo { border:1px solid #e2e8f0; border-radius:8px; padding:0.5rem 0.75rem; margin:0; background:#fff; min-width:0; }
+.acc-grupo legend { font-weight:700; font-size:0.8rem; color:#1e40af; padding:0 0.25rem; }
+.acc-permiso { display:flex; gap:0.5rem; align-items:flex-start; padding:0.35rem 0; font-size:0.82rem; color:#1e293b; cursor:pointer; white-space:normal; }
+.acc-permiso input { margin-top:0.2rem; flex:none; }
+.acc-permiso small { display:block; color:#64748b; font-size:0.74rem; font-weight:400; }
+.acc-fijo { cursor:default; opacity:0.75; }
+.acc-editor-pie { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-top:0.75rem; }
+.acc-editor-pie input[type=text] { flex:1 1 240px; min-width:0; cursor:text; }
+.acc-msg { font-size:0.8rem; }
+@media (max-width: 760px) {
+    /* La tabla es más ancha que la pantalla: el editor queda fijo a la izquierda y del ancho visible. */
+    .acc-editor { position:sticky; left:0; width:calc(100vw - 72px); }
+    .acc-casillas { grid-template-columns:1fr; }
+}

@@ -10,43 +10,17 @@ import secrets
 from datetime import datetime
 from typing import Any
 
+from cxc.permisos import BASE_POR_ROL, NOMBRES_ROLES, PAGINAS, efectivos
 from cxc.repositories import Repository
 
 logger = logging.getLogger("cxc.auth")
 
-# Matriz de Permisos por Rol
-ALL_PAGES = [
-    "dashboard",
-    "facturacion",
-    "conciliaciones",
-    "cobranza",
-    "ventas",
-    "reporte",
-    "auditoria",
-    "inventario",
-    "configuracion",
-    "bancos",
-]
+# Matriz de Permisos por Rol. La fuente es ``cxc.permisos`` (base de cada rol, que el
+# administrador ajusta persona por persona); esto queda por compatibilidad: lo que
+# cada rol tiene SIN ajustes, en el orden del menú.
+ALL_PAGES = [clave for clave, _ in PAGINAS]
 
-# Bancos (saldos y movimientos de todas las cuentas) solo para admin y auditor;
-# la API aplica la misma regla (``_ROLES_BANCOS_LECTURA`` en web/app.py).
-_SIN_BANCOS = [p for p in ALL_PAGES if p != "bancos"]
-
-ROLES_PERMISOS: dict[str, list[str]] = {
-    "admin": ALL_PAGES,
-    "gerente_ventas": _SIN_BANCOS,
-    "tesoreria": _SIN_BANCOS,
-    "auditor": ALL_PAGES,
-    "ventas": _SIN_BANCOS,
-}
-
-NOMBRES_ROLES: dict[str, str] = {
-    "admin": "Administrador / Gerencia",
-    "gerente_ventas": "Supervisor / Gerente de Ventas",
-    "tesoreria": "Tesorería y Cobranza",
-    "auditor": "Auditoría y Contabilidad",
-    "ventas": "Ventas y Comercial",
-}
+ROLES_PERMISOS: dict[str, list[str]] = {rol: efectivos(rol) for rol in BASE_POR_ROL}
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -206,7 +180,7 @@ def autenticar_usuario(
         "email": email_clean,
         "nombre": odoo_user.get("name") or u_row.get("nombre_odoo") or email_clean,
         "rol": u_row.get("rol", "ventas"),
-        "permisos": ROLES_PERMISOS.get(u_row.get("rol", "ventas"), ["reporte"]),
+        "permisos": efectivos(u_row.get("rol", "ventas")),
         "nombre_rol": NOMBRES_ROLES.get(u_row.get("rol", "ventas"), "Ventas"),
     }
     return user_info, None

@@ -705,6 +705,32 @@ usuarios_plataforma = Table(
     Column("fecha_registro", String, nullable=False, server_default=""),
 )
 
+# --- Permisos por usuario (nov-2026, ver cxc.permisos) -------------------------
+# Solo la diferencia con la base del rol: concedido=True agrega, False quita.
+usuarios_permisos = Table(
+    "usuarios_permisos",
+    metadata,
+    Column("email", String, ForeignKey("usuarios_plataforma.email"), primary_key=True),
+    Column("permiso", String, primary_key=True),
+    Column("concedido", Boolean, nullable=False),
+    Column("actualizado_por", String, nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+# Cada cambio de acceso (rol, activo, permisos), con el antes y el después. Solo-append
+# (trigger), como bancos_decisiones: es el registro de quién le dio qué a quién.
+accesos_bitacora = Table(
+    "accesos_bitacora",
+    metadata,
+    Column("cambio_id", Integer, primary_key=True, autoincrement=True),
+    Column("email", String, nullable=False, index=True),
+    Column("antes", Text, nullable=False),  # JSON {rol, activo, permisos}
+    Column("despues", Text, nullable=False),
+    Column("comentario", Text, nullable=False, server_default=""),
+    Column("usuario", String, nullable=False),
+    Column("cambiado_en", DateTime(timezone=False), nullable=False),
+)
+
 # --- BandejaAuditoria (log de discrepancias motor vs. Odoo) ------------------
 bandeja_auditoria = Table(
     "bandeja_auditoria",
