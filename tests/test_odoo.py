@@ -1,6 +1,7 @@
 """Tests del adaptador Odoo: mapeo puro + enriquecimiento de relaciones.
 
-Calibrado contra el Odoo 18 QA (ver docs/ODOO_MAPEO.md). El ``execute`` es un
+Calibrado contra el duplicado de QA (``qa1``, Odoo 18, ya no existe; ver
+docs/ODOO_MAPEO.md). El ``execute`` es un
 fake que despacha por modelo/dominio; sin red.
 """
 

@@ -109,8 +109,10 @@ sobre un servicio Postgres 16, en cada push/PR a `main` y `develop`.
 
 ### Banco de escenarios
 
-`./scripts/escenarios.sh` corre `escenarios/` contra el Odoo de QA (escribe por
-red, tarda minutos, no es parte de la suite normal). Ver
+`./scripts/escenarios.sh` corre `escenarios/` contra el Odoo de prueba de `.env.qa`
+(escribe por red, tarda minutos, no es parte de la suite normal). Se niega a correr si
+`ODOO_URL` no lleva `.dev.odoo.com`. Hoy no hay Odoo de prueba: el duplicado `qa1` ya no
+existe, y `lixie-dev-lubrika.odoo.com` (el de `.env`) es **producción**. Ver
 [`escenarios/README.md`](escenarios/README.md).
 
 ---

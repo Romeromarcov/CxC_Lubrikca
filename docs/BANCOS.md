@@ -85,6 +85,13 @@ Si se decide escribir, mínimo: usuario de Odoo dedicado con permiso solo sobre
 `account.bank.statement.line`, base de pruebas primero, y la cola de aprobación de la
 fase 2 delante de todo envío.
 
+**Hoy no hay base de pruebas de Odoo.** `lixie-dev-lubrika.odoo.com` (el `ODOO_URL`
+de `.env`) es **producción**, aunque el nombre diga "dev": contra ella solo se lee. El
+duplicado `lixie-dev-lubrika-qa1-….dev.odoo.com` (el de `.env.qa`) ya no existe. Antes
+de escribir el push hace falta una rama de staging nueva en Odoo.sh (o un Odoo 18 local),
+y la misma barrera del banco de escenarios: el código que escribe se niega a correr si
+`ODOO_URL` no lleva `.dev.odoo.com`.
+
 ## Seguridad
 
 - Los estados de cuenta no se versionan; credenciales de bancos en un vault, nunca en

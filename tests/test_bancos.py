@@ -178,6 +178,32 @@ def test_parser_deb_cred_deriva_saldo_inicial_y_lee_footer():
     assert validar_estado(e).ok
 
 
+def _libro_dos_cortes(saldo_inicial_octubre: str) -> bytes:
+    # Consolidado: el estado de septiembre y el de octubre pegados en una sola hoja.
+    return _xlsx(
+        [
+            ["Nro.", "Fecha", "Referencia", "Concepto", "Débito", "Crédito", "Saldo"],
+            [1, "29/09/2026", "11", "TRF CR INM CLIENTE", "", "500,00", "1.500,00"],
+            [2, "30/09/2026", "12", "COM PAGO OTRAS CTAS", "54,00", "", "1.446,00"],
+            [1, "01/10/2026", "", "SALDO INICIAL", "", "", saldo_inicial_octubre],
+            [2, "01/10/2026", "13", "TRF CR INM CLIENTE", "", "100,00", "1.546,00"],
+        ]
+    )
+
+
+def test_saldo_inicial_a_mitad_de_archivo_no_reemplaza_la_apertura():
+    e = parsear(_libro_dos_cortes("1.446,00"), "bdv.xlsx", "VENEZUELA")
+    assert e.saldo_inicial == D("1000.00") and e.saldo_inicial_derivado
+    assert len(e.movimientos) == 3 and not e.avisos
+    assert validar_estado(e).ok
+
+
+def test_saldo_inicial_a_mitad_de_archivo_que_no_empalma_avisa():
+    e = parsear(_libro_dos_cortes("1.400,00"), "bdv.xlsx", "VENEZUELA")
+    assert e.saldo_inicial == D("1000.00")
+    assert any("a mitad de archivo" in a for a in e.avisos)
+
+
 def test_parser_bdt_lee_codigo():
     e = parsear(_libro_deb_cred(codigo=True), "bdt.xlsx", "bdt")
     assert {m.codigo for m in e.movimientos} == {"NC"}

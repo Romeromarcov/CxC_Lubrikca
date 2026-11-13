@@ -127,7 +127,18 @@ def _parse_deb_cred(
         concepto = str(fila[i_d] or "").strip().upper()
         saldo = parse_monto(fila[i_s])
         if concepto.startswith("SALDO INICIAL"):  # Venezuela: fila explícita
-            est.saldo_inicial = saldo
+            if not est.movimientos:
+                est.saldo_inicial = saldo
+            else:
+                # Varios estados pegados en un archivo: la fila del corte siguiente no es la
+                # apertura del archivo. Si no coincide con el saldo previo, falta algo entre
+                # ambos cortes (la validación fila a fila lo marca en el próximo movimiento).
+                previo = est.movimientos[-1].saldo
+                if saldo is not None and previo is not None and saldo != previo:
+                    est.avisos.append(
+                        f"SALDO INICIAL {saldo} a mitad de archivo no coincide con el "
+                        f"saldo previo {previo}"
+                    )
             continue
         if fila[i_f] in (None, ""):  # relleno con ceros al final del xlsx
             continue
