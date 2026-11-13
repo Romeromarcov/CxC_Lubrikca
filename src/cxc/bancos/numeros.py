@@ -55,6 +55,8 @@ def parse_fecha(valor: Any, datemode: int = 0) -> date:
         base = datetime(1899, 12, 30) if datemode == 0 else datetime(1904, 1, 1)
         return (base + timedelta(days=float(valor))).date()
     s = str(valor).strip()
+    if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2}", s):  # Bancamiga web: '02/10/26'
+        return datetime.strptime(s, "%d/%m/%y").date()
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(s, fmt).date()

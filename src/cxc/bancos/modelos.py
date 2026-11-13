@@ -44,10 +44,17 @@ class MovimientoBancario:
     def huella(self) -> str:
         """Hash estable: re-importar un corte solapado produce las mismas huellas.
 
-        Sin saldo (ningún parser actual) dos movimientos idénticos del mismo día
-        colisionarían; por eso, en ese caso, la posición dentro del archivo entra
-        en la huella. Con saldo no hace falta: el saldo ya los distingue.
+        Sin saldo (Binance) dos movimientos idénticos del mismo día colisionarían. En
+        ese caso entra el ``correlativo`` si el parser lo da estable (Binance pone la
+        hora exacta), y si no, la posición dentro del archivo. Con saldo no hace falta:
+        el saldo ya los distingue, y el correlativo no entra (Provincial lo renumera).
         """
+        if self.saldo is not None:
+            distingue = f"{self.saldo:.2f}"
+        elif self.correlativo:
+            distingue = f"@{self.correlativo}"
+        else:
+            distingue = f"#{self.orden}"
         base = "|".join(
             [
                 self.banco,
@@ -57,7 +64,7 @@ class MovimientoBancario:
                 self.descripcion.strip().upper(),
                 f"{self.debito:.2f}",
                 f"{self.credito:.2f}",
-                f"{self.saldo:.2f}" if self.saldo is not None else f"#{self.orden}",
+                distingue,
             ]
         )
         return hashlib.sha256(base.encode()).hexdigest()[:24]

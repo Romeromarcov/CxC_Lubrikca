@@ -382,3 +382,130 @@ def test_libro_consolidado_tiene_las_tres_hojas():
     assert "sin tasa: BANCAMIGA" in wb["Saldos"]["K4"].value
     assert wb["Movimientos"]["F2"].value == "COM MTTO"
     assert wb["Categorías"]["C2"].value == 1
+
+
+# ------------------------------------------------- Bancamiga web (HTML) y Binance
+
+
+def _html_bancamiga(cuenta: str, filas: list[list[str]], inicial: str, final: str) -> bytes:
+    # Así exporta el portal de Bancamiga: un HTML con extensión .xls, a veces en Latin-1.
+    tr = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in f) + "</tr>" for f in filas)
+    html = (
+        "<table border='1'><tr><th colspan='7'><img src='logo.png'></th></tr>"
+        "<tr><th>Bancamiga Banco Universal</th></tr>"
+        f"<tr><th>Cuenta: {cuenta}</th></tr>"
+        "<tr><th>Movimientos del 01/10/2026-31/10/2026</th></tr>"
+        f"<tr><th>Saldo Inicial: {inicial}</th></tr>"
+        "<tr><th>Nro.</th><th>Fecha</th><th>Referencia</th><th>Concepto</th>"
+        "<th>Débito</th><th>Crédito</th><th>Saldo</th></tr>"
+        f"{tr}<tr></tr><tr><td>Creditos Total: 1470</td><td>Debito Total: 46,68</td>"
+        f"<td>Saldo Final: {final}</td></tr></table>"
+    )
+    return html.encode("latin-1")
+
+
+_FILAS_USD = [
+    ["1", "02/10/26", "'1128899819", "Op. Internac. MasterDebit ME Sub - FACEBK", "45,11", "0",
+     "44762,37"],
+    ["2", "02/10/26", "'1128899819", "Comisión Compra Pos M_Debit US Intr Sub", "1,57", "0",
+     "44760,80"],
+    ["3", "21/10/26", "'4125410411", "NC Compra USD Intervencion Digital", "0", "1470,00",
+     "46230,80"],
+]
+
+
+def test_bancamiga_usd_desde_html_cuadra_y_lee_el_encabezado():
+    e = parsear(
+        _html_bancamiga("01720110751101276747", _FILAS_USD, "44807.48", "46230,80"),
+        "Movimientos_12112026_2.xls",
+        "BANCAMIGA_USD",
+    )
+    assert (e.banco, e.moneda) == ("BANCAMIGA_USD", "USD")
+    assert e.saldo_inicial == D("44807.48") and not e.saldo_inicial_derivado
+    assert e.saldo_final == D("46230.80")
+    assert e.movimientos[0].fecha == date(2026, 10, 2) and e.movimientos[0].debito == D("45.11")
+    assert validar_estado(e).ok
+    assert [clasificar(m)[0] for m in e.movimientos] == [
+        "compra_tarjeta", "comision_bancaria", "operacion_cambiaria"
+    ]
+
+
+def test_bancamiga_rechaza_el_archivo_de_otra_cuenta():
+    usd = _html_bancamiga("01720110751101276747", _FILAS_USD, "44807.48", "46230,80")
+    with pytest.raises(ValueError, match="es de la cuenta 01720110751101276747"):
+        parsear(usd, "Movimientos.xls", "BANCAMIGA")
+
+
+def _binance(filas: list[list[Any]]) -> bytes:
+    enc = [None, None, "ID de usuario", "Hora", None, "Cuenta", "Operación", None, "Moneda",
+           "Cambiar", None, "Comentario"]
+    cab: list[list[Any]] = [[None], [None, None, "Historial de transacciones"], [None], enc]
+    return _xlsx(cab + [[None, None, "1", *f] for f in filas])
+
+
+_FILAS_BINANCE = [
+    ["2026-10-20 10:08:27", None, "Spot", "Deposit", None, "USD", "9590", None, ""],
+    ["2026-10-20 11:07:12", None, "Spot", "Buy Crypto With Fiat", None, "USD", "-9590", None,
+     "Via CashBalance - Wallet/N01809060620077980672102065"],
+    ["2026-10-20 11:07:18", None, "Spot", "Buy Crypto With Fiat", None, "USDT", "9603.90355958",
+     None, "Via CashBalance - Wallet/N01809060620077980672102065"],
+    ["2026-10-15 11:14:34", None, "Spot", "Transfer", None, "USDT", "200", None,
+     "Binance Pay - P_A251P9QHTYN71116"],
+    ["2026-10-15 12:49:20", None, "Spot", "Transfer", None, "USDT", "200", None,
+     "Binance Pay - P_A251QP4XUUD7111R"],
+    ["2026-10-21 17:21:16", None, "Spot", "Transfer", None, "USDT", "-300", None,
+     "Binance Pay - P_A255T7M5K1W71112"],
+]
+
+
+def test_binance_ordena_lee_ids_y_clasifica():
+    e = parsear(_binance(_FILAS_BINANCE), "binance.xlsx", "binance")
+    assert (e.banco, e.moneda, e.saldo_inicial, e.saldo_final) == ("BINANCE", "USD", None, None)
+    assert [m.fecha for m in e.movimientos] == sorted(m.fecha for m in e.movimientos)
+    pay = e.movimientos[0]
+    assert (pay.referencia, pay.credito, pay.saldo) == ("P_A251P9QHTYN71116", D("200.00"), None)
+    assert pay.correlativo == "2026-10-15 11:14:34"
+    assert {m.referencia for m in e.movimientos if "Buy" in m.descripcion} == {
+        "N01809060620077980672102065"
+    }
+    assert sum((m.neto for m in e.movimientos), D(0)) == D("9703.90")
+    assert any("1:1" in a for a in e.avisos)
+    assert [clasificar(m)[0] for m in e.movimientos] == [
+        "cobro_candidato", "cobro_candidato", "transferencia_propia_candidata",
+        "conversion_cripto", "conversion_cripto", "pago_a_terceros",
+    ]
+
+
+def test_binance_huella_estable_entre_exports_que_se_solapan():
+    # Sin saldo, la huella usa la hora exacta: el mismo movimiento en otro export (con
+    # otras filas antes) no se duplica, y dos operaciones iguales del mismo día no chocan.
+    completo = parsear(_binance(_FILAS_BINANCE), "a.xlsx", "BINANCE")
+    parcial = parsear(_binance(_FILAS_BINANCE[3:]), "b.xlsx", "BINANCE")
+    h_completo = {m.huella for m in completo.movimientos}
+    assert {m.huella for m in parcial.movimientos} <= h_completo
+    assert len(h_completo) == len(_FILAS_BINANCE)
+
+
+def test_binance_moneda_desconocida_falla_claro():
+    fila = ["2026-10-20 10:08:27", None, "Spot", "Deposit", None, "BTC", "1", None, ""]
+    with pytest.raises(ValueError, match="BTC"):
+        parsear(_binance([fila]), "b.xlsx", "BINANCE")
+
+
+def test_fecha_con_anio_de_dos_digitos():
+    assert parse_fecha("02/10/26") == date(2026, 10, 2)
+
+
+def test_consolidar_cuenta_sin_saldo_queda_fuera_del_total_con_alerta():
+    cons = consolidar(
+        [_corte(1, "BINANCE", date(2026, 10, 13), date(2026, 11, 8), None, None, moneda="USD")],
+        {date(2026, 11, 8): D("250")}.get,
+    )
+    c = cons.cuentas[0]
+    assert c.saldo_usd is None and cons.total_usd == 0 and cons.cuentas_sin_tasa == []
+    assert any("no informa saldo" in a for a in c.alertas)
+
+
+def test_csv_odoo_cuenta_sin_diario_en_odoo():
+    with pytest.raises(KeyError, match="no tiene diario"):
+        csv_odoo([_mc(banco="BANCAMIGA_USD")])

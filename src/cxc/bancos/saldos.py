@@ -111,12 +111,14 @@ def consolidar(cortes: list[Corte], tasa_bcv: Callable[[date], Decimal | None]) 
         usd = ves = None
         if ultimo.saldo_final is not None:
             usd, ves = _convertir(ultimo.saldo_final, ultimo.moneda, tasa)
-        if usd is None or ves is None:
+        alertas = _continuidad(lista)
+        if ultimo.saldo_final is None:
+            alertas.append("el archivo no informa saldo: la cuenta queda fuera del total")
+        elif usd is None or ves is None:
             sin_tasa.append(banco)
         else:
             total_usd += usd
             total_ves += ves
-        alertas = _continuidad(lista)
         if not ultimo.cuadra:
             alertas.insert(0, f"el último corte ('{ultimo.nombre_archivo}') no cuadra")
         cuentas.append(

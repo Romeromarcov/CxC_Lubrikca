@@ -12,8 +12,9 @@ from __future__ import annotations
 import io
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from html.parser import HTMLParser
 from typing import Any
 
 from .modelos import CERO, EstadoCuenta, MovimientoBancario
@@ -22,7 +23,49 @@ from .numeros import limpiar_ref, parse_fecha, parse_monto
 Parser = Callable[[bytes, str], EstadoCuenta]
 
 
+class _TablaHtml(HTMLParser):
+    """Filas de las ``<table>`` de un HTML, como texto. Solo lee: no sigue enlaces ni imágenes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.filas: list[list[Any]] = []
+        self._fila: list[Any] | None = None
+        self._celda: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._fila = []
+        elif tag in ("td", "th") and self._fila is not None:
+            self._celda = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._fila is not None and self._celda is not None:
+            self._fila.append(" ".join("".join(self._celda).split()))
+            self._celda = None
+        elif tag == "tr" and self._fila is not None:
+            self.filas.append(self._fila)
+            self._fila = None
+
+    def handle_data(self, data: str) -> None:
+        if self._celda is not None:
+            self._celda.append(data)
+
+
+def _leer_html(contenido: bytes) -> list[list[Any]]:
+    # El portal de Bancamiga exporta "Movimientos_*.xls" que en realidad son HTML, a veces
+    # en UTF-8 y a veces en Latin-1.
+    try:
+        texto = contenido.decode("utf-8")
+    except UnicodeDecodeError:
+        texto = contenido.decode("cp1252", errors="replace")
+    t = _TablaHtml()
+    t.feed(texto)
+    return t.filas
+
+
 def _leer_hoja(contenido: bytes, nombre: str) -> tuple[list[list[Any]], int]:
+    if contenido.lstrip()[:1] == b"<":
+        return _leer_html(contenido), 0
     if nombre.lower().endswith(".xls"):
         import xlrd
 
@@ -92,10 +135,26 @@ def _derivar_saldo_inicial(est: EstadoCuenta) -> None:
 _FOOTER = re.compile(r"(?i)\s*cr[eé]ditos\s+total")
 
 
+_CUENTA_ENCABEZADO = re.compile(r"(?i)^\s*cuenta:\s*([\d-]+)")
+_SALDO_INICIAL_ENCABEZADO = re.compile(r"(?i)^\s*saldo inicial:\s*(-?[\d.,]+)")
+
+
 def _parse_deb_cred(
-    contenido: bytes, nombre: str, banco: str, cuenta: str, moneda: str, *, con_codigo: bool = False
+    contenido: bytes,
+    nombre: str,
+    banco: str,
+    cuenta: str,
+    moneda: str,
+    *,
+    con_codigo: bool = False,
+    cuenta_sufijo: str | None = None,
 ) -> EstadoCuenta:
-    """Tabla con columnas Fecha / Referencia / Concepto / Débito / Crédito / Saldo."""
+    """Tabla con columnas Fecha / Referencia / Concepto / Débito / Crédito / Saldo.
+
+    Arriba del encabezado algunos exports traen ``Cuenta: 0172…`` y ``Saldo Inicial: X``.
+    Si el archivo dice de qué cuenta es y no termina en ``cuenta_sufijo``, se rechaza:
+    es la protección contra cargar el estado en USD como si fuera el de bolívares.
+    """
     filas, dm = _leer_hoja(contenido, nombre)
     try:
         h = next(
@@ -105,6 +164,19 @@ def _parse_deb_cred(
         raise ValueError(
             f"{nombre}: no encuentro la fila de encabezado (columna 'Fecha')"
         ) from None
+    saldo_inicial_encabezado: Decimal | None = None
+    for fila in filas[:h]:
+        celda = str(fila[0] if fila else "")
+        m_cta = _CUENTA_ENCABEZADO.match(celda)
+        if m_cta and cuenta_sufijo:
+            numero = re.sub(r"\D", "", m_cta.group(1))
+            if not numero.endswith(cuenta_sufijo):
+                raise ValueError(
+                    f"{nombre}: es de la cuenta {numero}, no de {banco} (…{cuenta_sufijo})"
+                )
+        m_si = _SALDO_INICIAL_ENCABEZADO.match(celda)
+        if m_si:
+            saldo_inicial_encabezado = parse_monto(m_si.group(1))
     header = filas[h]
     i_f, i_r = _idx(header, "fecha"), _idx(header, "referencia")
     i_d = _idx(header, "concepto", "descripción", "descripcion")
@@ -112,7 +184,7 @@ def _parse_deb_cred(
     i_s = _idx(header, "saldo", "balance")
     i_c = _idx(header, "código", "codigo") if con_codigo else None
 
-    est = EstadoCuenta(banco, cuenta, moneda, nombre)
+    est = EstadoCuenta(banco, cuenta, moneda, nombre, saldo_inicial=saldo_inicial_encabezado)
     orden = 0
     for fila in filas[h + 1 :]:
         if _vacia(fila):
@@ -167,7 +239,91 @@ def parse_bdt(contenido: bytes, nombre: str) -> EstadoCuenta:
 
 
 def parse_bancamiga(contenido: bytes, nombre: str) -> EstadoCuenta:
-    return _parse_deb_cred(contenido, nombre, "BANCAMIGA", "BANCAMIGA", "VES")
+    return _parse_deb_cred(
+        contenido, nombre, "BANCAMIGA", "BANCAMIGA", "VES", cuenta_sufijo="7806"
+    )
+
+
+def parse_bancamiga_usd(contenido: bytes, nombre: str) -> EstadoCuenta:
+    """Cuenta en divisas 0172-0110-75-1101276747. Mismo formato que la de bolívares."""
+    return _parse_deb_cred(
+        contenido, nombre, "BANCAMIGA_USD", "BANCAMIGA_USD", "USD", cuenta_sufijo="6747"
+    )
+
+
+_ID_BINANCE = re.compile(r"\b(P_[A-Z0-9]+|N\d{10,})\b")
+
+
+def parse_binance(contenido: bytes, nombre: str) -> EstadoCuenta:
+    """Historial de transacciones de Binance (xlsx): Hora / Cuenta / Operación / Moneda /
+    Cambiar / Comentario. Sin saldo.
+
+    USDT y USD se toman 1:1 (la cuenta se lleva en USD, igual que el diario de Odoo).
+    Una compra de USDT con USD viene en dos filas (USD negativo, USDT positivo): las dos
+    entran, y la diferencia entre ambas es la ganancia o pérdida de la conversión.
+    Como no hay saldo, la hora exacta va a ``correlativo`` y es lo que distingue en la
+    huella dos operaciones iguales del mismo día.
+    """
+    import openpyxl
+
+    # read_only=False: el archivo de Binance no declara dimensiones y en modo
+    # read_only openpyxl ve una sola fila.
+    ws = openpyxl.load_workbook(io.BytesIO(contenido), data_only=True).worksheets[0]
+    filas = [list(r) for r in ws.iter_rows(values_only=True)]
+    try:
+        h = next(
+            i
+            for i, f in enumerate(filas)
+            if any(str(c or "").strip().lower() in ("operación", "operacion") for c in f)
+        )
+    except StopIteration:
+        raise ValueError(f"{nombre}: no encuentro el encabezado de Binance (Operación)") from None
+    header = filas[h]
+    i_h, i_cta, i_op = _idx(header, "hora"), _idx(header, "cuenta"), _idx(header, "operación")
+    i_mon, i_monto = _idx(header, "moneda"), _idx(header, "cambiar")
+    i_com = _idx(header, "comentario")
+
+    est = EstadoCuenta("BINANCE", "BINANCE", "USD", nombre)
+    crudo: list[tuple[datetime, int, list[Any]]] = []
+    for pos, fila in enumerate(filas[h + 1 :]):
+        if _vacia(fila) or fila[i_h] in (None, ""):
+            continue
+        hora = fila[i_h]
+        if not isinstance(hora, datetime):
+            hora = datetime.strptime(str(hora).strip(), "%Y-%m-%d %H:%M:%S")
+        crudo.append((hora, pos, fila))
+    crudo.sort(key=lambda t: (t[0], t[1]))
+    monedas: set[str] = set()
+    for orden, (hora, _pos, fila) in enumerate(crudo, 1):
+        monto = parse_monto(fila[i_monto])
+        if monto is None:
+            raise ValueError(f"{nombre}: fila sin monto: {fila}")
+        moneda = str(fila[i_mon] or "").strip().upper()
+        monedas.add(moneda)
+        if moneda not in ("USD", "USDT"):
+            raise ValueError(f"{nombre}: moneda {moneda!r} no soportada (solo USD/USDT)")
+        comentario = str(fila[i_com] or "").strip()
+        m_id = _ID_BINANCE.search(comentario)
+        desc = f"{fila[i_op]} {moneda} ({fila[i_cta]})" + (f" - {comentario}" if comentario else "")
+        est.movimientos.append(
+            _mov(
+                "BINANCE",
+                "BINANCE",
+                "USD",
+                hora.date(),
+                m_id.group(1) if m_id else "",
+                desc,
+                -monto if monto < 0 else CERO,
+                monto if monto > 0 else CERO,
+                None,
+                orden,
+                correlativo=hora.isoformat(sep=" "),
+            )
+        )
+    est.avisos.append("Binance no informa saldo: no se valida la cadena ni hay saldo de cierre")
+    if "USDT" in monedas:
+        est.avisos.append("USDT tomado 1:1 con USD")
+    return est
 
 
 def parse_venezuela(contenido: bytes, nombre: str) -> EstadoCuenta:
@@ -230,6 +386,8 @@ def parse_provincial(contenido: bytes, nombre: str) -> EstadoCuenta:
 PARSERS: dict[str, Parser] = {
     "BDT": parse_bdt,
     "BANCAMIGA": parse_bancamiga,
+    "BANCAMIGA_USD": parse_bancamiga_usd,
+    "BINANCE": parse_binance,
     "VENEZUELA": parse_venezuela,
     "BANESCO": parse_banesco,
     "PROVINCIAL": parse_provincial,

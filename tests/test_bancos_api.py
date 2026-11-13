@@ -136,7 +136,7 @@ def test_csv_odoo(sin_base):
     ):
         r = client.get("/api/bancos/odoo-extracto.csv?banco=BDT&hasta=2026-10-31")
     assert r.status_code == 200
-    assert "Banco Digital de los Trabajadores" in r.text and r.text.strip().endswith(",5.00")
+    assert ",0175*****9321," in r.text and r.text.strip().endswith(",5.00")
     assert mov.call_args.kwargs["hasta"] == date(2026, 10, 31)
     assert 'filename="odoo_extracto_bdt.csv"' in r.headers["content-disposition"]
 

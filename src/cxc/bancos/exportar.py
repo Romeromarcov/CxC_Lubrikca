@@ -170,8 +170,11 @@ def csv_odoo(movs: list[MovimientoClasificado]) -> str:
     w.writerow(COLUMNAS_ODOO)
     for mc in movs:
         m = mc.mov
-        if m.banco not in DIARIOS:
-            raise KeyError(f"El banco {m.banco} no tiene diario de Odoo en cxc.bancos.diarios")
+        if m.banco not in DIARIOS or DIARIOS[m.banco]["journal_id"] is None:
+            raise KeyError(
+                f"El banco {m.banco} no tiene diario en Odoo: filtrá por otro banco "
+                "o creá el diario primero"
+            )
         w.writerow(
             [
                 m.unique_import_id,

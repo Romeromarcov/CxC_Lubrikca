@@ -36,9 +36,15 @@ REGLAS: list[Regla] = [
     Regla(
         "servicio_publico", "servicio", r"HIDROCAPITAL|CORPOELEC|CANTV|DIGITEL|MOVISTAR|MOVILNET"
     ),
-    Regla(
-        "operacion_cambiaria", "operacion_cambiaria", r"COMPRA USD|VENTA USD|INTERVENCION", "debito"
-    ),
+    # Débito en la cuenta en Bs, crédito en la cuenta en divisas: las dos patas.
+    Regla("operacion_cambiaria", "operacion_cambiaria", r"COMPRA USD|VENTA USD|INTERVENCION"),
+    # Binance: la descripción la arma el parser ("<Operación> <moneda> (<cuenta>) - ...").
+    Regla("binance_pay_entra", "cobro_candidato", r"^TRANSFER USDT.*BINANCE PAY", "credito"),
+    Regla("binance_pay_sale", "pago_a_terceros", r"^TRANSFER USDT.*BINANCE PAY", "debito"),
+    Regla("binance_deposito", "transferencia_propia_candidata", r"^DEPOSIT USD"),
+    Regla("binance_conversion", "conversion_cripto", r"^BUY CRYPTO WITH FIAT"),
+    Regla("binance_retiro", "retiro_cripto", r"^WITHDRAW USDT", "debito"),
+    Regla("compra_internacional", "compra_tarjeta", r"OP\.? INTERNAC\.? MASTERDEBIT", "debito"),
     Regla("transferencia_propia", "transferencia_propia_candidata", r"MISMO CLIENTE"),
     Regla("consumo_debito", "compra_tarjeta", r"CONSUMO MASTERDEBIT|CONSUMO MAESTRO", "debito"),
     Regla("alcaldia", "impuesto", r"ALCALDIA|ALCALD[IÍ]A", "debito"),
