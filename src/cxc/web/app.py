@@ -13,9 +13,19 @@ import uuid
 from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    BackgroundTasks,
+    Cookie,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -42,6 +52,15 @@ from cxc.auth import (
     verificar_session_token,
     verificar_usuario_odoo_activo,
 )
+from cxc.bancos import conciliacion as bancos_conciliacion
+from cxc.bancos import exportar as bancos_exportar
+from cxc.bancos import repositorio as bancos_repo
+from cxc.bancos.clasificacion import clasificar as bancos_clasificar
+from cxc.bancos.diarios import DIARIOS as BANCOS_DIARIOS
+from cxc.bancos.ingesta import MovimientoClasificado as BancosMovimiento
+from cxc.bancos.ingesta import preparar as bancos_preparar
+from cxc.bancos.parsers import PARSERS as BANCOS_PARSERS
+from cxc.bancos.saldos import consolidar as bancos_consolidar
 from cxc.config import AppConfig
 from cxc.db.postgres_repository import PostgresRepository
 from cxc.engine.abonos import fusionar_abonos
@@ -3890,6 +3909,11 @@ async def page_auditoria(cxc_session: str | None = Cookie(default=None)):
 @app.get("/configuracion", response_class=HTMLResponse)
 async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("configuracion", cxc_session)
+
+
+@app.get("/bancos", response_class=HTMLResponse)
+async def page_bancos(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("bancos", cxc_session)
 
 
 @app.get("/inventario", response_class=HTMLResponse)
@@ -17928,3 +17952,362 @@ def _get_reporte_diario_sync(
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# --- BANCOS: ingesta de estados de cuenta (fase 1) ---------------------------
+#
+# Ver ``cxc.bancos``. Cargar un archivo es escritura (solo admin); leer saldos y
+# movimientos es para admin y auditor -- los saldos bancarios no son para todos los
+# roles. Nada de esto escribe en Odoo: el CSV de líneas de extracto lo importa una
+# persona en el diario del banco.
+
+_ROLES_BANCOS_LECTURA = ("admin", "auditor")
+
+
+def _usuario_bancos(cxc_session: str | None, *, escribir: bool) -> dict[str, Any]:
+    user = get_current_user_from_cookie(cxc_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    permitidos = ("admin",) if escribir else _ROLES_BANCOS_LECTURA
+    if user.get("rol") not in permitidos:
+        raise HTTPException(status_code=403, detail="Sin permisos para bancos")
+    return user
+
+
+def _engine_bancos():
+    return get_repo()._engine
+
+
+def _fecha_param(valor: str | None, nombre: str) -> date | None:
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(valor)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"{nombre} debe ser YYYY-MM-DD") from e
+
+
+def _detalle(e: Exception) -> str:
+    # KeyError envuelve su mensaje en comillas al pasarlo a str().
+    return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
+
+
+def _tasa_bcv_bancos():
+    tasas = tasas_vigentes()
+
+    def tasa(dia: date) -> Decimal | None:
+        valor = tasas.bcv_usd(dia)
+        return valor if valor and valor > 0 else None
+
+    return tasa
+
+
+def _jsonable(v: Any) -> Any:
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, date | datetime):
+        return v.isoformat()
+    return v
+
+
+@app.get("/api/bancos/parsers")
+async def bancos_parsers(cxc_session: str | None = Cookie(default=None)):
+    _usuario_bancos(cxc_session, escribir=False)
+    return {"bancos": sorted(BANCOS_PARSERS)}
+
+
+@app.post("/api/bancos/importar")
+async def bancos_importar(
+    banco: Annotated[str, Form()],
+    archivo: Annotated[UploadFile, File()],
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Carga un estado de cuenta: lo guarda crudo, lo parsea, valida la cadena de
+
+    saldos y agrega solo los movimientos que no se conocían. Idempotente: subir el
+    mismo archivo, o un corte solapado, no duplica nada.
+    """
+    user = _usuario_bancos(cxc_session, escribir=True)
+    contenido = await archivo.read()
+    try:
+        prep = bancos_preparar(contenido, archivo.filename or "archivo", banco)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=_detalle(e)) from e
+    try:
+        r = bancos_repo.guardar(
+            _engine_bancos(), prep, user.get("email") or user.get("nombre") or "desconocido"
+        )
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {
+        "archivo_id": r.archivo_id,
+        "banco": r.banco,
+        "archivo": r.nombre,
+        "ya_cargado": r.ya_cargado,
+        "movimientos": r.n_movimientos,
+        "nuevos": r.n_nuevos,
+        "cuadra": r.cuadra,
+        "observaciones": r.observaciones,
+        "desde": _jsonable(r.fecha_desde),
+        "hasta": _jsonable(r.fecha_hasta),
+    }
+
+
+@app.get("/api/bancos/archivos")
+async def bancos_archivos_cargados(cxc_session: str | None = Cookie(default=None)):
+    _usuario_bancos(cxc_session, escribir=False)
+    filas = bancos_repo.archivos(_engine_bancos())
+    return {"archivos": [{k: _jsonable(v) for k, v in f.items()} for f in filas]}
+
+
+@app.get("/api/bancos/saldos")
+async def bancos_saldos(cxc_session: str | None = Cookie(default=None)):
+    """Saldo por cuenta (último corte), convertido con la tasa BCV de la fecha de corte."""
+    _usuario_bancos(cxc_session, escribir=False)
+    cons = bancos_consolidar(bancos_repo.cortes(_engine_bancos()), _tasa_bcv_bancos())
+    return {
+        "cuentas": [
+            {
+                "banco": c.banco,
+                "cuenta": c.cuenta,
+                "moneda": c.moneda,
+                "fecha_corte": _jsonable(c.fecha_corte),
+                "saldo": _jsonable(c.saldo),
+                "tasa_bcv": _jsonable(c.tasa_bcv),
+                "saldo_usd": _jsonable(c.saldo_usd),
+                "saldo_ves": _jsonable(c.saldo_ves),
+                "cortes": c.n_cortes,
+                "cortes_sin_cuadrar": c.cortes_sin_cuadrar,
+                "alertas": c.alertas,
+            }
+            for c in cons.cuentas
+        ],
+        "total_usd": float(cons.total_usd),
+        "total_ves": float(cons.total_ves),
+        "cuentas_sin_tasa": cons.cuentas_sin_tasa,
+    }
+
+
+@app.get("/api/bancos/movimientos")
+async def bancos_movimientos_listado(
+    banco: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    categoria: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _usuario_bancos(cxc_session, escribir=False)
+    movs = bancos_repo.movimientos(
+        _engine_bancos(),
+        banco=banco,
+        desde=_fecha_param(desde, "desde"),
+        hasta=_fecha_param(hasta, "hasta"),
+        categoria=categoria,
+    )
+    return {
+        "movimientos": [
+            {
+                "unique_import_id": mc.mov.unique_import_id,
+                "banco": mc.mov.banco,
+                "cuenta": mc.mov.cuenta,
+                "moneda": mc.mov.moneda,
+                "fecha": mc.mov.fecha.isoformat(),
+                "referencia": mc.mov.referencia,
+                "descripcion": mc.mov.descripcion,
+                "debito": float(mc.mov.debito),
+                "credito": float(mc.mov.credito),
+                "saldo": _jsonable(mc.mov.saldo),
+                "categoria": mc.categoria,
+                "regla": mc.regla,
+            }
+            for mc in movs
+        ]
+    }
+
+
+@app.get("/api/bancos/consolidado.xlsx")
+async def bancos_consolidado_excel(cxc_session: str | None = Cookie(default=None)):
+    _usuario_bancos(cxc_session, escribir=False)
+    engine = _engine_bancos()
+    cons = bancos_consolidar(bancos_repo.cortes(engine), _tasa_bcv_bancos())
+    contenido = bancos_exportar.libro_consolidado(bancos_repo.movimientos(engine), cons)
+    filename = f"consolidado_bancos_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(contenido),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/bancos/odoo-extracto.csv")
+async def bancos_csv_odoo(
+    banco: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """CSV de ``account.bank.statement.line`` para el asistente de importación de Odoo."""
+    _usuario_bancos(cxc_session, escribir=False)
+    movs = bancos_repo.movimientos(
+        _engine_bancos(),
+        banco=banco,
+        desde=_fecha_param(desde, "desde"),
+        hasta=_fecha_param(hasta, "hasta"),
+    )
+    try:
+        texto = bancos_exportar.csv_odoo(movs)
+    except KeyError as e:
+        raise HTTPException(status_code=422, detail=_detalle(e)) from e
+    filename = f"odoo_extracto_{(banco or 'todos').lower()}.csv"
+    return Response(
+        content=texto.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ----------------------------------------------------------------- bancos, fase 2
+# Pre-conciliación: las reglas proponen, una persona aprueba o corrige, y cada
+# decisión queda en ``bancos_decisiones`` (solo-append). Odoo se lee, nunca se escribe.
+
+
+class BancosDecisionRequest(BaseModel):
+    accion: str = Field(..., description="aprobar | rechazar | corregir | reabrir")
+    pago_id: int | None = None
+    cuenta: str | None = None
+    comentario: str = ""
+
+
+def _bancos_reclasificar(movs: list[BancosMovimiento]) -> list[BancosMovimiento]:
+    # Con las reglas de hoy, no con las del día en que se cargó el archivo: una regla
+    # corregida (p. ej. comisiones de nómina) tiene que valer también para lo ya cargado.
+    out = []
+    for mc in movs:
+        categoria, regla = bancos_clasificar(mc.mov)
+        out.append(BancosMovimiento(mc.mov, categoria, regla))
+    return out
+
+
+@app.post("/api/bancos/conciliacion/generar")
+async def bancos_conciliacion_generar(
+    banco: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Corre las reglas sobre los movimientos cargados y guarda las propuestas.
+
+    Lee de Odoo (solo lectura) los pagos de cada diario en el rango de sus
+    movimientos. Las propuestas que alguien ya decidió no se tocan.
+    """
+    _usuario_bancos(cxc_session, escribir=True)
+    engine = _engine_bancos()
+    movs = _bancos_reclasificar(bancos_repo.movimientos(engine, banco=banco))
+    por_banco: dict[str, list[BancosMovimiento]] = {}
+    for mc in movs:
+        por_banco.setdefault(mc.mov.banco, []).append(mc)
+
+    def _generar() -> dict[str, Any]:
+        execute = None
+        totales: dict[str, int] = {"nuevas": 0, "actualizadas": 0, "ya_decididas": 0}
+        por_tipo: dict[str, int] = {}
+        for b, lista in sorted(por_banco.items()):
+            diario = BANCOS_DIARIOS.get(b)
+            pagos: list[bancos_conciliacion.PagoCandidato] = []
+            if diario and diario["journal_id"] is not None:
+                if execute is None:
+                    execute = _connect(AppConfig.from_env().odoo)
+                pagos = bancos_conciliacion.pagos_candidatos(
+                    execute,
+                    diario["journal_id"],
+                    min(m.mov.fecha for m in lista),
+                    max(m.mov.fecha for m in lista),
+                )
+            props = bancos_conciliacion.proponer(lista, pagos)
+            info = {
+                p.pago_id: {
+                    "id": p.pago_id,
+                    "nombre": p.nombre,
+                    "fecha": p.fecha.isoformat(),
+                    "monto": float(p.monto),
+                    "partner": p.partner,
+                    "memo": p.memo,
+                    "ya_conciliado": p.ya_conciliado,
+                }
+                for p in pagos
+            }
+            r = bancos_repo.guardar_propuestas(engine, props, info)
+            for k, v in r.items():
+                totales[k] += v
+            for p in props:
+                por_tipo[p.tipo] = por_tipo.get(p.tipo, 0) + 1
+        return {"movimientos": len(movs), "por_tipo": por_tipo, **totales}
+
+    import xmlrpc.client
+
+    try:
+        return await asyncio.to_thread(_generar)
+    except (OSError, xmlrpc.client.Error) as e:
+        # PermissionError (método no permitido o autenticación) es un OSError.
+        raise HTTPException(status_code=502, detail=f"No pude leer Odoo: {e}") from e
+
+
+@app.get("/api/bancos/conciliacion")
+async def bancos_conciliacion_listar(
+    banco: str | None = None,
+    estado: str | None = None,
+    tipo: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _usuario_bancos(cxc_session, escribir=False)
+    filas = bancos_repo.propuestas(
+        _engine_bancos(),
+        banco=banco,
+        estado=estado,
+        tipo=tipo,
+        desde=_fecha_param(desde, "desde"),
+        hasta=_fecha_param(hasta, "hasta"),
+    )
+    resumen: dict[str, dict[str, int]] = {"estado": {}, "tipo": {}}
+    for f in filas:
+        resumen["estado"][f["estado"]] = resumen["estado"].get(f["estado"], 0) + 1
+        resumen["tipo"][f["tipo"]] = resumen["tipo"].get(f["tipo"], 0) + 1
+    return {
+        "items": [{k: _jsonable(v) for k, v in f.items()} for f in filas],
+        "resumen": resumen,
+    }
+
+
+@app.post("/api/bancos/conciliacion/{huella}/decidir")
+async def bancos_conciliacion_decidir(
+    huella: str,
+    req: BancosDecisionRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
+    user = _usuario_bancos(cxc_session, escribir=True)
+    try:
+        r = bancos_repo.decidir(
+            _engine_bancos(),
+            huella,
+            req.accion,
+            str(user.get("email") or ""),
+            pago_id=req.pago_id,
+            cuenta=req.cuenta,
+            comentario=req.comentario,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_detalle(e)) from e
+    except bancos_repo.DecisionInvalida as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {k: _jsonable(v) for k, v in r.items()}
+
+
+@app.get("/api/bancos/conciliacion/auditoria")
+async def bancos_conciliacion_auditoria(
+    huella: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _usuario_bancos(cxc_session, escribir=False)
+    filas = bancos_repo.decisiones(_engine_bancos(), huella=huella)
+    return {"items": [{k: _jsonable(v) for k, v in f.items()} for f in filas]}

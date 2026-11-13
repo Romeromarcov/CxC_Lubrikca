@@ -25,14 +25,19 @@ ALL_PAGES = [
     "auditoria",
     "inventario",
     "configuracion",
+    "bancos",
 ]
+
+# Bancos (saldos y movimientos de todas las cuentas) solo para admin y auditor;
+# la API aplica la misma regla (``_ROLES_BANCOS_LECTURA`` en web/app.py).
+_SIN_BANCOS = [p for p in ALL_PAGES if p != "bancos"]
 
 ROLES_PERMISOS: dict[str, list[str]] = {
     "admin": ALL_PAGES,
-    "gerente_ventas": ALL_PAGES,
-    "tesoreria": ALL_PAGES,
+    "gerente_ventas": _SIN_BANCOS,
+    "tesoreria": _SIN_BANCOS,
     "auditor": ALL_PAGES,
-    "ventas": ALL_PAGES,
+    "ventas": _SIN_BANCOS,
 }
 
 NOMBRES_ROLES: dict[str, str] = {

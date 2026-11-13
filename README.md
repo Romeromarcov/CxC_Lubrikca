@@ -61,6 +61,7 @@ append). Lo verifica `tests/test_sync.py`.
 | `sync/` | `incremental.py` (sync delta) |
 | `scraper/` | BCV, Binance y el orquestador `rates_scraper.py` |
 | `reconciliation/` | Semáforo motor vs Odoo |
+| `bancos/` | Ingesta de estados de cuenta: parsers por banco, huella de dedupe, validación de saldos, saldos consolidados, CSV de líneas de extracto para Odoo. Ver [`docs/BANCOS.md`](docs/BANCOS.md) |
 | `audit/` | `HourAuditor` (hora declarada vs banco). **Librería sin cablear**: ningún endpoint ni demonio la usa hoy |
 | `sheets/` | Solo `serde.py`: conversión dataclass ↔ fila (resto del backend Google Sheets retirado en agosto 2026) |
 | `repositories.py` | Interfaz `Repository` e `InMemoryRepository` (para tests) |
@@ -108,8 +109,10 @@ sobre un servicio Postgres 16, en cada push/PR a `main` y `develop`.
 
 ### Banco de escenarios
 
-`./scripts/escenarios.sh` corre `escenarios/` contra el Odoo de QA (escribe por
-red, tarda minutos, no es parte de la suite normal). Ver
+`./scripts/escenarios.sh` corre `escenarios/` contra el Odoo de prueba de `.env.qa`
+(escribe por red, tarda minutos, no es parte de la suite normal). Se niega a correr si
+`ODOO_URL` no lleva `.dev.odoo.com`. Hoy no hay Odoo de prueba: el duplicado `qa1` ya no
+existe, y `lixie-dev-lubrika.odoo.com` (el de `.env`) es **producción**. Ver
 [`escenarios/README.md`](escenarios/README.md).
 
 ---
@@ -141,6 +144,7 @@ red, tarda minutos, no es parte de la suite normal). Ver
 |---|---|
 | [`SETUP.md`](SETUP.md) | Variables de entorno, despliegue en Railway, migraciones, prerrequisitos en Odoo |
 | [`TODO.md`](TODO.md) | Decisiones de negocio ante ambigüedad y pendientes de confirmar |
+| [`docs/BANCOS.md`](docs/BANCOS.md) | Ingesta bancaria: fases, tablas, endpoints y decisiones |
 | [`docs/ODOO_MAPEO.md`](docs/ODOO_MAPEO.md) | Qué modelos y campos de Odoo lee el sistema |
 | [`docs/blindaje/PROGRESO.md`](docs/blindaje/PROGRESO.md) | Libro de a bordo del plan de blindaje (sep-2026): mediciones, hallazgos e incidentes |
 | [`escenarios/README.md`](escenarios/README.md) | Banco de escenarios de error humano |

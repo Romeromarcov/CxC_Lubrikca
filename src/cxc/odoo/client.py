@@ -1,6 +1,10 @@
 """Cliente Odoo XML-RPC — solo lectura, delta por ``write_date`` (sección 2).
 
-Mapeo calibrado contra el Odoo 18 QA de Lubrikca (ver docs/ODOO_MAPEO.md):
+El ``ODOO_URL`` de ``.env`` (``lixie-dev-lubrika.odoo.com``) es PRODUCCIÓN, aunque el
+nombre diga "dev": este cliente solo lee. Hoy no hay Odoo de prueba (ver docs/BANCOS.md).
+
+Mapeo calibrado contra el duplicado de QA de Lubrikca (``qa1``, Odoo 18, ya no existe;
+ver docs/ODOO_MAPEO.md):
   - SO identificada por ``name`` (S00553), no por id numérico.
   - ``vendedor_email`` = ``user_id.login`` (resuelto con 2ª consulta a res.users).
   - ``fecha_entrega`` = ``stock.picking.date_done`` del despacho saliente.
