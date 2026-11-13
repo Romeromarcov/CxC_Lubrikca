@@ -1409,6 +1409,54 @@
                         </table>
                     </div>
                 </section>
+
+                <!-- Pre-conciliación (fase 2) -->
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">🔗 Pre-conciliación</h2>
+                            <p style="color:#475569; margin:0;">Para cada movimiento, las reglas proponen el pago de Odoo con el que casa (mismo diario, mismo monto, fecha a ±3 días) o la cuenta a la que va (comisiones, pagos pendientes). Una persona aprueba, corrige o rechaza; cada decisión queda registrada con quién y cuándo. Nada se escribe en Odoo.</p>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="bancos-conc-banco" class="filter-select"><option value="">Todos los bancos</option></select>
+                        <select id="bancos-conc-estado" class="filter-select">
+                            <option value="pendiente">Pendientes</option>
+                            <option value="aprobada">Aprobadas</option>
+                            <option value="corregida">Corregidas</option>
+                            <option value="rechazada">Rechazadas</option>
+                            <option value="">Todas</option>
+                        </select>
+                        <select id="bancos-conc-tipo" class="filter-select">
+                            <option value="">Todas las propuestas</option>
+                            <option value="pago">Pago de Odoo</option>
+                            <option value="cuenta">Cuenta</option>
+                            <option value="ambiguo">Ambiguas</option>
+                            <option value="sin_propuesta">Sin propuesta</option>
+                        </select>
+                        <button type="button" class="btn-secondary" onclick="loadBancosConciliacion()">🔍 Filtrar</button>
+                        <button type="button" class="btn-primary" id="bancos-conc-generar" onclick="generarBancosPropuestas()" style="display:none;" title="Lee los pagos de Odoo (solo lectura) y corre las reglas sobre los movimientos cargados">⚙️ Generar propuestas</button>
+                    </div>
+                    <p id="bancos-conc-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Banco</th>
+                                    <th>Descripción</th>
+                                    <th style="text-align:right;">Monto</th>
+                                    <th>Propuesta</th>
+                                    <th>Estado</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bancos-conc-body">
+                                <tr><td colspan="7" class="table-empty">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
 
@@ -2300,7 +2348,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261112_2"></script>
+    <script src="/static/app.js?v=20261113_1"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco

@@ -5529,6 +5529,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const opciones = data.bancos.map(b => `<option value="${_bancosEsc(b)}">${_bancosEsc(b)}</option>`).join("");
         document.getElementById("bancos-carga-banco").innerHTML = `<option value="">Banco...</option>${opciones}`;
         document.getElementById("bancos-mov-banco").innerHTML = `<option value="">Todos los bancos</option>${opciones}`;
+        document.getElementById("bancos-conc-banco").innerHTML = `<option value="">Todos los bancos</option>${opciones}`;
         _bancosParsersCargados = true;
     }
 
@@ -5677,12 +5678,14 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadBancos() {
         const esAdmin = (await _bancosRol()) === "admin";
         document.getElementById("bancos-carga-panel").style.display = esAdmin ? "block" : "none";
+        document.getElementById("bancos-conc-generar").style.display = esAdmin ? "" : "none";
+        _bancosConcAdmin = esAdmin;
         try {
             await _bancosCargarParsers();
         } catch (err) {
             console.error("Bancos: no se pudo cargar la lista de bancos", err);
         }
-        await Promise.all([loadBancosSaldos(), loadBancosArchivos(), loadBancosMovimientos()]);
+        await Promise.all([loadBancosSaldos(), loadBancosArchivos(), loadBancosMovimientos(), loadBancosConciliacion()]);
     }
     window.loadBancos = loadBancos;
 
@@ -5694,6 +5697,190 @@ document.addEventListener("DOMContentLoaded", () => {
         const p = _bancosFiltros(false).toString();
         window.location.href = "/api/bancos/odoo-extracto.csv" + (p ? "?" + p : "");
     };
+
+    // --- Pre-conciliación (fase 2): las reglas proponen, una persona decide. ---
+    let _bancosConc = [];
+    let _bancosConcAdmin = false;
+    const _BANCOS_CONC_ESTADO = {
+        pendiente: ["Pendiente", ""],
+        aprobada: ["Aprobada", "verde"],
+        corregida: ["Corregida", "verde"],
+        rechazada: ["Rechazada", "rojo"],
+    };
+    const _bancosChico = (html) => `<div style="font-size:0.72rem; color:#64748b; margin-top:0.2rem;">${html}</div>`;
+
+    function _bancosConcPropuesta(p) {
+        const cands = p.candidatos || [];
+        if (p.tipo === "pago") {
+            const c = cands.find(x => x.id === p.pago_id) || {};
+            const detalle = [c.partner, c.fecha ? _bancosFecha(c.fecha) : "", c.memo].filter(Boolean).map(_bancosEsc).join(" · ");
+            return `<strong>${_bancosEsc(p.pago_nombre || ("Pago #" + p.pago_id))}</strong>` +
+                (detalle ? _bancosChico(detalle) : "") +
+                (c.ya_conciliado ? `<div style="font-size:0.72rem; color:#b45309;">Ya conciliado en Odoo</div>` : "") +
+                _bancosChico(_bancosEsc(String(p.motivo || "").replace(" (ya conciliado en Odoo)", "")));
+        }
+        if (p.tipo === "cuenta") {
+            return `<strong>${_bancosEsc(p.cuenta)}</strong>` + _bancosChico(_bancosEsc(`${p.regla} · ${p.motivo}`));
+        }
+        if (p.tipo === "ambiguo") {
+            return `<span style="color:#b45309; font-weight:600;">Ambigua</span>: ${cands.length} pagos posibles` +
+                _bancosChico(_bancosEsc(p.motivo));
+        }
+        return `<span style="color:#94a3b8;">Sin propuesta</span>` + _bancosChico(_bancosEsc(p.motivo || ""));
+    }
+
+    function _bancosConcAcciones(p, i) {
+        if (!_bancosConcAdmin) return "—";
+        const b = (accion, texto, clase) =>
+            `<button type="button" class="${clase}" data-conc-accion="${accion}" data-conc-i="${i}" style="padding:0.25rem 0.6rem; font-size:0.75rem; margin:0.1rem;">${texto}</button>`;
+        if (p.estado !== "pendiente") return b("reabrir", "Reabrir", "btn-secondary");
+        return (["pago", "cuenta"].includes(p.tipo) ? b("aprobar", "✓ Aprobar", "btn-primary") : "") +
+            b("corregir", "Corregir", "btn-secondary") + b("rechazar", "Rechazar", "btn-secondary");
+    }
+
+    function _renderBancosConciliacion(resumen) {
+        const body = document.getElementById("bancos-conc-body");
+        const est = resumen ? Object.entries(resumen.estado).map(([k, v]) => `${v} ${k}`).join(" · ") : "";
+        const tip = resumen ? Object.entries(resumen.tipo).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(" · ") : "";
+        document.getElementById("bancos-conc-resumen").textContent =
+            `${_bancosConc.length} movimientos` + (est ? ` · ${est}` : "") + (tip ? ` · propuestas: ${tip}` : "") +
+            (_bancosConc.length > _BANCOS_MAX_FILAS ? ` · se muestran los primeros ${_BANCOS_MAX_FILAS}` : "");
+        if (!_bancosConc.length) {
+            body.innerHTML = `<tr><td colspan="7" class="table-empty">Sin propuestas para estos filtros${_bancosConcAdmin ? ". Usa “Generar propuestas”." : "."}</td></tr>`;
+            return;
+        }
+        body.innerHTML = _bancosConc.slice(0, _BANCOS_MAX_FILAS).map((p, i) => {
+            const [etq, color] = _BANCOS_CONC_ESTADO[p.estado] || [p.estado, ""];
+            const quien = p.decidida_por ? _bancosChico(`${_bancosEsc(p.decidida_por)} · ${_bancosFecha(p.decidida_en)}`) : "";
+            return `<tr id="bancos-conc-fila-${i}">
+                <td style="white-space:nowrap;">${_bancosFecha(p.fecha)}</td>
+                <td>${_bancosEsc(p.banco)}</td>
+                <td>${_bancosEsc(p.descripcion)}${p.referencia ? _bancosChico("Ref. " + _bancosEsc(p.referencia)) : ""}</td>
+                <td style="text-align:right; white-space:nowrap; color:${p.monto < 0 ? "#be123c" : "#047857"};">${_bancosMonto(p.monto)} <span style="color:#94a3b8; font-size:0.7rem;">${_bancosEsc(p.moneda)}</span></td>
+                <td style="max-width:340px;">${_bancosConcPropuesta(p)}</td>
+                <td><span class="semaphore ${color}">${_bancosEsc(etq)}</span>${quien}</td>
+                <td style="white-space:nowrap;">${_bancosConcAcciones(p, i)}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    async function loadBancosConciliacion() {
+        const body = document.getElementById("bancos-conc-body");
+        body.innerHTML = `<tr><td colspan="7" class="table-empty">Cargando...</td></tr>`;
+        const q = new URLSearchParams();
+        for (const [param, id] of [["banco", "bancos-conc-banco"], ["estado", "bancos-conc-estado"], ["tipo", "bancos-conc-tipo"]]) {
+            const v = document.getElementById(id).value;
+            if (v) q.set(param, v);
+        }
+        try {
+            const data = await _bancosGet("/api/bancos/conciliacion?" + q.toString());
+            _bancosConc = data.items;
+            _renderBancosConciliacion(data.resumen);
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="7" class="table-empty">❌ ${_bancosEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadBancosConciliacion = loadBancosConciliacion;
+
+    window.generarBancosPropuestas = async function() {
+        const btn = document.getElementById("bancos-conc-generar");
+        const out = document.getElementById("bancos-conc-resumen");
+        const banco = document.getElementById("bancos-conc-banco").value;
+        btn.disabled = true;
+        out.textContent = "Leyendo pagos de Odoo y corriendo las reglas...";
+        try {
+            const res = await fetch("/api/bancos/conciliacion/generar" + (banco ? "?banco=" + encodeURIComponent(banco) : ""), { method: "POST" });
+            const r = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(r.detail || `Error ${res.status}`);
+            await loadBancosConciliacion();
+            out.textContent = `Propuestas: ${r.nuevas} nuevas, ${r.actualizadas} actualizadas, ${r.ya_decididas} ya decididas (no se tocan). ` + out.textContent;
+        } catch (err) {
+            out.textContent = "❌ " + err.message;
+        } finally {
+            btn.disabled = false;
+        }
+    };
+
+    function _bancosConcEditor(i, accion) {
+        const p = _bancosConc[i];
+        document.querySelectorAll(".bancos-conc-editor").forEach(el => el.remove());
+        const fila = document.getElementById(`bancos-conc-fila-${i}`);
+        let campos = "";
+        if (accion === "corregir") {
+            const ops = (p.candidatos || []).map(c =>
+                `<option value="${c.id}">${_bancosEsc([c.nombre || ("#" + c.id), c.partner, c.fecha ? _bancosFecha(c.fecha) : "", c.memo].filter(Boolean).join(" · "))}</option>`).join("");
+            campos = `<label style="font-size:0.8rem;">Pago de Odoo
+                    <select class="filter-select" data-conc-campo="pago"><option value="">—</option>${ops}</select></label>
+                <label style="font-size:0.8rem;">o id de pago <input type="number" min="1" class="filter-select" data-conc-campo="pago_libre" style="width:7rem; cursor:text;"></label>
+                <label style="font-size:0.8rem;">o cuenta <input type="text" class="filter-select" data-conc-campo="cuenta" placeholder="6.2.1.1.01.02 Bank Fees" style="min-width:16rem; cursor:text;"></label>`;
+        }
+        const obligatorio = accion === "rechazar" || accion === "reabrir";
+        const textoBtn = { corregir: "Guardar corrección", rechazar: "Rechazar", reabrir: "Reabrir" }[accion];
+        const tr = document.createElement("tr");
+        tr.className = "bancos-conc-editor";
+        tr.innerHTML = `<td colspan="7" style="background:#f8fafc;">
+            <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                ${campos}
+                <label style="font-size:0.8rem;">Comentario${obligatorio ? " (obligatorio)" : ""}
+                    <input type="text" class="filter-select" data-conc-campo="comentario" style="min-width:16rem; cursor:text;"></label>
+                <button type="button" class="btn-primary" data-conc-confirmar="${accion}" data-conc-i="${i}" style="padding:0.3rem 0.8rem; font-size:0.8rem;">${textoBtn}</button>
+                <button type="button" class="btn-secondary" data-conc-cancelar="1" style="padding:0.3rem 0.8rem; font-size:0.8rem;">Cancelar</button>
+                <span data-conc-error style="color:#be123c; font-size:0.8rem;"></span>
+            </div></td>`;
+        fila.after(tr);
+    }
+
+    async function _bancosConcDecidir(i, accion, editor) {
+        const p = _bancosConc[i];
+        const valor = (campo) => {
+            const el = editor && editor.querySelector(`[data-conc-campo="${campo}"]`);
+            return el ? el.value.trim() : "";
+        };
+        const body = { accion, comentario: valor("comentario") };
+        if (accion === "corregir") {
+            const pago = valor("pago") || valor("pago_libre");
+            if (pago) body.pago_id = Number(pago);
+            if (valor("cuenta")) body.cuenta = valor("cuenta");
+        }
+        const error = editor ? editor.querySelector("[data-conc-error]") : null;
+        try {
+            const res = await fetch(`/api/bancos/conciliacion/${encodeURIComponent(p.huella)}/decidir`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const r = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(typeof r.detail === "string" ? r.detail : `Error ${res.status}`);
+            await loadBancosConciliacion();
+        } catch (err) {
+            if (error) error.textContent = "❌ " + err.message;
+            else document.getElementById("bancos-conc-resumen").textContent = "❌ " + err.message;
+        }
+    }
+
+    const _bancosConcBody = document.getElementById("bancos-conc-body");
+    if (_bancosConcBody) {
+        _bancosConcBody.addEventListener("click", (e) => {
+            const btn = e.target.closest("button");
+            if (!btn) return;
+            if (btn.dataset.concCancelar) {
+                btn.closest(".bancos-conc-editor").remove();
+                return;
+            }
+            const i = Number(btn.dataset.concI);
+            if (btn.dataset.concConfirmar) {
+                _bancosConcDecidir(i, btn.dataset.concConfirmar, btn.closest(".bancos-conc-editor"));
+                return;
+            }
+            const accion = btn.dataset.concAccion;
+            if (accion === "aprobar") _bancosConcDecidir(i, "aprobar", null);
+            else if (accion) _bancosConcEditor(i, accion);
+        });
+    }
+    for (const id of ["bancos-conc-estado", "bancos-conc-tipo", "bancos-conc-banco"]) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", loadBancosConciliacion);
+    }
 
     const _bancosBuscarEl = document.getElementById("bancos-mov-buscar");
     if (_bancosBuscarEl) _bancosBuscarEl.addEventListener("input", _renderBancosMovimientos);

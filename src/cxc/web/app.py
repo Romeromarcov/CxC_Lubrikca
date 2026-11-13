@@ -52,8 +52,12 @@ from cxc.auth import (
     verificar_session_token,
     verificar_usuario_odoo_activo,
 )
+from cxc.bancos import conciliacion as bancos_conciliacion
 from cxc.bancos import exportar as bancos_exportar
 from cxc.bancos import repositorio as bancos_repo
+from cxc.bancos.clasificacion import clasificar as bancos_clasificar
+from cxc.bancos.diarios import DIARIOS as BANCOS_DIARIOS
+from cxc.bancos.ingesta import MovimientoClasificado as BancosMovimiento
 from cxc.bancos.ingesta import preparar as bancos_preparar
 from cxc.bancos.parsers import PARSERS as BANCOS_PARSERS
 from cxc.bancos.saldos import consolidar as bancos_consolidar
@@ -18161,3 +18165,149 @@ async def bancos_csv_odoo(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ----------------------------------------------------------------- bancos, fase 2
+# Pre-conciliación: las reglas proponen, una persona aprueba o corrige, y cada
+# decisión queda en ``bancos_decisiones`` (solo-append). Odoo se lee, nunca se escribe.
+
+
+class BancosDecisionRequest(BaseModel):
+    accion: str = Field(..., description="aprobar | rechazar | corregir | reabrir")
+    pago_id: int | None = None
+    cuenta: str | None = None
+    comentario: str = ""
+
+
+def _bancos_reclasificar(movs: list[BancosMovimiento]) -> list[BancosMovimiento]:
+    # Con las reglas de hoy, no con las del día en que se cargó el archivo: una regla
+    # corregida (p. ej. comisiones de nómina) tiene que valer también para lo ya cargado.
+    out = []
+    for mc in movs:
+        categoria, regla = bancos_clasificar(mc.mov)
+        out.append(BancosMovimiento(mc.mov, categoria, regla))
+    return out
+
+
+@app.post("/api/bancos/conciliacion/generar")
+async def bancos_conciliacion_generar(
+    banco: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Corre las reglas sobre los movimientos cargados y guarda las propuestas.
+
+    Lee de Odoo (solo lectura) los pagos de cada diario en el rango de sus
+    movimientos. Las propuestas que alguien ya decidió no se tocan.
+    """
+    _usuario_bancos(cxc_session, escribir=True)
+    engine = _engine_bancos()
+    movs = _bancos_reclasificar(bancos_repo.movimientos(engine, banco=banco))
+    por_banco: dict[str, list[BancosMovimiento]] = {}
+    for mc in movs:
+        por_banco.setdefault(mc.mov.banco, []).append(mc)
+
+    def _generar() -> dict[str, Any]:
+        execute = None
+        totales: dict[str, int] = {"nuevas": 0, "actualizadas": 0, "ya_decididas": 0}
+        por_tipo: dict[str, int] = {}
+        for b, lista in sorted(por_banco.items()):
+            diario = BANCOS_DIARIOS.get(b)
+            pagos: list[bancos_conciliacion.PagoCandidato] = []
+            if diario and diario["journal_id"] is not None:
+                if execute is None:
+                    execute = _connect(AppConfig.from_env().odoo)
+                pagos = bancos_conciliacion.pagos_candidatos(
+                    execute,
+                    diario["journal_id"],
+                    min(m.mov.fecha for m in lista),
+                    max(m.mov.fecha for m in lista),
+                )
+            props = bancos_conciliacion.proponer(lista, pagos)
+            info = {
+                p.pago_id: {
+                    "id": p.pago_id,
+                    "nombre": p.nombre,
+                    "fecha": p.fecha.isoformat(),
+                    "monto": float(p.monto),
+                    "partner": p.partner,
+                    "memo": p.memo,
+                    "ya_conciliado": p.ya_conciliado,
+                }
+                for p in pagos
+            }
+            r = bancos_repo.guardar_propuestas(engine, props, info)
+            for k, v in r.items():
+                totales[k] += v
+            for p in props:
+                por_tipo[p.tipo] = por_tipo.get(p.tipo, 0) + 1
+        return {"movimientos": len(movs), "por_tipo": por_tipo, **totales}
+
+    import xmlrpc.client
+
+    try:
+        return await asyncio.to_thread(_generar)
+    except (OSError, xmlrpc.client.Error) as e:
+        # PermissionError (método no permitido o autenticación) es un OSError.
+        raise HTTPException(status_code=502, detail=f"No pude leer Odoo: {e}") from e
+
+
+@app.get("/api/bancos/conciliacion")
+async def bancos_conciliacion_listar(
+    banco: str | None = None,
+    estado: str | None = None,
+    tipo: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _usuario_bancos(cxc_session, escribir=False)
+    filas = bancos_repo.propuestas(
+        _engine_bancos(),
+        banco=banco,
+        estado=estado,
+        tipo=tipo,
+        desde=_fecha_param(desde, "desde"),
+        hasta=_fecha_param(hasta, "hasta"),
+    )
+    resumen: dict[str, dict[str, int]] = {"estado": {}, "tipo": {}}
+    for f in filas:
+        resumen["estado"][f["estado"]] = resumen["estado"].get(f["estado"], 0) + 1
+        resumen["tipo"][f["tipo"]] = resumen["tipo"].get(f["tipo"], 0) + 1
+    return {
+        "items": [{k: _jsonable(v) for k, v in f.items()} for f in filas],
+        "resumen": resumen,
+    }
+
+
+@app.post("/api/bancos/conciliacion/{huella}/decidir")
+async def bancos_conciliacion_decidir(
+    huella: str,
+    req: BancosDecisionRequest,
+    cxc_session: str | None = Cookie(default=None),
+):
+    user = _usuario_bancos(cxc_session, escribir=True)
+    try:
+        r = bancos_repo.decidir(
+            _engine_bancos(),
+            huella,
+            req.accion,
+            str(user.get("email") or ""),
+            pago_id=req.pago_id,
+            cuenta=req.cuenta,
+            comentario=req.comentario,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_detalle(e)) from e
+    except bancos_repo.DecisionInvalida as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {k: _jsonable(v) for k, v in r.items()}
+
+
+@app.get("/api/bancos/conciliacion/auditoria")
+async def bancos_conciliacion_auditoria(
+    huella: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _usuario_bancos(cxc_session, escribir=False)
+    filas = bancos_repo.decisiones(_engine_bancos(), huella=huella)
+    return {"items": [{k: _jsonable(v) for k, v in f.items()} for f in filas]}

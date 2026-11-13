@@ -1012,3 +1012,41 @@ bancos_movimientos = Table(
     CheckConstraint("credito >= 0", name="ck_bmov_credito_no_negativo"),
     Index("ix_bmov_banco_fecha", "banco", "fecha"),
 )
+
+# --- Bancos, fase 2: pre-conciliación -------------------------------------------
+# Una propuesta por movimiento (la última que generaron las reglas) y su estado. Las
+# decisiones de las personas quedan además en ``bancos_decisiones``, solo-append.
+bancos_propuestas = Table(
+    "bancos_propuestas",
+    metadata,
+    Column(
+        "huella", String(24), ForeignKey("bancos_movimientos.huella"), primary_key=True
+    ),
+    Column("tipo", String, nullable=False),  # pago | cuenta | ambiguo | sin_propuesta
+    Column("regla", String, nullable=False),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("pago_id", Integer, nullable=True),
+    Column("pago_nombre", String, nullable=False, server_default=""),
+    Column("cuenta", String, nullable=False, server_default=""),
+    Column("puntaje", Integer, nullable=False, server_default="0"),
+    Column("candidatos", Text, nullable=False, server_default="[]"),  # JSON: ids de pago
+    Column("generada_en", DateTime(timezone=False), nullable=False),
+    # pendiente | aprobada | rechazada | corregida
+    Column("estado", String, nullable=False, server_default="pendiente", index=True),
+    Column("decidida_por", String, nullable=False, server_default=""),
+    Column("decidida_en", DateTime(timezone=False), nullable=True),
+)
+
+bancos_decisiones = Table(
+    "bancos_decisiones",
+    metadata,
+    Column("decision_id", Integer, primary_key=True, autoincrement=True),
+    Column("huella", String(24), ForeignKey("bancos_movimientos.huella"), nullable=False,
+           index=True),
+    Column("accion", String, nullable=False),  # aprobar | rechazar | corregir | reabrir
+    Column("antes", Text, nullable=False),  # JSON de la propuesta antes de decidir
+    Column("despues", Text, nullable=False),  # JSON de lo que quedó
+    Column("comentario", Text, nullable=False, server_default=""),
+    Column("usuario", String, nullable=False),
+    Column("decidida_en", DateTime(timezone=False), nullable=False),
+)
