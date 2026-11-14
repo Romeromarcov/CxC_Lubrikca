@@ -37,17 +37,20 @@ _PAGINAS = [
     "inventario",
     "configuracion",
     "bancos",
+    "capturas",
 ]
-_SIN_BANCOS = [p for p in _PAGINAS if p != "bancos"]
+_SIN_BANCOS = [p for p in _PAGINAS if p not in ("bancos", "capturas")]
+# Capturas Telegram (nov-2026): página derivada, como Bancos. Se abre con capturas.ver/gestionar.
+_CON_CAPTURAS = _SIN_BANCOS + ["capturas"]
 
 
 @pytest.mark.parametrize(
     "rol,paginas",
     [
         ("admin", _PAGINAS),
-        ("auditor", _PAGINAS),
-        ("tesoreria", _SIN_BANCOS),
-        ("gerente_ventas", _SIN_BANCOS),
+        ("auditor", [*_SIN_BANCOS, "bancos", "capturas"]),
+        ("tesoreria", _CON_CAPTURAS),
+        ("gerente_ventas", _CON_CAPTURAS),
         ("ventas", _SIN_BANCOS),
     ],
 )
@@ -66,6 +69,19 @@ def test_acciones_que_antes_eran_por_rol():
     assert acc.tiene(auditor, "bancos.ver") and acc.tiene(auditor, "auditoria.decidir")
     assert not acc.tiene(auditor, "bancos.cargar")
     assert not acc.tiene(auditor, "bancos.conciliar")
+
+
+def test_capturas_telegram_por_rol():
+    tesoreria = {"rol": "tesoreria", "permisos": acc.efectivos("tesoreria")}
+    assert acc.tiene(tesoreria, "capturas.gestionar")
+    auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
+    assert acc.tiene(auditor, "capturas.ver") and not acc.tiene(auditor, "capturas.gestionar")
+    ventas = acc.efectivos("ventas")
+    assert "capturas" not in ventas and "capturas.ver" not in ventas
+    # La página se abre sola al conceder una acción, y se cierra al quitarla.
+    assert "capturas" in acc.efectivos("ventas", {"capturas.ver": True})
+    sin = {"capturas.ver": False, "capturas.gestionar": False}
+    assert "capturas" not in acc.efectivos("tesoreria", sin)
 
 
 def test_conceder_cargar_bancos_abre_la_pagina_sin_dar_saldos():
