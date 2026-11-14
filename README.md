@@ -8,7 +8,9 @@ Odoo realmente facturó y cobró.
 Principio rector: **el sistema enmarca y marca; el humano revisa lo que se sale
 del marco.** Ningún humano carga solo con un número que mueve dinero sin que el
 sistema lo contraste contra algo verificable. Odoo es la única autoridad
-contable: este sistema **nunca escribe en Odoo**.
+contable: este sistema **no escribe en Odoo**, con una única excepción acotada
+(nov-2026): los **borradores capturados por Telegram** (ver
+[«Capturas de Telegram»](#capturas-de-telegram-única-escritura-a-odoo) más abajo).
 
 > Las reglas de negocio de origen están en
 > [`Especificacion_Sistema_Cobros_Lubrikca.md`](Especificacion_Sistema_Cobros_Lubrikca.md)
@@ -48,7 +50,45 @@ cxc.sync ──► Postgres ◄── cxc.scraper (BCV + Binance → serie_tasas
 **Tres mundos de datos que no se cruzan en escritura:** *espejo de Odoo*
 (escribe solo el sync), *trabajo humano* (vinculaciones, decisiones, reglas de
 descuento — el sync nunca las toca) y *auditoría inmutable* (`serie_tasas`, solo
-append). Lo verifica `tests/test_sync.py`.
+append). Lo verifica `tests/test_sync.py`. Un cuarto mundo, `capturas_bot`
+(lo que llega por Telegram), tampoco lo toca el sync.
+
+### Capturas de Telegram (única escritura a Odoo)
+
+**Cambio de principio (decisión del owner, nov-2026).** Hasta ahora CxC nunca
+escribía en Odoo. Para que el equipo siga trabajando en la interfaz de CxC mientras
+se prueban los bots de Telegram, los bots escriben a Omni **y** a CxC a la vez, y
+CxC crea en Odoo, automáticamente, **solo borradores**:
+
+| Captura | Qué se crea en Odoo | Qué NO se hace |
+|---|---|---|
+| `contacto` | `res.partner` marcado «[Borrador Telegram] pendiente de completar», sin rango de cliente | No se confirma ni se completa |
+| `pedido` | `sale.order` en borrador (+ el cliente, con su RIF, si no existe) | No se confirma; no se fija precio si el bot no lo da (Odoo aplica la lista del cliente) |
+| `pago`, `pago_proveedor` | `account.payment` sin publicar (inbound/outbound) | No se publica ni concilia; **nunca crea clientes ni proveedores**; si el cliente, el diario o la moneda son ambiguos o no existen, queda `INCOMPLETO` con el motivo |
+
+- **Credencial aparte:** `ODOO_WRITE_USERNAME` / `ODOO_WRITE_PASSWORD` (misma
+  URL y base que la lectura). Debe ser un usuario de Odoo con permisos mínimos:
+  crear en `res.partner`, `sale.order` y `account.payment`, nada más. La credencial
+  de lectura (`ODOO_USERNAME`) no cambia y sigue siendo solo lectura.
+- **Interruptor:** `CAPTURAS_ODOO_ESCRITURA=1`. Sin él, o sin la credencial, no se
+  abre ninguna conexión de escritura: las capturas se guardan y quedan `PENDIENTE`.
+- **Idempotente:** cada creación lleva la marca `BOT-<id>` y se busca antes de
+  crear, así un reintento nunca duplica. Los errores técnicos de Odoo van al log;
+  la interfaz solo muestra un mensaje legible.
+- **Bitácora:** cada captura guarda sus eventos (recibida, intento, creada en Odoo,
+  error, completada, reintento manual) en `capturas_bot_eventos`, solo-append.
+- **API:** los bots usan `POST /api/bots/capturas` y `…/{id}/completar` con la
+  cabecera `X-Bot-Key` (`BOT_API_KEY`); es lo único que esa clave abre. Las llaves
+  de API normales siguen siendo solo `GET`. La interfaz (página **Capturas
+  Telegram**, permisos `capturas.ver` / `capturas.gestionar`) lista, muestra,
+  reintenta y, con `capturas.gestionar`, también completa pagos
+  (`…/{id}/completar` acepta la clave del bot **o** esa sesión; crear capturas
+  es solo del bot).
+- **Estados:** `PENDIENTE` → `ENVIADO` (`odoo_ref` = `modelo:id`), o `INCOMPLETO`
+  (falta algo que no se adivina) o `ERROR` (los de red se reintentan solos, máx. 5).
+
+Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
+única autoridad contable.
 
 ### Mapa del código (`src/cxc/`)
 
@@ -57,11 +97,12 @@ append). Lo verifica `tests/test_sync.py`.
 | `web/` | `app.py` (API, auth por cookie y por llave de API, demonios) y `static/` (SPA en JS plano) |
 | `engine/` | Lógica pura de dinero: `discounts.py` (motor), `runner.py` (cablea repo + precios), `balance.py`, `saldos.py`, `listas.py`, `equivalents.py`, `acotar_pago.py`, auditorías (`auditoria_*`, `nc_contra_motor.py`, `pagos_duplicados.py`, `reversadas.py`…) |
 | `db/` | `schema.py` (tablas, SQLAlchemy Core), `postgres_repository.py`, `invariantes.py` (restricciones de base) |
-| `odoo/` | `client.py` (lector XML-RPC), `price.py` (precio por pricelist) |
+| `odoo/` | `client.py` (lector XML-RPC), `price.py` (precio por pricelist), `escritura.py` (escritor de borradores de las capturas, credencial aparte) |
 | `sync/` | `incremental.py` (sync delta) |
 | `scraper/` | BCV, Binance y el orquestador `rates_scraper.py` |
 | `reconciliation/` | Semáforo motor vs Odoo |
 | `bancos/` | Ingesta de estados de cuenta: parsers por banco, huella de dedupe, validación de saldos, saldos consolidados, CSV de líneas de extracto para Odoo. Ver [`docs/BANCOS.md`](docs/BANCOS.md) |
+| `capturas/` | Capturas de los bots de Telegram: validación, repositorio, servicio y resolución de cliente/producto/diario. Escribe a Odoo **solo borradores** vía `odoo/escritura.py` |
 | `audit/` | `HourAuditor` (hora declarada vs banco). **Librería sin cablear**: ningún endpoint ni demonio la usa hoy |
 | `sheets/` | Solo `serde.py`: conversión dataclass ↔ fila (resto del backend Google Sheets retirado en agosto 2026) |
 | `repositories.py` | Interfaz `Repository` e `InMemoryRepository` (para tests) |
