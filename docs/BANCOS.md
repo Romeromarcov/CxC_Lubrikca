@@ -56,7 +56,7 @@ Endpoints. Cada uno exige un permiso (ver "Permisos" abajo): `bancos.cargar` par
 | GET | `/api/bancos/saldos` | Saldo por cuenta al último corte, en USD y VES, con alertas |
 | GET | `/api/bancos/movimientos` | Filtros `banco`, `desde`, `hasta`, `categoria` |
 | GET | `/api/bancos/consolidado.xlsx` | Libro: Saldos, Movimientos, Categorías |
-| GET | `/api/bancos/odoo-extracto.csv` | CSV para importar en Odoo; filtros `banco`, `desde`, `hasta` |
+| GET | `/api/bancos/odoo-extracto.csv` | CSV para importar en Odoo, con contacto (ver "CSV para Odoo"); filtros `banco`, `desde`, `hasta` |
 
 ## Decisiones
 
@@ -122,6 +122,34 @@ corregida, rechazada; regenerar no toca las ya decididas) y `bancos_decisiones`
 
 Las reglas de clasificación se aplican de nuevo al generar, así que una regla
 corregida vale también para lo que ya estaba cargado.
+
+## CSV para Odoo
+
+Un solo formato para todos los bancos: la plantilla de importación de
+`account.bank.statement.line`. Columnas: `unique_import_id`, `journal_id` (diario, por
+nombre), `date`, `partner_id` (contacto, por nombre), `payment_ref` (descripción del
+banco), `ref` (referencia del banco), `amount` (+ entra, − sale).
+
+El contacto es lo que más ayuda a la conciliación de Odoo a proponer el pago o la
+factura correctos. Sale, en este orden:
+
+1. Del pago de Odoo que la cola de pre-conciliación le asigna al movimiento: el
+   aprobado o corregido, o el que proponen las reglas mientras está pendiente.
+   Rechazadas y ambiguas no dan contacto.
+2. Si no, del RIF/cédula de la descripción, buscado en Odoo (solo lectura). Solo si
+   un único contacto tiene ese RIF; el de la propia empresa se descarta (aparece en
+   las transferencias entre cuentas). Si la descripción trae dos RIF de dos contactos
+   distintos, no se asigna.
+3. Si no, vacío: mejor vacío que adivinado.
+
+Con los archivos de nov-2026, traen RIF en la descripción Banesco (31 de 169) y
+Venezuela (20 de 52); Bancamiga, BDT y Provincial no, y ahí el contacto sale solo de
+la cola. Por eso conviene **generar las propuestas antes de bajar el CSV**.
+
+**Una sola vía de carga por banco.** `unique_import_id` evita duplicar lo que entró
+por este CSV, no lo que entró a Odoo por otro lado (a mano o sincronización). Al
+pasar un banco a esta vía, bajar el CSV con `desde` = el día siguiente a la última
+línea de extracto que ya tiene ese diario en Odoo.
 
 ## Decisión pendiente: escribir en Odoo
 

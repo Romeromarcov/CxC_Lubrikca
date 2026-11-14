@@ -1,9 +1,11 @@
 """Salidas de la fase 1: libro Excel consolidado y CSV de líneas de extracto para Odoo.
 
 El CSV es para el asistente de importación de Odoo (modelo
-``account.bank.statement.line``). Este sistema no escribe en Odoo: la carga la hace
-una persona, en el diario del banco, y la conciliación nativa de Odoo genera los
-asientos. ``unique_import_id`` hace que re-importar el mismo CSV no duplique.
+``account.bank.statement.line``), el mismo formato para todos los bancos. Este
+sistema no escribe en Odoo: la carga la hace una persona, en el diario del banco, y
+la conciliación nativa de Odoo genera los asientos. ``unique_import_id`` hace que
+re-importar el mismo CSV no duplique. ``partner_id`` (el contacto, por nombre) es lo
+que más ayuda a Odoo a proponer el pago o la factura correctos al conciliar.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -25,7 +28,15 @@ from .modelos import CERO
 from .saldos import Consolidado
 
 NUM = "#,##0.00;[Red]-#,##0.00"
-COLUMNAS_ODOO = ["unique_import_id", "journal_id", "date", "payment_ref", "ref", "amount"]
+COLUMNAS_ODOO = [
+    "unique_import_id",
+    "journal_id",
+    "date",
+    "partner_id",
+    "payment_ref",
+    "ref",
+    "amount",
+]
 
 
 def _f(d: Decimal | None) -> float | None:
@@ -165,8 +176,13 @@ def libro_consolidado(movs: list[MovimientoClasificado], cons: Consolidado) -> b
     return buf.getvalue()
 
 
-def csv_odoo(movs: list[MovimientoClasificado]) -> str:
-    """Una línea de extracto por movimiento. ``journal_id`` va por NOMBRE del diario."""
+def csv_odoo(
+    movs: list[MovimientoClasificado], contactos: Mapping[str, str] | None = None
+) -> str:
+    """Una línea de extracto por movimiento. ``journal_id`` y ``partner_id`` van por
+    NOMBRE, tal como están en Odoo. ``contactos`` es huella -> contacto; sin contacto
+    seguro la celda queda vacía (mejor vacía que un contacto adivinado)."""
+    contactos = contactos or {}
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(COLUMNAS_ODOO)
@@ -182,6 +198,7 @@ def csv_odoo(movs: list[MovimientoClasificado]) -> str:
                 m.unique_import_id,
                 DIARIOS[m.banco]["nombre"],
                 m.fecha.isoformat(),
+                contactos.get(m.huella, ""),
                 m.descripcion,
                 m.referencia,
                 f"{m.neto:.2f}",

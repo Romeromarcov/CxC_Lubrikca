@@ -26,6 +26,7 @@ from cxc.bancos.conciliacion import (
     PAGO,
     SIN_PROPUESTA,
     PagoCandidato,
+    contactos_por_rif,
     pagos_candidatos,
     proponer,
     rifs,
@@ -159,6 +160,7 @@ def test_r3_binance_no_tiene_cuenta_de_pendientes():
 def test_rifs_normaliza():
     assert rifs("PAGO J-0507836142 y V12.670.859") == {"J507836142"}
     assert rifs("TRANSF RECIBIDA BDV V12670859 YANIS") == {"V12670859"}
+    assert rifs("TRF J-50783614-2 / V-12670859-1234") == {"J507836142", "V12670859"}
 
 
 # ------------------------------------------------------------ Odoo, solo lectura
@@ -206,6 +208,29 @@ def test_pagos_candidatos_lee_pagos_y_rif_del_cliente():
     assert a.partner_rifs == {"J507836142"}
     assert (b.entrante, b.memo, b.partner, b.partner_rifs) == (False, "", "", frozenset())
     assert all(m in ("search_read", "read") for _, m in llamadas)
+
+
+def test_contactos_por_rif_solo_si_un_contacto_lo_tiene():
+    llamadas: list[tuple[str, str, Any]] = []
+
+    def execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
+        llamadas.append((model, method, args))
+        if model == "res.company":
+            return [{"id": 1, "partner_id": [1, "Lubrikca"]}]
+        return [
+            {"id": 1, "display_name": "Lubrikca", "vat": "J-50000000-1"},  # la propia empresa
+            {"id": 77, "display_name": "En ascenso 2011,c.a.", "vat": "J-50783614-2"},
+            {"id": 80, "display_name": "Yanis", "vat": "V12670859"},
+            {"id": 81, "display_name": "Yanis (dup)", "vat": "V-12670859"},
+            {"id": 90, "display_name": "Parecido", "vat": "J5078361429"},  # otro RIF
+        ]
+
+    r = contactos_por_rif(execute, {"J507836142", "V12670859", "J500000001"})
+    assert r == {"J507836142": "En ascenso 2011,c.a."}
+    dominio = llamadas[1][2][0]
+    assert dominio[:2] == ["|", "|"] and ["vat", "ilike", "50783614"] in dominio
+    assert all(m == "search_read" for _, m, _ in llamadas)
+    assert contactos_por_rif(execute, []) == {} and len(llamadas) == 2
 
 
 # ------------------------------------------------------------------- endpoints
@@ -554,3 +579,74 @@ def test_endpoint_aprobadas(sin_base):
     with _como(AUDITOR):
         r = client.get("/api/bancos/conciliacion/aprobadas.xlsx", params={"desde": "ayer"})
     assert r.status_code == 422
+
+
+def test_contactos_de_propuestas(engine):
+    movs = _cargar(engine)
+    props, _ = _generar(engine, movs)
+    pago = next(p for p in props if p.tipo == PAGO)
+    huellas = [mc.mov.huella for mc in movs]
+    # Pendiente: vale el pago que proponen las reglas.
+    assert repositorio.contactos_de_propuestas(engine, huellas) == {pago.huella: "Cliente A"}
+    repositorio.decidir(engine, pago.huella, "rechazar", "ana", comentario="no es")
+    assert repositorio.contactos_de_propuestas(engine, huellas) == {}
+    assert repositorio.contactos_de_propuestas(engine, []) == {}
+
+
+def _mov_csv(huella_desc: str) -> MovimientoClasificado:
+    return MovimientoClasificado(
+        MovimientoBancario(
+            "BANCAMIGA", "7806", "VES", date(2026, 11, 12), "1", huella_desc,
+            D("0"), D("10"), D("10"), 1,
+        ),
+        "transferencia",
+        "r",
+    )
+
+
+def test_csv_odoo_contacto_de_la_cola_y_del_rif(sin_base):
+    import csv
+    import io
+
+    a = _mov_csv("TRF RECIBIDA A")
+    b = _mov_csv("TRF RECIBIDA J-50783614-2 EN ASCENSO")
+    c = _mov_csv("TRF RECIBIDA V12670859 Y J507836142")  # dos RIF, dos contactos: vacío
+    d = _mov_csv("COMPRA POS")
+    por_rif = {"J507836142": "En ascenso 2011,c.a.", "V12670859": "Yanis"}
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[a, b, c, d]),
+        patch(
+            "cxc.web.app.bancos_repo.contactos_de_propuestas",
+            return_value={a.mov.huella: "Cliente A"},
+        ),
+        patch("cxc.web.app._connect", return_value=MagicMock()),
+        patch(
+            "cxc.web.app.bancos_conciliacion.contactos_por_rif", return_value=por_rif
+        ) as cpr,
+    ):
+        r = client.get("/api/bancos/odoo-extracto.csv", params={"banco": "BANCAMIGA"})
+    assert r.status_code == 200
+    filas = list(csv.DictReader(io.StringIO(r.text)))
+    assert [f["partner_id"] for f in filas] == ["Cliente A", "En ascenso 2011,c.a.", "", ""]
+    assert cpr.call_args.args[1] == {"J507836142", "V12670859"}
+
+
+def test_csv_odoo_sin_rifs_no_lee_odoo_y_si_odoo_falla_es_502(sin_base):
+    con_rif = _mov_csv("TRF J507836142")
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[_mov_csv("COMPRA POS")]),
+        patch("cxc.web.app.bancos_repo.contactos_de_propuestas", return_value={}),
+        patch("cxc.web.app._connect") as conn,
+    ):
+        assert client.get("/api/bancos/odoo-extracto.csv").status_code == 200
+    conn.assert_not_called()
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[con_rif]),
+        patch("cxc.web.app.bancos_repo.contactos_de_propuestas", return_value={}),
+        patch("cxc.web.app._connect", side_effect=PermissionError("Autenticación Odoo fallida")),
+    ):
+        r = client.get("/api/bancos/odoo-extracto.csv")
+    assert r.status_code == 502 and "No pude leer Odoo" in r.json()["detail"]

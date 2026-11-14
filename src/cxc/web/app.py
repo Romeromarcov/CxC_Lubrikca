@@ -18260,16 +18260,44 @@ async def bancos_csv_odoo(
     hasta: str | None = None,
     cxc_session: str | None = Cookie(default=None),
 ):
-    """CSV de ``account.bank.statement.line`` para el asistente de importación de Odoo."""
+    """CSV de ``account.bank.statement.line`` para el asistente de importación de Odoo.
+
+    El contacto sale, en este orden: del pago de Odoo que la cola le asigna al
+    movimiento; si no hay, del RIF/cédula de la descripción, buscado en Odoo (solo
+    lectura) y usado solo si un único contacto lo tiene. Si no, queda vacío.
+    """
     _usuario_bancos(cxc_session, "bancos.ver")
+    engine = _engine_bancos()
     movs = bancos_repo.movimientos(
-        _engine_bancos(),
+        engine,
         banco=banco,
         desde=_fecha_param(desde, "desde"),
         hasta=_fecha_param(hasta, "hasta"),
     )
+    contactos = bancos_repo.contactos_de_propuestas(engine, [mc.mov.huella for mc in movs])
+    rifs_sin_contacto = {
+        mc.mov.huella: bancos_conciliacion.rifs(mc.mov.descripcion)
+        for mc in movs
+        if mc.mov.huella not in contactos
+    }
+    buscados: set[str] = set().union(*rifs_sin_contacto.values())
+    if buscados:
+        import xmlrpc.client
+
+        try:
+            por_rif = await asyncio.to_thread(
+                lambda: bancos_conciliacion.contactos_por_rif(
+                    _connect(AppConfig.from_env().odoo), buscados
+                )
+            )
+        except (OSError, xmlrpc.client.Error) as e:
+            raise HTTPException(status_code=502, detail=f"No pude leer Odoo: {e}") from e
+        for huella, rs in rifs_sin_contacto.items():
+            nombres = {por_rif[r] for r in rs if r in por_rif}
+            if len(nombres) == 1:
+                contactos[huella] = nombres.pop()
     try:
-        texto = bancos_exportar.csv_odoo(movs)
+        texto = bancos_exportar.csv_odoo(movs, contactos)
     except KeyError as e:
         raise HTTPException(status_code=422, detail=_detalle(e)) from e
     filename = f"odoo_extracto_{(banco or 'todos').lower()}.csv"

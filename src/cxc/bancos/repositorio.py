@@ -326,6 +326,37 @@ def propuestas(
         return out
 
 
+def contactos_de_propuestas(engine: Engine, huellas: list[str]) -> dict[str, str]:
+    """huella -> contacto del pago de Odoo que la cola le asigna al movimiento.
+
+    Vale el pago aprobado o corregido por una persona, y el que proponen las reglas
+    (mismo diario, mismo monto exacto) mientras sigue pendiente. Rechazadas y ambiguas
+    no dan contacto.
+    """
+    if not huellas:
+        return {}
+    p = bancos_propuestas
+    q = select(p.c.huella, p.c.pago_id, p.c.candidatos).where(
+        p.c.tipo == PAGO,
+        p.c.estado.in_([PENDIENTE, APROBADA, CORREGIDA]),
+        p.c.huella.in_(huellas),
+    )
+    out: dict[str, str] = {}
+    with engine.connect() as conn:
+        for huella, pago_id, candidatos in conn.execute(q).all():
+            partner = next(
+                (
+                    str(c.get("partner") or "")
+                    for c in json.loads(candidatos or "[]")
+                    if c.get("id") == pago_id
+                ),
+                "",
+            )
+            if partner:
+                out[str(huella)] = partner
+    return out
+
+
 def decidir(
     engine: Engine,
     huella: str,
