@@ -64,11 +64,14 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
 |---|---|---|
 | `contacto` | `res.partner` marcado «[Borrador Telegram] pendiente de completar», sin rango de cliente | No se confirma ni se completa |
 | `pedido` | `sale.order` en borrador (+ el cliente, con su RIF, si no existe) | No se confirma; no se fija precio si el bot no lo da (Odoo aplica la lista del cliente) |
-| `pago`, `pago_proveedor` | `account.payment` sin publicar (inbound/outbound) | No se publica ni concilia; **nunca crea clientes ni proveedores**; si el cliente, el diario o la moneda son ambiguos o no existen, queda `INCOMPLETO` con el motivo |
+| `pago`, `pago_proveedor` | `account.payment` sin publicar (inbound/outbound) | No se publica ni concilia; **nunca crea clientes ni proveedores**; si el cliente, el diario o la moneda son ambiguos o no existen, queda `INCOMPLETO` con el motivo. En un pago a proveedor con `factura_ref` se ubica la factura (`account.move` `in_invoice`, misma `ref` y partner) **solo para citarla en la nota**; si no aparece, no es error |
+| `proveedor` | `res.partner` con `supplier_rank` 1 y `customer_rank` 0, «[Borrador Telegram] pendiente de completar» y los datos del bot (RIF, teléfono, email, dirección, días de crédito en la nota, GPS si el campo existe). **Si ya existe** (por RIF, con o sin guiones, o por nombre exacto) **no se duplica**: queda `ENVIADO` con el `odoo_ref` del existente y una nota en `resultado` | No modifica al proveedor existente; RIF o nombre ambiguo → `INCOMPLETO` |
+| `factura_proveedor` | `account.move` `in_invoice` en **borrador** (`partner_id`, `ref` = número de factura, `invoice_date`, `invoice_date_due`, moneda, una línea por la base imponible, o por el monto total si no viene). El IVA y el número de control del bot van en `narration` | **No publica y no inventa impuestos** (la línea va sin impuestos para que contabilidad los asigne). **Nunca crea el proveedor desde una factura** ni adivina si es ambiguo: queda `INCOMPLETO` («créalo con /proveedor»). Faltantes (número, fecha, moneda, monto, proveedor) → `INCOMPLETO` hasta `completar`. La misma (proveedor, número) ya capturada → `409`; si ya está en Odoo → `ERROR` legible |
 
 - **Credencial aparte:** `ODOO_WRITE_USERNAME` / `ODOO_WRITE_PASSWORD` (misma
   URL y base que la lectura). Debe ser un usuario de Odoo con permisos mínimos:
-  crear en `res.partner`, `sale.order` y `account.payment`, nada más. La credencial
+  crear en `res.partner`, `sale.order`, `account.payment` y `account.move` (facturas de
+  proveedor en borrador), y leer lo necesario para buscar; nada más. La credencial
   de lectura (`ODOO_USERNAME`) no cambia y sigue siendo solo lectura.
 - **Interruptor:** `CAPTURAS_ODOO_ESCRITURA=1`. Sin él, o sin la credencial, no se
   abre ninguna conexión de escritura: las capturas se guardan y quedan `PENDIENTE`.
@@ -81,9 +84,10 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
   cabecera `X-Bot-Key` (`BOT_API_KEY`); es lo único que esa clave abre. Las llaves
   de API normales siguen siendo solo `GET`. La interfaz (página **Capturas
   Telegram**, permisos `capturas.ver` / `capturas.gestionar`) lista, muestra,
-  reintenta y, con `capturas.gestionar`, también completa pagos
-  (`…/{id}/completar` acepta la clave del bot **o** esa sesión; crear capturas
-  es solo del bot).
+  reintenta y, con `capturas.gestionar`, también completa pagos y facturas de
+  proveedor (`…/{id}/completar` acepta la clave del bot **o** esa sesión; crear
+  capturas es solo del bot). Tipos válidos (`kind`): `contacto`, `pedido`, `pago`,
+  `pago_proveedor`, `proveedor`, `factura_proveedor`.
 - **Estados:** `PENDIENTE` → `ENVIADO` (`odoo_ref` = `modelo:id`), o `INCOMPLETO`
   (falta algo que no se adivina) o `ERROR` (los de red se reintentan solos, máx. 5).
 

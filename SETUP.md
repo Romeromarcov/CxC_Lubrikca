@@ -55,7 +55,7 @@ sin ellas CxC se comporta exactamente como antes (solo lectura de Odoo).
 |---|---|
 | `BOT_API_KEY` | Clave que los bots mandan en `X-Bot-Key`. Sin ella, `POST /api/bots/capturas` responde 503. Generar una larga y aleatoria; solo abre las dos rutas del bot |
 | `CAPTURAS_ODOO_ESCRITURA` | `1` activa la escritura de borradores a Odoo. Apagado por defecto |
-| `ODOO_WRITE_USERNAME`, `ODOO_WRITE_PASSWORD` | Credencial de Odoo **solo para escribir**, con permisos mínimos (crear en `res.partner`, `sale.order`, `account.payment`). Usa la misma `ODOO_URL` y `ODOO_DB` |
+| `ODOO_WRITE_USERNAME`, `ODOO_WRITE_PASSWORD` | Credencial de Odoo **solo para escribir**, con permisos mínimos (crear en `res.partner`, `sale.order`, `account.payment` y `account.move` —facturas de proveedor en borrador—). Usa la misma `ODOO_URL` y `ODOO_DB` |
 | `CAPTURAS_DIARIOS` | (opcional) JSON `{"bancamiga_usd": 41, "transferencia": 14, "default": 14}`: fuerza el `journal_id` según `<banco>_<moneda>`, `<banco>`, `<método>_<moneda>`, `<método>`, `<moneda>` o `default`. Sin él se usa el mapa de `cxc/bancos/diarios.py` |
 | `CAPTURAS_MAX_INTENTOS` | (opcional, 5) intentos del reintento automático de errores de red |
 
