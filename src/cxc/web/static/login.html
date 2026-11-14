@@ -233,17 +233,11 @@
 
         <!-- FORMULARIO 3: RESTABLECER CLAVE OLVIDADA -->
         <div id="panel-olvidaste" class="auth-form-panel">
-            <form id="form-reset-password">
-                <div class="form-group">
-                    <label>Correo Electrónico de Odoo</label>
-                    <input type="email" id="reset-email" required placeholder="ejemplo@lubrikca.com">
-                </div>
-                <div class="form-group">
-                    <label>Nueva Contraseña</label>
-                    <input type="password" id="reset-new-password" required minlength="6" placeholder="Nueva contraseña de acceso">
-                </div>
-                <button type="submit" class="auth-btn" style="background: linear-gradient(135deg, #d97706, #b45309);">Restablecer Mi Contraseña</button>
-            </form>
+            <p style="color:#475569; line-height:1.5; margin:0 0 0.75rem 0;">
+                Por seguridad, la contraseña solo la puede restablecer un administrador,
+                desde Configuración → Usuarios. Pídele que te asigne una nueva y luego
+                ingresa con ella.
+            </p>
         </div>
 
         <div class="odoo-notice">
@@ -345,34 +339,6 @@
             }
         });
 
-        // Handle Reset Password Form
-        document.getElementById('form-reset-password').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            hideAlert();
-            const email = document.getElementById('reset-email').value.trim();
-            const password = document.getElementById('reset-new-password').value;
-
-            try {
-                const res = await fetch('/api/auth/reset-password', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-
-                if (res.ok) {
-                    showAlert('✅ Contraseña restablecida correctamente. Ya puedes iniciar sesión.', false);
-                    setTimeout(() => {
-                        switchAuthTab('login');
-                        document.getElementById('login-email').value = email;
-                    }, 1200);
-                } else {
-                    const err = await res.json();
-                    showAlert(err.detail || 'Error al restablecer contraseña');
-                }
-            } catch (err) {
-                showAlert('Error de red al conectar con el servidor');
-            }
-        });
     </script>
 </body>
 </html>

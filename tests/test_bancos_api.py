@@ -13,12 +13,13 @@ from fastapi.testclient import TestClient
 
 from cxc.bancos.repositorio import ResumenIngesta
 from cxc.bancos.saldos import Corte
+from cxc.permisos import efectivos
 from cxc.web.app import app
 
 client = TestClient(app)
 
 ADMIN = {"email": "admin@x.test", "rol": "admin", "permisos": []}
-AUDITOR = {"email": "aud@x.test", "rol": "auditor", "permisos": []}
+AUDITOR = {"email": "aud@x.test", "rol": "auditor", "permisos": efectivos("auditor")}
 VENDEDOR = {"email": "v@x.test", "rol": "vendedor", "permisos": []}
 
 

@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20261113_2">
 </head>
 <body>
     <div class="glow-container">
@@ -1276,12 +1276,12 @@
 
         <!-- PESTAÑA 3: CONFIGURACIÓN -->
         <!-- PESTAÑA: BANCOS (ingesta de estados de cuenta, fase 1). Fuente: /api/bancos/*.
-             Solo admin y auditor; cargar archivos, solo admin. Ver docs/BANCOS.md. -->
+             Cada sección según permiso (bancos.cargar / ver / conciliar, ver cxc/permisos.py). -->
         <div id="tab-bancos" class="tab-panel">
             <div class="bancos-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
 
                 <!-- Saldos consolidados -->
-                <section class="card" style="padding:1.5rem;">
+                <section class="card" id="bancos-saldos-panel" style="padding:1.5rem;">
                     <div class="panel-header-row">
                         <div>
                             <h2 style="margin:0 0 0.25rem 0;">🏦 Saldos Consolidados</h2>
@@ -1322,7 +1322,7 @@
                     </div>
                 </section>
 
-                <!-- Carga de estados de cuenta (solo admin) -->
+                <!-- Carga de estados de cuenta (permiso bancos.cargar) -->
                 <section class="card" id="bancos-carga-panel" style="padding:1.5rem; display:none;">
                     <div class="panel-header-row">
                         <div>
@@ -1341,7 +1341,7 @@
                 </section>
 
                 <!-- Archivos cargados -->
-                <section class="card" style="padding:1.5rem;">
+                <section class="card" id="bancos-archivos-panel" style="padding:1.5rem;">
                     <div class="panel-header-row">
                         <div>
                             <h2 style="margin:0 0 0.25rem 0;">🗂️ Archivos Cargados</h2>
@@ -1372,7 +1372,7 @@
                 </section>
 
                 <!-- Movimientos -->
-                <section class="card" style="padding:1.5rem;">
+                <section class="card" id="bancos-mov-panel" style="padding:1.5rem;">
                     <div class="panel-header-row">
                         <div>
                             <h2 style="margin:0 0 0.25rem 0;">📋 Movimientos</h2>
@@ -1411,7 +1411,7 @@
                 </section>
 
                 <!-- Pre-conciliación (fase 2) -->
-                <section class="card" style="padding:1.5rem;">
+                <section class="card" id="bancos-conc-panel" style="padding:1.5rem;">
                     <div class="panel-header-row">
                         <div>
                             <h2 style="margin:0 0 0.25rem 0;">🔗 Pre-conciliación</h2>
@@ -2023,34 +2023,52 @@
                 </section>
 
 
-                <!-- GESTIÓN DE USUARIOS Y ROLES DE LA PLATAFORMA (SOLO ADMINS) -->
+                <!-- ACCESOS (SOLO ADMINS): rol como base + ajustes por persona (cxc/permisos.py) -->
                 <section class="config-card card" data-subpage="usuarios" id="admin-user-mgmt-panel" style="grid-column: 1 / span 2; border-left: 5px solid #2563eb;">
-                    <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div class="panel-header-row" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
                         <div>
                             <h2 style="color: #1e40af; display: flex; align-items: center; gap: 0.5rem;">
-                                <span>👥</span> Gestión de Usuarios y Roles de la Plataforma
+                                <span>👥</span> Usuarios y Accesos
                             </h2>
-                            <p style="color: #475569;">Asigna o modifica los niveles de acceso de cada usuario registrado con su correo de Odoo ERP</p>
+                            <p style="color: #475569;">El rol da los permisos base; con "Editar accesos" le agregas o quitas permisos puntuales a una persona. Cada cambio queda en la bitácora de abajo.</p>
                         </div>
-                        <button class="btn btn-secondary" onclick="loadAdminUsuarios()" style="padding: 0.4rem 0.85rem; font-size: 0.82rem;">🔄 Actualizar Lista</button>
+                        <button class="btn btn-secondary" onclick="loadAdminUsuarios()" style="padding: 0.4rem 0.85rem; font-size: 0.82rem;">🔄 Actualizar</button>
                     </div>
 
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
+                    <div class="table-wrapper acc-wrapper">
+                        <table class="cxc-table acc-tabla">
                             <thead>
                                 <tr>
-                                    <th>Usuario (Odoo Email)</th>
-                                    <th>Nombre del Colaborador</th>
-                                    <th>Rol Asignado</th>
-                                    <th>Fecha Registro</th>
+                                    <th>Usuario</th>
+                                    <th>Rol</th>
+                                    <th>Ajustes sobre el rol</th>
                                     <th>Estado</th>
-                                    <th>Acciones Administrador</th>
+                                    <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody id="admin-usuarios-table-body">
                                 <tr>
-                                    <td colspan="6" class="table-empty">Cargando usuarios de la plataforma...</td>
+                                    <td colspan="5" class="table-empty">Cargando usuarios de la plataforma...</td>
                                 </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="config-card card" data-subpage="usuarios" id="admin-accesos-bitacora-panel" style="grid-column: 1 / span 2; border-left: 5px solid #0f766e; display: none;">
+                    <div class="panel-header-row" style="margin-bottom: 1rem;">
+                        <div>
+                            <h2 style="color: #115e59; display: flex; align-items: center; gap: 0.5rem;"><span>📜</span> Bitácora de accesos</h2>
+                            <p style="color: #475569;">Quién cambió qué acceso a quién, y cuándo. No se puede editar ni borrar.</p>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr><th>Fecha</th><th>Usuario</th><th>Cambio</th><th>Motivo</th><th>Hecho por</th></tr>
+                            </thead>
+                            <tbody id="admin-accesos-bitacora-body">
+                                <tr><td colspan="5" class="table-empty">Cargando...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2348,7 +2366,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261113_1"></script>
+    <script src="/static/app.js?v=20261113_2"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco
