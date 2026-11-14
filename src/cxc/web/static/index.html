@@ -33,6 +33,7 @@
             <a href="/reporte" class="tab-btn nav-link" data-page="reporte" style="text-decoration: none;">📑 Reporte de Saldos</a>
             <a href="/auditoria" class="tab-btn nav-link" data-page="auditoria" style="text-decoration: none;">🔍 Auditoría</a>
             <a href="/bancos" class="tab-btn nav-link" data-page="bancos" style="text-decoration: none;">🏦 Bancos</a>
+            <a href="/capturas" class="tab-btn nav-link" data-page="capturas" style="text-decoration: none;">📲 Capturas Telegram</a>
             <a href="/inventario" class="tab-btn nav-link" data-page="inventario" style="text-decoration: none;">📦 Inventario</a>
             <a href="/configuracion" class="tab-btn nav-link" data-page="configuracion" style="text-decoration: none;">⚙️ Configuración</a>
         </nav>
@@ -2250,7 +2251,81 @@
                 </section>
             </div>
         </div>
+
+        <!-- PESTAÑA: CAPTURAS TELEGRAM. Borradores que mandan los bots (pedidos, contactos, cobranza,
+             pagos a proveedores) y su envío a Odoo. Fuente: /api/bots/capturas. Acciones según permiso
+             (capturas.ver / capturas.gestionar, ver cxc/permisos.py). -->
+        <div id="tab-capturas" class="tab-panel">
+            <div style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">📲 Capturas Telegram</h2>
+                            <p style="color:#475569; margin:0;">Lo que el equipo manda por los bots de Telegram. Cada captura se envía a Odoo como borrador; aquí ves cuáles quedaron enviadas, incompletas o con error.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadCapturas()">↻ Actualizar</button>
+                    </div>
+
+                    <div class="dashboard-kpi-row" id="capturas-kpis" style="margin:1rem 0;">
+                        <div class="card kpi-card cap-kpi" data-cap-estado="PENDIENTE" role="button" tabindex="0"><h3>Pendientes</h3><p id="capturas-n-PENDIENTE">—</p><span>Por enviar a Odoo</span></div>
+                        <div class="card kpi-card cap-kpi" data-cap-estado="INCOMPLETO" role="button" tabindex="0"><h3>Incompletas</h3><p id="capturas-n-INCOMPLETO">—</p><span>Faltan datos: completar</span></div>
+                        <div class="card kpi-card cap-kpi" data-cap-estado="ERROR" role="button" tabindex="0"><h3>Con error</h3><p id="capturas-n-ERROR">—</p><span>Odoo no las aceptó</span></div>
+                        <div class="card kpi-card cap-kpi" data-cap-estado="ENVIADO" role="button" tabindex="0"><h3>Enviadas</h3><p id="capturas-n-ENVIADO">—</p><span>Ya están en Odoo</span></div>
+                    </div>
+
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="capturas-estado" class="filter-select" aria-label="Estado">
+                            <option value="">Todos los estados</option>
+                            <option value="PENDIENTE">Pendiente</option>
+                            <option value="INCOMPLETO">Incompleto</option>
+                            <option value="ERROR">Error</option>
+                            <option value="ENVIADO">Enviado</option>
+                        </select>
+                        <select id="capturas-kind" class="filter-select" aria-label="Tipo">
+                            <option value="">Todos los tipos</option>
+                            <option value="pedido">Pedido</option>
+                            <option value="contacto">Contacto</option>
+                            <option value="pago">Pago de cliente</option>
+                            <option value="pago_proveedor">Pago a proveedor</option>
+                        </select>
+                        <input type="text" id="capturas-buscar" class="filter-select" placeholder="Buscar cliente, proveedor o referencia" style="cursor:text; min-width:240px;">
+                    </div>
+                    <p id="capturas-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Recibida</th>
+                                    <th>Tipo</th>
+                                    <th>Resumen</th>
+                                    <th>Estado</th>
+                                    <th>Odoo</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="capturas-body">
+                                <tr><td colspan="6" class="table-empty">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="capturas-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
+                </section>
+            </div>
+        </div>
     </main>
+
+
+    <!-- Detalle de una captura de Telegram -->
+    <div id="modal-captura" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+        <div class="card" style="max-width:760px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; gap:1rem;">
+                <h2 style="margin:0;" id="modal-captura-titulo">Captura</h2>
+                <button type="button" class="btn btn-secondary" onclick="cerrarModalCaptura()" style="padding:0.3rem 0.7rem;" aria-label="Cerrar">✕</button>
+            </div>
+            <div id="modal-captura-body"></div>
+        </div>
+    </div>
 
     <!-- MODAL DE IMPRESIÓN DE RECIBO DE ENTREGA (2 COPIAS) -->
     <div id="recibo-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99999; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
@@ -2372,7 +2447,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261114_1"></script>
+    <script src="/static/app.js?v=20261114_2"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco
