@@ -26,6 +26,7 @@ from cxc.bancos.conciliacion import (
     PAGO,
     SIN_PROPUESTA,
     PagoCandidato,
+    contactos_por_rif,
     pagos_candidatos,
     proponer,
     rifs,
@@ -159,6 +160,7 @@ def test_r3_binance_no_tiene_cuenta_de_pendientes():
 def test_rifs_normaliza():
     assert rifs("PAGO J-0507836142 y V12.670.859") == {"J507836142"}
     assert rifs("TRANSF RECIBIDA BDV V12670859 YANIS") == {"V12670859"}
+    assert rifs("TRF J-50783614-2 / V-12670859-1234") == {"J507836142", "V12670859"}
 
 
 # ------------------------------------------------------------ Odoo, solo lectura
@@ -206,6 +208,29 @@ def test_pagos_candidatos_lee_pagos_y_rif_del_cliente():
     assert a.partner_rifs == {"J507836142"}
     assert (b.entrante, b.memo, b.partner, b.partner_rifs) == (False, "", "", frozenset())
     assert all(m in ("search_read", "read") for _, m in llamadas)
+
+
+def test_contactos_por_rif_solo_si_un_contacto_lo_tiene():
+    llamadas: list[tuple[str, str, Any]] = []
+
+    def execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
+        llamadas.append((model, method, args))
+        if model == "res.company":
+            return [{"id": 1, "partner_id": [1, "Lubrikca"]}]
+        return [
+            {"id": 1, "display_name": "Lubrikca", "vat": "J-50000000-1"},  # la propia empresa
+            {"id": 77, "display_name": "En ascenso 2011,c.a.", "vat": "J-50783614-2"},
+            {"id": 80, "display_name": "Yanis", "vat": "V12670859"},
+            {"id": 81, "display_name": "Yanis (dup)", "vat": "V-12670859"},
+            {"id": 90, "display_name": "Parecido", "vat": "J5078361429"},  # otro RIF
+        ]
+
+    r = contactos_por_rif(execute, {"J507836142", "V12670859", "J500000001"})
+    assert r == {"J507836142": "En ascenso 2011,c.a."}
+    dominio = llamadas[1][2][0]
+    assert dominio[:2] == ["|", "|"] and ["vat", "ilike", "50783614"] in dominio
+    assert all(m == "search_read" for _, m, _ in llamadas)
+    assert contactos_por_rif(execute, []) == {} and len(llamadas) == 2
 
 
 # ------------------------------------------------------------------- endpoints
@@ -444,3 +469,184 @@ def test_la_bitacora_es_solo_append(engine):
     for sql in ("UPDATE bancos_decisiones SET usuario = 'otro'", "DELETE FROM bancos_decisiones"):
         with pytest.raises(DBAPIError, match="solo-append"), engine.begin() as conn:
             conn.execute(text(sql))
+
+
+# ------------------------------------------------------------------- aprobadas a Excel
+
+
+def test_aprobadas_trae_lo_decidido_con_su_ultimo_comentario(engine):
+    movs = _cargar(engine)
+    props, _ = _generar(engine, movs)
+    pago = next(p for p in props if p.tipo == PAGO)
+    cuenta = next(p for p in props if p.tipo == CUENTA)
+    sin = next(p for p in props if p.tipo == SIN_PROPUESTA)
+    repositorio.decidir(engine, pago.huella, "aprobar", "ana", comentario="ok")
+    repositorio.decidir(engine, cuenta.huella, "rechazar", "ana", comentario="no va")
+    repositorio.decidir(engine, sin.huella, "corregir", "ana", cuenta="6.1 Limpieza")
+    repositorio.decidir(engine, sin.huella, "reabrir", "jefe", comentario="revisar")
+    repositorio.decidir(
+        engine, sin.huella, "corregir", "jefe", cuenta="6.2 Otra", comentario="era otra"
+    )
+
+    filas = repositorio.aprobadas(engine)
+    assert {f["huella"]: (f["estado"], f["comentario"]) for f in filas} == {
+        pago.huella: ("aprobada", "ok"),
+        sin.huella: ("corregida", "era otra"),
+    }
+    hoy = date.today()
+    assert len(repositorio.aprobadas(engine, decididas_desde=hoy, decididas_hasta=hoy)) == 2
+    assert repositorio.aprobadas(engine, decididas_hasta=date(2000, 1, 1)) == []
+    assert repositorio.aprobadas(engine, banco="BDT") == []
+
+
+def _libro(filas):
+    import io
+
+    import openpyxl
+
+    from cxc.bancos.exportar import libro_aprobadas
+
+    return openpyxl.load_workbook(io.BytesIO(libro_aprobadas(filas)))
+
+
+def test_libro_aprobadas():
+    from datetime import datetime
+    from decimal import Decimal
+
+    base = {
+        "banco": "BANCAMIGA", "fecha": date(2026, 11, 12), "referencia": "33577466",
+        "descripcion": "NC Credito Inmediato", "moneda": "VES", "regla": "R2",
+        "decidida_por": "ana@x.test", "decidida_en": datetime(2026, 11, 13, 10, 5, 7, 123),
+        "comentario": "",
+    }
+    filas = [
+        base | {"huella": "h1", "monto": Decimal("306118.02"), "tipo": "pago", "pago_id": 7,
+                "pago_nombre": "PBAMI/2026/00973", "cuenta": "", "estado": "aprobada",
+                "candidatos": [{"id": 7, "partner": "Cliente A", "fecha": "2026-11-12",
+                                "ya_conciliado": True}]},
+        base | {"huella": "h2", "monto": Decimal("-2435.85"), "tipo": "cuenta", "pago_id": None,
+                "pago_nombre": "", "cuenta": "6.2.1.1.01.02 Bank Fees", "estado": "corregida",
+                "candidatos": [], "regla": "R1", "comentario": "comisión"},
+    ]
+    filas.append(
+        filas[0] | {"huella": "h3", "pago_id": 8, "pago_nombre": "PBAMI/2026/00974",
+                    "candidatos": [{"id": 8, "partner": "Cliente B", "fecha": "2026-11-12"}]}
+    )
+    wb = _libro(filas)
+    assert wb.sheetnames == ["Para aplicar", "Ya conciliadas en Odoo", "Resumen"]
+
+    def tabla(nombre):
+        ws = wb[nombre]
+        enc = [c.value for c in ws[1]]
+        return [dict(zip(enc, [c.value for c in r], strict=True)) for r in ws.iter_rows(min_row=2)]
+
+    aplicar = tabla("Para aplicar")
+    assert [f["Huella"] for f in aplicar] == ["h2", "h3"]
+    cuenta, pago = aplicar
+    assert (cuenta["Destino"], cuenta["Cuenta contable"], cuenta["Comentario"]) == (
+        "Cuenta", "6.2.1.1.01.02 Bank Fees", "comisión"
+    )
+    assert cuenta["Diario Odoo"] == "Banco Bancamiga 7806"
+    assert (pago["Destino"], pago["Pago Odoo"], pago["Cliente / proveedor"]) == (
+        "Pago", "PBAMI/2026/00974", "Cliente B"
+    )
+    assert pago["Monto"] == 306118.02
+
+    ya = tabla("Ya conciliadas en Odoo")
+    assert [(f["Huella"], f["Pago Odoo"], f["Cliente / proveedor"]) for f in ya] == [
+        ("h1", "PBAMI/2026/00973", "Cliente A")
+    ]
+    res = [[c.value for c in r] for r in wb["Resumen"].iter_rows(min_row=2)]
+    assert res == [["BANCAMIGA", "Cuenta", 1, -2435.85, 0], ["BANCAMIGA", "Pago", 1, 306118.02, 1]]
+
+
+def test_libro_aprobadas_vacio():
+    assert _libro([])["Resumen"]["A2"].value.startswith("No hay propuestas")
+
+
+def test_endpoint_aprobadas(sin_base):
+    with _como(VENDEDOR):
+        assert client.get("/api/bancos/conciliacion/aprobadas.xlsx").status_code == 403
+    with _como(AUDITOR), patch("cxc.web.app.bancos_repo.aprobadas", return_value=[]) as ap:
+        r = client.get(
+            "/api/bancos/conciliacion/aprobadas.xlsx",
+            params={"banco": 'BAN"CAMIGA', "desde": "2026-11-13", "hasta": "2026-11-14"},
+        )
+    assert r.status_code == 200
+    assert ap.call_args.kwargs["decididas_desde"] == date(2026, 11, 13)
+    assert ap.call_args.kwargs["decididas_hasta"] == date(2026, 11, 14)
+    assert 'filename="aprobadas_para_odoo_bancamiga_' in r.headers["content-disposition"]
+    with _como(AUDITOR):
+        r = client.get("/api/bancos/conciliacion/aprobadas.xlsx", params={"desde": "ayer"})
+    assert r.status_code == 422
+
+
+def test_contactos_de_propuestas(engine):
+    movs = _cargar(engine)
+    props, _ = _generar(engine, movs)
+    pago = next(p for p in props if p.tipo == PAGO)
+    huellas = [mc.mov.huella for mc in movs]
+    # Pendiente: vale el pago que proponen las reglas.
+    assert repositorio.contactos_de_propuestas(engine, huellas) == {pago.huella: "Cliente A"}
+    repositorio.decidir(engine, pago.huella, "rechazar", "ana", comentario="no es")
+    assert repositorio.contactos_de_propuestas(engine, huellas) == {}
+    assert repositorio.contactos_de_propuestas(engine, []) == {}
+
+
+def _mov_csv(huella_desc: str) -> MovimientoClasificado:
+    return MovimientoClasificado(
+        MovimientoBancario(
+            "BANCAMIGA", "7806", "VES", date(2026, 11, 12), "1", huella_desc,
+            D("0"), D("10"), D("10"), 1,
+        ),
+        "transferencia",
+        "r",
+    )
+
+
+def test_csv_odoo_contacto_de_la_cola_y_del_rif(sin_base):
+    import csv
+    import io
+
+    a = _mov_csv("TRF RECIBIDA A")
+    b = _mov_csv("TRF RECIBIDA J-50783614-2 EN ASCENSO")
+    c = _mov_csv("TRF RECIBIDA V12670859 Y J507836142")  # dos RIF, dos contactos: vacío
+    d = _mov_csv("COMPRA POS")
+    por_rif = {"J507836142": "En ascenso 2011,c.a.", "V12670859": "Yanis"}
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[a, b, c, d]),
+        patch(
+            "cxc.web.app.bancos_repo.contactos_de_propuestas",
+            return_value={a.mov.huella: "Cliente A"},
+        ),
+        patch("cxc.web.app._connect", return_value=MagicMock()),
+        patch(
+            "cxc.web.app.bancos_conciliacion.contactos_por_rif", return_value=por_rif
+        ) as cpr,
+    ):
+        r = client.get("/api/bancos/odoo-extracto.csv", params={"banco": "BANCAMIGA"})
+    assert r.status_code == 200
+    filas = list(csv.DictReader(io.StringIO(r.text)))
+    assert [f["partner_id"] for f in filas] == ["Cliente A", "En ascenso 2011,c.a.", "", ""]
+    assert cpr.call_args.args[1] == {"J507836142", "V12670859"}
+
+
+def test_csv_odoo_sin_rifs_no_lee_odoo_y_si_odoo_falla_es_502(sin_base):
+    con_rif = _mov_csv("TRF J507836142")
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[_mov_csv("COMPRA POS")]),
+        patch("cxc.web.app.bancos_repo.contactos_de_propuestas", return_value={}),
+        patch("cxc.web.app._connect") as conn,
+    ):
+        assert client.get("/api/bancos/odoo-extracto.csv").status_code == 200
+    conn.assert_not_called()
+    with (
+        _como(AUDITOR),
+        patch("cxc.web.app.bancos_repo.movimientos", return_value=[con_rif]),
+        patch("cxc.web.app.bancos_repo.contactos_de_propuestas", return_value={}),
+        patch("cxc.web.app._connect", side_effect=PermissionError("Autenticación Odoo fallida")),
+    ):
+        r = client.get("/api/bancos/odoo-extracto.csv")
+    assert r.status_code == 502 and "No pude leer Odoo" in r.json()["detail"]

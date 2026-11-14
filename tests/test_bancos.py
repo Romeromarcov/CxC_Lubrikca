@@ -361,10 +361,16 @@ def _mc(banco="BANCAMIGA") -> MovimientoClasificado:
 def test_csv_odoo_columnas_y_signo():
     filas = list(csv.reader(io.StringIO(csv_odoo([_mc()]))))
     assert filas[0] == COLUMNAS_ODOO
-    uid, diario, fecha, ref_pago, ref, monto = filas[1]
+    uid, diario, fecha, contacto, ref_pago, ref, monto = filas[1]
     assert diario == "Banco Bancamiga 7806" and fecha == "2026-09-01"
-    assert (ref_pago, ref, monto) == ("COM MTTO", "77", "-54.00")
+    assert (contacto, ref_pago, ref, monto) == ("", "COM MTTO", "77", "-54.00")
     assert uid.startswith("BANCAMIGA-C-")
+
+
+def test_csv_odoo_lleva_el_contacto_por_huella():
+    mc = _mc()
+    filas = list(csv.reader(io.StringIO(csv_odoo([mc], {mc.mov.huella: "En ascenso, c.a."}))))
+    assert filas[1][3] == "En ascenso, c.a."
 
 
 def test_csv_odoo_banco_sin_diario():

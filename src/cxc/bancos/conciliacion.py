@@ -42,12 +42,15 @@ CUENTA = "cuenta"
 AMBIGUO = "ambiguo"
 SIN_PROPUESTA = "sin_propuesta"
 
-_RIF = re.compile(r"\b([VJEGP])-?0*(\d{6,9})\b")
+# El verificador puede venir pegado (J507836142) o con guion (J-50783614-2).
+_RIF = re.compile(r"\b([VJEGP])-?0*(\d{6,9})(?:-(\d))?\b")
 
 
 def rifs(texto: str | None) -> frozenset[str]:
     """RIF/cédulas normalizados de un texto: 'J-0507836142' y 'J507836142' -> 'J507836142'."""
-    return frozenset(f"{letra}{int(num)}" for letra, num in _RIF.findall((texto or "").upper()))
+    return frozenset(
+        f"{letra}{int(num)}{dv}" for letra, num, dv in _RIF.findall((texto or "").upper())
+    )
 
 
 def _digitos(ref: str) -> str:
@@ -238,3 +241,36 @@ def pagos_candidatos(
             )
         )
     return out
+
+
+def contactos_por_rif(execute: Execute, buscados: Iterable[str]) -> dict[str, str]:
+    """RIF/cédula -> nombre del contacto en Odoo, solo cuando UN contacto lo tiene.
+
+    Un RIF repetido en dos contactos no se asigna (sería adivinar), y el contacto de la
+    propia empresa se descarta: su RIF aparece en las transferencias entre cuentas.
+    """
+    ex = solo_lectura(execute)
+    lista = sorted(set(buscados))
+    if not lista:
+        return {}
+    propios = {
+        int(c["partner_id"][0])
+        for c in ex("res.company", "search_read", [[]], {"fields": ["partner_id"]})
+        if c.get("partner_id")
+    }
+    por_rif: dict[str, dict[int, str]] = {}
+    for i in range(0, len(lista), 200):
+        bloque = lista[i : i + 200]
+        # En Odoo el RIF puede estar como 'J507836142' o 'J-50783614-2': se busca por
+        # los dígitos sin el verificador y se confirma normalizando, como en los pagos.
+        dominio: list[Any] = ["|"] * (len(bloque) - 1)
+        dominio += [["vat", "ilike", r[1:-1]] for r in bloque]
+        for s in ex(
+            "res.partner", "search_read", [dominio], {"fields": ["id", "display_name", "vat"]}
+        ):
+            if int(s["id"]) in propios:
+                continue
+            v = re.sub(r"[^A-Z0-9]", "", str(s.get("vat") or "").upper())
+            for r in rifs(v) & set(bloque):
+                por_rif.setdefault(r, {})[int(s["id"])] = str(s.get("display_name") or "")
+    return {r: next(iter(ids.values())) for r, ids in por_rif.items() if len(ids) == 1}

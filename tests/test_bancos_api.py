@@ -134,6 +134,7 @@ def test_csv_odoo(sin_base):
             "cxc.web.app.bancos_repo.movimientos",
             return_value=[MovimientoClasificado(m, "c", "r")],
         ) as mov,
+        patch("cxc.web.app.bancos_repo.contactos_de_propuestas", return_value={}),
     ):
         r = client.get("/api/bancos/odoo-extracto.csv?banco=BDT&hasta=2026-10-31")
     assert r.status_code == 200

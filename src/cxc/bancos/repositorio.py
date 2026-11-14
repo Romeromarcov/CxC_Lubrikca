@@ -326,6 +326,37 @@ def propuestas(
         return out
 
 
+def contactos_de_propuestas(engine: Engine, huellas: list[str]) -> dict[str, str]:
+    """huella -> contacto del pago de Odoo que la cola le asigna al movimiento.
+
+    Vale el pago aprobado o corregido por una persona, y el que proponen las reglas
+    (mismo diario, mismo monto exacto) mientras sigue pendiente. Rechazadas y ambiguas
+    no dan contacto.
+    """
+    if not huellas:
+        return {}
+    p = bancos_propuestas
+    q = select(p.c.huella, p.c.pago_id, p.c.candidatos).where(
+        p.c.tipo == PAGO,
+        p.c.estado.in_([PENDIENTE, APROBADA, CORREGIDA]),
+        p.c.huella.in_(huellas),
+    )
+    out: dict[str, str] = {}
+    with engine.connect() as conn:
+        for huella, pago_id, candidatos in conn.execute(q).all():
+            partner = next(
+                (
+                    str(c.get("partner") or "")
+                    for c in json.loads(candidatos or "[]")
+                    if c.get("id") == pago_id
+                ),
+                "",
+            )
+            if partner:
+                out[str(huella)] = partner
+    return out
+
+
 def decidir(
     engine: Engine,
     huella: str,
@@ -425,3 +456,41 @@ def decisiones(
             x["antes"], x["despues"] = json.loads(x["antes"]), json.loads(x["despues"])
             out.append(x)
         return out
+
+
+def aprobadas(
+    engine: Engine,
+    *,
+    banco: str | None = None,
+    decididas_desde: date | None = None,
+    decididas_hasta: date | None = None,
+) -> list[dict[str, Any]]:
+    """Lo aprobado o corregido, para aplicarlo en Odoo a mano mientras no hay fase 3.
+
+    Igual que ``propuestas`` más el comentario de la última decisión. Los filtros de
+    fecha son por cuándo se decidió (``decididas_hasta`` incluye todo ese día), para
+    poder bajar "lo aprobado hoy" sin repetir lo de ayer.
+    """
+    filas = [
+        f
+        for f in propuestas(engine, banco=banco)
+        if f["estado"] in (APROBADA, CORREGIDA)
+        and (decididas_desde is None or f["decidida_en"].date() >= decididas_desde)
+        and (decididas_hasta is None or f["decidida_en"].date() <= decididas_hasta)
+    ]
+    if not filas:
+        return []
+    d = bancos_decisiones
+    ultima = (
+        select(d.c.huella, d.c.comentario)
+        .where(d.c.huella.in_([f["huella"] for f in filas]))
+        .where(d.c.accion != "reabrir")
+        .order_by(d.c.huella, d.c.decision_id.desc())
+        .distinct(d.c.huella)
+    )
+    with engine.connect() as conn:
+        comentarios = {r.huella: r.comentario for r in conn.execute(ultima)}
+    for f in filas:
+        f["comentario"] = comentarios.get(f["huella"], "")
+    filas.sort(key=lambda f: (f["banco"], f["fecha"], f["huella"]))
+    return filas
