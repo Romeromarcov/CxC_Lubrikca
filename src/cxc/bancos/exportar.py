@@ -11,7 +11,9 @@ from __future__ import annotations
 import csv
 import io
 from collections import defaultdict
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -185,4 +187,119 @@ def csv_odoo(movs: list[MovimientoClasificado]) -> str:
                 f"{m.neto:.2f}",
             ]
         )
+    return buf.getvalue()
+
+
+_ENCABEZADO_APROBADAS = [
+    "Banco",
+    "Diario Odoo",
+    "Fecha",
+    "Referencia",
+    "Descripción",
+    "Monto",
+    "Moneda",
+    "Destino",
+    "Pago Odoo",
+    "Cliente / proveedor",
+    "Fecha pago",
+    "Cuenta contable",
+    "Regla",
+    "Estado",
+    "Decidida por",
+    "Decidida el",
+    "Comentario",
+    "Huella",
+]
+_ANCHOS_APROBADAS = [12, 26, 11, 16, 40, 15, 8, 9, 20, 30, 11, 30, 7, 11, 26, 17, 30, 26]
+
+
+def _info_pago(f: dict[str, Any]) -> dict[str, Any]:
+    if f.get("tipo") != "pago":
+        return {}
+    return next((c for c in f.get("candidatos") or [] if c.get("id") == f.get("pago_id")), {})
+
+
+def _ya_conciliado(f: dict[str, Any]) -> bool:
+    return bool(_info_pago(f).get("ya_conciliado"))
+
+
+def _hoja_aprobadas(ws: Worksheet, filas: list[dict[str, Any]]) -> None:
+    _hoja(ws, _ENCABEZADO_APROBADAS, _ANCHOS_APROBADAS)
+    for f in filas:
+        pago = _info_pago(f)
+        diario = DIARIOS.get(f["banco"])
+        fecha_pago = pago.get("fecha")
+        decidida = f.get("decidida_en")
+        ws.append(
+            [
+                f["banco"],
+                diario["nombre"] if diario and diario["journal_id"] is not None else "(sin diario)",
+                f["fecha"],
+                f.get("referencia") or "",
+                f.get("descripcion") or "",
+                _f(f["monto"]),
+                f.get("moneda") or "",
+                "Pago" if f["tipo"] == "pago" else "Cuenta",
+                f.get("pago_nombre") or (f"#{f['pago_id']}" if f.get("pago_id") else ""),
+                pago.get("partner") or "",
+                date.fromisoformat(fecha_pago) if fecha_pago else None,
+                f.get("cuenta") or "",
+                f.get("regla") or "",
+                f["estado"],
+                f.get("decidida_por") or "",
+                decidida.replace(microsecond=0) if isinstance(decidida, datetime) else decidida,
+                f.get("comentario") or "",
+                f["huella"],
+            ]
+        )
+        fila = ws[ws.max_row]
+        fila[2].number_format = fila[10].number_format = "dd/mm/yyyy"
+        fila[15].number_format = "dd/mm/yyyy hh:mm"
+        fila[5].number_format = NUM
+    ws.auto_filter.ref = ws.dimensions
+
+
+def libro_aprobadas(filas: list[dict[str, Any]]) -> bytes:
+    """Lo aprobado en la cola, listo para que contabilidad lo aplique a mano en Odoo.
+
+    Una fila por movimiento con el destino decidido: el pago de Odoo contra el que se
+    concilia la línea de extracto, o la cuenta contable a la que va. Lo que casó con un
+    pago que YA estaba conciliado en Odoo (al generar las propuestas) va en otra hoja:
+    es lo que contabilidad ya hizo, sirve para verificar pero no hay que aplicarlo.
+    """
+    para_aplicar = [f for f in filas if not _ya_conciliado(f)]
+    ya_hechas = [f for f in filas if _ya_conciliado(f)]
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Para aplicar"
+    _hoja_aprobadas(ws, para_aplicar)
+    _hoja_aprobadas(wb.create_sheet("Ya conciliadas en Odoo"), ya_hechas)
+
+    res = wb.create_sheet("Resumen")
+    _hoja(
+        res,
+        ["Banco", "Destino", "Para aplicar", "Monto para aplicar", "Ya conciliadas en Odoo"],
+        [14, 10, 13, 20, 22],
+    )
+    grupos: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for f in filas:
+        grupos[(f["banco"], "Pago" if f["tipo"] == "pago" else "Cuenta")].append(f)
+    for (banco, destino), fs in sorted(grupos.items()):
+        aplicar = [x for x in fs if not _ya_conciliado(x)]
+        res.append(
+            [
+                banco,
+                destino,
+                len(aplicar),
+                _f(sum((x["monto"] for x in aplicar), CERO)),
+                len(fs) - len(aplicar),
+            ]
+        )
+        res[res.max_row][3].number_format = NUM
+    if not filas:
+        res.append(["No hay propuestas aprobadas ni corregidas con estos filtros."])
+
+    buf = io.BytesIO()
+    wb.save(buf)
     return buf.getvalue()

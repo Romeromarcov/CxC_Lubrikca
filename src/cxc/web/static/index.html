@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=20261113_2">
+    <link rel="stylesheet" href="/static/styles.css?v=20261114_1">
 </head>
 <body>
     <div class="glow-container">
@@ -1437,6 +1437,12 @@
                         <button type="button" class="btn-secondary" onclick="loadBancosConciliacion()">🔍 Filtrar</button>
                         <button type="button" class="btn-primary" id="bancos-conc-generar" onclick="generarBancosPropuestas()" style="display:none;" title="Lee los pagos de Odoo (solo lectura) y corre las reglas sobre los movimientos cargados">⚙️ Generar propuestas</button>
                     </div>
+                    <div class="bancos-conc-export">
+                        <span><strong>Aprobadas para Odoo:</strong> lo aprobado o corregido, para aplicarlo a mano en Odoo. Usa el banco del filtro de arriba.</span>
+                        <label>Decididas desde <input type="date" id="bancos-conc-exp-desde" class="filter-select"></label>
+                        <label>hasta <input type="date" id="bancos-conc-exp-hasta" class="filter-select"></label>
+                        <button type="button" class="btn-secondary" onclick="descargarBancosAprobadas()" title="Excel con el pago o la cuenta decidida para cada movimiento">📥 Descargar Excel</button>
+                    </div>
                     <p id="bancos-conc-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
                     <div class="table-wrapper large-table">
                         <table class="cxc-table">
@@ -2366,7 +2372,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261113_2"></script>
+    <script src="/static/app.js?v=20261114_1"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco

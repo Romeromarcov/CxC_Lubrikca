@@ -5970,6 +5970,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.loadBancosConciliacion = loadBancosConciliacion;
 
+    window.descargarBancosAprobadas = function() {
+        // Las fechas son de cuándo se DECIDIÓ: "lo aprobado hoy" sin repetir lo de ayer.
+        const p = new URLSearchParams();
+        const banco = document.getElementById("bancos-conc-banco").value;
+        const desde = document.getElementById("bancos-conc-exp-desde").value;
+        const hasta = document.getElementById("bancos-conc-exp-hasta").value;
+        if (banco) p.set("banco", banco);
+        if (desde) p.set("desde", desde);
+        if (hasta) p.set("hasta", hasta);
+        const q = p.toString();
+        window.location.href = "/api/bancos/conciliacion/aprobadas.xlsx" + (q ? "?" + q : "");
+    };
+
     window.generarBancosPropuestas = async function() {
         const btn = document.getElementById("bancos-conc-generar");
         const out = document.getElementById("bancos-conc-resumen");

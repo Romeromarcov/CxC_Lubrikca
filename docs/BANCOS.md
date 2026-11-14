@@ -118,6 +118,7 @@ corregida, rechazada; regenerar no toca las ya decididas) y `bancos_decisiones`
 | GET | `/api/bancos/conciliacion` | Propuestas con filtros `banco`, `estado`, `tipo`, `desde`, `hasta` |
 | POST | `/api/bancos/conciliacion/{huella}/decidir` | (`bancos.conciliar`) `accion`: aprobar, rechazar, corregir (`pago_id` o `cuenta`), reabrir |
 | GET | `/api/bancos/conciliacion/auditoria` | La bitácora; filtro `huella` |
+| GET | `/api/bancos/conciliacion/aprobadas.xlsx` | Lo aprobado o corregido, para aplicarlo a mano en Odoo. Filtros `banco` y `desde`/`hasta` (fecha en que se decidió). Hojas: Para aplicar, Ya conciliadas en Odoo (el pago ya estaba conciliado al generar), Resumen |
 
 Las reglas de clasificación se aplican de nuevo al generar, así que una regla
 corregida vale también para lo que ya estaba cargado.

@@ -444,3 +444,113 @@ def test_la_bitacora_es_solo_append(engine):
     for sql in ("UPDATE bancos_decisiones SET usuario = 'otro'", "DELETE FROM bancos_decisiones"):
         with pytest.raises(DBAPIError, match="solo-append"), engine.begin() as conn:
             conn.execute(text(sql))
+
+
+# ------------------------------------------------------------------- aprobadas a Excel
+
+
+def test_aprobadas_trae_lo_decidido_con_su_ultimo_comentario(engine):
+    movs = _cargar(engine)
+    props, _ = _generar(engine, movs)
+    pago = next(p for p in props if p.tipo == PAGO)
+    cuenta = next(p for p in props if p.tipo == CUENTA)
+    sin = next(p for p in props if p.tipo == SIN_PROPUESTA)
+    repositorio.decidir(engine, pago.huella, "aprobar", "ana", comentario="ok")
+    repositorio.decidir(engine, cuenta.huella, "rechazar", "ana", comentario="no va")
+    repositorio.decidir(engine, sin.huella, "corregir", "ana", cuenta="6.1 Limpieza")
+    repositorio.decidir(engine, sin.huella, "reabrir", "jefe", comentario="revisar")
+    repositorio.decidir(
+        engine, sin.huella, "corregir", "jefe", cuenta="6.2 Otra", comentario="era otra"
+    )
+
+    filas = repositorio.aprobadas(engine)
+    assert {f["huella"]: (f["estado"], f["comentario"]) for f in filas} == {
+        pago.huella: ("aprobada", "ok"),
+        sin.huella: ("corregida", "era otra"),
+    }
+    hoy = date.today()
+    assert len(repositorio.aprobadas(engine, decididas_desde=hoy, decididas_hasta=hoy)) == 2
+    assert repositorio.aprobadas(engine, decididas_hasta=date(2000, 1, 1)) == []
+    assert repositorio.aprobadas(engine, banco="BDT") == []
+
+
+def _libro(filas):
+    import io
+
+    import openpyxl
+
+    from cxc.bancos.exportar import libro_aprobadas
+
+    return openpyxl.load_workbook(io.BytesIO(libro_aprobadas(filas)))
+
+
+def test_libro_aprobadas():
+    from datetime import datetime
+    from decimal import Decimal
+
+    base = {
+        "banco": "BANCAMIGA", "fecha": date(2026, 11, 12), "referencia": "33577466",
+        "descripcion": "NC Credito Inmediato", "moneda": "VES", "regla": "R2",
+        "decidida_por": "ana@x.test", "decidida_en": datetime(2026, 11, 13, 10, 5, 7, 123),
+        "comentario": "",
+    }
+    filas = [
+        base | {"huella": "h1", "monto": Decimal("306118.02"), "tipo": "pago", "pago_id": 7,
+                "pago_nombre": "PBAMI/2026/00973", "cuenta": "", "estado": "aprobada",
+                "candidatos": [{"id": 7, "partner": "Cliente A", "fecha": "2026-11-12",
+                                "ya_conciliado": True}]},
+        base | {"huella": "h2", "monto": Decimal("-2435.85"), "tipo": "cuenta", "pago_id": None,
+                "pago_nombre": "", "cuenta": "6.2.1.1.01.02 Bank Fees", "estado": "corregida",
+                "candidatos": [], "regla": "R1", "comentario": "comisión"},
+    ]
+    filas.append(
+        filas[0] | {"huella": "h3", "pago_id": 8, "pago_nombre": "PBAMI/2026/00974",
+                    "candidatos": [{"id": 8, "partner": "Cliente B", "fecha": "2026-11-12"}]}
+    )
+    wb = _libro(filas)
+    assert wb.sheetnames == ["Para aplicar", "Ya conciliadas en Odoo", "Resumen"]
+
+    def tabla(nombre):
+        ws = wb[nombre]
+        enc = [c.value for c in ws[1]]
+        return [dict(zip(enc, [c.value for c in r], strict=True)) for r in ws.iter_rows(min_row=2)]
+
+    aplicar = tabla("Para aplicar")
+    assert [f["Huella"] for f in aplicar] == ["h2", "h3"]
+    cuenta, pago = aplicar
+    assert (cuenta["Destino"], cuenta["Cuenta contable"], cuenta["Comentario"]) == (
+        "Cuenta", "6.2.1.1.01.02 Bank Fees", "comisión"
+    )
+    assert cuenta["Diario Odoo"] == "Banco Bancamiga 7806"
+    assert (pago["Destino"], pago["Pago Odoo"], pago["Cliente / proveedor"]) == (
+        "Pago", "PBAMI/2026/00974", "Cliente B"
+    )
+    assert pago["Monto"] == 306118.02
+
+    ya = tabla("Ya conciliadas en Odoo")
+    assert [(f["Huella"], f["Pago Odoo"], f["Cliente / proveedor"]) for f in ya] == [
+        ("h1", "PBAMI/2026/00973", "Cliente A")
+    ]
+    res = [[c.value for c in r] for r in wb["Resumen"].iter_rows(min_row=2)]
+    assert res == [["BANCAMIGA", "Cuenta", 1, -2435.85, 0], ["BANCAMIGA", "Pago", 1, 306118.02, 1]]
+
+
+def test_libro_aprobadas_vacio():
+    assert _libro([])["Resumen"]["A2"].value.startswith("No hay propuestas")
+
+
+def test_endpoint_aprobadas(sin_base):
+    with _como(VENDEDOR):
+        assert client.get("/api/bancos/conciliacion/aprobadas.xlsx").status_code == 403
+    with _como(AUDITOR), patch("cxc.web.app.bancos_repo.aprobadas", return_value=[]) as ap:
+        r = client.get(
+            "/api/bancos/conciliacion/aprobadas.xlsx",
+            params={"banco": 'BAN"CAMIGA', "desde": "2026-11-13", "hasta": "2026-11-14"},
+        )
+    assert r.status_code == 200
+    assert ap.call_args.kwargs["decididas_desde"] == date(2026, 11, 13)
+    assert ap.call_args.kwargs["decididas_hasta"] == date(2026, 11, 14)
+    assert 'filename="aprobadas_para_odoo_bancamiga_' in r.headers["content-disposition"]
+    with _como(AUDITOR):
+        r = client.get("/api/bancos/conciliacion/aprobadas.xlsx", params={"desde": "ayer"})
+    assert r.status_code == 422

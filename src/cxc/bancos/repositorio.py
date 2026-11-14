@@ -425,3 +425,41 @@ def decisiones(
             x["antes"], x["despues"] = json.loads(x["antes"]), json.loads(x["despues"])
             out.append(x)
         return out
+
+
+def aprobadas(
+    engine: Engine,
+    *,
+    banco: str | None = None,
+    decididas_desde: date | None = None,
+    decididas_hasta: date | None = None,
+) -> list[dict[str, Any]]:
+    """Lo aprobado o corregido, para aplicarlo en Odoo a mano mientras no hay fase 3.
+
+    Igual que ``propuestas`` más el comentario de la última decisión. Los filtros de
+    fecha son por cuándo se decidió (``decididas_hasta`` incluye todo ese día), para
+    poder bajar "lo aprobado hoy" sin repetir lo de ayer.
+    """
+    filas = [
+        f
+        for f in propuestas(engine, banco=banco)
+        if f["estado"] in (APROBADA, CORREGIDA)
+        and (decididas_desde is None or f["decidida_en"].date() >= decididas_desde)
+        and (decididas_hasta is None or f["decidida_en"].date() <= decididas_hasta)
+    ]
+    if not filas:
+        return []
+    d = bancos_decisiones
+    ultima = (
+        select(d.c.huella, d.c.comentario)
+        .where(d.c.huella.in_([f["huella"] for f in filas]))
+        .where(d.c.accion != "reabrir")
+        .order_by(d.c.huella, d.c.decision_id.desc())
+        .distinct(d.c.huella)
+    )
+    with engine.connect() as conn:
+        comentarios = {r.huella: r.comentario for r in conn.execute(ultima)}
+    for f in filas:
+        f["comentario"] = comentarios.get(f["huella"], "")
+    filas.sort(key=lambda f: (f["banco"], f["fecha"], f["huella"]))
+    return filas

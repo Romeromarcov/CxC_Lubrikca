@@ -18364,6 +18364,35 @@ async def bancos_conciliacion_generar(
         raise HTTPException(status_code=502, detail=f"No pude leer Odoo: {e}") from e
 
 
+@app.get("/api/bancos/conciliacion/aprobadas.xlsx")
+async def bancos_conciliacion_aprobadas_excel(
+    banco: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
+    """Lo aprobado o corregido en la cola, para aplicarlo a mano en Odoo (sin fase 3).
+
+    ``desde``/``hasta`` filtran por la fecha en que se DECIDIÓ, no la del movimiento:
+    así se baja "lo aprobado hoy" sin repetir lo que ya se aplicó.
+    """
+    _usuario_bancos(cxc_session, "bancos.ver", "bancos.conciliar")
+    filas = bancos_repo.aprobadas(
+        _engine_bancos(),
+        banco=banco,
+        decididas_desde=_fecha_param(desde, "desde"),
+        decididas_hasta=_fecha_param(hasta, "hasta"),
+    )
+    contenido = bancos_exportar.libro_aprobadas(filas)
+    sufijo = "_" + re.sub(r"[^a-z0-9_]", "", banco.lower()) if banco else ""
+    filename = f"aprobadas_para_odoo{sufijo}_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(contenido),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/bancos/conciliacion")
 async def bancos_conciliacion_listar(
     banco: str | None = None,
