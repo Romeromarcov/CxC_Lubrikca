@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -20,8 +20,16 @@ CONTACTO = "contacto"
 PEDIDO = "pedido"
 PAGO = "pago"
 PAGO_PROVEEDOR = "pago_proveedor"
-KINDS: tuple[str, ...] = (CONTACTO, PEDIDO, PAGO, PAGO_PROVEEDOR)
-KINDS_COMPLETABLES = frozenset({PAGO, PAGO_PROVEEDOR})
+PROVEEDOR = "proveedor"
+FACTURA_PROVEEDOR = "factura_proveedor"
+KINDS: tuple[str, ...] = (
+    CONTACTO,
+    PEDIDO,
+    PAGO,
+    PAGO_PROVEEDOR,
+    PROVEEDOR,
+    FACTURA_PROVEEDOR,
+)
 
 PENDIENTE = "PENDIENTE"
 INCOMPLETO = "INCOMPLETO"
@@ -45,6 +53,33 @@ CAMPOS_PAGO = frozenset(
         "factura_ref",
     }
 )
+
+# Campos de una factura de proveedor que se pueden corregir con /completar.
+CAMPOS_FACTURA = frozenset(
+    {
+        "proveedor",
+        "rif",
+        "numero_factura",
+        "numero_control",
+        "fecha_emision",
+        "fecha_vencimiento",
+        "moneda",
+        "base_imponible",
+        "iva",
+        "monto_total",
+        "concepto",
+        "orden_ref",
+        "notas",
+    }
+)
+
+# Qué tipos se completan después de enviados y con qué campos.
+CAMPOS_COMPLETABLES: dict[str, frozenset[str]] = {
+    PAGO: CAMPOS_PAGO,
+    PAGO_PROVEEDOR: CAMPOS_PAGO,
+    FACTURA_PROVEEDOR: CAMPOS_FACTURA,
+}
+KINDS_COMPLETABLES = frozenset(CAMPOS_COMPLETABLES)
 
 
 class CapturaInvalida(ValueError):
@@ -152,7 +187,63 @@ def validar(kind: str, draft: dict[str, Any]) -> list[str]:
         return []
     if kind == PEDIDO:
         return _validar_pedido(draft)
+    if kind == PROVEEDOR:
+        return _validar_proveedor(draft)
+    if kind == FACTURA_PROVEEDOR:
+        return _validar_factura(draft)
     return _validar_pago(kind, draft)
+
+
+def _validar_proveedor(draft: dict[str, Any]) -> list[str]:
+    _exigir(draft, ["nombre", "rif", "telefono"])
+    normalizar_rif(str(draft["rif"]))
+    if not 7 <= len(digitos(str(draft["telefono"]))) <= 15:
+        raise CapturaInvalida("Teléfono inválido (7 a 15 dígitos).", ["telefono"])
+    if not vacio(draft.get("dias_credito")):
+        try:
+            dias = int(str(draft["dias_credito"]).strip())
+        except ValueError as e:
+            raise CapturaInvalida("Días de crédito inválidos.", ["dias_credito"]) from e
+        if dias < 0:
+            raise CapturaInvalida("Días de crédito inválidos.", ["dias_credito"])
+    return []
+
+
+def fecha_iso_valida(valor: Any, nombre: str) -> str:
+    """``YYYY-MM-DD`` exacto; lanza ``CapturaInvalida`` si el formato o la fecha no son válidos."""
+    try:
+        return date.fromisoformat(str(valor).strip()).isoformat()
+    except ValueError as e:
+        raise CapturaInvalida(f"{nombre} inválida (usa AAAA-MM-DD).", [nombre.lower()]) from e
+
+
+def _validar_factura(draft: dict[str, Any]) -> list[str]:
+    if not vacio(draft.get("rif")):
+        normalizar_rif(str(draft["rif"]))
+    if not vacio(draft.get("monto_total")) and a_decimal(draft["monto_total"], "monto_total") <= 0:
+        raise CapturaInvalida("El monto total debe ser mayor que cero.", ["monto_total"])
+    for campo in ("base_imponible", "iva"):
+        if not vacio(draft.get(campo)) and a_decimal(draft[campo], campo) < 0:
+            raise CapturaInvalida(f"{campo} no puede ser negativo.", [campo])
+    emision = (
+        fecha_iso_valida(draft["fecha_emision"], "fecha_emision")
+        if not vacio(draft.get("fecha_emision"))
+        else None
+    )
+    if not vacio(draft.get("fecha_vencimiento")):
+        venc = fecha_iso_valida(draft["fecha_vencimiento"], "fecha_vencimiento")
+        if emision and venc < emision:
+            raise CapturaInvalida(
+                "La fecha de vencimiento es anterior a la de emisión.", ["fecha_vencimiento"]
+            )
+    faltan = [
+        c
+        for c in ("numero_factura", "fecha_emision", "moneda", "monto_total")
+        if vacio(draft.get(c))
+    ]
+    if vacio(draft.get("proveedor")) and vacio(draft.get("rif")):
+        faltan.append("proveedor (nombre o RIF)")
+    return faltan
 
 
 def _validar_pedido(draft: dict[str, Any]) -> list[str]:

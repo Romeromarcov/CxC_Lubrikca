@@ -21,15 +21,18 @@ from cxc.odoo.escritura import EscritorOdoo, OdooEscrituraError
 
 from .espejo import Espejo
 from .modelos import (
-    CAMPOS_PAGO,
+    CAMPOS_COMPLETABLES,
     CONTACTO,
     ENVIADO,
     ERROR,
+    FACTURA_PROVEEDOR,
     INCOMPLETO,
     KINDS_COMPLETABLES,
     PAGO,
+    PAGO_PROVEEDOR,
     PEDIDO,
     PENDIENTE,
+    PROVEEDOR,
     Captura,
     CapturaInvalida,
     a_decimal,
@@ -54,7 +57,11 @@ class CapturaCerrada(Exception):
 
 
 class NoCompletable(Exception):
-    """Solo los pagos se completan desde el bot."""
+    """Solo los pagos y las facturas de proveedor se completan después de recibidos."""
+
+
+class FacturaDuplicada(Exception):
+    """Misma (proveedor, número de factura) ya capturada: rechazo de negocio (409)."""
 
 
 class _Incompleto(Exception):
@@ -100,10 +107,16 @@ def resolver_diario(payload: dict[str, Any], override: dict[str, int]) -> int:
                     raise _Incompleto([f"diario: la cuenta {clave} no tiene diario en Odoo"])
                 return int(d["journal_id"])
     raise _Incompleto(
-        [
-            "diario: no pude determinar el diario (indica el banco o configura CAPTURAS_DIARIOS)"
-        ]
+        ["diario: no pude determinar el diario (indica el banco o configura CAPTURAS_DIARIOS)"]
     )
+
+
+def _mismo_proveedor(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Mismo proveedor: igual RIF si ambos lo traen; si no, igual nombre (sin mayúsculas)."""
+    if not vacio(a.get("rif")) and not vacio(b.get("rif")):
+        return str(a["rif"]).upper() == str(b["rif"]).upper()
+    na, nb = a.get("proveedor") or a.get("nombre"), b.get("proveedor") or b.get("nombre")
+    return not vacio(na) and not vacio(nb) and str(na).strip().lower() == str(nb).strip().lower()
 
 
 def _fecha_iso(valor: Any) -> str | None:
@@ -137,9 +150,13 @@ class ServicioCapturas:
         self, kind: str, draft: dict[str, Any], source: dict[str, Any], idempotency_key: str
     ) -> tuple[Captura, bool]:
         """Valida y registra. ``creada=False`` si la clave ya existía (mismo mensaje)."""
+        existente = self._repo.obtener_por_clave(idempotency_key)
+        if existente is not None:  # el mismo mensaje de Telegram: devolver lo ya registrado
+            return existente, False
         faltan = validar(kind, draft)
         if not vacio(draft.get("rif")):
             draft = {**draft, "rif": normalizar_rif(str(draft["rif"]))}
+        self._rechazar_factura_duplicada(kind, draft, excluir=None)
         return self._repo.crear(
             kind=kind,
             idempotency_key=idempotency_key,
@@ -153,17 +170,19 @@ class ServicioCapturas:
     def completar(
         self, captura_id: int, cambios: dict[str, Any], actor: str = "bot", enviar: bool = True
     ) -> Captura:
-        """Fusiona correcciones de un pago y lo reevalúa; ``enviar=False`` no lo manda a Odoo."""
+        """Fusiona correcciones de un pago o factura y lo reevalúa; ``enviar=False`` no lo manda."""
         c = self._existente(captura_id)
         if c.kind not in KINDS_COMPLETABLES:
-            raise NoCompletable("Solo se pueden completar pagos.")
+            raise NoCompletable("Solo se pueden completar pagos y facturas de proveedor.")
         if c.estado == ENVIADO:
             raise CapturaCerrada("Ya está en Odoo: edítala allá.")
-        validos = {k: v for k, v in cambios.items() if k in CAMPOS_PAGO and not vacio(v)}
+        permitidos = CAMPOS_COMPLETABLES[c.kind]
+        validos = {k: v for k, v in cambios.items() if k in permitidos and not vacio(v)}
         payload = {**c.payload, **validos}
         faltan = validar(c.kind, payload)  # puede lanzar CapturaInvalida
         if not vacio(payload.get("rif")):
             payload["rif"] = normalizar_rif(str(payload["rif"]))
+        self._rechazar_factura_duplicada(c.kind, payload, excluir=captura_id)
         c = self._repo.actualizar(
             captura_id,
             payload=payload,
@@ -173,6 +192,19 @@ class ServicioCapturas:
         )
         self._repo.evento(captura_id, "completada", ", ".join(sorted(validos)), actor)
         return c if faltan or not enviar else self.procesar(captura_id)
+
+    def _rechazar_factura_duplicada(
+        self, kind: str, draft: dict[str, Any], excluir: int | None
+    ) -> None:
+        """Una factura (proveedor + número) se captura una sola vez."""
+        if kind != FACTURA_PROVEEDOR or vacio(draft.get("numero_factura")):
+            return
+        for previa in self._repo.facturas_con_numero(str(draft["numero_factura"]).strip()):
+            if previa.captura_id != excluir and _mismo_proveedor(previa.payload, draft):
+                raise FacturaDuplicada(
+                    f"La factura {str(draft['numero_factura']).strip()} de ese proveedor ya fue "
+                    f"capturada (captura #{previa.captura_id}, {previa.estado})."
+                )
 
     def reintentar(self, captura_id: int, actor: str = "sistema") -> Captura:
         c = self._existente(captura_id)
@@ -266,6 +298,10 @@ class ServicioCapturas:
             return self._contacto(c, odoo, marca)
         if c.kind == PEDIDO:
             return self._pedido(c, odoo, marca)
+        if c.kind == PROVEEDOR:
+            return self._proveedor(c, odoo, marca)
+        if c.kind == FACTURA_PROVEEDOR:
+            return self._factura(c, odoo, marca)
         return self._pago(c, odoo, marca)
 
     # ── contacto ─────────────────────────────────────────────────────────────
@@ -411,13 +447,20 @@ class ServicioCapturas:
         if moneda_id is None:
             raise _Incompleto([f"moneda: «{p['moneda']}» no existe en Odoo"])
         diario = resolver_diario(p, self._diarios)
+        factura_txt = f"factura {p['factura_ref']}" if not vacio(p.get("factura_ref")) else ""
+        if c.kind == PAGO_PROVEEDOR and factura_txt:
+            # Solo referencia para la nota: NO se concilia ni se exige que la factura exista.
+            factura = odoo.factura_proveedor_por_ref(partner, str(p["factura_ref"]))
+            if factura is not None:
+                factura_txt += f" [account.move {factura}]"
+                extra = {**extra, "factura_odoo_id": factura}
         partes = [
             marca,
             f"ref {p['referencia']}" if not vacio(p.get("referencia")) else "",
             str(p.get("banco") or ""),
             str(p.get("metodo_pago") or ""),
             f"pedido {p['pedido_ref']}" if not vacio(p.get("pedido_ref")) else "",
-            f"factura {p['factura_ref']}" if not vacio(p.get("factura_ref")) else "",
+            factura_txt,
         ]
         pago = odoo.crear_pago(
             partner_id=partner,
@@ -431,10 +474,131 @@ class ServicioCapturas:
         )
         return f"account.payment:{pago}", {**extra, "partner_id": partner, "diario_id": diario}
 
+    # ── proveedor y factura de proveedor ─────────────────────────────────────
+
+    def _proveedor(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
+        """Crea el proveedor solo si no existe (por RIF o por nombre exacto): nunca duplica."""
+        p = c.payload
+        propio = odoo.partner_por_marca(marca)  # un reintento tras crearlo nosotros
+        if propio is not None:
+            return f"res.partner:{propio}", {"partner_id": propio, "ya_existia": False}
+        rif, nombre = str(p["rif"]), str(p["nombre"])
+        ids = odoo.partners_por_rif(rif)
+        if len(ids) > 1:
+            raise _Incompleto([f"proveedor: el RIF {rif} está en {len(ids)} contactos de Odoo"])
+        via = "rif"
+        if not ids:
+            ids, via = odoo.partners_por_nombre(nombre), "nombre"
+            if len(ids) > 1:
+                raise _Incompleto(
+                    [f"proveedor: hay {len(ids)} contactos llamados «{nombre}» en Odoo"]
+                )
+        if ids:
+            return f"res.partner:{ids[0]}", {
+                "partner_id": ids[0],
+                "ya_existia": True,
+                "encontrado_por": via,
+                "nota": "El proveedor ya existía en Odoo: no se creó ni se modificó.",
+            }
+        ub = p.get("ubicacion") or {}
+        pid = odoo.crear_proveedor(
+            {
+                "nombre": nombre,
+                "rif": rif,
+                "telefono": p["telefono"],
+                "email": p.get("email"),
+                "direccion": p.get("direccion"),
+                "dias_credito": p.get("dias_credito"),
+                "notas": p.get("notas"),
+                "lat": ub.get("latitud"),
+                "lon": ub.get("longitud"),
+            },
+            marca,
+        )
+        return f"res.partner:{pid}", {"partner_id": pid, "ya_existia": False}
+
+    def _proveedor_de_factura(self, odoo: EscritorOdoo, p: dict[str, Any]) -> tuple[int, str]:
+        """El proveedor de una factura debe EXISTIR: no se crea desde una factura ni se adivina."""
+        rif = str(p["rif"]) if not vacio(p.get("rif")) else None
+        nombre = str(p["proveedor"]).strip() if not vacio(p.get("proveedor")) else None
+        if rif:
+            ids = odoo.partners_por_rif(rif)
+            if len(ids) > 1:
+                raise _Incompleto([f"proveedor: el RIF {rif} está en {len(ids)} contactos de Odoo"])
+            if ids:
+                return ids[0], "rif"
+        if nombre:
+            ids = odoo.proveedores_por_nombre(nombre)
+            if len(ids) > 1:
+                raise _Incompleto(
+                    [f"proveedor: «{nombre}» es ambiguo en Odoo ({len(ids)} coincidencias)"]
+                )
+            if ids:
+                return ids[0], "nombre"
+            en_espejo = [i for i in self._espejo.clientes_por_nombre(nombre) if i.isdigit()]
+            if len(en_espejo) > 1:
+                raise _Incompleto(
+                    [f"proveedor: «{nombre}» es ambiguo ({len(en_espejo)} coincidencias)"]
+                )
+            if en_espejo:
+                return int(en_espejo[0]), "espejo"
+        quien = f"el RIF {rif}" if rif else f"«{nombre}»"
+        raise _Incompleto(
+            [f"proveedor: {quien} no existe en Odoo: créalo (/proveedor) y reintenta"]
+        )
+
+    def _factura(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
+        """``account.move`` de proveedor en BORRADOR; el IVA y el control quedan en la nota."""
+        p = c.payload
+        partner, via = self._proveedor_de_factura(odoo, p)
+        numero = str(p["numero_factura"]).strip()
+        propia = odoo.factura_por_marca(marca)  # un reintento tras crearla nosotros
+        if propia is not None:
+            return f"account.move:{propia}", {"partner_id": partner, "proveedor_via": via}
+        ajena = odoo.factura_proveedor_por_ref(partner, numero)
+        if ajena is not None:
+            raise OdooEscrituraError(
+                f"La factura {numero} ya existe en Odoo para ese proveedor (account.move {ajena})."
+            )
+        moneda_id = odoo.moneda_id(str(p["moneda"]))
+        if moneda_id is None:
+            raise _Incompleto([f"moneda: «{p['moneda']}» no existe en Odoo"])
+        base = p.get("base_imponible")
+        usa_base = not vacio(base) and Decimal(str(base)) > 0
+        monto = Decimal(str(base if usa_base else p["monto_total"]))
+        notas = [
+            f"Factura proveedor {numero}",
+            f"Control {p['numero_control']}" if not vacio(p.get("numero_control")) else "",
+            f"IVA {p['iva']}" if not vacio(p.get("iva")) else "",
+            f"Monto total {p['monto_total']} {p['moneda']}",
+            f"Orden {p['orden_ref']}" if not vacio(p.get("orden_ref")) else "",
+            str(p["notas"]) if not vacio(p.get("notas")) else "",
+        ]
+        concepto = (
+            str(p["concepto"]) if not vacio(p.get("concepto")) else f"Factura proveedor {numero}"
+        )
+        factura = odoo.crear_factura_proveedor(
+            partner_id=partner,
+            numero=numero,
+            fecha_emision=str(p["fecha_emision"]),
+            fecha_vencimiento=_fecha_iso(p.get("fecha_vencimiento")),
+            moneda_id=moneda_id,
+            monto=monto,
+            concepto=concepto,
+            marca=marca,
+            narration=" · ".join(x for x in notas if x),
+        )
+        return f"account.move:{factura}", {
+            "partner_id": partner,
+            "proveedor_via": via,
+            "monto_linea": str(monto),
+        }
+
 
 __all__ = [
     "CapturaCerrada",
     "CapturaInvalida",
+    "FacturaDuplicada",
     "NoCompletable",
     "NoEncontrada",
     "ServicioCapturas",

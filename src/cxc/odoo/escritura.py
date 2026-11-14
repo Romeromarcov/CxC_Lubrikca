@@ -33,6 +33,7 @@ logger = logging.getLogger("cxc.odoo.escritura")
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
 
 NOTA_BORRADOR = "[Borrador Telegram] pendiente de completar"
+SALTO = "\n"
 TIMEOUT_SEGUNDOS = 30.0
 
 
@@ -333,3 +334,115 @@ class EscritorOdoo:
             **{campo: memo},
         )
         return self._crear("account.payment", vals)
+
+    # ── proveedores y facturas de proveedor (borradores) ─────────────────────
+
+    def partner_por_marca(self, marca: str) -> int | None:
+        """Partner que ya creó esta captura (la marca va en ``ref``)."""
+        ids = self._buscar("res.partner", [["ref", "=", marca]], 1)
+        return ids[0] if ids else None
+
+    def partners_por_nombre(self, nombre: str) -> list[int]:
+        """Contactos con ese nombre exacto (sin mayúsculas), sean o no proveedores."""
+        return self._buscar("res.partner", [["name", "=ilike", _ilike_exacto(nombre)]])
+
+    def crear_proveedor(self, datos: dict[str, Any], marca: str) -> int:
+        """Proveedor nuevo en borrador (``supplier_rank`` 1, sin rango de cliente)."""
+        previo = self._buscar("res.partner", [["ref", "=", marca]], 1)
+        if previo:
+            return previo[0]
+        nota = [NOTA_BORRADOR]
+        if datos.get("dias_credito") not in (None, ""):
+            nota.append(f"Días de crédito: {datos['dias_credito']}")
+        if datos.get("notas"):
+            nota.append(str(datos["notas"]))
+        vals = _vals(
+            name=str(datos["nombre"]).strip(),
+            vat=datos["rif"],
+            phone=str(datos["telefono"]).strip(),
+            email=datos.get("email") or None,
+            street=datos.get("direccion") or None,
+            company_type="company" if str(datos["rif"]).upper()[:1] in ("J", "G") else "person",
+            supplier_rank=1,
+            customer_rank=0,
+            comment=SALTO.join(nota),
+            ref=marca,
+            **self._gps("res.partner", datos.get("lat"), datos.get("lon")),
+        )
+        return self._crear("res.partner", vals)
+
+    def factura_por_marca(self, marca: str) -> int | None:
+        """Factura de proveedor que ya creó esta captura (la marca va en ``narration``)."""
+        ids = self._buscar(
+            "account.move", [["move_type", "=", "in_invoice"], ["narration", "ilike", marca]], 1
+        )
+        return ids[0] if ids else None
+
+    def factura_proveedor_por_ref(self, partner_id: int, numero: str) -> int | None:
+        """``account.move`` de proveedor con ``ref`` = número de factura y ese partner."""
+        ids = self._buscar(
+            "account.move",
+            [
+                ["move_type", "=", "in_invoice"],
+                ["partner_id", "=", partner_id],
+                ["ref", "=", numero.strip()],
+            ],
+            1,
+        )
+        return ids[0] if ids else None
+
+    def _validar_campos_factura(self) -> bool:
+        """Verifica con ``fields_get`` los campos de la factura; dice si hay impuestos en línea."""
+        faltan = {
+            "move_type",
+            "partner_id",
+            "ref",
+            "invoice_date",
+            "currency_id",
+            "invoice_line_ids",
+            "narration",
+        } - self.campos("account.move")
+        if faltan:
+            raise OdooEscrituraError(
+                "Odoo no tiene los campos de factura esperados (" + ", ".join(sorted(faltan)) + ")."
+            )
+        return "tax_ids" in self.campos("account.move.line")
+
+    def crear_factura_proveedor(
+        self,
+        *,
+        partner_id: int,
+        numero: str,
+        fecha_emision: str,
+        fecha_vencimiento: str | None,
+        moneda_id: int,
+        monto: Decimal,
+        concepto: str,
+        marca: str,
+        narration: str,
+    ) -> int:
+        """``account.move`` ``in_invoice`` en BORRADOR (no se publica) con una línea.
+
+        No inventa impuestos: la línea va con ``tax_ids`` vacío y el IVA y el número de control que
+        dio el bot quedan en ``narration`` para que contabilidad los asigne en Odoo.
+        """
+        con_impuestos = self._validar_campos_factura()
+        previo = self.factura_por_marca(marca)
+        if previo:
+            return previo
+        linea: dict[str, Any] = {"name": concepto, "quantity": 1.0, "price_unit": float(monto)}
+        if con_impuestos:
+            linea["tax_ids"] = [(6, 0, [])]
+        vals = _vals(
+            move_type="in_invoice",
+            partner_id=partner_id,
+            ref=numero.strip(),
+            invoice_date=fecha_emision,
+            invoice_date_due=fecha_vencimiento
+            if fecha_vencimiento and "invoice_date_due" in self.campos("account.move")
+            else None,
+            currency_id=moneda_id,
+            narration=f"{marca} · {narration}",
+            invoice_line_ids=[(0, 0, linea)],
+        )
+        return self._crear("account.move", vals)

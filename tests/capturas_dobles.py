@@ -59,6 +59,17 @@ class RepoMemoria:
     def obtener(self, captura_id: int) -> Captura | None:
         return self.filas.get(captura_id)
 
+    def obtener_por_clave(self, idempotency_key: str) -> Captura | None:
+        return next((c for c in self.filas.values() if c.idempotency_key == idempotency_key), None)
+
+    def facturas_con_numero(self, numero_factura: str) -> list[Captura]:
+        return [
+            c
+            for c in self.filas.values()
+            if c.kind == "factura_proveedor"
+            and str(c.payload.get("numero_factura", "")).lower() == numero_factura.lower()
+        ]
+
     def listar(
         self, *, estado: str | None, kind: str | None, limit: int, offset: int
     ) -> tuple[list[Captura], int]:
@@ -158,6 +169,20 @@ class OdooFalso:
         self.r: dict[str, Any] = {
             "res.partner:fields_get": {"name": {}, "partner_latitude": {}, "partner_longitude": {}},
             "account.payment:fields_get": {"memo": {}, "amount": {}},
+            "account.move:fields_get": dict.fromkeys(
+                [
+                    "move_type",
+                    "partner_id",
+                    "ref",
+                    "invoice_date",
+                    "invoice_date_due",
+                    "currency_id",
+                    "invoice_line_ids",
+                    "narration",
+                ],
+                {},
+            ),
+            "account.move.line:fields_get": {"tax_ids": {}, "name": {}},
             "res.currency:search_read": [{"id": 1, "name": "USD"}, {"id": 2, "name": "VES"}],
             "res.users:search": [7],
             "sale.order:read": [{"name": "S00700"}],

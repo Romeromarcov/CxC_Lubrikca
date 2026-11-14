@@ -11,7 +11,8 @@ import json
 from datetime import datetime
 from typing import Any, Protocol
 
-from sqlalchemy import Engine, func, insert, select, update
+from sqlalchemy import Engine, cast, func, insert, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from cxc.db.schema import capturas_bot, capturas_bot_eventos
@@ -33,6 +34,12 @@ class RepoCapturas(Protocol):
     ) -> tuple[Captura, bool]: ...
 
     def obtener(self, captura_id: int) -> Captura | None: ...
+
+    def obtener_por_clave(self, idempotency_key: str) -> Captura | None: ...
+
+    def facturas_con_numero(self, numero_factura: str) -> list[Captura]:
+        """Capturas ``factura_proveedor`` con ese número (sin distinguir mayúsculas)."""
+        ...
 
     def listar(
         self, *, estado: str | None, kind: str | None, limit: int, offset: int
@@ -142,6 +149,23 @@ class RepoCapturasSQL:
                 select(capturas_bot).where(capturas_bot.c.captura_id == captura_id)
             ).first()
         return _a_captura(fila) if fila is not None else None
+
+    def obtener_por_clave(self, idempotency_key: str) -> Captura | None:
+        with self._engine.connect() as conn:
+            fila = conn.execute(
+                select(capturas_bot).where(capturas_bot.c.idempotency_key == idempotency_key)
+            ).first()
+        return _a_captura(fila) if fila is not None else None
+
+    def facturas_con_numero(self, numero_factura: str) -> list[Captura]:
+        numero = func.lower(cast(capturas_bot.c.payload, JSONB)["numero_factura"].astext)
+        with self._engine.connect() as conn:
+            filas = conn.execute(
+                select(capturas_bot)
+                .where(capturas_bot.c.kind == "factura_proveedor", numero == numero_factura.lower())
+                .order_by(capturas_bot.c.captura_id)
+            ).all()
+        return [_a_captura(f) for f in filas]
 
     def listar(
         self, *, estado: str | None, kind: str | None, limit: int, offset: int

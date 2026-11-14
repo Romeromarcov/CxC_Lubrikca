@@ -33,6 +33,7 @@ from cxc.capturas.modelos import ESTADOS, KINDS, PENDIENTE, CapturaInvalida
 from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.capturas.servicio import (
     CapturaCerrada,
+    FacturaDuplicada,
     NoCompletable,
     NoEncontrada,
     ServicioCapturas,
@@ -167,6 +168,8 @@ def _invalida(e: CapturaInvalida) -> JSONResponse:
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
         captura, creada = servicio.recibir(body.kind, body.draft, body.source, body.idempotency_key)
+    except FacturaDuplicada as e:
+        return JSONResponse(status_code=409, content={"error": str(e)})  # rechazo de negocio
     except CapturaInvalida as e:
         return _invalida(e)
     if creada and captura.estado == PENDIENTE:
@@ -182,14 +185,14 @@ def completar_captura(
     servicio: Servicio,
     actor: Annotated[str, Depends(bot_o_gestion)],
 ) -> JSONResponse:
-    """Completa un pago: lo llama el bot (``X-Bot-Key``) o la pantalla (``capturas.gestionar``)."""
+    """Completa un pago o factura: lo llama el bot (``X-Bot-Key``) o la pantalla (gestionar)."""
     try:
         captura = servicio.completar(captura_id, body.cambios, actor=actor, enviar=False)
     except NoEncontrada as e:
         raise HTTPException(status_code=404, detail="Captura no encontrada") from e
     except NoCompletable as e:
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": []})
-    except CapturaCerrada as e:
+    except (CapturaCerrada, FacturaDuplicada) as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
     except CapturaInvalida as e:
         return _invalida(e)
