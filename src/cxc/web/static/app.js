@@ -272,6 +272,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "auditoria": "tab-auditoria",
             "inventario": "tab-inventario",
             "bancos": "tab-bancos",
+            "capturas": "tab-capturas",
             "configuracion": "tab-config"
         };
 
@@ -320,6 +321,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadInventario === "function") loadInventario();
             } else if (path === "bancos") {
                 if (typeof loadBancos === "function") loadBancos();
+            } else if (path === "capturas") {
+                if (typeof loadCapturas === "function") loadCapturas();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
@@ -6127,6 +6130,435 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
+
+    // ===================================================================
+    // CAPTURAS TELEGRAM: borradores de los bots y su envío a Odoo.
+    // API: GET /api/bots/capturas, GET /api/bots/capturas/{id},
+    //      POST /api/bots/capturas/{id}/reintentar. Ver docs del PR.
+    // ===================================================================
+    const _CAP_PAGINA = 25;
+    const _CAP_MAX_BUSQUEDA = 500;   // la API no filtra por texto: con búsqueda se traen hasta N y se filtra aquí
+    // «Completar» necesita POST /api/bots/capturas/{id}/completar, que hoy solo acepta la llave del bot
+    // (X-Bot-Key), no la sesión de una persona. Cuando el backend lo abra a sesión, basta poner esto en true.
+    const _CAP_COMPLETAR_POR_SESION = false;
+    const _CAP_ESTADOS = {
+        PENDIENTE: ["Pendiente", "amarillo"],
+        INCOMPLETO: ["Incompleto", "amarillo"],
+        ERROR: ["Error", "rojo"],
+        ENVIADO: ["Enviado", "verde"],
+    };
+    const _CAP_TIPOS = {
+        pedido: "Pedido",
+        contacto: "Contacto",
+        pago: "Pago de cliente",
+        pago_proveedor: "Pago a proveedor",
+    };
+    let _capOffset = 0;
+    let _capItems = [];          // filas visibles en la tabla (para abrir el detalle)
+    let _capPuedeGestionar = false;
+    let _capCargaId = 0;         // descarta respuestas viejas si el usuario cambia de filtro rápido
+
+    const _capEsc = (v) => _bancosEsc(v);
+    const _capTexto = (v) => (v == null || v === "" ? "—" : _capEsc(v));
+    const _capMonto = (v) => {
+        const n = Number(v);
+        return v == null || v === "" || !Number.isFinite(n) ? "—" : _bancosNum.format(n);
+    };
+    const _capFechaHora = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (isNaN(d)) return _capEsc(String(iso).slice(0, 16).replace("T", " "));
+        return d.toLocaleString("es-VE", {
+            timeZone: "America/Caracas", day: "2-digit", month: "2-digit", year: "numeric",
+            hour: "2-digit", minute: "2-digit", hour12: false,
+        });
+    };
+    const _capFechaSolo = (iso) => (iso ? _bancosFecha(iso) : "—");
+
+    async function _capSesion() { return _bancosSesion(); }
+
+    async function _capGet(url) {
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+        return data;
+    }
+
+    function _capBadge(estado) {
+        const [txt, clase] = _CAP_ESTADOS[estado] || [estado || "—", ""];
+        return `<span class="semaphore ${clase}">${_capEsc(txt)}</span>`;
+    }
+
+    // Una línea de resumen legible por tipo (lo que la gente busca de un vistazo).
+    function _capResumen(c) {
+        const p = c.payload || {};
+        const gris = (t) => `<div class="cap-sub">${t}</div>`;
+        if (c.kind === "pedido") {
+            const n = Array.isArray(p.lineas) ? p.lineas.length : 0;
+            return `<strong>${_capTexto(p.cliente)}</strong>${gris(`${_capEsc(p.rif || "sin RIF")} · ${n} producto${n === 1 ? "" : "s"}`)}`;
+        }
+        if (c.kind === "contacto") {
+            return `<strong>${_capTexto(p.nombre)}</strong>${gris(_capEsc([p.telefono, p.email].filter(Boolean).join(" · ") || "sin teléfono"))}`;
+        }
+        if (c.kind === "pago") {
+            const quien = p.cliente || p.rif || p.pedido_ref;
+            return `<strong>${_capTexto(quien)}</strong>${gris(`${_capMonto(p.monto)} ${_capEsc(p.moneda || "")} · ref ${_capEsc(p.referencia || "—")}`)}`;
+        }
+        if (c.kind === "pago_proveedor") {
+            return `<strong>${_capTexto(p.proveedor)}</strong>${gris(`${_capMonto(p.monto)} ${_capEsc(p.moneda || "")} · ref ${_capEsc(p.referencia || "—")}`)}`;
+        }
+        return "—";
+    }
+
+    // Texto plano del payload para la búsqueda (cliente, proveedor, referencias, RIF, nombre…).
+    function _capTextoBusqueda(c) {
+        const p = c.payload || {};
+        return [p.cliente, p.proveedor, p.nombre, p.rif, p.referencia, p.pedido_ref, p.factura_ref, p.telefono, p.email,
+                c.odoo_ref]
+            .filter(Boolean).join(" ").toUpperCase();
+    }
+
+    function _capFila(c, i) {
+        const aviso = c.error
+            ? `<div class="cap-sub" style="color:#be123c;">${_capEsc(c.error)}</div>`
+            : (c.estado === "INCOMPLETO" && (c.incompleto || []).length
+                ? `<div class="cap-sub" style="color:#b45309;">Falta: ${(c.incompleto || []).map(_capEsc).join(", ")}</div>` : "");
+        const auto = c.auto ? `<div class="cap-sub">Enviada sola (sin respuesta en el grupo)</div>` : "";
+        return `<tr>
+            <td style="white-space:nowrap;">${_capFechaHora(c.fecha_creacion)}</td>
+            <td>${_capEsc(_CAP_TIPOS[c.kind] || c.kind)}</td>
+            <td>${_capResumen(c)}</td>
+            <td>${_capBadge(c.estado)}${aviso}${auto}</td>
+            <td style="font-size:0.78rem;">${c.odoo_ref ? _capEsc(c.odoo_ref) : "—"}</td>
+            <td style="white-space:nowrap;"><button type="button" class="btn-secondary" data-cap-ver="${i}">Ver detalle</button></td>
+        </tr>`;
+    }
+
+    async function _capContadores() {
+        const estados = Object.keys(_CAP_ESTADOS);
+        const kind = document.getElementById("capturas-kind").value;
+        await Promise.all(estados.map(async (e) => {
+            const el = document.getElementById("capturas-n-" + e);
+            if (!el) return;
+            try {
+                const p = new URLSearchParams({ estado: e, limit: "1", offset: "0" });
+                if (kind) p.set("kind", kind);
+                const data = await _capGet("/api/bots/capturas?" + p.toString());
+                el.textContent = data.total ?? 0;
+                el.style.color = (e === "ERROR" || e === "INCOMPLETO") && data.total ? "#e11d48" : "";
+            } catch (err) {
+                el.textContent = "—";
+            }
+        }));
+    }
+
+    function _capPaginacion(total, desde, hasta, local) {
+        const cont = document.getElementById("capturas-paginacion");
+        if (!total) { cont.innerHTML = ""; return; }
+        const ant = desde > 0, sig = hasta < total;
+        cont.innerHTML = `<span>${desde + 1}–${hasta} de ${total}</span>
+            <button type="button" class="btn-secondary" data-cap-pag="ant" ${ant ? "" : "disabled"}>← Anterior</button>
+            <button type="button" class="btn-secondary" data-cap-pag="sig" ${sig ? "" : "disabled"}>Siguiente →</button>`;
+        cont.dataset.local = local ? "1" : "";
+    }
+
+    async function loadCapturasLista() {
+        const body = document.getElementById("capturas-body");
+        const resumen = document.getElementById("capturas-resumen");
+        const estado = document.getElementById("capturas-estado").value;
+        const kind = document.getElementById("capturas-kind").value;
+        const q = (document.getElementById("capturas-buscar").value || "").trim().toUpperCase();
+        const miCarga = ++_capCargaId;
+        const p = new URLSearchParams();
+        if (estado) p.set("estado", estado);
+        if (kind) p.set("kind", kind);
+        if (q) { p.set("limit", String(_CAP_MAX_BUSQUEDA)); p.set("offset", "0"); }
+        else { p.set("limit", String(_CAP_PAGINA)); p.set("offset", String(_capOffset)); }
+        try {
+            const data = await _capGet("/api/bots/capturas?" + p.toString());
+            if (miCarga !== _capCargaId) return;   // llegó una respuesta de un filtro anterior
+            let filas = data.items || [];
+            let total = data.total ?? filas.length;
+            let desde = _capOffset;
+            if (q) {
+                filas = filas.filter(c => _capTextoBusqueda(c).includes(q));
+                total = filas.length;
+                desde = Math.min(_capOffset, Math.max(0, total - 1));
+                desde = desde - (desde % _CAP_PAGINA);
+                _capOffset = desde;
+                filas = filas.slice(desde, desde + _CAP_PAGINA);
+                resumen.textContent = `${total} coincidencia${total === 1 ? "" : "s"} entre las últimas ${_CAP_MAX_BUSQUEDA} capturas del filtro.`;
+            } else {
+                resumen.textContent = total ? `${total} captura${total === 1 ? "" : "s"}` : "";
+            }
+            _capItems = filas;
+            if (!filas.length) {
+                body.innerHTML = `<tr><td colspan="6" class="table-empty">${
+                    (estado || kind || q) ? "No hay capturas con esos filtros." : "Todavía no llegan capturas desde Telegram."}</td></tr>`;
+                _capPaginacion(0, 0, 0, !!q);
+                return;
+            }
+            body.innerHTML = filas.map(_capFila).join("");
+            _capPaginacion(total, desde, desde + filas.length, !!q);
+        } catch (err) {
+            if (miCarga !== _capCargaId) return;
+            _capItems = [];
+            body.innerHTML = `<tr><td colspan="6" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+            document.getElementById("capturas-paginacion").innerHTML = "";
+            resumen.textContent = "";
+        }
+    }
+
+    async function loadCapturas() {
+        const u = await _capSesion();
+        _capPuedeGestionar = !!u && (u.rol === "admin" || (u.permisos || []).includes("capturas.gestionar"));
+        await Promise.all([_capContadores(), loadCapturasLista()]);
+    }
+    window.loadCapturas = loadCapturas;
+
+    // --- Detalle ---------------------------------------------------------------
+    const _capFilaDato = (etiqueta, valorHtml) =>
+        `<tr><th style="text-align:left; width:38%; color:#475569; font-weight:600; padding:0.35rem 0.5rem 0.35rem 0; vertical-align:top;">${etiqueta}</th>` +
+        `<td style="padding:0.35rem 0;">${valorHtml}</td></tr>`;
+    const _capTablaDatos = (filas) =>
+        `<table style="width:100%; border-collapse:collapse; font-size:0.88rem;">${filas.join("")}</table>`;
+
+    function _capGps(u) {
+        if (!u || u.latitud == null || u.longitud == null) return "—";
+        const lat = Number(u.latitud), lon = Number(u.longitud);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return "—";
+        const prec = u.precision_m != null && Number.isFinite(Number(u.precision_m)) ? ` (±${Math.round(Number(u.precision_m))} m)` : "";
+        return `<a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" rel="noopener noreferrer">${lat.toFixed(5)}, ${lon.toFixed(5)}</a>${prec}`;
+    }
+
+    function _capDetallePedido(p) {
+        const lineas = (p.lineas || []).map(l => `<tr>
+            <td>${_capTexto(l.producto)}</td>
+            <td style="text-align:right;">${_capMonto(l.cantidad)}</td>
+            <td style="text-align:right;">${l.precio_unitario == null ? "—" : _capMonto(l.precio_unitario)}</td>
+        </tr>`).join("");
+        const entrega = p.entrega_igual_fiscal ? "La misma dirección fiscal" : _capTexto(p.direccion_entrega);
+        return _capTablaDatos([
+            _capFilaDato("Cliente", _capTexto(p.cliente)),
+            _capFilaDato("RIF", _capTexto(p.rif)),
+            _capFilaDato("Correo", _capTexto(p.email)),
+            _capFilaDato("Teléfono", _capTexto(p.telefono)),
+            _capFilaDato("Dirección fiscal", _capTexto(p.direccion_fiscal)),
+            _capFilaDato("Dirección de entrega", entrega),
+            _capFilaDato("Ubicación GPS", _capGps(p.ubicacion)),
+            _capFilaDato("Fecha de entrega", _capFechaSolo(p.fecha_entrega)),
+            _capFilaDato("Observaciones", _capTexto(p.observaciones)),
+        ]) + `<h4 style="margin:1rem 0 0.4rem 0;">Productos</h4>
+            <div class="table-wrapper"><table class="cxc-table"><thead><tr><th>Producto</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">Precio</th></tr></thead>
+            <tbody>${lineas || `<tr><td colspan="3" class="table-empty">Sin productos.</td></tr>`}</tbody></table></div>`;
+    }
+
+    function _capDetallePago(p, proveedor) {
+        return _capTablaDatos([
+            proveedor ? _capFilaDato("Proveedor", _capTexto(p.proveedor)) : _capFilaDato("Cliente", _capTexto(p.cliente)),
+            proveedor ? _capFilaDato("Factura", _capTexto(p.factura_ref)) : _capFilaDato("RIF", _capTexto(p.rif)),
+            proveedor ? "" : _capFilaDato("Pedido o factura", _capTexto(p.pedido_ref)),
+            _capFilaDato("Monto", `<strong>${_capMonto(p.monto)}</strong> ${_capEsc(p.moneda || "")}`),
+            _capFilaDato("Método de pago", _capTexto(p.metodo_pago)),
+            _capFilaDato("Referencia", _capTexto(p.referencia)),
+            _capFilaDato("Banco", _capTexto(p.banco)),
+            _capFilaDato("Fecha del pago", _capFechaSolo(p.fecha_pago)),
+        ].filter(Boolean));
+    }
+
+    function _capDetalleContacto(p) {
+        return _capTablaDatos([
+            _capFilaDato("Nombre", _capTexto(p.nombre)),
+            _capFilaDato("Teléfono", _capTexto(p.telefono)),
+            _capFilaDato("Correo", _capTexto(p.email)),
+            _capFilaDato("Ubicación GPS", _capGps(p.ubicacion)),
+            _capFilaDato("Notas", _capTexto(p.notas)),
+        ]);
+    }
+
+    // Campos que se pueden completar en un pago incompleto (formulario deshabilitado hasta que el backend lo permita).
+    const _CAP_CAMPOS_COMPLETAR = {
+        pago: [["monto", "Monto"], ["moneda", "Moneda"], ["metodo_pago", "Método de pago"], ["referencia", "Referencia"],
+               ["banco", "Banco"], ["fecha_pago", "Fecha del pago"], ["cliente", "Cliente"], ["rif", "RIF"], ["pedido_ref", "Pedido"]],
+        pago_proveedor: [["proveedor", "Proveedor"], ["monto", "Monto"], ["moneda", "Moneda"], ["metodo_pago", "Método de pago"],
+                         ["referencia", "Referencia"], ["banco", "Banco"], ["fecha_pago", "Fecha del pago"], ["factura_ref", "Factura"]],
+    };
+
+    function _capFormCompletar(c) {
+        const campos = _CAP_CAMPOS_COMPLETAR[c.kind];
+        if (!campos || c.estado !== "INCOMPLETO") return "";
+        const dis = _CAP_COMPLETAR_POR_SESION && _capPuedeGestionar ? "" : "disabled";
+        const aviso = !_CAP_COMPLETAR_POR_SESION
+            ? "Por ahora los datos que faltan se completan desde el grupo de Telegram («✏️ Completar») o directamente en Odoo; desde esta pantalla todavía no."
+            : (!_capPuedeGestionar ? "Necesitas el permiso «gestionar capturas» para completar." : "");
+        const inputs = campos.map(([k, et]) => {
+            const falta = (c.incompleto || []).some(x => String(x).toLowerCase().startsWith(k.split("_")[0]));
+            const tipo = k === "fecha_pago" ? "date" : "text";
+            return `<label style="display:flex; flex-direction:column; font-size:0.78rem; color:#475569; gap:0.2rem;">
+                ${_capEsc(et)}${falta ? ' <span style="color:#b45309;">(falta)</span>' : ""}
+                <input type="${tipo}" class="filter-select" data-cap-campo="${k}" ${dis} style="cursor:text;" value="${_capEsc((c.payload || {})[k] || "")}">
+            </label>`;
+        }).join("");
+        return `<h4 style="margin:1rem 0 0.4rem 0;">Completar datos</h4>
+            ${aviso ? `<p style="color:#92400e; background:#fffbeb; border-left:4px solid #f59e0b; padding:0.5rem 0.75rem; border-radius:6px; font-size:0.82rem; margin:0 0 0.75rem 0;">${_capEsc(aviso)}</p>` : ""}
+            <form id="cap-form-completar" data-cap-id="${_capEsc(c.id)}" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;">
+                ${inputs}
+                <div style="grid-column:1/-1;"><button type="submit" class="btn-primary" ${dis} style="padding:0.5rem 1rem;">Guardar datos</button></div>
+            </form>`;
+    }
+
+    function _capDetalle(c) {
+        const p = c.payload || {};
+        const fuente = c.fuente || {};
+        const vendedor = c.vendedor || c.vendedor_email || fuente.vendedor_email || p.vendedor;
+        let contenido = "";
+        if (c.kind === "pedido") contenido = _capDetallePedido(p);
+        else if (c.kind === "pago") contenido = _capDetallePago(p, false);
+        else if (c.kind === "pago_proveedor") contenido = _capDetallePago(p, true);
+        else if (c.kind === "contacto") contenido = _capDetalleContacto(p);
+        else contenido = `<pre style="white-space:pre-wrap; font-size:0.8rem;">${_capEsc(JSON.stringify(p, null, 2))}</pre>`;
+
+        const faltan = (c.incompleto || []).length
+            ? `<div style="border-left:4px solid #f59e0b; background:#fffbeb; padding:0.5rem 0.85rem; border-radius:6px; color:#92400e; margin-bottom:0.75rem;">
+                 <strong>Falta:</strong> ${(c.incompleto || []).map(_capEsc).join(", ")}</div>` : "";
+        const error = c.error
+            ? `<div style="border-left:4px solid #e11d48; background:#fff1f2; padding:0.5rem 0.85rem; border-radius:6px; color:#9f1239; margin-bottom:0.75rem;">
+                 <strong>Error:</strong> ${_capEsc(c.error)}</div>` : "";
+        const reintentar = _capPuedeGestionar && (c.estado === "ERROR" || c.estado === "PENDIENTE")
+            ? `<button type="button" class="btn-primary" data-cap-reintentar="${_capEsc(c.id)}" style="padding:0.5rem 1rem;">↻ Reintentar envío a Odoo</button>` : "";
+        const resultado = c.resultado && Object.keys(c.resultado).length
+            ? `<details style="margin-top:1rem;"><summary style="cursor:pointer; color:#475569; font-size:0.85rem;">Resultado técnico</summary>
+                 <pre style="white-space:pre-wrap; font-size:0.78rem; background:#f8fafc; padding:0.6rem; border-radius:6px;">${_capEsc(JSON.stringify(c.resultado, null, 2))}</pre></details>` : "";
+
+        return `<div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
+                ${_capBadge(c.estado)}
+                <span class="state-badge">${_capEsc(_CAP_TIPOS[c.kind] || c.kind)}</span>
+                ${c.auto ? '<span class="state-badge abierta" title="Nadie respondió en el grupo a tiempo y se envió sola">Enviada sola</span>' : ""}
+            </div>
+            ${faltan}${error}
+            ${_capTablaDatos([
+                _capFilaDato("Recibida", _capFechaHora(c.fecha_creacion)),
+                _capFilaDato("Última actualización", _capFechaHora(c.fecha_actualizacion)),
+                _capFilaDato("Vendedor", _capTexto(vendedor)),
+                _capFilaDato("En Odoo", c.odoo_ref ? `<strong>${_capEsc(c.odoo_ref)}</strong>` : "Todavía no"),
+            ])}
+            <h4 style="margin:1rem 0 0.4rem 0;">Borrador</h4>
+            ${contenido}
+            ${_capFormCompletar(c)}
+            ${resultado}
+            <div style="margin-top:1.25rem; display:flex; gap:0.6rem; flex-wrap:wrap;">${reintentar}
+                <button type="button" class="btn-secondary" onclick="cerrarModalCaptura()">Cerrar</button></div>
+            <div id="cap-accion-resultado" style="margin-top:0.75rem;"></div>`;
+    }
+
+    function _capMostrarModal(titulo, html) {
+        document.getElementById("modal-captura-titulo").textContent = titulo;
+        document.getElementById("modal-captura-body").innerHTML = html;
+        document.getElementById("modal-captura").style.display = "flex";
+    }
+
+    window.cerrarModalCaptura = function() {
+        document.getElementById("modal-captura").style.display = "none";
+    };
+
+    async function _capAbrirDetalle(id, previo) {
+        _capMostrarModal("Captura", `<p class="table-empty" style="padding:1rem !important;">Cargando...</p>`);
+        try {
+            const c = await _capGet("/api/bots/capturas/" + encodeURIComponent(id));
+            _capMostrarModal(`${_CAP_TIPOS[c.kind] || "Captura"} · ${_capFechaHora(c.fecha_creacion)}`, _capDetalle(c));
+        } catch (err) {
+            if (previo) {   // sin el detalle individual, se muestra lo que ya trae la lista
+                _capMostrarModal(`${_CAP_TIPOS[previo.kind] || "Captura"} · ${_capFechaHora(previo.fecha_creacion)}`, _capDetalle(previo));
+            } else {
+                _capMostrarModal("Captura", `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`);
+            }
+        }
+    }
+
+    async function _capReintentar(id, btn) {
+        if (!confirm("¿Reintentar el envío de esta captura a Odoo?")) return;
+        const out = document.getElementById("cap-accion-resultado");
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/bots/capturas/${encodeURIComponent(id)}/reintentar`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            await _capAbrirDetalle(id);
+            const out2 = document.getElementById("cap-accion-resultado");
+            if (out2) out2.innerHTML = `<div style="border-left:4px solid #10b981; padding:0.5rem 0.85rem; background:#ecfdf5; border-radius:6px; color:#065f46;">✅ Reintento solicitado. El envío a Odoo se hace en segundo plano: actualiza en unos segundos.</div>`;
+            await loadCapturas();
+        } catch (err) {
+            if (out) out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`;
+            btn.disabled = false;
+        }
+    }
+
+    async function _capCompletar(form) {
+        const id = form.dataset.capId;
+        const cambios = {};
+        form.querySelectorAll("[data-cap-campo]").forEach(inp => {
+            const v = inp.value.trim();
+            if (v) cambios[inp.dataset.capCampo] = v;
+        });
+        const out = document.getElementById("cap-accion-resultado");
+        if (!Object.keys(cambios).length) {
+            out.innerHTML = `<div style="color:#9f1239;">Escribe al menos un dato.</div>`;
+            return;
+        }
+        try {
+            const res = await fetch(`/api/bots/capturas/${encodeURIComponent(id)}/completar`, {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cambios }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            await _capAbrirDetalle(id);
+            await loadCapturas();
+        } catch (err) {
+            out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`;
+        }
+    }
+
+    // --- Eventos de la pantalla ---------------------------------------------------
+    (function _capEventos() {
+        const estadoEl = document.getElementById("capturas-estado");
+        const kindEl = document.getElementById("capturas-kind");
+        const buscarEl = document.getElementById("capturas-buscar");
+        if (!estadoEl) return;
+        const refiltrar = () => { _capOffset = 0; loadCapturasLista(); };
+        estadoEl.addEventListener("change", refiltrar);
+        kindEl.addEventListener("change", () => { _capOffset = 0; _capContadores(); loadCapturasLista(); });
+        let t = null;
+        buscarEl.addEventListener("input", () => { clearTimeout(t); t = setTimeout(refiltrar, 300); });
+
+        const irAEstado = (e) => { estadoEl.value = e; refiltrar(); };
+        document.querySelectorAll(".cap-kpi").forEach(k => {
+            k.addEventListener("click", () => irAEstado(k.dataset.capEstado));
+            k.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); irAEstado(k.dataset.capEstado); } });
+        });
+
+        document.getElementById("capturas-body").addEventListener("click", (e) => {
+            const b = e.target.closest("[data-cap-ver]");
+            if (!b) return;
+            const c = _capItems[Number(b.dataset.capVer)];
+            if (c) _capAbrirDetalle(c.id, c);
+        });
+        document.getElementById("capturas-paginacion").addEventListener("click", (e) => {
+            const b = e.target.closest("[data-cap-pag]");
+            if (!b || b.disabled) return;
+            _capOffset = Math.max(0, _capOffset + (b.dataset.capPag === "sig" ? _CAP_PAGINA : -_CAP_PAGINA));
+            loadCapturasLista();
+        });
+        const modal = document.getElementById("modal-captura");
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) window.cerrarModalCaptura();
+            const r = e.target.closest("[data-cap-reintentar]");
+            if (r) _capReintentar(r.dataset.capReintentar, r);
+        });
+        modal.addEventListener("submit", (e) => {
+            if (e.target.id === "cap-form-completar") { e.preventDefault(); _capCompletar(e.target); }
+        });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalCaptura(); });
+    })();
 
     // SPA navigation click handling for nav links and dashboard cards
     document.querySelectorAll(".nav-link").forEach(link => {
