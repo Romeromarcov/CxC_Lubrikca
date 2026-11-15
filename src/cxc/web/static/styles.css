@@ -1025,3 +1025,19 @@ body {
 .bancos-conc-export { display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap; margin:0 0 1rem 0; padding:0.6rem 0.8rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.8rem; color:#475569; }
 .bancos-conc-export label { display:flex; gap:0.35rem; align-items:center; }
 .bancos-conc-export > span { flex:1 1 260px; }
+
+/* Capturas Telegram */
+.cap-sub {
+    font-size: 0.72rem;
+    color: #64748b;
+    margin-top: 0.2rem;
+}
+
+.cap-kpi {
+    cursor: pointer;
+}
+
+.cap-kpi:focus-visible {
+    outline: 2px solid hsl(var(--accent-cyan));
+    outline-offset: 2px;
+}
