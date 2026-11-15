@@ -163,6 +163,24 @@ def variantes_rif(rif: str) -> list[str]:
     return sorted({n, f"{letra}{digs}", f"{letra}-{digs[:-1]}-{digs[-1]}", digs, rif.strip()})
 
 
+def validar_gps(ubicacion: Any, campo: str = "ubicacion") -> None:
+    """Misma regla que Omni (``_gps``): latitud entre -90 y 90, longitud entre -180 y 180."""
+    if not isinstance(ubicacion, dict):
+        raise CapturaInvalida("Ubicación GPS inválida.", [campo])
+    try:
+        lat = Decimal(str(ubicacion["latitud"]))
+        lon = Decimal(str(ubicacion["longitud"]))
+        prec = ubicacion.get("precision_m")
+        if prec is not None:
+            Decimal(str(prec))
+    except (KeyError, InvalidOperation) as e:
+        raise CapturaInvalida("Ubicación GPS inválida.", [campo]) from e
+    if not (lat.is_finite() and lon.is_finite()):
+        raise CapturaInvalida("Ubicación GPS inválida.", [campo])
+    if not (Decimal(-90) <= lat <= 90 and Decimal(-180) <= lon <= 180):
+        raise CapturaInvalida("Ubicación GPS fuera de rango.", [campo])
+
+
 def digitos(telefono: str) -> str:
     return re.sub(r"\D", "", telefono or "")
 
@@ -181,9 +199,10 @@ def validar(kind: str, draft: dict[str, Any]) -> list[str]:
     if kind not in KINDS:
         raise CapturaInvalida(f"Tipo de captura desconocido: {kind!r}.")
     if kind == CONTACTO:
-        _exigir(draft, ["nombre", "telefono"])
+        _exigir(draft, ["nombre", "telefono", "ubicacion"])
         if not 7 <= len(digitos(str(draft["telefono"]))) <= 15:
             raise CapturaInvalida("Teléfono inválido (7 a 15 dígitos).", ["telefono"])
+        validar_gps(draft["ubicacion"])
         return []
     if kind == PEDIDO:
         return _validar_pedido(draft)
@@ -199,13 +218,13 @@ def _validar_proveedor(draft: dict[str, Any]) -> list[str]:
     normalizar_rif(str(draft["rif"]))
     if not 7 <= len(digitos(str(draft["telefono"]))) <= 15:
         raise CapturaInvalida("Teléfono inválido (7 a 15 dígitos).", ["telefono"])
-    if not vacio(draft.get("dias_credito")):
-        try:
-            dias = int(str(draft["dias_credito"]).strip())
-        except ValueError as e:
-            raise CapturaInvalida("Días de crédito inválidos.", ["dias_credito"]) from e
-        if dias < 0:
-            raise CapturaInvalida("Días de crédito inválidos.", ["dias_credito"])
+    if not vacio(draft.get("ubicacion")):
+        validar_gps(draft["ubicacion"])
+    dias = draft.get("dias_credito")
+    if dias is not None and (not str(dias).isdigit() or int(str(dias)) > 365):
+        raise CapturaInvalida(
+            "Los días de crédito deben ser un número entre 0 y 365.", ["dias_credito"]
+        )
     return []
 
 
@@ -246,8 +265,18 @@ def _validar_factura(draft: dict[str, Any]) -> list[str]:
     return faltan
 
 
+# Obligatorios de un pedido: los mismos que Omni (``_REQ_PEDIDO`` en bots_ingest/handlers.py).
+REQ_PEDIDO = ["cliente", "lineas", "rif", "email", "direccion_fiscal", "ubicacion"]
+
+
 def _validar_pedido(draft: dict[str, Any]) -> list[str]:
-    _exigir(draft, ["cliente", "lineas"])
+    _exigir(draft, REQ_PEDIDO)
+    if vacio(draft.get("direccion_entrega")) and not draft.get("entrega_igual_fiscal"):
+        raise CapturaInvalida(
+            "Indica la dirección de entrega o que es la misma fiscal.", ["direccion_entrega"]
+        )
+    normalizar_rif(str(draft["rif"]))
+    validar_gps(draft["ubicacion"])
     lineas = draft["lineas"]
     if not isinstance(lineas, list) or not all(isinstance(ln, dict) for ln in lineas):
         raise CapturaInvalida("Las líneas del pedido son inválidas.", ["lineas"])
@@ -258,8 +287,6 @@ def _validar_pedido(draft: dict[str, Any]) -> list[str]:
             raise CapturaInvalida(f"Cantidad inválida para «{ln['producto']}».", ["lineas"])
         if not vacio(ln.get("precio_unitario")) and a_decimal(ln["precio_unitario"], "Precio") < 0:
             raise CapturaInvalida(f"Precio inválido para «{ln['producto']}».", ["lineas"])
-    if not vacio(draft.get("rif")):
-        normalizar_rif(str(draft["rif"]))
     return []
 
 

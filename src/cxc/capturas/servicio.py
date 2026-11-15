@@ -41,7 +41,7 @@ from .modelos import (
     vacio,
     validar,
 )
-from .repositorio import RepoCapturas
+from .repositorio import BloqueoOcupado, FacturaYaCapturada, RepoCapturas
 
 logger = logging.getLogger("cxc.capturas")
 
@@ -111,6 +111,21 @@ def resolver_diario(payload: dict[str, Any], override: dict[str, int]) -> int:
     )
 
 
+def _numero_factura(kind: str, draft: dict[str, Any]) -> str | None:
+    """Número de una ``factura_proveedor`` (None si no es factura o aún no lo trae)."""
+    if kind != FACTURA_PROVEEDOR or vacio(draft.get("numero_factura")):
+        return None
+    return str(draft["numero_factura"]).strip()
+
+
+def _factura_duplicada(numero: str, e: FacturaYaCapturada) -> FacturaDuplicada:
+    previa = e.existente
+    return FacturaDuplicada(
+        f"La factura {numero} de ese proveedor ya fue capturada "
+        f"(captura #{previa.captura_id}, {previa.estado})."
+    )
+
+
 def _mismo_proveedor(a: dict[str, Any], b: dict[str, Any]) -> bool:
     """Mismo proveedor: igual RIF si ambos lo traen; si no, igual nombre (sin mayúsculas)."""
     if not vacio(a.get("rif")) and not vacio(b.get("rif")):
@@ -150,22 +165,81 @@ class ServicioCapturas:
         self, kind: str, draft: dict[str, Any], source: dict[str, Any], idempotency_key: str
     ) -> tuple[Captura, bool]:
         """Valida y registra. ``creada=False`` si la clave ya existía (mismo mensaje)."""
+        captura, creada, _ = self.recibir_detallado(kind, draft, source, idempotency_key)
+        return captura, creada
+
+    def recibir_detallado(
+        self, kind: str, draft: dict[str, Any], source: dict[str, Any], idempotency_key: str
+    ) -> tuple[Captura, bool, bool]:
+        """Como ``recibir`` y además dice si un reenvío CORRIGIÓ una captura aún no enviada.
+
+        Devuelve ``(captura, creada, actualizada)``. Con la misma clave:
+
+        - mismo contenido → la existente, sin cambios (idempotente);
+        - contenido distinto y la captura sigue ``PENDIENTE``/``INCOMPLETO`` (no llegó a Odoo) →
+          se actualiza el payload, se reevalúa el estado y se anota en la bitácora (así la
+          corrección del vendedor reemplaza al borrador viejo y nunca se envía el viejo a Odoo);
+        - ya ``ENVIADO`` o ``ERROR`` → no se pisa: se devuelve la existente.
+        """
         existente = self._repo.obtener_por_clave(idempotency_key)
-        if existente is not None:  # el mismo mensaje de Telegram: devolver lo ya registrado
-            return existente, False
+        if existente is not None:
+            captura, actualizada = self._reenvio(existente, kind, draft, source)
+            return captura, False, actualizada
         faltan = validar(kind, draft)
+        draft = self._normalizar(draft)
+        datos: dict[str, Any] = {
+            "kind": kind,
+            "idempotency_key": idempotency_key,
+            "payload": draft,
+            "fuente": source,
+            "auto": bool(source.get("auto")),
+            "estado": INCOMPLETO if faltan else PENDIENTE,
+            "incompleto": faltan,
+        }
+        numero = _numero_factura(kind, draft)
+        if numero is None:
+            captura, creada = self._repo.crear(**datos)
+        else:  # comprobar y crear en UNA transacción bloqueada por número (ver repositorio)
+            try:
+                captura, creada = self._repo.crear_factura(
+                    **datos,
+                    numero_factura=numero,
+                    es_mismo_proveedor=lambda previo: _mismo_proveedor(previo, draft),
+                )
+            except FacturaYaCapturada as e:
+                raise _factura_duplicada(numero, e) from e
+        return captura, creada, False
+
+    @staticmethod
+    def _normalizar(draft: dict[str, Any]) -> dict[str, Any]:
         if not vacio(draft.get("rif")):
-            draft = {**draft, "rif": normalizar_rif(str(draft["rif"]))}
-        self._rechazar_factura_duplicada(kind, draft, excluir=None)
-        return self._repo.crear(
-            kind=kind,
-            idempotency_key=idempotency_key,
-            payload=draft,
-            fuente=source,
-            auto=bool(source.get("auto")),
-            estado=INCOMPLETO if faltan else PENDIENTE,
-            incompleto=faltan,
+            return {**draft, "rif": normalizar_rif(str(draft["rif"]))}
+        return draft
+
+    def _reenvio(
+        self, existente: Captura, kind: str, draft: dict[str, Any], source: dict[str, Any]
+    ) -> tuple[Captura, bool]:
+        if existente.estado not in (PENDIENTE, INCOMPLETO):
+            return existente, False  # ya en Odoo o con error: no se pisa
+        if kind != existente.kind:
+            raise CapturaInvalida("Esa clave ya se usó con otro tipo de captura.")
+        faltan = validar(kind, draft)  # un reenvío inválido se rechaza y deja intacta la captura
+        nuevo = self._normalizar(draft)
+        if nuevo == existente.payload:
+            return existente, False
+        cambiados = sorted(
+            k
+            for k in set(nuevo) | set(existente.payload)
+            if nuevo.get(k) != existente.payload.get(k)
         )
+        actualizada = self._guardar_cambios(existente.captura_id, kind, nuevo, faltan)
+        self._repo.evento(
+            existente.captura_id,
+            "actualizada_por_reenvio",
+            ", ".join(cambiados),
+            str(source.get("vendedor_email") or "bot"),
+        )
+        return actualizada, True
 
     def completar(
         self, captura_id: int, cambios: dict[str, Any], actor: str = "bot", enviar: bool = True
@@ -182,29 +256,36 @@ class ServicioCapturas:
         faltan = validar(c.kind, payload)  # puede lanzar CapturaInvalida
         if not vacio(payload.get("rif")):
             payload["rif"] = normalizar_rif(str(payload["rif"]))
-        self._rechazar_factura_duplicada(c.kind, payload, excluir=captura_id)
-        c = self._repo.actualizar(
-            captura_id,
-            payload=payload,
-            incompleto=faltan,
-            estado=INCOMPLETO if faltan else PENDIENTE,
-            error="",
-        )
+        c = self._guardar_cambios(captura_id, c.kind, payload, faltan)
         self._repo.evento(captura_id, "completada", ", ".join(sorted(validos)), actor)
         return c if faltan or not enviar else self.procesar(captura_id)
 
-    def _rechazar_factura_duplicada(
-        self, kind: str, draft: dict[str, Any], excluir: int | None
-    ) -> None:
-        """Una factura (proveedor + número) se captura una sola vez."""
-        if kind != FACTURA_PROVEEDOR or vacio(draft.get("numero_factura")):
-            return
-        for previa in self._repo.facturas_con_numero(str(draft["numero_factura"]).strip()):
-            if previa.captura_id != excluir and _mismo_proveedor(previa.payload, draft):
-                raise FacturaDuplicada(
-                    f"La factura {str(draft['numero_factura']).strip()} de ese proveedor ya fue "
-                    f"capturada (captura #{previa.captura_id}, {previa.estado})."
-                )
+    def _guardar_cambios(
+        self, captura_id: int, kind: str, payload: dict[str, Any], faltan: list[str]
+    ) -> Captura:
+        """Guarda el payload corregido y reevalúa el estado.
+
+        Una factura con número se guarda con la comprobación de duplicados DENTRO de la misma
+        transacción bloqueada por número: dos capturas no pueden quedar con la misma factura.
+        """
+        campos: dict[str, Any] = {
+            "payload": payload,
+            "incompleto": faltan,
+            "estado": INCOMPLETO if faltan else PENDIENTE,
+            "error": "",
+        }
+        numero = _numero_factura(kind, payload)
+        if numero is None:
+            return self._repo.actualizar(captura_id, **campos)
+        try:
+            return self._repo.actualizar_factura(
+                captura_id,
+                numero_factura=numero,
+                es_mismo_proveedor=lambda previo: _mismo_proveedor(previo, payload),
+                **campos,
+            )
+        except FacturaYaCapturada as e:
+            raise _factura_duplicada(numero, e) from e
 
     def reintentar(self, captura_id: int, actor: str = "sistema") -> Captura:
         c = self._existente(captura_id)
@@ -299,7 +380,7 @@ class ServicioCapturas:
         if c.kind == PEDIDO:
             return self._pedido(c, odoo, marca)
         if c.kind == PROVEEDOR:
-            return self._proveedor(c, odoo, marca)
+            return self._proveedor_exclusivo(c, odoo, marca)
         if c.kind == FACTURA_PROVEEDOR:
             return self._factura(c, odoo, marca)
         return self._pago(c, odoo, marca)
@@ -338,7 +419,7 @@ class ServicioCapturas:
             ids_e = self._espejo.clientes_por_nombre(nombre)
             if len(ids_e) > 1:
                 raise _Incompleto(
-                    [f"cliente: hay varios clientes llamados «{nombre}»; indica el RIF"]
+                    [f"cliente: hay varios clientes llamados «{nombre}»; vincúlalo en Odoo"]
                 )
             if ids_e and ids_e[0].isdigit():
                 return int(ids_e[0]), "nombre"
@@ -476,6 +557,23 @@ class ServicioCapturas:
 
     # ── proveedor y factura de proveedor ─────────────────────────────────────
 
+    def _proveedor_exclusivo(
+        self, c: Captura, odoo: EscritorOdoo, marca: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Serializa por RIF: dos capturas del mismo proveedor no crean dos ``res.partner``.
+
+        Con envíos simultáneos las dos buscarían «no existe» y las dos crearían. Con el bloqueo, la
+        segunda espera a la primera, la encuentra en Odoo y queda ``ya_existia``. Si no se logra el
+        bloqueo a tiempo es un error transitorio y se reintenta solo.
+        """
+        try:
+            with self._repo.bloqueo(f"proveedor:{c.payload['rif']}"):
+                return self._proveedor(c, odoo, marca)
+        except BloqueoOcupado as e:
+            raise OdooEscrituraError(
+                "Hay otro envío del mismo proveedor en curso; se reintentará.", transitorio=True
+            ) from e
+
     def _proveedor(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
         """Crea el proveedor solo si no existe (por RIF o por nombre exacto): nunca duplica."""
         p = c.payload
@@ -597,6 +695,7 @@ class ServicioCapturas:
 
 __all__ = [
     "CapturaCerrada",
+    "BloqueoOcupado",
     "CapturaInvalida",
     "FacturaDuplicada",
     "NoCompletable",

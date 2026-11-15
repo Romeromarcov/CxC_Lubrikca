@@ -32,6 +32,7 @@ from cxc.capturas.espejo import EspejoSQL
 from cxc.capturas.modelos import ESTADOS, KINDS, PENDIENTE, CapturaInvalida
 from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.capturas.servicio import (
+    BloqueoOcupado,
     CapturaCerrada,
     FacturaDuplicada,
     NoCompletable,
@@ -161,6 +162,16 @@ class CompletarIn(BaseModel):
     cambios: dict[str, Any]
 
 
+def _ocupado() -> JSONResponse:
+    """Otro envío de lo mismo sigue en curso: el bot puede reintentar (es idempotente)."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "Hay otro envío de la misma factura en curso; reintenta en unos segundos."
+        },
+    )
+
+
 def _invalida(e: CapturaInvalida) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
 
@@ -168,12 +179,16 @@ def _invalida(e: CapturaInvalida) -> JSONResponse:
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
-        captura, creada = servicio.recibir(body.kind, body.draft, body.source, body.idempotency_key)
+        captura, creada, actualizada = servicio.recibir_detallado(
+            body.kind, body.draft, body.source, body.idempotency_key
+        )
     except FacturaDuplicada as e:
         return JSONResponse(status_code=409, content={"error": str(e)})  # rechazo de negocio
+    except BloqueoOcupado:
+        return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
-    if creada and captura.estado == PENDIENTE:
+    if (creada or actualizada) and captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
     return JSONResponse(status_code=201 if creada else 200, content=captura.a_dict())
 
@@ -195,6 +210,8 @@ def completar_captura(
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": []})
     except (CapturaCerrada, FacturaDuplicada) as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
+    except BloqueoOcupado:
+        return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
     if captura.estado == PENDIENTE:

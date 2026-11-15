@@ -1,0 +1,742 @@
+{
+ "invalidos": [
+  {
+   "id": "contacto_sin_ubicacion",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567"
+   }
+  },
+  {
+   "id": "contacto_ubicacion_vacia",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {}
+   }
+  },
+  {
+   "id": "contacto_sin_telefono",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "contacto_sin_nombre",
+   "kind": "contacto",
+   "draft": {
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "contacto_telefono_corto",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "123",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "contacto_telefono_largo",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "1234567890123456",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "contacto_latitud_fuera_de_rango",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 99,
+     "longitud": 0
+    }
+   }
+  },
+  {
+   "id": "contacto_longitud_fuera_de_rango",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 0,
+     "longitud": -181
+    }
+   }
+  },
+  {
+   "id": "contacto_gps_sin_longitud",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 10.4
+    }
+   }
+  },
+  {
+   "id": "contacto_gps_no_numerico",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": "abc",
+     "longitud": 1
+    }
+   }
+  },
+  {
+   "id": "pedido_sin_cliente",
+   "kind": "pedido",
+   "draft": {
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_sin_lineas",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "pedido_sin_rif",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_sin_email",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_sin_direccion_fiscal",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_sin_ubicacion",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_sin_ninguna_direccion_de_entrega",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_entrega_igual_fiscal_falso_y_sin_direccion",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": false,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_lineas_vacias",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": []
+   }
+  },
+  {
+   "id": "pedido_rif_invalido",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "ABC",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_gps_fuera_de_rango",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 91,
+     "longitud": 0
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_gps_incompleto",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "longitud": 10
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "proveedor_sin_nombre",
+   "kind": "proveedor",
+   "draft": {
+    "rif": "J-123456789",
+    "telefono": "0414-1234567"
+   }
+  },
+  {
+   "id": "proveedor_sin_rif",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "telefono": "0414-1234567"
+   }
+  },
+  {
+   "id": "proveedor_sin_telefono",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789"
+   }
+  },
+  {
+   "id": "proveedor_rif_invalido",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "ABC",
+    "telefono": "0414-1234567"
+   }
+  },
+  {
+   "id": "proveedor_telefono_corto",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "123456"
+   }
+  },
+  {
+   "id": "proveedor_gps_latitud_fuera_de_rango",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 200,
+     "longitud": 0
+    }
+   }
+  },
+  {
+   "id": "proveedor_gps_longitud_fuera_de_rango",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 0,
+     "longitud": 999
+    }
+   }
+  },
+  {
+   "id": "proveedor_gps_no_numerico",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": "x",
+     "longitud": "y"
+    }
+   }
+  },
+  {
+   "id": "proveedor_dias_credito_texto",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "dias_credito": "abc"
+   }
+  },
+  {
+   "id": "proveedor_dias_credito_negativo",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "dias_credito": -5
+   }
+  },
+  {
+   "id": "proveedor_dias_credito_excesivo",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "dias_credito": 400
+   }
+  },
+  {
+   "id": "proveedor_dias_credito_vacio",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "dias_credito": ""
+   }
+  },
+  {
+   "id": "factura_monto_cero",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "0"
+   }
+  },
+  {
+   "id": "factura_monto_negativo",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "-5"
+   }
+  },
+  {
+   "id": "factura_monto_no_numerico",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "abc"
+   }
+  },
+  {
+   "id": "factura_fecha_emision_con_formato_local",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "10/11/2026",
+    "moneda": "USD",
+    "monto_total": "116"
+   }
+  },
+  {
+   "id": "factura_fecha_vencimiento_invalida",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "116",
+    "fecha_vencimiento": "mañana"
+   }
+  },
+  {
+   "id": "factura_vence_antes_de_emitirse",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "116",
+    "fecha_vencimiento": "2026-11-01"
+   }
+  },
+  {
+   "id": "pago_monto_negativo",
+   "kind": "pago",
+   "draft": {
+    "cliente": "Taller",
+    "monto": "-1",
+    "moneda": "USD",
+    "referencia": "R1"
+   }
+  },
+  {
+   "id": "pago_monto_cero",
+   "kind": "pago",
+   "draft": {
+    "cliente": "Taller",
+    "monto": "0",
+    "moneda": "USD",
+    "referencia": "R1"
+   }
+  },
+  {
+   "id": "pago_monto_no_numerico",
+   "kind": "pago",
+   "draft": {
+    "cliente": "Taller",
+    "monto": "abc",
+    "moneda": "USD",
+    "referencia": "R1"
+   }
+  },
+  {
+   "id": "pago_proveedor_monto_cero",
+   "kind": "pago_proveedor",
+   "draft": {
+    "proveedor": "Lub",
+    "monto": "0",
+    "moneda": "USD"
+   }
+  },
+  {
+   "id": "pago_proveedor_monto_negativo",
+   "kind": "pago_proveedor",
+   "draft": {
+    "proveedor": "Lub",
+    "monto": "-3",
+    "moneda": "USD"
+   }
+  }
+ ],
+ "validos": [
+  {
+   "id": "contacto",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "contacto_con_email_y_notas",
+   "kind": "contacto",
+   "draft": {
+    "nombre": "Pedro",
+    "telefono": "0414-1234567",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "email": "p@x.com",
+    "notas": "n"
+   }
+  },
+  {
+   "id": "pedido",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "entrega_igual_fiscal": true,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "pedido_con_entrega_distinta",
+   "kind": "pedido",
+   "draft": {
+    "cliente": "Taller",
+    "rif": "J-123456789",
+    "email": "t@x.com",
+    "direccion_fiscal": "Av 1",
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    },
+    "lineas": [
+     {
+      "producto": "AC-20W50",
+      "cantidad": "2"
+     }
+    ],
+    "direccion_entrega": "Galpón 3"
+   }
+  },
+  {
+   "id": "proveedor",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567"
+   }
+  },
+  {
+   "id": "proveedor_completo",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "email": "p@x.com",
+    "direccion": "Av",
+    "dias_credito": 30,
+    "ubicacion": {
+     "latitud": 10.4806,
+     "longitud": -66.9036,
+     "precision_m": 12.5
+    }
+   }
+  },
+  {
+   "id": "proveedor_dias_cero_texto",
+   "kind": "proveedor",
+   "draft": {
+    "nombre": "Lubricantes SA",
+    "rif": "J-123456789",
+    "telefono": "0414-1234567",
+    "dias_credito": "0"
+   }
+  },
+  {
+   "id": "factura",
+   "kind": "factura_proveedor",
+   "draft": {
+    "proveedor": "Lubricantes SA",
+    "rif": "J-123456789",
+    "numero_factura": "F-001",
+    "fecha_emision": "2026-11-10",
+    "moneda": "USD",
+    "monto_total": "116"
+   }
+  },
+  {
+   "id": "pago",
+   "kind": "pago",
+   "draft": {
+    "cliente": "Taller",
+    "monto": "100",
+    "moneda": "USD",
+    "referencia": "R1"
+   }
+  },
+  {
+   "id": "pago_proveedor",
+   "kind": "pago_proveedor",
+   "draft": {
+    "proveedor": "Lub",
+    "monto": "9",
+    "moneda": "USD"
+   }
+  }
+ ]
+}

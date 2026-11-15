@@ -91,6 +91,34 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
   `pago_proveedor`, `proveedor`, `factura_proveedor`.
 - **Estados:** `PENDIENTE` → `ENVIADO` (`odoo_ref` = `modelo:id`), o `INCOMPLETO`
   (falta algo que no se adivina) o `ERROR` (los de red se reintentan solos, máx. 5).
+- **Reglas de validación (paridad con Omni).** La **fuente de verdad es Omni**
+  (`omni-erp/backend/apps/bots_ingest/services/handlers.py`); `cxc/capturas/modelos.py`
+  las replica y hay que **mantenerlas alineadas**. Obligatorios: `contacto` → nombre,
+  teléfono y ubicación; `pedido` → cliente, líneas, RIF, correo, dirección fiscal,
+  ubicación y (dirección de entrega o «igual a la fiscal»); `proveedor` → nombre, RIF y
+  teléfono. Formato: RIF normalizado (letra-dígitos), teléfono de 7 a 15 dígitos, GPS con
+  latitud −90..90 y longitud −180..180, montos > 0, fechas `AAAA-MM-DD`, días de crédito
+  0..365. Un rechazo de fondo es `422 {error, faltan}` y **no deja captura**; solo los
+  pagos y las facturas de proveedor toleran faltantes (`INCOMPLETO`). La tabla
+  `tests/fixtures/paridad_omni.json` (45 borradores inválidos, verificados contra los
+  handlers reales de Omni) la ejercen `tests/test_capturas_paridad_omni.py`.
+- **Reenvío con la misma `idempotency_key`:** mismo contenido → la captura existente,
+  sin cambios (`200`). Contenido distinto y la captura sigue `PENDIENTE` o `INCOMPLETO`
+  (no llegó a Odoo) → **se actualiza** el payload, se reevalúa el estado y queda en la
+  bitácora (`actualizada_por_reenvio`), así la corrección del vendedor reemplaza al
+  borrador viejo. Ya `ENVIADO` o `ERROR` → no se pisa (`200` con la existente).
+- **Duplicados lógicos y concurrencia.** La misma factura de proveedor (mismo RIF, o mismo
+  nombre si falta el RIF, y mismo número sin distinguir mayúsculas ni espacios) se captura una
+  sola vez: la segunda recibe `409`. La comprobación y el alta van **en la misma transacción,
+  bajo un `pg_advisory_xact_lock` por número de factura**, así que 6 envíos simultáneos con
+  claves distintas dejan una sola captura (antes, con la comprobación en un paso aparte, se
+  colaban hasta 5). El mismo bloqueo protege la corrección del número por reenvío o por
+  `completar`. No se usó un índice único porque «mismo proveedor» (RIF o nombre) no lo expresa
+  un índice, y así tampoco hay migración. Si el bloqueo no se logra en 10 s → `503` (el bot
+  reintenta; es idempotente). Además, la creación de un `proveedor` en Odoo se serializa por RIF
+  (bloqueo de sesión): dos capturas del mismo RIF no crean dos `res.partner`; la segunda queda
+  `ya_existia`. Contactos, pedidos y pagos **no** se rechazan como duplicados a propósito: cada
+  captura lleva su propia marca `BOT-<id>` y repetir un pedido o un pago puede ser legítimo.
 
 Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
 única autoridad contable.
