@@ -13,6 +13,7 @@ from cxc.capturas.modelos import (
     validar,
     variantes_rif,
 )
+from tests.capturas_dobles import contacto_ok, pedido_ok
 
 
 @pytest.mark.parametrize(
@@ -73,24 +74,19 @@ def test_digitos() -> None:
 
 
 def test_contacto_ok_y_faltantes() -> None:
-    assert validar("contacto", {"nombre": "Pedro", "telefono": "0414-1234567"}) == []
+    assert validar("contacto", contacto_ok()) == []
     with pytest.raises(CapturaInvalida) as e:
         validar("contacto", {"nombre": "Pedro"})
-    assert e.value.faltan == ["telefono"]
+    assert e.value.faltan == ["telefono", "ubicacion"]
     with pytest.raises(CapturaInvalida):
-        validar("contacto", {"nombre": "Pedro", "telefono": "123"})
+        validar("contacto", contacto_ok(telefono="123"))
 
 
 # ── pedido ───────────────────────────────────────────────────────────────────
 
 
 def _pedido(**kw: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "cliente": "Taller",
-        "lineas": [{"producto": "Aceite", "cantidad": "2"}],
-    }
-    base.update(kw)
-    return base
+    return pedido_ok(**kw)
 
 
 def test_pedido_valido() -> None:

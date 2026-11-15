@@ -21,7 +21,7 @@ from cxc.capturas.servicio import (
     resolver_diario,
 )
 from cxc.odoo.escritura import EscritorOdoo, OdooEscrituraError
-from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria
+from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria, contacto_ok, pedido_ok
 
 FUENTE = {
     "telegram_user_id": 7,
@@ -114,8 +114,8 @@ def test_con_la_escritura_desactivada_nunca_se_llama_a_odoo() -> None:
     svc, repo, odoo = montar(espejo=ESP_TALLER, activa=False)
     for kind, draft in (
         ("pago", pago()),
-        ("contacto", {"nombre": "P", "telefono": "04141234567"}),
-        ("pedido", {"cliente": "Taller", "lineas": [{"producto": "AC-20W50", "cantidad": "1"}]}),
+        ("contacto", contacto_ok()),
+        ("pedido", pedido_ok(lineas=[{"producto": "AC-20W50", "cantidad": "1"}])),
     ):
         c, _ = svc.recibir(kind, draft, FUENTE, f"k-{kind}")
         out = svc.procesar(c.captura_id)
@@ -157,7 +157,7 @@ def test_contacto_se_envia_como_borrador() -> None:
 
 def test_enviado_no_se_reenvia() -> None:
     svc, _, odoo = montar()
-    c, _ = svc.recibir("contacto", {"nombre": "P", "telefono": "04141234567"}, FUENTE, "k1")
+    c, _ = svc.recibir("contacto", contacto_ok(), FUENTE, "k1")
     svc.procesar(c.captura_id)
     n = len(odoo.creados)
     assert svc.procesar(c.captura_id).estado == ENVIADO and len(odoo.creados) == n
@@ -236,20 +236,20 @@ def test_pedido_rif_duplicado_en_odoo_no_se_adivina() -> None:
     assert out.estado == INCOMPLETO and "2 contactos" in out.error and odoo.creados == []
 
 
-def test_pedido_con_varios_clientes_del_mismo_nombre_pide_el_rif() -> None:
+def test_pedido_con_varios_clientes_del_mismo_nombre_en_el_espejo_no_se_adivina() -> None:
     svc, _, odoo = montar(
         espejo=EspejoFalso(clientes={"Taller": ["1", "2"]}, productos={"AC-20W50": ["900"]})
     )
-    c, _ = svc.recibir("pedido", _pedido(rif=None), FUENTE, "k1")
+    c, _ = svc.recibir("pedido", _pedido(), FUENTE, "k1")  # el RIF no está en Odoo
     out = svc.procesar(c.captura_id)
-    assert out.estado == INCOMPLETO and "indica el RIF" in out.error and odoo.creados == []
+    assert out.estado == INCOMPLETO and "varios clientes" in out.error and odoo.creados == []
 
 
-def test_pedido_sin_cliente_en_odoo_y_sin_rif_no_lo_crea() -> None:
-    svc, _, odoo = montar(espejo=EspejoFalso(productos={"AC-20W50": ["900"]}))
-    c, _ = svc.recibir("pedido", _pedido(cliente="Desconocido", rif=None), FUENTE, "k1")
-    out = svc.procesar(c.captura_id)
-    assert out.estado == INCOMPLETO and "RIF" in out.error and odoo.creados == []
+def test_un_pedido_sin_rif_ni_otros_obligatorios_ya_no_llega_ni_a_registrarse() -> None:
+    svc, repo, odoo = montar(espejo=EspejoFalso(productos={"AC-20W50": ["900"]}))
+    with pytest.raises(CapturaInvalida) as e:
+        svc.recibir("pedido", _pedido(cliente="Desconocido", rif=None), FUENTE, "k1")
+    assert e.value.faltan == ["rif"] and repo.filas == {} and odoo.llamadas == []
 
 
 def test_pedido_con_productos_sin_resolver_lista_todos_y_no_crea_nada() -> None:
@@ -464,7 +464,7 @@ def test_completar_rechaza_valores_invalidos_y_tipos_no_completables() -> None:
     c, _ = svc.recibir("pago", pago(referencia=None), FUENTE, "k1")
     with pytest.raises(CapturaInvalida):
         svc.completar(c.captura_id, {"monto": "-3"})
-    ct, _ = svc.recibir("contacto", {"nombre": "P", "telefono": "04141234567"}, FUENTE, "k2")
+    ct, _ = svc.recibir("contacto", contacto_ok(), FUENTE, "k2")
     with pytest.raises(NoCompletable):
         svc.completar(ct.captura_id, {"nombre": "Q"})
     with pytest.raises(NoEncontrada):

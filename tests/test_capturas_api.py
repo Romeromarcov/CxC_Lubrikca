@@ -14,7 +14,7 @@ from cxc.odoo.escritura import EscritorOdoo
 from cxc.permisos import efectivos
 from cxc.web.app import app
 from cxc.web.capturas_api import get_servicio
-from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria
+from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria, contacto_ok, pedido_ok
 
 client = TestClient(app)
 KEY = "clave-de-prueba-del-bot"
@@ -178,15 +178,8 @@ def test_cuerpo_mal_formado_da_422(entorno: Any) -> None:
 
 def test_contacto_pedido_y_pago_proveedor_se_aceptan(entorno: Any) -> None:
     for kind, draft in (
-        ("contacto", {"nombre": "Pedro", "telefono": "0414-1234567"}),
-        (
-            "pedido",
-            {
-                "cliente": "Taller",
-                "lineas": [{"producto": "AC-20W50", "cantidad": "1"}],
-                "rif": "J-123456789",
-            },
-        ),
+        ("contacto", contacto_ok()),
+        ("pedido", pedido_ok(lineas=[{"producto": "AC-20W50", "cantidad": "1"}])),
         ("pago_proveedor", {"proveedor": "Lub", "monto": "9", "moneda": "USD"}),
     ):
         r = client.post(
@@ -237,7 +230,7 @@ def test_completar_errores(entorno: Any) -> None:
         "/api/bots/capturas",
         json={
             "kind": "contacto",
-            "draft": {"nombre": "P", "telefono": "04141234567"},
+            "draft": contacto_ok(),
             "source": FUENTE,
             "idempotency_key": "kcont",
         },
@@ -279,7 +272,7 @@ def test_listar_filtra_y_pagina(entorno: Any) -> None:
         "/api/bots/capturas",
         json={
             "kind": "contacto",
-            "draft": {"nombre": "P", "telefono": "04141234567"},
+            "draft": contacto_ok(),
             "source": FUENTE,
             "idempotency_key": "b",
         },
@@ -323,7 +316,7 @@ def test_reintentar_exige_gestionar(entorno: Any) -> None:
     svc, repo, odoo = entorno
     body = {
         "kind": "pedido",
-        "draft": {"cliente": "Taller", "lineas": [{"producto": "Fantasma", "cantidad": "1"}]},
+        "draft": pedido_ok(lineas=[{"producto": "Fantasma", "cantidad": "1"}]),
         "source": FUENTE,
         "idempotency_key": "kp",
     }

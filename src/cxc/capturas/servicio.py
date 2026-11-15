@@ -150,14 +150,30 @@ class ServicioCapturas:
         self, kind: str, draft: dict[str, Any], source: dict[str, Any], idempotency_key: str
     ) -> tuple[Captura, bool]:
         """Valida y registra. ``creada=False`` si la clave ya existía (mismo mensaje)."""
+        captura, creada, _ = self.recibir_detallado(kind, draft, source, idempotency_key)
+        return captura, creada
+
+    def recibir_detallado(
+        self, kind: str, draft: dict[str, Any], source: dict[str, Any], idempotency_key: str
+    ) -> tuple[Captura, bool, bool]:
+        """Como ``recibir`` y además dice si un reenvío CORRIGIÓ una captura aún no enviada.
+
+        Devuelve ``(captura, creada, actualizada)``. Con la misma clave:
+
+        - mismo contenido → la existente, sin cambios (idempotente);
+        - contenido distinto y la captura sigue ``PENDIENTE``/``INCOMPLETO`` (no llegó a Odoo) →
+          se actualiza el payload, se reevalúa el estado y se anota en la bitácora (así la
+          corrección del vendedor reemplaza al borrador viejo y nunca se envía el viejo a Odoo);
+        - ya ``ENVIADO`` o ``ERROR`` → no se pisa: se devuelve la existente.
+        """
         existente = self._repo.obtener_por_clave(idempotency_key)
-        if existente is not None:  # el mismo mensaje de Telegram: devolver lo ya registrado
-            return existente, False
+        if existente is not None:
+            captura, actualizada = self._reenvio(existente, kind, draft, source)
+            return captura, False, actualizada
         faltan = validar(kind, draft)
-        if not vacio(draft.get("rif")):
-            draft = {**draft, "rif": normalizar_rif(str(draft["rif"]))}
+        draft = self._normalizar(draft)
         self._rechazar_factura_duplicada(kind, draft, excluir=None)
-        return self._repo.crear(
+        captura, creada = self._repo.crear(
             kind=kind,
             idempotency_key=idempotency_key,
             payload=draft,
@@ -166,6 +182,45 @@ class ServicioCapturas:
             estado=INCOMPLETO if faltan else PENDIENTE,
             incompleto=faltan,
         )
+        return captura, creada, False
+
+    @staticmethod
+    def _normalizar(draft: dict[str, Any]) -> dict[str, Any]:
+        if not vacio(draft.get("rif")):
+            return {**draft, "rif": normalizar_rif(str(draft["rif"]))}
+        return draft
+
+    def _reenvio(
+        self, existente: Captura, kind: str, draft: dict[str, Any], source: dict[str, Any]
+    ) -> tuple[Captura, bool]:
+        if existente.estado not in (PENDIENTE, INCOMPLETO):
+            return existente, False  # ya en Odoo o con error: no se pisa
+        if kind != existente.kind:
+            raise CapturaInvalida("Esa clave ya se usó con otro tipo de captura.")
+        faltan = validar(kind, draft)  # un reenvío inválido se rechaza y deja intacta la captura
+        nuevo = self._normalizar(draft)
+        if nuevo == existente.payload:
+            return existente, False
+        self._rechazar_factura_duplicada(kind, nuevo, excluir=existente.captura_id)
+        cambiados = sorted(
+            k
+            for k in set(nuevo) | set(existente.payload)
+            if nuevo.get(k) != existente.payload.get(k)
+        )
+        actualizada = self._repo.actualizar(
+            existente.captura_id,
+            payload=nuevo,
+            incompleto=faltan,
+            estado=INCOMPLETO if faltan else PENDIENTE,
+            error="",
+        )
+        self._repo.evento(
+            existente.captura_id,
+            "actualizada_por_reenvio",
+            ", ".join(cambiados),
+            str(source.get("vendedor_email") or "bot"),
+        )
+        return actualizada, True
 
     def completar(
         self, captura_id: int, cambios: dict[str, Any], actor: str = "bot", enviar: bool = True
@@ -338,7 +393,7 @@ class ServicioCapturas:
             ids_e = self._espejo.clientes_por_nombre(nombre)
             if len(ids_e) > 1:
                 raise _Incompleto(
-                    [f"cliente: hay varios clientes llamados «{nombre}»; indica el RIF"]
+                    [f"cliente: hay varios clientes llamados «{nombre}»; vincúlalo en Odoo"]
                 )
             if ids_e and ids_e[0].isdigit():
                 return int(ids_e[0]), "nombre"

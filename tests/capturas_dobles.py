@@ -11,6 +11,34 @@ from typing import Any
 
 from cxc.capturas.modelos import ERROR, PENDIENTE, Captura
 
+UBICACION = {"latitud": 10.4806, "longitud": -66.9036, "precision_m": 12.5}
+
+
+def contacto_ok(**kw: Any) -> dict[str, Any]:
+    """Contacto válido según Omni: nombre, teléfono y ubicación obligatorios."""
+    d: dict[str, Any] = {
+        "nombre": "Pedro",
+        "telefono": "0414-1234567",
+        "ubicacion": dict(UBICACION),
+    }
+    d.update(kw)
+    return d
+
+
+def pedido_ok(**kw: Any) -> dict[str, Any]:
+    """Pedido válido según Omni: cliente, líneas, RIF, correo, direcciones, ubicación."""
+    d: dict[str, Any] = {
+        "cliente": "Taller",
+        "rif": "J-123456789",
+        "email": "t@x.com",
+        "direccion_fiscal": "Av 1",
+        "entrega_igual_fiscal": True,
+        "ubicacion": dict(UBICACION),
+        "lineas": [{"producto": "AC-20W50", "cantidad": "2"}],
+    }
+    d.update(kw)
+    return d
+
 
 class RepoMemoria:
     """Misma interfaz que ``RepoCapturasSQL`` (ver el Protocol ``RepoCapturas``)."""

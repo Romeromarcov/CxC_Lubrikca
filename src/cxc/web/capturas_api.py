@@ -167,12 +167,14 @@ def _invalida(e: CapturaInvalida) -> JSONResponse:
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
-        captura, creada = servicio.recibir(body.kind, body.draft, body.source, body.idempotency_key)
+        captura, creada, actualizada = servicio.recibir_detallado(
+            body.kind, body.draft, body.source, body.idempotency_key
+        )
     except FacturaDuplicada as e:
         return JSONResponse(status_code=409, content={"error": str(e)})  # rechazo de negocio
     except CapturaInvalida as e:
         return _invalida(e)
-    if creada and captura.estado == PENDIENTE:
+    if (creada or actualizada) and captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
     return JSONResponse(status_code=201 if creada else 200, content=captura.a_dict())
 
