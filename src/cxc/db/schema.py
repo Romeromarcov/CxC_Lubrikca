@@ -25,6 +25,7 @@ Convenciones:
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -1075,4 +1076,103 @@ bancos_decisiones = Table(
     Column("comentario", Text, nullable=False, server_default=""),
     Column("usuario", String, nullable=False),
     Column("decidida_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Capturas de los bots de Telegram (nov-2026) ----------------------------------
+# Cuarto mundo de datos: lo que los vendedores y la administración mandan por Telegram
+# (contactos, pedidos, pagos de clientes y pagos a proveedores) y su camino a Odoo. NO es
+# espejo de Odoo (el sync no la toca) ni trabajo humano de conciliación. Los JSON se
+# guardan como texto, igual que el resto del esquema. ``idempotency_key`` es único: el
+# mismo mensaje de Telegram nunca se registra dos veces.
+capturas_bot = Table(
+    "capturas_bot",
+    metadata,
+    Column("captura_id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", String, nullable=False, index=True),  # contacto|pedido|pago|pago_proveedor
+    Column("idempotency_key", String, nullable=False, unique=True),
+    # PENDIENTE | INCOMPLETO | ENVIADO | ERROR
+    Column("estado", String, nullable=False, server_default="PENDIENTE", index=True),
+    Column("payload", Text, nullable=False),  # JSON: el borrador tal como lo confirmó el bot
+    Column("fuente", Text, nullable=False, server_default="{}"),  # JSON: chat, mensaje, vendedor
+    Column("auto", Boolean, nullable=False, server_default="false"),
+    Column("incompleto", Text, nullable=False, server_default="[]"),  # JSON: lo que falta
+    Column("resultado", Text, nullable=False, server_default="{}"),  # JSON: ids resueltos, etc.
+    Column("odoo_ref", String, nullable=False, server_default=""),  # «modelo:id»
+    Column("error", Text, nullable=False, server_default=""),  # mensaje legible
+    Column("intentos", Integer, nullable=False, server_default="0"),
+    Column("creada_en", DateTime(timezone=False), nullable=False),
+    Column("actualizada_en", DateTime(timezone=False), nullable=False),
+)
+
+# Bitácora de cada captura (solo-append): recibida, intento de envío, creada en Odoo,
+# error, completada, reintento manual. Es la evidencia de qué se escribió en Odoo y cuándo.
+capturas_bot_eventos = Table(
+    "capturas_bot_eventos",
+    metadata,
+    Column("evento_id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "captura_id", Integer, ForeignKey("capturas_bot.captura_id"), nullable=False, index=True
+    ),
+    Column("evento", String, nullable=False),
+    Column("detalle", Text, nullable=False, server_default=""),
+    Column("actor", String, nullable=False, server_default="sistema"),
+    Column("en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Panel de bots de Telegram (nov-2026) ------------------------------------------
+# Plano de control de la familia de bots (pedidos, cobranza, compras, eventos, asana): cada
+# bot reporta su latido y recibe de aquí su configuración. Mundo aparte: el sync de Odoo no
+# lo toca. NUNCA se guardan tokens de Telegram ni API keys (viven en el entorno de cada bot).
+bots_registro = Table(
+    "bots_registro",
+    metadata,
+    Column("bot", String, primary_key=True),  # pedidos | cobranza | compras | eventos | asana
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("habilitado", Boolean, nullable=False, server_default="true"),
+    Column("parametros", Text, nullable=False, server_default="{}"),  # JSON
+    Column("chats", Text, nullable=False, server_default="{}"),  # JSON {respaldo, grupo}
+    Column("url_panel", String, nullable=False, server_default=""),
+    Column("mensaje", String, nullable=False, server_default=""),
+    Column("version", String, nullable=False, server_default=""),
+    Column("estado", Text, nullable=False, server_default="{}"),  # JSON del último latido
+    Column("ultimo_latido", DateTime(timezone=False), nullable=True),
+    Column("actualizado_por", String, nullable=False, server_default="sistema"),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+)
+
+bots_usuarios = Table(
+    "bots_usuarios",
+    metadata,
+    Column("telegram_id", BigInteger, primary_key=True, autoincrement=False),
+    Column("email", String, nullable=False, server_default=""),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("bots", Text, nullable=False, server_default="[]"),  # JSON: ids de bots permitidos
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+)
+
+# Un renglón por bot y día (retención corta: se podan los de más de 30 días).
+bots_latidos = Table(
+    "bots_latidos",
+    metadata,
+    Column("bot", String, primary_key=True),
+    Column("dia", Date, primary_key=True),
+    Column("latidos", Integer, nullable=False, server_default="0"),
+    Column("mensajes", Integer, nullable=False, server_default="0"),
+    Column("errores", Integer, nullable=False, server_default="0"),
+    Column("ultimo", DateTime(timezone=False), nullable=False),
+)
+
+# Cambios hechos desde el panel (quién, qué, antes y después). Solo-append (trigger).
+bots_bitacora = Table(
+    "bots_bitacora",
+    metadata,
+    Column("cambio_id", Integer, primary_key=True, autoincrement=True),
+    Column("entidad", String, nullable=False, index=True),  # «bot:pedidos» | «usuario:123»
+    Column("accion", String, nullable=False),  # actualizar | alta | baja
+    Column("antes", Text, nullable=False, server_default="{}"),
+    Column("despues", Text, nullable=False, server_default="{}"),
+    Column("usuario", String, nullable=False),
+    Column("cambiado_en", DateTime(timezone=False), nullable=False),
 )

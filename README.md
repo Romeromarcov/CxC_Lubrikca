@@ -8,7 +8,9 @@ Odoo realmente facturó y cobró.
 Principio rector: **el sistema enmarca y marca; el humano revisa lo que se sale
 del marco.** Ningún humano carga solo con un número que mueve dinero sin que el
 sistema lo contraste contra algo verificable. Odoo es la única autoridad
-contable: este sistema **nunca escribe en Odoo**.
+contable: este sistema **no escribe en Odoo**, con una única excepción acotada
+(nov-2026): los **borradores capturados por Telegram** (ver
+[«Capturas de Telegram»](#capturas-de-telegram-única-escritura-a-odoo) más abajo).
 
 > Las reglas de negocio de origen están en
 > [`Especificacion_Sistema_Cobros_Lubrikca.md`](Especificacion_Sistema_Cobros_Lubrikca.md)
@@ -48,7 +50,107 @@ cxc.sync ──► Postgres ◄── cxc.scraper (BCV + Binance → serie_tasas
 **Tres mundos de datos que no se cruzan en escritura:** *espejo de Odoo*
 (escribe solo el sync), *trabajo humano* (vinculaciones, decisiones, reglas de
 descuento — el sync nunca las toca) y *auditoría inmutable* (`serie_tasas`, solo
-append). Lo verifica `tests/test_sync.py`.
+append). Lo verifica `tests/test_sync.py`. Un cuarto mundo, `capturas_bot`
+(lo que llega por Telegram), tampoco lo toca el sync.
+
+### Capturas de Telegram (única escritura a Odoo)
+
+**Cambio de principio (decisión del owner, nov-2026).** Hasta ahora CxC nunca
+escribía en Odoo. Para que el equipo siga trabajando en la interfaz de CxC mientras
+se prueban los bots de Telegram, los bots escriben a Omni **y** a CxC a la vez, y
+CxC crea en Odoo, automáticamente, **solo borradores**:
+
+| Captura | Qué se crea en Odoo | Qué NO se hace |
+|---|---|---|
+| `contacto` | `res.partner` marcado «[Borrador Telegram] pendiente de completar», sin rango de cliente | No se confirma ni se completa |
+| `pedido` | `sale.order` en borrador (+ el cliente, con su RIF, si no existe) | No se confirma; no se fija precio si el bot no lo da (Odoo aplica la lista del cliente) |
+| `pago`, `pago_proveedor` | `account.payment` sin publicar (inbound/outbound) | No se publica ni concilia; **nunca crea clientes ni proveedores**; si el cliente, el diario o la moneda son ambiguos o no existen, queda `INCOMPLETO` con el motivo. En un pago a proveedor con `factura_ref` se ubica la factura (`account.move` `in_invoice`, misma `ref` y partner) **solo para citarla en la nota**; si no aparece, no es error |
+| `proveedor` | `res.partner` con `supplier_rank` 1 y `customer_rank` 0, «[Borrador Telegram] pendiente de completar» y los datos del bot (RIF, teléfono, email, dirección, días de crédito en la nota, GPS si el campo existe). **Si ya existe** (por RIF, con o sin guiones, o por nombre exacto) **no se duplica**: queda `ENVIADO` con el `odoo_ref` del existente y una nota en `resultado` | No modifica al proveedor existente; RIF o nombre ambiguo → `INCOMPLETO` |
+| `factura_proveedor` | `account.move` `in_invoice` en **borrador** (`partner_id`, `ref` = número de factura, `invoice_date`, `invoice_date_due`, moneda, una línea por la base imponible, o por el monto total si no viene). El IVA y el número de control del bot van en `narration` | **No publica y no inventa impuestos** (la línea va sin impuestos para que contabilidad los asigne). **Nunca crea el proveedor desde una factura** ni adivina si es ambiguo: queda `INCOMPLETO` («créalo con /proveedor»). Faltantes (número, fecha, moneda, monto, proveedor) → `INCOMPLETO` hasta `completar`. La misma (proveedor, número) ya capturada → `409`; si ya está en Odoo → `ERROR` legible |
+
+- **Credencial aparte:** `ODOO_WRITE_USERNAME` / `ODOO_WRITE_PASSWORD` (misma
+  URL y base que la lectura). Debe ser un usuario de Odoo con permisos mínimos:
+  crear en `res.partner`, `sale.order`, `account.payment` y `account.move` (facturas de
+  proveedor en borrador), y leer lo necesario para buscar; nada más. La credencial
+  de lectura (`ODOO_USERNAME`) no cambia y sigue siendo solo lectura.
+- **Interruptor:** `CAPTURAS_ODOO_ESCRITURA=1`. Sin él, o sin la credencial, no se
+  abre ninguna conexión de escritura: las capturas se guardan y quedan `PENDIENTE`.
+- **Idempotente:** cada creación lleva la marca `BOT-<id>` y se busca antes de
+  crear, así un reintento nunca duplica. Los errores técnicos de Odoo van al log;
+  la interfaz solo muestra un mensaje legible.
+- **Bitácora:** cada captura guarda sus eventos (recibida, intento, creada en Odoo,
+  error, completada, reintento manual) en `capturas_bot_eventos`, solo-append.
+- **API:** los bots usan `POST /api/bots/capturas` y `…/{id}/completar` con la
+  cabecera `X-Bot-Key` (`BOT_API_KEY`); con el latido del panel de bots (más abajo) es lo
+  único que esa clave abre. Las llaves
+  de API normales siguen siendo solo `GET`. La interfaz (página **Capturas
+  Telegram**, permisos `capturas.ver` / `capturas.gestionar`) lista, muestra,
+  reintenta y, con `capturas.gestionar`, también completa pagos y facturas de
+  proveedor (`…/{id}/completar` acepta la clave del bot **o** esa sesión; crear
+  capturas es solo del bot). Tipos válidos (`kind`): `contacto`, `pedido`, `pago`,
+  `pago_proveedor`, `proveedor`, `factura_proveedor`.
+- **Estados:** `PENDIENTE` → `ENVIADO` (`odoo_ref` = `modelo:id`), o `INCOMPLETO`
+  (falta algo que no se adivina) o `ERROR` (los de red se reintentan solos, máx. 5).
+- **Reglas de validación (paridad con Omni).** La **fuente de verdad es Omni**
+  (`omni-erp/backend/apps/bots_ingest/services/handlers.py`); `cxc/capturas/modelos.py`
+  las replica y hay que **mantenerlas alineadas**. Obligatorios: `contacto` → nombre,
+  teléfono y ubicación; `pedido` → cliente, líneas, RIF, correo, dirección fiscal,
+  ubicación y (dirección de entrega o «igual a la fiscal»); `proveedor` → nombre, RIF y
+  teléfono. Formato: RIF normalizado (letra-dígitos), teléfono de 7 a 15 dígitos, GPS con
+  latitud −90..90 y longitud −180..180, montos > 0, fechas `AAAA-MM-DD`, días de crédito
+  0..365. Un rechazo de fondo es `422 {error, faltan}` y **no deja captura**; solo los
+  pagos y las facturas de proveedor toleran faltantes (`INCOMPLETO`). La tabla
+  `tests/fixtures/paridad_omni.json` (45 borradores inválidos, verificados contra los
+  handlers reales de Omni) la ejercen `tests/test_capturas_paridad_omni.py`.
+- **Reenvío con la misma `idempotency_key`:** mismo contenido → la captura existente,
+  sin cambios (`200`). Contenido distinto y la captura sigue `PENDIENTE` o `INCOMPLETO`
+  (no llegó a Odoo) → **se actualiza** el payload, se reevalúa el estado y queda en la
+  bitácora (`actualizada_por_reenvio`), así la corrección del vendedor reemplaza al
+  borrador viejo. Ya `ENVIADO` o `ERROR` → no se pisa (`200` con la existente).
+- **Duplicados lógicos y concurrencia.** La misma factura de proveedor (mismo RIF, o mismo
+  nombre si falta el RIF, y mismo número sin distinguir mayúsculas ni espacios) se captura una
+  sola vez: la segunda recibe `409`. La comprobación y el alta van **en la misma transacción,
+  bajo un `pg_advisory_xact_lock` por número de factura**, así que 6 envíos simultáneos con
+  claves distintas dejan una sola captura (antes, con la comprobación en un paso aparte, se
+  colaban hasta 5). El mismo bloqueo protege la corrección del número por reenvío o por
+  `completar`. No se usó un índice único porque «mismo proveedor» (RIF o nombre) no lo expresa
+  un índice, y así tampoco hay migración. Si el bloqueo no se logra en 10 s → `503` (el bot
+  reintenta; es idempotente). Además, la creación de un `proveedor` en Odoo se serializa por RIF
+  (bloqueo de sesión): dos capturas del mismo RIF no crean dos `res.partner`; la segunda queda
+  `ya_existia`. Contactos, pedidos y pagos **no** se rechazan como duplicados a propósito: cada
+  captura lleva su propia marca `BOT-<id>` y repetir un pedido o un pago puede ser legítimo.
+
+Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
+única autoridad contable.
+
+### Panel de bots de Telegram (plano de control de la familia de bots)
+
+CxC no solo recibe las capturas: es también el **panel desde el que se administra** la familia de
+bots de Lubrikca (página **Bots**): `pedidos` (Ventas), `cobranza` (Cobranzas), `compras`,
+`eventos` y `asana` (el bot de Asana, ya en producción; su tarjeta enlaza a su propio panel).
+
+- **Latido:** cada bot llama a `POST /api/bots/heartbeat` (misma clave `X-Bot-Key` / `BOT_API_KEY`;
+  es la única otra ruta que esa clave abre) con su estado (`modo`, `gemini`, `omni`, `cxc`,
+  cola de reintentos, mensajes y errores de hoy, último error) y **recibe en la respuesta su
+  configuración**: `habilitado`, `parametros` (`auto_envio_min` 1–120, `gemini_model`),
+  `usuarios` autorizados para ese bot, `chats` (`grupo`, `respaldo`) y un `mensaje`.
+  Un bot está **en línea** si su último latido tiene menos de 3 minutos.
+- **Qué se controla desde el panel:** pausar/reanudar un bot, sus parámetros y chats, la dirección
+  de su propio panel (`url_panel`, útil para Asana), un mensaje para el equipo, y la lista de
+  **usuarios autorizados** (id de Telegram, correo, nombre y a qué bots tienen acceso).
+  Además muestra la **salud de los destinos** (Omni, CxC, Gemini y la cola de reintentos), las
+  capturas incompletas o con error y la actividad reciente de cada bot.
+- **Si CxC no responde**, los bots siguen con la última configuración que recibieron (o la de su
+  `.env`): el panel gobierna, pero no es un punto único de falla.
+- **Lo que NO guarda ni devuelve:** tokens de Telegram ni API keys (la clave de Gemini solo se
+  indica si el bot la tiene). Lo que un bot reporta como texto (`ultimo_error`) se trunca y se
+  redacta antes de guardarse, por si trae una URL con token.
+- **Permisos:** `bots.ver` (consultar) y `bots.gestionar` (cambiar), con el mismo reparto que
+  las capturas: tesorería y gerencia ven y gestionan, auditoría solo ve, ventas no ve nada.
+- **Bitácora:** todo cambio hecho desde el panel queda en `bots_bitacora` (solo-append, con
+  trigger): quién, qué y el antes/después de lo que realmente cambió.
+- **Tablas:** `bots_registro`, `bots_usuarios`, `bots_latidos` (contadores por día, se podan a
+  los 30 días) y `bots_bitacora`. Mundo aparte: el sync de Odoo no las toca.
 
 ### Mapa del código (`src/cxc/`)
 
@@ -57,11 +159,13 @@ append). Lo verifica `tests/test_sync.py`.
 | `web/` | `app.py` (API, auth por cookie y por llave de API, demonios) y `static/` (SPA en JS plano) |
 | `engine/` | Lógica pura de dinero: `discounts.py` (motor), `runner.py` (cablea repo + precios), `balance.py`, `saldos.py`, `listas.py`, `equivalents.py`, `acotar_pago.py`, auditorías (`auditoria_*`, `nc_contra_motor.py`, `pagos_duplicados.py`, `reversadas.py`…) |
 | `db/` | `schema.py` (tablas, SQLAlchemy Core), `postgres_repository.py`, `invariantes.py` (restricciones de base) |
-| `odoo/` | `client.py` (lector XML-RPC), `price.py` (precio por pricelist) |
+| `odoo/` | `client.py` (lector XML-RPC), `price.py` (precio por pricelist), `escritura.py` (escritor de borradores de las capturas, credencial aparte) |
 | `sync/` | `incremental.py` (sync delta) |
 | `scraper/` | BCV, Binance y el orquestador `rates_scraper.py` |
 | `reconciliation/` | Semáforo motor vs Odoo |
 | `bancos/` | Ingesta de estados de cuenta: parsers por banco, huella de dedupe, validación de saldos, saldos consolidados, CSV de líneas de extracto para Odoo. Ver [`docs/BANCOS.md`](docs/BANCOS.md) |
+| `bots/` | Panel de bots de Telegram (plano de control): modelo y validación, repositorio, servicio (latido, configuración, usuarios autorizados, salud de destinos). API en `web/bots_api.py` |
+| `capturas/` | Capturas de los bots de Telegram: validación, repositorio, servicio y resolución de cliente/producto/diario. Escribe a Odoo **solo borradores** vía `odoo/escritura.py` |
 | `audit/` | `HourAuditor` (hora declarada vs banco). **Librería sin cablear**: ningún endpoint ni demonio la usa hoy |
 | `sheets/` | Solo `serde.py`: conversión dataclass ↔ fila (resto del backend Google Sheets retirado en agosto 2026) |
 | `repositories.py` | Interfaz `Repository` e `InMemoryRepository` (para tests) |

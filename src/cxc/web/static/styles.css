@@ -1025,3 +1025,79 @@ body {
 .bancos-conc-export { display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap; margin:0 0 1rem 0; padding:0.6rem 0.8rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.8rem; color:#475569; }
 .bancos-conc-export label { display:flex; gap:0.35rem; align-items:center; }
 .bancos-conc-export > span { flex:1 1 260px; }
+
+/* Capturas Telegram */
+.cap-sub {
+    font-size: 0.72rem;
+    color: #64748b;
+    margin-top: 0.2rem;
+}
+
+.cap-kpi {
+    cursor: pointer;
+}
+
+.cap-kpi:focus-visible {
+    outline: 2px solid hsl(var(--accent-cyan));
+    outline-offset: 2px;
+}
+
+/* Bots de Telegram (panel) */
+.bt-destinos { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.75rem; }
+.bt-dest { border:1px solid #e2e8f0; border-radius:10px; padding:0.7rem 0.9rem; background:#f8fafc; }
+.bt-dest h4 { margin:0 0 0.3rem 0; font-size:0.78rem; color:#475569; text-transform:uppercase; letter-spacing:0.03em; }
+.bt-dest strong { display:flex; align-items:center; gap:0.4rem; font-size:1rem; color:#0f172a; }
+.bt-dest small { display:block; margin-top:0.25rem; color:#64748b; font-size:0.72rem; }
+.bt-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:1rem; }
+.bt-card { display:flex; flex-direction:column; gap:0.6rem; padding:1.1rem; }
+.bt-card.bt-pausa { border-left:4px solid #d97706; }
+.bt-card-cab { display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem; }
+.bt-card-cab h3 { margin:0; font-size:1.05rem; }
+.bt-card-cab p { margin:0.1rem 0 0 0; font-size:0.78rem; color:#64748b; }
+.bt-estado { display:inline-flex; align-items:center; gap:0.4rem; font-size:0.78rem; font-weight:600; color:#334155; white-space:nowrap; }
+.bt-dot { width:0.7rem; height:0.7rem; border-radius:50%; background:#94a3b8; display:inline-block; flex:0 0 auto; }
+.bt-dot.verde { background:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,0.2); }
+.bt-dot.rojo { background:#e11d48; box-shadow:0 0 0 3px rgba(225,29,72,0.18); }
+.bt-dot.amarillo { background:#f59e0b; }
+.bt-metricas { display:grid; grid-template-columns:repeat(3, 1fr); gap:0.4rem; }
+.bt-metricas div { background:#f8fafc; border-radius:8px; padding:0.4rem 0.5rem; text-align:center; }
+.bt-metricas b { display:block; font-size:1.05rem; color:#0f172a; }
+.bt-metricas span { font-size:0.66rem; color:#64748b; text-transform:uppercase; }
+.bt-chips { display:flex; gap:0.35rem; flex-wrap:wrap; }
+.bt-chip { display:inline-flex; align-items:center; gap:0.3rem; padding:0.15rem 0.5rem; border-radius:999px; background:#f1f5f9; font-size:0.72rem; color:#334155; }
+.bt-aviso { border-left:4px solid #f59e0b; padding:0.4rem 0.7rem; background:#fffbeb; border-radius:6px; color:#92400e; font-size:0.8rem; }
+.bt-error { font-size:0.74rem; color:#be123c; word-break:break-word; }
+.bt-acciones { display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:auto; padding-top:0.3rem; }
+.bt-acciones a.btn-secondary { text-decoration:none; display:inline-block; }
+.bt-form-usuario { margin-top:1rem; padding:1rem; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; }
+.bt-form-fila { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.6rem; }
+.bt-form-fila label, .bt-cfg label { display:flex; flex-direction:column; gap:0.2rem; font-size:0.78rem; color:#475569; }
+.bt-form-fila input, .bt-cfg input, .bt-cfg textarea { font:inherit; padding:0.4rem 0.55rem; border:1px solid #cbd5e1; border-radius:6px; min-width:0; cursor:text; }
+.bt-form-bots { display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.6rem; font-size:0.85rem; }
+.bt-form-bots label { display:flex; gap:0.35rem; align-items:center; }
+.bt-cfg { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem; margin:0.75rem 0; }
+.bt-cfg .bt-ancho { grid-column:1 / -1; }
+.bt-sec { margin-top:1.1rem; }
+.bt-sec h4 { margin:0 0 0.4rem 0; }
+.bt-sec table { width:100%; font-size:0.8rem; }
+@media (max-width: 760px) {
+    .bt-grid { grid-template-columns:1fr; }
+    .bt-metricas { grid-template-columns:repeat(3, 1fr); }
+}
+
+/* Bots: botones secundarios con estilo propio (el sitio no define .btn-secondary globalmente). */
+#tab-bots .btn-secondary,
+#modal-bot .btn-secondary {
+    padding: 0.35rem 0.8rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #1e293b;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+#tab-bots .btn-secondary:hover,
+#modal-bot .btn-secondary:hover { background: #f1f5f9; }
+#tab-bots .bt-acciones a.btn-secondary { color: #1d4ed8; }
+#bots-aviso:empty { display: none; }

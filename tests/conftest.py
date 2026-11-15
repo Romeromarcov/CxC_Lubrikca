@@ -82,11 +82,17 @@ def _sesion_valida_por_defecto(request):
     mockeado propio) solo agregaría ruido. Se sustituye el único punto que
     consulta el middleware.
 
-    ``tests/test_auth_api_cerrada.py``/``tests/test_api_keys.py`` -- que
+    ``tests/test_auth_api_cerrada.py``/``tests/test_api_keys.py``/
+    ``tests/test_capturas_api_auth.py``/``tests/test_bots_api_auth.py`` -- que
     verifican justamente el cierre de la API y la autenticación por llave
-    de API -- quedan excluidos para que ejerzan el middleware de verdad.
+    de API o por clave de bot -- quedan excluidos para que ejerzan el middleware de verdad.
     """
-    if request.node.fspath.basename in ("test_auth_api_cerrada.py", "test_api_keys.py"):
+    if request.node.fspath.basename in (
+        "test_auth_api_cerrada.py",
+        "test_api_keys.py",
+        "test_capturas_api_auth.py",
+        "test_bots_api_auth.py",
+    ):
         yield
         return
     with patch("cxc.web.app.hay_sesion_valida", return_value=True):

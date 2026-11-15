@@ -52,12 +52,15 @@ PAGINAS: tuple[tuple[str, str], ...] = (
     ("inventario", "Inventario"),
     ("configuracion", "Configuración"),
     ("bancos", "Bancos"),
+    ("capturas", "Capturas Telegram"),
+    ("bots", "Bots de Telegram"),
 )
 SIEMPRE = frozenset({"dashboard"})
 
-# La página "bancos" no se marca a mano: se abre si la persona tiene cualquier permiso de
-# bancos. Así no puede quedar alguien con la página abierta y nada que ver en ella.
-_PAGINA_DERIVADA = {"bancos": "bancos."}
+# Las páginas "bancos", "capturas" y "bots" no se marcan a mano: se abren si la persona tiene
+# cualquier permiso de su grupo. Así no puede quedar alguien con la página abierta y nada
+# que ver en ella.
+_PAGINA_DERIVADA = {"bancos": "bancos.", "capturas": "capturas.", "bots": "bots."}
 
 ACCIONES: tuple[Permiso, ...] = (
     {
@@ -78,6 +81,32 @@ ACCIONES: tuple[Permiso, ...] = (
         "grupo": "Bancos",
         "nombre": "Pre-conciliar",
         "descripcion": "Generar propuestas (lee Odoo) y aprobar, corregir, rechazar o reabrir.",
+    },
+    {
+        "clave": "capturas.ver",
+        "grupo": "Capturas Telegram",
+        "nombre": "Ver capturas de Telegram",
+        "descripcion": "Ver lo que llega por los bots (contactos, pedidos, pagos) y su estado.",
+    },
+    {
+        "clave": "capturas.gestionar",
+        "grupo": "Capturas Telegram",
+        "nombre": "Gestionar capturas de Telegram",
+        "descripcion": "Reintentar el envío a Odoo de una captura con error o incompleta.",
+    },
+    {
+        "clave": "bots.ver",
+        "grupo": "Bots de Telegram",
+        "nombre": "Ver el panel de bots",
+        "descripcion": "Estado de cada bot, sus usuarios autorizados, la salud de los destinos y "
+        "la actividad.",
+    },
+    {
+        "clave": "bots.gestionar",
+        "grupo": "Bots de Telegram",
+        "nombre": "Administrar los bots",
+        "descripcion": "Pausar o reanudar un bot, cambiar sus parámetros y chats, y dar de alta o "
+        "baja usuarios.",
     },
     {
         "clave": "auditoria.decidir",
@@ -108,7 +137,7 @@ CATALOGO: tuple[Permiso, ...] = (
             descripcion="Siempre visible: es la página de entrada."
             if clave in SIEMPRE
             else (
-                "Se abre sola con cualquier permiso de Bancos."
+                f"Se abre sola con cualquier permiso de {nombre}."
                 if clave in _PAGINA_DERIVADA
                 else f"Ver la página {nombre}."
             ),
@@ -131,15 +160,20 @@ NOMBRES_ROLES: dict[str, str] = {
     "ventas": "Ventas y Comercial",
 }
 
-_PAGINAS_SIN_BANCOS = frozenset(c for c, _ in PAGINAS if c != "bancos")
+# Páginas que se abren por sí solas (Bancos y Capturas se abren con sus acciones).
+_PAGINAS_SIN_BANCOS = frozenset(c for c, _ in PAGINAS if c not in _PAGINA_DERIVADA)
 
 # Base de cada rol: reproduce exactamente lo que cada rol podía hacer antes de que
 # existieran los ajustes (páginas de ``ROLES_PERMISOS`` y los ``if rol in (...)`` de la API).
 BASE_POR_ROL: dict[str, frozenset[str]] = {
     "admin": CLAVES,
-    "gerente_ventas": _PAGINAS_SIN_BANCOS | {"cobranza.recibo", "sistema.recalcular"},
-    "tesoreria": _PAGINAS_SIN_BANCOS | {"cobranza.recibo"},
-    "auditor": _PAGINAS_SIN_BANCOS | {"bancos.ver", "auditoria.decidir"},
+    "gerente_ventas": _PAGINAS_SIN_BANCOS
+    | {"cobranza.recibo", "sistema.recalcular", "capturas.ver", "capturas.gestionar",
+                          "bots.ver", "bots.gestionar"},
+    "tesoreria": _PAGINAS_SIN_BANCOS
+    | {"cobranza.recibo", "capturas.ver", "capturas.gestionar", "bots.ver", "bots.gestionar"},
+    "auditor": _PAGINAS_SIN_BANCOS
+    | {"bancos.ver", "auditoria.decidir", "capturas.ver", "bots.ver"},
     "ventas": _PAGINAS_SIN_BANCOS,
 }
 

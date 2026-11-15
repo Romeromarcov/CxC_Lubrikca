@@ -272,6 +272,8 @@ document.addEventListener("DOMContentLoaded", () => {
             "auditoria": "tab-auditoria",
             "inventario": "tab-inventario",
             "bancos": "tab-bancos",
+            "capturas": "tab-capturas",
+            "bots": "tab-bots",
             "configuracion": "tab-config"
         };
 
@@ -320,6 +322,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadInventario === "function") loadInventario();
             } else if (path === "bancos") {
                 if (typeof loadBancos === "function") loadBancos();
+            } else if (path === "capturas") {
+                if (typeof loadCapturas === "function") loadCapturas();
+            } else if (path === "bots") {
+                if (typeof loadBots === "function") loadBots();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
@@ -6127,6 +6133,794 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
+
+    // ===================================================================
+    // CAPTURAS TELEGRAM: borradores de los bots y su envío a Odoo.
+    // API: GET /api/bots/capturas, GET /api/bots/capturas/{id},
+    //      POST /api/bots/capturas/{id}/reintentar. Ver docs del PR.
+    // ===================================================================
+    const _CAP_PAGINA = 25;
+    const _CAP_MAX_BUSQUEDA = 500;   // la API no filtra por texto: con búsqueda se traen hasta N y se filtra aquí
+    // «Completar» necesita POST /api/bots/capturas/{id}/completar, que hoy solo acepta la llave del bot
+    // (X-Bot-Key), no la sesión de una persona. Cuando el backend lo abra a sesión, basta poner esto en true.
+    const _CAP_COMPLETAR_POR_SESION = false;
+    const _CAP_ESTADOS = {
+        PENDIENTE: ["Pendiente", "amarillo"],
+        INCOMPLETO: ["Incompleto", "amarillo"],
+        ERROR: ["Error", "rojo"],
+        ENVIADO: ["Enviado", "verde"],
+    };
+    const _CAP_TIPOS = {
+        pedido: "Pedido",
+        contacto: "Contacto",
+        pago: "Pago de cliente",
+        pago_proveedor: "Pago a proveedor",
+    };
+    let _capOffset = 0;
+    let _capItems = [];          // filas visibles en la tabla (para abrir el detalle)
+    let _capPuedeGestionar = false;
+    let _capCargaId = 0;         // descarta respuestas viejas si el usuario cambia de filtro rápido
+
+    const _capEsc = (v) => _bancosEsc(v);
+    const _capTexto = (v) => (v == null || v === "" ? "—" : _capEsc(v));
+    const _capMonto = (v) => {
+        const n = Number(v);
+        return v == null || v === "" || !Number.isFinite(n) ? "—" : _bancosNum.format(n);
+    };
+    const _capFechaHora = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (isNaN(d)) return _capEsc(String(iso).slice(0, 16).replace("T", " "));
+        return d.toLocaleString("es-VE", {
+            timeZone: "America/Caracas", day: "2-digit", month: "2-digit", year: "numeric",
+            hour: "2-digit", minute: "2-digit", hour12: false,
+        });
+    };
+    const _capFechaSolo = (iso) => (iso ? _bancosFecha(iso) : "—");
+
+    async function _capSesion() { return _bancosSesion(); }
+
+    async function _capGet(url) {
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+        return data;
+    }
+
+    function _capBadge(estado) {
+        const [txt, clase] = _CAP_ESTADOS[estado] || [estado || "—", ""];
+        return `<span class="semaphore ${clase}">${_capEsc(txt)}</span>`;
+    }
+
+    // Una línea de resumen legible por tipo (lo que la gente busca de un vistazo).
+    function _capResumen(c) {
+        const p = c.payload || {};
+        const gris = (t) => `<div class="cap-sub">${t}</div>`;
+        if (c.kind === "pedido") {
+            const n = Array.isArray(p.lineas) ? p.lineas.length : 0;
+            return `<strong>${_capTexto(p.cliente)}</strong>${gris(`${_capEsc(p.rif || "sin RIF")} · ${n} producto${n === 1 ? "" : "s"}`)}`;
+        }
+        if (c.kind === "contacto") {
+            return `<strong>${_capTexto(p.nombre)}</strong>${gris(_capEsc([p.telefono, p.email].filter(Boolean).join(" · ") || "sin teléfono"))}`;
+        }
+        if (c.kind === "pago") {
+            const quien = p.cliente || p.rif || p.pedido_ref;
+            return `<strong>${_capTexto(quien)}</strong>${gris(`${_capMonto(p.monto)} ${_capEsc(p.moneda || "")} · ref ${_capEsc(p.referencia || "—")}`)}`;
+        }
+        if (c.kind === "pago_proveedor") {
+            return `<strong>${_capTexto(p.proveedor)}</strong>${gris(`${_capMonto(p.monto)} ${_capEsc(p.moneda || "")} · ref ${_capEsc(p.referencia || "—")}`)}`;
+        }
+        return "—";
+    }
+
+    // Texto plano del payload para la búsqueda (cliente, proveedor, referencias, RIF, nombre…).
+    function _capTextoBusqueda(c) {
+        const p = c.payload || {};
+        return [p.cliente, p.proveedor, p.nombre, p.rif, p.referencia, p.pedido_ref, p.factura_ref, p.telefono, p.email,
+                c.odoo_ref]
+            .filter(Boolean).join(" ").toUpperCase();
+    }
+
+    function _capFila(c, i) {
+        const aviso = c.error
+            ? `<div class="cap-sub" style="color:#be123c;">${_capEsc(c.error)}</div>`
+            : (c.estado === "INCOMPLETO" && (c.incompleto || []).length
+                ? `<div class="cap-sub" style="color:#b45309;">Falta: ${(c.incompleto || []).map(_capEsc).join(", ")}</div>` : "");
+        const auto = c.auto ? `<div class="cap-sub">Enviada sola (sin respuesta en el grupo)</div>` : "";
+        return `<tr>
+            <td style="white-space:nowrap;">${_capFechaHora(c.fecha_creacion)}</td>
+            <td>${_capEsc(_CAP_TIPOS[c.kind] || c.kind)}</td>
+            <td>${_capResumen(c)}</td>
+            <td>${_capBadge(c.estado)}${aviso}${auto}</td>
+            <td style="font-size:0.78rem;">${c.odoo_ref ? _capEsc(c.odoo_ref) : "—"}</td>
+            <td style="white-space:nowrap;"><button type="button" class="btn-secondary" data-cap-ver="${i}">Ver detalle</button></td>
+        </tr>`;
+    }
+
+    async function _capContadores() {
+        const estados = Object.keys(_CAP_ESTADOS);
+        const kind = document.getElementById("capturas-kind").value;
+        await Promise.all(estados.map(async (e) => {
+            const el = document.getElementById("capturas-n-" + e);
+            if (!el) return;
+            try {
+                const p = new URLSearchParams({ estado: e, limit: "1", offset: "0" });
+                if (kind) p.set("kind", kind);
+                const data = await _capGet("/api/bots/capturas?" + p.toString());
+                el.textContent = data.total ?? 0;
+                el.style.color = (e === "ERROR" || e === "INCOMPLETO") && data.total ? "#e11d48" : "";
+            } catch (err) {
+                el.textContent = "—";
+            }
+        }));
+    }
+
+    function _capPaginacion(total, desde, hasta, local) {
+        const cont = document.getElementById("capturas-paginacion");
+        if (!total) { cont.innerHTML = ""; return; }
+        const ant = desde > 0, sig = hasta < total;
+        cont.innerHTML = `<span>${desde + 1}–${hasta} de ${total}</span>
+            <button type="button" class="btn-secondary" data-cap-pag="ant" ${ant ? "" : "disabled"}>← Anterior</button>
+            <button type="button" class="btn-secondary" data-cap-pag="sig" ${sig ? "" : "disabled"}>Siguiente →</button>`;
+        cont.dataset.local = local ? "1" : "";
+    }
+
+    async function loadCapturasLista() {
+        const body = document.getElementById("capturas-body");
+        const resumen = document.getElementById("capturas-resumen");
+        const estado = document.getElementById("capturas-estado").value;
+        const kind = document.getElementById("capturas-kind").value;
+        const q = (document.getElementById("capturas-buscar").value || "").trim().toUpperCase();
+        const miCarga = ++_capCargaId;
+        const p = new URLSearchParams();
+        if (estado) p.set("estado", estado);
+        if (kind) p.set("kind", kind);
+        if (q) { p.set("limit", String(_CAP_MAX_BUSQUEDA)); p.set("offset", "0"); }
+        else { p.set("limit", String(_CAP_PAGINA)); p.set("offset", String(_capOffset)); }
+        try {
+            const data = await _capGet("/api/bots/capturas?" + p.toString());
+            if (miCarga !== _capCargaId) return;   // llegó una respuesta de un filtro anterior
+            let filas = data.items || [];
+            let total = data.total ?? filas.length;
+            let desde = _capOffset;
+            if (q) {
+                filas = filas.filter(c => _capTextoBusqueda(c).includes(q));
+                total = filas.length;
+                desde = Math.min(_capOffset, Math.max(0, total - 1));
+                desde = desde - (desde % _CAP_PAGINA);
+                _capOffset = desde;
+                filas = filas.slice(desde, desde + _CAP_PAGINA);
+                resumen.textContent = `${total} coincidencia${total === 1 ? "" : "s"} entre las últimas ${_CAP_MAX_BUSQUEDA} capturas del filtro.`;
+            } else {
+                resumen.textContent = total ? `${total} captura${total === 1 ? "" : "s"}` : "";
+            }
+            _capItems = filas;
+            if (!filas.length) {
+                body.innerHTML = `<tr><td colspan="6" class="table-empty">${
+                    (estado || kind || q) ? "No hay capturas con esos filtros." : "Todavía no llegan capturas desde Telegram."}</td></tr>`;
+                _capPaginacion(0, 0, 0, !!q);
+                return;
+            }
+            body.innerHTML = filas.map(_capFila).join("");
+            _capPaginacion(total, desde, desde + filas.length, !!q);
+        } catch (err) {
+            if (miCarga !== _capCargaId) return;
+            _capItems = [];
+            body.innerHTML = `<tr><td colspan="6" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+            document.getElementById("capturas-paginacion").innerHTML = "";
+            resumen.textContent = "";
+        }
+    }
+
+    async function loadCapturas() {
+        const u = await _capSesion();
+        _capPuedeGestionar = !!u && (u.rol === "admin" || (u.permisos || []).includes("capturas.gestionar"));
+        await Promise.all([_capContadores(), loadCapturasLista()]);
+    }
+    window.loadCapturas = loadCapturas;
+
+    // --- Detalle ---------------------------------------------------------------
+    const _capFilaDato = (etiqueta, valorHtml) =>
+        `<tr><th style="text-align:left; width:38%; color:#475569; font-weight:600; padding:0.35rem 0.5rem 0.35rem 0; vertical-align:top;">${etiqueta}</th>` +
+        `<td style="padding:0.35rem 0;">${valorHtml}</td></tr>`;
+    const _capTablaDatos = (filas) =>
+        `<table style="width:100%; border-collapse:collapse; font-size:0.88rem;">${filas.join("")}</table>`;
+
+    function _capGps(u) {
+        if (!u || u.latitud == null || u.longitud == null) return "—";
+        const lat = Number(u.latitud), lon = Number(u.longitud);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return "—";
+        const prec = u.precision_m != null && Number.isFinite(Number(u.precision_m)) ? ` (±${Math.round(Number(u.precision_m))} m)` : "";
+        return `<a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" rel="noopener noreferrer">${lat.toFixed(5)}, ${lon.toFixed(5)}</a>${prec}`;
+    }
+
+    function _capDetallePedido(p) {
+        const lineas = (p.lineas || []).map(l => `<tr>
+            <td>${_capTexto(l.producto)}</td>
+            <td style="text-align:right;">${_capMonto(l.cantidad)}</td>
+            <td style="text-align:right;">${l.precio_unitario == null ? "—" : _capMonto(l.precio_unitario)}</td>
+        </tr>`).join("");
+        const entrega = p.entrega_igual_fiscal ? "La misma dirección fiscal" : _capTexto(p.direccion_entrega);
+        return _capTablaDatos([
+            _capFilaDato("Cliente", _capTexto(p.cliente)),
+            _capFilaDato("RIF", _capTexto(p.rif)),
+            _capFilaDato("Correo", _capTexto(p.email)),
+            _capFilaDato("Teléfono", _capTexto(p.telefono)),
+            _capFilaDato("Dirección fiscal", _capTexto(p.direccion_fiscal)),
+            _capFilaDato("Dirección de entrega", entrega),
+            _capFilaDato("Ubicación GPS", _capGps(p.ubicacion)),
+            _capFilaDato("Fecha de entrega", _capFechaSolo(p.fecha_entrega)),
+            _capFilaDato("Observaciones", _capTexto(p.observaciones)),
+        ]) + `<h4 style="margin:1rem 0 0.4rem 0;">Productos</h4>
+            <div class="table-wrapper"><table class="cxc-table"><thead><tr><th>Producto</th><th style="text-align:right;">Cantidad</th><th style="text-align:right;">Precio</th></tr></thead>
+            <tbody>${lineas || `<tr><td colspan="3" class="table-empty">Sin productos.</td></tr>`}</tbody></table></div>`;
+    }
+
+    function _capDetallePago(p, proveedor) {
+        return _capTablaDatos([
+            proveedor ? _capFilaDato("Proveedor", _capTexto(p.proveedor)) : _capFilaDato("Cliente", _capTexto(p.cliente)),
+            proveedor ? _capFilaDato("Factura", _capTexto(p.factura_ref)) : _capFilaDato("RIF", _capTexto(p.rif)),
+            proveedor ? "" : _capFilaDato("Pedido o factura", _capTexto(p.pedido_ref)),
+            _capFilaDato("Monto", `<strong>${_capMonto(p.monto)}</strong> ${_capEsc(p.moneda || "")}`),
+            _capFilaDato("Método de pago", _capTexto(p.metodo_pago)),
+            _capFilaDato("Referencia", _capTexto(p.referencia)),
+            _capFilaDato("Banco", _capTexto(p.banco)),
+            _capFilaDato("Fecha del pago", _capFechaSolo(p.fecha_pago)),
+        ].filter(Boolean));
+    }
+
+    function _capDetalleContacto(p) {
+        return _capTablaDatos([
+            _capFilaDato("Nombre", _capTexto(p.nombre)),
+            _capFilaDato("Teléfono", _capTexto(p.telefono)),
+            _capFilaDato("Correo", _capTexto(p.email)),
+            _capFilaDato("Ubicación GPS", _capGps(p.ubicacion)),
+            _capFilaDato("Notas", _capTexto(p.notas)),
+        ]);
+    }
+
+    // Campos que se pueden completar en un pago incompleto (formulario deshabilitado hasta que el backend lo permita).
+    const _CAP_CAMPOS_COMPLETAR = {
+        pago: [["monto", "Monto"], ["moneda", "Moneda"], ["metodo_pago", "Método de pago"], ["referencia", "Referencia"],
+               ["banco", "Banco"], ["fecha_pago", "Fecha del pago"], ["cliente", "Cliente"], ["rif", "RIF"], ["pedido_ref", "Pedido"]],
+        pago_proveedor: [["proveedor", "Proveedor"], ["monto", "Monto"], ["moneda", "Moneda"], ["metodo_pago", "Método de pago"],
+                         ["referencia", "Referencia"], ["banco", "Banco"], ["fecha_pago", "Fecha del pago"], ["factura_ref", "Factura"]],
+    };
+
+    function _capFormCompletar(c) {
+        const campos = _CAP_CAMPOS_COMPLETAR[c.kind];
+        if (!campos || c.estado !== "INCOMPLETO") return "";
+        const dis = _CAP_COMPLETAR_POR_SESION && _capPuedeGestionar ? "" : "disabled";
+        const aviso = !_CAP_COMPLETAR_POR_SESION
+            ? "Por ahora los datos que faltan se completan desde el grupo de Telegram («✏️ Completar») o directamente en Odoo; desde esta pantalla todavía no."
+            : (!_capPuedeGestionar ? "Necesitas el permiso «gestionar capturas» para completar." : "");
+        const inputs = campos.map(([k, et]) => {
+            const falta = (c.incompleto || []).some(x => String(x).toLowerCase().startsWith(k.split("_")[0]));
+            const tipo = k === "fecha_pago" ? "date" : "text";
+            return `<label style="display:flex; flex-direction:column; font-size:0.78rem; color:#475569; gap:0.2rem;">
+                ${_capEsc(et)}${falta ? ' <span style="color:#b45309;">(falta)</span>' : ""}
+                <input type="${tipo}" class="filter-select" data-cap-campo="${k}" ${dis} style="cursor:text;" value="${_capEsc((c.payload || {})[k] || "")}">
+            </label>`;
+        }).join("");
+        return `<h4 style="margin:1rem 0 0.4rem 0;">Completar datos</h4>
+            ${aviso ? `<p style="color:#92400e; background:#fffbeb; border-left:4px solid #f59e0b; padding:0.5rem 0.75rem; border-radius:6px; font-size:0.82rem; margin:0 0 0.75rem 0;">${_capEsc(aviso)}</p>` : ""}
+            <form id="cap-form-completar" data-cap-id="${_capEsc(c.id)}" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;">
+                ${inputs}
+                <div style="grid-column:1/-1;"><button type="submit" class="btn-primary" ${dis} style="padding:0.5rem 1rem;">Guardar datos</button></div>
+            </form>`;
+    }
+
+    function _capDetalle(c) {
+        const p = c.payload || {};
+        const fuente = c.fuente || {};
+        const vendedor = c.vendedor || c.vendedor_email || fuente.vendedor_email || p.vendedor;
+        let contenido = "";
+        if (c.kind === "pedido") contenido = _capDetallePedido(p);
+        else if (c.kind === "pago") contenido = _capDetallePago(p, false);
+        else if (c.kind === "pago_proveedor") contenido = _capDetallePago(p, true);
+        else if (c.kind === "contacto") contenido = _capDetalleContacto(p);
+        else contenido = `<pre style="white-space:pre-wrap; font-size:0.8rem;">${_capEsc(JSON.stringify(p, null, 2))}</pre>`;
+
+        const faltan = (c.incompleto || []).length
+            ? `<div style="border-left:4px solid #f59e0b; background:#fffbeb; padding:0.5rem 0.85rem; border-radius:6px; color:#92400e; margin-bottom:0.75rem;">
+                 <strong>Falta:</strong> ${(c.incompleto || []).map(_capEsc).join(", ")}</div>` : "";
+        const error = c.error
+            ? `<div style="border-left:4px solid #e11d48; background:#fff1f2; padding:0.5rem 0.85rem; border-radius:6px; color:#9f1239; margin-bottom:0.75rem;">
+                 <strong>Error:</strong> ${_capEsc(c.error)}</div>` : "";
+        const reintentar = _capPuedeGestionar && (c.estado === "ERROR" || c.estado === "PENDIENTE")
+            ? `<button type="button" class="btn-primary" data-cap-reintentar="${_capEsc(c.id)}" style="padding:0.5rem 1rem;">↻ Reintentar envío a Odoo</button>` : "";
+        const resultado = c.resultado && Object.keys(c.resultado).length
+            ? `<details style="margin-top:1rem;"><summary style="cursor:pointer; color:#475569; font-size:0.85rem;">Resultado técnico</summary>
+                 <pre style="white-space:pre-wrap; font-size:0.78rem; background:#f8fafc; padding:0.6rem; border-radius:6px;">${_capEsc(JSON.stringify(c.resultado, null, 2))}</pre></details>` : "";
+
+        return `<div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
+                ${_capBadge(c.estado)}
+                <span class="state-badge">${_capEsc(_CAP_TIPOS[c.kind] || c.kind)}</span>
+                ${c.auto ? '<span class="state-badge abierta" title="Nadie respondió en el grupo a tiempo y se envió sola">Enviada sola</span>' : ""}
+            </div>
+            ${faltan}${error}
+            ${_capTablaDatos([
+                _capFilaDato("Recibida", _capFechaHora(c.fecha_creacion)),
+                _capFilaDato("Última actualización", _capFechaHora(c.fecha_actualizacion)),
+                _capFilaDato("Vendedor", _capTexto(vendedor)),
+                _capFilaDato("En Odoo", c.odoo_ref ? `<strong>${_capEsc(c.odoo_ref)}</strong>` : "Todavía no"),
+            ])}
+            <h4 style="margin:1rem 0 0.4rem 0;">Borrador</h4>
+            ${contenido}
+            ${_capFormCompletar(c)}
+            ${resultado}
+            <div style="margin-top:1.25rem; display:flex; gap:0.6rem; flex-wrap:wrap;">${reintentar}
+                <button type="button" class="btn-secondary" onclick="cerrarModalCaptura()">Cerrar</button></div>
+            <div id="cap-accion-resultado" style="margin-top:0.75rem;"></div>`;
+    }
+
+    function _capMostrarModal(titulo, html) {
+        document.getElementById("modal-captura-titulo").textContent = titulo;
+        document.getElementById("modal-captura-body").innerHTML = html;
+        document.getElementById("modal-captura").style.display = "flex";
+    }
+
+    window.cerrarModalCaptura = function() {
+        document.getElementById("modal-captura").style.display = "none";
+    };
+
+    async function _capAbrirDetalle(id, previo) {
+        _capMostrarModal("Captura", `<p class="table-empty" style="padding:1rem !important;">Cargando...</p>`);
+        try {
+            const c = await _capGet("/api/bots/capturas/" + encodeURIComponent(id));
+            _capMostrarModal(`${_CAP_TIPOS[c.kind] || "Captura"} · ${_capFechaHora(c.fecha_creacion)}`, _capDetalle(c));
+        } catch (err) {
+            if (previo) {   // sin el detalle individual, se muestra lo que ya trae la lista
+                _capMostrarModal(`${_CAP_TIPOS[previo.kind] || "Captura"} · ${_capFechaHora(previo.fecha_creacion)}`, _capDetalle(previo));
+            } else {
+                _capMostrarModal("Captura", `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`);
+            }
+        }
+    }
+
+    async function _capReintentar(id, btn) {
+        if (!confirm("¿Reintentar el envío de esta captura a Odoo?")) return;
+        const out = document.getElementById("cap-accion-resultado");
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/bots/capturas/${encodeURIComponent(id)}/reintentar`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            await _capAbrirDetalle(id);
+            const out2 = document.getElementById("cap-accion-resultado");
+            if (out2) out2.innerHTML = `<div style="border-left:4px solid #10b981; padding:0.5rem 0.85rem; background:#ecfdf5; border-radius:6px; color:#065f46;">✅ Reintento solicitado. El envío a Odoo se hace en segundo plano: actualiza en unos segundos.</div>`;
+            await loadCapturas();
+        } catch (err) {
+            if (out) out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`;
+            btn.disabled = false;
+        }
+    }
+
+    async function _capCompletar(form) {
+        const id = form.dataset.capId;
+        const cambios = {};
+        form.querySelectorAll("[data-cap-campo]").forEach(inp => {
+            const v = inp.value.trim();
+            if (v) cambios[inp.dataset.capCampo] = v;
+        });
+        const out = document.getElementById("cap-accion-resultado");
+        if (!Object.keys(cambios).length) {
+            out.innerHTML = `<div style="color:#9f1239;">Escribe al menos un dato.</div>`;
+            return;
+        }
+        try {
+            const res = await fetch(`/api/bots/capturas/${encodeURIComponent(id)}/completar`, {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cambios }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            await _capAbrirDetalle(id);
+            await loadCapturas();
+        } catch (err) {
+            out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`;
+        }
+    }
+
+    // --- Eventos de la pantalla ---------------------------------------------------
+    (function _capEventos() {
+        const estadoEl = document.getElementById("capturas-estado");
+        const kindEl = document.getElementById("capturas-kind");
+        const buscarEl = document.getElementById("capturas-buscar");
+        if (!estadoEl) return;
+        const refiltrar = () => { _capOffset = 0; loadCapturasLista(); };
+        estadoEl.addEventListener("change", refiltrar);
+        kindEl.addEventListener("change", () => { _capOffset = 0; _capContadores(); loadCapturasLista(); });
+        let t = null;
+        buscarEl.addEventListener("input", () => { clearTimeout(t); t = setTimeout(refiltrar, 300); });
+
+        const irAEstado = (e) => { estadoEl.value = e; refiltrar(); };
+        document.querySelectorAll(".cap-kpi").forEach(k => {
+            k.addEventListener("click", () => irAEstado(k.dataset.capEstado));
+            k.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); irAEstado(k.dataset.capEstado); } });
+        });
+
+        document.getElementById("capturas-body").addEventListener("click", (e) => {
+            const b = e.target.closest("[data-cap-ver]");
+            if (!b) return;
+            const c = _capItems[Number(b.dataset.capVer)];
+            if (c) _capAbrirDetalle(c.id, c);
+        });
+        document.getElementById("capturas-paginacion").addEventListener("click", (e) => {
+            const b = e.target.closest("[data-cap-pag]");
+            if (!b || b.disabled) return;
+            _capOffset = Math.max(0, _capOffset + (b.dataset.capPag === "sig" ? _CAP_PAGINA : -_CAP_PAGINA));
+            loadCapturasLista();
+        });
+        const modal = document.getElementById("modal-captura");
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) window.cerrarModalCaptura();
+            const r = e.target.closest("[data-cap-reintentar]");
+            if (r) _capReintentar(r.dataset.capReintentar, r);
+        });
+        modal.addEventListener("submit", (e) => {
+            if (e.target.id === "cap-form-completar") { e.preventDefault(); _capCompletar(e.target); }
+        });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalCaptura(); });
+    })();
+
+    // ===================================================================
+    // BOTS DE TELEGRAM: panel de administración de la familia de bots.
+    // API: GET /api/bots, GET /api/bots/{bot}, PATCH /api/bots/{bot}, GET /api/bots/destinos,
+    //      GET|POST /api/bots/usuarios, DELETE /api/bots/usuarios/{telegram_id}.
+    // Permisos: bots.ver (consultar) y bots.gestionar (cambiar). No maneja tokens ni claves.
+    // ===================================================================
+    const _BT_BOTS = {
+        pedidos: { nombre: "Ventas", detalle: "Pedidos, cotizaciones y contactos" },
+        cobranza: { nombre: "Cobranzas", detalle: "Pagos de clientes" },
+        compras: { nombre: "Compras", detalle: "Pagos, facturas y proveedores" },
+        eventos: { nombre: "Eventos", detalle: "Activaciones y calendario" },
+        asana: { nombre: "Asana", detalle: "Tareas del equipo en Asana" },
+    };
+    const _BT_TIPOS_CAPTURA = {
+        pedido: "Pedido", contacto: "Contacto", pago: "Pago de cliente",
+        pago_proveedor: "Pago a proveedor", proveedor: "Proveedor", factura_proveedor: "Factura de proveedor",
+    };
+    const _BT_ESTADO_DESTINO = {
+        ok: ["verde", "Conectado"], error: ["rojo", "Con error"], desactivado: ["gris", "Desactivado"],
+        sin_clave: ["amarillo", "Sin clave"], sin_datos: ["gris", "Sin datos"],
+    };
+    const _BT_REFRESCO_MS = 30000;
+    let _btPuedeGestionar = false;
+    let _btBots = [];
+    let _btUsuarios = [];
+    let _btCarga = 0;
+    let _btTimer = null;
+    let _btModalBot = null;
+
+    const _btEsc = (v) => _bancosEsc(v);
+
+    async function _btFetch(url, opts) {
+        const res = await fetch(url, opts);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+        return data;
+    }
+
+    const _btJson = (metodo, cuerpo) => ({
+        method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo),
+    });
+
+    function _btMensaje(tipo, texto) {
+        const [borde, fondo, color, icono] = tipo === "ok"
+            ? ["#10b981", "#ecfdf5", "#065f46", "✅"] : ["#e11d48", "#fff1f2", "#9f1239", "❌"];
+        return `<div style="border-left:4px solid ${borde}; padding:0.5rem 0.85rem; background:${fondo}; border-radius:6px; color:${color};">${icono} ${_btEsc(texto)}</div>`;
+    }
+
+    function _btHace(segundos) {
+        if (segundos == null) return "nunca";
+        if (segundos < 60) return `hace ${Math.max(segundos, 0)} s`;
+        if (segundos < 3600) return `hace ${Math.floor(segundos / 60)} min`;
+        if (segundos < 86400) return `hace ${Math.floor(segundos / 3600)} h`;
+        return `hace ${Math.floor(segundos / 86400)} d`;
+    }
+
+    function _btSemaforo(estado) {
+        const [clase, texto] = _BT_ESTADO_DESTINO[estado] || ["gris", estado || "—"];
+        return `<span class="bt-dot ${clase}" aria-hidden="true"></span>${_btEsc(texto)}`;
+    }
+
+    // ── Salud de destinos ─────────────────────────────────────────────────────
+    function _btRenderDestinos(d) {
+        const tarjeta = (titulo, bloque, pie) => `<div class="bt-dest"><h4>${_btEsc(titulo)}</h4><strong>${_btSemaforo(bloque.estado)}</strong><small>${pie}</small></div>`;
+        const porBot = (b) => {
+            const lista = Object.entries(b.por_bot || {}).map(([bot, e]) => `${_btEsc((_BT_BOTS[bot] || {}).nombre || bot)}: ${_btEsc(e)}`);
+            return lista.length ? lista.join(" · ") : "Ningún bot en línea lo reporta";
+        };
+        const c = d.capturas || {};
+        document.getElementById("bots-destinos").innerHTML = [
+            tarjeta("Omni ERP", d.omni, porBot(d.omni)),
+            tarjeta("CxC", d.cxc, porBot(d.cxc)),
+            tarjeta("Gemini (IA)", d.gemini, porBot(d.gemini)),
+            `<div class="bt-dest"><h4>Cola de reintentos</h4><strong>${Number(d.outbox_pendientes) || 0} pendiente${Number(d.outbox_pendientes) === 1 ? "" : "s"}</strong><small>Envíos que esperan a que un destino vuelva</small></div>`,
+            `<div class="bt-dest"><h4>Capturas con problema</h4><strong>${Number(c.INCOMPLETO) || 0} incompletas · ${Number(c.ERROR) || 0} con error</strong><small><a href="/capturas" data-page="capturas" class="nav-link">Ver capturas →</a></small></div>`,
+            `<div class="bt-dest"><h4>Bots en línea</h4><strong>${Number(d.bots_en_linea) || 0} de ${Number(d.bots_total) || 0}</strong><small>Latido en los últimos 3 minutos</small></div>`,
+        ].join("");
+    }
+
+    // ── Tarjetas de bots ──────────────────────────────────────────────────────
+    function _btTarjeta(b) {
+        const meta = _BT_BOTS[b.bot] || { nombre: b.nombre, detalle: "" };
+        const estado = !b.visto_alguna_vez ? ["gris", "Nunca visto"]
+            : b.en_linea ? ["verde", "En línea"] : ["rojo", "Fuera de línea"];
+        const e = b.estado || {};
+        const pausa = !b.habilitado;
+        const visto = b.visto_alguna_vez ? `Último latido ${_btHace(b.hace_segundos)}${b.version ? " · v" + _btEsc(b.version) : ""}` : "Todavía no se ha conectado";
+        const chips = ["omni", "cxc", "gemini"].map((k) => {
+            const [clase, texto] = _BT_ESTADO_DESTINO[e[k]] || ["gris", "—"];
+            return `<span class="bt-chip"><span class="bt-dot ${clase}" aria-hidden="true"></span>${k === "gemini" ? "Gemini" : k === "omni" ? "Omni" : "CxC"}: ${_btEsc(texto)}</span>`;
+        }).join("");
+        const seguro = typeof b.url_panel === "string" && /^https?:\/\//i.test(b.url_panel);
+        const enlace = b.bot === "asana" && seguro
+            ? `<a class="btn-secondary" href="${_btEsc(b.url_panel)}" target="_blank" rel="noopener noreferrer">Abrir su panel ↗</a>`
+            : (b.bot === "asana" ? `<span class="cap-sub">Configura la dirección de su panel en «Configurar».</span>` : "");
+        return `<article class="card bt-card${pausa ? " bt-pausa" : ""}" data-bt-bot="${_btEsc(b.bot)}">
+            <div class="bt-card-cab">
+                <div><h3>${_btEsc(meta.nombre)}</h3><p>${_btEsc(meta.detalle)}</p></div>
+                <span class="bt-estado"><span class="bt-dot ${estado[0]}" aria-hidden="true"></span>${estado[1]}</span>
+            </div>
+            <div class="cap-sub" style="margin:0;">${_btEsc(visto)}${e.modo ? " · " + _btEsc(e.modo) : ""}</div>
+            ${pausa ? `<div class="bt-aviso">⏸ En pausa: el bot no atiende mensajes hasta que lo reanudes.</div>` : ""}
+            ${b.mensaje ? `<div class="cap-sub">📣 ${_btEsc(b.mensaje)}</div>` : ""}
+            <div class="bt-metricas">
+                <div><b>${Number(e.mensajes_hoy) || 0}</b><span>Mensajes hoy</span></div>
+                <div><b>${Number(e.errores_hoy) || 0}</b><span>Errores hoy</span></div>
+                <div><b>${Number(e.outbox_pendientes) || 0}</b><span>En cola</span></div>
+            </div>
+            <div class="bt-chips">${chips}<span class="bt-chip">👥 ${Number(b.n_usuarios) || 0} usuario${Number(b.n_usuarios) === 1 ? "" : "s"}</span></div>
+            ${e.ultimo_error ? `<div class="bt-error">Último error: ${_btEsc(e.ultimo_error)}</div>` : ""}
+            <div class="bt-acciones">
+                <button type="button" class="btn-secondary" data-bt-config="${_btEsc(b.bot)}">${_btPuedeGestionar ? "Configurar" : "Ver detalle"}</button>
+                ${_btPuedeGestionar ? `<button type="button" class="btn-secondary" data-bt-pausar="${_btEsc(b.bot)}" data-bt-habilitado="${b.habilitado ? "1" : "0"}">${b.habilitado ? "⏸ Pausar" : "▶ Reanudar"}</button>` : ""}
+                ${enlace}
+            </div>
+        </article>`;
+    }
+
+    // ── Usuarios autorizados ──────────────────────────────────────────────────
+    function _btRenderUsuarios() {
+        const body = document.getElementById("bots-usuarios-body");
+        if (!_btUsuarios.length) {
+            body.innerHTML = `<tr><td colspan="5" class="table-empty">Todavía no hay usuarios autorizados: los bots ignoran a todo el mundo hasta que agregues a alguien.</td></tr>`;
+            return;
+        }
+        body.innerHTML = _btUsuarios.map((u, i) => `<tr>
+            <td style="white-space:nowrap;">${_btEsc(u.telegram_id)}</td>
+            <td>${u.nombre ? _btEsc(u.nombre) : "—"}</td>
+            <td>${u.email ? _btEsc(u.email) : "—"}</td>
+            <td><div class="bt-chips">${(u.bots || []).map((b) => `<span class="bt-chip">${_btEsc((_BT_BOTS[b] || {}).nombre || b)}</span>`).join("")}</div></td>
+            <td style="white-space:nowrap;">${_btPuedeGestionar
+                ? `<button type="button" class="btn-secondary" data-bt-editar="${i}">Editar</button> <button type="button" class="btn-secondary" data-bt-borrar="${i}">Quitar</button>` : ""}</td>
+        </tr>`).join("");
+    }
+
+    function _btPrepararFormUsuario() {
+        const form = document.getElementById("bots-form-usuario");
+        form.style.display = _btPuedeGestionar ? "block" : "none";
+        document.getElementById("bots-u-bots").innerHTML = Object.entries(_BT_BOTS).map(([id, m]) =>
+            `<label><input type="checkbox" value="${id}" data-bt-u-bot> ${_btEsc(m.nombre)}</label>`).join("");
+    }
+
+    function _btLimpiarFormUsuario() {
+        document.getElementById("bots-form-usuario").reset();
+        document.getElementById("bots-u-id").readOnly = false;
+        document.getElementById("bots-form-titulo").textContent = "Agregar usuario";
+        document.getElementById("bots-u-cancelar").style.display = "none";
+    }
+
+    async function _btGuardarUsuario(ev) {
+        ev.preventDefault();
+        const out = document.getElementById("bots-u-resultado");
+        const bots = [...document.querySelectorAll("[data-bt-u-bot]:checked")].map((c) => c.value);
+        out.innerHTML = "";
+        try {
+            await _btFetch("/api/bots/usuarios", _btJson("POST", {
+                telegram_id: document.getElementById("bots-u-id").value.trim(),
+                nombre: document.getElementById("bots-u-nombre").value.trim(),
+                email: document.getElementById("bots-u-email").value.trim(),
+                bots,
+            }));
+            _btLimpiarFormUsuario();
+            out.innerHTML = _btMensaje("ok", "Usuario guardado. Los bots lo aplican en menos de un minuto.");
+            await loadBots();
+        } catch (err) {
+            out.innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    async function _btBorrarUsuario(u) {
+        if (!confirm(`¿Quitar a ${u.nombre || u.telegram_id} de los bots? Dejará de poder usarlos.`)) return;
+        try {
+            await _btFetch(`/api/bots/usuarios/${encodeURIComponent(u.telegram_id)}`, { method: "DELETE" });
+            await loadBots();
+        } catch (err) {
+            document.getElementById("bots-aviso").innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Pausar / reanudar ─────────────────────────────────────────────────────
+    async function _btPausar(bot, habilitado) {
+        const nombre = (_BT_BOTS[bot] || {}).nombre || bot;
+        if (habilitado && !confirm(`¿Pausar el bot de ${nombre}? Dejará de atender mensajes hasta que lo reanudes.`)) return;
+        try {
+            await _btFetch(`/api/bots/${encodeURIComponent(bot)}`, _btJson("PATCH", { habilitado: !habilitado }));
+            await loadBots();
+        } catch (err) {
+            document.getElementById("bots-aviso").innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Detalle y configuración (modal) ───────────────────────────────────────
+    function _btCapturasHtml(lista) {
+        if (!lista.length) return `<p class="cap-sub">Este bot todavía no ha enviado capturas a CxC.</p>`;
+        return `<div class="table-wrapper"><table class="cxc-table"><thead><tr><th>Recibida</th><th>Tipo</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>${lista.map((c) => {
+            const clase = { ENVIADO: "verde", ERROR: "rojo", INCOMPLETO: "amarillo", PENDIENTE: "amarillo" }[c.estado] || "";
+            const nota = c.error ? _btEsc(c.error) : ((c.incompleto || []).length ? "Falta: " + c.incompleto.map(_btEsc).join(", ") : (c.odoo_ref ? _btEsc(c.odoo_ref) : "—"));
+            return `<tr><td style="white-space:nowrap;">${_capFechaHora(c.creada_en)}</td><td>${_btEsc(_BT_TIPOS_CAPTURA[c.kind] || c.kind)}</td><td><span class="semaphore ${clase}">${_btEsc(c.estado)}</span></td><td>${nota}</td></tr>`;
+        }).join("")}</tbody></table></div>`;
+    }
+
+    function _btResumenCambio(c) {
+        const antes = c.antes || {};
+        const despues = c.despues || {};
+        const claves = [...new Set([...Object.keys(antes), ...Object.keys(despues)])];
+        const corto = (v) => (v && typeof v === "object" ? JSON.stringify(v) : String(v == null ? "—" : v));
+        return claves.map((k) => `${_btEsc(k)}: ${_btEsc(corto(antes[k]))} → ${_btEsc(corto(despues[k]))}`).join("; ") || "—";
+    }
+
+    function _btDetalleHtml(d) {
+        const p = d.parametros || {};
+        const ch = d.chats || {};
+        const dis = _btPuedeGestionar ? "" : " disabled";
+        const modelos = (d.modelos_sugeridos || []).map((m) => `<option value="${_btEsc(m)}"></option>`).join("");
+        const hist = (d.historial || []).length
+            ? `<table class="cxc-table"><thead><tr><th>Día</th><th>Latidos</th><th>Mensajes</th><th>Errores</th></tr></thead><tbody>${d.historial.map((h) => `<tr><td>${_btEsc(h.dia)}</td><td>${Number(h.latidos) || 0}</td><td>${Number(h.mensajes) || 0}</td><td>${Number(h.errores) || 0}</td></tr>`).join("")}</tbody></table>`
+            : `<p class="cap-sub">Sin actividad registrada en los últimos días.</p>`;
+        const bit = (d.bitacora || []).length
+            ? `<table class="cxc-table"><thead><tr><th>Cuándo</th><th>Quién</th><th>Cambio</th></tr></thead><tbody>${d.bitacora.map((c) => `<tr><td style="white-space:nowrap;">${_capFechaHora(c.en)}</td><td>${_btEsc(c.usuario)}</td><td>${_btResumenCambio(c)}</td></tr>`).join("")}</tbody></table>`
+            : `<p class="cap-sub">Nadie ha cambiado la configuración de este bot.</p>`;
+        const claveGemini = (d.estado || {}).gemini;
+        return `<form id="bot-form-config" data-bt-bot="${_btEsc(d.bot)}" autocomplete="off">
+            <div class="bt-cfg">
+                <label>Estado del bot
+                    <span><label style="flex-direction:row; align-items:center; gap:0.4rem;"><input type="checkbox" id="bot-c-habilitado"${d.habilitado ? " checked" : ""}${dis}> Activo (atiende mensajes)</label></span>
+                </label>
+                <label>Envío automático tras (minutos)<input type="number" id="bot-c-auto" min="1" max="120" value="${_btEsc(p.auto_envio_min)}"${dis}></label>
+                <label>Modelo de Gemini<input type="text" id="bot-c-modelo" list="bot-modelos" maxlength="60" value="${_btEsc(p.gemini_model)}"${dis}><datalist id="bot-modelos">${modelos}</datalist></label>
+                <label>Chat de respaldo (id)<input type="text" id="bot-c-respaldo" inputmode="numeric" placeholder="-100…" value="${ch.respaldo == null ? "" : _btEsc(ch.respaldo)}"${dis}></label>
+                <label>Chat del grupo (id)<input type="text" id="bot-c-grupo" inputmode="numeric" placeholder="-100…" value="${ch.grupo == null ? "" : _btEsc(ch.grupo)}"${dis}></label>
+                <label>Dirección de su panel<input type="url" id="bot-c-url" maxlength="300" placeholder="https://…" value="${_btEsc(d.url_panel)}"${dis}></label>
+                <label class="bt-ancho">Mensaje para el equipo (opcional, hasta 280 caracteres)<input type="text" id="bot-c-mensaje" maxlength="280" value="${_btEsc(d.mensaje)}"${dis}></label>
+            </div>
+            <p class="cap-sub">La clave de Gemini y el token de Telegram no se guardan aquí: se configuran en el entorno del bot${claveGemini === "sin_clave" ? " (este bot reporta que <b>no tiene clave de Gemini</b>)" : ""}.</p>
+            ${_btPuedeGestionar ? `<div style="display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;"><button type="submit" class="btn btn-primary" style="padding:0.4rem 0.9rem;">Guardar cambios</button><span id="bot-c-resultado"></span></div>` : `<p class="cap-sub">Necesitas el permiso «administrar los bots» para cambiar esto.</p>`}
+        </form>
+        <div class="bt-sec"><h4>Actividad de los últimos días</h4>${hist}</div>
+        <div class="bt-sec"><h4>Capturas recientes de este bot</h4>${_btCapturasHtml(d.capturas || [])}</div>
+        <div class="bt-sec"><h4>Cambios de configuración</h4>${bit}</div>`;
+    }
+
+    function _btAbrirModal(titulo, html) {
+        document.getElementById("modal-bot-titulo").textContent = titulo;
+        document.getElementById("modal-bot-body").innerHTML = html;
+        document.getElementById("modal-bot").style.display = "flex";
+    }
+
+    window.cerrarModalBot = function() {
+        document.getElementById("modal-bot").style.display = "none";
+        _btModalBot = null;
+    };
+
+    async function _btAbrirDetalle(bot) {
+        _btModalBot = bot;
+        const nombre = (_BT_BOTS[bot] || {}).nombre || bot;
+        _btAbrirModal(`Bot de ${nombre}`, `<p class="table-empty" style="padding:1rem !important;">Cargando...</p>`);
+        try {
+            const d = await _btFetch(`/api/bots/${encodeURIComponent(bot)}`);
+            if (_btModalBot === bot) _btAbrirModal(`Bot de ${nombre}`, _btDetalleHtml(d));
+        } catch (err) {
+            _btAbrirModal(`Bot de ${nombre}`, _btMensaje("error", err.message));
+        }
+    }
+
+    async function _btGuardarConfig(form) {
+        const bot = form.dataset.btBot;
+        const out = document.getElementById("bot-c-resultado");
+        const valor = (id) => document.getElementById(id).value.trim();
+        const cuerpo = {
+            habilitado: document.getElementById("bot-c-habilitado").checked,
+            parametros: { auto_envio_min: valor("bot-c-auto"), gemini_model: valor("bot-c-modelo") },
+            chats: { respaldo: valor("bot-c-respaldo"), grupo: valor("bot-c-grupo") },
+            url_panel: valor("bot-c-url"),
+            mensaje: valor("bot-c-mensaje"),
+        };
+        out.innerHTML = "";
+        try {
+            await _btFetch(`/api/bots/${encodeURIComponent(bot)}`, _btJson("PATCH", cuerpo));
+            await _btAbrirDetalle(bot);
+            const nuevo = document.getElementById("bot-c-resultado");
+            if (nuevo) nuevo.innerHTML = _btMensaje("ok", "Guardado. El bot lo aplica en menos de un minuto.");
+            await loadBots();
+        } catch (err) {
+            out.innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Carga de la pantalla ──────────────────────────────────────────────────
+    async function loadBots() {
+        const miCarga = ++_btCarga;
+        const u = await _bancosSesion();
+        _btPuedeGestionar = !!u && (u.rol === "admin" || (u.permisos || []).includes("bots.gestionar"));
+        _btPrepararFormUsuarioUnaVez();
+        const aviso = document.getElementById("bots-aviso");
+        try {
+            const [lista, destinos, usuarios] = await Promise.all([
+                _btFetch("/api/bots"), _btFetch("/api/bots/destinos"), _btFetch("/api/bots/usuarios"),
+            ]);
+            if (miCarga !== _btCarga) return;   // llegó una carga más nueva
+            _btBots = lista.items || [];
+            _btUsuarios = usuarios.items || [];
+            aviso.innerHTML = "";
+            _btRenderDestinos(destinos);
+            document.getElementById("bots-grid").innerHTML = _btBots.map(_btTarjeta).join("");
+            _btRenderUsuarios();
+        } catch (err) {
+            if (miCarga !== _btCarga) return;
+            aviso.innerHTML = _btMensaje("error", err.message);
+            document.getElementById("bots-grid").innerHTML = "";
+        }
+        clearTimeout(_btTimer);
+        _btTimer = setTimeout(() => {   // se refresca solo mientras la pantalla de bots esté abierta
+            if (location.pathname.replace(/\/+$/, "") === "/bots" && !document.hidden && !_btModalBot) loadBots();
+        }, _BT_REFRESCO_MS);
+    }
+    window.loadBots = loadBots;
+
+    let _btFormListo = false;
+    function _btPrepararFormUsuarioUnaVez() {
+        if (!_btFormListo) { _btPrepararFormUsuario(); _btFormListo = true; }
+        else document.getElementById("bots-form-usuario").style.display = _btPuedeGestionar ? "block" : "none";
+    }
+
+    // --- Eventos de la pantalla ---------------------------------------------------
+    (function _btEventos() {
+        const grid = document.getElementById("bots-grid");
+        if (!grid) return;
+        grid.addEventListener("click", (e) => {
+            const cfg = e.target.closest("[data-bt-config]");
+            if (cfg) { _btAbrirDetalle(cfg.dataset.btConfig); return; }
+            const pa = e.target.closest("[data-bt-pausar]");
+            if (pa) _btPausar(pa.dataset.btPausar, pa.dataset.btHabilitado === "1");
+        });
+        document.getElementById("bots-usuarios-body").addEventListener("click", (e) => {
+            const ed = e.target.closest("[data-bt-editar]");
+            const bo = e.target.closest("[data-bt-borrar]");
+            if (bo) { const u = _btUsuarios[Number(bo.dataset.btBorrar)]; if (u) _btBorrarUsuario(u); return; }
+            if (!ed) return;
+            const u = _btUsuarios[Number(ed.dataset.btEditar)];
+            if (!u) return;
+            document.getElementById("bots-u-id").value = u.telegram_id;
+            document.getElementById("bots-u-id").readOnly = true;
+            document.getElementById("bots-u-nombre").value = u.nombre || "";
+            document.getElementById("bots-u-email").value = u.email || "";
+            document.querySelectorAll("[data-bt-u-bot]").forEach((c) => { c.checked = (u.bots || []).includes(c.value); });
+            document.getElementById("bots-form-titulo").textContent = `Editar a ${u.nombre || u.telegram_id}`;
+            document.getElementById("bots-u-cancelar").style.display = "inline-block";
+            document.getElementById("bots-u-id").scrollIntoView({ block: "center" });
+        });
+        document.getElementById("bots-form-usuario").addEventListener("submit", _btGuardarUsuario);
+        document.getElementById("bots-u-cancelar").addEventListener("click", _btLimpiarFormUsuario);
+        const modal = document.getElementById("modal-bot");
+        modal.addEventListener("click", (e) => { if (e.target === modal) window.cerrarModalBot(); });
+        modal.addEventListener("submit", (e) => {
+            if (e.target.id === "bot-form-config") { e.preventDefault(); _btGuardarConfig(e.target); }
+        });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalBot(); });
+    })();
 
     // SPA navigation click handling for nav links and dashboard cards
     document.querySelectorAll(".nav-link").forEach(link => {

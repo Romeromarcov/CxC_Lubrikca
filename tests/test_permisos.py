@@ -37,17 +37,22 @@ _PAGINAS = [
     "inventario",
     "configuracion",
     "bancos",
+    "capturas",
+    "bots",
 ]
-_SIN_BANCOS = [p for p in _PAGINAS if p != "bancos"]
+_SIN_BANCOS = [p for p in _PAGINAS if p not in ("bancos", "capturas", "bots")]
+# Capturas Telegram y Panel de bots (nov-2026): páginas derivadas, como Bancos. Se abren con
+# capturas.ver/gestionar y bots.ver/gestionar.
+_CON_CAPTURAS = _SIN_BANCOS + ["capturas", "bots"]
 
 
 @pytest.mark.parametrize(
     "rol,paginas",
     [
         ("admin", _PAGINAS),
-        ("auditor", _PAGINAS),
-        ("tesoreria", _SIN_BANCOS),
-        ("gerente_ventas", _SIN_BANCOS),
+        ("auditor", [*_SIN_BANCOS, "bancos", "capturas", "bots"]),
+        ("tesoreria", _CON_CAPTURAS),
+        ("gerente_ventas", _CON_CAPTURAS),
         ("ventas", _SIN_BANCOS),
     ],
 )
@@ -66,6 +71,19 @@ def test_acciones_que_antes_eran_por_rol():
     assert acc.tiene(auditor, "bancos.ver") and acc.tiene(auditor, "auditoria.decidir")
     assert not acc.tiene(auditor, "bancos.cargar")
     assert not acc.tiene(auditor, "bancos.conciliar")
+
+
+def test_capturas_telegram_por_rol():
+    tesoreria = {"rol": "tesoreria", "permisos": acc.efectivos("tesoreria")}
+    assert acc.tiene(tesoreria, "capturas.gestionar")
+    auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
+    assert acc.tiene(auditor, "capturas.ver") and not acc.tiene(auditor, "capturas.gestionar")
+    ventas = acc.efectivos("ventas")
+    assert "capturas" not in ventas and "capturas.ver" not in ventas
+    # La página se abre sola al conceder una acción, y se cierra al quitarla.
+    assert "capturas" in acc.efectivos("ventas", {"capturas.ver": True})
+    sin = {"capturas.ver": False, "capturas.gestionar": False}
+    assert "capturas" not in acc.efectivos("tesoreria", sin)
 
 
 def test_conceder_cargar_bancos_abre_la_pagina_sin_dar_saldos():
@@ -376,3 +394,18 @@ def test_la_bitacora_no_se_edita_ni_se_borra(engine):
     for sql in ("UPDATE accesos_bitacora SET usuario = 'x'", "DELETE FROM accesos_bitacora"):
         with pytest.raises(Exception, match="solo-append"), engine.begin() as c:
             c.execute(text(sql))
+
+
+def test_panel_de_bots_por_rol():
+    tesoreria = {"rol": "tesoreria", "permisos": acc.efectivos("tesoreria")}
+    assert acc.tiene(tesoreria, "bots.ver") and acc.tiene(tesoreria, "bots.gestionar")
+    gerente = {"rol": "gerente_ventas", "permisos": acc.efectivos("gerente_ventas")}
+    assert acc.tiene(gerente, "bots.ver") and acc.tiene(gerente, "bots.gestionar")
+    auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
+    assert acc.tiene(auditor, "bots.ver") and not acc.tiene(auditor, "bots.gestionar")
+    ventas = acc.efectivos("ventas")
+    assert "bots" not in ventas and "bots.ver" not in ventas
+    # La página se abre sola al conceder una acción, y se cierra al quitarlas.
+    assert "bots" in acc.efectivos("ventas", {"bots.ver": True})
+    sin = {"bots.ver": False, "bots.gestionar": False}
+    assert "bots" not in acc.efectivos("tesoreria", sin)

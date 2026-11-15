@@ -46,6 +46,39 @@ alertas solo se loguean), `RECON_TOLERANCE_ROUNDING` (0.01) y
 mayor → rojo. `HOUR_AUDIT_*` solo afectan a la librería `cxc.audit`, que hoy no
 está cableada a la app.
 
+### Capturas de Telegram (escritura de borradores a Odoo)
+
+Ver la sección «Capturas de Telegram» del [README](README.md). Todas son **opcionales**:
+sin ellas CxC se comporta exactamente como antes (solo lectura de Odoo).
+
+| Variable | Para qué |
+|---|---|
+| `BOT_API_KEY` | Clave que los bots mandan en `X-Bot-Key`. Sin ella, `POST /api/bots/capturas` responde 503. Generar una larga y aleatoria; solo abre las dos rutas de capturas del bot y el latido del panel de bots |
+| `CAPTURAS_ODOO_ESCRITURA` | `1` activa la escritura de borradores a Odoo. Apagado por defecto |
+| `ODOO_WRITE_USERNAME`, `ODOO_WRITE_PASSWORD` | Credencial de Odoo **solo para escribir**, con permisos mínimos (crear en `res.partner`, `sale.order`, `account.payment` y `account.move` —facturas de proveedor en borrador—). Usa la misma `ODOO_URL` y `ODOO_DB` |
+| `CAPTURAS_DIARIOS` | (opcional) JSON `{"bancamiga_usd": 41, "transferencia": 14, "default": 14}`: fuerza el `journal_id` según `<banco>_<moneda>`, `<banco>`, `<método>_<moneda>`, `<método>`, `<moneda>` o `default`. Sin él se usa el mapa de `cxc/bancos/diarios.py` |
+| `CAPTURAS_MAX_INTENTOS` | (opcional, 5) intentos del reintento automático de errores de red |
+
+**Activación paso a paso:** (1) aplicar la migración (`alembic upgrade head`); (2) definir
+`BOT_API_KEY`; (3) crear en Odoo un usuario con permisos mínimos y definir
+`ODOO_WRITE_*`; (4) probar en un Odoo de pruebas con `CAPTURAS_ODOO_ESCRITURA=1`;
+(5) dar `capturas.ver` / `capturas.gestionar` a quien deba ver y reintentar. El
+campo del memo del pago (`memo`/`payment_reference`/`ref`) y el de GPS del contacto
+se detectan con `fields_get` en tiempo de ejecución.
+
+### Panel de bots de Telegram
+
+Ver la sección «Panel de bots de Telegram» del [README](README.md). **No agrega variables de
+entorno**: reutiliza `BOT_API_KEY` (la misma de las capturas; sin ella `POST /api/bots/heartbeat`
+responde 503).
+
+**Activación:** (1) aplicar la migración (`alembic upgrade head`: crea `bots_registro`,
+`bots_usuarios`, `bots_latidos` y `bots_bitacora`); (2) dar `bots.ver` / `bots.gestionar` a quien
+deba ver o administrar la página **Bots**; (3) en cada bot, apuntar `CXC_URL` y `CXC_BOT_KEY` (=
+`BOT_API_KEY`) para que empiece a latir; (4) cargar en el panel los usuarios autorizados y,
+si hace falta, los chats y la dirección del panel de Asana. Mientras un bot no haya latido
+aparece como «Nunca visto» y con la configuración por defecto (activo, sin usuarios).
+
 ---
 
 ## 2. Base de datos y migraciones
