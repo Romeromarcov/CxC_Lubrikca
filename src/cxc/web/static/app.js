@@ -273,6 +273,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "inventario": "tab-inventario",
             "bancos": "tab-bancos",
             "capturas": "tab-capturas",
+            "bots": "tab-bots",
             "configuracion": "tab-config"
         };
 
@@ -323,6 +324,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadBancos === "function") loadBancos();
             } else if (path === "capturas") {
                 if (typeof loadCapturas === "function") loadCapturas();
+            } else if (path === "bots") {
+                if (typeof loadBots === "function") loadBots();
             } else if (path === "configuracion") {
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
@@ -6558,6 +6561,365 @@ document.addEventListener("DOMContentLoaded", () => {
             if (e.target.id === "cap-form-completar") { e.preventDefault(); _capCompletar(e.target); }
         });
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalCaptura(); });
+    })();
+
+    // ===================================================================
+    // BOTS DE TELEGRAM: panel de administración de la familia de bots.
+    // API: GET /api/bots, GET /api/bots/{bot}, PATCH /api/bots/{bot}, GET /api/bots/destinos,
+    //      GET|POST /api/bots/usuarios, DELETE /api/bots/usuarios/{telegram_id}.
+    // Permisos: bots.ver (consultar) y bots.gestionar (cambiar). No maneja tokens ni claves.
+    // ===================================================================
+    const _BT_BOTS = {
+        pedidos: { nombre: "Ventas", detalle: "Pedidos, cotizaciones y contactos" },
+        cobranza: { nombre: "Cobranzas", detalle: "Pagos de clientes" },
+        compras: { nombre: "Compras", detalle: "Pagos, facturas y proveedores" },
+        eventos: { nombre: "Eventos", detalle: "Activaciones y calendario" },
+        asana: { nombre: "Asana", detalle: "Tareas del equipo en Asana" },
+    };
+    const _BT_TIPOS_CAPTURA = {
+        pedido: "Pedido", contacto: "Contacto", pago: "Pago de cliente",
+        pago_proveedor: "Pago a proveedor", proveedor: "Proveedor", factura_proveedor: "Factura de proveedor",
+    };
+    const _BT_ESTADO_DESTINO = {
+        ok: ["verde", "Conectado"], error: ["rojo", "Con error"], desactivado: ["gris", "Desactivado"],
+        sin_clave: ["amarillo", "Sin clave"], sin_datos: ["gris", "Sin datos"],
+    };
+    const _BT_REFRESCO_MS = 30000;
+    let _btPuedeGestionar = false;
+    let _btBots = [];
+    let _btUsuarios = [];
+    let _btCarga = 0;
+    let _btTimer = null;
+    let _btModalBot = null;
+
+    const _btEsc = (v) => _bancosEsc(v);
+
+    async function _btFetch(url, opts) {
+        const res = await fetch(url, opts);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+        return data;
+    }
+
+    const _btJson = (metodo, cuerpo) => ({
+        method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo),
+    });
+
+    function _btMensaje(tipo, texto) {
+        const [borde, fondo, color, icono] = tipo === "ok"
+            ? ["#10b981", "#ecfdf5", "#065f46", "✅"] : ["#e11d48", "#fff1f2", "#9f1239", "❌"];
+        return `<div style="border-left:4px solid ${borde}; padding:0.5rem 0.85rem; background:${fondo}; border-radius:6px; color:${color};">${icono} ${_btEsc(texto)}</div>`;
+    }
+
+    function _btHace(segundos) {
+        if (segundos == null) return "nunca";
+        if (segundos < 60) return `hace ${Math.max(segundos, 0)} s`;
+        if (segundos < 3600) return `hace ${Math.floor(segundos / 60)} min`;
+        if (segundos < 86400) return `hace ${Math.floor(segundos / 3600)} h`;
+        return `hace ${Math.floor(segundos / 86400)} d`;
+    }
+
+    function _btSemaforo(estado) {
+        const [clase, texto] = _BT_ESTADO_DESTINO[estado] || ["gris", estado || "—"];
+        return `<span class="bt-dot ${clase}" aria-hidden="true"></span>${_btEsc(texto)}`;
+    }
+
+    // ── Salud de destinos ─────────────────────────────────────────────────────
+    function _btRenderDestinos(d) {
+        const tarjeta = (titulo, bloque, pie) => `<div class="bt-dest"><h4>${_btEsc(titulo)}</h4><strong>${_btSemaforo(bloque.estado)}</strong><small>${pie}</small></div>`;
+        const porBot = (b) => {
+            const lista = Object.entries(b.por_bot || {}).map(([bot, e]) => `${_btEsc((_BT_BOTS[bot] || {}).nombre || bot)}: ${_btEsc(e)}`);
+            return lista.length ? lista.join(" · ") : "Ningún bot en línea lo reporta";
+        };
+        const c = d.capturas || {};
+        document.getElementById("bots-destinos").innerHTML = [
+            tarjeta("Omni ERP", d.omni, porBot(d.omni)),
+            tarjeta("CxC", d.cxc, porBot(d.cxc)),
+            tarjeta("Gemini (IA)", d.gemini, porBot(d.gemini)),
+            `<div class="bt-dest"><h4>Cola de reintentos</h4><strong>${Number(d.outbox_pendientes) || 0} pendiente${Number(d.outbox_pendientes) === 1 ? "" : "s"}</strong><small>Envíos que esperan a que un destino vuelva</small></div>`,
+            `<div class="bt-dest"><h4>Capturas con problema</h4><strong>${Number(c.INCOMPLETO) || 0} incompletas · ${Number(c.ERROR) || 0} con error</strong><small><a href="/capturas" data-page="capturas" class="nav-link">Ver capturas →</a></small></div>`,
+            `<div class="bt-dest"><h4>Bots en línea</h4><strong>${Number(d.bots_en_linea) || 0} de ${Number(d.bots_total) || 0}</strong><small>Latido en los últimos 3 minutos</small></div>`,
+        ].join("");
+    }
+
+    // ── Tarjetas de bots ──────────────────────────────────────────────────────
+    function _btTarjeta(b) {
+        const meta = _BT_BOTS[b.bot] || { nombre: b.nombre, detalle: "" };
+        const estado = !b.visto_alguna_vez ? ["gris", "Nunca visto"]
+            : b.en_linea ? ["verde", "En línea"] : ["rojo", "Fuera de línea"];
+        const e = b.estado || {};
+        const pausa = !b.habilitado;
+        const visto = b.visto_alguna_vez ? `Último latido ${_btHace(b.hace_segundos)}${b.version ? " · v" + _btEsc(b.version) : ""}` : "Todavía no se ha conectado";
+        const chips = ["omni", "cxc", "gemini"].map((k) => {
+            const [clase, texto] = _BT_ESTADO_DESTINO[e[k]] || ["gris", "—"];
+            return `<span class="bt-chip"><span class="bt-dot ${clase}" aria-hidden="true"></span>${k === "gemini" ? "Gemini" : k === "omni" ? "Omni" : "CxC"}: ${_btEsc(texto)}</span>`;
+        }).join("");
+        const seguro = typeof b.url_panel === "string" && /^https?:\/\//i.test(b.url_panel);
+        const enlace = b.bot === "asana" && seguro
+            ? `<a class="btn-secondary" href="${_btEsc(b.url_panel)}" target="_blank" rel="noopener noreferrer">Abrir su panel ↗</a>`
+            : (b.bot === "asana" ? `<span class="cap-sub">Configura la dirección de su panel en «Configurar».</span>` : "");
+        return `<article class="card bt-card${pausa ? " bt-pausa" : ""}" data-bt-bot="${_btEsc(b.bot)}">
+            <div class="bt-card-cab">
+                <div><h3>${_btEsc(meta.nombre)}</h3><p>${_btEsc(meta.detalle)}</p></div>
+                <span class="bt-estado"><span class="bt-dot ${estado[0]}" aria-hidden="true"></span>${estado[1]}</span>
+            </div>
+            <div class="cap-sub" style="margin:0;">${_btEsc(visto)}${e.modo ? " · " + _btEsc(e.modo) : ""}</div>
+            ${pausa ? `<div class="bt-aviso">⏸ En pausa: el bot no atiende mensajes hasta que lo reanudes.</div>` : ""}
+            ${b.mensaje ? `<div class="cap-sub">📣 ${_btEsc(b.mensaje)}</div>` : ""}
+            <div class="bt-metricas">
+                <div><b>${Number(e.mensajes_hoy) || 0}</b><span>Mensajes hoy</span></div>
+                <div><b>${Number(e.errores_hoy) || 0}</b><span>Errores hoy</span></div>
+                <div><b>${Number(e.outbox_pendientes) || 0}</b><span>En cola</span></div>
+            </div>
+            <div class="bt-chips">${chips}<span class="bt-chip">👥 ${Number(b.n_usuarios) || 0} usuario${Number(b.n_usuarios) === 1 ? "" : "s"}</span></div>
+            ${e.ultimo_error ? `<div class="bt-error">Último error: ${_btEsc(e.ultimo_error)}</div>` : ""}
+            <div class="bt-acciones">
+                <button type="button" class="btn-secondary" data-bt-config="${_btEsc(b.bot)}">${_btPuedeGestionar ? "Configurar" : "Ver detalle"}</button>
+                ${_btPuedeGestionar ? `<button type="button" class="btn-secondary" data-bt-pausar="${_btEsc(b.bot)}" data-bt-habilitado="${b.habilitado ? "1" : "0"}">${b.habilitado ? "⏸ Pausar" : "▶ Reanudar"}</button>` : ""}
+                ${enlace}
+            </div>
+        </article>`;
+    }
+
+    // ── Usuarios autorizados ──────────────────────────────────────────────────
+    function _btRenderUsuarios() {
+        const body = document.getElementById("bots-usuarios-body");
+        if (!_btUsuarios.length) {
+            body.innerHTML = `<tr><td colspan="5" class="table-empty">Todavía no hay usuarios autorizados: los bots ignoran a todo el mundo hasta que agregues a alguien.</td></tr>`;
+            return;
+        }
+        body.innerHTML = _btUsuarios.map((u, i) => `<tr>
+            <td style="white-space:nowrap;">${_btEsc(u.telegram_id)}</td>
+            <td>${u.nombre ? _btEsc(u.nombre) : "—"}</td>
+            <td>${u.email ? _btEsc(u.email) : "—"}</td>
+            <td><div class="bt-chips">${(u.bots || []).map((b) => `<span class="bt-chip">${_btEsc((_BT_BOTS[b] || {}).nombre || b)}</span>`).join("")}</div></td>
+            <td style="white-space:nowrap;">${_btPuedeGestionar
+                ? `<button type="button" class="btn-secondary" data-bt-editar="${i}">Editar</button> <button type="button" class="btn-secondary" data-bt-borrar="${i}">Quitar</button>` : ""}</td>
+        </tr>`).join("");
+    }
+
+    function _btPrepararFormUsuario() {
+        const form = document.getElementById("bots-form-usuario");
+        form.style.display = _btPuedeGestionar ? "block" : "none";
+        document.getElementById("bots-u-bots").innerHTML = Object.entries(_BT_BOTS).map(([id, m]) =>
+            `<label><input type="checkbox" value="${id}" data-bt-u-bot> ${_btEsc(m.nombre)}</label>`).join("");
+    }
+
+    function _btLimpiarFormUsuario() {
+        document.getElementById("bots-form-usuario").reset();
+        document.getElementById("bots-u-id").readOnly = false;
+        document.getElementById("bots-form-titulo").textContent = "Agregar usuario";
+        document.getElementById("bots-u-cancelar").style.display = "none";
+    }
+
+    async function _btGuardarUsuario(ev) {
+        ev.preventDefault();
+        const out = document.getElementById("bots-u-resultado");
+        const bots = [...document.querySelectorAll("[data-bt-u-bot]:checked")].map((c) => c.value);
+        out.innerHTML = "";
+        try {
+            await _btFetch("/api/bots/usuarios", _btJson("POST", {
+                telegram_id: document.getElementById("bots-u-id").value.trim(),
+                nombre: document.getElementById("bots-u-nombre").value.trim(),
+                email: document.getElementById("bots-u-email").value.trim(),
+                bots,
+            }));
+            _btLimpiarFormUsuario();
+            out.innerHTML = _btMensaje("ok", "Usuario guardado. Los bots lo aplican en menos de un minuto.");
+            await loadBots();
+        } catch (err) {
+            out.innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    async function _btBorrarUsuario(u) {
+        if (!confirm(`¿Quitar a ${u.nombre || u.telegram_id} de los bots? Dejará de poder usarlos.`)) return;
+        try {
+            await _btFetch(`/api/bots/usuarios/${encodeURIComponent(u.telegram_id)}`, { method: "DELETE" });
+            await loadBots();
+        } catch (err) {
+            document.getElementById("bots-aviso").innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Pausar / reanudar ─────────────────────────────────────────────────────
+    async function _btPausar(bot, habilitado) {
+        const nombre = (_BT_BOTS[bot] || {}).nombre || bot;
+        if (habilitado && !confirm(`¿Pausar el bot de ${nombre}? Dejará de atender mensajes hasta que lo reanudes.`)) return;
+        try {
+            await _btFetch(`/api/bots/${encodeURIComponent(bot)}`, _btJson("PATCH", { habilitado: !habilitado }));
+            await loadBots();
+        } catch (err) {
+            document.getElementById("bots-aviso").innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Detalle y configuración (modal) ───────────────────────────────────────
+    function _btCapturasHtml(lista) {
+        if (!lista.length) return `<p class="cap-sub">Este bot todavía no ha enviado capturas a CxC.</p>`;
+        return `<div class="table-wrapper"><table class="cxc-table"><thead><tr><th>Recibida</th><th>Tipo</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>${lista.map((c) => {
+            const clase = { ENVIADO: "verde", ERROR: "rojo", INCOMPLETO: "amarillo", PENDIENTE: "amarillo" }[c.estado] || "";
+            const nota = c.error ? _btEsc(c.error) : ((c.incompleto || []).length ? "Falta: " + c.incompleto.map(_btEsc).join(", ") : (c.odoo_ref ? _btEsc(c.odoo_ref) : "—"));
+            return `<tr><td style="white-space:nowrap;">${_capFechaHora(c.creada_en)}</td><td>${_btEsc(_BT_TIPOS_CAPTURA[c.kind] || c.kind)}</td><td><span class="semaphore ${clase}">${_btEsc(c.estado)}</span></td><td>${nota}</td></tr>`;
+        }).join("")}</tbody></table></div>`;
+    }
+
+    function _btResumenCambio(c) {
+        const antes = c.antes || {};
+        const despues = c.despues || {};
+        const claves = [...new Set([...Object.keys(antes), ...Object.keys(despues)])];
+        const corto = (v) => (v && typeof v === "object" ? JSON.stringify(v) : String(v == null ? "—" : v));
+        return claves.map((k) => `${_btEsc(k)}: ${_btEsc(corto(antes[k]))} → ${_btEsc(corto(despues[k]))}`).join("; ") || "—";
+    }
+
+    function _btDetalleHtml(d) {
+        const p = d.parametros || {};
+        const ch = d.chats || {};
+        const dis = _btPuedeGestionar ? "" : " disabled";
+        const modelos = (d.modelos_sugeridos || []).map((m) => `<option value="${_btEsc(m)}"></option>`).join("");
+        const hist = (d.historial || []).length
+            ? `<table class="cxc-table"><thead><tr><th>Día</th><th>Latidos</th><th>Mensajes</th><th>Errores</th></tr></thead><tbody>${d.historial.map((h) => `<tr><td>${_btEsc(h.dia)}</td><td>${Number(h.latidos) || 0}</td><td>${Number(h.mensajes) || 0}</td><td>${Number(h.errores) || 0}</td></tr>`).join("")}</tbody></table>`
+            : `<p class="cap-sub">Sin actividad registrada en los últimos días.</p>`;
+        const bit = (d.bitacora || []).length
+            ? `<table class="cxc-table"><thead><tr><th>Cuándo</th><th>Quién</th><th>Cambio</th></tr></thead><tbody>${d.bitacora.map((c) => `<tr><td style="white-space:nowrap;">${_capFechaHora(c.en)}</td><td>${_btEsc(c.usuario)}</td><td>${_btResumenCambio(c)}</td></tr>`).join("")}</tbody></table>`
+            : `<p class="cap-sub">Nadie ha cambiado la configuración de este bot.</p>`;
+        const claveGemini = (d.estado || {}).gemini;
+        return `<form id="bot-form-config" data-bt-bot="${_btEsc(d.bot)}" autocomplete="off">
+            <div class="bt-cfg">
+                <label>Estado del bot
+                    <span><label style="flex-direction:row; align-items:center; gap:0.4rem;"><input type="checkbox" id="bot-c-habilitado"${d.habilitado ? " checked" : ""}${dis}> Activo (atiende mensajes)</label></span>
+                </label>
+                <label>Envío automático tras (minutos)<input type="number" id="bot-c-auto" min="1" max="120" value="${_btEsc(p.auto_envio_min)}"${dis}></label>
+                <label>Modelo de Gemini<input type="text" id="bot-c-modelo" list="bot-modelos" maxlength="60" value="${_btEsc(p.gemini_model)}"${dis}><datalist id="bot-modelos">${modelos}</datalist></label>
+                <label>Chat de respaldo (id)<input type="text" id="bot-c-respaldo" inputmode="numeric" placeholder="-100…" value="${ch.respaldo == null ? "" : _btEsc(ch.respaldo)}"${dis}></label>
+                <label>Chat del grupo (id)<input type="text" id="bot-c-grupo" inputmode="numeric" placeholder="-100…" value="${ch.grupo == null ? "" : _btEsc(ch.grupo)}"${dis}></label>
+                <label>Dirección de su panel<input type="url" id="bot-c-url" maxlength="300" placeholder="https://…" value="${_btEsc(d.url_panel)}"${dis}></label>
+                <label class="bt-ancho">Mensaje para el equipo (opcional, hasta 280 caracteres)<input type="text" id="bot-c-mensaje" maxlength="280" value="${_btEsc(d.mensaje)}"${dis}></label>
+            </div>
+            <p class="cap-sub">La clave de Gemini y el token de Telegram no se guardan aquí: se configuran en el entorno del bot${claveGemini === "sin_clave" ? " (este bot reporta que <b>no tiene clave de Gemini</b>)" : ""}.</p>
+            ${_btPuedeGestionar ? `<div style="display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;"><button type="submit" class="btn btn-primary" style="padding:0.4rem 0.9rem;">Guardar cambios</button><span id="bot-c-resultado"></span></div>` : `<p class="cap-sub">Necesitas el permiso «administrar los bots» para cambiar esto.</p>`}
+        </form>
+        <div class="bt-sec"><h4>Actividad de los últimos días</h4>${hist}</div>
+        <div class="bt-sec"><h4>Capturas recientes de este bot</h4>${_btCapturasHtml(d.capturas || [])}</div>
+        <div class="bt-sec"><h4>Cambios de configuración</h4>${bit}</div>`;
+    }
+
+    function _btAbrirModal(titulo, html) {
+        document.getElementById("modal-bot-titulo").textContent = titulo;
+        document.getElementById("modal-bot-body").innerHTML = html;
+        document.getElementById("modal-bot").style.display = "flex";
+    }
+
+    window.cerrarModalBot = function() {
+        document.getElementById("modal-bot").style.display = "none";
+        _btModalBot = null;
+    };
+
+    async function _btAbrirDetalle(bot) {
+        _btModalBot = bot;
+        const nombre = (_BT_BOTS[bot] || {}).nombre || bot;
+        _btAbrirModal(`Bot de ${nombre}`, `<p class="table-empty" style="padding:1rem !important;">Cargando...</p>`);
+        try {
+            const d = await _btFetch(`/api/bots/${encodeURIComponent(bot)}`);
+            if (_btModalBot === bot) _btAbrirModal(`Bot de ${nombre}`, _btDetalleHtml(d));
+        } catch (err) {
+            _btAbrirModal(`Bot de ${nombre}`, _btMensaje("error", err.message));
+        }
+    }
+
+    async function _btGuardarConfig(form) {
+        const bot = form.dataset.btBot;
+        const out = document.getElementById("bot-c-resultado");
+        const valor = (id) => document.getElementById(id).value.trim();
+        const cuerpo = {
+            habilitado: document.getElementById("bot-c-habilitado").checked,
+            parametros: { auto_envio_min: valor("bot-c-auto"), gemini_model: valor("bot-c-modelo") },
+            chats: { respaldo: valor("bot-c-respaldo"), grupo: valor("bot-c-grupo") },
+            url_panel: valor("bot-c-url"),
+            mensaje: valor("bot-c-mensaje"),
+        };
+        out.innerHTML = "";
+        try {
+            await _btFetch(`/api/bots/${encodeURIComponent(bot)}`, _btJson("PATCH", cuerpo));
+            await _btAbrirDetalle(bot);
+            const nuevo = document.getElementById("bot-c-resultado");
+            if (nuevo) nuevo.innerHTML = _btMensaje("ok", "Guardado. El bot lo aplica en menos de un minuto.");
+            await loadBots();
+        } catch (err) {
+            out.innerHTML = _btMensaje("error", err.message);
+        }
+    }
+
+    // ── Carga de la pantalla ──────────────────────────────────────────────────
+    async function loadBots() {
+        const miCarga = ++_btCarga;
+        const u = await _bancosSesion();
+        _btPuedeGestionar = !!u && (u.rol === "admin" || (u.permisos || []).includes("bots.gestionar"));
+        _btPrepararFormUsuarioUnaVez();
+        const aviso = document.getElementById("bots-aviso");
+        try {
+            const [lista, destinos, usuarios] = await Promise.all([
+                _btFetch("/api/bots"), _btFetch("/api/bots/destinos"), _btFetch("/api/bots/usuarios"),
+            ]);
+            if (miCarga !== _btCarga) return;   // llegó una carga más nueva
+            _btBots = lista.items || [];
+            _btUsuarios = usuarios.items || [];
+            aviso.innerHTML = "";
+            _btRenderDestinos(destinos);
+            document.getElementById("bots-grid").innerHTML = _btBots.map(_btTarjeta).join("");
+            _btRenderUsuarios();
+        } catch (err) {
+            if (miCarga !== _btCarga) return;
+            aviso.innerHTML = _btMensaje("error", err.message);
+            document.getElementById("bots-grid").innerHTML = "";
+        }
+        clearTimeout(_btTimer);
+        _btTimer = setTimeout(() => {   // se refresca solo mientras la pantalla de bots esté abierta
+            if (location.pathname.replace(/\/+$/, "") === "/bots" && !document.hidden && !_btModalBot) loadBots();
+        }, _BT_REFRESCO_MS);
+    }
+    window.loadBots = loadBots;
+
+    let _btFormListo = false;
+    function _btPrepararFormUsuarioUnaVez() {
+        if (!_btFormListo) { _btPrepararFormUsuario(); _btFormListo = true; }
+        else document.getElementById("bots-form-usuario").style.display = _btPuedeGestionar ? "block" : "none";
+    }
+
+    // --- Eventos de la pantalla ---------------------------------------------------
+    (function _btEventos() {
+        const grid = document.getElementById("bots-grid");
+        if (!grid) return;
+        grid.addEventListener("click", (e) => {
+            const cfg = e.target.closest("[data-bt-config]");
+            if (cfg) { _btAbrirDetalle(cfg.dataset.btConfig); return; }
+            const pa = e.target.closest("[data-bt-pausar]");
+            if (pa) _btPausar(pa.dataset.btPausar, pa.dataset.btHabilitado === "1");
+        });
+        document.getElementById("bots-usuarios-body").addEventListener("click", (e) => {
+            const ed = e.target.closest("[data-bt-editar]");
+            const bo = e.target.closest("[data-bt-borrar]");
+            if (bo) { const u = _btUsuarios[Number(bo.dataset.btBorrar)]; if (u) _btBorrarUsuario(u); return; }
+            if (!ed) return;
+            const u = _btUsuarios[Number(ed.dataset.btEditar)];
+            if (!u) return;
+            document.getElementById("bots-u-id").value = u.telegram_id;
+            document.getElementById("bots-u-id").readOnly = true;
+            document.getElementById("bots-u-nombre").value = u.nombre || "";
+            document.getElementById("bots-u-email").value = u.email || "";
+            document.querySelectorAll("[data-bt-u-bot]").forEach((c) => { c.checked = (u.bots || []).includes(c.value); });
+            document.getElementById("bots-form-titulo").textContent = `Editar a ${u.nombre || u.telegram_id}`;
+            document.getElementById("bots-u-cancelar").style.display = "inline-block";
+            document.getElementById("bots-u-id").scrollIntoView({ block: "center" });
+        });
+        document.getElementById("bots-form-usuario").addEventListener("submit", _btGuardarUsuario);
+        document.getElementById("bots-u-cancelar").addEventListener("click", _btLimpiarFormUsuario);
+        const modal = document.getElementById("modal-bot");
+        modal.addEventListener("click", (e) => { if (e.target === modal) window.cerrarModalBot(); });
+        modal.addEventListener("submit", (e) => {
+            if (e.target.id === "bot-form-config") { e.preventDefault(); _btGuardarConfig(e.target); }
+        });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalBot(); });
     })();
 
     // SPA navigation click handling for nav links and dashboard cards

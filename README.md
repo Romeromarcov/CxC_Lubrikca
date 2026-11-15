@@ -81,7 +81,8 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
 - **Bitácora:** cada captura guarda sus eventos (recibida, intento, creada en Odoo,
   error, completada, reintento manual) en `capturas_bot_eventos`, solo-append.
 - **API:** los bots usan `POST /api/bots/capturas` y `…/{id}/completar` con la
-  cabecera `X-Bot-Key` (`BOT_API_KEY`); es lo único que esa clave abre. Las llaves
+  cabecera `X-Bot-Key` (`BOT_API_KEY`); con el latido del panel de bots (más abajo) es lo
+  único que esa clave abre. Las llaves
   de API normales siguen siendo solo `GET`. La interfaz (página **Capturas
   Telegram**, permisos `capturas.ver` / `capturas.gestionar`) lista, muestra,
   reintenta y, con `capturas.gestionar`, también completa pagos y facturas de
@@ -93,6 +94,35 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
 
 Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
 única autoridad contable.
+
+### Panel de bots de Telegram (plano de control de la familia de bots)
+
+CxC no solo recibe las capturas: es también el **panel desde el que se administra** la familia de
+bots de Lubrikca (página **Bots**): `pedidos` (Ventas), `cobranza` (Cobranzas), `compras`,
+`eventos` y `asana` (el bot de Asana, ya en producción; su tarjeta enlaza a su propio panel).
+
+- **Latido:** cada bot llama a `POST /api/bots/heartbeat` (misma clave `X-Bot-Key` / `BOT_API_KEY`;
+  es la única otra ruta que esa clave abre) con su estado (`modo`, `gemini`, `omni`, `cxc`,
+  cola de reintentos, mensajes y errores de hoy, último error) y **recibe en la respuesta su
+  configuración**: `habilitado`, `parametros` (`auto_envio_min` 1–120, `gemini_model`),
+  `usuarios` autorizados para ese bot, `chats` (`grupo`, `respaldo`) y un `mensaje`.
+  Un bot está **en línea** si su último latido tiene menos de 3 minutos.
+- **Qué se controla desde el panel:** pausar/reanudar un bot, sus parámetros y chats, la dirección
+  de su propio panel (`url_panel`, útil para Asana), un mensaje para el equipo, y la lista de
+  **usuarios autorizados** (id de Telegram, correo, nombre y a qué bots tienen acceso).
+  Además muestra la **salud de los destinos** (Omni, CxC, Gemini y la cola de reintentos), las
+  capturas incompletas o con error y la actividad reciente de cada bot.
+- **Si CxC no responde**, los bots siguen con la última configuración que recibieron (o la de su
+  `.env`): el panel gobierna, pero no es un punto único de falla.
+- **Lo que NO guarda ni devuelve:** tokens de Telegram ni API keys (la clave de Gemini solo se
+  indica si el bot la tiene). Lo que un bot reporta como texto (`ultimo_error`) se trunca y se
+  redacta antes de guardarse, por si trae una URL con token.
+- **Permisos:** `bots.ver` (consultar) y `bots.gestionar` (cambiar), con el mismo reparto que
+  las capturas: tesorería y gerencia ven y gestionan, auditoría solo ve, ventas no ve nada.
+- **Bitácora:** todo cambio hecho desde el panel queda en `bots_bitacora` (solo-append, con
+  trigger): quién, qué y el antes/después de lo que realmente cambió.
+- **Tablas:** `bots_registro`, `bots_usuarios`, `bots_latidos` (contadores por día, se podan a
+  los 30 días) y `bots_bitacora`. Mundo aparte: el sync de Odoo no las toca.
 
 ### Mapa del código (`src/cxc/`)
 
@@ -106,6 +136,7 @@ Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
 | `scraper/` | BCV, Binance y el orquestador `rates_scraper.py` |
 | `reconciliation/` | Semáforo motor vs Odoo |
 | `bancos/` | Ingesta de estados de cuenta: parsers por banco, huella de dedupe, validación de saldos, saldos consolidados, CSV de líneas de extracto para Odoo. Ver [`docs/BANCOS.md`](docs/BANCOS.md) |
+| `bots/` | Panel de bots de Telegram (plano de control): modelo y validación, repositorio, servicio (latido, configuración, usuarios autorizados, salud de destinos). API en `web/bots_api.py` |
 | `capturas/` | Capturas de los bots de Telegram: validación, repositorio, servicio y resolución de cliente/producto/diario. Escribe a Odoo **solo borradores** vía `odoo/escritura.py` |
 | `audit/` | `HourAuditor` (hora declarada vs banco). **Librería sin cablear**: ningún endpoint ni demonio la usa hoy |
 | `sheets/` | Solo `serde.py`: conversión dataclass ↔ fila (resto del backend Google Sheets retirado en agosto 2026) |

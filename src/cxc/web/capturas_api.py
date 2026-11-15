@@ -45,13 +45,14 @@ logger = logging.getLogger("cxc.capturas.api")
 
 router = APIRouter()
 
-_RUTA_BOT = re.compile(r"^/api/bots/capturas(/\d+/completar)?$")
+_RUTA_BOT = re.compile(r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat)$")
 PERMISOS_VER = ("capturas.ver", "capturas.gestionar")
 INTERVALO_REINTENTO_SEGUNDOS = 120
 
 
 def es_ruta_bot(metodo: str, ruta: str) -> bool:
-    """Rutas que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave)."""
+    """Rutas POST que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave):
+    capturas, completar y el latido del panel de bots."""
     return metodo == "POST" and _RUTA_BOT.match(ruta) is not None
 
 
