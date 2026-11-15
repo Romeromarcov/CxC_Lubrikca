@@ -90,6 +90,22 @@ CxC crea en Odoo, automáticamente, **solo borradores**:
   `pago_proveedor`, `proveedor`, `factura_proveedor`.
 - **Estados:** `PENDIENTE` → `ENVIADO` (`odoo_ref` = `modelo:id`), o `INCOMPLETO`
   (falta algo que no se adivina) o `ERROR` (los de red se reintentan solos, máx. 5).
+- **Reglas de validación (paridad con Omni).** La **fuente de verdad es Omni**
+  (`omni-erp/backend/apps/bots_ingest/services/handlers.py`); `cxc/capturas/modelos.py`
+  las replica y hay que **mantenerlas alineadas**. Obligatorios: `contacto` → nombre,
+  teléfono y ubicación; `pedido` → cliente, líneas, RIF, correo, dirección fiscal,
+  ubicación y (dirección de entrega o «igual a la fiscal»); `proveedor` → nombre, RIF y
+  teléfono. Formato: RIF normalizado (letra-dígitos), teléfono de 7 a 15 dígitos, GPS con
+  latitud −90..90 y longitud −180..180, montos > 0, fechas `AAAA-MM-DD`, días de crédito
+  0..365. Un rechazo de fondo es `422 {error, faltan}` y **no deja captura**; solo los
+  pagos y las facturas de proveedor toleran faltantes (`INCOMPLETO`). La tabla
+  `tests/fixtures/paridad_omni.json` (45 borradores inválidos, verificados contra los
+  handlers reales de Omni) la ejercen `tests/test_capturas_paridad_omni.py`.
+- **Reenvío con la misma `idempotency_key`:** mismo contenido → la captura existente,
+  sin cambios (`200`). Contenido distinto y la captura sigue `PENDIENTE` o `INCOMPLETO`
+  (no llegó a Odoo) → **se actualiza** el payload, se reevalúa el estado y queda en la
+  bitácora (`actualizada_por_reenvio`), así la corrección del vendedor reemplaza al
+  borrador viejo. Ya `ENVIADO` o `ERROR` → no se pisa (`200` con la existente).
 
 Una persona confirma/publica el borrador dentro de Odoo: Odoo sigue siendo la
 única autoridad contable.
