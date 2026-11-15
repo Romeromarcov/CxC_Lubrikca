@@ -1076,3 +1076,44 @@ bancos_decisiones = Table(
     Column("usuario", String, nullable=False),
     Column("decidida_en", DateTime(timezone=False), nullable=False),
 )
+
+# --- Capturas de los bots de Telegram (nov-2026) ----------------------------------
+# Cuarto mundo de datos: lo que los vendedores y la administración mandan por Telegram
+# (contactos, pedidos, pagos de clientes y pagos a proveedores) y su camino a Odoo. NO es
+# espejo de Odoo (el sync no la toca) ni trabajo humano de conciliación. Los JSON se
+# guardan como texto, igual que el resto del esquema. ``idempotency_key`` es único: el
+# mismo mensaje de Telegram nunca se registra dos veces.
+capturas_bot = Table(
+    "capturas_bot",
+    metadata,
+    Column("captura_id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", String, nullable=False, index=True),  # contacto|pedido|pago|pago_proveedor
+    Column("idempotency_key", String, nullable=False, unique=True),
+    # PENDIENTE | INCOMPLETO | ENVIADO | ERROR
+    Column("estado", String, nullable=False, server_default="PENDIENTE", index=True),
+    Column("payload", Text, nullable=False),  # JSON: el borrador tal como lo confirmó el bot
+    Column("fuente", Text, nullable=False, server_default="{}"),  # JSON: chat, mensaje, vendedor
+    Column("auto", Boolean, nullable=False, server_default="false"),
+    Column("incompleto", Text, nullable=False, server_default="[]"),  # JSON: lo que falta
+    Column("resultado", Text, nullable=False, server_default="{}"),  # JSON: ids resueltos, etc.
+    Column("odoo_ref", String, nullable=False, server_default=""),  # «modelo:id»
+    Column("error", Text, nullable=False, server_default=""),  # mensaje legible
+    Column("intentos", Integer, nullable=False, server_default="0"),
+    Column("creada_en", DateTime(timezone=False), nullable=False),
+    Column("actualizada_en", DateTime(timezone=False), nullable=False),
+)
+
+# Bitácora de cada captura (solo-append): recibida, intento de envío, creada en Odoo,
+# error, completada, reintento manual. Es la evidencia de qué se escribió en Odoo y cuándo.
+capturas_bot_eventos = Table(
+    "capturas_bot_eventos",
+    metadata,
+    Column("evento_id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "captura_id", Integer, ForeignKey("capturas_bot.captura_id"), nullable=False, index=True
+    ),
+    Column("evento", String, nullable=False),
+    Column("detalle", Text, nullable=False, server_default=""),
+    Column("actor", String, nullable=False, server_default="sistema"),
+    Column("en", DateTime(timezone=False), nullable=False),
+)
