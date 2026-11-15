@@ -83,7 +83,7 @@ def _sesion_valida_por_defecto(request):
     consulta el middleware.
 
     ``tests/test_auth_api_cerrada.py``/``tests/test_api_keys.py``/
-    ``tests/test_capturas_api_auth.py`` -- que
+    ``tests/test_capturas_api_auth.py``/``tests/test_bots_api_auth.py`` -- que
     verifican justamente el cierre de la API y la autenticación por llave
     de API o por clave de bot -- quedan excluidos para que ejerzan el middleware de verdad.
     """
@@ -91,6 +91,7 @@ def _sesion_valida_por_defecto(request):
         "test_auth_api_cerrada.py",
         "test_api_keys.py",
         "test_capturas_api_auth.py",
+        "test_bots_api_auth.py",
     ):
         yield
         return

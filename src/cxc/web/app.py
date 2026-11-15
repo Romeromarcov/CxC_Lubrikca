@@ -184,6 +184,7 @@ from cxc.repositories import Repository
 from cxc.sheets import serde
 from cxc.sync.incremental import IncrementalSync
 from cxc.web import reporte_cxc_excel, reporte_cxc_vendedor
+from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
 from cxc.web.capturas_api import run_reintentos_capturas_en_background
@@ -195,6 +196,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 app.include_router(capturas_router)  # capturas de Telegram (src/cxc/web/capturas_api.py)
+# Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas: así ``/api/bots/capturas``
+# gana a ``/api/bots/{bot}``.
+app.include_router(bots_router)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -3814,7 +3818,7 @@ async def exigir_sesion_en_api(request: Request, call_next):
     if ruta.startswith("/api/") and ruta not in _API_RUTAS_PUBLICAS:
         if hay_sesion_valida(request):
             return await call_next(request)
-        # Bots de Telegram: SOLO dos rutas POST y solo con la cabecera X-Bot-Key presente. El
+        # Bots de Telegram: SOLO tres rutas POST y solo con la cabecera X-Bot-Key presente. El
         # endpoint valida la clave (BOT_API_KEY) y responde 401/503; esto no abre nada más.
         if request.headers.get("x-bot-key") and _es_ruta_bot_capturas(request.method, ruta):
             return await call_next(request)
@@ -3934,6 +3938,11 @@ async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
 @app.get("/bancos", response_class=HTMLResponse)
 async def page_bancos(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("bancos", cxc_session)
+
+
+@app.get("/bots", response_class=HTMLResponse)
+async def page_bots(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("bots", cxc_session)
 
 
 @app.get("/capturas", response_class=HTMLResponse)

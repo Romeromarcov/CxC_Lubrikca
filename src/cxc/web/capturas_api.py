@@ -32,6 +32,7 @@ from cxc.capturas.espejo import EspejoSQL
 from cxc.capturas.modelos import ESTADOS, KINDS, PENDIENTE, CapturaInvalida
 from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.capturas.servicio import (
+    BloqueoOcupado,
     CapturaCerrada,
     FacturaDuplicada,
     NoCompletable,
@@ -45,13 +46,14 @@ logger = logging.getLogger("cxc.capturas.api")
 
 router = APIRouter()
 
-_RUTA_BOT = re.compile(r"^/api/bots/capturas(/\d+/completar)?$")
+_RUTA_BOT = re.compile(r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat)$")
 PERMISOS_VER = ("capturas.ver", "capturas.gestionar")
 INTERVALO_REINTENTO_SEGUNDOS = 120
 
 
 def es_ruta_bot(metodo: str, ruta: str) -> bool:
-    """Rutas que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave)."""
+    """Rutas POST que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave):
+    capturas, completar y el latido del panel de bots."""
     return metodo == "POST" and _RUTA_BOT.match(ruta) is not None
 
 
@@ -160,6 +162,16 @@ class CompletarIn(BaseModel):
     cambios: dict[str, Any]
 
 
+def _ocupado() -> JSONResponse:
+    """Otro envío de lo mismo sigue en curso: el bot puede reintentar (es idempotente)."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "Hay otro envío de la misma factura en curso; reintenta en unos segundos."
+        },
+    )
+
+
 def _invalida(e: CapturaInvalida) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
 
@@ -172,6 +184,8 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
         )
     except FacturaDuplicada as e:
         return JSONResponse(status_code=409, content={"error": str(e)})  # rechazo de negocio
+    except BloqueoOcupado:
+        return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
     if (creada or actualizada) and captura.estado == PENDIENTE:
@@ -196,6 +210,8 @@ def completar_captura(
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": []})
     except (CapturaCerrada, FacturaDuplicada) as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
+    except BloqueoOcupado:
+        return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
     if captura.estado == PENDIENTE:

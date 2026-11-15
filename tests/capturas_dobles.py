@@ -6,10 +6,14 @@ El Odoo falso implementa ``execute(model, method, args, kwargs)`` (la misma firm
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
 from cxc.capturas.modelos import ERROR, PENDIENTE, Captura
+from cxc.capturas.repositorio import BloqueoOcupado, FacturaYaCapturada
 
 UBICACION = {"latitud": 10.4806, "longitud": -66.9036, "precision_m": 12.5}
 
@@ -47,6 +51,8 @@ class RepoMemoria:
         self.filas: dict[int, Captura] = {}
         self.bitacora: list[tuple[int, str, str, str]] = []
         self._sig = 1
+        self._cerrojo = threading.RLock()  # hace atómicas las operaciones de factura
+        self._bloqueos: dict[str, threading.Lock] = {}
 
     def crear(
         self,
@@ -95,8 +101,49 @@ class RepoMemoria:
             c
             for c in self.filas.values()
             if c.kind == "factura_proveedor"
-            and str(c.payload.get("numero_factura", "")).lower() == numero_factura.lower()
+            and str(c.payload.get("numero_factura", "")).strip().lower()
+            == numero_factura.strip().lower()
         ]
+
+    def crear_factura(
+        self,
+        *,
+        numero_factura: str,
+        es_mismo_proveedor: Callable[[dict[str, Any]], bool],
+        **datos: Any,
+    ) -> tuple[Captura, bool]:
+        with self._cerrojo:
+            previa = self.obtener_por_clave(datos["idempotency_key"])
+            if previa is not None:
+                return previa, False
+            for c in self.facturas_con_numero(numero_factura):
+                if es_mismo_proveedor(c.payload):
+                    raise FacturaYaCapturada(c)
+            return self.crear(**datos)
+
+    def actualizar_factura(
+        self,
+        captura_id: int,
+        *,
+        numero_factura: str,
+        es_mismo_proveedor: Callable[[dict[str, Any]], bool],
+        **campos: Any,
+    ) -> Captura:
+        with self._cerrojo:
+            for c in self.facturas_con_numero(numero_factura):
+                if c.captura_id != captura_id and es_mismo_proveedor(c.payload):
+                    raise FacturaYaCapturada(c)
+            return self.actualizar(captura_id, **campos)
+
+    @contextmanager
+    def bloqueo(self, clave: str, espera_segundos: float = 30.0) -> Iterator[None]:
+        candado = self._bloqueos.setdefault(clave, threading.Lock())
+        if not candado.acquire(timeout=espera_segundos):
+            raise BloqueoOcupado(clave)
+        try:
+            yield
+        finally:
+            candado.release()
 
     def listar(
         self, *, estado: str | None, kind: str | None, limit: int, offset: int

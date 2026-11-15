@@ -38,17 +38,19 @@ _PAGINAS = [
     "configuracion",
     "bancos",
     "capturas",
+    "bots",
 ]
-_SIN_BANCOS = [p for p in _PAGINAS if p not in ("bancos", "capturas")]
-# Capturas Telegram (nov-2026): página derivada, como Bancos. Se abre con capturas.ver/gestionar.
-_CON_CAPTURAS = _SIN_BANCOS + ["capturas"]
+_SIN_BANCOS = [p for p in _PAGINAS if p not in ("bancos", "capturas", "bots")]
+# Capturas Telegram y Panel de bots (nov-2026): páginas derivadas, como Bancos. Se abren con
+# capturas.ver/gestionar y bots.ver/gestionar.
+_CON_CAPTURAS = _SIN_BANCOS + ["capturas", "bots"]
 
 
 @pytest.mark.parametrize(
     "rol,paginas",
     [
         ("admin", _PAGINAS),
-        ("auditor", [*_SIN_BANCOS, "bancos", "capturas"]),
+        ("auditor", [*_SIN_BANCOS, "bancos", "capturas", "bots"]),
         ("tesoreria", _CON_CAPTURAS),
         ("gerente_ventas", _CON_CAPTURAS),
         ("ventas", _SIN_BANCOS),
@@ -392,3 +394,18 @@ def test_la_bitacora_no_se_edita_ni_se_borra(engine):
     for sql in ("UPDATE accesos_bitacora SET usuario = 'x'", "DELETE FROM accesos_bitacora"):
         with pytest.raises(Exception, match="solo-append"), engine.begin() as c:
             c.execute(text(sql))
+
+
+def test_panel_de_bots_por_rol():
+    tesoreria = {"rol": "tesoreria", "permisos": acc.efectivos("tesoreria")}
+    assert acc.tiene(tesoreria, "bots.ver") and acc.tiene(tesoreria, "bots.gestionar")
+    gerente = {"rol": "gerente_ventas", "permisos": acc.efectivos("gerente_ventas")}
+    assert acc.tiene(gerente, "bots.ver") and acc.tiene(gerente, "bots.gestionar")
+    auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
+    assert acc.tiene(auditor, "bots.ver") and not acc.tiene(auditor, "bots.gestionar")
+    ventas = acc.efectivos("ventas")
+    assert "bots" not in ventas and "bots.ver" not in ventas
+    # La página se abre sola al conceder una acción, y se cierra al quitarlas.
+    assert "bots" in acc.efectivos("ventas", {"bots.ver": True})
+    sin = {"bots.ver": False, "bots.gestionar": False}
+    assert "bots" not in acc.efectivos("tesoreria", sin)

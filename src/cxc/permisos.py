@@ -53,12 +53,14 @@ PAGINAS: tuple[tuple[str, str], ...] = (
     ("configuracion", "Configuración"),
     ("bancos", "Bancos"),
     ("capturas", "Capturas Telegram"),
+    ("bots", "Bots de Telegram"),
 )
 SIEMPRE = frozenset({"dashboard"})
 
-# Las páginas "bancos" y "capturas" no se marcan a mano: se abren si la persona tiene cualquier
-# permiso de su grupo. Así no puede quedar alguien con la página abierta y nada que ver en ella.
-_PAGINA_DERIVADA = {"bancos": "bancos.", "capturas": "capturas."}
+# Las páginas "bancos", "capturas" y "bots" no se marcan a mano: se abren si la persona tiene
+# cualquier permiso de su grupo. Así no puede quedar alguien con la página abierta y nada
+# que ver en ella.
+_PAGINA_DERIVADA = {"bancos": "bancos.", "capturas": "capturas.", "bots": "bots."}
 
 ACCIONES: tuple[Permiso, ...] = (
     {
@@ -91,6 +93,20 @@ ACCIONES: tuple[Permiso, ...] = (
         "grupo": "Capturas Telegram",
         "nombre": "Gestionar capturas de Telegram",
         "descripcion": "Reintentar el envío a Odoo de una captura con error o incompleta.",
+    },
+    {
+        "clave": "bots.ver",
+        "grupo": "Bots de Telegram",
+        "nombre": "Ver el panel de bots",
+        "descripcion": "Estado de cada bot, sus usuarios autorizados, la salud de los destinos y "
+        "la actividad.",
+    },
+    {
+        "clave": "bots.gestionar",
+        "grupo": "Bots de Telegram",
+        "nombre": "Administrar los bots",
+        "descripcion": "Pausar o reanudar un bot, cambiar sus parámetros y chats, y dar de alta o "
+        "baja usuarios.",
     },
     {
         "clave": "auditoria.decidir",
@@ -152,9 +168,12 @@ _PAGINAS_SIN_BANCOS = frozenset(c for c, _ in PAGINAS if c not in _PAGINA_DERIVA
 BASE_POR_ROL: dict[str, frozenset[str]] = {
     "admin": CLAVES,
     "gerente_ventas": _PAGINAS_SIN_BANCOS
-    | {"cobranza.recibo", "sistema.recalcular", "capturas.ver", "capturas.gestionar"},
-    "tesoreria": _PAGINAS_SIN_BANCOS | {"cobranza.recibo", "capturas.ver", "capturas.gestionar"},
-    "auditor": _PAGINAS_SIN_BANCOS | {"bancos.ver", "auditoria.decidir", "capturas.ver"},
+    | {"cobranza.recibo", "sistema.recalcular", "capturas.ver", "capturas.gestionar",
+                          "bots.ver", "bots.gestionar"},
+    "tesoreria": _PAGINAS_SIN_BANCOS
+    | {"cobranza.recibo", "capturas.ver", "capturas.gestionar", "bots.ver", "bots.gestionar"},
+    "auditor": _PAGINAS_SIN_BANCOS
+    | {"bancos.ver", "auditoria.decidir", "capturas.ver", "bots.ver"},
     "ventas": _PAGINAS_SIN_BANCOS,
 }
 
