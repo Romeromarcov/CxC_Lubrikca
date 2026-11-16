@@ -11,6 +11,7 @@ La validación es pura (sin red ni base). Hay dos niveles:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -22,6 +23,7 @@ PAGO = "pago"
 PAGO_PROVEEDOR = "pago_proveedor"
 PROVEEDOR = "proveedor"
 FACTURA_PROVEEDOR = "factura_proveedor"
+GASTO = "gasto"  # compra menor / gasto de consumo ya pagado al contado (sin cuenta por pagar)
 KINDS: tuple[str, ...] = (
     CONTACTO,
     PEDIDO,
@@ -29,6 +31,7 @@ KINDS: tuple[str, ...] = (
     PAGO_PROVEEDOR,
     PROVEEDOR,
     FACTURA_PROVEEDOR,
+    GASTO,
 )
 
 PENDIENTE = "PENDIENTE"
@@ -70,14 +73,22 @@ CAMPOS_FACTURA = frozenset(
         "concepto",
         "orden_ref",
         "notas",
+        # datos del proveedor tal como salen del documento (sirven para crearlo si no existe)
+        "proveedor_direccion",
+        "proveedor_telefono",
+        "proveedor_email",
     }
 )
+
+# Campos de un gasto (compra menor ya pagada) que se pueden corregir con /completar.
+CAMPOS_GASTO = CAMPOS_FACTURA | {"categoria"}
 
 # Qué tipos se completan después de enviados y con qué campos.
 CAMPOS_COMPLETABLES: dict[str, frozenset[str]] = {
     PAGO: CAMPOS_PAGO,
     PAGO_PROVEEDOR: CAMPOS_PAGO,
     FACTURA_PROVEEDOR: CAMPOS_FACTURA,
+    GASTO: CAMPOS_GASTO,
 }
 KINDS_COMPLETABLES = frozenset(CAMPOS_COMPLETABLES)
 
@@ -210,6 +221,8 @@ def validar(kind: str, draft: dict[str, Any]) -> list[str]:
         return _validar_proveedor(draft)
     if kind == FACTURA_PROVEEDOR:
         return _validar_factura(draft)
+    if kind == GASTO:
+        return _validar_gasto(draft)
     return _validar_pago(kind, draft)
 
 
@@ -263,6 +276,36 @@ def _validar_factura(draft: dict[str, Any]) -> list[str]:
     if vacio(draft.get("proveedor")) and vacio(draft.get("rif")):
         faltan.append("proveedor (nombre o RIF)")
     return faltan
+
+
+# Obligatorios de un gasto: los mismos que Omni (función ``gasto`` en bots_ingest/handlers.py).
+REQ_GASTO = ("proveedor", "fecha_emision", "moneda", "monto_total")
+
+
+def _validar_gasto(draft: dict[str, Any]) -> list[str]:
+    """Compra menor ya pagada. Inválido de fondo → ``CapturaInvalida``; faltantes → ``INCOMPLETO``.
+
+    El número de factura es opcional (un recibo o una nota de contado puede no traerlo). El RIF
+    también: si falta, el proveedor se identifica por su nombre normalizado.
+    """
+    if not vacio(draft.get("rif")):
+        normalizar_rif(str(draft["rif"]))
+    if not vacio(draft.get("monto_total")) and a_decimal(draft["monto_total"], "monto_total") <= 0:
+        raise CapturaInvalida("El monto total debe ser mayor que cero.", ["monto_total"])
+    # Igual que Omni: solo el IVA se valida (la base no se usa para registrar el gasto allá).
+    if not vacio(draft.get("iva")) and a_decimal(draft["iva"], "iva") < 0:
+        raise CapturaInvalida("iva no puede ser negativo.", ["iva"])
+    if not vacio(draft.get("fecha_emision")):
+        fecha_iso_valida(draft["fecha_emision"], "fecha_emision")
+    return [c for c in REQ_GASTO if vacio(draft.get(c))]
+
+
+def normalizar_nombre(nombre: str) -> str:
+    """Nombre comparable de un proveedor: sin tildes, en minúsculas y con espacios simples."""
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFD", nombre or "") if unicodedata.category(c) != "Mn"
+    )
+    return re.sub(r"\s+", " ", sin_tildes).strip().lower()
 
 
 # Obligatorios de un pedido: los mismos que Omni (``_REQ_PEDIDO`` en bots_ingest/handlers.py).

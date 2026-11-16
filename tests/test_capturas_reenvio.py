@@ -250,7 +250,9 @@ def test_api_reenvio_con_factura_duplicada_da_409(entorno_api: Any) -> None:
         "monto_total": "50",
     }
     _post("factura_proveedor", {**base, "numero_factura": "F-1"}, "ka")
-    _post("factura_proveedor", {**base, "numero_factura": "F-2"}, "kb")
+    # «kb» queda INCOMPLETO (sin moneda): no llega a Odoo, así que su corrección se reescribe
+    sin_moneda = {k: v for k, v in base.items() if k != "moneda"}
+    _post("factura_proveedor", {**sin_moneda, "numero_factura": "F-2"}, "kb")
     r = _post("factura_proveedor", {**base, "numero_factura": "F-1"}, "kb")
     assert r.status_code == 409 and "F-1" in r.json()["error"]
 
