@@ -6595,6 +6595,353 @@ document.addEventListener("DOMContentLoaded", () => {
     })();
 
     // ===================================================================
+    // DIRECTORIO DE CONTACTOS Y PLAN DE CUENTAS EN ODOO (Solo lectura)
+    // API: GET /api/odoo/contactos, GET /api/odoo/plan-cuentas
+    // Clasifica contactos en Prospectos, Clientes, Proveedores y Ambos, y
+    // propone cómo clasificar compras y gastos contra el plan de cuentas.
+    // ===================================================================
+    const _DIR_PAGINA = 50;
+    let _dirOffset = 0;
+    let _dirCargaId = 0;
+    let _dirCargadoUnaVez = false;
+    let _ctaCargaId = 0;
+    let _ctaCargadoUnaVez = false;
+    let _ctaTodasCuentas = [];
+
+    function _dirBadgeClasificacion(c) {
+        const mapa = {
+            prospecto: ["amarillo", "Prospecto"],
+            cliente: ["verde", "Cliente"],
+            proveedor: ["abierta", "Proveedor"],
+            ambos: ["cierre", "Cliente y proveedor"],
+        };
+        const [clase, et] = mapa[c.clasificacion] || ["", c.clasificacion_etiqueta || c.clasificacion];
+        const bot = c.es_borrador_telegram
+            ? ` <span class="state-badge" style="background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe;" title="Creado como borrador desde los bots de Telegram">📲 Borrador Telegram</span>`
+            : "";
+        return `<span class="semaphore ${clase}">${_capEsc(et)}</span>${bot}`;
+    }
+
+    function _dirFilaContacto(c) {
+        const tipoPersona = c.es_empresa ? "🏢 Empresa" : "👤 Persona";
+        const contactoInfo = [
+            c.telefono ? `📞 ${_capEsc(c.telefono)}` : "",
+            c.email ? `✉️ ${_capEsc(c.email)}` : "",
+        ].filter(Boolean).join("<br>") || "—";
+        const ubicacionVend = [
+            c.ciudad ? `📍 ${_capEsc(c.ciudad)}` : "",
+            c.vendedor ? `🧑‍💼 ${_capEsc(c.vendedor)}` : "",
+        ].filter(Boolean).join("<br>") || "—";
+        const origenNotas = [
+            c.referencia ? `<code>${_capEsc(c.referencia)}</code>` : "",
+            c.notas ? `<span style="color:#475569; font-size:0.78rem;">${_capEsc(c.notas.slice(0, 120))}${c.notas.length > 120 ? "…" : ""}</span>` : "",
+        ].filter(Boolean).join("<br>") || "—";
+        return `<tr>
+            <td style="white-space:nowrap; color:#64748b;">#${Number(c.id)}</td>
+            <td><strong>${_capEsc(c.nombre)}</strong><div style="font-size:0.75rem; color:#64748b;">${tipoPersona}</div></td>
+            <td style="white-space:nowrap;">${c.rif ? `<code>${_capEsc(c.rif)}</code>` : '<span style="color:#94a3b8;">Sin RIF</span>'}</td>
+            <td>${_dirBadgeClasificacion(c)}</td>
+            <td style="font-size:0.82rem;">${contactoInfo}</td>
+            <td style="font-size:0.82rem;">${ubicacionVend}</td>
+            <td style="font-size:0.82rem; max-width:260px;">${origenNotas}</td>
+        </tr>`;
+    }
+
+    function _dirPaginacion(total, desde, hasta) {
+        const cont = document.getElementById("dir-paginacion");
+        if (!cont) return;
+        if (!total) { cont.innerHTML = ""; return; }
+        const ant = desde > 0, sig = hasta < total;
+        cont.innerHTML = `<span>${desde + 1}–${hasta} de ${total}</span>
+            <button type="button" class="btn-secondary" data-dir-pag="ant" ${ant ? "" : "disabled"}>← Anterior</button>
+            <button type="button" class="btn-secondary" data-dir-pag="sig" ${sig ? "" : "disabled"}>Siguiente →</button>`;
+    }
+
+    async function loadContactosOdoo(refresh = false) {
+        const body = document.getElementById("dir-contactos-body");
+        const resumenEl = document.getElementById("dir-resumen");
+        if (!body) return;
+        const clasificacion = (document.getElementById("dir-clasificacion")?.value || "").trim();
+        const q = (document.getElementById("dir-buscar")?.value || "").trim();
+        const miCarga = ++_dirCargaId;
+
+        if (refresh) _dirOffset = 0;
+        body.innerHTML = `<tr><td colspan="7" class="table-empty">Consultando contactos en Odoo...</td></tr>`;
+
+        const p = new URLSearchParams({
+            limit: String(_DIR_PAGINA),
+            offset: String(_dirOffset),
+        });
+        if (clasificacion) p.set("clasificacion", clasificacion);
+        if (q) p.set("q", q);
+        if (refresh) p.set("refresh", "true");
+
+        try {
+            const data = await _capGet("/api/odoo/contactos?" + p.toString());
+            if (miCarga !== _dirCargaId) return;
+            _dirCargadoUnaVez = true;
+            const r = data.resumen || {};
+            const setKpi = (id, val) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = val ?? 0;
+            };
+            setKpi("dir-n-total", r.total);
+            setKpi("dir-n-prospectos", r.prospectos);
+            setKpi("dir-n-clientes", r.clientes_total ?? r.clientes);
+            setKpi("dir-n-proveedores", r.proveedores_total ?? r.proveedores);
+            setKpi("dir-n-ambos", r.ambos);
+            setKpi("dir-n-borradores", r.borradores_telegram);
+
+            const filas = data.items || [];
+            const totalFiltrado = data.total_filtrado ?? filas.length;
+            if (resumenEl) {
+                resumenEl.textContent = `${totalFiltrado} contacto${totalFiltrado === 1 ? "" : "s"} encontrado${totalFiltrado === 1 ? "" : "s"}`;
+            }
+            if (!filas.length) {
+                body.innerHTML = `<tr><td colspan="7" class="table-empty">No se encontraron contactos con esos filtros.</td></tr>`;
+                _dirPaginacion(0, 0, 0);
+                return;
+            }
+            body.innerHTML = filas.map(_dirFilaContacto).join("");
+            _dirPaginacion(totalFiltrado, _dirOffset, _dirOffset + filas.length);
+        } catch (err) {
+            if (miCarga !== _dirCargaId) return;
+            body.innerHTML = `<tr><td colspan="7" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+            if (resumenEl) resumenEl.textContent = "";
+            _dirPaginacion(0, 0, 0);
+        }
+    }
+    window.loadContactosOdoo = loadContactosOdoo;
+
+    function _ctaChipCuenta(cta) {
+        if (!cta) return `<span style="color:#94a3b8;">Sin cuenta sugerida en el plan actual</span>`;
+        const codigo = cta.code ? `<strong>${_capEsc(cta.code)}</strong> · ` : "";
+        return `<div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; padding:0.35rem 0.6rem; border-radius:6px; font-size:0.82rem; display:inline-block;">
+            ${codigo}${_capEsc(cta.name)}
+            <div style="font-size:0.72rem; color:#3b82f6;">${_capEsc(cta.tipo_nombre || cta.account_type)}</div>
+        </div>`;
+    }
+
+    function _ctaFilaPropuesta(p) {
+        const tipoBot = p.kind_bot === "factura_proveedor"
+            ? `<span class="state-badge cierre">Factura de proveedor</span>`
+            : `<span class="state-badge abierta">Gasto (compra menor)</span>`;
+        const ejemplos = (p.ejemplos || []).map(e => `<li>${_capEsc(e)}</li>`).join("");
+        const alts = (p.alternativas || []).length
+            ? (p.alternativas || []).map(a => `<div style="font-size:0.78rem; color:#334155; margin-bottom:0.2rem;">• <code>${_capEsc(a.code || "—")}</code> ${_capEsc(a.name)}</div>`).join("")
+            : `<span style="color:#94a3b8; font-size:0.78rem;">—</span>`;
+        const cxp = p.cuenta_cxp_sugerida
+            ? `<div style="margin-top:0.35rem; font-size:0.76rem; color:#0f766e;"><strong>Haber (CxP):</strong> <code>${_capEsc(p.cuenta_cxp_sugerida.code)}</code> ${_capEsc(p.cuenta_cxp_sugerida.name)}</div>`
+            : "";
+        return `<tr>
+            <td>
+                <strong style="font-size:0.92rem; color:#0f172a; text-transform:capitalize;">${_capEsc(p.categoria)}</strong>
+                <div style="font-size:0.78rem; color:#475569; margin:0.15rem 0 0.35rem 0;">${_capEsc(p.titulo)}</div>
+                ${tipoBot}
+            </td>
+            <td><ul style="margin:0; padding-left:1.1rem; font-size:0.8rem; color:#334155;">${ejemplos}</ul></td>
+            <td>${_ctaChipCuenta(p.cuenta_sugerida)}</td>
+            <td>${alts}</td>
+            <td style="font-size:0.8rem; color:#475569; max-width:290px;">${_capEsc(p.criterio_contable || "")}${cxp}</td>
+        </tr>`;
+    }
+
+    function _ctaRenderCatalogoLocal() {
+        const body = document.getElementById("cta-catalogo-body");
+        const resumenEl = document.getElementById("cta-resumen");
+        if (!body) return;
+        const grupo = (document.getElementById("cta-grupo")?.value || "").trim().toLowerCase();
+        const q = (document.getElementById("cta-buscar")?.value || "").trim().toLowerCase();
+
+        let filtradas = _ctaTodasCuentas;
+        if (grupo) {
+            filtradas = filtradas.filter(c => (c.grupo || "").toLowerCase() === grupo);
+        }
+        if (q) {
+            filtradas = filtradas.filter(c =>
+                `${c.code || ""} ${c.name || ""} ${c.tipo_nombre || ""} ${c.account_type || ""}`.toLowerCase().includes(q)
+            );
+        }
+        if (resumenEl) {
+            resumenEl.textContent = `${filtradas.length} cuenta${filtradas.length === 1 ? "" : "s"} mostrada${filtradas.length === 1 ? "" : "s"}`;
+        }
+        if (!filtradas.length) {
+            body.innerHTML = `<tr><td colspan="5" class="table-empty">No hay cuentas contables que coincidan con el filtro.</td></tr>`;
+            return;
+        }
+        const grupoBadge = {
+            gastos: ["amarillo", "Gastos / Costos"],
+            pasivo: ["rojo", "Pasivo / CxP"],
+            activo: ["verde", "Activo"],
+            ingreso: ["abierta", "Ingreso"],
+            otros: ["", "Otros"],
+        };
+        body.innerHTML = filtradas.map(c => {
+            const [cl, et] = grupoBadge[c.grupo] || ["", c.grupo];
+            return `<tr>
+                <td style="white-space:nowrap;"><code><strong>${_capEsc(c.code || "—")}</strong></code></td>
+                <td><strong>${_capEsc(c.name)}</strong></td>
+                <td style="font-size:0.82rem; color:#475569;">${_capEsc(c.tipo_nombre || c.account_type)} <small style="color:#94a3b8;">(${_capEsc(c.account_type)})</small></td>
+                <td><span class="semaphore ${cl}">${_capEsc(et)}</span></td>
+                <td>${c.reconcile ? "Sí" : "No"}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    async function loadPlanCuentasOdoo(refresh = false) {
+        const propBody = document.getElementById("cta-propuestas-body");
+        const catBody = document.getElementById("cta-catalogo-body");
+        if (!propBody || !catBody) return;
+        const miCarga = ++_ctaCargaId;
+        propBody.innerHTML = `<tr><td colspan="5" class="table-empty">Consultando plan de cuentas en Odoo...</td></tr>`;
+        catBody.innerHTML = `<tr><td colspan="5" class="table-empty">Cargando catálogo contable...</td></tr>`;
+
+        const p = new URLSearchParams();
+        if (refresh) p.set("refresh", "true");
+
+        try {
+            const data = await _capGet("/api/odoo/plan-cuentas?" + p.toString());
+            if (miCarga !== _ctaCargaId) return;
+            _ctaCargadoUnaVez = true;
+            const r = data.resumen || {};
+            const setKpi = (id, val) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = val ?? 0;
+            };
+            setKpi("cta-n-total", r.total);
+            setKpi("cta-n-gastos", r.gastos);
+            setKpi("cta-n-costo", r.costo_directo);
+            setKpi("cta-n-pasivo", r.pasivo);
+            setKpi("cta-n-activo", r.activo);
+
+            const propuestas = data.propuestas || [];
+            propBody.innerHTML = propuestas.length
+                ? propuestas.map(_ctaFilaPropuesta).join("")
+                : `<tr><td colspan="5" class="table-empty">No se encontraron cuentas en Odoo para armar propuestas.</td></tr>`;
+
+            _ctaTodasCuentas = data.cuentas || [];
+            _ctaRenderCatalogoLocal();
+        } catch (err) {
+            if (miCarga !== _ctaCargaId) return;
+            propBody.innerHTML = `<tr><td colspan="5" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+            catBody.innerHTML = `<tr><td colspan="5" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadPlanCuentasOdoo = loadPlanCuentasOdoo;
+
+    async function _ctaSimularConcepto(ev) {
+        ev.preventDefault();
+        const inp = document.getElementById("cta-concepto-input");
+        const out = document.getElementById("cta-simulador-resultado");
+        if (!inp || !out) return;
+        const concepto = inp.value.trim();
+        if (!concepto) {
+            out.innerHTML = `<div style="color:#9f1239; font-size:0.85rem;">Escribe el concepto de la compra o gasto para clasificarlo.</div>`;
+            return;
+        }
+        out.innerHTML = `<div style="color:#475569; font-size:0.85rem;">Clasificando concepto...</div>`;
+        try {
+            const data = await _capGet("/api/odoo/plan-cuentas?concepto=" + encodeURIComponent(concepto));
+            const s = data.sugerencia_concepto;
+            if (!s) {
+                out.innerHTML = "";
+                return;
+            }
+            const tipoBot = s.kind_bot === "factura_proveedor" ? "Factura de proveedor (CxP)" : "Gasto (compra menor)";
+            const kws = (s.palabras_detectadas || []).length
+                ? `Palabras clave detectadas: <code>${s.palabras_detectadas.map(_capEsc).join(", ")}</code>`
+                : "Clasificación por defecto (revisar categoría si aplica otra específica)";
+            out.innerHTML = `<div style="background:#ffffff; border:1px solid #cbd5e1; border-left:4px solid #10b981; border-radius:8px; padding:0.85rem 1rem; display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; align-items:start;">
+                <div>
+                    <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Categoría Propuesta</div>
+                    <strong style="font-size:1rem; color:#0f172a; text-transform:capitalize;">${_capEsc(s.categoria_sugerida)}</strong>
+                    <div style="font-size:0.8rem; color:#475569;">${_capEsc(s.titulo_categoria)} · <strong>${_capEsc(tipoBot)}</strong></div>
+                    <div style="font-size:0.75rem; color:#64748b; margin-top:0.25rem;">${kws}</div>
+                </div>
+                <div>
+                    <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600; margin-bottom:0.25rem;">Cuenta Contable Sugerida en Odoo</div>
+                    ${_ctaChipCuenta(s.cuenta_sugerida)}
+                </div>
+                <div style="font-size:0.8rem; color:#334155;">
+                    <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Criterio Contable</div>
+                    ${_capEsc(s.criterio_contable || "")}
+                </div>
+            </div>`;
+        } catch (err) {
+            out.innerHTML = `<div style="border-left:4px solid #e11d48; padding:0.5rem 0.85rem; background:#fff1f2; border-radius:6px; color:#9f1239;">❌ ${_capEsc(err.message)}</div>`;
+        }
+    }
+
+    function applyCapturasSubpage(subpage) {
+        const panels = document.querySelectorAll("#tab-capturas [data-capturas-panel]");
+        const buttons = document.querySelectorAll(".capturas-subnav-btn");
+        panels.forEach((panel) => {
+            panel.classList.toggle(
+                "config-subpage-hidden",
+                panel.getAttribute("data-capturas-panel") !== subpage
+            );
+        });
+        buttons.forEach((btn) => {
+            btn.classList.toggle("active", btn.getAttribute("data-capturas-subpage") === subpage);
+        });
+        if (subpage === "contactos" && !_dirCargadoUnaVez) {
+            loadContactosOdoo(false);
+        } else if (subpage === "cuentas" && !_ctaCargadoUnaVez) {
+            loadPlanCuentasOdoo(false);
+        }
+    }
+
+    window.irACapturasSubpage = function(subpage) {
+        history.pushState(null, "", "/capturas");
+        initCurrentPage();
+        applyCapturasSubpage(subpage);
+    };
+
+    (function _dirYPlanEventos() {
+        document.querySelectorAll(".capturas-subnav-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                applyCapturasSubpage(btn.getAttribute("data-capturas-subpage"));
+            });
+        });
+
+        const dirClasif = document.getElementById("dir-clasificacion");
+        const dirBuscar = document.getElementById("dir-buscar");
+        if (dirClasif && dirBuscar) {
+            const refiltrarDir = () => { _dirOffset = 0; loadContactosOdoo(false); };
+            dirClasif.addEventListener("change", refiltrarDir);
+            let tDir = null;
+            dirBuscar.addEventListener("input", () => {
+                clearTimeout(tDir);
+                tDir = setTimeout(refiltrarDir, 300);
+            });
+            document.querySelectorAll(".dir-kpi").forEach((k) => {
+                const activar = () => {
+                    dirClasif.value = k.dataset.dirClasificacion || "";
+                    refiltrarDir();
+                };
+                k.addEventListener("click", activar);
+                k.addEventListener("keydown", (ev) => {
+                    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activar(); }
+                });
+            });
+            document.getElementById("dir-paginacion")?.addEventListener("click", (e) => {
+                const b = e.target.closest("[data-dir-pag]");
+                if (!b || b.disabled) return;
+                _dirOffset = Math.max(0, _dirOffset + (b.dataset.dirPag === "sig" ? _DIR_PAGINA : -_DIR_PAGINA));
+                loadContactosOdoo(false);
+            });
+        }
+
+        const ctaGrupo = document.getElementById("cta-grupo");
+        const ctaBuscar = document.getElementById("cta-buscar");
+        if (ctaGrupo && ctaBuscar) {
+            ctaGrupo.addEventListener("change", _ctaRenderCatalogoLocal);
+            ctaBuscar.addEventListener("input", _ctaRenderCatalogoLocal);
+        }
+        document.getElementById("cta-form-simulador")?.addEventListener("submit", _ctaSimularConcepto);
+    })();
+
+    // ===================================================================
     // BOTS DE TELEGRAM: panel de administración de la familia de bots.
     // API: GET /api/bots, GET /api/bots/{bot}, PATCH /api/bots/{bot}, GET /api/bots/destinos,
     //      GET|POST /api/bots/usuarios, DELETE /api/bots/usuarios/{telegram_id}.

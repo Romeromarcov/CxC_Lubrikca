@@ -2253,11 +2253,17 @@
             </div>
         </div>
 
-        <!-- PESTAÑA: CAPTURAS TELEGRAM. Borradores que mandan los bots (pedidos, contactos, cobranza,
-             pagos a proveedores) y su envío a Odoo. Fuente: /api/bots/capturas. Acciones según permiso
-             (capturas.ver / capturas.gestionar, ver cxc/permisos.py). -->
+        <!-- PESTAÑA: CAPTURAS TELEGRAM + DIRECTORIO Y PLAN DE CUENTAS ODOO.
+             Borradores que mandan los bots, directorio de contactos en Odoo (prospectos, clientes y
+             proveedores) y plan de cuentas con propuesta de clasificación de compras y gastos. -->
         <div id="tab-capturas" class="tab-panel">
-            <div style="display:flex; flex-direction:column; gap:1.5rem;">
+            <div class="config-subnav tab-navigation" role="tablist" aria-label="Secciones de Capturas y Consultas Odoo" style="margin-bottom:1rem;">
+                <button type="button" class="tab-btn capturas-subnav-btn active" data-capturas-subpage="bandeja">📲 Capturas recibidas</button>
+                <button type="button" class="tab-btn capturas-subnav-btn" data-capturas-subpage="contactos">👥 Contactos en Odoo (Prospectos, Clientes y Proveedores)</button>
+                <button type="button" class="tab-btn capturas-subnav-btn" data-capturas-subpage="cuentas">📒 Plan de Cuentas y Compras/Gastos</button>
+            </div>
+
+            <div data-capturas-panel="bandeja" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="card" style="padding:1.5rem;">
                     <div class="panel-header-row">
                         <div>
@@ -2316,6 +2322,150 @@
                     <div id="capturas-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
                 </section>
             </div>
+
+            <!-- SUBPÁGINA: CONTACTOS EN ODOO (Prospectos, Clientes y Proveedores) -->
+            <div data-capturas-panel="contactos" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">👥 Contactos en Odoo: Prospectos, Clientes y Proveedores</h2>
+                            <p style="color:#475569; margin:0;">Consulta directa (solo lectura) de <code>res.partner</code> en Odoo. Clasifica cada contacto según su rango comercial en <strong>Prospecto</strong> (sin compras ni ventas aún), <strong>Cliente</strong>, <strong>Proveedor</strong> o <strong>Cliente y Proveedor</strong>, destacando los borradores creados por Telegram.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadContactosOdoo(true)">↻ Recargar desde Odoo</button>
+                    </div>
+
+                    <div class="dashboard-kpi-row" id="odoo-contactos-kpis" style="margin:1rem 0;">
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="" role="button" tabindex="0"><h3>Total en Odoo</h3><p id="dir-n-total">—</p><span>Contactos activos</span></div>
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="prospecto" role="button" tabindex="0"><h3>Prospectos</h3><p id="dir-n-prospectos">—</p><span>Sin rango comercial aún</span></div>
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="cliente" role="button" tabindex="0"><h3>Clientes</h3><p id="dir-n-clientes">—</p><span>Con rango de cliente</span></div>
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="proveedor" role="button" tabindex="0"><h3>Proveedores</h3><p id="dir-n-proveedores">—</p><span>Con rango de proveedor</span></div>
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="ambos" role="button" tabindex="0"><h3>Cliente y proveedor</h3><p id="dir-n-ambos">—</p><span>Ambos rangos en Odoo</span></div>
+                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="borrador_telegram" role="button" tabindex="0"><h3>Borrador Telegram</h3><p id="dir-n-borradores">—</p><span>Creados desde los bots</span></div>
+                    </div>
+
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="dir-clasificacion" class="filter-select" aria-label="Clasificación de contacto">
+                            <option value="">Todas las clasificaciones</option>
+                            <option value="prospecto">Prospectos (sin compras/ventas)</option>
+                            <option value="cliente">Clientes (incluye ambos)</option>
+                            <option value="proveedor">Proveedores (incluye ambos)</option>
+                            <option value="ambos">Cliente y proveedor a la vez</option>
+                            <option value="borrador_telegram">Borradores creados por Telegram</option>
+                        </select>
+                        <input type="text" id="dir-buscar" class="filter-select" placeholder="Buscar por nombre, RIF, teléfono, correo o vendedor..." style="cursor:text; min-width:280px; flex:1;">
+                    </div>
+                    <p id="dir-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+
+                    <div class="table-wrapper large-table">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>ID Odoo</th>
+                                    <th>Nombre / Razón Social</th>
+                                    <th>RIF</th>
+                                    <th>Clasificación</th>
+                                    <th>Teléfono / Correo</th>
+                                    <th>Ciudad / Vendedor</th>
+                                    <th>Origen / Notas</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dir-contactos-body">
+                                <tr><td colspan="7" class="table-empty">Selecciona esta pestaña para consultar los contactos en Odoo...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="dir-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
+                </section>
+            </div>
+
+            <!-- SUBPÁGINA: PLAN DE CUENTAS Y CLASIFICACIÓN DE COMPRAS / GASTOS -->
+            <div data-capturas-panel="cuentas" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="card" style="padding:1.5rem; border-left:5px solid #2563eb;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">📒 Propuesta de Clasificación de Compras y Gastos (Plan de Cuentas Odoo)</h2>
+                            <p style="color:#475569; margin:0;">Cruza las categorías de compras menores (<code>gasto</code>) y facturas de proveedor (<code>factura_proveedor</code>) de los bots de Telegram con el plan de cuentas activo en Odoo (<code>account.account</code>) para proponer cómo contabilizar cada operación.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadPlanCuentasOdoo(true)">↻ Recargar Plan de Cuentas</button>
+                    </div>
+
+                    <div class="dashboard-kpi-row" id="odoo-cuentas-kpis" style="margin:1rem 0;">
+                        <div class="card kpi-card"><h3>Total Cuentas</h3><p id="cta-n-total">—</p><span>Plan activo en Odoo</span></div>
+                        <div class="card kpi-card"><h3>Gastos Operativos</h3><p id="cta-n-gastos">—</p><span>Tipo expense</span></div>
+                        <div class="card kpi-card"><h3>Costo Directo / Compras</h3><p id="cta-n-costo">—</p><span>Tipo expense_direct_cost</span></div>
+                        <div class="card kpi-card"><h3>Pasivo / CxP</h3><p id="cta-n-pasivo">—</p><span>Proveedores y obligaciones</span></div>
+                        <div class="card kpi-card"><h3>Activo / Inventario</h3><p id="cta-n-activo">—</p><span>Bancos, CxC e inventario</span></div>
+                    </div>
+
+                    <!-- Clasificador interactivo por concepto -->
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; margin:1rem 0;">
+                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#0f172a;">🔎 Simulador: Proponer clasificación para una compra o gasto</h3>
+                        <p style="margin:0 0 0.65rem 0; font-size:0.82rem; color:#475569;">Escribe el concepto de un recibo o factura (ej. <em>«Gasoil para camión»</em>, <em>«Refrigerios reunión gerencial»</em>, <em>«Electricidad y aseo urbano»</em>, <em>«Compra de tambores de lubricante»</em>) para ver la categoría del bot y la cuenta contable sugerida en Odoo.</p>
+                        <form id="cta-form-simulador" style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center;">
+                            <input type="text" id="cta-concepto-input" class="filter-select" placeholder="Describe la compra o gasto..." style="cursor:text; flex:1; min-width:260px;">
+                            <button type="submit" class="btn btn-primary" style="padding:0.45rem 1rem;">Proponer cuenta</button>
+                        </form>
+                        <div id="cta-simulador-resultado" style="margin-top:0.75rem;"></div>
+                    </div>
+
+                    <h3 style="margin:1.25rem 0 0.5rem 0; font-size:1rem;">Matriz de Clasificación Sugerida por Categoría</h3>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Categoría / Tipo Bot</th>
+                                    <th>Ejemplos en Lubrikca</th>
+                                    <th>Cuenta Contable Sugerida (Debe)</th>
+                                    <th>Alternativas en el Plan</th>
+                                    <th>Criterio Contable y Contrapartida</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cta-propuestas-body">
+                                <tr><td colspan="5" class="table-empty">Cargando propuesta de clasificación desde Odoo...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row">
+                        <div>
+                            <h3 style="margin:0 0 0.25rem 0;">Catálogo Completo del Plan de Cuentas en Odoo (<code>account.account</code>)</h3>
+                            <p style="color:#475569; margin:0; font-size:0.85rem;">Filtra por naturaleza contable o busca por código o nombre de cuenta.</p>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="cta-grupo" class="filter-select" aria-label="Grupo contable">
+                            <option value="">Todos los grupos contables</option>
+                            <option value="gastos">Gastos y Costos (Compras / Gastos)</option>
+                            <option value="pasivo">Pasivo y Cuentas por Pagar (Proveedores)</option>
+                            <option value="activo">Activo (Bancos, CxC, Inventario)</option>
+                            <option value="ingreso">Ingresos</option>
+                            <option value="otros">Patrimonio y Otros</option>
+                        </select>
+                        <input type="text" id="cta-buscar" class="filter-select" placeholder="Buscar por código (ej. 51, 61) o nombre de cuenta..." style="cursor:text; min-width:260px; flex:1;">
+                    </div>
+                    <p id="cta-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+
+                    <div class="table-wrapper large-table" style="max-height:480px; overflow-y:auto;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Nombre de la Cuenta</th>
+                                    <th>Tipo en Odoo</th>
+                                    <th>Grupo</th>
+                                    <th>Conciliable</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cta-catalogo-body">
+                                <tr><td colspan="5" class="table-empty">Cargando cuentas contables...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
         </div>
 
         <!-- PESTAÑA: BOTS. Panel de administración de la familia de bots de Telegram (Ventas, Cobranzas,
@@ -2330,7 +2480,11 @@
                             <h2 style="margin:0 0 0.25rem 0;">🤖 Bots de Telegram</h2>
                             <p style="color:#475569; margin:0;">La familia de bots de Lubrikca. Cada bot reporta su estado cada minuto y recibe de aquí su configuración, sus usuarios autorizados y sus chats. Los tokens de Telegram y las claves de Gemini no se guardan en CxC: viven en el entorno de cada bot.</p>
                         </div>
-                        <button type="button" class="btn-secondary" onclick="loadBots()">↻ Actualizar</button>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" class="btn-secondary" onclick="irACapturasSubpage('contactos')">👥 Contactos Odoo</button>
+                            <button type="button" class="btn-secondary" onclick="irACapturasSubpage('cuentas')">📒 Plan de Cuentas y Gastos</button>
+                            <button type="button" class="btn-secondary" onclick="loadBots()">↻ Actualizar</button>
+                        </div>
                     </div>
                     <div id="bots-aviso" style="margin-top:0.75rem;"></div>
                 </section>
@@ -2519,7 +2673,7 @@
         <p>&copy; 2026 Lubrikca C.A. — Sistema Integrado de Cuentas por Cobrar.</p>
     </footer>
 
-    <script src="/static/app.js?v=20261115_1"></script>
+    <script src="/static/app.js?v=20261116_1"></script>
 
         <!-- Detalle de reglas: de qué regla viene cada peso del descuento
              sugerido. Antes el motor solo guardaba el "origen" y con cinco
