@@ -29,7 +29,7 @@ BOTS: dict[str, str] = {
 KINDS_POR_BOT: dict[str, tuple[str, ...]] = {
     "pedidos": ("contacto", "pedido"),
     "cobranza": ("pago",),
-    "compras": ("pago_proveedor", "factura_proveedor", "proveedor"),
+    "compras": ("pago_proveedor", "factura_proveedor", "proveedor", "gasto"),
     "eventos": (),
     "asana": (),
 }

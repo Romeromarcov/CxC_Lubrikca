@@ -100,7 +100,7 @@ class RepoMemoria:
         return [
             c
             for c in self.filas.values()
-            if c.kind == "factura_proveedor"
+            if c.kind in ("factura_proveedor", "gasto")
             and str(c.payload.get("numero_factura", "")).strip().lower()
             == numero_factura.strip().lower()
         ]
@@ -232,6 +232,21 @@ class EspejoFalso:
 
     def productos(self, texto: str) -> list[str]:
         return self.prods.get(texto.strip().lower(), [])
+
+
+def partners(*ids: int) -> Callable[[list[Any], dict[str, Any]], list[int]]:
+    """``search`` de res.partner que devuelve ``ids`` salvo para la búsqueda por marca (``ref``).
+
+    Un Odoo real no trae nada al buscar el partner que ESTA captura aún no creó; así los tests de
+    «ya existe» no confunden un hallazgo por RIF o nombre con un reintento propio.
+    """
+
+    def f(args: list[Any], kwargs: dict[str, Any]) -> list[int]:
+        if any(isinstance(d, list) and d and d[0] == "ref" for d in args[0]):
+            return []
+        return list(ids)
+
+    return f
 
 
 class OdooFalso:

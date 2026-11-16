@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from cxc.bancos.diarios import DIARIOS
-from cxc.odoo.escritura import EscritorOdoo, OdooEscrituraError
+from cxc.odoo.escritura import NOTA_PROVEEDOR_DE_DOCUMENTO, EscritorOdoo, OdooEscrituraError
 
 from .espejo import Espejo
 from .modelos import (
@@ -26,6 +26,7 @@ from .modelos import (
     ENVIADO,
     ERROR,
     FACTURA_PROVEEDOR,
+    GASTO,
     INCOMPLETO,
     KINDS_COMPLETABLES,
     PAGO,
@@ -37,6 +38,7 @@ from .modelos import (
     CapturaInvalida,
     a_decimal,
     clase_moneda,
+    normalizar_nombre,
     normalizar_rif,
     vacio,
     validar,
@@ -57,7 +59,7 @@ class CapturaCerrada(Exception):
 
 
 class NoCompletable(Exception):
-    """Solo los pagos y las facturas de proveedor se completan después de recibidos."""
+    """Solo los pagos, las facturas de proveedor y los gastos se completan después de recibidos."""
 
 
 class FacturaDuplicada(Exception):
@@ -112,8 +114,8 @@ def resolver_diario(payload: dict[str, Any], override: dict[str, int]) -> int:
 
 
 def _numero_factura(kind: str, draft: dict[str, Any]) -> str | None:
-    """Número de una ``factura_proveedor`` (None si no es factura o aún no lo trae)."""
-    if kind != FACTURA_PROVEEDOR or vacio(draft.get("numero_factura")):
+    """Número de una ``factura_proveedor`` o ``gasto`` (None si no es uno o aún no lo trae)."""
+    if kind not in (FACTURA_PROVEEDOR, GASTO) or vacio(draft.get("numero_factura")):
         return None
     return str(draft["numero_factura"]).strip()
 
@@ -131,7 +133,11 @@ def _mismo_proveedor(a: dict[str, Any], b: dict[str, Any]) -> bool:
     if not vacio(a.get("rif")) and not vacio(b.get("rif")):
         return str(a["rif"]).upper() == str(b["rif"]).upper()
     na, nb = a.get("proveedor") or a.get("nombre"), b.get("proveedor") or b.get("nombre")
-    return not vacio(na) and not vacio(nb) and str(na).strip().lower() == str(nb).strip().lower()
+    return (
+        not vacio(na)
+        and not vacio(nb)
+        and normalizar_nombre(str(na)) == normalizar_nombre(str(nb))
+    )
 
 
 def _fecha_iso(valor: Any) -> str | None:
@@ -247,7 +253,7 @@ class ServicioCapturas:
         """Fusiona correcciones de un pago o factura y lo reevalúa; ``enviar=False`` no lo manda."""
         c = self._existente(captura_id)
         if c.kind not in KINDS_COMPLETABLES:
-            raise NoCompletable("Solo se pueden completar pagos y facturas de proveedor.")
+            raise NoCompletable("Solo se pueden completar pagos, facturas de proveedor y gastos.")
         if c.estado == ENVIADO:
             raise CapturaCerrada("Ya está en Odoo: edítala allá.")
         permitidos = CAMPOS_COMPLETABLES[c.kind]
@@ -381,8 +387,8 @@ class ServicioCapturas:
             return self._pedido(c, odoo, marca)
         if c.kind == PROVEEDOR:
             return self._proveedor_exclusivo(c, odoo, marca)
-        if c.kind == FACTURA_PROVEEDOR:
-            return self._factura(c, odoo, marca)
+        if c.kind in (FACTURA_PROVEEDOR, GASTO):
+            return self._documento(c, odoo, marca)
         return self._pago(c, odoo, marca)
 
     # ── contacto ─────────────────────────────────────────────────────────────
@@ -615,10 +621,16 @@ class ServicioCapturas:
         )
         return f"res.partner:{pid}", {"partner_id": pid, "ya_existia": False}
 
-    def _proveedor_de_factura(self, odoo: EscritorOdoo, p: dict[str, Any]) -> tuple[int, str]:
-        """El proveedor de una factura debe EXISTIR: no se crea desde una factura ni se adivina."""
-        rif = str(p["rif"]) if not vacio(p.get("rif")) else None
-        nombre = str(p["proveedor"]).strip() if not vacio(p.get("proveedor")) else None
+    def _buscar_proveedor(
+        self, odoo: EscritorOdoo, rif: str | None, nombre: str | None
+    ) -> tuple[int | None, str]:
+        """Proveedor ya existente en Odoo: por RIF y, si no, por nombre exacto.
+
+        Ambiguo → ``_Incompleto``.
+
+        Con nombre se busca primero entre los proveedores y luego entre cualquier contacto: un
+        cliente que también nos vende no se duplica. Nunca modifica lo que encuentra.
+        """
         if rif:
             ids = odoo.partners_por_rif(rif)
             if len(ids) > 1:
@@ -626,60 +638,128 @@ class ServicioCapturas:
             if ids:
                 return ids[0], "rif"
         if nombre:
-            ids = odoo.proveedores_por_nombre(nombre)
-            if len(ids) > 1:
-                raise _Incompleto(
-                    [f"proveedor: «{nombre}» es ambiguo en Odoo ({len(ids)} coincidencias)"]
-                )
-            if ids:
-                return ids[0], "nombre"
-            en_espejo = [i for i in self._espejo.clientes_por_nombre(nombre) if i.isdigit()]
-            if len(en_espejo) > 1:
-                raise _Incompleto(
-                    [f"proveedor: «{nombre}» es ambiguo ({len(en_espejo)} coincidencias)"]
-                )
-            if en_espejo:
-                return int(en_espejo[0]), "espejo"
-        quien = f"el RIF {rif}" if rif else f"«{nombre}»"
-        raise _Incompleto(
-            [f"proveedor: {quien} no existe en Odoo: créalo (/proveedor) y reintenta"]
-        )
+            for buscar, via in (
+                (odoo.proveedores_por_nombre, "nombre"),
+                (odoo.partners_por_nombre, "nombre_contacto"),
+            ):
+                ids = buscar(nombre)
+                if len(ids) > 1:
+                    raise _Incompleto(
+                        [f"proveedor: «{nombre}» es ambiguo en Odoo ({len(ids)} coincidencias)"]
+                    )
+                if ids:
+                    return ids[0], via
+        return None, ""
 
-    def _factura(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
-        """``account.move`` de proveedor en BORRADOR; el IVA y el control quedan en la nota."""
+    def _proveedor_del_documento(
+        self, c: Captura, odoo: EscritorOdoo, marca: str
+    ) -> tuple[int, dict[str, Any]]:
+        """El proveedor de una factura o un gasto: lo busca y, si NO existe, lo CREA.
+
+        Decisión del owner (nov-2026): el grupo de Compras es de compras menores del día a día; el
+        bot lee el proveedor del propio documento y no se le exige darlo de alta aparte. Se
+        serializa con el MISMO bloqueo que el kind ``proveedor`` (por RIF; sin RIF, por nombre
+        normalizado): varios gastos simultáneos de un proveedor nuevo crean un solo ``res.partner``.
+        """
         p = c.payload
-        partner, via = self._proveedor_de_factura(odoo, p)
-        numero = str(p["numero_factura"]).strip()
+        rif = str(p["rif"]) if not vacio(p.get("rif")) else None
+        nombre = str(p["proveedor"]).strip() if not vacio(p.get("proveedor")) else None
+        if rif is None and nombre is None:
+            raise _Incompleto(["proveedor: indica su nombre o su RIF"])
+        clave = f"proveedor:{rif}" if rif else f"proveedor:nombre:{normalizar_nombre(nombre or '')}"
+        try:
+            with self._repo.bloqueo(clave):
+                return self._buscar_o_crear_proveedor(odoo, p, marca, rif, nombre)
+        except BloqueoOcupado as e:
+            raise OdooEscrituraError(
+                "Hay otro envío del mismo proveedor en curso; se reintentará.", transitorio=True
+            ) from e
+
+    def _buscar_o_crear_proveedor(
+        self,
+        odoo: EscritorOdoo,
+        p: dict[str, Any],
+        marca: str,
+        rif: str | None,
+        nombre: str | None,
+    ) -> tuple[int, dict[str, Any]]:
+        propio = odoo.partner_por_marca(marca)  # un reintento tras crearlo nosotros
+        if propio is not None:
+            return propio, {"proveedor_via": "creado", "proveedor_creado": True}
+        existente, via = self._buscar_proveedor(odoo, rif, nombre)
+        if existente is not None:
+            return existente, {"proveedor_via": via, "proveedor_creado": False}
+        if nombre is None:  # solo traía el RIF y ese RIF no existe: sin nombre no se puede crear
+            raise _Incompleto(
+                [
+                    f"proveedor: el RIF {rif} no existe en Odoo; "
+                    "indica el nombre del proveedor para crearlo"
+                ]
+            )
+        pid = odoo.crear_proveedor(
+            {
+                "nombre": nombre,
+                "rif": rif,
+                "telefono": p.get("proveedor_telefono"),
+                "email": p.get("proveedor_email"),
+                "direccion": p.get("proveedor_direccion"),
+                "nota": NOTA_PROVEEDOR_DE_DOCUMENTO,
+            },
+            marca,
+        )
+        return pid, {"proveedor_via": "creado", "proveedor_creado": True}
+
+    def _documento(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
+        """``account.move`` de proveedor en BORRADOR para una factura o un gasto pagado al contado.
+
+        El IVA y el control van en la nota; no se inventan impuestos. Un gasto no genera pago ni
+        cuenta por pagar: queda indicado en la nota para que contabilidad lo concilie.
+        """
+        p = c.payload
+        es_gasto = c.kind == GASTO
+        partner, extra = self._proveedor_del_documento(c, odoo, marca)
+        numero = str(p["numero_factura"]).strip() if not vacio(p.get("numero_factura")) else None
         propia = odoo.factura_por_marca(marca)  # un reintento tras crearla nosotros
         if propia is not None:
-            return f"account.move:{propia}", {"partner_id": partner, "proveedor_via": via}
-        ajena = odoo.factura_proveedor_por_ref(partner, numero)
-        if ajena is not None:
-            raise OdooEscrituraError(
-                f"La factura {numero} ya existe en Odoo para ese proveedor (account.move {ajena})."
-            )
+            return f"account.move:{propia}", {"partner_id": partner, **extra}
+        if numero and not extra["proveedor_creado"]:
+            ajena = odoo.factura_proveedor_por_ref(partner, numero)
+            if ajena is not None:
+                raise OdooEscrituraError(
+                    f"La factura {numero} ya existe en Odoo para ese proveedor "
+                    f"(account.move {ajena})."
+                )
         moneda_id = odoo.moneda_id(str(p["moneda"]))
         if moneda_id is None:
             raise _Incompleto([f"moneda: «{p['moneda']}» no existe en Odoo"])
         base = p.get("base_imponible")
         usa_base = not vacio(base) and Decimal(str(base)) > 0
         monto = Decimal(str(base if usa_base else p["monto_total"]))
+        etiqueta = numero or f"S/N-{c.captura_id}"
+        proveedor_txt = "proveedor"
+        if not vacio(p.get("proveedor")):
+            proveedor_txt = str(p["proveedor"]).strip()
         notas = [
-            f"Factura proveedor {numero}",
+            "Gasto de consumo pagado al contado (sin pago asociado: contabilidad lo concilia)"
+            if es_gasto
+            else f"Factura proveedor {etiqueta}",
+            f"Documento {numero}" if es_gasto and numero else "",
+            f"Categoría {p['categoria']}" if es_gasto and not vacio(p.get("categoria")) else "",
             f"Control {p['numero_control']}" if not vacio(p.get("numero_control")) else "",
             f"IVA {p['iva']}" if not vacio(p.get("iva")) else "",
             f"Monto total {p['monto_total']} {p['moneda']}",
             f"Orden {p['orden_ref']}" if not vacio(p.get("orden_ref")) else "",
             str(p["notas"]) if not vacio(p.get("notas")) else "",
         ]
-        concepto = (
-            str(p["concepto"]) if not vacio(p.get("concepto")) else f"Factura proveedor {numero}"
-        )
+        if not vacio(p.get("concepto")):
+            concepto = str(p["concepto"])
+        else:
+            concepto = f"Compra en {proveedor_txt}" if es_gasto else f"Factura proveedor {etiqueta}"
         factura = odoo.crear_factura_proveedor(
             partner_id=partner,
-            numero=numero,
+            numero=etiqueta,
             fecha_emision=str(p["fecha_emision"]),
-            fecha_vencimiento=_fecha_iso(p.get("fecha_vencimiento")),
+            fecha_vencimiento=None if es_gasto else _fecha_iso(p.get("fecha_vencimiento")),
             moneda_id=moneda_id,
             monto=monto,
             concepto=concepto,
@@ -688,7 +768,7 @@ class ServicioCapturas:
         )
         return f"account.move:{factura}", {
             "partner_id": partner,
-            "proveedor_via": via,
+            **extra,
             "monto_linea": str(monto),
         }
 

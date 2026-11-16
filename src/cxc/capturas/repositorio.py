@@ -111,7 +111,7 @@ class RepoCapturas(Protocol):
     def obtener_por_clave(self, idempotency_key: str) -> Captura | None: ...
 
     def facturas_con_numero(self, numero_factura: str) -> list[Captura]:
-        """Capturas ``factura_proveedor`` con ese número (sin distinguir mayúsculas ni espacios)."""
+        """Capturas ``factura_proveedor`` o ``gasto`` con ese número (sin mayúsc. ni espacios)."""
         ...
 
     def listar(
@@ -273,7 +273,8 @@ def _facturas_con_numero(conn: Connection, numero_factura: str) -> list[Any]:
         conn.execute(
             select(capturas_bot)
             .where(
-                capturas_bot.c.kind == "factura_proveedor",
+                # un gasto y una factura de proveedor con el mismo número son el MISMO documento
+                capturas_bot.c.kind.in_(("factura_proveedor", "gasto")),
                 numero == numero_factura.strip().lower(),
             )
             .order_by(capturas_bot.c.captura_id)
