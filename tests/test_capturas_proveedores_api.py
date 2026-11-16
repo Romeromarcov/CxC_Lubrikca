@@ -11,7 +11,7 @@ from cxc.capturas.servicio import ServicioCapturas
 from cxc.odoo.escritura import EscritorOdoo
 from cxc.web.app import app
 from cxc.web.capturas_api import get_servicio
-from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria
+from tests.capturas_dobles import EspejoFalso, OdooFalso, RepoMemoria, partners
 from tests.test_capturas_api import ADMIN, AUDITOR, BOT, FUENTE, TESORERIA, _como, client
 
 
@@ -187,7 +187,7 @@ def test_factura_ya_en_odoo_queda_en_error_legible(monkeypatch: pytest.MonkeyPat
         return [] if any(isinstance(d, list) and d[0] == "narration" for d in args[0]) else [900]
 
     repo, odoo = _montar(
-        monkeypatch, OdooFalso(res_partner__search=[31], account_move__search=moves)
+        monkeypatch, OdooFalso(res_partner__search=partners(31), account_move__search=moves)
     )
     try:
         r = client.post("/api/bots/capturas", json=_cuerpo("factura_proveedor", FACT), headers=BOT)
@@ -197,13 +197,14 @@ def test_factura_ya_en_odoo_queda_en_error_legible(monkeypatch: pytest.MonkeyPat
         app.dependency_overrides.pop(get_servicio, None)
 
 
-def test_proveedor_de_la_factura_inexistente_queda_incompleto_con_la_pista(
+def test_proveedor_de_la_factura_inexistente_se_crea_desde_el_documento(
     sin_proveedor: Any,
 ) -> None:
     repo, odoo = sin_proveedor
     r = client.post("/api/bots/capturas", json=_cuerpo("factura_proveedor", FACT), headers=BOT)
     cap = repo.filas[r.json()["id"]]
-    assert cap.estado == "INCOMPLETO" and "/proveedor" in cap.error and odoo.creados == []
+    assert cap.estado == "ENVIADO" and cap.resultado["proveedor_creado"] is True
+    assert len(odoo.creados_de("res.partner")) == 1 and len(odoo.creados_de("account.move")) == 1
 
 
 # ── completar facturas ───────────────────────────────────────────────────────

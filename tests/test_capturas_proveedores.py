@@ -18,7 +18,7 @@ from cxc.capturas.modelos import (
 )
 from cxc.capturas.servicio import FacturaDuplicada, NoCompletable
 from cxc.odoo.escritura import NOTA_BORRADOR, EscritorOdoo, OdooEscrituraError
-from tests.capturas_dobles import EspejoFalso, OdooFalso
+from tests.capturas_dobles import EspejoFalso, OdooFalso, partners
 from tests.test_capturas_servicio import FUENTE, montar
 
 # ── validación ───────────────────────────────────────────────────────────────
@@ -337,7 +337,7 @@ def _moves(por_marca: list[int] | None = None, por_ref: list[int] | None = None)
 
 
 def _odoo_factura(**kw: Any) -> OdooFalso:
-    return OdooFalso(res_partner__search=kw.pop("partner", [31]), **kw)
+    return OdooFalso(res_partner__search=partners(*kw.pop("partner", [31])), **kw)
 
 
 def test_factura_completa_se_envia_en_borrador_con_la_nota_contable() -> None:
@@ -420,24 +420,70 @@ def test_factura_identifica_al_proveedor_por_nombre_cuando_no_hay_rif() -> None:
     assert out.estado == ENVIADO and out.resultado["proveedor_via"] == "nombre"
 
 
-def test_factura_identifica_al_proveedor_en_el_espejo_si_odoo_no_lo_trae_como_proveedor() -> None:
-    svc, _, odoo = montar(OdooFalso(), espejo=EspejoFalso(clientes={"Lubricantes SA": ["55"]}))
+def test_factura_identifica_al_proveedor_aunque_en_odoo_solo_figure_como_cliente() -> None:
+    """Un contacto con ese nombre que no tiene rango de proveedor se reutiliza (no se duplica)."""
+
+    def busca(args: list[Any], kwargs: dict[str, Any]) -> list[int]:
+        dominio = args[0]
+        if any(isinstance(d, list) and d[0] == "supplier_rank" for d in dominio):
+            return []
+        return [] if any(isinstance(d, list) and d[0] == "ref" for d in dominio) else [55]
+
+    svc, _, odoo = montar(OdooFalso(res_partner__search=busca))
     c, _ = svc.recibir("factura_proveedor", _fact(rif=None), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
-    assert out.estado == ENVIADO and out.resultado["proveedor_via"] == "espejo"
+    assert out.estado == ENVIADO and out.resultado["proveedor_via"] == "nombre_contacto"
+    assert odoo.creados_de("res.partner") == []
     assert odoo.creados_de("account.move")[0]["partner_id"] == 55
 
 
-def test_factura_de_proveedor_inexistente_no_lo_crea_y_dice_como_arreglarlo() -> None:
+def test_factura_de_proveedor_inexistente_lo_crea_con_los_datos_del_documento() -> None:
     svc, _, odoo = montar(OdooFalso())
+    c, _ = svc.recibir(
+        "factura_proveedor",
+        _fact(
+            proveedor_direccion="Av. Industrial, Valencia",
+            proveedor_telefono="0241-8001122",
+            proveedor_email="ventas@lubri.com",
+        ),
+        FUENTE,
+        "k1",
+    )
+    out = svc.procesar(c.captura_id)
+    assert out.estado == ENVIADO and out.resultado["proveedor_creado"] is True
+    (p,) = odoo.creados_de("res.partner")
+    assert p["name"] == "Lubricantes SA" and p["vat"] == "J-123456789"
+    assert p["supplier_rank"] == 1 and p["customer_rank"] == 0 and p["company_type"] == "company"
+    assert p["phone"] == "0241-8001122" and p["email"] == "ventas@lubri.com"
+    assert p["street"] == "Av. Industrial, Valencia" and p["ref"] == f"BOT-{c.captura_id}"
+    assert "proveedor creado desde un documento; revisar" in p["comment"]
+    # la factura va al proveedor recién creado
+    assert odoo.creados_de("account.move")[0]["partner_id"] == 101
+
+
+def test_factura_de_proveedor_sin_rif_inexistente_se_crea_solo_con_el_nombre() -> None:
+    svc, _, odoo = montar(OdooFalso())
+    c, _ = svc.recibir("factura_proveedor", _fact(rif=None), FUENTE, "k1")
+    assert svc.procesar(c.captura_id).estado == ENVIADO
+    (p,) = odoo.creados_de("res.partner")
+    assert p["name"] == "Lubricantes SA" and "vat" not in p and "phone" not in p
+    assert "company_type" not in p
+
+
+def test_factura_con_solo_el_rif_y_proveedor_inexistente_pide_el_nombre() -> None:
+    svc, _, odoo = montar(OdooFalso())
+    c, _ = svc.recibir("factura_proveedor", _fact(proveedor=None), FUENTE, "k1")
+    out = svc.procesar(c.captura_id)
+    assert out.estado == INCOMPLETO and "indica el nombre" in out.error and odoo.creados == []
+
+
+def test_el_reintento_tras_crear_el_proveedor_no_lo_duplica() -> None:
+    """Si el proveedor se creó pero la factura falló, el reintento reutiliza ese partner."""
+    svc, _, odoo = montar(OdooFalso(res_partner__search=lambda a, k: [77]))
     c, _ = svc.recibir("factura_proveedor", _fact(), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
-    assert (
-        out.estado == INCOMPLETO and "no existe en Odoo" in out.error and "/proveedor" in out.error
-    )
-    assert odoo.creados == []  # jamás crea el proveedor desde una factura
-    c2, _ = svc.recibir("factura_proveedor", _fact(numero_factura="F-2", rif=None), FUENTE, "k2")
-    assert "«Lubricantes SA»" in svc.procesar(c2.captura_id).error
+    assert out.estado == ENVIADO and odoo.creados_de("res.partner") == []
+    assert out.resultado["partner_id"] == 77
 
 
 @pytest.mark.parametrize(
@@ -447,7 +493,7 @@ def test_factura_de_proveedor_inexistente_no_lo_crea_y_dice_como_arreglarlo() ->
     ],
 )
 def test_factura_con_rif_ambiguo_no_se_adivina(hallados: list[int], texto: str) -> None:
-    svc, _, odoo = montar(OdooFalso(res_partner__search=hallados))
+    svc, _, odoo = montar(OdooFalso(res_partner__search=partners(*hallados)))
     c, _ = svc.recibir("factura_proveedor", _fact(), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
     assert out.estado == INCOMPLETO and texto in out.error and odoo.creados == []
@@ -463,9 +509,13 @@ def test_factura_con_nombre_ambiguo_no_se_adivina() -> None:
     c, _ = svc.recibir("factura_proveedor", _fact(rif=None), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
     assert out.estado == INCOMPLETO and "ambiguo" in out.error and odoo.creados == []
-    svc2, _, odoo2 = montar(
-        OdooFalso(), espejo=EspejoFalso(clientes={"Lubricantes SA": ["1", "2"]})
+    # dos contactos con ese nombre que no son proveedores: tampoco se adivina ni se crea otro
+    odoo2 = OdooFalso(
+        res_partner__search=lambda a, k: []
+        if any(isinstance(d, list) and d[0] in ("supplier_rank", "ref") for d in a[0])
+        else [1, 2]
     )
+    svc2, _, odoo2 = montar(odoo2)
     c2, _ = svc2.recibir("factura_proveedor", _fact(rif=None), FUENTE, "k2")
     assert svc2.procesar(c2.captura_id).estado == INCOMPLETO and odoo2.creados == []
 

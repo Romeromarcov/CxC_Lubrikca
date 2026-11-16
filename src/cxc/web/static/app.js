@@ -6155,6 +6155,9 @@ document.addEventListener("DOMContentLoaded", () => {
         contacto: "Contacto",
         pago: "Pago de cliente",
         pago_proveedor: "Pago a proveedor",
+        proveedor: "Proveedor",
+        factura_proveedor: "Factura de proveedor",
+        gasto: "Gasto (compra menor)",
     };
     let _capOffset = 0;
     let _capItems = [];          // filas visibles en la tabla (para abrir el detalle)
@@ -6209,6 +6212,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (c.kind === "pago_proveedor") {
             return `<strong>${_capTexto(p.proveedor)}</strong>${gris(`${_capMonto(p.monto)} ${_capEsc(p.moneda || "")} · ref ${_capEsc(p.referencia || "—")}`)}`;
+        }
+        if (c.kind === "proveedor") {
+            return `<strong>${_capTexto(p.nombre)}</strong>${gris(_capEsc([p.rif, p.telefono].filter(Boolean).join(" · ") || "sin RIF"))}`;
+        }
+        if (c.kind === "factura_proveedor" || c.kind === "gasto") {
+            return `<strong>${_capTexto(p.proveedor)}</strong>${gris(`${_capMonto(p.monto_total)} ${_capEsc(p.moneda || "")} · doc ${_capEsc(p.numero_factura || "sin número")}`)}`;
         }
         return "—";
     }
@@ -6379,6 +6388,27 @@ document.addEventListener("DOMContentLoaded", () => {
         ]);
     }
 
+    // Gasto (compra menor ya pagada) o factura de proveedor: todo escapado con _capTexto/_capMonto.
+    function _capDetalleGasto(p) {
+        return _capTablaDatos([
+            _capFilaDato("Proveedor", _capTexto(p.proveedor)),
+            _capFilaDato("RIF", _capTexto(p.rif)),
+            _capFilaDato("Dirección", _capTexto(p.proveedor_direccion)),
+            _capFilaDato("Teléfono", _capTexto(p.proveedor_telefono)),
+            _capFilaDato("Correo", _capTexto(p.proveedor_email)),
+            _capFilaDato("N.º de documento", _capTexto(p.numero_factura)),
+            _capFilaDato("N.º de control", _capTexto(p.numero_control)),
+            _capFilaDato("Fecha de emisión", _capTexto(p.fecha_emision)),
+            _capFilaDato("Moneda", _capTexto(p.moneda)),
+            _capFilaDato("Base imponible", _capMonto(p.base_imponible)),
+            _capFilaDato("IVA", _capMonto(p.iva)),
+            _capFilaDato("Monto total", _capMonto(p.monto_total)),
+            _capFilaDato("Categoría", _capTexto(p.categoria)),
+            _capFilaDato("Concepto", _capTexto(p.concepto)),
+            _capFilaDato("Notas", _capTexto(p.notas)),
+        ]);
+    }
+
     // Campos que se pueden completar en un pago incompleto (formulario deshabilitado hasta que el backend lo permita).
     const _CAP_CAMPOS_COMPLETAR = {
         pago: [["monto", "Monto"], ["moneda", "Moneda"], ["metodo_pago", "Método de pago"], ["referencia", "Referencia"],
@@ -6419,6 +6449,7 @@ document.addEventListener("DOMContentLoaded", () => {
         else if (c.kind === "pago") contenido = _capDetallePago(p, false);
         else if (c.kind === "pago_proveedor") contenido = _capDetallePago(p, true);
         else if (c.kind === "contacto") contenido = _capDetalleContacto(p);
+        else if (c.kind === "gasto" || c.kind === "factura_proveedor") contenido = _capDetalleGasto(p);
         else contenido = `<pre style="white-space:pre-wrap; font-size:0.8rem;">${_capEsc(JSON.stringify(p, null, 2))}</pre>`;
 
         const faltan = (c.incompleto || []).length
@@ -6579,6 +6610,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const _BT_TIPOS_CAPTURA = {
         pedido: "Pedido", contacto: "Contacto", pago: "Pago de cliente",
         pago_proveedor: "Pago a proveedor", proveedor: "Proveedor", factura_proveedor: "Factura de proveedor",
+        gasto: "Gasto (compra menor)",
     };
     const _BT_ESTADO_DESTINO = {
         ok: ["verde", "Conectado"], error: ["rojo", "Con error"], desactivado: ["gris", "Desactivado"],

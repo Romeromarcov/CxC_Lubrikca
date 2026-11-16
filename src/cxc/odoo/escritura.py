@@ -33,6 +33,7 @@ logger = logging.getLogger("cxc.odoo.escritura")
 ExecuteFn = Callable[[str, str, list[Any], dict[str, Any]], Any]
 
 NOTA_BORRADOR = "[Borrador Telegram] pendiente de completar"
+NOTA_PROVEEDOR_DE_DOCUMENTO = "[Borrador Telegram] proveedor creado desde un documento; revisar"
 SALTO = "\n"
 TIMEOUT_SEGUNDOS = 30.0
 
@@ -347,22 +348,30 @@ class EscritorOdoo:
         return self._buscar("res.partner", [["name", "=ilike", _ilike_exacto(nombre)]])
 
     def crear_proveedor(self, datos: dict[str, Any], marca: str) -> int:
-        """Proveedor nuevo en borrador (``supplier_rank`` 1, sin rango de cliente)."""
+        """Proveedor nuevo en borrador (``supplier_rank`` 1, sin rango de cliente).
+
+        ``rif`` y ``telefono`` son opcionales (un proveedor leído de un recibo puede no traerlos);
+        ``nota`` permite indicar el origen («creado desde un documento»).
+        """
         previo = self._buscar("res.partner", [["ref", "=", marca]], 1)
         if previo:
             return previo[0]
-        nota = [NOTA_BORRADOR]
+        nota = [datos.get("nota") or NOTA_BORRADOR]
         if datos.get("dias_credito") not in (None, ""):
             nota.append(f"Días de crédito: {datos['dias_credito']}")
         if datos.get("notas"):
             nota.append(str(datos["notas"]))
+        rif = str(datos["rif"]) if datos.get("rif") else None
+        telefono = str(datos["telefono"]).strip() if datos.get("telefono") else None
         vals = _vals(
             name=str(datos["nombre"]).strip(),
-            vat=datos["rif"],
-            phone=str(datos["telefono"]).strip(),
+            vat=rif,
+            phone=telefono,
             email=datos.get("email") or None,
             street=datos.get("direccion") or None,
-            company_type="company" if str(datos["rif"]).upper()[:1] in ("J", "G") else "person",
+            company_type=(
+                ("company" if rif.upper()[:1] in ("J", "G") else "person") if rif else None
+            ),
             supplier_rank=1,
             customer_rank=0,
             comment=SALTO.join(nota),

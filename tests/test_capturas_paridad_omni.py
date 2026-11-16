@@ -43,8 +43,9 @@ def test_la_tabla_cubre_todos_los_tipos() -> None:
         "pago_proveedor",
         "proveedor",
         "factura_proveedor",
+        "gasto",
     }
-    assert len(_DATOS["invalidos"]) >= 40
+    assert len(_DATOS["invalidos"]) >= 50
 
 
 @pytest.mark.parametrize("kind,draft", INVALIDOS)
