@@ -437,7 +437,7 @@ class EscritorOdoo:
         return self._crear("res.partner", vals)
 
     def factura_por_marca(self, marca: str) -> int | None:
-        """Factura de proveedor que ya creó esta captura (la marca va delimitada en ``narration``)."""
+        """Factura de proveedor ya creada por esta captura (delimitada en ``narration``)."""
         ids = self._buscar(
             "account.move",
             [["move_type", "=", "in_invoice"], ["narration", "ilike", f"{marca} · "]],
