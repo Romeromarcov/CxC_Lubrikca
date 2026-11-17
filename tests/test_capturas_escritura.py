@@ -283,12 +283,13 @@ def test_pago_sin_campo_de_memo_no_se_crea_a_ciegas() -> None:
     assert not e.value.transitorio and odoo.creados == []
 
 
-def test_pago_idempotente_busca_la_marca_en_el_memo() -> None:
+def test_pago_idempotente_busca_la_marca_delimitada_en_el_memo() -> None:
     odoo = OdooFalso(account_payment__search=[444])
     assert _pago(EscritorOdoo(odoo)) == 444
     assert odoo.creados == []
     dominio = odoo.llamadas_a("account.payment", "search")[0][0]
-    assert dominio == [["memo", "ilike", "BOT-9"]]
+    # Delimitado con « · » para que BOT-1 nunca colisione con BOT-10
+    assert dominio == ["|", ["memo", "=", "BOT-9"], ["memo", "=ilike", "BOT-9 · %"]]
 
 
 def test_pago_sin_fecha_no_la_envia() -> None:
