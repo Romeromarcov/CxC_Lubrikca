@@ -926,7 +926,12 @@
 
         <!-- PESTAÑA: VENTAS (teórico vs real, por orden) -->
         <div id="tab-ventas" class="tab-panel">
-            <div class="ventas-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
+            <div class="config-subnav tab-navigation" role="tablist" aria-label="Secciones de Ventas" style="margin-bottom:1rem;">
+                <button type="button" class="tab-btn ventas-subnav-btn active" data-ventas-subpage="seguimiento">📊 Seguimiento de Órdenes (Teórico vs. Real)</button>
+                <button type="button" class="tab-btn ventas-subnav-btn" data-ventas-subpage="documentos">📝 Cotizaciones y Pedidos</button>
+            </div>
+
+            <div class="ventas-stack" data-ventas-panel="seguimiento" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
                     <div class="kpi-card">
                         <h3>Subtotal de la Orden (Total)</h3>
@@ -1012,6 +1017,199 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </section>
+            </div>
+
+            <!-- SUB-SECCIÓN DENTRO DE VENTAS: DOCUMENTOS DE COTIZACIONES Y PEDIDOS -->
+            <div data-ventas-panel="documentos" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">📝 Documentos de Cotizaciones y Pedidos</h2>
+                            <p style="color:#475569; margin:0;">Documentos creados desde los bots de Telegram o aquí mismo con el catálogo real de productos de Odoo. Revisa, edita líneas o precios y envíalos a Odoo.</p>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" class="btn-secondary" onclick="abrirNuevoDocumento('cotizacion')">➕ Nueva Cotización</button>
+                            <button type="button" class="btn-primary" onclick="abrirNuevoDocumento('pedido')">🛒 Nuevo Pedido</button>
+                            <button type="button" class="btn-secondary" onclick="loadDocumentosComerciales()">↻ Actualizar</button>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                        <div class="card kpi-card"><h3>Total Documentos</h3><p id="docs-kpi-total">0</p><span>Cotizaciones y pedidos en CxC</span></div>
+                        <div class="card kpi-card"><h3>Cotizaciones por enviar</h3><p id="docs-kpi-cot">0</p><span>Borradores revisables en CxC</span></div>
+                        <div class="card kpi-card"><h3>Pedidos en borrador</h3><p id="docs-kpi-ped">0</p><span>Pendientes de enviar a Odoo</span></div>
+                        <div class="card kpi-card"><h3>Enviados a Odoo</h3><p id="docs-kpi-enviados">0</p><span>Con orden creada en Odoo</span></div>
+                    </div>
+
+                    <div id="docs-aviso-general" style="margin-bottom:0.75rem;"></div>
+
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="docs-filtro-tipo" class="filter-select" aria-label="Tipo de documento">
+                            <option value="">Todos los tipos</option>
+                            <option value="cotizacion">Cotizaciones</option>
+                            <option value="pedido">Pedidos</option>
+                        </select>
+                        <select id="docs-filtro-estado" class="filter-select" aria-label="Estado del documento">
+                            <option value="">Todos los estados</option>
+                            <option value="BORRADOR">En borrador CxC</option>
+                            <option value="ENVIADO_ODOO">Enviados a Odoo</option>
+                            <option value="ERROR">Con error</option>
+                        </select>
+                        <input type="text" id="docs-filtro-q" placeholder="🔍 Buscar por número, cliente, RIF o S0..." style="min-width:260px; padding:0.45rem 0.75rem; border:1px solid #cbd5e1; border-radius:8px;">
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Documento</th>
+                                    <th>Tipo</th>
+                                    <th>Contacto / Rol</th>
+                                    <th>Lista</th>
+                                    <th>Líneas / Litros</th>
+                                    <th>Subtotal Est.</th>
+                                    <th>Estado / Orden Odoo</th>
+                                    <th>Fecha</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="docs-table-body">
+                                <tr><td colspan="9" class="table-empty">Cargando documentos comerciales...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Editor de Cotización / Pedido integrado con Catálogo Real de Odoo -->
+                <section id="doc-editor-card" class="card" style="padding:1.5rem; display:none; border-top:4px solid #2563eb;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <div>
+                            <h3 id="doc-editor-titulo" style="margin:0; color:#1e40af;">Nueva Cotización</h3>
+                            <small id="doc-editor-subtitulo" style="color:#64748b;">Vinculado al catálogo real y directorio de contactos de Odoo</small>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="cerrarEditorDocumento()">✖ Cerrar</button>
+                    </div>
+
+                    <div id="doc-editor-mensaje" style="margin-bottom:0.85rem;"></div>
+
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:0.85rem; margin-bottom:1rem;">
+                        <div class="form-group" style="margin:0;">
+                            <label>Tipo de documento</label>
+                            <select id="doc-f-tipo">
+                                <option value="cotizacion">📄 Cotización (Prospecto o Cliente)</option>
+                                <option value="pedido">🛒 Pedido formal (Cliente)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Lista de referencia</label>
+                            <select id="doc-f-moneda">
+                                <option value="USD">Lista USD ($)</option>
+                                <option value="VES">Lista BCV / VES ($)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; grid-column: span 2;">
+                            <label>Buscar contacto existente en Odoo (Prospecto o Cliente)</label>
+                            <div style="position:relative;">
+                                <input type="text" id="doc-buscar-contacto" placeholder="🔎 Escribe nombre o RIF para autocompletar desde Odoo...">
+                                <div id="doc-resultados-contacto" style="display:none; position:absolute; z-index:30; left:0; right:0; top:100%; background:#fff; border:1px solid #cbd5e1; border-radius:8px; max-height:220px; overflow-y:auto; box-shadow:0 8px 20px rgba(15,23,42,0.12);"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="doc-f-id" value="">
+                    <input type="hidden" id="doc-f-partner-id" value="">
+                    <input type="hidden" id="doc-f-tipo-contacto" value="prospecto">
+
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.85rem; margin-bottom:1rem; background:#f8fafc; padding:1rem; border-radius:8px; border:1px solid #e2e8f0;">
+                        <div class="form-group" style="margin:0;">
+                            <label>Nombre / Razón social *</label>
+                            <input type="text" id="doc-f-cliente" placeholder="Nombre del prospecto o cliente">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>RIF / Cédula <span id="doc-lbl-req-rif" style="color:#64748b; font-weight:normal;">(opcional en cotización)</span></label>
+                            <input type="text" id="doc-f-rif" placeholder="Ej. J-123456789 o V-12345678">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Teléfono</label>
+                            <input type="text" id="doc-f-telefono" placeholder="0414-0000000">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Email</label>
+                            <input type="email" id="doc-f-email" placeholder="cliente@correo.com">
+                        </div>
+                        <div class="form-group" style="margin:0; grid-column: span 2;">
+                            <label>Dirección principal</label>
+                            <input type="text" id="doc-f-direccion" placeholder="Dirección fiscal / principal del contacto">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Latitud GPS</label>
+                            <input type="number" step="any" id="doc-f-lat" placeholder="Ej. 10.4806">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Longitud GPS</label>
+                            <input type="number" step="any" id="doc-f-lon" placeholder="Ej. -66.9036">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Plus Code (Calle 2)</label>
+                            <input type="text" id="doc-f-plus" placeholder="Se calcula automático o ej. 772J62VW+M4">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Fecha entrega estimada</label>
+                            <input type="date" id="doc-f-fecha-entrega">
+                        </div>
+                    </div>
+
+                    <!-- Buscador del Catálogo Real de Productos de Odoo -->
+                    <div style="margin-bottom:1rem; padding:1rem; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px;">
+                        <label style="font-weight:600; color:#1e3a8a; display:block; margin-bottom:0.4rem;">📦 Agregar productos del catálogo real de Odoo</label>
+                        <div style="position:relative;">
+                            <input type="text" id="doc-buscar-producto" placeholder="🔎 Busca por código (ej. 0761), nombre (ej. Liga DOT4, Elite 20W50) o presentación (Tambor, 1x12)..." style="width:100%; background:#fff;">
+                            <div id="doc-resultados-producto" style="display:none; position:absolute; z-index:30; left:0; right:0; top:100%; background:#fff; border:1px solid #93c5fd; border-radius:8px; max-height:260px; overflow-y:auto; box-shadow:0 8px 20px rgba(15,23,42,0.14);"></div>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper" style="margin-bottom:1rem;">
+                        <table class="cxc-table mini">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Producto (Catálogo Odoo)</th>
+                                    <th>Presentación</th>
+                                    <th style="width:95px;">Cantidad</th>
+                                    <th style="width:120px;">Precio Unit. ($)</th>
+                                    <th style="width:95px;">% Desc.</th>
+                                    <th>Litros</th>
+                                    <th>Subtotal ($)</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="doc-lineas-body">
+                                <tr><td colspan="9" class="table-empty">Usa el buscador de arriba para agregar productos reales de Odoo.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:1.5rem; margin-bottom:1rem; font-size:0.95rem;">
+                        <div>Litros totales: <strong id="doc-resumen-litros">0.00 L</strong></div>
+                        <div>Subtotal estimado: <strong id="doc-resumen-subtotal" style="color:#1e40af; font-size:1.1rem;">$0.00</strong></div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:0.85rem; margin-bottom:1.25rem;">
+                        <div class="form-group" style="margin:0;">
+                            <label>Condiciones de negociación y descuentos otorgados</label>
+                            <textarea id="doc-f-condiciones" rows="2" placeholder="Ej. Contado BCV, 5% descuento pronto pago..."></textarea>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>Observaciones / Notas adicionales</label>
+                            <textarea id="doc-f-observaciones" rows="2" placeholder="Notas internas o instrucciones..."></textarea>
+                        </div>
+                    </div>
+
+                    <div id="doc-editor-acciones" style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                        <button type="button" class="btn-secondary" id="doc-btn-guardar" onclick="guardarDocumentoComercial(false)">💾 Guardar en CxC</button>
+                        <button type="button" class="btn-primary" id="doc-btn-enviar-odoo" onclick="guardarDocumentoComercial(true)">🚀 Guardar y Enviar a Odoo</button>
                     </div>
                 </section>
             </div>
@@ -2291,7 +2489,9 @@
                         <select id="capturas-kind" class="filter-select" aria-label="Tipo">
                             <option value="">Todos los tipos</option>
                             <option value="pedido">Pedido</option>
-                            <option value="contacto">Contacto</option>
+                            <option value="cotizacion">Cotización</option>
+                            <option value="contacto">Contacto (Prospecto)</option>
+                            <option value="contacto_editar">Edición de contacto</option>
                             <option value="pago">Pago de cliente</option>
                             <option value="pago_proveedor">Pago a proveedor</option>
                             <option value="proveedor">Proveedor</option>

@@ -189,6 +189,7 @@ from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
 from cxc.web.capturas_api import run_reintentos_capturas_en_background
 from cxc.web.directorio_api import router as directorio_router
+from cxc.web.documentos_api import router as documentos_router
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -197,8 +198,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 app.include_router(capturas_router)  # capturas de Telegram (src/cxc/web/capturas_api.py)
-# Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas: así ``/api/bots/capturas``
-# gana a ``/api/bots/{bot}``.
+app.include_router(documentos_router)  # documentos comerciales y catálogo bots (documentos_api.py)
+# Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas y documentos: así las rutas
+# de ``/api/bots/capturas|catalogo|contactos`` ganan a ``/api/bots/{bot}``.
 app.include_router(bots_router)
 app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
 

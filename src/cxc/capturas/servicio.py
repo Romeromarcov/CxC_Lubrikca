@@ -23,6 +23,8 @@ from .espejo import Espejo
 from .modelos import (
     CAMPOS_COMPLETABLES,
     CONTACTO,
+    CONTACTO_EDITAR,
+    COTIZACION,
     ENVIADO,
     ERROR,
     FACTURA_PROVEEDOR,
@@ -135,9 +137,7 @@ def _mismo_proveedor(a: dict[str, Any], b: dict[str, Any]) -> bool:
         return str(a["rif"]).upper() == str(b["rif"]).upper()
     na, nb = a.get("proveedor") or a.get("nombre"), b.get("proveedor") or b.get("nombre")
     return (
-        not vacio(na)
-        and not vacio(nb)
-        and normalizar_nombre(str(na)) == normalizar_nombre(str(nb))
+        not vacio(na) and not vacio(nb) and normalizar_nombre(str(na)) == normalizar_nombre(str(nb))
     )
 
 
@@ -337,6 +337,17 @@ class ServicioCapturas:
         faltan = validar(c.kind, c.payload)
         if faltan:
             return self._repo.actualizar(captura_id, estado=INCOMPLETO, incompleto=faltan)
+        if c.kind == COTIZACION:
+            # Las cotizaciones quedan como documento en CxC y se envían a Odoo desde CxC (Ventas).
+            self._repo.evento(captura_id, "registrada_en_cxc", "cotizacion")
+            return self._repo.actualizar(
+                captura_id,
+                estado=ENVIADO,
+                odoo_ref="",
+                incompleto=[],
+                error="",
+                resultado={**c.resultado, "modo": "documento_cxc", "transitorio": False},
+            )
         try:
             escritor = self._fabrica()
         except OdooEscrituraError as e:
@@ -384,6 +395,8 @@ class ServicioCapturas:
         marca = f"BOT-{c.captura_id}"
         if c.kind == CONTACTO:
             return self._contacto(c, odoo, marca)
+        if c.kind == CONTACTO_EDITAR:
+            return self._contacto_editar(c, odoo, marca)
         if c.kind == PEDIDO:
             return self._pedido(c, odoo, marca)
         if c.kind == PROVEEDOR:
@@ -402,20 +415,72 @@ class ServicioCapturas:
                 "nombre": p["nombre"],
                 "telefono": p["telefono"],
                 "email": p.get("email"),
+                "direccion": p.get("direccion"),
+                "rif": p.get("rif"),
                 "notas": p.get("notas"),
+                "plus_code": ub.get("plus_code") or p.get("plus_code"),
                 "lat": ub.get("latitud"),
                 "lon": ub.get("longitud"),
             },
             marca,
         )
-        return f"res.partner:{pid}", {"partner_id": pid}
+        return f"res.partner:{pid}", {"partner_id": pid, "tipo_contacto": "prospecto"}
+
+    def _contacto_editar(
+        self, c: Captura, odoo: EscritorOdoo, marca: str
+    ) -> tuple[str, dict[str, Any]]:
+        p = c.payload
+        pid_raw = p.get("partner_odoo_id")
+        partner_id: int | None = (
+            int(str(pid_raw))
+            if pid_raw not in (None, "", False) and str(pid_raw).isdigit()
+            else None
+        )
+        rif = str(p["rif"]).strip() if not vacio(p.get("rif")) else None
+        nombre_ref = str(p.get("nombre_buscar") or p.get("nombre") or "").strip() or None
+        if partner_id is None and rif:
+            ids = odoo.partners_por_rif(rif)
+            if len(ids) > 1:
+                raise _Incompleto([f"contacto: el RIF {rif} está en {len(ids)} contactos de Odoo"])
+            if ids:
+                partner_id = ids[0]
+        if partner_id is None and nombre_ref:
+            ids_nom = odoo.partners_por_nombre(nombre_ref)
+            if len(ids_nom) > 1:
+                raise _Incompleto(
+                    [f"contacto: hay {len(ids_nom)} contactos llamados «{nombre_ref}» en Odoo"]
+                )
+            if ids_nom:
+                partner_id = ids_nom[0]
+        if partner_id is None:
+            raise _Incompleto(
+                ["contacto: no encontré ese contacto en Odoo para editarlo (verifica nombre o RIF)"]
+            )
+        ub = p.get("ubicacion") or {}
+        odoo.actualizar_contacto(
+            partner_id,
+            {
+                "nombre": p.get("nombre") if p.get("nombre_buscar") else None,
+                "telefono": p.get("telefono"),
+                "email": p.get("email"),
+                "direccion": p.get("direccion"),
+                "rif": rif,
+                "notas": p.get("notas"),
+                "plus_code": ub.get("plus_code") or p.get("plus_code"),
+                "lat": ub.get("latitud"),
+                "lon": ub.get("longitud"),
+            },
+            promover_cliente=False,
+            marca=marca,
+        )
+        return f"res.partner:{partner_id}", {"partner_id": partner_id, "editado": True}
 
     # ── pedido ───────────────────────────────────────────────────────────────
 
     def _partner_existente(
         self, odoo: EscritorOdoo, rif: str | None, nombre: str | None
     ) -> tuple[int | None, str]:
-        """Partner por RIF y, si no, por nombre exacto del espejo. Ambiguo → ``_Incompleto``."""
+        """Partner por RIF y, si no, por nombre exacto (espejo o prospecto en Odoo)."""
         if rif:
             ids = odoo.partners_por_rif(rif)
             if len(ids) > 1:
@@ -430,20 +495,35 @@ class ServicioCapturas:
                 )
             if ids_e and ids_e[0].isdigit():
                 return int(ids_e[0]), "nombre"
+            # También busca entre contactos/prospectos aún sin orden confirmada en Odoo
+            ids_p = odoo.partners_por_nombre(nombre)
+            if len(ids_p) > 1:
+                raise _Incompleto([f"cliente: hay varios contactos llamados «{nombre}» en Odoo"])
+            if ids_p:
+                return ids_p[0], "prospecto_odoo"
         return None, ""
 
     def _pedido(self, c: Captura, odoo: EscritorOdoo, marca: str) -> tuple[str, dict[str, Any]]:
         p = c.payload
         rif = str(p["rif"]) if not vacio(p.get("rif")) else None
-        partner, via = self._partner_existente(odoo, rif, str(p["cliente"]))
+        pid_raw = p.get("partner_odoo_id")
+        partner: int | None
+        if pid_raw not in (None, "", False) and str(pid_raw).isdigit():
+            partner, via = int(str(pid_raw)), "odoo_id"
+        else:
+            partner, via = self._partner_existente(odoo, rif, str(p["cliente"]))
 
         lineas: list[dict[str, Any]] = []
         sin_resolver: list[str] = []
         for ln in p["lineas"]:
-            ids = self._espejo.productos(str(ln["producto"]))
+            pid_explicito = str(ln.get("producto_id") or "").strip()
+            if pid_explicito and pid_explicito.isdigit():
+                ids = [pid_explicito]
+            else:
+                ids = self._espejo.productos(str(ln.get("producto") or ""))
             if len(ids) != 1 or not ids[0].isdigit():
                 motivo = "ambiguo" if len(ids) > 1 else "no encontrado"
-                sin_resolver.append(f"producto «{ln['producto']}» {motivo} en el catálogo")
+                sin_resolver.append(f"producto «{ln.get('producto')}» {motivo} en el catálogo")
                 continue
             lineas.append(
                 {
@@ -452,15 +532,34 @@ class ServicioCapturas:
                     "precio": ln.get("precio_unitario")
                     if not vacio(ln.get("precio_unitario"))
                     else None,
+                    "descuento_pct": ln.get("descuento_pct")
+                    if not vacio(ln.get("descuento_pct"))
+                    else None,
                 }
             )
         if sin_resolver:
             raise _Incompleto(sin_resolver)
 
-        if partner is None:
+        ub = p.get("ubicacion") or {}
+        if partner is not None and via in ("odoo_id", "prospecto_odoo"):
+            # Si era prospecto o trae datos nuevos para su ficha, los actualiza y promueve
+            odoo.actualizar_contacto(
+                partner,
+                {
+                    "rif": rif,
+                    "email": p.get("email"),
+                    "telefono": p.get("telefono"),
+                    "direccion_fiscal": p.get("direccion_fiscal"),
+                    "plus_code": ub.get("plus_code") or p.get("plus_code"),
+                    "lat": ub.get("latitud"),
+                    "lon": ub.get("longitud"),
+                },
+                promover_cliente=True,
+                marca=marca,
+            )
+        elif partner is None:
             if not rif:
                 raise _Incompleto(["cliente: no existe en Odoo; indica su RIF para crearlo"])
-            ub = p.get("ubicacion") or {}
             partner = odoo.crear_cliente(
                 {
                     "nombre": p["cliente"],

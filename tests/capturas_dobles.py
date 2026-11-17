@@ -255,16 +255,25 @@ class OdooFalso:
     def __init__(self, **respuestas: Any) -> None:
         self.llamadas: list[tuple[str, str, list[Any], dict[str, Any]]] = []
         self.creados: list[tuple[str, dict[str, Any]]] = []
+        self.escritos: list[tuple[str, list[int], dict[str, Any]]] = []
         self.chatter: list[tuple[str, int, str]] = []
         self._ids: dict[str, int] = {}
         self.r: dict[str, Any] = {
             "res.partner:fields_get": {
                 "name": {},
+                "vat": {},
+                "email": {},
+                "phone": {},
+                "street": {},
                 "street2": {},
+                "customer_rank": {},
+                "comment": {},
+                "message_ids": {},
                 "partner_latitude": {},
                 "partner_longitude": {},
             },
             "sale.order:fields_get": {"name": {}, "message_ids": {}},
+            "sale.order.line:fields_get": {"discount": {}},
             "account.payment:fields_get": {"memo": {}, "amount": {}, "message_ids": {}},
             "account.move:fields_get": dict.fromkeys(
                 [
@@ -328,6 +337,16 @@ class OdooFalso:
             self.creados.append((model, args[0]))
             self._ids[model] = self._ids.get(model, 100) + 1
             return self._ids[model]
+        if method == "write":
+            self.escritos.append((model, list(args[0]), dict(args[1])))
+            return True
+        if model == "res.partner" and method == "read":
+            ids = list(args[0]) if args else []
+            return (
+                [{"id": int(ids[0]), "name": "Contacto Existente", "customer_rank": 0}]
+                if ids
+                else []
+            )
         if method == "search":
             return []
         raise AssertionError(f"Odoo falso: sin respuesta para {model}.{method}")

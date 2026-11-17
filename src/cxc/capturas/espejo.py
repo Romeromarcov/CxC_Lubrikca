@@ -5,11 +5,14 @@ Solo lectura y solo del espejo: no abre ninguna conexión a Odoo.
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from sqlalchemy import Engine, func, select
 
 from cxc.db.schema import catalogo, clientes, ordenes_venta
+
+_RE_PREFIJO_COD = re.compile(r"^\[([^\]]+)\]\s*")
 
 
 class Espejo(Protocol):
@@ -45,12 +48,15 @@ class EspejoSQL:
 
     def productos(self, texto: str) -> list[str]:
         """``producto_id`` (product.product) por código exacto y, si no hay, por nombre exacto."""
-        t = texto.strip().lower()
+        raw = texto.strip()
+        m = _RE_PREFIJO_COD.match(raw)
+        candidatos_txt = [m.group(1).strip().lower(), raw.lower()] if m else [raw.lower()]
         with self._engine.connect() as conn:
-            for columna in (catalogo.c.codigo, catalogo.c.nombre):
-                filas = conn.execute(
-                    select(catalogo.c.producto_id).where(func.lower(columna) == t).limit(3)
-                ).all()
-                if filas:
-                    return [str(f[0]) for f in filas]
+            for t in candidatos_txt:
+                for columna in (catalogo.c.codigo, catalogo.c.nombre):
+                    filas = conn.execute(
+                        select(catalogo.c.producto_id).where(func.lower(columna) == t).limit(3)
+                    ).all()
+                    if filas:
+                        return [str(f[0]) for f in filas]
         return []

@@ -6152,7 +6152,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     const _CAP_TIPOS = {
         pedido: "Pedido",
-        contacto: "Contacto",
+        cotizacion: "Cotización",
+        contacto: "Contacto (Prospecto)",
+        contacto_editar: "Edición de contacto",
         pago: "Pago de cliente",
         pago_proveedor: "Pago a proveedor",
         proveedor: "Proveedor",
@@ -6199,12 +6201,12 @@ document.addEventListener("DOMContentLoaded", () => {
     function _capResumen(c) {
         const p = c.payload || {};
         const gris = (t) => `<div class="cap-sub">${t}</div>`;
-        if (c.kind === "pedido") {
+        if (c.kind === "pedido" || c.kind === "cotizacion") {
             const n = Array.isArray(p.lineas) ? p.lineas.length : 0;
-            return `<strong>${_capTexto(p.cliente)}</strong>${gris(`${_capEsc(p.rif || "sin RIF")} · ${n} producto${n === 1 ? "" : "s"}`)}`;
+            return `<strong>${_capTexto(p.cliente)}</strong>${gris(`${_capEsc(p.rif || (c.kind === "cotizacion" ? "cotización" : "sin RIF"))} · ${n} producto${n === 1 ? "" : "s"}`)}`;
         }
-        if (c.kind === "contacto") {
-            return `<strong>${_capTexto(p.nombre)}</strong>${gris(_capEsc([p.telefono, p.email].filter(Boolean).join(" · ") || "sin teléfono"))}`;
+        if (c.kind === "contacto" || c.kind === "contacto_editar") {
+            return `<strong>${_capTexto(p.nombre || p.nombre_buscar)}</strong>${gris(_capEsc([p.telefono, p.email, p.rif].filter(Boolean).join(" · ") || "contacto"))}`;
         }
         if (c.kind === "pago") {
             const quien = p.cliente || p.rif || p.pedido_ref;
@@ -7299,6 +7301,508 @@ document.addEventListener("DOMContentLoaded", () => {
             if (e.target.id === "bot-form-config") { e.preventDefault(); _btGuardarConfig(e.target); }
         });
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.cerrarModalBot(); });
+    })();
+
+    // =========================================================================
+    // VENTAS → DOCUMENTOS DE COTIZACIONES Y PEDIDOS (Catálogo Real + Envío Odoo)
+    // =========================================================================
+    let _docsItems = [];
+    let _docsLineasEdit = [];
+    let _docsCatalogoCache = [];
+    let _docsCargadoUnaVez = false;
+
+    function applyVentasSubpage(subpage) {
+        const panels = document.querySelectorAll("#tab-ventas [data-ventas-panel]");
+        const buttons = document.querySelectorAll(".ventas-subnav-btn");
+        panels.forEach((p) => {
+            p.classList.toggle("config-subpage-hidden", p.getAttribute("data-ventas-panel") !== subpage);
+        });
+        buttons.forEach((b) => {
+            b.classList.toggle("active", b.getAttribute("data-ventas-subpage") === subpage);
+        });
+        if (subpage === "documentos" && !_docsCargadoUnaVez) {
+            loadDocumentosComerciales();
+            _cargarCatalogoInicialDocs();
+        }
+    }
+    window.applyVentasSubpage = applyVentasSubpage;
+
+    async function _cargarCatalogoInicialDocs() {
+        if (_docsCatalogoCache.length) return _docsCatalogoCache;
+        try {
+            const res = await fetch("/api/documentos/catalogo?limit=500");
+            if (res.ok) {
+                const data = await res.json();
+                _docsCatalogoCache = data.items || [];
+            }
+        } catch (_e) { /* silencioso */ }
+        return _docsCatalogoCache;
+    }
+
+    function _docAlertaHtml(tipo, texto) {
+        const ok = tipo === "ok";
+        return `<div style="border-left:4px solid ${ok ? "#10b981" : "#e11d48"}; background:${ok ? "#ecfdf5" : "#fff1f2"}; color:${ok ? "#065f46" : "#9f1239"}; padding:0.6rem 0.9rem; border-radius:6px; font-size:0.88rem;">${ok ? "✅" : "⚠️"} ${_capEsc(texto)}</div>`;
+    }
+
+    async function loadDocumentosComerciales() {
+        const tbody = document.getElementById("docs-table-body");
+        if (!tbody) return;
+        _docsCargadoUnaVez = true;
+        const tipo = (document.getElementById("docs-filtro-tipo") || {}).value || "";
+        const estado = (document.getElementById("docs-filtro-estado") || {}).value || "";
+        const q = ((document.getElementById("docs-filtro-q") || {}).value || "").trim();
+        const qs = new URLSearchParams({ limit: "100" });
+        if (tipo) qs.set("tipo", tipo);
+        if (estado) qs.set("estado", estado);
+        if (q) qs.set("q", q);
+        tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Cargando documentos...</td></tr>`;
+        try {
+            const res = await fetch(`/api/documentos?${qs}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            _docsItems = data.items || [];
+            const r = data.resumen || {};
+            document.getElementById("docs-kpi-total").textContent = String(r.total || 0);
+            document.getElementById("docs-kpi-cot").textContent = String(r.cotizaciones_borrador || 0);
+            document.getElementById("docs-kpi-ped").textContent = String(r.pedidos_borrador || 0);
+            document.getElementById("docs-kpi-enviados").textContent = String(r.enviados_odoo || 0);
+            _renderTablaDocumentos(_docsItems);
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">${_capEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadDocumentosComerciales = loadDocumentosComerciales;
+
+    function _renderTablaDocumentos(items) {
+        const tbody = document.getElementById("docs-table-body");
+        if (!items.length) {
+            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">No hay cotizaciones ni pedidos aún. Crea uno nuevo arriba o desde el bot de Ventas en Telegram.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = items.map((d) => {
+            const badgeTipo = d.tipo === "cotizacion"
+                ? `<span class="state-badge abierta">📄 Cotización</span>`
+                : `<span class="state-badge cierre">🛒 Pedido</span>`;
+            const rolBadge = d.tipo_contacto === "cliente"
+                ? `<span style="font-size:0.74rem; color:#047857; font-weight:600;">🟢 Cliente</span>`
+                : `<span style="font-size:0.74rem; color:#b45309; font-weight:600;">🟡 Prospecto</span>`;
+            let estadoHtml = `<span class="semaphore amarillo">Borrador CxC</span>`;
+            if (d.estado === "ENVIADO_ODOO") {
+                estadoHtml = `<span class="semaphore verde">En Odoo: ${_capEsc(d.odoo_order_name || ("#" + d.odoo_order_id))}</span>`;
+            } else if (d.estado === "ERROR") {
+                estadoHtml = `<span class="semaphore rojo" title="${_capEsc(d.error_odoo)}">Error Odoo</span>`;
+            }
+            const avisoSinCat = d.lineas_sin_catalogo > 0
+                ? `<div style="font-size:0.73rem; color:#dc2626;">⚠️ ${d.lineas_sin_catalogo} línea(s) sin SKU</div>`
+                : "";
+            const origenTxt = d.origen === "bot" ? "📲 Bot" : "💻 Web";
+            const puedeEnviar = d.estado !== "ENVIADO_ODOO";
+            return `<tr>
+                <td><strong>${_capEsc(d.numero)}</strong><div class="cap-sub">${origenTxt}</div></td>
+                <td>${badgeTipo}</td>
+                <td><strong>${_capEsc(d.cliente_nombre)}</strong><div class="cap-sub">${rolBadge}${d.rif ? " · " + _capEsc(d.rif) : ""}</div></td>
+                <td><strong>${_capEsc(d.moneda_lista)}</strong></td>
+                <td>${d.n_lineas} ítem(s)<div class="cap-sub">${Number(d.total_litros || 0).toFixed(2)} L</div>${avisoSinCat}</td>
+                <td><strong>$${_capMonto(d.subtotal)}</strong></td>
+                <td>${estadoHtml}${d.error_odoo ? `<div class="cap-sub" style="color:#dc2626;">${_capEsc(d.error_odoo)}</div>` : ""}</td>
+                <td style="font-size:0.8rem;">${_capFechaHora(d.actualizado_en)}</td>
+                <td style="white-space:nowrap;">
+                    <button type="button" class="btn-secondary" onclick="editarDocumentoPorId(${d.id})">${puedeEnviar ? "✏️ Ver / Editar" : "👁 Ver"}</button>
+                    ${puedeEnviar ? `<button type="button" class="btn-primary" style="padding:0.35rem 0.65rem; font-size:0.8rem;" onclick="enviarDocumentoDirectoOdoo(${d.id})">🚀 Enviar a Odoo</button>` : ""}
+                </td>
+            </tr>`;
+        }).join("");
+    }
+
+    function _actualizarEtiquetasTipoDoc() {
+        const tipo = (document.getElementById("doc-f-tipo") || {}).value || "cotizacion";
+        const lblRif = document.getElementById("doc-lbl-req-rif");
+        if (lblRif) {
+            lblRif.textContent = tipo === "pedido" ? "* (obligatorio en cliente nuevo)" : "(opcional en cotización)";
+        }
+    }
+
+    function _renderLineasEditor(soloLectura = false) {
+        const tbody = document.getElementById("doc-lineas-body");
+        if (!tbody) return;
+        if (!_docsLineasEdit.length) {
+            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Usa el buscador de arriba para agregar productos reales del catálogo de Odoo.</td></tr>`;
+            document.getElementById("doc-resumen-litros").textContent = "0.00 L";
+            document.getElementById("doc-resumen-subtotal").textContent = "$0.00";
+            return;
+        }
+        let totalLitros = 0;
+        let totalSub = 0;
+        tbody.innerHTML = _docsLineasEdit.map((ln, i) => {
+            const cant = Math.max(0, Number(ln.cantidad) || 0);
+            const precio = Math.max(0, Number(ln.precio_unitario) || 0);
+            const desc = Math.min(100, Math.max(0, Number(ln.descuento_pct) || 0));
+            const litrosU = Math.max(0, Number(ln.litros_unidad) || 0);
+            const litrosLn = cant * litrosU;
+            const subLn = cant * precio * (1 - desc / 100);
+            totalLitros += litrosLn;
+            totalSub += subLn;
+            const alertaSku = !(ln.producto_id && /^\d+$/.test(String(ln.producto_id)))
+                ? `<div style="color:#dc2626; font-size:0.74rem;">⚠️ Sin vincular al catálogo: busca arriba y reemplázala</div>`
+                : "";
+            return `<tr>
+                <td><code>${_capEsc(ln.codigo || "—")}</code></td>
+                <td><strong>${_capEsc(ln.descripcion)}</strong>${alertaSku}</td>
+                <td>${_capEsc(ln.presentacion || "—")}</td>
+                <td><input type="number" min="0.01" step="any" value="${cant}" ${soloLectura ? "disabled" : ""} data-doc-ln="${i}" data-doc-campo="cantidad" style="width:82px; padding:4px 6px;"></td>
+                <td><input type="number" min="0" step="0.01" value="${precio.toFixed(2)}" ${soloLectura ? "disabled" : ""} data-doc-ln="${i}" data-doc-campo="precio_unitario" style="width:105px; padding:4px 6px;"></td>
+                <td><input type="number" min="0" max="100" step="0.1" value="${desc}" ${soloLectura ? "disabled" : ""} data-doc-ln="${i}" data-doc-campo="descuento_pct" style="width:76px; padding:4px 6px;"></td>
+                <td>${litrosLn.toFixed(2)} L</td>
+                <td><strong>$${subLn.toFixed(2)}</strong></td>
+                <td>${soloLectura ? "" : `<button type="button" class="btn-secondary" data-doc-quitar="${i}" style="padding:2px 8px;">✖</button>`}</td>
+            </tr>`;
+        }).join("");
+        document.getElementById("doc-resumen-litros").textContent = `${totalLitros.toFixed(2)} L`;
+        document.getElementById("doc-resumen-subtotal").textContent = `$${totalSub.toFixed(2)}`;
+    }
+
+    function abrirNuevoDocumento(tipo = "cotizacion") {
+        _cargarCatalogoInicialDocs();
+        document.getElementById("doc-f-id").value = "";
+        document.getElementById("doc-f-partner-id").value = "";
+        document.getElementById("doc-f-tipo-contacto").value = tipo === "pedido" ? "cliente" : "prospecto";
+        document.getElementById("doc-f-tipo").value = tipo;
+        document.getElementById("doc-f-tipo").disabled = false;
+        document.getElementById("doc-f-moneda").value = "USD";
+        document.getElementById("doc-buscar-contacto").value = "";
+        document.getElementById("doc-f-cliente").value = "";
+        document.getElementById("doc-f-rif").value = "";
+        document.getElementById("doc-f-telefono").value = "";
+        document.getElementById("doc-f-email").value = "";
+        document.getElementById("doc-f-direccion").value = "";
+        document.getElementById("doc-f-lat").value = "";
+        document.getElementById("doc-f-lon").value = "";
+        document.getElementById("doc-f-plus").value = "";
+        document.getElementById("doc-f-fecha-entrega").value = "";
+        document.getElementById("doc-f-condiciones").value = "";
+        document.getElementById("doc-f-observaciones").value = "";
+        document.getElementById("doc-editor-mensaje").innerHTML = "";
+        document.getElementById("doc-editor-acciones").style.display = "flex";
+        document.getElementById("doc-editor-titulo").textContent = tipo === "cotizacion" ? "➕ Nueva Cotización" : "🛒 Nuevo Pedido";
+        document.getElementById("doc-editor-subtitulo").textContent = "Selecciona un contacto de Odoo o escribe uno nuevo y agrega productos del catálogo real";
+        _docsLineasEdit = [];
+        _actualizarEtiquetasTipoDoc();
+        _renderLineasEditor(false);
+        const card = document.getElementById("doc-editor-card");
+        card.style.display = "block";
+        card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    window.abrirNuevoDocumento = abrirNuevoDocumento;
+
+    async function editarDocumentoPorId(docId) {
+        await _cargarCatalogoInicialDocs();
+        try {
+            const res = await fetch(`/api/documentos/${docId}`);
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.detail || d.error || `Error ${res.status}`);
+            const enviado = d.estado === "ENVIADO_ODOO";
+            document.getElementById("doc-f-id").value = String(d.id);
+            document.getElementById("doc-f-partner-id").value = d.partner_odoo_id ? String(d.partner_odoo_id) : "";
+            document.getElementById("doc-f-tipo-contacto").value = d.tipo_contacto || "prospecto";
+            document.getElementById("doc-f-tipo").value = d.tipo || "cotizacion";
+            document.getElementById("doc-f-tipo").disabled = enviado;
+            document.getElementById("doc-f-moneda").value = d.moneda_lista || "USD";
+            document.getElementById("doc-buscar-contacto").value = "";
+            document.getElementById("doc-f-cliente").value = d.cliente_nombre || "";
+            document.getElementById("doc-f-rif").value = d.rif || "";
+            document.getElementById("doc-f-telefono").value = d.telefono || "";
+            document.getElementById("doc-f-email").value = d.email || "";
+            document.getElementById("doc-f-direccion").value = d.direccion || "";
+            document.getElementById("doc-f-lat").value = d.latitud != null ? String(d.latitud) : "";
+            document.getElementById("doc-f-lon").value = d.longitud != null ? String(d.longitud) : "";
+            document.getElementById("doc-f-plus").value = d.plus_code || "";
+            document.getElementById("doc-f-fecha-entrega").value = d.fecha_entrega || "";
+            document.getElementById("doc-f-condiciones").value = d.condiciones_negociacion || "";
+            document.getElementById("doc-f-observaciones").value = d.observaciones || "";
+            document.getElementById("doc-editor-mensaje").innerHTML = enviado
+                ? _docAlertaHtml("ok", `Ya enviado a Odoo como ${d.odoo_order_name || ("#" + d.odoo_order_id)}.`)
+                : (d.error_odoo ? _docAlertaHtml("err", d.error_odoo) : "");
+            document.getElementById("doc-editor-acciones").style.display = enviado ? "none" : "flex";
+            document.getElementById("doc-editor-titulo").textContent = `${enviado ? "👁" : "✏️"} ${d.numero} · ${d.cliente_nombre}`;
+            document.getElementById("doc-editor-subtitulo").textContent = `Origen: ${d.origen === "bot" ? "Bot de Telegram" : "Web CxC"} · Actualizado: ${_capFechaHora(d.actualizado_en)}`;
+            _docsLineasEdit = (d.lineas || []).map((ln) => ({
+                producto_id: ln.producto_id || "",
+                codigo: ln.codigo || "",
+                descripcion: ln.descripcion || "",
+                presentacion: ln.presentacion || "",
+                litros_unidad: Number(ln.litros_unidad) || 0,
+                cantidad: Number(ln.cantidad) || 1,
+                precio_unitario: Number(ln.precio_unitario) || 0,
+                descuento_pct: Number(ln.descuento_pct) || 0,
+            }));
+            _actualizarEtiquetasTipoDoc();
+            _renderLineasEditor(enviado);
+            const card = document.getElementById("doc-editor-card");
+            card.style.display = "block";
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+        } catch (err) {
+            document.getElementById("docs-aviso-general").innerHTML = _docAlertaHtml("err", err.message);
+        }
+    }
+    window.editarDocumentoPorId = editarDocumentoPorId;
+
+    function cerrarEditorDocumento() {
+        const card = document.getElementById("doc-editor-card");
+        if (card) card.style.display = "none";
+    }
+    window.cerrarEditorDocumento = cerrarEditorDocumento;
+
+    async function guardarDocumentoComercial(enviarOdoo = false) {
+        const msg = document.getElementById("doc-editor-mensaje");
+        msg.innerHTML = "";
+        const docId = document.getElementById("doc-f-id").value;
+        const pidRaw = document.getElementById("doc-f-partner-id").value;
+        const latRaw = document.getElementById("doc-f-lat").value;
+        const lonRaw = document.getElementById("doc-f-lon").value;
+        const payload = {
+            tipo: document.getElementById("doc-f-tipo").value,
+            moneda_lista: document.getElementById("doc-f-moneda").value,
+            partner_odoo_id: pidRaw ? Number(pidRaw) : null,
+            tipo_contacto: document.getElementById("doc-f-tipo-contacto").value || "prospecto",
+            es_primera_compra: !pidRaw || document.getElementById("doc-f-tipo-contacto").value === "prospecto",
+            cliente_nombre: document.getElementById("doc-f-cliente").value.trim(),
+            rif: document.getElementById("doc-f-rif").value.trim(),
+            telefono: document.getElementById("doc-f-telefono").value.trim(),
+            email: document.getElementById("doc-f-email").value.trim(),
+            direccion: document.getElementById("doc-f-direccion").value.trim(),
+            latitud: latRaw !== "" ? Number(latRaw) : null,
+            longitud: lonRaw !== "" ? Number(lonRaw) : null,
+            plus_code: document.getElementById("doc-f-plus").value.trim(),
+            fecha_entrega: document.getElementById("doc-f-fecha-entrega").value || null,
+            condiciones_negociacion: document.getElementById("doc-f-condiciones").value.trim(),
+            observaciones: document.getElementById("doc-f-observaciones").value.trim(),
+            lineas: _docsLineasEdit,
+        };
+        try {
+            const url = docId ? `/api/documentos/${docId}` : "/api/documentos";
+            const metodo = docId ? "PUT" : "POST";
+            const res = await fetch(url, {
+                method: metodo,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const guardado = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(guardado.error || guardado.detail || `Error ${res.status}`);
+            document.getElementById("doc-f-id").value = String(guardado.id);
+            if (enviarOdoo) {
+                const resEnv = await fetch(`/api/documentos/${guardado.id}/enviar-odoo`, { method: "POST" });
+                const envData = await resEnv.json().catch(() => ({}));
+                if (!resEnv.ok) throw new Error(envData.error || envData.detail || `Error al enviar a Odoo (${resEnv.status})`);
+                document.getElementById("docs-aviso-general").innerHTML = _docAlertaHtml(
+                    "ok",
+                    `Documento ${envData.numero} enviado exitosamente a Odoo → Orden ${envData.odoo_order_name || ("#" + envData.odoo_order_id)}.`
+                );
+                cerrarEditorDocumento();
+            } else {
+                msg.innerHTML = _docAlertaHtml("ok", `Documento ${guardado.numero} guardado en CxC.`);
+            }
+            await loadDocumentosComerciales();
+        } catch (err) {
+            msg.innerHTML = _docAlertaHtml("err", err.message);
+        }
+    }
+    window.guardarDocumentoComercial = guardarDocumentoComercial;
+
+    async function enviarDocumentoDirectoOdoo(docId) {
+        const aviso = document.getElementById("docs-aviso-general");
+        aviso.innerHTML = "";
+        try {
+            const res = await fetch(`/api/documentos/${docId}/enviar-odoo`, { method: "POST" });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                aviso.innerHTML = _docAlertaHtml("err", d.error || d.detail || `Error ${res.status}`);
+                await editarDocumentoPorId(docId);
+                return;
+            }
+            aviso.innerHTML = _docAlertaHtml(
+                "ok",
+                `Documento ${d.numero} enviado a Odoo como borrador → ${d.odoo_order_name || ("#" + d.odoo_order_id)}.`
+            );
+            await loadDocumentosComerciales();
+        } catch (err) {
+            aviso.innerHTML = _docAlertaHtml("err", err.message);
+        }
+    }
+    window.enviarDocumentoDirectoOdoo = enviarDocumentoDirectoOdoo;
+
+    (function _docsEventos() {
+        document.querySelectorAll(".ventas-subnav-btn").forEach((btn) => {
+            btn.addEventListener("click", () => applyVentasSubpage(btn.getAttribute("data-ventas-subpage")));
+        });
+        const fTipo = document.getElementById("docs-filtro-tipo");
+        const fEstado = document.getElementById("docs-filtro-estado");
+        const fQ = document.getElementById("docs-filtro-q");
+        if (fTipo && fEstado && fQ) {
+            fTipo.addEventListener("change", loadDocumentosComerciales);
+            fEstado.addEventListener("change", loadDocumentosComerciales);
+            let tDocs = null;
+            fQ.addEventListener("input", () => {
+                clearTimeout(tDocs);
+                tDocs = setTimeout(loadDocumentosComerciales, 250);
+            });
+        }
+        const selTipoDoc = document.getElementById("doc-f-tipo");
+        if (selTipoDoc) selTipoDoc.addEventListener("change", _actualizarEtiquetasTipoDoc);
+
+        const selMonedaDoc = document.getElementById("doc-f-moneda");
+        if (selMonedaDoc) {
+            selMonedaDoc.addEventListener("change", () => {
+                const mon = selMonedaDoc.value;
+                _docsLineasEdit.forEach((ln) => {
+                    const prod = _docsCatalogoCache.find((p) => String(p.producto_id) === String(ln.producto_id));
+                    if (prod) {
+                        ln.precio_unitario = Number(mon === "VES" ? prod.precio_ves : prod.precio_usd) || 0;
+                    }
+                });
+                _renderLineasEditor(false);
+            });
+        }
+
+        const bodyLineas = document.getElementById("doc-lineas-body");
+        if (bodyLineas) {
+            bodyLineas.addEventListener("input", (e) => {
+                const inp = e.target.closest("[data-doc-ln]");
+                if (!inp) return;
+                const idx = Number(inp.dataset.docLn);
+                const campo = inp.dataset.docCampo;
+                if (_docsLineasEdit[idx] && campo) {
+                    _docsLineasEdit[idx][campo] = Number(inp.value) || 0;
+                    _renderLineasEditor(false);
+                }
+            });
+            bodyLineas.addEventListener("click", (e) => {
+                const btn = e.target.closest("[data-doc-quitar]");
+                if (!btn) return;
+                _docsLineasEdit.splice(Number(btn.dataset.docQuitar), 1);
+                _renderLineasEditor(false);
+            });
+        }
+
+        // Autocompletado de Contactos en vivo desde Odoo
+        const inpCont = document.getElementById("doc-buscar-contacto");
+        const boxCont = document.getElementById("doc-resultados-contacto");
+        let tCont = null;
+        if (inpCont && boxCont) {
+            inpCont.addEventListener("input", () => {
+                clearTimeout(tCont);
+                const q = inpCont.value.trim();
+                if (q.length < 2) { boxCont.style.display = "none"; return; }
+                tCont = setTimeout(async () => {
+                    try {
+                        const r = await fetch(`/api/odoo/contactos?q=${encodeURIComponent(q)}&limit=10`);
+                        const data = await r.json();
+                        const items = (data.items || []).filter((c) => c.clasificacion !== "proveedor");
+                        if (!items.length) {
+                            boxCont.innerHTML = `<div style="padding:0.6rem 0.85rem; color:#64748b; font-size:0.84rem;">Sin coincidencias en Odoo (puedes llenar los datos abajo para crearlo nuevo).</div>`;
+                        } else {
+                            boxCont.innerHTML = items.map((c, idx) => {
+                                const etq = c.clasificacion === "prospecto" ? "🟡 Prospecto" : "🟢 Cliente";
+                                return `<div data-doc-pick-cont="${idx}" style="padding:0.55rem 0.85rem; cursor:pointer; border-bottom:1px solid #f1f5f9; font-size:0.85rem;">
+                                    <strong>${_capEsc(c.nombre)}</strong> <span style="color:#475569;">(${etq}${c.rif ? " · " + _capEsc(c.rif) : ""})</span>
+                                    <div style="font-size:0.76rem; color:#64748b;">${_capEsc([c.telefono, c.email, c.direccion].filter(Boolean).join(" · ") || "Sin datos adicionales")}</div>
+                                </div>`;
+                            }).join("");
+                            boxCont._items = items;
+                        }
+                        boxCont.style.display = "block";
+                    } catch (_e) { boxCont.style.display = "none"; }
+                }, 220);
+            });
+            boxCont.addEventListener("click", (e) => {
+                const row = e.target.closest("[data-doc-pick-cont]");
+                if (!row || !boxCont._items) return;
+                const c = boxCont._items[Number(row.dataset.docPickCont)];
+                if (!c) return;
+                document.getElementById("doc-f-partner-id").value = String(c.id);
+                document.getElementById("doc-f-tipo-contacto").value = c.clasificacion === "prospecto" ? "prospecto" : "cliente";
+                document.getElementById("doc-f-cliente").value = c.nombre || "";
+                document.getElementById("doc-f-rif").value = c.rif || "";
+                document.getElementById("doc-f-telefono").value = c.telefono || "";
+                document.getElementById("doc-f-email").value = c.email || "";
+                document.getElementById("doc-f-direccion").value = c.direccion || "";
+                document.getElementById("doc-f-plus").value = c.plus_code || "";
+                document.getElementById("doc-f-lat").value = c.latitud != null ? String(c.latitud) : "";
+                document.getElementById("doc-f-lon").value = c.longitud != null ? String(c.longitud) : "";
+                inpCont.value = `${c.nombre} (${c.clasificacion_etiqueta})`;
+                boxCont.style.display = "none";
+            });
+        }
+
+        // Buscador en vivo del Catálogo Real de Productos de Odoo
+        const inpProd = document.getElementById("doc-buscar-producto");
+        const boxProd = document.getElementById("doc-resultados-producto");
+        let tProd = null;
+        if (inpProd && boxProd) {
+            inpProd.addEventListener("input", () => {
+                clearTimeout(tProd);
+                const q = inpProd.value.trim();
+                if (!q) { boxProd.style.display = "none"; return; }
+                tProd = setTimeout(async () => {
+                    try {
+                        const r = await fetch(`/api/documentos/catalogo?q=${encodeURIComponent(q)}&limit=15`);
+                        const data = await r.json();
+                        const items = data.items || [];
+                        if (!items.length) {
+                            boxProd.innerHTML = `<div style="padding:0.6rem 0.85rem; color:#64748b; font-size:0.84rem;">No se encontraron productos con «${_capEsc(q)}» en el catálogo de Odoo.</div>`;
+                        } else {
+                            const mon = document.getElementById("doc-f-moneda").value;
+                            boxProd.innerHTML = items.map((p, idx) => {
+                                const pr = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
+                                return `<div data-doc-pick-prod="${idx}" style="padding:0.55rem 0.85rem; cursor:pointer; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; font-size:0.85rem;">
+                                    <div>
+                                        <code>${_capEsc(p.codigo || "S/C")}</code> <strong>${_capEsc(p.nombre)}</strong>
+                                        <div style="font-size:0.75rem; color:#64748b;">${_capEsc(p.marca || "")} · ${Number(p.litros || 0).toFixed(2)} L</div>
+                                    </div>
+                                    <strong style="color:#1e40af;">$${pr.toFixed(2)}</strong>
+                                </div>`;
+                            }).join("");
+                            boxProd._items = items;
+                        }
+                        boxProd.style.display = "block";
+                    } catch (_e) { boxProd.style.display = "none"; }
+                }, 180);
+            });
+            boxProd.addEventListener("click", (e) => {
+                const row = e.target.closest("[data-doc-pick-prod]");
+                if (!row || !boxProd._items) return;
+                const p = boxProd._items[Number(row.dataset.docPickProd)];
+                if (!p) return;
+                const mon = document.getElementById("doc-f-moneda").value;
+                const precio = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
+                const existente = _docsLineasEdit.find((x) => String(x.producto_id) === String(p.producto_id));
+                if (existente) {
+                    existente.cantidad = (Number(existente.cantidad) || 0) + 1;
+                } else {
+                    _docsLineasEdit.push({
+                        producto_id: String(p.producto_id),
+                        codigo: p.codigo || "",
+                        descripcion: p.nombre,
+                        presentacion: p.presentacion || "",
+                        litros_unidad: Number(p.litros) || 0,
+                        cantidad: 1,
+                        precio_unitario: precio,
+                        descuento_pct: 0,
+                    });
+                }
+                inpProd.value = "";
+                boxProd.style.display = "none";
+                _renderLineasEditor(false);
+            });
+        }
+
+        document.addEventListener("click", (e) => {
+            if (boxCont && !e.target.closest("#doc-buscar-contacto") && !e.target.closest("#doc-resultados-contacto")) {
+                boxCont.style.display = "none";
+            }
+            if (boxProd && !e.target.closest("#doc-buscar-producto") && !e.target.closest("#doc-resultados-producto")) {
+                boxProd.style.display = "none";
+            }
+        });
     })();
 
     // SPA navigation click handling for nav links and dashboard cards

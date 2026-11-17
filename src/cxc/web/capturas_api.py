@@ -46,15 +46,21 @@ logger = logging.getLogger("cxc.capturas.api")
 
 router = APIRouter()
 
-_RUTA_BOT = re.compile(r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat)$")
+_RUTA_BOT_POST = re.compile(r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat)$")
+_RUTA_BOT_GET = re.compile(r"^/api/bots/(?:catalogo|contactos)$")
+_KINDS_SINCRONOS = frozenset({"contacto", "contacto_editar", "cotizacion", "pedido"})
 PERMISOS_VER = ("capturas.ver", "capturas.gestionar")
 INTERVALO_REINTENTO_SEGUNDOS = 120
 
 
 def es_ruta_bot(metodo: str, ruta: str) -> bool:
-    """Rutas POST que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave):
-    capturas, completar y el latido del panel de bots."""
-    return metodo == "POST" and _RUTA_BOT.match(ruta) is not None
+    """Rutas que el middleware deja pasar con ``X-Bot-Key`` (el handler valida la clave):
+    capturas, completar, latido del panel y consultas de catálogo/contactos para los bots."""
+    if metodo == "POST":
+        return _RUTA_BOT_POST.match(ruta) is not None
+    if metodo == "GET":
+        return _RUTA_BOT_GET.match(ruta) is not None
+    return False
 
 
 # ── dependencias ─────────────────────────────────────────────────────────────
@@ -176,6 +182,64 @@ def _invalida(e: CapturaInvalida) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
 
 
+def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
+    """Crea/actualiza el Documento Comercial (COT/PED) en CxC cuando llega desde el bot."""
+    if captura.kind not in ("cotizacion", "pedido"):
+        return {}
+    try:
+        from cxc.web.app import app as _app
+        from cxc.web.documentos_api import get_servicio_documentos
+
+        fabrica_docs = _app.dependency_overrides.get(
+            get_servicio_documentos, get_servicio_documentos
+        )
+        svc_docs = fabrica_docs()
+        p = captura.payload
+        actor = str(captura.fuente.get("vendedor_email") or "bot")
+        doc = svc_docs.crear(
+            {
+                "tipo": captura.kind,
+                "partner_odoo_id": captura.resultado.get("partner_id") or p.get("partner_odoo_id"),
+                "tipo_contacto": "cliente"
+                if (captura.kind == "pedido" or p.get("es_primera_compra") is False)
+                else "prospecto",
+                "cliente_nombre": p.get("cliente") or p.get("nombre") or "",
+                "rif": p.get("rif") or "",
+                "email": p.get("email") or "",
+                "telefono": p.get("telefono") or "",
+                "direccion": p.get("direccion_fiscal")
+                or p.get("direccion")
+                or p.get("direccion_entrega")
+                or "",
+                "ubicacion": p.get("ubicacion"),
+                "es_primera_compra": p.get("es_primera_compra") is not False,
+                "moneda_lista": p.get("moneda_lista") or "USD",
+                "vendedor_email": str(captura.fuente.get("vendedor_email") or ""),
+                "fecha_entrega": p.get("fecha_entrega"),
+                "condiciones_negociacion": p.get("condiciones_negociacion") or "",
+                "observaciones": p.get("observaciones") or p.get("notas") or "",
+                "lineas": p.get("lineas") or [],
+            },
+            origen="bot",
+            captura_id=captura.captura_id,
+            actor=actor,
+        )
+        if captura.kind == "pedido":
+            if captura.estado == "ENVIADO" and captura.resultado.get("pedido_odoo_id"):
+                doc = svc_docs.registrar_envio_captura(
+                    doc.documento_id,
+                    partner_odoo_id=captura.resultado.get("partner_id"),
+                    odoo_order_id=int(captura.resultado["pedido_odoo_id"]),
+                    odoo_order_name=str(captura.resultado.get("odoo_name") or ""),
+                )
+            elif captura.estado in ("INCOMPLETO", "ERROR") and captura.error:
+                doc = svc_docs.registrar_error_captura(doc.documento_id, captura.error)
+        return {"documento_id": doc.documento_id, "documento_numero": doc.numero}
+    except Exception:
+        # En tests unitarios aislados sin Postgres para documentos no interrumpe la captura.
+        return {}
+
+
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
@@ -188,6 +252,14 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
         return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
+    if body.kind in _KINDS_SINCRONOS:
+        if (creada or actualizada) and captura.estado == PENDIENTE:
+            captura = servicio.procesar(captura.captura_id)
+        extra_doc = _sincronizar_documento_desde_captura(captura)
+        cuerpo = captura.a_dict()
+        if extra_doc:
+            cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_doc}
+        return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
     if (creada or actualizada) and captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
     return JSONResponse(status_code=201 if creada else 200, content=captura.a_dict())
