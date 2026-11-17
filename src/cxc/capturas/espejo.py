@@ -5,12 +5,14 @@ Solo lectura y solo del espejo: no abre ninguna conexión a Odoo.
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from sqlalchemy import Engine, func, select
 
 from cxc.db.schema import catalogo, clientes, ordenes_venta
-from cxc.documentos.catalogo import ItemCatalogo, extraer_presentacion, resolver_producto_unico
+
+_RE_PREFIJO_COD = re.compile(r"^\[([^\]]+)\]\s*")
 
 
 class Espejo(Protocol):
@@ -45,34 +47,16 @@ class EspejoSQL:
         return str(fila[0]) if fila is not None else None
 
     def productos(self, texto: str) -> list[str]:
-        """``producto_id`` por código/nombre exacto o coincidencia única en catálogo."""
-        t = texto.strip().lower()
+        """``producto_id`` (product.product) por código exacto y, si no hay, por nombre exacto."""
+        raw = texto.strip()
+        m = _RE_PREFIJO_COD.match(raw)
+        candidatos_txt = [m.group(1).strip().lower(), raw.lower()] if m else [raw.lower()]
         with self._engine.connect() as conn:
-            for columna in (catalogo.c.codigo, catalogo.c.nombre):
-                filas = conn.execute(
-                    select(catalogo.c.producto_id).where(func.lower(columna) == t).limit(3)
-                ).all()
-                if filas:
-                    return [str(f[0]) for f in filas]
-            todas = conn.execute(
-                select(
-                    catalogo.c.producto_id,
-                    catalogo.c.codigo,
-                    catalogo.c.nombre,
-                    catalogo.c.marca,
-                )
-            ).all()
-        items = [
-            ItemCatalogo(
-                producto_id=str(r[0]),
-                codigo=str(r[1] or ""),
-                nombre=str(r[2] or ""),
-                marca=str(r[3] or ""),
-                presentacion=extraer_presentacion(str(r[2] or "")),
-            )
-            for r in todas
-        ]
-        elegido, candidatos = resolver_producto_unico(items, texto=texto)
-        if elegido is not None:
-            return [elegido.producto_id]
-        return [c.producto_id for c in candidatos[:3]]
+            for t in candidatos_txt:
+                for columna in (catalogo.c.codigo, catalogo.c.nombre):
+                    filas = conn.execute(
+                        select(catalogo.c.producto_id).where(func.lower(columna) == t).limit(3)
+                    ).all()
+                    if filas:
+                        return [str(f[0]) for f in filas]
+        return []
