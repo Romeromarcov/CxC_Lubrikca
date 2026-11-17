@@ -37,7 +37,7 @@ def test_primer_latido_registra_el_bot_con_valores_seguros(
     cfg = svc.latido("pedidos", "Ventas", "1.0", {"omni": "ok"})
     assert cfg == {
         "habilitado": True,
-        "parametros": {"auto_envio_min": 10, "gemini_model": "gemini-2.5-flash"},
+        "parametros": {"auto_envio_min": 10, "gemini_model": "gemini-3.5-flash-lite"},
         "chats": {"respaldo": None, "grupo": None},
         "mensaje": None,
         "usuarios": [],
@@ -127,7 +127,7 @@ def test_detalle_trae_capturas_del_bot_historial_y_bitacora(
     assert [c["captura_id"] for c in svc.detalle("compras")["capturas"]] == [3]
     assert svc.detalle("eventos")["capturas"] == [] and svc.detalle("asana")["capturas"] == []
     assert d["historial"][0]["mensajes"] == 4 and d["bitacora"][0]["usuario"] == "admin"
-    assert "gemini-2.5-flash" in d["modelos_sugeridos"]
+    assert "gemini-3.5-flash-lite" in d["modelos_sugeridos"]
 
 
 def test_detalle_de_bot_desconocido(svc: ServicioBots):
@@ -165,7 +165,7 @@ def test_un_guardado_sin_cambios_no_toca_nada_ni_deja_rastro(
         "pedidos",
         {
             "habilitado": True,
-            "parametros": {"auto_envio_min": 25, "gemini_model": "gemini-2.5-flash"},
+            "parametros": {"auto_envio_min": 25, "gemini_model": "gemini-3.5-flash-lite"},
             "chats": {"respaldo": None, "grupo": None},
             "url_panel": "",
             "mensaje": "Hola",
@@ -192,7 +192,7 @@ def test_el_formulario_completo_solo_registra_lo_que_cambio(
     )
     (c,) = repo.log
     assert c["antes"] == {
-        "parametros": {"gemini_model": "gemini-2.5-flash"},
+        "parametros": {"gemini_model": "gemini-3.5-flash-lite"},
         "chats": {"respaldo": None},
     }
     assert c["despues"] == {

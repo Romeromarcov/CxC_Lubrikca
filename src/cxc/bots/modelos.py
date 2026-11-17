@@ -37,13 +37,18 @@ KINDS_POR_BOT: dict[str, tuple[str, ...]] = {
 EN_LINEA_SEGUNDOS = 180  # un bot está «en línea» si su último latido tiene menos de 3 min
 RETENCION_LATIDOS_DIAS = 30
 
-PARAMETROS_POR_DEFECTO: dict[str, Any] = {"auto_envio_min": 10, "gemini_model": "gemini-2.5-flash"}
+PARAMETROS_POR_DEFECTO: dict[str, Any] = {
+    "auto_envio_min": 10,
+    "gemini_model": "gemini-3.5-flash-lite",
+}
 CHATS_POR_DEFECTO: dict[str, int | None] = {"respaldo": None, "grupo": None}
 MODELOS_GEMINI_SUGERIDOS: tuple[str, ...] = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
-    "gemini-flash-latest",
-    "gemini-pro-latest",
 )
 
 ESTADOS_DESTINO = ("ok", "error", "desactivado")

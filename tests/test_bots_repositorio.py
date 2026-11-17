@@ -89,7 +89,7 @@ def test_el_latido_crea_el_registro_con_valores_por_defecto(repo: RepoBotsSQL) -
     assert (
         b.habilitado and b.ultimo_latido == T0 and b.version == "1.0" and b.estado == {"omni": "ok"}
     )
-    assert b.parametros == {"auto_envio_min": 10, "gemini_model": "gemini-2.5-flash"}
+    assert b.parametros == {"auto_envio_min": 10, "gemini_model": "gemini-3.5-flash-lite"}
     assert b.chats == {"respaldo": None, "grupo": None} and b.nombre == "Ventas"
 
 
@@ -120,7 +120,7 @@ def test_guardar_config_devuelve_antes_y_despues_y_combina(repo: RepoBotsSQL) ->
         ahora=T0,
     )
     assert antes.parametros["auto_envio_min"] == 10 and despues.parametros["auto_envio_min"] == 30
-    assert despues.parametros["gemini_model"] == "gemini-2.5-flash"  # lo no tocado se conserva
+    assert despues.parametros["gemini_model"] == "gemini-3.5-flash-lite"  # lo no tocado se conserva
     assert despues.chats == {"respaldo": None, "grupo": -100} and despues.actualizado_por == "ana"
     _, d2 = repo.guardar_config("compras", {"chats": {"respaldo": -200}}, por="ana", ahora=T0)
     assert d2.chats == {"respaldo": -200, "grupo": -100}
