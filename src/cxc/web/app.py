@@ -188,6 +188,7 @@ from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
 from cxc.web.capturas_api import run_reintentos_capturas_en_background
+from cxc.web.directorio_api import router as directorio_router
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -199,6 +200,7 @@ app.include_router(capturas_router)  # capturas de Telegram (src/cxc/web/captura
 # Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas: así ``/api/bots/capturas``
 # gana a ``/api/bots/{bot}``.
 app.include_router(bots_router)
+app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
