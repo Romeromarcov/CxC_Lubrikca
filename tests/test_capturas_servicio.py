@@ -201,22 +201,48 @@ def test_pedido_con_cliente_existente_por_rif() -> None:
     assert "price_unit" not in v["order_line"][0][2] and v["order_line"][0][2]["product_id"] == 900
 
 
-def test_pedido_con_cliente_nuevo_lo_crea_con_su_rif_y_entrega() -> None:
+def test_pedido_cliente_nuevo_guarda_gps_plus_code_y_condiciones_en_notas() -> None:
     svc, _, odoo = montar(
-        OdooFalso(res_partner__search=lambda a, k: [44] if a[0][0][0] == "parent_id" else []),
+        OdooFalso(),
         EspejoFalso(productos={"AC-20W50": ["900"]}),
     )
     c, _ = svc.recibir(
         "pedido",
-        _pedido(cliente="Nuevo", entrega_igual_fiscal=False, direccion_entrega="Galpón 3"),
+        _pedido(
+            cliente="Nuevo",
+            entrega_igual_fiscal=False,
+            direccion_entrega="Galpón 3",
+            condiciones_negociacion="Crédito 7 días, 5% descuento por volumen",
+        ),
         FUENTE,
         "k1",
     )
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and out.resultado["cliente_via"] == "creado"
-    padre, hijo = odoo.creados_de("res.partner")
-    assert padre["vat"] == "J-12345678-9" and hijo["type"] == "delivery"
-    assert odoo.creados_de("sale.order")[0]["partner_shipping_id"] == 44
+    (principal,) = odoo.creados_de("res.partner")  # sin sub-dirección de entrega
+    assert principal["vat"] == "J-12345678-9" and "+" in principal["street2"]
+    assert principal["partner_latitude"] == 10.4
+    so = odoo.creados_de("sale.order")[0]
+    assert "partner_shipping_id" not in so
+    assert "Crédito 7 días, 5% descuento por volumen" in so["note"]
+    assert any(m == "sale.order" and "5% descuento" in txt for m, _i, txt in odoo.chatter)
+
+
+def test_pedido_de_cliente_existente_no_exige_volver_a_enviar_gps_ni_ficha() -> None:
+    svc, _, odoo = montar(odoo=None, espejo=ESP_TALLER)
+    c, _ = svc.recibir(
+        "pedido",
+        {
+            "cliente": "Taller",
+            "es_primera_compra": False,
+            "condiciones_negociacion": "Contado BCV sin descuento",
+            "lineas": [{"producto": "AC-20W50", "cantidad": "3"}],
+        },
+        FUENTE,
+        "k-recurrente",
+    )
+    out = svc.procesar(c.captura_id)
+    assert out.estado == ENVIADO and odoo.creados_de("sale.order")[0]["partner_id"] == 55
 
 
 def test_pedido_cliente_por_nombre_exacto_del_espejo_si_odoo_no_tiene_ese_rif() -> None:
@@ -304,8 +330,25 @@ def test_pago_de_cliente_por_nombre_exacto_va_en_borrador() -> None:
     assert out.estado == ENVIADO and out.odoo_ref == "account.payment:101"
     v = odoo.creados_de("account.payment")[0]
     assert v["partner_id"] == 55 and v["journal_id"] == 14 and v["currency_id"] == 1
-    assert v["memo"].startswith(f"BOT-{c.captura_id}") and "ref R1" in v["memo"]
+    assert v["memo"] == "R1"  # solo la referencia de transferencia
+    assert odoo.chatter[0][2].startswith(f"BOT-{c.captura_id}") and "ref R1" in odoo.chatter[0][2]
     assert odoo.creados_de("res.partner") == []  # jamás crea clientes para un pago
+
+
+def test_pago_de_cliente_en_efectivo_no_exige_referencia_ni_llena_memo() -> None:
+    svc, _, odoo = montar(espejo=ESP_TALLER, diarios={"efectivo_usd": 29})
+    c, _ = svc.recibir(
+        "pago",
+        {"cliente": "Taller", "monto": "50", "moneda": "USD", "metodo_pago": "efectivo"},
+        FUENTE,
+        "k-efec",
+    )
+    assert c.estado == "PENDIENTE" and c.incompleto == []
+    out = svc.procesar(c.captura_id)
+    assert out.estado == ENVIADO
+    v = odoo.creados_de("account.payment")[0]
+    assert "memo" not in v and v["journal_id"] == 29
+    assert "efectivo" in odoo.chatter[0][2]
 
 
 def test_pago_por_pedido_ref_usa_el_cliente_del_pedido() -> None:

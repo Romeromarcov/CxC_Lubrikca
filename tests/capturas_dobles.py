@@ -255,14 +255,22 @@ class OdooFalso:
     def __init__(self, **respuestas: Any) -> None:
         self.llamadas: list[tuple[str, str, list[Any], dict[str, Any]]] = []
         self.creados: list[tuple[str, dict[str, Any]]] = []
+        self.chatter: list[tuple[str, int, str]] = []
         self._ids: dict[str, int] = {}
         self.r: dict[str, Any] = {
-            "res.partner:fields_get": {"name": {}, "partner_latitude": {}, "partner_longitude": {}},
-            "account.payment:fields_get": {"memo": {}, "amount": {}},
+            "res.partner:fields_get": {
+                "name": {},
+                "street2": {},
+                "partner_latitude": {},
+                "partner_longitude": {},
+            },
+            "sale.order:fields_get": {"name": {}, "message_ids": {}},
+            "account.payment:fields_get": {"memo": {}, "amount": {}, "message_ids": {}},
             "account.move:fields_get": dict.fromkeys(
                 [
                     "move_type",
                     "partner_id",
+                    "journal_id",
                     "ref",
                     "invoice_date",
                     "invoice_date_due",
@@ -274,6 +282,10 @@ class OdooFalso:
             ),
             "account.move.line:fields_get": {"tax_ids": {}, "name": {}},
             "res.currency:search_read": [{"id": 1, "name": "USD"}, {"id": 2, "name": "VES"}],
+            "account.journal:search_read": [
+                {"id": 99, "name": "Compras USD", "code": "BUSD", "currency_id": [1, "USD"]},
+                {"id": 10, "name": "Vendor Bills", "code": "BILL", "currency_id": False},
+            ],
             "res.users:search": [7],
             "sale.order:read": [{"name": "S00700"}],
         }
@@ -291,6 +303,27 @@ class OdooFalso:
             return v(args, kwargs)
         if v is not None:
             return v
+        if method == "message_post":
+            rid = int(args[0][0])
+            self.chatter.append((model, rid, str(kwargs.get("body") or "")))
+            self._ids["mail.message"] = self._ids.get("mail.message", 500) + 1
+            return self._ids["mail.message"]
+        if model == "mail.message" and method == "search_read":
+            dom = args[0] if args else []
+            mod_filtro = next(
+                (d[2] for d in dom if isinstance(d, list) and d[:2] == ["model", "="]), None
+            )
+            patrones = [
+                str(d[2]).strip("<>")
+                for d in dom
+                if isinstance(d, list) and len(d) == 3 and d[0] == "body"
+            ]
+            for m_mod, m_rid, m_body in self.chatter:
+                if mod_filtro and m_mod != mod_filtro:
+                    continue
+                if any(p in m_body for p in patrones):
+                    return [{"id": 501, "res_id": m_rid}]
+            return []
         if method == "create":
             self.creados.append((model, args[0]))
             self._ids[model] = self._ids.get(model, 100) + 1
