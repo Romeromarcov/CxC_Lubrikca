@@ -223,11 +223,12 @@ def test_factura_verifica_los_campos_con_fields_get_y_no_crea_a_ciegas() -> None
     assert "narration" in str(e.value) and not e.value.transitorio and odoo.creados == []
 
 
-def test_factura_idempotente_por_marca_en_narration() -> None:
+def test_factura_idempotente_por_marca_delimitada_en_narration() -> None:
     odoo = OdooFalso(account_move__search=[555])
     assert _factura(EscritorOdoo(odoo)) == 555 and odoo.creados == []
     dominio = odoo.llamadas_a("account.move", "search")[0][0]
-    assert ["narration", "ilike", "BOT-8"] in dominio and [
+    # Delimitado con « · » para que BOT-1 nunca colisione con BOT-10 en el HTML de narration
+    assert ["narration", "ilike", "BOT-8 · "] in dominio and [
         "move_type",
         "=",
         "in_invoice",

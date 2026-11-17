@@ -374,7 +374,10 @@ class EscritorOdoo:
     ) -> int:
         """``account.payment`` en borrador (sin publicar). Nunca crea partners."""
         campo = self._campo_memo()
-        previo = self._buscar("account.payment", [[campo, "ilike", marca]], 1)
+        prefijo = f"{_ilike_exacto(marca)} · %"
+        previo = self._buscar(
+            "account.payment", ["|", [campo, "=", marca], [campo, "=ilike", prefijo]], 1
+        )
         if previo:
             return previo[0]
         vals = _vals(
@@ -434,9 +437,11 @@ class EscritorOdoo:
         return self._crear("res.partner", vals)
 
     def factura_por_marca(self, marca: str) -> int | None:
-        """Factura de proveedor que ya creó esta captura (la marca va en ``narration``)."""
+        """Factura de proveedor ya creada por esta captura (delimitada en ``narration``)."""
         ids = self._buscar(
-            "account.move", [["move_type", "=", "in_invoice"], ["narration", "ilike", marca]], 1
+            "account.move",
+            [["move_type", "=", "in_invoice"], ["narration", "ilike", f"{marca} · "]],
+            1,
         )
         return ids[0] if ids else None
 
