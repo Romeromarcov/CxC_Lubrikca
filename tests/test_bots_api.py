@@ -61,7 +61,7 @@ def test_latido_crea_y_devuelve_la_config(repo: RepoBotsMemoria) -> None:
     assert r.status_code == 200
     assert r.json() == {
         "habilitado": True,
-        "parametros": {"auto_envio_min": 10, "gemini_model": "gemini-2.5-flash"},
+        "parametros": {"auto_envio_min": 10, "gemini_model": "gemini-3.5-flash-lite"},
         "chats": {"respaldo": None, "grupo": None},
         "mensaje": None,
         "usuarios": [],
