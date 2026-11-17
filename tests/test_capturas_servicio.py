@@ -215,7 +215,7 @@ def test_pedido_con_cliente_nuevo_lo_crea_con_su_rif_y_entrega() -> None:
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and out.resultado["cliente_via"] == "creado"
     padre, hijo = odoo.creados_de("res.partner")
-    assert padre["vat"] == "J-123456789" and hijo["type"] == "delivery"
+    assert padre["vat"] == "J-12345678-9" and hijo["type"] == "delivery"
     assert odoo.creados_de("sale.order")[0]["partner_shipping_id"] == 44
 
 

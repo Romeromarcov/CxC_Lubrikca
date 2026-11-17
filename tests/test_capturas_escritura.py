@@ -136,13 +136,35 @@ def test_cliente_nuevo_con_entrega_distinta_crea_el_hijo_de_entrega() -> None:
         "BOT-2",
     )
     padre, hijo = odoo.creados_de("res.partner")
-    assert pid == 101 and padre["vat"] == "J-123456789" and padre["customer_rank"] == 1
+    assert pid == 101 and padre["vat"] == "J-12345678-9" and padre["customer_rank"] == 1
     assert (
         padre["company_type"] == "company" and "partner_latitude" not in padre
     )  # el GPS va a la entrega
     assert (
         hijo["parent_id"] == 101 and hijo["type"] == "delivery" and hijo["partner_latitude"] == 10.4
     )
+
+
+def test_identificacion_fiscal_odoo18_venezuela_separa_rif_y_cedula() -> None:
+    """En Odoo 18 con localización venezolana, RIF lleva doble guion y Cédula usa su tipo LatAm."""
+    odoo = OdooFalso(res_partner__fields_get={"name": {}, "l10n_latam_identification_type_id": {}})
+    odoo.r["l10n_latam.identification.type:search_read"] = [
+        {"id": 1, "name": "RIF"},
+        {"id": 4, "name": "Cédula Venezolano"},
+        {"id": 3, "name": "Cédula Extranjero"},
+    ]
+    escritor = EscritorOdoo(odoo)
+    escritor.crear_cliente({"nombre": "Empresa", "rif": "J-506570297"}, "BOT-10")
+    escritor.crear_cliente({"nombre": "Natural V", "rif": "V-12345678"}, "BOT-11")
+    escritor.crear_proveedor(
+        {"nombre": "Natural E", "rif": "E-82345678", "telefono": "04141234567"}, "BOT-12"
+    )
+    emp, nat_v, nat_e = odoo.creados_de("res.partner")
+    assert emp["vat"] == "J-50657029-7" and emp["l10n_latam_identification_type_id"] == 1
+    assert nat_v["vat"] == "V-12345678" and nat_v["l10n_latam_identification_type_id"] == 4
+    assert nat_e["vat"] == "E-82345678" and nat_e["l10n_latam_identification_type_id"] == 3
+    # caché: solo una lectura a l10n_latam.identification.type
+    assert len(odoo.llamadas_a("l10n_latam.identification.type", "search_read")) == 1
 
 
 def test_cliente_persona_natural_y_gps_en_el_fiscal_si_no_hay_entrega() -> None:

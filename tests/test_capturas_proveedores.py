@@ -129,7 +129,7 @@ def test_crear_proveedor_en_borrador_con_rango_de_proveedor() -> None:
         "BOT-4",
     )
     (v,) = odoo.creados_de("res.partner")
-    assert pid == 101 and v["name"] == "Lubricantes SA" and v["vat"] == "J-123456789"
+    assert pid == 101 and v["name"] == "Lubricantes SA" and v["vat"] == "J-12345678-9"
     assert v["supplier_rank"] == 1 and v["customer_rank"] == 0 and v["ref"] == "BOT-4"
     assert v["street"] == "Av 1" and v["email"] == "p@x.com" and v["company_type"] == "company"
     assert v["comment"].startswith(NOTA_BORRADOR) and "Días de crédito: 30" in v["comment"]
@@ -452,7 +452,7 @@ def test_factura_de_proveedor_inexistente_lo_crea_con_los_datos_del_documento() 
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and out.resultado["proveedor_creado"] is True
     (p,) = odoo.creados_de("res.partner")
-    assert p["name"] == "Lubricantes SA" and p["vat"] == "J-123456789"
+    assert p["name"] == "Lubricantes SA" and p["vat"] == "J-12345678-9"
     assert p["supplier_rank"] == 1 and p["customer_rank"] == 0 and p["company_type"] == "company"
     assert p["phone"] == "0241-8001122" and p["email"] == "ventas@lubri.com"
     assert p["street"] == "Av. Industrial, Valencia" and p["ref"] == f"BOT-{c.captura_id}"
