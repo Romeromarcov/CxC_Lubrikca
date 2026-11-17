@@ -120,17 +120,13 @@ def conectar_lectura(cfg: OdooConfig, timeout: float = 30.0) -> ExecuteFn:  # pr
             return conn
 
     try:
-        common = xmlrpc.client.ServerProxy(
-            f"{cfg.url}/xmlrpc/2/common", transport=_ConTimeout()
-        )
+        common = xmlrpc.client.ServerProxy(f"{cfg.url}/xmlrpc/2/common", transport=_ConTimeout())
         uid = common.authenticate(cfg.db, cfg.username, cfg.password, {})
     except (OSError, xmlrpc.client.ProtocolError) as e:
         raise OdooDirectorioError("No se pudo conectar con Odoo.") from e
     if not uid:
         raise OdooDirectorioError("Odoo rechazó la credencial de lectura.")
-    models = xmlrpc.client.ServerProxy(
-        f"{cfg.url}/xmlrpc/2/object", transport=_ConTimeout()
-    )
+    models = xmlrpc.client.ServerProxy(f"{cfg.url}/xmlrpc/2/object", transport=_ConTimeout())
 
     def execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
         return models.execute_kw(cfg.db, uid, cfg.password, model, method, args, kwargs)
@@ -159,6 +155,9 @@ class ContactoOdoo:
     referencia: str
     vendedor: str
     notas: str
+    plus_code: str = ""
+    latitud: float | None = None
+    longitud: float | None = None
 
     def a_dict(self) -> dict[str, Any]:
         return {
@@ -169,6 +168,9 @@ class ContactoOdoo:
             "telefono": self.telefono,
             "ciudad": self.ciudad,
             "direccion": self.direccion,
+            "plus_code": self.plus_code,
+            "latitud": self.latitud,
+            "longitud": self.longitud,
             "es_empresa": self.es_empresa,
             "customer_rank": self.customer_rank,
             "supplier_rank": self.supplier_rank,
@@ -218,6 +220,17 @@ def mapear_contacto(registro: Mapping[str, Any]) -> ContactoOdoo:
     notas = _limpiar_str(registro.get("comment"))
     company_type = _limpiar_str(registro.get("company_type")).lower()
     es_empresa = bool(registro.get("is_company")) or company_type == "company"
+    raw_lat = registro.get("partner_latitude")
+    raw_lon = registro.get("partner_longitude")
+    lat_val: float | None = None
+    lon_val: float | None = None
+    if raw_lat not in (None, False, "") and raw_lon not in (None, False, ""):
+        try:
+            f_lat, f_lon = float(str(raw_lat)), float(str(raw_lon))
+            if not (f_lat == 0.0 and f_lon == 0.0):
+                lat_val, lon_val = f_lat, f_lon
+        except (TypeError, ValueError):
+            pass
     return ContactoOdoo(
         id=int(registro["id"]),
         nombre=_limpiar_str(registro.get("name")) or f"Contacto #{registro['id']}",
@@ -235,6 +248,9 @@ def mapear_contacto(registro: Mapping[str, Any]) -> ContactoOdoo:
         referencia=ref,
         vendedor=_m2o_nombre(registro.get("user_id")),
         notas=notas,
+        plus_code=_limpiar_str(registro.get("street2")),
+        latitud=lat_val,
+        longitud=lon_val,
     )
 
 
@@ -466,9 +482,7 @@ REGLAS_CLASIFICACION_GASTOS: tuple[ReglaCategoriaGasto, ...] = (
         ),
         tipos_preferidos=("expense", "expense_direct_cost"),
         prefijos_codigo=("6", "5"),
-        criterio_contable=(
-            "Gasto de movilización, peajes o fletes sobre ventas/compras menores."
-        ),
+        criterio_contable=("Gasto de movilización, peajes o fletes sobre ventas/compras menores."),
     ),
     ReglaCategoriaGasto(
         categoria="servicios",
@@ -668,9 +682,7 @@ def proponer_clasificacion_gastos(
     return propuestas
 
 
-def sugerir_para_concepto(
-    concepto: str, cuentas: Sequence[CuentaContable]
-) -> dict[str, Any]:
+def sugerir_para_concepto(concepto: str, cuentas: Sequence[CuentaContable]) -> dict[str, Any]:
     """Dado el texto de una compra o gasto, propone su categoría del bot y la cuenta en Odoo."""
     texto_norm = _sin_acentos(concepto.strip())
     mejor_regla = REGLAS_CLASIFICACION_GASTOS[6]  # "otros" por defecto
@@ -678,9 +690,7 @@ def sugerir_para_concepto(
     palabras_detectadas: list[str] = []
 
     for regla in REGLAS_CLASIFICACION_GASTOS:
-        coincidencias = [
-            kw for kw in regla.palabras_clave if _sin_acentos(kw) in texto_norm
-        ]
+        coincidencias = [kw for kw in regla.palabras_clave if _sin_acentos(kw) in texto_norm]
         pts = sum(20 if len(kw) >= 6 else 12 for kw in coincidencias)
         if pts > mejor_puntaje:
             mejor_puntaje = pts
@@ -688,9 +698,7 @@ def sugerir_para_concepto(
             palabras_detectadas = coincidencias
 
     # Además busca si alguna cuenta del plan de cuentas coincide directamente por nombre
-    propuestas = {
-        p["categoria"]: p for p in proponer_clasificacion_gastos(cuentas)
-    }
+    propuestas = {p["categoria"]: p for p in proponer_clasificacion_gastos(cuentas)}
     propuesta_cat = propuestas[mejor_regla.categoria]
     cuenta_directa: CuentaContable | None = None
     if texto_norm:
@@ -708,9 +716,7 @@ def sugerir_para_concepto(
                 cuenta_directa = c
 
     cuenta_final = (
-        cuenta_directa.a_dict()
-        if cuenta_directa is not None
-        else propuesta_cat["cuenta_sugerida"]
+        cuenta_directa.a_dict() if cuenta_directa is not None else propuesta_cat["cuenta_sugerida"]
     )
 
     return {
@@ -731,12 +737,8 @@ def resumir_plan_cuentas(cuentas: Sequence[CuentaContable]) -> dict[str, int]:
     return {
         "total": len(cuentas),
         "gastos": sum(1 for c in cuentas if c.account_type == "expense"),
-        "costo_directo": sum(
-            1 for c in cuentas if c.account_type == "expense_direct_cost"
-        ),
-        "depreciacion": sum(
-            1 for c in cuentas if c.account_type == "expense_depreciation"
-        ),
+        "costo_directo": sum(1 for c in cuentas if c.account_type == "expense_direct_cost"),
+        "depreciacion": sum(1 for c in cuentas if c.account_type == "expense_depreciation"),
         "pasivo": sum(1 for c in cuentas if c.grupo == "pasivo"),
         "activo": sum(1 for c in cuentas if c.grupo == "activo"),
         "ingreso": sum(1 for c in cuentas if c.grupo == "ingreso"),
@@ -783,7 +785,10 @@ class LectorDirectorioOdoo:
         "phone",
         "mobile",
         "street",
+        "street2",
         "city",
+        "partner_latitude",
+        "partner_longitude",
         "is_company",
         "company_type",
         "customer_rank",

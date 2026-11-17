@@ -10,6 +10,7 @@ from typing import Protocol
 from sqlalchemy import Engine, func, select
 
 from cxc.db.schema import catalogo, clientes, ordenes_venta
+from cxc.documentos.catalogo import ItemCatalogo, extraer_presentacion, resolver_producto_unico
 
 
 class Espejo(Protocol):
@@ -44,7 +45,7 @@ class EspejoSQL:
         return str(fila[0]) if fila is not None else None
 
     def productos(self, texto: str) -> list[str]:
-        """``producto_id`` (product.product) por código exacto y, si no hay, por nombre exacto."""
+        """``producto_id`` por código/nombre exacto o coincidencia única en catálogo."""
         t = texto.strip().lower()
         with self._engine.connect() as conn:
             for columna in (catalogo.c.codigo, catalogo.c.nombre):
@@ -53,4 +54,25 @@ class EspejoSQL:
                 ).all()
                 if filas:
                     return [str(f[0]) for f in filas]
-        return []
+            todas = conn.execute(
+                select(
+                    catalogo.c.producto_id,
+                    catalogo.c.codigo,
+                    catalogo.c.nombre,
+                    catalogo.c.marca,
+                )
+            ).all()
+        items = [
+            ItemCatalogo(
+                producto_id=str(r[0]),
+                codigo=str(r[1] or ""),
+                nombre=str(r[2] or ""),
+                marca=str(r[3] or ""),
+                presentacion=extraer_presentacion(str(r[2] or "")),
+            )
+            for r in todas
+        ]
+        elegido, candidatos = resolver_producto_unico(items, texto=texto)
+        if elegido is not None:
+            return [elegido.producto_id]
+        return [c.producto_id for c in candidatos[:3]]

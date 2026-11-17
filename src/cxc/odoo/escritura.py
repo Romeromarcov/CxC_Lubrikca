@@ -225,7 +225,10 @@ class EscritorOdoo:
     def _gps(self, modelo: str, lat: Any, lon: Any) -> dict[str, Any]:
         if lat is None or lon is None or "partner_latitude" not in self.campos(modelo):
             return {}
-        return {"partner_latitude": float(lat), "partner_longitude": float(lon)}
+        f_lat, f_lon = float(lat), float(lon)
+        if f_lat == 0.0 and f_lon == 0.0:
+            return {}
+        return {"partner_latitude": f_lat, "partner_longitude": f_lon}
 
     def _mapa_tipos_identificacion(self) -> dict[str, int]:
         """IDs de ``l10n_latam.identification.type`` (RIF vs Cédula Venezolano/Extranjero)."""
@@ -283,16 +286,112 @@ class EscritorOdoo:
         if previo:
             return previo[0]
         nota = NOTA_BORRADOR + (f"\n{datos['notas']}" if datos.get("notas") else "")
+        lat, lon = datos.get("lat"), datos.get("lon")
+        gps_vals = self._gps("res.partner", lat, lon)
+        plus_raw = str(datos.get("plus_code") or "").strip()
+        plus_code = (
+            plus_raw
+            if plus_raw and plus_raw != "6FG22222+22"
+            else (encode_plus_code(lat, lon) if gps_vals else None)
+        )
+        calle2 = (
+            {"street2": plus_code} if plus_code and "street2" in self.campos("res.partner") else {}
+        )
+        rif = str(datos["rif"]).strip() if datos.get("rif") else None
+        telefono = str(datos.get("telefono") or "").strip() or None
         vals = _vals(
             name=str(datos["nombre"]).strip(),
-            phone=str(datos["telefono"]).strip(),
+            phone=telefono,
             email=datos.get("email") or None,
+            street=datos.get("direccion") or None,
             comment=nota,
             customer_rank=0,
             ref=marca,
-            **self._gps("res.partner", datos.get("lat"), datos.get("lon")),
+            company_type=(
+                ("company" if rif.upper()[:1] in ("J", "G") else "person") if rif else None
+            ),
+            **calle2,
+            **self._identificacion_odoo(rif),
+            **gps_vals,
         )
         return self._crear("res.partner", vals)
+
+    def leer_partner(self, partner_id: int) -> dict[str, Any] | None:
+        """Lee los datos principales de un ``res.partner`` existente en Odoo."""
+        deseados = [
+            "id",
+            "name",
+            "vat",
+            "email",
+            "phone",
+            "mobile",
+            "street",
+            "street2",
+            "partner_latitude",
+            "partner_longitude",
+            "customer_rank",
+            "supplier_rank",
+            "comment",
+        ]
+        campos = [c for c in deseados if c in self.campos("res.partner")]
+        if "id" not in campos:
+            campos.append("id")
+        filas = self._call("res.partner", "read", [[partner_id]], {"fields": campos})
+        return dict(filas[0]) if filas else None
+
+    def actualizar_contacto(
+        self,
+        partner_id: int,
+        datos: dict[str, Any],
+        *,
+        promover_cliente: bool = False,
+        marca: str | None = None,
+    ) -> int:
+        """Actualiza un contacto existente en Odoo (edición de prospecto/cliente o promoción)."""
+        actual = self.leer_partner(partner_id) or {}
+        lat, lon = datos.get("lat"), datos.get("lon")
+        gps_vals = self._gps("res.partner", lat, lon)
+        plus_raw = str(datos.get("plus_code") or "").strip()
+        plus_code = (
+            plus_raw
+            if plus_raw and plus_raw != "6FG22222+22"
+            else (encode_plus_code(lat, lon) if gps_vals else None)
+        )
+        calle2 = (
+            {"street2": plus_code} if plus_code and "street2" in self.campos("res.partner") else {}
+        )
+        rif = str(datos["rif"]).strip() if datos.get("rif") else None
+        vals: dict[str, Any] = {}
+        if datos.get("nombre"):
+            vals["name"] = str(datos["nombre"]).strip()
+        if datos.get("telefono"):
+            vals["phone"] = str(datos["telefono"]).strip()
+        if datos.get("email"):
+            vals["email"] = str(datos["email"]).strip()
+        if datos.get("direccion") or datos.get("direccion_fiscal"):
+            vals["street"] = str(datos.get("direccion") or datos.get("direccion_fiscal")).strip()
+        if rif:
+            vals.update(self._identificacion_odoo(rif))
+            vals["company_type"] = "company" if rif.upper()[:1] in ("J", "G") else "person"
+        vals.update(calle2)
+        vals.update(gps_vals)
+        if promover_cliente and int(actual.get("customer_rank") or 0) == 0:
+            vals["customer_rank"] = 1
+        if datos.get("notas"):
+            previo_c = str(actual.get("comment") or "").strip()
+            nueva_nota = str(datos["notas"]).strip()
+            if nueva_nota and nueva_nota not in previo_c:
+                vals["comment"] = f"{previo_c}\n{nueva_nota}".strip() if previo_c else nueva_nota
+        if vals:
+            self._call("res.partner", "write", [[partner_id], vals])
+        if marca:
+            self.nota_chatter(
+                "res.partner",
+                partner_id,
+                f"{marca} · Contacto actualizado"
+                + (" y promovido a cliente" if promover_cliente else ""),
+            )
+        return partner_id
 
     def crear_cliente(self, datos: dict[str, Any], marca: str) -> int:
         """Cliente nuevo desde un pedido: dirección, GPS y Plus Code en el principal."""
@@ -301,17 +400,16 @@ class EscritorOdoo:
             return previo[0]
         juridica = str(datos["rif"]).upper()[:1] in ("J", "G")
         lat, lon = datos.get("lat"), datos.get("lon")
+        gps_vals = self._gps("res.partner", lat, lon)
         plus_raw = str(datos.get("plus_code") or "").strip()
         plus_code = (
             plus_raw
-            if plus_raw
-            else (encode_plus_code(lat, lon) if lat is not None and lon is not None else None)
+            if plus_raw and plus_raw != "6FG22222+22"
+            else (encode_plus_code(lat, lon) if gps_vals else None)
         )
         calle = datos.get("direccion_fiscal") or datos.get("direccion_entrega") or None
         calle2 = (
-            {"street2": plus_code}
-            if plus_code and "street2" in self.campos("res.partner")
-            else {}
+            {"street2": plus_code} if plus_code and "street2" in self.campos("res.partner") else {}
         )
         vals = _vals(
             name=str(datos["nombre"]).strip(),
@@ -323,7 +421,7 @@ class EscritorOdoo:
             ref=marca,
             **calle2,
             **self._identificacion_odoo(str(datos["rif"])),
-            **self._gps("res.partner", lat, lon),
+            **gps_vals,
         )
         return self._crear("res.partner", vals)
 
@@ -367,6 +465,12 @@ class EscritorOdoo:
             }
             if ln.get("precio") is not None:
                 v["price_unit"] = float(Decimal(str(ln["precio"])))
+            if (
+                ln.get("descuento_pct") is not None
+                and Decimal(str(ln["descuento_pct"])) > 0
+                and "discount" in self.campos("sale.order.line")
+            ):
+                v["discount"] = float(Decimal(str(ln["descuento_pct"])))
             order_line.append((0, 0, v))
         vals = _vals(
             partner_id=partner_id,

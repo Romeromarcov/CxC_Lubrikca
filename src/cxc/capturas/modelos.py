@@ -18,6 +18,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 CONTACTO = "contacto"
+CONTACTO_EDITAR = "contacto_editar"
+COTIZACION = "cotizacion"
 PEDIDO = "pedido"
 PAGO = "pago"
 PAGO_PROVEEDOR = "pago_proveedor"
@@ -26,6 +28,8 @@ FACTURA_PROVEEDOR = "factura_proveedor"
 GASTO = "gasto"  # compra menor / gasto de consumo ya pagado al contado (sin cuenta por pagar)
 KINDS: tuple[str, ...] = (
     CONTACTO,
+    CONTACTO_EDITAR,
+    COTIZACION,
     PEDIDO,
     PAGO,
     PAGO_PROVEEDOR,
@@ -191,6 +195,10 @@ def validar_gps(ubicacion: Any, campo: str = "ubicacion") -> None:
         raise CapturaInvalida("Ubicación GPS inválida.", [campo]) from e
     if not (lat.is_finite() and lon.is_finite()):
         raise CapturaInvalida("Ubicación GPS inválida.", [campo])
+    if lat == Decimal(0) and lon == Decimal(0):
+        raise CapturaInvalida(
+            "Envía una ubicación GPS real (coordenadas distintas de 0, 0).", [campo]
+        )
     if not (Decimal(-90) <= lat <= 90 and Decimal(-180) <= lon <= 180):
         raise CapturaInvalida("Ubicación GPS fuera de rango.", [campo])
 
@@ -216,8 +224,14 @@ def validar(kind: str, draft: dict[str, Any]) -> list[str]:
         _exigir(draft, ["nombre", "telefono", "ubicacion"])
         if not 7 <= len(digitos(str(draft["telefono"]))) <= 15:
             raise CapturaInvalida("Teléfono inválido (7 a 15 dígitos).", ["telefono"])
+        if not vacio(draft.get("rif")):
+            normalizar_rif(str(draft["rif"]))
         validar_gps(draft["ubicacion"])
         return []
+    if kind == CONTACTO_EDITAR:
+        return _validar_contacto_editar(draft)
+    if kind == COTIZACION:
+        return _validar_cotizacion(draft)
     if kind == PEDIDO:
         return _validar_pedido(draft)
     if kind == PROVEEDOR:
@@ -323,10 +337,51 @@ def es_efectivo(metodo_pago: Any) -> bool:
     return m == "cash" or "efectivo" in m
 
 
+def _validar_lineas_comerciales(lineas: Any) -> None:
+    if not isinstance(lineas, list) or not lineas or not all(isinstance(ln, dict) for ln in lineas):
+        raise CapturaInvalida("Las líneas de productos son inválidas.", ["lineas"])
+    for ln in lineas:
+        if vacio(ln.get("producto")) and vacio(ln.get("producto_id")):
+            raise CapturaInvalida("Hay una línea sin producto.", ["lineas"])
+        if a_decimal(ln.get("cantidad"), "Cantidad") <= 0:
+            etiqueta = ln.get("producto") or ln.get("producto_id")
+            raise CapturaInvalida(f"Cantidad inválida para «{etiqueta}».", ["lineas"])
+        if not vacio(ln.get("precio_unitario")) and a_decimal(ln["precio_unitario"], "Precio") < 0:
+            raise CapturaInvalida(f"Precio inválido para «{ln.get('producto')}».", ["lineas"])
+
+
+def _validar_contacto_editar(draft: dict[str, Any]) -> list[str]:
+    if all(vacio(draft.get(c)) for c in ("partner_odoo_id", "rif", "nombre_buscar", "nombre")):
+        raise CapturaInvalida(
+            "Indica qué contacto deseas editar (ID de Odoo, RIF o nombre).", ["nombre"]
+        )
+    campos_editables = ("nombre", "telefono", "email", "rif", "direccion", "ubicacion", "notas")
+    if all(vacio(draft.get(c)) for c in campos_editables):
+        raise CapturaInvalida("Indica al menos un dato nuevo para actualizar en el contacto.")
+    if not vacio(draft.get("telefono")) and not 7 <= len(digitos(str(draft["telefono"]))) <= 15:
+        raise CapturaInvalida("Teléfono inválido (7 a 15 dígitos).", ["telefono"])
+    if not vacio(draft.get("rif")):
+        normalizar_rif(str(draft["rif"]))
+    if not vacio(draft.get("ubicacion")):
+        validar_gps(draft["ubicacion"])
+    return []
+
+
+def _validar_cotizacion(draft: dict[str, Any]) -> list[str]:
+    _exigir(draft, ["cliente", "lineas"])
+    if not vacio(draft.get("rif")):
+        normalizar_rif(str(draft["rif"]))
+    if not vacio(draft.get("ubicacion")):
+        validar_gps(draft["ubicacion"])
+    _validar_lineas_comerciales(draft["lineas"])
+    return []
+
+
 def _validar_pedido(draft: dict[str, Any]) -> list[str]:
     primera = draft.get("es_primera_compra")
-    if primera is False:
-        # Cliente ya registrado: basta identificar cliente y líneas (valida RIF/GPS solo si vienen).
+    ya_localizado = primera is False or not vacio(draft.get("partner_odoo_id"))
+    if ya_localizado:
+        # Cliente ya registrado o seleccionado de Odoo: basta identificar cliente y líneas.
         _exigir(draft, ["cliente", "lineas"])
         if not vacio(draft.get("rif")):
             normalizar_rif(str(draft["rif"]))
@@ -346,16 +401,7 @@ def _validar_pedido(draft: dict[str, Any]) -> list[str]:
             )
         normalizar_rif(str(draft["rif"]))
         validar_gps(draft["ubicacion"])
-    lineas = draft["lineas"]
-    if not isinstance(lineas, list) or not all(isinstance(ln, dict) for ln in lineas):
-        raise CapturaInvalida("Las líneas del pedido son inválidas.", ["lineas"])
-    for ln in lineas:
-        if vacio(ln.get("producto")):
-            raise CapturaInvalida("Hay una línea sin producto.", ["lineas"])
-        if a_decimal(ln.get("cantidad"), "Cantidad") <= 0:
-            raise CapturaInvalida(f"Cantidad inválida para «{ln['producto']}».", ["lineas"])
-        if not vacio(ln.get("precio_unitario")) and a_decimal(ln["precio_unitario"], "Precio") < 0:
-            raise CapturaInvalida(f"Precio inválido para «{ln['producto']}».", ["lineas"])
+    _validar_lineas_comerciales(draft["lineas"])
     return []
 
 

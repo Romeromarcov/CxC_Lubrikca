@@ -1176,3 +1176,66 @@ bots_bitacora = Table(
     Column("usuario", String, nullable=False),
     Column("cambiado_en", DateTime(timezone=False), nullable=False),
 )
+
+# --- Documentos Comerciales: Cotizaciones y Pedidos (nov-2026) ---------------------
+# Documentos creados desde los bots de Telegram o directamente desde la sección de Ventas en CxC,
+# integrados con el catálogo real de productos de Odoo y desde donde las cotizaciones/pedidos
+# pueden revisarse, editarse y enviarse a Odoo (``sale.order`` en borrador).
+documentos_comerciales = Table(
+    "documentos_comerciales",
+    metadata,
+    Column("documento_id", Integer, primary_key=True, autoincrement=True),
+    Column("numero", String, nullable=False, unique=True),  # COT-00001 | PED-00001
+    Column("tipo", String, nullable=False, index=True),  # cotizacion | pedido
+    # BORRADOR | ENVIADO_ODOO | ERROR
+    Column("estado", String, nullable=False, server_default="BORRADOR", index=True),
+    Column("origen", String, nullable=False, server_default="web"),  # bot | web
+    Column("captura_id", Integer, nullable=True, index=True),
+    Column("partner_odoo_id", Integer, nullable=True),
+    Column("tipo_contacto", String, nullable=False, server_default="prospecto"),
+    Column("cliente_nombre", String, nullable=False),
+    Column("rif", String, nullable=False, server_default=""),
+    Column("email", String, nullable=False, server_default=""),
+    Column("telefono", String, nullable=False, server_default=""),
+    Column("direccion", Text, nullable=False, server_default=""),
+    Column("plus_code", String, nullable=False, server_default=""),
+    Column("latitud", Numeric(12, 6), nullable=True),
+    Column("longitud", Numeric(12, 6), nullable=True),
+    Column("es_primera_compra", Boolean, nullable=False, server_default="true"),
+    Column("moneda_lista", String, nullable=False, server_default="USD"),  # USD | VES
+    Column("vendedor_email", String, nullable=False, server_default=""),
+    Column("fecha_entrega", Date, nullable=True),
+    Column("condiciones_negociacion", Text, nullable=False, server_default=""),
+    Column("observaciones", Text, nullable=False, server_default=""),
+    Column("subtotal", MONEY, nullable=False, server_default="0"),
+    Column("total_litros", MONEY, nullable=False, server_default="0"),
+    Column("odoo_order_id", Integer, nullable=True),
+    Column("odoo_order_name", String, nullable=False, server_default=""),
+    Column("error_odoo", Text, nullable=False, server_default=""),
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+documentos_comerciales_lineas = Table(
+    "documentos_comerciales_lineas",
+    metadata,
+    Column("linea_id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "documento_id",
+        Integer,
+        ForeignKey("documentos_comerciales.documento_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("orden", Integer, nullable=False, server_default="1"),
+    Column("producto_id", String, nullable=False, server_default=""),
+    Column("codigo", String, nullable=False, server_default=""),
+    Column("descripcion", String, nullable=False),
+    Column("presentacion", String, nullable=False, server_default=""),
+    Column("litros_unidad", MONEY, nullable=False, server_default="0"),
+    Column("cantidad", MONEY, nullable=False),
+    Column("precio_unitario", MONEY, nullable=False, server_default="0"),
+    Column("descuento_pct", PCT, nullable=False, server_default="0"),
+    Column("subtotal", MONEY, nullable=False, server_default="0"),
+)
