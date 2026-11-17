@@ -165,7 +165,7 @@ def test_gasto_con_proveedor_nuevo_lo_crea_con_los_datos_del_documento() -> None
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and out.resultado["proveedor_creado"] is True
     (p,) = odoo.creados_de("res.partner")
-    assert p["name"] == "Restaurante El Sabor C.A." and p["vat"] == "J-301234567"
+    assert p["name"] == "Restaurante El Sabor C.A." and p["vat"] == "J-30123456-7"
     assert p["supplier_rank"] == 1 and p["customer_rank"] == 0 and p["company_type"] == "company"
     assert p["street"] == "Av. Bolívar, Valencia" and p["phone"] == "0241-5551234"
     assert p["email"] == "info@sabor.com" and p["ref"] == f"BOT-{c.captura_id}"

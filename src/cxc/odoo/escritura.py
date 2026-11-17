@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 import xmlrpc.client
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from cxc.capturas.modelos import clase_moneda, variantes_rif
+from cxc.capturas.modelos import clase_moneda, normalizar_rif, variantes_rif
 from cxc.config import OdooConfig
 
 logger = logging.getLogger("cxc.odoo.escritura")
@@ -129,6 +130,7 @@ class EscritorOdoo:
     def __init__(self, execute: ExecuteFn) -> None:
         self._execute = execute
         self._campos: dict[str, set[str]] = {}
+        self._tipos_id: dict[str, int] | None = None
 
     # ── infraestructura ──────────────────────────────────────────────────────
 
@@ -202,6 +204,57 @@ class EscritorOdoo:
             return {}
         return {"partner_latitude": float(lat), "partner_longitude": float(lon)}
 
+    def _mapa_tipos_identificacion(self) -> dict[str, int]:
+        """IDs de ``l10n_latam.identification.type`` (RIF vs Cédula Venezolano/Extranjero)."""
+        if self._tipos_id is not None:
+            return self._tipos_id
+        filas = self._call(
+            "l10n_latam.identification.type",
+            "search_read",
+            [[]],
+            {"fields": ["id", "name"], "limit": 50},
+        )
+        mapa: dict[str, int] = {}
+        for f in filas or []:
+            limpio = "".join(
+                c
+                for c in unicodedata.normalize("NFD", str(f.get("name") or "").lower())
+                if unicodedata.category(c) != "Mn"
+            ).strip()
+            fid = int(f["id"])
+            if limpio == "rif":
+                mapa["rif"] = fid
+            elif "cedula" in limpio and "venezolano" in limpio:
+                mapa["cedula_v"] = fid
+            elif "cedula" in limpio and "extranjero" in limpio:
+                mapa["cedula_e"] = fid
+        self._tipos_id = mapa
+        return mapa
+
+    def _identificacion_odoo(self, rif: str | None) -> dict[str, Any]:
+        """Formatea ``vat`` y ``l10n_latam_identification_type_id`` según exige Odoo 18 Venezuela.
+
+        - RIF de 9 dígitos (``J-123456789``) → ``vat = 'J-12345678-9'`` y tipo ``RIF``.
+        - Cédula de 6–8 dígitos sin dígito verificador (``V-12345678`` / ``E-82345678``) →
+          ``vat = 'V-12345678'`` y tipo ``Cédula Venezolano`` / ``Cédula Extranjero``.
+        """
+        if not rif:
+            return {}
+        letra, digs = normalizar_rif(str(rif)).split("-", 1)
+        es_rif_completo = len(digs) >= 9
+        vat = f"{letra}-{digs[:-1]}-{digs[-1]}" if es_rif_completo else f"{letra}-{digs}"
+        out: dict[str, Any] = {"vat": vat}
+        if "l10n_latam_identification_type_id" in self.campos("res.partner"):
+            tipos = self._mapa_tipos_identificacion()
+            clave = (
+                "rif"
+                if es_rif_completo
+                else ("cedula_v" if letra == "V" else ("cedula_e" if letra == "E" else ""))
+            )
+            if clave and clave in tipos:
+                out["l10n_latam_identification_type_id"] = tipos[clave]
+        return out
+
     def crear_contacto_borrador(self, datos: dict[str, Any], marca: str) -> int:
         previo = self._buscar("res.partner", [["ref", "=", marca]], 1)
         if previo:
@@ -226,13 +279,13 @@ class EscritorOdoo:
         juridica = str(datos["rif"]).upper()[:1] in ("J", "G")
         vals = _vals(
             name=str(datos["nombre"]).strip(),
-            vat=datos["rif"],
             email=datos.get("email") or None,
             phone=datos.get("telefono") or None,
             street=datos.get("direccion_fiscal") or None,
             company_type="company" if juridica else "person",
             customer_rank=1,
             ref=marca,
+            **self._identificacion_odoo(str(datos["rif"])),
             **(
                 {}
                 if datos.get("direccion_entrega")
@@ -365,7 +418,6 @@ class EscritorOdoo:
         telefono = str(datos["telefono"]).strip() if datos.get("telefono") else None
         vals = _vals(
             name=str(datos["nombre"]).strip(),
-            vat=rif,
             phone=telefono,
             email=datos.get("email") or None,
             street=datos.get("direccion") or None,
@@ -376,6 +428,7 @@ class EscritorOdoo:
             customer_rank=0,
             comment=SALTO.join(nota),
             ref=marca,
+            **self._identificacion_odoo(rif),
             **self._gps("res.partner", datos.get("lat"), datos.get("lon")),
         )
         return self._crear("res.partner", vals)
