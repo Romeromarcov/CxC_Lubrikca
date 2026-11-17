@@ -665,8 +665,9 @@ def test_pago_a_proveedor_ubica_la_factura_solo_como_referencia() -> None:
     c, _ = svc.recibir("pago_proveedor", _pago_prov(), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and out.resultado["factura_odoo_id"] == 900
-    memo = odoo.creados_de("account.payment")[0]["memo"]
-    assert "factura F-001 [account.move 900]" in memo
+    v = odoo.creados_de("account.payment")[0]
+    assert v["memo"] == "T1"  # memo limpio: solo la referencia
+    assert "factura F-001 [account.move 900]" in odoo.chatter[0][2]
     dominio = odoo.llamadas_a("account.move", "search")[0][0]
     assert ["partner_id", "=", 31] in dominio and ["ref", "=", "F-001"] in dominio
     # no concilia: solo se creó el pago, ninguna escritura sobre la factura
@@ -678,8 +679,27 @@ def test_pago_a_proveedor_con_factura_que_no_se_encuentra_no_es_error() -> None:
     c, _ = svc.recibir("pago_proveedor", _pago_prov(), FUENTE, "k1")
     out = svc.procesar(c.captura_id)
     assert out.estado == ENVIADO and "factura_odoo_id" not in out.resultado
-    memo = odoo.creados_de("account.payment")[0]["memo"]
-    assert "factura F-001" in memo and "account.move" not in memo
+    assert odoo.creados_de("account.payment")[0]["memo"] == "T1"
+    assert "factura F-001" in odoo.chatter[0][2] and "account.move" not in odoo.chatter[0][2]
+
+
+def test_factura_proveedor_y_gasto_van_siempre_por_defecto_al_diario_en_ves() -> None:
+    """Aunque haya diario USD (id=99), por defecto elige el diario de compras VES (id=10)."""
+    odoo = OdooFalso(res_partner__search=[31])
+    svc, _, odoo = montar(odoo)
+    c, _ = svc.recibir("factura_proveedor", _fact(moneda="USD"), FUENTE, "k-ves-default")
+    out = svc.procesar(c.captura_id)
+    assert out.estado == ENVIADO and out.resultado["diario_id"] == 10
+    assert odoo.creados_de("account.move")[0]["journal_id"] == 10
+    # Y si en el futuro viene un cuestionario con diario_id explícito, lo respeta:
+    c2, _ = svc.recibir(
+        "factura_proveedor",
+        _fact(numero_factura="F-002", diario_id=99),
+        FUENTE,
+        "k-diario-explicito",
+    )
+    out2 = svc.procesar(c2.captura_id)
+    assert out2.estado == ENVIADO and odoo.creados_de("account.move")[1]["journal_id"] == 99
 
 
 def test_pago_a_proveedor_sin_factura_ref_no_consulta_facturas() -> None:

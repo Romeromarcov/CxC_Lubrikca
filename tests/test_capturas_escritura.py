@@ -12,6 +12,7 @@ from cxc.odoo.escritura import (
     EscritorOdoo,
     EscrituraConfig,
     OdooEscrituraError,
+    encode_plus_code,
 )
 from tests.capturas_dobles import OdooFalso
 
@@ -119,7 +120,8 @@ def test_contacto_idempotente_por_marca() -> None:
 # ── cliente nuevo desde un pedido ────────────────────────────────────────────
 
 
-def test_cliente_nuevo_con_entrega_distinta_crea_el_hijo_de_entrega() -> None:
+def test_cliente_nuevo_guarda_direccion_gps_y_plus_code_en_contacto_principal() -> None:
+    assert encode_plus_code(47.365590, 8.524997) == "8FVC9G8F+6X"  # vector oficial Google OLC
     odoo = OdooFalso()
     escritor = EscritorOdoo(odoo)
     pid = escritor.crear_cliente(
@@ -130,19 +132,17 @@ def test_cliente_nuevo_con_entrega_distinta_crea_el_hijo_de_entrega() -> None:
             "telefono": "0414",
             "direccion_fiscal": "Av 1",
             "direccion_entrega": "Galpón 3",
-            "lat": 10.4,
-            "lon": -66.9,
+            "lat": 10.4806,
+            "lon": -66.9036,
         },
         "BOT-2",
     )
-    padre, hijo = odoo.creados_de("res.partner")
-    assert pid == 101 and padre["vat"] == "J-12345678-9" and padre["customer_rank"] == 1
-    assert (
-        padre["company_type"] == "company" and "partner_latitude" not in padre
-    )  # el GPS va a la entrega
-    assert (
-        hijo["parent_id"] == 101 and hijo["type"] == "delivery" and hijo["partner_latitude"] == 10.4
-    )
+    (principal,) = odoo.creados_de("res.partner")  # NUNCA crea sub-dirección type=delivery
+    assert pid == 101 and principal["vat"] == "J-12345678-9" and principal["customer_rank"] == 1
+    assert principal["company_type"] == "company" and principal["street"] == "Av 1"
+    assert principal["partner_latitude"] == 10.4806 and principal["partner_longitude"] == -66.9036
+    assert principal["street2"] == encode_plus_code(10.4806, -66.9036)
+    assert "+" in principal["street2"] and len(principal["street2"]) == 11
 
 
 def test_identificacion_fiscal_odoo18_venezuela_separa_rif_y_cedula() -> None:
@@ -235,22 +235,32 @@ def _pago(escritor: EscritorOdoo, **kw: object) -> int:
         "moneda_id": 1,
         "es_cliente": True,
         "marca": "BOT-9",
-        "memo": "BOT-9 · ref R1",
+        "memo": "R1",
+        "nota_chatter": "BOT-9 · ref R1 · Banesco · transferencia",
     }
     args.update(kw)
     return escritor.crear_pago(**args)  # type: ignore[arg-type]
 
 
-def test_pago_de_cliente_es_inbound_en_borrador() -> None:
+def test_pago_de_cliente_es_inbound_con_solo_referencia_en_memo_y_nota_en_chatter() -> None:
     odoo = OdooFalso()
     _pago(EscritorOdoo(odoo), fecha="2026-11-12")
     v = odoo.creados_de("account.payment")[0]
     assert (v["payment_type"], v["partner_type"], v["amount"]) == ("inbound", "customer", 100.5)
     assert v["journal_id"] == 14 and v["currency_id"] == 1 and v["date"] == "2026-11-12"
-    assert v["memo"] == "BOT-9 · ref R1"
+    assert v["memo"] == "R1"
+    assert odoo.chatter == [("account.payment", 101, "BOT-9 · ref R1 · Banesco · transferencia")]
     assert not any(
         m == "account.payment" and me in ("action_post", "write") for m, me, _a, _k in odoo.llamadas
     )
+
+
+def test_pago_en_efectivo_no_coloca_nada_en_memo_pero_deja_nota_en_chatter() -> None:
+    odoo = OdooFalso()
+    _pago(EscritorOdoo(odoo), memo=None, nota_chatter="BOT-9 · efectivo")
+    v = odoo.creados_de("account.payment")[0]
+    assert "memo" not in v
+    assert odoo.chatter == [("account.payment", 101, "BOT-9 · efectivo")]
 
 
 def test_pago_a_proveedor_es_outbound() -> None:
@@ -273,7 +283,7 @@ def test_el_campo_del_memo_se_detecta_con_fields_get(
 ) -> None:
     odoo = OdooFalso(account_payment__fields_get=campos)
     _pago(EscritorOdoo(odoo))
-    assert odoo.creados_de("account.payment")[0][esperado] == "BOT-9 · ref R1"
+    assert odoo.creados_de("account.payment")[0][esperado] == "R1"
 
 
 def test_pago_sin_campo_de_memo_no_se_crea_a_ciegas() -> None:
@@ -283,13 +293,11 @@ def test_pago_sin_campo_de_memo_no_se_crea_a_ciegas() -> None:
     assert not e.value.transitorio and odoo.creados == []
 
 
-def test_pago_idempotente_busca_la_marca_delimitada_en_el_memo() -> None:
-    odoo = OdooFalso(account_payment__search=[444])
+def test_pago_idempotente_busca_la_marca_en_el_chatter_sin_ensuciar_memo() -> None:
+    odoo = OdooFalso()
+    odoo.chatter.append(("account.payment", 444, "BOT-9 · ref R1"))
     assert _pago(EscritorOdoo(odoo)) == 444
     assert odoo.creados == []
-    dominio = odoo.llamadas_a("account.payment", "search")[0][0]
-    # Delimitado con « · » para que BOT-1 nunca colisione con BOT-10
-    assert dominio == ["|", ["memo", "=", "BOT-9"], ["memo", "=ilike", "BOT-9 · %"]]
 
 
 def test_pago_sin_fecha_no_la_envia() -> None:

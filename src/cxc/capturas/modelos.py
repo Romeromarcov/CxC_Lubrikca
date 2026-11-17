@@ -77,6 +77,9 @@ CAMPOS_FACTURA = frozenset(
         "proveedor_direccion",
         "proveedor_telefono",
         "proveedor_email",
+        # preparado para cuestionario futuro de selección de diario (por defecto va al diario VES)
+        "diario_id",
+        "diario_codigo",
     }
 )
 
@@ -308,18 +311,41 @@ def normalizar_nombre(nombre: str) -> str:
     return re.sub(r"\s+", " ", sin_tildes).strip().lower()
 
 
-# Obligatorios de un pedido: los mismos que Omni (``_REQ_PEDIDO`` en bots_ingest/handlers.py).
+# Obligatorios de un pedido de primera compra / ficha completa (paridad con Omni).
 REQ_PEDIDO = ["cliente", "lineas", "rif", "email", "direccion_fiscal", "ubicacion"]
 
 
+def es_efectivo(metodo_pago: Any) -> bool:
+    """True si el método de pago es efectivo (no lleva referencia en el memo de Odoo)."""
+    if vacio(metodo_pago):
+        return False
+    m = str(metodo_pago).strip().lower()
+    return m == "cash" or "efectivo" in m
+
+
 def _validar_pedido(draft: dict[str, Any]) -> list[str]:
-    _exigir(draft, REQ_PEDIDO)
-    if vacio(draft.get("direccion_entrega")) and not draft.get("entrega_igual_fiscal"):
-        raise CapturaInvalida(
-            "Indica la dirección de entrega o que es la misma fiscal.", ["direccion_entrega"]
-        )
-    normalizar_rif(str(draft["rif"]))
-    validar_gps(draft["ubicacion"])
+    primera = draft.get("es_primera_compra")
+    if primera is False:
+        # Cliente ya registrado: basta identificar cliente y líneas (valida RIF/GPS solo si vienen).
+        _exigir(draft, ["cliente", "lineas"])
+        if not vacio(draft.get("rif")):
+            normalizar_rif(str(draft["rif"]))
+        if not vacio(draft.get("ubicacion")):
+            validar_gps(draft["ubicacion"])
+    else:
+        _exigir(draft, REQ_PEDIDO)
+        # En el flujo nuevo (es_primera_compra=True) la dirección va siempre en el contacto
+        # principal; si viene sin el flag (paridad histórica Omni) se conserva el chequeo previo.
+        if (
+            primera is None
+            and vacio(draft.get("direccion_entrega"))
+            and not draft.get("entrega_igual_fiscal")
+        ):
+            raise CapturaInvalida(
+                "Indica la dirección de entrega o que es la misma fiscal.", ["direccion_entrega"]
+            )
+        normalizar_rif(str(draft["rif"]))
+        validar_gps(draft["ubicacion"])
     lineas = draft["lineas"]
     if not isinstance(lineas, list) or not all(isinstance(ln, dict) for ln in lineas):
         raise CapturaInvalida("Las líneas del pedido son inválidas.", ["lineas"])
@@ -339,7 +365,12 @@ def _validar_pago(kind: str, draft: dict[str, Any]) -> list[str]:
     if not vacio(draft.get("rif")):
         normalizar_rif(str(draft["rif"]))
     if kind == PAGO:
-        faltan = [c for c in ("monto", "moneda", "referencia") if vacio(draft.get(c))]
+        req = (
+            ("monto", "moneda")
+            if es_efectivo(draft.get("metodo_pago"))
+            else ("monto", "moneda", "referencia")
+        )
+        faltan = [c for c in req if vacio(draft.get(c))]
         if all(vacio(draft.get(c)) for c in ("cliente", "rif", "pedido_ref")):
             faltan.append("cliente (nombre, RIF o pedido)")
         return faltan

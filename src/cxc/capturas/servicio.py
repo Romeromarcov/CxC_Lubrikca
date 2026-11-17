@@ -38,6 +38,7 @@ from .modelos import (
     CapturaInvalida,
     a_decimal,
     clase_moneda,
+    es_efectivo,
     normalizar_nombre,
     normalizar_rif,
     vacio,
@@ -456,7 +457,6 @@ class ServicioCapturas:
         if sin_resolver:
             raise _Incompleto(sin_resolver)
 
-        creado = False
         if partner is None:
             if not rif:
                 raise _Incompleto(["cliente: no existe en Odoo; indica su RIF para crearlo"])
@@ -468,22 +468,36 @@ class ServicioCapturas:
                     "email": p.get("email"),
                     "telefono": p.get("telefono"),
                     "direccion_fiscal": p.get("direccion_fiscal"),
-                    "direccion_entrega": None
-                    if p.get("entrega_igual_fiscal")
-                    else p.get("direccion_entrega"),
+                    "direccion_entrega": p.get("direccion_entrega"),
+                    "plus_code": ub.get("plus_code") or p.get("plus_code"),
                     "lat": ub.get("latitud"),
                     "lon": ub.get("longitud"),
                 },
                 marca,
             )
-            creado, via = True, "creado"
+            via = "creado"
+
+        notas_pedido: list[str] = []
+        if not vacio(p.get("condiciones_negociacion")):
+            cond = str(p["condiciones_negociacion"]).strip()
+            notas_pedido.append(f"Condiciones de negociación / descuentos: {cond}")
+        if not vacio(p.get("observaciones")):
+            notas_pedido.append(str(p["observaciones"]).strip())
+        if (
+            not p.get("entrega_igual_fiscal")
+            and not vacio(p.get("direccion_entrega"))
+            and p.get("direccion_entrega") != p.get("direccion_fiscal")
+        ):
+            notas_pedido.append(f"Referencia entrega: {str(p['direccion_entrega']).strip()}")
+        nota_final = "\n".join(notas_pedido) if notas_pedido else None
+
         order = odoo.crear_pedido(
             partner_id=partner,
             lineas=lineas,
             marca=marca,
-            nota=p.get("observaciones"),
+            nota=nota_final,
             vendedor_id=odoo.vendedor_id(str(c.fuente.get("vendedor_email") or "")),
-            shipping_id=odoo.entrega_de(partner) if creado else None,
+            shipping_id=None,
             fecha_entrega=_fecha_iso(p.get("fecha_entrega")),
         )
         return f"sale.order:{order}", {
@@ -548,7 +562,13 @@ class ServicioCapturas:
             str(p.get("metodo_pago") or ""),
             f"pedido {p['pedido_ref']}" if not vacio(p.get("pedido_ref")) else "",
             factura_txt,
+            str(p.get("notas") or ""),
         ]
+        memo_limpio = (
+            None
+            if es_efectivo(p.get("metodo_pago"))
+            else (str(p["referencia"]).strip() if not vacio(p.get("referencia")) else None)
+        )
         pago = odoo.crear_pago(
             partner_id=partner,
             monto=Decimal(str(p["monto"])),
@@ -556,7 +576,8 @@ class ServicioCapturas:
             moneda_id=moneda_id,
             es_cliente=c.kind == PAGO,
             marca=marca,
-            memo=" · ".join(x for x in partes if x),
+            memo=memo_limpio,
+            nota_chatter=" · ".join(x for x in partes if x),
             fecha=_fecha_iso(p.get("fecha_pago")),
         )
         return f"account.payment:{pago}", {**extra, "partner_id": partner, "diario_id": diario}
@@ -755,6 +776,7 @@ class ServicioCapturas:
             concepto = str(p["concepto"])
         else:
             concepto = f"Compra en {proveedor_txt}" if es_gasto else f"Factura proveedor {etiqueta}"
+        diario_id = odoo.diario_compras_ves_id(p.get("diario_id") or p.get("diario_codigo"))
         factura = odoo.crear_factura_proveedor(
             partner_id=partner,
             numero=etiqueta,
@@ -765,12 +787,16 @@ class ServicioCapturas:
             concepto=concepto,
             marca=marca,
             narration=" · ".join(x for x in notas if x),
+            journal_id=diario_id,
         )
-        return f"account.move:{factura}", {
+        res_doc: dict[str, Any] = {
             "partner_id": partner,
             **extra,
             "monto_linea": str(monto),
         }
+        if diario_id is not None:
+            res_doc["diario_id"] = diario_id
+        return f"account.move:{factura}", res_doc
 
 
 __all__ = [
