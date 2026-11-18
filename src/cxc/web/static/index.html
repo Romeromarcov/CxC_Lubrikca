@@ -1038,9 +1038,9 @@
 
                     <div class="dashboard-kpi-row" style="margin:1rem 0;">
                         <div class="card kpi-card"><h3>Total Documentos</h3><p id="docs-kpi-total">0</p><span>Cotizaciones y pedidos en CxC</span></div>
-                        <div class="card kpi-card"><h3>Cotizaciones por enviar</h3><p id="docs-kpi-cot">0</p><span>Borradores revisables en CxC</span></div>
-                        <div class="card kpi-card"><h3>Pedidos en borrador</h3><p id="docs-kpi-ped">0</p><span>Pendientes de enviar a Odoo</span></div>
-                        <div class="card kpi-card"><h3>Enviados a Odoo</h3><p id="docs-kpi-enviados">0</p><span>Con orden creada en Odoo</span></div>
+                        <div class="card kpi-card"><h3>Cotizaciones activas</h3><p id="docs-kpi-cot">0</p><span>Con enlace de preview compartible</span></div>
+                        <div class="card kpi-card"><h3>⏳ Pendientes aprobación</h3><p id="docs-kpi-ped">0</p><span>Pedidos por autorizar en CxC</span></div>
+                        <div class="card kpi-card"><h3>✅ Aprobados en Odoo</h3><p id="docs-kpi-enviados">0</p><span>Enviados con precios de lista + chatter</span></div>
                     </div>
 
                     <div id="docs-aviso-general" style="margin-bottom:0.75rem;"></div>
@@ -1053,9 +1053,11 @@
                         </select>
                         <select id="docs-filtro-estado" class="filter-select" aria-label="Estado del documento">
                             <option value="">Todos los estados</option>
-                            <option value="BORRADOR">En borrador CxC</option>
-                            <option value="ENVIADO_ODOO">Enviados a Odoo</option>
-                            <option value="ERROR">Con error</option>
+                            <option value="PENDIENTE_APROBACION">⏳ Pedido pendiente por aprobación</option>
+                            <option value="BORRADOR">📋 Cotización vigente</option>
+                            <option value="ENVIADO_ODOO">✅ Aprobados / Enviados a Odoo</option>
+                            <option value="RECHAZADO">❌ Rechazados</option>
+                            <option value="ERROR">⚠️ Con error</option>
                         </select>
                         <input type="text" id="docs-filtro-q" placeholder="🔍 Buscar por número, cliente, RIF o S0..." style="min-width:260px; padding:0.45rem 0.75rem; border:1px solid #cbd5e1; border-radius:8px;">
                     </div>
@@ -1103,10 +1105,10 @@
                             </select>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label>Lista de referencia</label>
+                            <label>Lista comercial por defecto</label>
                             <select id="doc-f-moneda">
-                                <option value="USD">Lista USD ($)</option>
-                                <option value="VES">Lista BCV / VES ($)</option>
+                                <option value="VES" id="doc-opt-lista-ves">Pago VES Nov 2026 (Comercial por defecto)</option>
+                                <option value="USD">Pago USD Comercial ($)</option>
                             </select>
                         </div>
                         <div class="form-group" style="margin:0; grid-column: span 2;">
@@ -1191,15 +1193,31 @@
                         </table>
                     </div>
 
-                    <div style="display:flex; justify-content:flex-end; gap:1.5rem; margin-bottom:1rem; font-size:0.95rem;">
-                        <div>Litros totales: <strong id="doc-resumen-litros">0.00 L</strong></div>
-                        <div>Subtotal estimado: <strong id="doc-resumen-subtotal" style="color:#1e40af; font-size:1.1rem;">$0.00</strong></div>
+                    <!-- Catálogo de Descuentos y Validación en Vivo del Motor CxC -->
+                    <div style="margin-bottom:1rem; padding:1rem; background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem;">
+                            <label style="font-weight:700; color:#0f172a; margin:0;">🏷️ Catálogo de Descuentos Comerciales (Validados contra el Motor CxC)</label>
+                            <small style="color:#475569;">En Odoo se enviarán los precios normales de lista; los descuentos van como nota al chatter y quedan en CxC.</small>
+                        </div>
+                        <div id="doc-descuentos-lista" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:0.5rem;">
+                            <span style="color:#64748b; font-size:0.85rem;">Cargando catálogo de descuentos...</span>
+                        </div>
+                        <div id="doc-descuentos-alertas" style="margin-top:0.65rem;"></div>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:1.4rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.93rem; background:#f1f5f9; padding:0.75rem 1rem; border-radius:8px;">
+                        <div>Litros: <strong id="doc-resumen-litros">0.00 L</strong></div>
+                        <div>Subtotal Lista: <strong id="doc-resumen-subtotal">$0.00</strong></div>
+                        <div style="color:#15803d;">Descuentos CxC: <strong id="doc-resumen-descuentos">-$0.00</strong></div>
+                        <div>Base Neta: <strong id="doc-resumen-neto">$0.00</strong></div>
+                        <div>IVA (16%): <strong id="doc-resumen-iva">$0.00</strong></div>
+                        <div>Total Estimado: <strong id="doc-resumen-total-iva" style="color:#1e40af; font-size:1.1rem;">$0.00</strong></div>
                     </div>
 
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:0.85rem; margin-bottom:1.25rem;">
                         <div class="form-group" style="margin:0;">
                             <label>Condiciones de negociación y descuentos otorgados</label>
-                            <textarea id="doc-f-condiciones" rows="2" placeholder="Ej. Contado BCV, 5% descuento pronto pago..."></textarea>
+                            <textarea id="doc-f-condiciones" rows="2" placeholder="Ej. Contado BCV, condiciones acordadas con el cliente..."></textarea>
                         </div>
                         <div class="form-group" style="margin:0;">
                             <label>Observaciones / Notas adicionales</label>
@@ -1207,9 +1225,11 @@
                         </div>
                     </div>
 
-                    <div id="doc-editor-acciones" style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                    <div id="doc-editor-acciones" style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
                         <button type="button" class="btn-secondary" id="doc-btn-guardar" onclick="guardarDocumentoComercial(false)">💾 Guardar en CxC</button>
-                        <button type="button" class="btn-primary" id="doc-btn-enviar-odoo" onclick="guardarDocumentoComercial(true)">🚀 Guardar y Enviar a Odoo</button>
+                        <a href="#" target="_blank" rel="noopener" class="btn-secondary" id="doc-btn-preview" style="display:none; text-decoration:none;">🔗 Abrir Preview</a>
+                        <button type="button" class="btn-secondary" id="doc-btn-convertir" style="display:none; background:#dcfce7; color:#166534; border-color:#86efac;" onclick="convertirDocumentoEditorAPedido()">🛒 Convertir en Pedido</button>
+                        <button type="button" class="btn-primary" id="doc-btn-enviar-odoo" onclick="guardarDocumentoComercial(true)">✅ Autorizar y Enviar a Odoo</button>
                     </div>
                 </section>
             </div>

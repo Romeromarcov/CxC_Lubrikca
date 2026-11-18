@@ -452,6 +452,7 @@ class EscritorOdoo:
         vendedor_id: int | None = None,
         shipping_id: int | None = None,
         fecha_entrega: str | None = None,
+        pricelist_id: int | None = None,
     ) -> int:
         """``sale.order`` en borrador. Sin ``price_unit`` Odoo aplica la lista del cliente."""
         previo = self._buscar("sale.order", [["client_order_ref", "=", marca]], 1)
@@ -472,8 +473,14 @@ class EscritorOdoo:
             ):
                 v["discount"] = float(Decimal(str(ln["descuento_pct"])))
             order_line.append((0, 0, v))
+        pl_val = (
+            pricelist_id
+            if pricelist_id is not None and "pricelist_id" in self.campos("sale.order")
+            else None
+        )
         vals = _vals(
             partner_id=partner_id,
+            pricelist_id=pl_val,
             client_order_ref=marca,
             note=nota or None,
             user_id=vendedor_id,

@@ -272,7 +272,7 @@ class OdooFalso:
                 "partner_latitude": {},
                 "partner_longitude": {},
             },
-            "sale.order:fields_get": {"name": {}, "message_ids": {}},
+            "sale.order:fields_get": {"name": {}, "message_ids": {}, "pricelist_id": {}},
             "sale.order.line:fields_get": {"discount": {}},
             "account.payment:fields_get": {"memo": {}, "amount": {}, "message_ids": {}},
             "account.move:fields_get": dict.fromkeys(
