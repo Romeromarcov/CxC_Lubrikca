@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -20,6 +21,8 @@ class RepoDocumentos(Protocol):
     ) -> DocumentoComercial: ...
 
     def obtener(self, documento_id: int) -> DocumentoComercial | None: ...
+
+    def obtener_por_token(self, token_preview: str) -> DocumentoComercial | None: ...
 
     def obtener_por_captura(self, captura_id: int) -> DocumentoComercial | None: ...
 
@@ -61,6 +64,43 @@ def _a_linea(r: Any) -> LineaDocumento:
     )
 
 
+def _cargar_json_lista(raw: Any) -> tuple[dict[str, Any], ...]:
+    if not raw:
+        return ()
+    if isinstance(raw, list | tuple):
+        return tuple(x for x in raw if isinstance(x, dict))
+    try:
+        parsed = json.loads(str(raw))
+        return tuple(x for x in parsed if isinstance(x, dict)) if isinstance(parsed, list) else ()
+    except Exception:
+        return ()
+
+
+def _cargar_json_dict(raw: Any) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _serializar_campos_sql(cabecera: dict[str, Any]) -> dict[str, Any]:
+    out = dict(cabecera)
+    if "descuentos_elegidos" in out:
+        val_d = out.pop("descuentos_elegidos")
+        out["descuentos_json"] = json.dumps(list(val_d or []), ensure_ascii=False)
+    if "validacion_motor" in out:
+        val_v = out.pop("validacion_motor")
+        out["validacion_motor_json"] = (
+            json.dumps(val_v, ensure_ascii=False) if val_v is not None else ""
+        )
+    return out
+
+
 def _a_documento(r: Any, lineas: Sequence[LineaDocumento]) -> DocumentoComercial:
     return DocumentoComercial(
         documento_id=int(r.documento_id),
@@ -80,7 +120,7 @@ def _a_documento(r: Any, lineas: Sequence[LineaDocumento]) -> DocumentoComercial
         latitud=float(r.latitud) if r.latitud is not None else None,
         longitud=float(r.longitud) if r.longitud is not None else None,
         es_primera_compra=bool(r.es_primera_compra),
-        moneda_lista=str(r.moneda_lista or "USD"),
+        moneda_lista=str(r.moneda_lista or "VES"),
         vendedor_email=str(r.vendedor_email or ""),
         fecha_entrega=r.fecha_entrega,
         condiciones_negociacion=str(r.condiciones_negociacion or ""),
@@ -94,6 +134,17 @@ def _a_documento(r: Any, lineas: Sequence[LineaDocumento]) -> DocumentoComercial
         creado_en=r.creado_en,
         actualizado_en=r.actualizado_en,
         lineas=tuple(lineas),
+        token_preview=str(getattr(r, "token_preview", None) or ""),
+        lista_precios_id=str(getattr(r, "lista_precios_id", None) or "21"),
+        lista_precios_nombre=str(getattr(r, "lista_precios_nombre", None) or "Pago VES Nov 2026"),
+        descuentos_elegidos=_cargar_json_lista(getattr(r, "descuentos_json", "")),
+        validacion_motor=_cargar_json_dict(getattr(r, "validacion_motor_json", "")),
+        total_descuentos=Decimal(str(getattr(r, "total_descuentos", None) or "0")),
+        subtotal_neto=Decimal(str(getattr(r, "subtotal_neto", None) or "0")),
+        monto_iva=Decimal(str(getattr(r, "monto_iva", None) or "0")),
+        total_con_iva=Decimal(str(getattr(r, "total_con_iva", None) or "0")),
+        aprobado_por=str(getattr(r, "aprobado_por", None) or ""),
+        aprobado_en=getattr(r, "aprobado_en", None),
     )
 
 
@@ -107,13 +158,14 @@ class RepoDocumentosSQL:
         self, cabecera: dict[str, Any], lineas: Sequence[dict[str, Any]]
     ) -> DocumentoComercial:
         ahora = datetime.now()
-        tipo = str(cabecera["tipo"])
+        vals = _serializar_campos_sql(cabecera)
+        tipo = str(vals["tipo"])
         temporal = f"{_prefijo(tipo)}-TMP-{ahora.timestamp():.6f}"
         with self._engine.begin() as conn:
             fila = conn.execute(
                 insert(documentos_comerciales)
                 .values(
-                    **cabecera,
+                    **vals,
                     numero=temporal,
                     creado_en=ahora,
                     actualizado_en=ahora,
@@ -168,6 +220,27 @@ class RepoDocumentosSQL:
             lns = conn.execute(
                 select(documentos_comerciales_lineas)
                 .where(documentos_comerciales_lineas.c.documento_id == documento_id)
+                .order_by(
+                    documentos_comerciales_lineas.c.orden,
+                    documentos_comerciales_lineas.c.linea_id,
+                )
+            ).all()
+        return _a_documento(fila, [_a_linea(x) for x in lns])
+
+    def obtener_por_token(self, token_preview: str) -> DocumentoComercial | None:
+        tok = (token_preview or "").strip()
+        if not tok:
+            return None
+        with self._engine.connect() as conn:
+            fila = conn.execute(
+                select(documentos_comerciales).where(documentos_comerciales.c.token_preview == tok)
+            ).first()
+            if fila is None:
+                return None
+            doc_id = int(fila.documento_id)
+            lns = conn.execute(
+                select(documentos_comerciales_lineas)
+                .where(documentos_comerciales_lineas.c.documento_id == doc_id)
                 .order_by(
                     documentos_comerciales_lineas.c.orden,
                     documentos_comerciales_lineas.c.linea_id,
@@ -246,7 +319,6 @@ class RepoDocumentosSQL:
                 for fl in filas_ln:
                     mapa_lineas[int(fl.documento_id)].append(_a_linea(fl))
 
-            # Resumen global sobre todos los documentos
             todos_res = conn.execute(
                 select(
                     documentos_comerciales.c.tipo,
@@ -258,8 +330,10 @@ class RepoDocumentosSQL:
         resumen = {
             "total": 0,
             "cotizaciones_borrador": 0,
+            "pedidos_pendientes_aprobacion": 0,
             "pedidos_borrador": 0,
             "enviados_odoo": 0,
+            "rechazados": 0,
             "con_error": 0,
         }
         for t, est, cnt in todos_res:
@@ -267,6 +341,11 @@ class RepoDocumentosSQL:
             resumen["total"] += n
             if est == "ENVIADO_ODOO":
                 resumen["enviados_odoo"] += n
+            elif est == "PENDIENTE_APROBACION":
+                resumen["pedidos_pendientes_aprobacion"] += n
+                resumen["pedidos_borrador"] += n
+            elif est == "RECHAZADO":
+                resumen["rechazados"] += n
             elif est == "ERROR":
                 resumen["con_error"] += n
             elif t == "cotizacion":
@@ -283,7 +362,7 @@ class RepoDocumentosSQL:
         cabecera: dict[str, Any],
         lineas: Sequence[dict[str, Any]] | None = None,
     ) -> DocumentoComercial:
-        valores = {**cabecera, "actualizado_en": datetime.now()}
+        valores = {**_serializar_campos_sql(cabecera), "actualizado_en": datetime.now()}
         if "tipo" in valores:
             valores["numero"] = f"{_prefijo(str(valores['tipo']))}-{documento_id:05d}"
         with self._engine.begin() as conn:

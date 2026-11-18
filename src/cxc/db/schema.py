@@ -1046,9 +1046,7 @@ bancos_movimientos = Table(
 bancos_propuestas = Table(
     "bancos_propuestas",
     metadata,
-    Column(
-        "huella", String(24), ForeignKey("bancos_movimientos.huella"), primary_key=True
-    ),
+    Column("huella", String(24), ForeignKey("bancos_movimientos.huella"), primary_key=True),
     Column("tipo", String, nullable=False),  # pago | cuenta | ambiguo | sin_propuesta
     Column("regla", String, nullable=False),
     Column("motivo", Text, nullable=False, server_default=""),
@@ -1068,8 +1066,9 @@ bancos_decisiones = Table(
     "bancos_decisiones",
     metadata,
     Column("decision_id", Integer, primary_key=True, autoincrement=True),
-    Column("huella", String(24), ForeignKey("bancos_movimientos.huella"), nullable=False,
-           index=True),
+    Column(
+        "huella", String(24), ForeignKey("bancos_movimientos.huella"), nullable=False, index=True
+    ),
     Column("accion", String, nullable=False),  # aprobar | rechazar | corregir | reabrir
     Column("antes", Text, nullable=False),  # JSON de la propuesta antes de decidir
     Column("despues", Text, nullable=False),  # JSON de lo que quedó
@@ -1186,8 +1185,9 @@ documentos_comerciales = Table(
     metadata,
     Column("documento_id", Integer, primary_key=True, autoincrement=True),
     Column("numero", String, nullable=False, unique=True),  # COT-00001 | PED-00001
+    Column("token_preview", String(64), nullable=False, server_default="", index=True),
     Column("tipo", String, nullable=False, index=True),  # cotizacion | pedido
-    # BORRADOR | ENVIADO_ODOO | ERROR
+    # BORRADOR | PENDIENTE_APROBACION | ENVIADO_ODOO | RECHAZADO | ERROR
     Column("estado", String, nullable=False, server_default="BORRADOR", index=True),
     Column("origen", String, nullable=False, server_default="web"),  # bot | web
     Column("captura_id", Integer, nullable=True, index=True),
@@ -1202,13 +1202,23 @@ documentos_comerciales = Table(
     Column("latitud", Numeric(12, 6), nullable=True),
     Column("longitud", Numeric(12, 6), nullable=True),
     Column("es_primera_compra", Boolean, nullable=False, server_default="true"),
-    Column("moneda_lista", String, nullable=False, server_default="USD"),  # USD | VES
+    Column("moneda_lista", String, nullable=False, server_default="VES"),  # VES | USD
+    Column("lista_precios_id", String, nullable=False, server_default=""),
+    Column("lista_precios_nombre", String, nullable=False, server_default=""),
     Column("vendedor_email", String, nullable=False, server_default=""),
     Column("fecha_entrega", Date, nullable=True),
     Column("condiciones_negociacion", Text, nullable=False, server_default=""),
     Column("observaciones", Text, nullable=False, server_default=""),
+    Column("descuentos_json", Text, nullable=False, server_default="[]"),
+    Column("validacion_motor_json", Text, nullable=False, server_default="{}"),
     Column("subtotal", MONEY, nullable=False, server_default="0"),
+    Column("total_descuentos", MONEY, nullable=False, server_default="0"),
+    Column("subtotal_neto", MONEY, nullable=False, server_default="0"),
+    Column("monto_iva", MONEY, nullable=False, server_default="0"),
+    Column("total_con_iva", MONEY, nullable=False, server_default="0"),
     Column("total_litros", MONEY, nullable=False, server_default="0"),
+    Column("aprobado_por", String, nullable=False, server_default=""),
+    Column("aprobado_en", DateTime(timezone=False), nullable=True),
     Column("odoo_order_id", Integer, nullable=True),
     Column("odoo_order_name", String, nullable=False, server_default=""),
     Column("error_odoo", Text, nullable=False, server_default=""),

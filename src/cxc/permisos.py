@@ -121,6 +121,12 @@ ACCIONES: tuple[Permiso, ...] = (
         "descripcion": "Botón de generar recibo de cobro.",
     },
     {
+        "clave": "ventas.aprobar_pedidos",
+        "grupo": "Ventas",
+        "nombre": "Autorizar pedidos para envío a Odoo",
+        "descripcion": "Aprobar pedidos pendientes en CxC y enviarlos como borrador a Odoo.",
+    },
+    {
         "clave": "sistema.recalcular",
         "grupo": "Sistema",
         "nombre": "Recalcular todo",
@@ -168,8 +174,15 @@ _PAGINAS_SIN_BANCOS = frozenset(c for c, _ in PAGINAS if c not in _PAGINA_DERIVA
 BASE_POR_ROL: dict[str, frozenset[str]] = {
     "admin": CLAVES,
     "gerente_ventas": _PAGINAS_SIN_BANCOS
-    | {"cobranza.recibo", "sistema.recalcular", "capturas.ver", "capturas.gestionar",
-                          "bots.ver", "bots.gestionar"},
+    | {
+        "cobranza.recibo",
+        "ventas.aprobar_pedidos",
+        "sistema.recalcular",
+        "capturas.ver",
+        "capturas.gestionar",
+        "bots.ver",
+        "bots.gestionar",
+    },
     "tesoreria": _PAGINAS_SIN_BANCOS
     | {"cobranza.recibo", "capturas.ver", "capturas.gestionar", "bots.ver", "bots.gestionar"},
     "auditor": _PAGINAS_SIN_BANCOS

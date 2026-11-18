@@ -46,8 +46,10 @@ logger = logging.getLogger("cxc.capturas.api")
 
 router = APIRouter()
 
-_RUTA_BOT_POST = re.compile(r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat)$")
-_RUTA_BOT_GET = re.compile(r"^/api/bots/(?:catalogo|contactos)$")
+_RUTA_BOT_POST = re.compile(
+    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido)$"
+)
+_RUTA_BOT_GET = re.compile(r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo)$")
 _KINDS_SINCRONOS = frozenset({"contacto", "contacto_editar", "cotizacion", "pedido"})
 PERMISOS_VER = ("capturas.ver", "capturas.gestionar")
 INTERVALO_REINTENTO_SEGUNDOS = 120
@@ -213,7 +215,9 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
                 or "",
                 "ubicacion": p.get("ubicacion"),
                 "es_primera_compra": p.get("es_primera_compra") is not False,
-                "moneda_lista": p.get("moneda_lista") or "USD",
+                "moneda_lista": p.get("moneda_lista") or "VES",
+                "moneda_pago_esperada": p.get("moneda_pago_esperada"),
+                "descuentos_codigos": p.get("descuentos_codigos") or p.get("descuentos") or [],
                 "vendedor_email": str(captura.fuente.get("vendedor_email") or ""),
                 "fecha_entrega": p.get("fecha_entrega"),
                 "condiciones_negociacion": p.get("condiciones_negociacion") or "",
@@ -224,7 +228,7 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
             captura_id=captura.captura_id,
             actor=actor,
         )
-        if captura.kind == "pedido":
+        if captura.kind == "pedido" and not p.get("requiere_aprobacion_cxc"):
             if captura.estado == "ENVIADO" and captura.resultado.get("pedido_odoo_id"):
                 doc = svc_docs.registrar_envio_captura(
                     doc.documento_id,
@@ -234,7 +238,24 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
                 )
             elif captura.estado in ("INCOMPLETO", "ERROR") and captura.error:
                 doc = svc_docs.registrar_error_captura(doc.documento_id, captura.error)
-        return {"documento_id": doc.documento_id, "documento_numero": doc.numero}
+        doc_dict = doc.a_dict(incluir_lineas=True)
+        return {
+            "documento_id": doc.documento_id,
+            "documento_numero": doc.numero,
+            "documento_estado": doc.estado,
+            "token_preview": doc.token_preview,
+            "preview_path": doc_dict["preview_path"],
+            "lista_precios_nombre": doc.lista_precios_nombre,
+            "subtotal": doc_dict["subtotal"],
+            "total_descuentos": doc_dict["total_descuentos"],
+            "subtotal_neto": doc_dict["subtotal_neto"],
+            "monto_iva": doc_dict["monto_iva"],
+            "total_con_iva": doc_dict["total_con_iva"],
+            "total_litros": doc_dict["total_litros"],
+            "descuentos": doc_dict["descuentos"],
+            "alertas_motor": doc_dict["alertas_motor"],
+            "lineas_calculadas": doc_dict["lineas"],
+        }
     except Exception:
         # En tests unitarios aislados sin Postgres para documentos no interrumpe la captura.
         return {}

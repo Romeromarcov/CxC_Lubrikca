@@ -1,7 +1,7 @@
-"""Catálogo real de productos de Odoo (espejo local + precios vigentes USD/VES).
+"""Catálogo real de productos de Odoo y resolución de la lista comercial por defecto.
 
 Sirve tanto a la interfaz web de documentos comerciales (Cotizaciones y Pedidos dentro de Ventas)
-como a los bots de Telegram (``GET /api/bots/catalogo``) y a la validación al enviar a Odoo.
+como a los bots de Telegram (``GET /api/bots/catalogo``) y al validador del motor de descuentos.
 """
 
 from __future__ import annotations
@@ -29,11 +29,8 @@ _RE_PREFIJO_CODIGO = re.compile(r"^\[([^\]]+)\]\s*")
 
 
 def _sin_acentos(texto: str) -> str:
-    return "".join(
-        c
-        for c in unicodedata.normalize("NFD", (texto or "").lower())
-        if unicodedata.category(c) != "Mn"
-    )
+    normalizado = unicodedata.normalize("NFD", (texto or "").lower())
+    return "".join(c for c in normalizado if unicodedata.category(c) != "Mn")
 
 
 def _normalizar(texto: str) -> str:
@@ -44,6 +41,39 @@ def _normalizar(texto: str) -> str:
 def extraer_presentacion(nombre: str) -> str:
     m = _RE_PRESENTACION.search((nombre or "").strip())
     return m.group(1).strip().upper() if m else ""
+
+
+def tipo_envase_de_presentacion(presentacion: str, nombre: str = "") -> str:
+    """Clasifica una presentación de Odoo en CAJA, PAILA, TAMBOR o UNIDAD para las reglas."""
+    p = _sin_acentos(f"{presentacion} {nombre}").upper()
+    if "TAMBOR" in p:
+        return "TAMBOR"
+    if "PAILA" in p or "CUÑETE" in p or "CUNETE" in p or "BALDE" in p:
+        return "PAILA"
+    if re.search(r"\b1\s*X\s*\d+\b", p) or "CAJA" in p:
+        return "CAJA"
+    return "UNIDAD"
+
+
+@dataclass(frozen=True)
+class ListaComercialActiva:
+    lista_id: str
+    nombre: str
+    moneda: str = "VES"
+
+    def a_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.lista_id,
+            "nombre": self.nombre,
+            "moneda": self.moneda,
+        }
+
+
+LISTA_POR_DEFECTO_FALLBACK = ListaComercialActiva(
+    lista_id="21",
+    nombre="Pago VES Nov 2026",
+    moneda="VES",
+)
 
 
 @dataclass(frozen=True)
@@ -58,12 +88,14 @@ class ItemCatalogo:
     precio_ves: Decimal = Decimal("0")
 
     def a_dict(self) -> dict[str, Any]:
+        pres = self.presentacion or extraer_presentacion(self.nombre)
         return {
             "producto_id": self.producto_id,
             "codigo": self.codigo,
             "nombre": self.nombre,
             "marca": self.marca,
-            "presentacion": self.presentacion or extraer_presentacion(self.nombre),
+            "presentacion": pres,
+            "tipo_envase": tipo_envase_de_presentacion(pres, self.nombre),
             "litros": float(self.litros),
             "precio_usd": float(self.precio_usd),
             "precio_ves": float(self.precio_ves),
@@ -73,6 +105,72 @@ class ItemCatalogo:
 
 class ProveedorCatalogo(Protocol):
     def listar(self, *, refresh: bool = False) -> list[ItemCatalogo]: ...
+
+    def lista_comercial_defecto(self, *, refresh: bool = False) -> ListaComercialActiva: ...
+
+
+def elegir_lista_comercial_ves_activa(
+    pricelists_odoo: Sequence[dict[str, Any]],
+    *,
+    preferida_id: str | None = None,
+) -> ListaComercialActiva:
+    """Selecciona la lista comercial VES vigente en Odoo (p. ej. «Pago VES Nov 2026»)."""
+    activas = [p for p in pricelists_odoo if p.get("active", True)]
+    if not activas:
+        return LISTA_POR_DEFECTO_FALLBACK
+
+    # 1. Listas activas comerciales principales tipo «Pago VES ...» (sin foráneas/industrial)
+    pago_ves: list[dict[str, Any]] = []
+    for p in activas:
+        nom = _sin_acentos(str(p.get("name") or ""))
+        if (
+            "ves" in nom
+            and "pago" in nom
+            and not any(x in nom for x in ("industrial", "foranea", "maturin"))
+        ):
+            pago_ves.append(p)
+    if pago_ves:
+        # El ID mayor corresponde a la lista mensual más reciente creada en Odoo (ej. Nov > Sept)
+        pago_ves.sort(key=lambda x: int(x.get("id") or 0), reverse=True)
+        elegida = pago_ves[0]
+        return ListaComercialActiva(
+            lista_id=str(elegida["id"]),
+            nombre=str(elegida["name"]).strip(),
+            moneda="VES",
+        )
+
+    # 2. Si existe una preferida configurada en pricelist_referencia_por_grupo y está activa
+    if preferida_id:
+        for p in activas:
+            if str(p.get("id")) == str(preferida_id):
+                return ListaComercialActiva(
+                    lista_id=str(p["id"]),
+                    nombre=str(p.get("name") or f"Lista #{p['id']}").strip(),
+                    moneda="VES",
+                )
+
+    # 3. Cualquier lista activa VES no industrial
+    ves_otras = [
+        p
+        for p in activas
+        if "ves" in _sin_acentos(str(p.get("name") or ""))
+        and "industrial" not in _sin_acentos(str(p.get("name") or ""))
+    ]
+    if ves_otras:
+        ves_otras.sort(key=lambda x: int(x.get("id") or 0), reverse=True)
+        e = ves_otras[0]
+        return ListaComercialActiva(
+            lista_id=str(e["id"]),
+            nombre=str(e["name"]).strip(),
+            moneda="VES",
+        )
+
+    e0 = activas[0]
+    return ListaComercialActiva(
+        lista_id=str(e0["id"]),
+        nombre=str(e0.get("name") or "Comercial VES").strip(),
+        moneda="VES",
+    )
 
 
 def buscar_productos(
@@ -120,7 +218,6 @@ def buscar_productos(
                 pts += 40
             puntuados.append((pts, item.nombre.lower(), item))
         elif len(tokens) >= 2 and len(coincidencias) >= len(tokens) - 1:
-            # Coincidencia parcial útil cuando el vendedor agrega una palabra genérica extra
             pts = 60 + len(coincidencias) * 20
             puntuados.append((pts, item.nombre.lower(), item))
 
@@ -134,13 +231,7 @@ def resolver_producto_unico(
     producto_id: str | None = None,
     texto: str | None = None,
 ) -> tuple[ItemCatalogo | None, list[ItemCatalogo]]:
-    """Intenta resolver inequívocamente un producto del catálogo real.
-
-    Devuelve ``(elegido, candidatos)``:
-    - Si ``producto_id`` coincide o el código/nombre es único, ``elegido`` trae el ``ItemCatalogo``.
-    - Si hay varias presentaciones posibles (p. ej. «liga para frenos» → 6 SKUs), ``elegido`` es
-      ``None`` y ``candidatos`` trae las opciones reales para elegir.
-    """
+    """Intenta resolver inequívocamente un producto del catálogo real."""
     if producto_id and str(producto_id).strip():
         buscado_id = str(producto_id).strip()
         for it in items:
@@ -172,48 +263,63 @@ def resolver_producto_unico(
     return None, candidatos
 
 
+@dataclass(frozen=True)
+class DatosPreciosOdoo:
+    lista_defecto: ListaComercialActiva
+    precios: dict[str, tuple[Decimal, Decimal]]
+
+
 class CatalogoSQLOdoo:
-    """Lee el catálogo del espejo Postgres y enriquece precios USD/VES desde Odoo (con caché)."""
+    """Lee el catálogo del espejo Postgres y enriquece precios USD/VES + lista comercial activa."""
 
     CACHE_TTL_S = 300.0
     _lock = threading.Lock()
-    _cache_precios: tuple[float, dict[str, tuple[Decimal, Decimal]]] | None = None
+    _cache_datos: tuple[float, DatosPreciosOdoo] | None = None
 
     def __init__(
         self,
         engine: Engine,
-        lector_precios_fn: Callable[[], dict[str, tuple[Decimal, Decimal]]] | None = None,
+        lector_fn: Callable[[], DatosPreciosOdoo | dict[str, tuple[Decimal, Decimal]]]
+        | None = None,
     ) -> None:
         self._engine = engine
-        self._lector_precios = lector_precios_fn
+        self._lector = lector_fn
 
     @classmethod
     def limpiar_cache(cls) -> None:
         with cls._lock:
-            cls._cache_precios = None
+            cls._cache_datos = None
 
-    def _precios_por_producto(self, refresh: bool = False) -> dict[str, tuple[Decimal, Decimal]]:
-        if self._lector_precios is None:
-            return {}
+    def _cargar_datos(self, refresh: bool = False) -> DatosPreciosOdoo:
+        if self._lector is None:
+            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {})
         ahora = time.monotonic()
         with self._lock:
-            if not refresh and self._cache_precios is not None:
-                ts, datos = self._cache_precios
+            if not refresh and self._cache_datos is not None:
+                ts, datos = self._cache_datos
                 if ahora - ts < self.CACHE_TTL_S:
                     return datos
         try:
-            nuevos = self._lector_precios()
+            crudo = self._lector()
+            nuevos = (
+                crudo
+                if isinstance(crudo, DatosPreciosOdoo)
+                else DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, crudo)
+            )
         except Exception:
             logger.warning("No pude enriquecer precios en vivo desde Odoo; uso espejo local.")
-            return {}
+            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {})
         with self._lock:
-            self._cache_precios = (ahora, nuevos)
+            self._cache_datos = (ahora, nuevos)
         return nuevos
+
+    def lista_comercial_defecto(self, *, refresh: bool = False) -> ListaComercialActiva:
+        return self._cargar_datos(refresh=refresh).lista_defecto
 
     def listar(self, *, refresh: bool = False) -> list[ItemCatalogo]:
         with self._engine.connect() as conn:
             filas = conn.execute(select(catalogo)).mappings().all()
-        precios = self._precios_por_producto(refresh=refresh)
+        precios = self._cargar_datos(refresh=refresh).precios
         items: list[ItemCatalogo] = []
         for f in filas:
             pid = str(f["producto_id"])
@@ -235,12 +341,42 @@ class CatalogoSQLOdoo:
         return items
 
 
-def cargar_precios_odoo_por_producto(
+def cargar_datos_precios_odoo(
     execute: ExecuteFn,
     usd_pricelist_ids: Sequence[int],
     ves_pricelist_ids: Sequence[int],
-) -> dict[str, tuple[Decimal, Decimal]]:
-    """Mapa ``product.product.id -> (precio_usd, precio_ves)`` desde Odoo."""
+    *,
+    preferida_ves_id: str | None = None,
+) -> DatosPreciosOdoo:
+    """Resuelve la lista comercial VES por defecto (ej. Pago VES Nov 2026) y sus precios."""
+    pricelists = execute(
+        "product.pricelist",
+        "search_read",
+        [[["active", "=", True]]],
+        {"fields": ["id", "name", "active"], "limit": 100},
+    )
+    lista_defecto = elegir_lista_comercial_ves_activa(
+        pricelists or [], preferida_id=preferida_ves_id
+    )
+    activas_ids = {int(p["id"]) for p in (pricelists or []) if p.get("id")}
+
+    # Asegura que la lista comercial VES activa por defecto tenga máxima prioridad para precio_ves
+    defecto_id = int(lista_defecto.lista_id) if lista_defecto.lista_id.isdigit() else None
+    ves_activas = [int(x) for x in ves_pricelist_ids if int(x) in activas_ids]
+    usd_activas = [int(x) for x in usd_pricelist_ids if int(x) in activas_ids]
+
+    # También detecta par activo «Pago USD ...» si aún no estaba en valid_pricelists_usd
+    for p in sorted(pricelists or [], key=lambda x: int(x.get("id") or 0), reverse=True):
+        nom = _sin_acentos(str(p.get("name") or ""))
+        pid_int = int(p["id"])
+        if (
+            "pago" in nom
+            and "usd" in nom
+            and "industrial" not in nom
+            and pid_int not in usd_activas
+        ):
+            usd_activas.append(pid_int)
+
     prods = execute(
         "product.product",
         "search_read",
@@ -267,18 +403,30 @@ def cargar_precios_odoo_por_producto(
         for t in tmpls or []:
             fallback_por_tmpl[int(t["id"])] = Decimal(str(t.get("list_price_usd") or "0"))
 
-    all_lists = [int(x) for x in (*usd_pricelist_ids, *ves_pricelist_ids)]
+    listas_consulta = list(
+        dict.fromkeys(
+            [*(usd_activas or usd_pricelist_ids), *(ves_activas or ves_pricelist_ids)]
+            + ([defecto_id] if defecto_id is not None else [])
+        )
+    )
     prices_usd: dict[int, Decimal] = {}
     prices_ves: dict[int, Decimal] = {}
-    if all_lists:
+    prices_ves_defecto: dict[int, Decimal] = {}
+
+    if listas_consulta:
         rules = execute(
             "product.pricelist.item",
             "search_read",
-            [[["pricelist_id", "in", all_lists], ["compute_price", "=", "fixed"]]],
-            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"], "limit": 20000},
+            [
+                [
+                    ["pricelist_id", "in", [int(x) for x in listas_consulta]],
+                    ["compute_price", "=", "fixed"],
+                ]
+            ],
+            {"fields": ["pricelist_id", "product_tmpl_id", "fixed_price"], "limit": 25000},
         )
-        usd_set = {int(x) for x in usd_pricelist_ids}
-        ves_set = {int(x) for x in ves_pricelist_ids}
+        usd_set = {int(x) for x in (usd_activas or usd_pricelist_ids)}
+        ves_set = {int(x) for x in (ves_activas or ves_pricelist_ids)}
         for r in rules or []:
             pl = r.get("pricelist_id")
             pl_id = int(pl[0]) if isinstance(pl, list | tuple) and pl else int(pl or 0)
@@ -287,13 +435,26 @@ def cargar_precios_odoo_por_producto(
             if pt_id is None:
                 continue
             val = Decimal(str(r.get("fixed_price") or "0"))
+            if defecto_id is not None and pl_id == defecto_id:
+                prices_ves_defecto[pt_id] = val
+            if pl_id in ves_set and pt_id not in prices_ves:
+                prices_ves[pt_id] = val
             if pl_id in usd_set:
                 prices_usd[pt_id] = val
-            elif pl_id in ves_set:
-                prices_ves[pt_id] = val
 
     salida: dict[str, tuple[Decimal, Decimal]] = {}
     for pid, tid in tmpl_por_prod.items():
         fb = fallback_por_tmpl.get(tid, Decimal("0"))
-        salida[pid] = (prices_usd.get(tid, fb), prices_ves.get(tid, fb))
-    return salida
+        p_ves = prices_ves_defecto.get(tid, prices_ves.get(tid, fb))
+        p_usd = prices_usd.get(tid, fb * Decimal("0.65") if fb > 0 else Decimal("0"))
+        salida[pid] = (p_usd, p_ves)
+    return DatosPreciosOdoo(lista_defecto=lista_defecto, precios=salida)
+
+
+def cargar_precios_odoo_por_producto(
+    execute: ExecuteFn,
+    usd_pricelist_ids: Sequence[int],
+    ves_pricelist_ids: Sequence[int],
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """Compatibilidad directa: devuelve solo el mapa ``producto_id -> (usd, ves)``."""
+    return cargar_datos_precios_odoo(execute, usd_pricelist_ids, ves_pricelist_ids).precios

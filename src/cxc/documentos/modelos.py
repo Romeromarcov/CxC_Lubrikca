@@ -14,11 +14,19 @@ PEDIDO = "pedido"
 TIPOS_DOCUMENTO = (COTIZACION, PEDIDO)
 
 BORRADOR = "BORRADOR"
+PENDIENTE_APROBACION = "PENDIENTE_APROBACION"
 ENVIADO_ODOO = "ENVIADO_ODOO"
+RECHAZADO = "RECHAZADO"
 ERROR_ODOO = "ERROR"
-ESTADOS_DOCUMENTO = (BORRADOR, ENVIADO_ODOO, ERROR_ODOO)
+ESTADOS_DOCUMENTO = (
+    BORRADOR,
+    PENDIENTE_APROBACION,
+    ENVIADO_ODOO,
+    RECHAZADO,
+    ERROR_ODOO,
+)
 
-MONEDAS_LISTA = ("USD", "VES")
+MONEDAS_LISTA = ("VES", "USD")
 
 
 class DocumentoInvalido(ValueError):
@@ -118,11 +126,39 @@ class DocumentoComercial:
     creado_en: datetime
     actualizado_en: datetime
     lineas: tuple[LineaDocumento, ...] = ()
+    token_preview: str = ""
+    lista_precios_id: str = "21"
+    lista_precios_nombre: str = "Pago VES Nov 2026"
+    descuentos_elegidos: tuple[dict[str, Any], ...] = ()
+    validacion_motor: dict[str, Any] | None = None
+    total_descuentos: Decimal = Decimal("0")
+    subtotal_neto: Decimal = Decimal("0")
+    monto_iva: Decimal = Decimal("0")
+    total_con_iva: Decimal = Decimal("0")
+    aprobado_por: str = ""
+    aprobado_en: datetime | None = None
 
     def a_dict(self, *, incluir_lineas: bool = True) -> dict[str, Any]:
+        sub_neto = (
+            self.subtotal_neto
+            if self.subtotal_neto > Decimal("0") or self.total_descuentos > Decimal("0")
+            else self.subtotal
+        )
+        iva = (
+            self.monto_iva
+            if self.total_con_iva > Decimal("0")
+            else (sub_neto * Decimal("0.16")).quantize(Decimal("0.01"))
+        )
+        tot_iva = (
+            self.total_con_iva
+            if self.total_con_iva > Decimal("0")
+            else (sub_neto + iva).quantize(Decimal("0.01"))
+        )
         out: dict[str, Any] = {
             "id": self.documento_id,
             "numero": self.numero,
+            "token_preview": self.token_preview,
+            "preview_path": f"/cotizacion/{self.token_preview}" if self.token_preview else "",
             "tipo": self.tipo,
             "estado": self.estado,
             "origen": self.origen,
@@ -139,11 +175,24 @@ class DocumentoComercial:
             "longitud": self.longitud,
             "es_primera_compra": self.es_primera_compra,
             "moneda_lista": self.moneda_lista,
+            "lista_precios_id": self.lista_precios_id,
+            "lista_precios_nombre": self.lista_precios_nombre,
             "vendedor_email": self.vendedor_email,
             "fecha_entrega": self.fecha_entrega.isoformat() if self.fecha_entrega else None,
             "condiciones_negociacion": self.condiciones_negociacion,
             "observaciones": self.observaciones,
+            "descuentos": [dict(d) for d in self.descuentos_elegidos],
+            "validacion_motor": dict(self.validacion_motor) if self.validacion_motor else None,
+            "alertas_motor": (
+                list(self.validacion_motor.get("alertas", []))
+                if isinstance(self.validacion_motor, dict)
+                else []
+            ),
             "subtotal": float(self.subtotal),
+            "total_descuentos": float(self.total_descuentos),
+            "subtotal_neto": float(sub_neto),
+            "monto_iva": float(iva),
+            "total_con_iva": float(tot_iva),
             "total_litros": float(self.total_litros),
             "n_lineas": len(self.lineas),
             "lineas_sin_catalogo": sum(
@@ -152,6 +201,10 @@ class DocumentoComercial:
             "odoo_order_id": self.odoo_order_id,
             "odoo_order_name": self.odoo_order_name,
             "error_odoo": self.error_odoo,
+            "aprobado_por": self.aprobado_por,
+            "aprobado_en": self.aprobado_en.isoformat(timespec="seconds")
+            if self.aprobado_en
+            else None,
             "creado_por": self.creado_por,
             "creado_en": self.creado_en.isoformat(timespec="seconds"),
             "actualizado_en": self.actualizado_en.isoformat(timespec="seconds"),
