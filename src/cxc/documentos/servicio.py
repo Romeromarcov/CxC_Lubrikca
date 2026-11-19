@@ -43,6 +43,7 @@ from .modelos import (
     normalizar_rif_opcional,
     parsear_fecha_opcional,
 )
+from .politica_ventas import evaluar_politica_auto_envio
 from .repositorio import RepoDocumentos
 
 logger = logging.getLogger("cxc.documentos.servicio")
@@ -96,13 +97,18 @@ def _extraer_codigos_descuento(datos: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(codigos))
 
 
-def _construir_nota_odoo(doc: DocumentoComercial, *, actor: str) -> str:
+def _construir_nota_odoo(doc: DocumentoComercial, *, actor: str, auto_enviado: bool = False) -> str:
     """Construye la nota detallada para el documento y el chatter de Odoo."""
     etiqueta_doc = "Cotización" if doc.tipo == COTIZACION else "Pedido"
     lista_lbl = doc.lista_precios_nombre or f"Lista {doc.moneda_lista}"
+    cab_aut = (
+        f"Auto-aprobado por política CxC (cumple todos los parámetros · {actor})"
+        if auto_enviado
+        else f"Autorizado / enviado desde CxC por: {actor}"
+    )
     lineas_nota: list[str] = [
         f"{etiqueta_doc} CxC {doc.numero} · Lista comercial: {lista_lbl}",
-        f"Autorizado / enviado desde CxC por: {actor}",
+        cab_aut,
         f"Subtotal precios normales de lista: ${doc.subtotal:.2f}",
     ]
 
@@ -545,6 +551,84 @@ class ServicioDocumentos:
     def _estado_inicial(tipo: str) -> str:
         return PENDIENTE_APROBACION if tipo == PEDIDO else BORRADOR
 
+    def evaluar_politica(self, doc: DocumentoComercial) -> dict[str, Any]:
+        """Evalúa la política de auto-envío y límites de crédito para un documento."""
+        return evaluar_politica_auto_envio(
+            doc,
+            self._repo_cxc,
+            engine=getattr(self._repo, "_engine", None),
+        )
+
+    def _aplicar_politica_y_auto_envio(
+        self, doc: DocumentoComercial, *, actor: str
+    ) -> DocumentoComercial:
+        """Envía a Odoo directo si cumple todos los parámetros; si no, retiene con motivos."""
+        if doc.tipo != PEDIDO or doc.estado == ENVIADO_ODOO:
+            return doc
+
+        eval_pol = self.evaluar_politica(doc)
+        motivos = list(eval_pol.get("motivos_retencion") or ())
+
+        if eval_pol.get("puede_auto_enviar"):
+            escritor = self._fabrica()
+            if escritor is None:
+                motivos.append("Escritura a Odoo desactivada en este entorno.")
+                eval_pol = {
+                    **eval_pol,
+                    "puede_auto_enviar": False,
+                    "motivos_retencion": motivos,
+                }
+                return self._repo.actualizar(
+                    doc.documento_id,
+                    {
+                        "estado": PENDIENTE_APROBACION,
+                        "auto_enviado": False,
+                        "motivos_retencion": motivos,
+                        "evaluacion_politica": eval_pol,
+                    },
+                )
+            self._repo.actualizar(
+                doc.documento_id,
+                {
+                    "motivos_retencion": (),
+                    "evaluacion_politica": eval_pol,
+                },
+            )
+            try:
+                return self.enviar_a_odoo(
+                    doc.documento_id,
+                    actor=actor,
+                    registrar_aprobacion=True,
+                    auto_enviado=True,
+                )
+            except (DocumentoInvalido, OdooEscrituraError) as exc:
+                motivo_err = getattr(exc, "mensaje", None) or str(exc)
+                motivos.append(motivo_err)
+                eval_pol = {
+                    **eval_pol,
+                    "puede_auto_enviar": False,
+                    "motivos_retencion": motivos,
+                }
+                return self._repo.actualizar(
+                    doc.documento_id,
+                    {
+                        "estado": PENDIENTE_APROBACION,
+                        "auto_enviado": False,
+                        "motivos_retencion": motivos,
+                        "evaluacion_politica": eval_pol,
+                        "error_odoo": "",
+                    },
+                )
+
+        return self._repo.actualizar(
+            doc.documento_id,
+            {
+                "auto_enviado": False,
+                "motivos_retencion": motivos,
+                "evaluacion_politica": eval_pol,
+            },
+        )
+
     def crear(
         self,
         datos: dict[str, Any],
@@ -552,6 +636,7 @@ class ServicioDocumentos:
         origen: str = "web",
         captura_id: int | None = None,
         actor: str = "sistema",
+        auto_enviar: bool = True,
     ) -> DocumentoComercial:
         if captura_id is not None:
             previo = self._repo.obtener_por_captura(captura_id)
@@ -568,15 +653,26 @@ class ServicioDocumentos:
                 cab.pop("creado_por", None)
                 cab["estado"] = self._estado_inicial(cab["tipo"])
                 cab["error_odoo"] = ""
-                return self._repo.actualizar(previo.documento_id, cab, lns)
+                doc_upd = self._repo.actualizar(previo.documento_id, cab, lns)
+                if cab["tipo"] == PEDIDO and auto_enviar:
+                    return self._aplicar_politica_y_auto_envio(doc_upd, actor=actor)
+                return doc_upd
         cab, lns = self._preparar_cabecera_y_lineas(
             datos, origen=origen, captura_id=captura_id, actor=actor
         )
         cab["estado"] = self._estado_inicial(cab["tipo"])
-        return self._repo.crear(cab, lns)
+        doc = self._repo.crear(cab, lns)
+        if cab["tipo"] == PEDIDO and auto_enviar:
+            return self._aplicar_politica_y_auto_envio(doc, actor=actor)
+        return doc
 
     def editar(
-        self, documento_id: int, datos: dict[str, Any], *, actor: str = "sistema"
+        self,
+        documento_id: int,
+        datos: dict[str, Any],
+        *,
+        actor: str = "sistema",
+        auto_enviar: bool = True,
     ) -> DocumentoComercial:
         existente = self.obtener(documento_id)
         if existente.estado == ENVIADO_ODOO:
@@ -631,7 +727,14 @@ class ServicioDocumentos:
         cab.pop("creado_por", None)
         cab["estado"] = self._estado_inicial(cab["tipo"])
         cab["error_odoo"] = ""
-        return self._repo.actualizar(documento_id, cab, lns)
+        actualizado = self._repo.actualizar(documento_id, cab, lns)
+        if (
+            actualizado.tipo == PEDIDO
+            and actualizado.estado == PENDIENTE_APROBACION
+            and auto_enviar
+        ):
+            return self._aplicar_politica_y_auto_envio(actualizado, actor=actor)
+        return actualizado
 
     def convertir_en_pedido(
         self,
@@ -640,7 +743,7 @@ class ServicioDocumentos:
         *,
         actor: str = "vendedor",
     ) -> DocumentoComercial:
-        """Convierte una Cotización en Pedido y lo deja en ``PENDIENTE_APROBACION`` en CxC."""
+        """Convierte una Cotización en Pedido y evalúa si auto-envía a Odoo o queda retenido."""
         existente = self.obtener(documento_id)
         if existente.estado == ENVIADO_ODOO:
             ref = existente.odoo_order_name or existente.odoo_order_id
@@ -678,12 +781,12 @@ class ServicioDocumentos:
         if "descuentos_codigos" in extra or "descuentos" in extra:
             cambios["descuentos_codigos"] = _extraer_codigos_descuento(extra)
 
-        actualizado = self.editar(documento_id, cambios, actor=actor)
+        actualizado = self.editar(documento_id, cambios, actor=actor, auto_enviar=False)
         if actualizado.estado != PENDIENTE_APROBACION:
             actualizado = self._repo.actualizar(
                 documento_id, {"tipo": PEDIDO, "estado": PENDIENTE_APROBACION}
             )
-        return actualizado
+        return self._aplicar_politica_y_auto_envio(actualizado, actor=actor)
 
     def convertir_por_token(
         self,
@@ -846,6 +949,8 @@ class ServicioDocumentos:
         doc = self.obtener(documento_id)
         if doc.tipo != PEDIDO:
             doc = self.convertir_en_pedido(documento_id, actor=actor)
+        if doc.estado == ENVIADO_ODOO and doc.auto_enviado:
+            return doc
         return self.enviar_a_odoo(doc.documento_id, actor=actor, registrar_aprobacion=True)
 
     def enviar_a_odoo(
@@ -854,6 +959,7 @@ class ServicioDocumentos:
         *,
         actor: str = "sistema",
         registrar_aprobacion: bool = False,
+        auto_enviado: bool = False,
     ) -> DocumentoComercial:
         """Envía a Odoo con precios normales de lista (sin discount en línea) + chatter."""
         doc = self.obtener(documento_id)
@@ -906,7 +1012,7 @@ class ServicioDocumentos:
         )
         try:
             partner_id = self._resolver_partner_para_envio(doc, escritor, marca)
-            nota_final = _construir_nota_odoo(doc, actor=actor)
+            nota_final = _construir_nota_odoo(doc, actor=actor, auto_enviado=auto_enviado)
             order_id = escritor.crear_pedido(
                 partner_id=partner_id,
                 lineas=lineas_odoo,
@@ -938,8 +1044,9 @@ class ServicioDocumentos:
             "odoo_order_id": order_id,
             "odoo_order_name": order_name,
             "error_odoo": "",
+            "auto_enviado": auto_enviado,
         }
         if registrar_aprobacion or doc.tipo == PEDIDO:
-            campos_fin["aprobado_por"] = actor
+            campos_fin["aprobado_por"] = f"auto_politica ({actor})" if auto_enviado else actor
             campos_fin["aprobado_en"] = datetime.now()
         return self._repo.actualizar(documento_id, campos_fin)

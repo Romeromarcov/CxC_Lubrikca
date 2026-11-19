@@ -201,6 +201,12 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
         svc_docs = fabrica_docs()
         p = captura.payload
         actor = str(captura.fuente.get("vendedor_email") or "bot")
+        ya_enviado_captura = (
+            captura.kind == "pedido"
+            and not p.get("requiere_aprobacion_cxc")
+            and captura.estado == "ENVIADO"
+            and bool(captura.resultado.get("pedido_odoo_id"))
+        )
         doc = svc_docs.crear(
             {
                 "tipo": captura.kind,
@@ -230,6 +236,7 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
             origen="bot",
             captura_id=captura.captura_id,
             actor=actor,
+            auto_enviar=not ya_enviado_captura,
         )
         if captura.kind == "pedido" and not p.get("requiere_aprobacion_cxc"):
             if captura.estado == "ENVIADO" and captura.resultado.get("pedido_odoo_id"):
@@ -242,10 +249,22 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
             elif captura.estado in ("INCOMPLETO", "ERROR") and captura.error:
                 doc = svc_docs.registrar_error_captura(doc.documento_id, captura.error)
         doc_dict = doc.a_dict(incluir_lineas=True)
-        return {
+        modo_res = (
+            "auto_enviado_odoo"
+            if (doc.auto_enviado and doc.estado == "ENVIADO_ODOO")
+            else (
+                "pendiente_aprobacion_cxc"
+                if doc.estado == "PENDIENTE_APROBACION"
+                else "documento_cxc"
+            )
+        )
+        out_doc: dict[str, Any] = {
             "documento_id": doc.documento_id,
             "documento_numero": doc.numero,
             "documento_estado": doc.estado,
+            "auto_enviado": doc.auto_enviado,
+            "motivos_retencion": list(doc.motivos_retencion),
+            "modo": modo_res,
             "token_preview": doc.token_preview,
             "preview_path": doc_dict["preview_path"],
             "lista_precios_nombre": doc.lista_precios_nombre,
@@ -259,6 +278,12 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
             "alertas_motor": doc_dict["alertas_motor"],
             "lineas_calculadas": doc_dict["lineas"],
         }
+        if doc.odoo_order_id:
+            out_doc["odoo_order_id"] = doc.odoo_order_id
+        if doc.odoo_order_name:
+            out_doc["odoo_order_name"] = doc.odoo_order_name
+            out_doc["odoo_name"] = doc.odoo_order_name
+        return out_doc
     except Exception:
         # En tests unitarios aislados sin Postgres para documentos no interrumpe la captura.
         return {}

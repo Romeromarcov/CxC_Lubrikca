@@ -1221,6 +1221,9 @@ documentos_comerciales = Table(
     Column("total_litros", MONEY, nullable=False, server_default="0"),
     Column("aprobado_por", String, nullable=False, server_default=""),
     Column("aprobado_en", DateTime(timezone=False), nullable=True),
+    Column("auto_enviado", Boolean, nullable=False, server_default="false"),
+    Column("motivos_retencion_json", Text, nullable=False, server_default="[]"),
+    Column("evaluacion_politica_json", Text, nullable=False, server_default="{}"),
     Column("odoo_order_id", Integer, nullable=True),
     Column("odoo_order_name", String, nullable=False, server_default=""),
     Column("error_odoo", Text, nullable=False, server_default=""),
@@ -1368,5 +1371,20 @@ documentos_operativos = Table(
     Column("recibo_emitido_en", DateTime(timezone=False), nullable=True),
     Column("creado_por", String, nullable=False, server_default="sistema"),
     Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Política de Crédito y Auto-Envío por Cliente (Fase 3, nov-2026) -------------
+politica_credito_cliente = Table(
+    "politica_credito_cliente",
+    metadata,
+    Column("partner_odoo_id", Integer, primary_key=True, autoincrement=False),
+    Column("cliente_nombre", String, nullable=False, server_default=""),
+    Column("limite_credito_usd", MONEY, nullable=True),
+    Column("limite_facturas_pendientes", Integer, nullable=True),
+    Column("dias_mora_max", Integer, nullable=True),
+    Column("bloquear_auto_envio", Boolean, nullable=False, server_default="false"),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("actualizado_por", String, nullable=False, server_default="sistema"),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
 )

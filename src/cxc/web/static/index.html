@@ -1101,26 +1101,34 @@
                 <section class="card" style="padding:1.5rem;">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">📝 Documentos de Cotizaciones y Pedidos</h2>
-                            <p style="color:#475569; margin:0;">Documentos creados desde los bots de Telegram o aquí mismo con el catálogo real de productos de Odoo. Revisa, edita líneas o precios y envíalos a Odoo.</p>
+                            <h2 style="margin:0 0 0.25rem 0;">📝 Cotizaciones y Pedidos (Unificado CxC + Odoo)</h2>
+                            <p style="color:#475569; margin:0;">Vista unificada indicando origen (CxC vs Odoo). Los pedidos que cumplen todos los parámetros se auto-envían directo a Odoo; los demás quedan retenidos para aprobación en CxC.</p>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                             <button type="button" class="btn-secondary" onclick="abrirNuevoDocumento('cotizacion')">➕ Nueva Cotización</button>
                             <button type="button" class="btn-primary" onclick="abrirNuevoDocumento('pedido')">🛒 Nuevo Pedido</button>
-                            <button type="button" class="btn-secondary" onclick="loadDocumentosComerciales()">↻ Actualizar</button>
+                            <button type="button" class="btn-secondary" onclick="window.loadDocumentosComerciales()">↻ Actualizar</button>
                         </div>
                     </div>
 
                     <div class="dashboard-kpi-row" style="margin:1rem 0;">
-                        <div class="card kpi-card"><h3>Total Documentos</h3><p id="docs-kpi-total">0</p><span>Cotizaciones y pedidos en CxC</span></div>
-                        <div class="card kpi-card"><h3>Cotizaciones activas</h3><p id="docs-kpi-cot">0</p><span>Con enlace de preview compartible</span></div>
-                        <div class="card kpi-card"><h3>⏳ Pendientes aprobación</h3><p id="docs-kpi-ped">0</p><span>Pedidos por autorizar en CxC</span></div>
-                        <div class="card kpi-card"><h3>✅ Aprobados en Odoo</h3><p id="docs-kpi-enviados">0</p><span>Enviados con precios de lista + chatter</span></div>
+                        <div class="card kpi-card"><h3>Total Unificado</h3><p id="docs-kpi-total">0</p><span>CxC + Odoo (sin duplicados)</span></div>
+                        <div class="card kpi-card"><h3>🏢 Nacidos en CxC</h3><p id="docs-kpi-cxc">0</p><span>Cotizaciones y pedidos CxC/Bot</span></div>
+                        <div class="card kpi-card"><h3>🟣 Nacidos en Odoo</h3><p id="docs-kpi-odoo">0</p><span>Órdenes directas de Odoo</span></div>
+                        <div class="card kpi-card"><h3>📋 Cotizaciones</h3><p id="docs-kpi-cot">0</p><span>Con enlace de preview compartible</span></div>
+                        <div class="card kpi-card"><h3>⏳ Retenidos aprobación</h3><p id="docs-kpi-ped">0</p><span>Por revisar o autorizar en CxC</span></div>
+                        <div class="card kpi-card"><h3>⚡ Auto-enviados</h3><p id="docs-kpi-autosend">0</p><span>Pasaron directo por política</span></div>
+                        <div class="card kpi-card"><h3>✅ En Odoo (Total)</h3><p id="docs-kpi-enviados">0</p><span>CxC + Odoo confirmadas</span></div>
                     </div>
 
                     <div id="docs-aviso-general" style="margin-bottom:0.75rem;"></div>
 
                     <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                        <select id="docs-filtro-origen" class="filter-select" aria-label="Origen del documento">
+                            <option value="todos">Todos los orígenes (CxC + Odoo)</option>
+                            <option value="cxc">🏢 Solo nacidos en CxC / Bot</option>
+                            <option value="odoo">🟣 Solo nacidos en Odoo</option>
+                        </select>
                         <select id="docs-filtro-tipo" class="filter-select" aria-label="Tipo de documento">
                             <option value="">Todos los tipos</option>
                             <option value="cotizacion">Cotizaciones</option>
@@ -2271,6 +2279,99 @@
                         </div>
                         <button type="submit" class="btn-primary">💾 Guardar Ajustes Generales</button>
                     </form>
+                </section>
+
+                <!-- POLÍTICA DE VENTAS: AUTO-ENVÍO Y LÍMITES DE CRÉDITO -->
+                <section class="config-card card" data-subpage="motor" id="politica-ventas-card" style="grid-column: 1 / span 2; border-top: 4px solid #2563eb;">
+                    <div class="panel-header" style="margin-bottom:0.85rem;">
+                        <h2>⚡ Política de Ventas y Auto-Envío a Odoo</h2>
+                        <p>Si un pedido cumple catálogo, motor de descuentos, ficha completa y no supera estos límites, pasa directo a Odoo. Si incumple cualquier regla, queda retenido para aprobación en CxC.</p>
+                    </div>
+                    <div id="pv-solo-lectura" style="display:none; margin-bottom:0.75rem; padding:0.5rem 0.85rem; background:#fffbeb; border-left:4px solid #f59e0b; border-radius:6px; font-size:0.84rem; color:#92400e;">
+                        🔒 Modo solo lectura: se requiere permiso «Aprobar pedidos» o Administrador para modificar estos límites.
+                    </div>
+                    <form id="politica-ventas-form" class="cxc-form">
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.85rem; margin-bottom:0.85rem;">
+                            <div class="form-group" style="display:flex; align-items:center; gap:0.5rem; margin:0; background:#f8fafc; padding:0.65rem 0.85rem; border-radius:8px; border:1px solid #e2e8f0;">
+                                <input type="checkbox" id="pv-autosend-activo" checked style="width:auto;">
+                                <label for="pv-autosend-activo" style="margin:0; font-weight:600;">⚡ Auto-envío inteligente a Odoo activo</label>
+                            </div>
+                            <div class="form-group" style="display:flex; align-items:center; gap:0.5rem; margin:0; background:#f8fafc; padding:0.65rem 0.85rem; border-radius:8px; border:1px solid #e2e8f0;">
+                                <input type="checkbox" id="pv-retener-vencidas" checked style="width:auto;">
+                                <label for="pv-retener-vencidas" style="margin:0; font-weight:600;">⏳ Retener si hay órdenes vencidas</label>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Límite crédito global USD (0 = sin límite)</label>
+                                <input type="number" id="pv-limite-credito" min="0" step="0.01" value="0">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Máx. facturas sin pagar (0 = sin límite)</label>
+                                <input type="number" id="pv-limite-facturas" min="0" step="1" value="0">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Días de gracia sobre vencimiento</label>
+                                <input type="number" id="pv-dias-mora-max" min="0" step="1" value="0">
+                            </div>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                            <button type="submit" id="pv-btn-guardar" class="btn-primary">💾 Guardar Política de Ventas</button>
+                            <span id="pv-status" style="font-size:0.85rem; font-weight:600;"></span>
+                        </div>
+                    </form>
+
+                    <div id="pv-overrides-wrap" style="margin-top:1.25rem; border-top:1px solid #e2e8f0; padding-top:1rem;">
+                        <h3 style="margin:0 0 0.5rem 0; font-size:0.98rem;">👤 Excepciones de Crédito por Cliente (Opcional)</h3>
+                        <form id="pv-override-form" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0.65rem; align-items:end; background:#f8fafc; padding:0.85rem; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:0.85rem;">
+                            <input type="hidden" id="pv-ov-partner-id">
+                            <input type="hidden" id="pv-ov-cliente-nombre">
+                            <div style="position:relative; grid-column:span 2;">
+                                <label style="font-size:0.76rem; font-weight:600; color:#475569;">Cliente (Odoo)</label>
+                                <input type="text" id="pv-ov-buscar" class="filter-select" style="width:100%; cursor:text;" placeholder="Buscar cliente por nombre o RIF...">
+                                <div id="pv-ov-resultados" style="display:none; position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:8px; max-height:190px; overflow-y:auto; z-index:40; box-shadow:0 8px 20px rgba(0,0,0,0.12);"></div>
+                            </div>
+                            <div>
+                                <label style="font-size:0.76rem; font-weight:600; color:#475569;">Límite USD</label>
+                                <input type="number" id="pv-ov-limite-credito" min="0" step="0.01" placeholder="Hereda">
+                            </div>
+                            <div>
+                                <label style="font-size:0.76rem; font-weight:600; color:#475569;">Máx. facturas</label>
+                                <input type="number" id="pv-ov-limite-facturas" min="0" step="1" placeholder="Hereda">
+                            </div>
+                            <div>
+                                <label style="font-size:0.76rem; font-weight:600; color:#475569;">Gracia mora (d)</label>
+                                <input type="number" id="pv-ov-dias-mora" min="0" step="1" placeholder="Hereda">
+                            </div>
+                            <div style="display:flex; align-items:center; gap:0.4rem; padding-bottom:0.35rem;">
+                                <input type="checkbox" id="pv-ov-bloquear" style="width:auto;">
+                                <label for="pv-ov-bloquear" style="margin:0; font-size:0.78rem; font-weight:600;">🔒 Bloquear auto-envío</label>
+                            </div>
+                            <div>
+                                <label style="font-size:0.76rem; font-weight:600; color:#475569;">Notas</label>
+                                <input type="text" id="pv-ov-notas" placeholder="Observación opcional">
+                            </div>
+                            <div style="display:flex; gap:0.5rem; align-items:center;">
+                                <button type="submit" class="btn-secondary">➕ Guardar Excepción</button>
+                                <span id="pv-ov-status" style="font-size:0.8rem;"></span>
+                            </div>
+                        </form>
+                        <div class="table-wrapper">
+                            <table class="cxc-table mini">
+                                <thead>
+                                    <tr>
+                                        <th>Cliente</th>
+                                        <th>Límite USD</th>
+                                        <th>Máx. Facturas</th>
+                                        <th>Gracia Mora</th>
+                                        <th>Regla / Notas</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pv-overrides-tbody">
+                                    <tr><td colspan="6" class="table-empty">Cargando excepciones...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
@@ -3579,10 +3680,11 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_3"></script>
-    <script src="/static/js/shell.js?v=20261119_3"></script>
-    <script src="/static/js/pagos_unificados.js?v=20261119_3"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_3"></script>
-    <script src="/static/js/config_tesoreria.js?v=20261119_3"></script>
+    <script src="/static/app.js?v=20261119_4"></script>
+    <script src="/static/js/shell.js?v=20261119_4"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261119_4"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261119_4"></script>
+    <script src="/static/js/config_tesoreria.js?v=20261119_4"></script>
+    <script src="/static/js/ventas_unificadas.js?v=20261119_4"></script>
 </body>
 </html>

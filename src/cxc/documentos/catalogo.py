@@ -12,7 +12,8 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -86,6 +87,16 @@ class ItemCatalogo:
     litros: Decimal = Decimal("0")
     precio_usd: Decimal = Decimal("0")
     precio_ves: Decimal = Decimal("0")
+    stock_disponible: Decimal | None = None
+
+    def estado_stock(self) -> str | None:
+        if self.stock_disponible is None:
+            return None
+        if self.stock_disponible <= Decimal("0"):
+            return "agotado"
+        if self.stock_disponible <= Decimal("5"):
+            return "bajo"
+        return "disponible"
 
     def a_dict(self) -> dict[str, Any]:
         pres = self.presentacion or extraer_presentacion(self.nombre)
@@ -99,6 +110,10 @@ class ItemCatalogo:
             "litros": float(self.litros),
             "precio_usd": float(self.precio_usd),
             "precio_ves": float(self.precio_ves),
+            "stock_disponible": (
+                float(self.stock_disponible) if self.stock_disponible is not None else None
+            ),
+            "estado_stock": self.estado_stock(),
             "etiqueta": f"[{self.codigo}] {self.nombre}" if self.codigo else self.nombre,
         }
 
@@ -267,6 +282,7 @@ def resolver_producto_unico(
 class DatosPreciosOdoo:
     lista_defecto: ListaComercialActiva
     precios: dict[str, tuple[Decimal, Decimal]]
+    stock: dict[str, Decimal] = field(default_factory=dict)
 
 
 class CatalogoSQLOdoo:
@@ -292,7 +308,7 @@ class CatalogoSQLOdoo:
 
     def _cargar_datos(self, refresh: bool = False) -> DatosPreciosOdoo:
         if self._lector is None:
-            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {})
+            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {}, {})
         ahora = time.monotonic()
         with self._lock:
             if not refresh and self._cache_datos is not None:
@@ -304,11 +320,11 @@ class CatalogoSQLOdoo:
             nuevos = (
                 crudo
                 if isinstance(crudo, DatosPreciosOdoo)
-                else DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, crudo)
+                else DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, crudo, {})
             )
         except Exception:
             logger.warning("No pude enriquecer precios en vivo desde Odoo; uso espejo local.")
-            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {})
+            return DatosPreciosOdoo(LISTA_POR_DEFECTO_FALLBACK, {}, {})
         with self._lock:
             self._cache_datos = (ahora, nuevos)
         return nuevos
@@ -319,7 +335,9 @@ class CatalogoSQLOdoo:
     def listar(self, *, refresh: bool = False) -> list[ItemCatalogo]:
         with self._engine.connect() as conn:
             filas = conn.execute(select(catalogo)).mappings().all()
-        precios = self._cargar_datos(refresh=refresh).precios
+        datos = self._cargar_datos(refresh=refresh)
+        precios = datos.precios
+        stock_map = datos.stock
         items: list[ItemCatalogo] = []
         for f in filas:
             pid = str(f["producto_id"])
@@ -335,6 +353,7 @@ class CatalogoSQLOdoo:
                     litros=Decimal(str(f["volumen"] or "0")),
                     precio_usd=p_usd,
                     precio_ves=p_ves,
+                    stock_disponible=stock_map.get(pid),
                 )
             )
         items.sort(key=lambda x: (x.nombre.lower(), x.codigo.lower()))
@@ -377,20 +396,34 @@ def cargar_datos_precios_odoo(
         ):
             usd_activas.append(pid_int)
 
-    prods = execute(
-        "product.product",
-        "search_read",
-        [[["sale_ok", "=", True], ["active", "=", True]]],
-        {"fields": ["id", "product_tmpl_id"], "limit": 5000},
-    )
+    try:
+        prods = execute(
+            "product.product",
+            "search_read",
+            [[["sale_ok", "=", True], ["active", "=", True]]],
+            {"fields": ["id", "product_tmpl_id", "qty_available"], "limit": 5000},
+        )
+    except Exception:
+        logger.warning("No pude leer qty_available en product.product; reintento sin stock.")
+        prods = execute(
+            "product.product",
+            "search_read",
+            [[["sale_ok", "=", True], ["active", "=", True]]],
+            {"fields": ["id", "product_tmpl_id"], "limit": 5000},
+        )
     tmpl_por_prod: dict[str, int] = {}
+    stock_por_prod: dict[str, Decimal] = {}
     tmpl_ids: set[int] = set()
     for p in prods or []:
         pt = p.get("product_tmpl_id")
         tid = int(pt[0]) if isinstance(pt, list | tuple) and pt else None
         if tid is not None:
-            tmpl_por_prod[str(p["id"])] = tid
+            pid_str = str(p["id"])
+            tmpl_por_prod[pid_str] = tid
             tmpl_ids.add(tid)
+            if "qty_available" in p and p.get("qty_available") not in (None, False, ""):
+                with suppress(Exception):
+                    stock_por_prod[pid_str] = Decimal(str(p["qty_available"]))
 
     fallback_por_tmpl: dict[int, Decimal] = {}
     if tmpl_ids:
@@ -448,7 +481,7 @@ def cargar_datos_precios_odoo(
         p_ves = prices_ves_defecto.get(tid, prices_ves.get(tid, fb))
         p_usd = prices_usd.get(tid, fb * Decimal("0.65") if fb > 0 else Decimal("0"))
         salida[pid] = (p_usd, p_ves)
-    return DatosPreciosOdoo(lista_defecto=lista_defecto, precios=salida)
+    return DatosPreciosOdoo(lista_defecto=lista_defecto, precios=salida, stock=stock_por_prod)
 
 
 def cargar_precios_odoo_por_producto(
