@@ -1042,7 +1042,7 @@ def test_compras_gastos_odoo_y_lotes_sql_si_hay_postgres() -> None:
             ]
         )
         rows = [r for r in repo_sql.all_compras_gastos_odoo() if r["move_id"] == "TEST-F4-999"]
-        assert len(rows) == 1 and rows[0]["monto_total"] == Decimal("123.45")
+        assert len(rows) == 1 and float(rows[0]["monto_total"]) == 123.45
 
         lote = repo_lotes_sql.crear(
             responsable="QA Caja SQL",
