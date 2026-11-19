@@ -209,6 +209,9 @@ class RepoDocumentosMemoria:
             total_con_iva=Decimal(str(cabecera.get("total_con_iva") or "0")),
             aprobado_por=str(cabecera.get("aprobado_por") or ""),
             aprobado_en=cabecera.get("aprobado_en"),
+            auto_enviado=bool(cabecera.get("auto_enviado", False)),
+            motivos_retencion=tuple(str(x) for x in (cabecera.get("motivos_retencion") or ())),
+            evaluacion_politica=cabecera.get("evaluacion_politica"),
         )
         self.docs[did] = doc
         return doc
@@ -250,6 +253,9 @@ class RepoDocumentosMemoria:
                 1
                 for d in vals
                 if d.estado in ("BORRADOR", "PENDIENTE_APROBACION") and d.tipo == "pedido"
+            ),
+            "pedidos_auto_enviados": sum(
+                1 for d in vals if d.estado == "ENVIADO_ODOO" and d.auto_enviado
             ),
             "enviados_odoo": sum(1 for d in vals if d.estado == "ENVIADO_ODOO"),
             "rechazados": sum(1 for d in vals if d.estado == "RECHAZADO"),
@@ -327,6 +333,11 @@ class RepoDocumentosMemoria:
             total_con_iva=Decimal(str(cabecera.get("total_con_iva", actual.total_con_iva))),
             aprobado_por=str(cabecera.get("aprobado_por", actual.aprobado_por)),
             aprobado_en=cabecera.get("aprobado_en", actual.aprobado_en),
+            auto_enviado=bool(cabecera.get("auto_enviado", actual.auto_enviado)),
+            motivos_retencion=tuple(
+                str(x) for x in cabecera.get("motivos_retencion", actual.motivos_retencion)
+            ),
+            evaluacion_politica=cabecera.get("evaluacion_politica", actual.evaluacion_politica),
         )
         self.docs[documento_id] = nuevo
         return nuevo

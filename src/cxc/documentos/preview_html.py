@@ -20,7 +20,8 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
     titulo_tipo = "Cotización Comercial" if es_cot else "Pedido de Venta"
 
     if doc.estado == ENVIADO_ODOO:
-        badge_txt = f"✅ Aprobado · Orden Odoo {doc.odoo_order_name or doc.odoo_order_id}"
+        pref_auto = "⚡ Auto-aprobado" if doc.auto_enviado else "✅ Aprobado"
+        badge_txt = f"{pref_auto} · Orden Odoo {doc.odoo_order_name or doc.odoo_order_id}"
         badge_cls = "badge-ok"
     elif doc.estado == PENDIENTE_APROBACION:
         badge_txt = "⏳ Pedido pendiente por aprobación en CxC"
@@ -98,6 +99,17 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
         <div class="alert-box">
           <strong>⚠️ Alertas de validación del Motor CxC:</strong>
           <ul>{lis}</ul>
+        </div>
+        """
+
+    motivos_ret: list[str] = d.get("motivos_retencion") or []
+    retencion_banner = ""
+    if doc.estado == PENDIENTE_APROBACION and motivos_ret:
+        lis_r = "".join(f"<li>{_esc(m)}</li>" for m in motivos_ret)
+        retencion_banner = f"""
+        <div class="alert-box">
+          <strong>⏳ Motivos de retención para revisión en CxC:</strong>
+          <ul>{lis_r}</ul>
         </div>
         """
 
@@ -390,6 +402,7 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
 
     {descuentos_html}
     {alertas_banner}
+    {retencion_banner}
     {notas_html}
 
     <div class="totals-wrap">
@@ -459,12 +472,25 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
         }}
         document.getElementById('lbl-doc-num').textContent = data.numero;
         var badge = document.getElementById('lbl-doc-badge');
-        badge.className = 'badge badge-warn';
-        badge.textContent = '⏳ Pedido pendiente por aprobación en CxC';
         var card = document.getElementById('convert-card');
-        card.innerHTML = '<div style="color:#166534;font-weight:700;font-size:14.5px;">' +
-          '✅ Convertido exitosamente en Pedido ' + data.numero +
-          '. Quedó registrado en CxC en estado «Pedido pendiente por aprobación».</div>';
+        if (data.estado === 'ENVIADO_ODOO') {{
+          var refOdoo = data.odoo_order_name || ('#' + data.odoo_order_id);
+          badge.className = 'badge badge-ok';
+          badge.textContent = (data.auto_enviado ? '⚡ Auto-enviado a Odoo' : '✅ En Odoo') + ' · ' + refOdoo;
+          card.innerHTML = '<div style="color:#166534;font-weight:700;font-size:14.5px;">' +
+            '⚡ Convertido en Pedido ' + data.numero + ' y enviado automáticamente a Odoo → ' + refOdoo + '.</div>';
+        }} else {{
+          badge.className = 'badge badge-warn';
+          badge.textContent = '⏳ Pedido pendiente por aprobación en CxC';
+          var motHtml = '';
+          if (Array.isArray(data.motivos_retencion) && data.motivos_retencion.length) {{
+            motHtml = '<ul style="margin:8px 0 0 18px;font-weight:500;color:#92400e;">' +
+              data.motivos_retencion.map(function (m) {{ return '<li>' + String(m).replace(/</g, '&lt;') + '</li>'; }}).join('') +
+              '</ul>';
+          }}
+          card.innerHTML = '<div style="color:#92400e;font-weight:700;font-size:14.5px;">' +
+            '⏳ Convertido en Pedido ' + data.numero + '. Quedó retenido en CxC pendiente por aprobación.' + motHtml + '</div>';
+        }}
       }} catch (err) {{
         msg.style.color = '#b91c1c';
         msg.textContent = 'Error de conexión al convertir la cotización.';

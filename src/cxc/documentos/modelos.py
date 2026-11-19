@@ -137,6 +137,9 @@ class DocumentoComercial:
     total_con_iva: Decimal = Decimal("0")
     aprobado_por: str = ""
     aprobado_en: datetime | None = None
+    auto_enviado: bool = False
+    motivos_retencion: tuple[str, ...] = ()
+    evaluacion_politica: dict[str, Any] | None = None
 
     def a_dict(self, *, incluir_lineas: bool = True) -> dict[str, Any]:
         sub_neto = (
@@ -162,6 +165,7 @@ class DocumentoComercial:
             "tipo": self.tipo,
             "estado": self.estado,
             "origen": self.origen,
+            "origen_sistema": "cxc",
             "captura_id": self.captura_id,
             "partner_odoo_id": self.partner_odoo_id,
             "tipo_contacto": self.tipo_contacto,
@@ -205,6 +209,11 @@ class DocumentoComercial:
             "aprobado_en": self.aprobado_en.isoformat(timespec="seconds")
             if self.aprobado_en
             else None,
+            "auto_enviado": self.auto_enviado,
+            "motivos_retencion": list(self.motivos_retencion),
+            "evaluacion_politica": (
+                dict(self.evaluacion_politica) if self.evaluacion_politica else None
+            ),
             "creado_por": self.creado_por,
             "creado_en": self.creado_en.isoformat(timespec="seconds"),
             "actualizado_en": self.actualizado_en.isoformat(timespec="seconds"),

@@ -76,6 +76,22 @@ def _cargar_json_lista(raw: Any) -> tuple[dict[str, Any], ...]:
         return ()
 
 
+def _cargar_json_strings(raw: Any) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    if isinstance(raw, list | tuple):
+        return tuple(str(x).strip() for x in raw if str(x).strip())
+    try:
+        parsed = json.loads(str(raw))
+        return (
+            tuple(str(x).strip() for x in parsed if str(x).strip())
+            if isinstance(parsed, list)
+            else ()
+        )
+    except Exception:
+        return ()
+
+
 def _cargar_json_dict(raw: Any) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -97,6 +113,14 @@ def _serializar_campos_sql(cabecera: dict[str, Any]) -> dict[str, Any]:
         val_v = out.pop("validacion_motor")
         out["validacion_motor_json"] = (
             json.dumps(val_v, ensure_ascii=False) if val_v is not None else ""
+        )
+    if "motivos_retencion" in out:
+        val_m = out.pop("motivos_retencion")
+        out["motivos_retencion_json"] = json.dumps(list(val_m or []), ensure_ascii=False)
+    if "evaluacion_politica" in out:
+        val_p = out.pop("evaluacion_politica")
+        out["evaluacion_politica_json"] = (
+            json.dumps(val_p, ensure_ascii=False) if val_p is not None else "{}"
         )
     return out
 
@@ -145,6 +169,9 @@ def _a_documento(r: Any, lineas: Sequence[LineaDocumento]) -> DocumentoComercial
         total_con_iva=Decimal(str(getattr(r, "total_con_iva", None) or "0")),
         aprobado_por=str(getattr(r, "aprobado_por", None) or ""),
         aprobado_en=getattr(r, "aprobado_en", None),
+        auto_enviado=bool(getattr(r, "auto_enviado", False)),
+        motivos_retencion=_cargar_json_strings(getattr(r, "motivos_retencion_json", "")),
+        evaluacion_politica=_cargar_json_dict(getattr(r, "evaluacion_politica_json", "")),
     )
 
 
@@ -323,8 +350,13 @@ class RepoDocumentosSQL:
                 select(
                     documentos_comerciales.c.tipo,
                     documentos_comerciales.c.estado,
+                    documentos_comerciales.c.auto_enviado,
                     func.count(),
-                ).group_by(documentos_comerciales.c.tipo, documentos_comerciales.c.estado)
+                ).group_by(
+                    documentos_comerciales.c.tipo,
+                    documentos_comerciales.c.estado,
+                    documentos_comerciales.c.auto_enviado,
+                )
             ).all()
 
         resumen = {
@@ -332,15 +364,18 @@ class RepoDocumentosSQL:
             "cotizaciones_borrador": 0,
             "pedidos_pendientes_aprobacion": 0,
             "pedidos_borrador": 0,
+            "pedidos_auto_enviados": 0,
             "enviados_odoo": 0,
             "rechazados": 0,
             "con_error": 0,
         }
-        for t, est, cnt in todos_res:
+        for t, est, auto_e, cnt in todos_res:
             n = int(cnt)
             resumen["total"] += n
             if est == "ENVIADO_ODOO":
                 resumen["enviados_odoo"] += n
+                if auto_e:
+                    resumen["pedidos_auto_enviados"] += n
             elif est == "PENDIENTE_APROBACION":
                 resumen["pedidos_pendientes_aprobacion"] += n
                 resumen["pedidos_borrador"] += n

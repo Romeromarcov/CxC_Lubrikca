@@ -18,11 +18,23 @@ from cxc.documentos.catalogo import (
     resolver_producto_unico,
 )
 from cxc.documentos.modelos import (
+    BORRADOR,
+    COTIZACION,
+    ENVIADO_ODOO,
+    ERROR_ODOO,
     ESTADOS_DOCUMENTO,
     PEDIDO,
     PENDIENTE_APROBACION,
+    RECHAZADO,
     TIPOS_DOCUMENTO,
     DocumentoInvalido,
+)
+from cxc.documentos.politica_ventas import (
+    cargar_politica_global,
+    eliminar_override_cliente,
+    guardar_override_cliente,
+    guardar_politica_global,
+    listar_overrides_clientes,
 )
 from cxc.documentos.preview_html import renderizar_preview_cotizacion
 from cxc.documentos.repositorio import RepoDocumentosSQL
@@ -52,7 +64,7 @@ def _usuario_doc(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
-    if not any(tiene(user, p) for p in permisos):
+    if permisos and not any(tiene(user, p) for p in permisos):
         raise HTTPException(status_code=403, detail="Sin permisos para esta operación comercial")
     return user
 
@@ -490,3 +502,229 @@ def enviar_documento_a_odoo(
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
     return JSONResponse(status_code=200, content=enviado.a_dict(incluir_lineas=True))
+
+
+# ── Ventas Unificadas (CxC + Odoo) y Política de Crédito / Auto-envío ────────
+
+
+def _repo_y_engine(servicio: ServicioDocumentos) -> tuple[Any, Any]:
+    from cxc.web.app import get_repo
+
+    repo_cxc = getattr(servicio, "_repo_cxc", None) or get_repo()
+    engine = getattr(getattr(servicio, "_repo", None), "_engine", None) or getattr(
+        repo_cxc, "_engine", None
+    )
+    return repo_cxc, engine
+
+
+def _estado_unificado_odoo(estado_orden: str) -> str:
+    est = (estado_orden or "sale").strip().lower()
+    if est == "cancel":
+        return RECHAZADO
+    if est in ("draft", "sent"):
+        return BORRADOR
+    return ENVIADO_ODOO
+
+
+@router.get("/api/ventas/unificadas")
+def listar_ventas_unificadas(
+    servicio: ServicioDocsDep,
+    origen: str = "todos",
+    tipo: str = "",
+    estado: str = "",
+    q: str = "",
+    limit: int = 150,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
+    orig_filtro = (origen or "todos").strip().lower()
+    if orig_filtro not in ("todos", "cxc", "odoo"):
+        raise HTTPException(status_code=422, detail="origen debe ser 'todos', 'cxc' o 'odoo'")
+    tipo_filtro = (tipo or "").strip().lower()
+    estado_filtro = (estado or "").strip().upper()
+    q_filtro = (q or "").strip().lower()
+
+    docs_cxc, _, _ = servicio.listar(limit=500, offset=0)
+    repo_cxc, _ = _repo_y_engine(servicio)
+
+    clientes_map = {str(c.cliente_id): c for c in repo_cxc.all_clientes()}
+    vinculados_so: set[str] = {
+        d.odoo_order_name.strip().upper()
+        for d in docs_cxc
+        if d.odoo_order_name and d.odoo_order_name.strip()
+    }
+
+    filas: list[dict[str, Any]] = []
+    for d in docs_cxc:
+        item = d.a_dict(incluir_lineas=True)
+        item["origen_sistema"] = "cxc"
+        item["solo_lectura"] = False
+        filas.append(item)
+
+    for o in repo_cxc.all_ordenes():
+        so_key = str(o.so_id or "").strip().upper()
+        if not so_key or so_key in vinculados_so:
+            continue
+        cli = clientes_map.get(str(o.cliente_id))
+        est_unif = _estado_unificado_odoo(o.estado_orden)
+        fecha_iso = o.fecha.isoformat()
+        filas.append(
+            {
+                "id": None,
+                "numero": o.so_id,
+                "token_preview": "",
+                "preview_path": "",
+                "tipo": PEDIDO,
+                "estado": est_unif,
+                "estado_odoo": o.estado_orden,
+                "origen": "odoo",
+                "origen_sistema": "odoo",
+                "solo_lectura": True,
+                "captura_id": None,
+                "partner_odoo_id": int(o.cliente_id) if str(o.cliente_id).isdigit() else None,
+                "tipo_contacto": "cliente",
+                "cliente_nombre": cli.nombre if cli else f"Cliente #{o.cliente_id}",
+                "rif": str(getattr(cli, "rif", "") or ""),
+                "email": "",
+                "telefono": "",
+                "direccion": "",
+                "moneda_lista": "USD",
+                "lista_precios_id": "",
+                "lista_precios_nombre": o.lista_precios,
+                "vendedor_email": o.vendedor_email,
+                "subtotal": float(o.monto_total),
+                "total_descuentos": 0.0,
+                "subtotal_neto": float(o.monto_total),
+                "monto_iva": 0.0,
+                "total_con_iva": float(o.monto_total),
+                "total_litros": 0.0,
+                "n_lineas": 0,
+                "lineas_sin_catalogo": 0,
+                "descuentos": [],
+                "alertas_motor": [],
+                "auto_enviado": False,
+                "motivos_retencion": [],
+                "odoo_order_id": None,
+                "odoo_order_name": o.so_id,
+                "facturada": bool(o.facturada),
+                "entregada_completa": bool(o.entregada_completa),
+                "creado_por": "odoo",
+                "creado_en": f"{fecha_iso}T00:00:00",
+                "actualizado_en": f"{fecha_iso}T00:00:00",
+            }
+        )
+
+    resumen = {
+        "total": len(filas),
+        "origen_cxc": sum(1 for x in filas if x["origen_sistema"] == "cxc"),
+        "origen_odoo": sum(1 for x in filas if x["origen_sistema"] == "odoo"),
+        "cotizaciones_borrador": sum(
+            1 for x in filas if x["tipo"] == COTIZACION and x["estado"] == BORRADOR
+        ),
+        "pedidos_pendientes_aprobacion": sum(
+            1 for x in filas if x["estado"] == PENDIENTE_APROBACION
+        ),
+        "pedidos_auto_enviados": sum(
+            1 for x in filas if x["estado"] == ENVIADO_ODOO and x.get("auto_enviado")
+        ),
+        "enviados_odoo": sum(1 for x in filas if x["estado"] == ENVIADO_ODOO),
+        "rechazados": sum(1 for x in filas if x["estado"] == RECHAZADO),
+        "con_error": sum(1 for x in filas if x["estado"] == ERROR_ODOO),
+    }
+
+    def _coincide(it: dict[str, Any]) -> bool:
+        if orig_filtro != "todos" and it["origen_sistema"] != orig_filtro:
+            return False
+        if tipo_filtro and it["tipo"] != tipo_filtro:
+            return False
+        if estado_filtro and it["estado"] != estado_filtro:
+            return False
+        if q_filtro:
+            bolsa = (
+                f"{it.get('numero', '')} {it.get('odoo_order_name', '')} "
+                f"{it.get('cliente_nombre', '')} {it.get('rif', '')} "
+                f"{it.get('vendedor_email', '')}"
+            ).lower()
+            if q_filtro not in bolsa:
+                return False
+        return True
+
+    filtradas = [it for it in filas if _coincide(it)]
+    filtradas.sort(key=lambda x: str(x.get("actualizado_en") or "")[:19], reverse=True)
+    lim = max(1, min(limit, 500))
+
+    return {
+        "puede_aprobar": tiene(user, PERMISO_APROBAR_PEDIDOS),
+        "lista_defecto": servicio.lista_comercial_defecto().a_dict(),
+        "politica_ventas": cargar_politica_global(repo_cxc),
+        "resumen": resumen,
+        "total": len(filtradas),
+        "items": filtradas[:lim],
+    }
+
+
+@router.get("/api/config/politica-ventas")
+def obtener_politica_ventas(
+    servicio: ServicioDocsDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_doc(cxc_session)
+    repo_cxc, engine = _repo_y_engine(servicio)
+    return {
+        "politica": cargar_politica_global(repo_cxc),
+        "overrides": listar_overrides_clientes(engine),
+        "puede_editar": tiene(user, PERMISO_APROBAR_PEDIDOS) or user.get("rol") == "admin",
+    }
+
+
+@router.post("/api/config/politica-ventas")
+def guardar_politica_ventas_api(
+    servicio: ServicioDocsDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_doc(cxc_session, PERMISO_APROBAR_PEDIDOS)
+    repo_cxc, _ = _repo_y_engine(servicio)
+    try:
+        pol = guardar_politica_global(repo_cxc, body)
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+    return JSONResponse(status_code=200, content={"ok": True, "politica": pol})
+
+
+@router.put("/api/config/politica-ventas/clientes/{partner_odoo_id}")
+def guardar_override_cliente_api(
+    partner_odoo_id: int,
+    servicio: ServicioDocsDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_doc(cxc_session, PERMISO_APROBAR_PEDIDOS)
+    _, engine = _repo_y_engine(servicio)
+    if engine is None:
+        return JSONResponse(
+            status_code=503, content={"error": "Base de datos SQL no disponible para overrides."}
+        )
+    try:
+        ov = guardar_override_cliente(engine, partner_odoo_id, body, actor=_actor_doc(user))
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+    return JSONResponse(status_code=200, content={"ok": True, "override": ov})
+
+
+@router.delete("/api/config/politica-ventas/clientes/{partner_odoo_id}")
+def eliminar_override_cliente_api(
+    partner_odoo_id: int,
+    servicio: ServicioDocsDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_doc(cxc_session, PERMISO_APROBAR_PEDIDOS)
+    _, engine = _repo_y_engine(servicio)
+    if engine is None:
+        return JSONResponse(
+            status_code=503, content={"error": "Base de datos SQL no disponible para overrides."}
+        )
+    eliminado = eliminar_override_cliente(engine, partner_odoo_id)
+    if not eliminado:
+        raise HTTPException(status_code=404, detail="Override de cliente no encontrado")
+    return JSONResponse(status_code=200, content={"ok": True, "partner_odoo_id": partner_odoo_id})

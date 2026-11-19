@@ -56,6 +56,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (subpage === "tesoreria" && typeof window.loadConfigTesoreria === "function") {
             window.loadConfigTesoreria();
         }
+        if (subpage === "motor" && typeof window.loadPoliticaVentasConfig === "function") {
+            window.loadPoliticaVentasConfig();
+        }
     }
 
     if (configSubnavButtons.length) {
@@ -7432,7 +7435,10 @@ document.addEventListener("DOMContentLoaded", () => {
             b.classList.toggle("active", b.getAttribute("data-ventas-subpage") === subpage);
         });
         if (subpage === "documentos" && !_docsCargadoUnaVez) {
-            loadDocumentosComerciales();
+            _docsCargadoUnaVez = true;
+            if (typeof window.loadDocumentosComerciales === "function") {
+                window.loadDocumentosComerciales();
+            }
             _cargarCatalogoInicialDocs();
         }
     }
@@ -7795,9 +7801,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
             let msgHtml = "";
             if (enviado) {
-                msgHtml = _docAlertaHtml("ok", `Enviado a Odoo como ${d.odoo_order_name || ("#" + d.odoo_order_id)} (precios de lista normales + descuentos en chatter).`);
+                const prefAuto = d.auto_enviado ? "⚡ Auto-enviado automáticamente a Odoo" : "✅ Enviado a Odoo";
+                msgHtml = _docAlertaHtml("ok", `${prefAuto} como ${d.odoo_order_name || ("#" + d.odoo_order_id)} (precios de lista normales + descuentos en chatter).`);
             } else if (d.estado === "PENDIENTE_APROBACION") {
-                msgHtml = _docAlertaHtml("warn", "Pedido pendiente por aprobación. Cuando una persona autorizada lo apruebe, se enviará a Odoo con precios normales y la nota de descuentos en el chatter.");
+                const mots = Array.isArray(d.motivos_retencion) && d.motivos_retencion.length
+                    ? ` Motivos de retención: ${d.motivos_retencion.join(" · ")}`
+                    : " Cuando una persona autorizada lo apruebe, se enviará a Odoo con precios normales y la nota de descuentos en el chatter.";
+                msgHtml = _docAlertaHtml("warn", `Pedido retenido en CxC pendiente por aprobación.${mots}`);
             } else if (d.error_odoo) {
                 msgHtml = _docAlertaHtml("err", d.error_odoo);
             }
@@ -7896,24 +7906,36 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnPrev.style.display = "inline-block";
             }
             if (enviarOdoo) {
-                const endpointAccion = tipoDoc === "pedido"
-                    ? `/api/documentos/${guardado.id}/aprobar`
-                    : `/api/documentos/${guardado.id}/enviar-odoo`;
-                const resEnv = await fetch(endpointAccion, { method: "POST" });
-                const envData = await resEnv.json().catch(() => ({}));
-                if (!resEnv.ok) throw new Error(envData.error || envData.detail || `Error al enviar a Odoo (${resEnv.status})`);
+                let envData = guardado;
+                if (guardado.estado !== "ENVIADO_ODOO") {
+                    const endpointAccion = tipoDoc === "pedido"
+                        ? `/api/documentos/${guardado.id}/aprobar`
+                        : `/api/documentos/${guardado.id}/enviar-odoo`;
+                    const resEnv = await fetch(endpointAccion, { method: "POST" });
+                    envData = await resEnv.json().catch(() => ({}));
+                    if (!resEnv.ok) throw new Error(envData.error || envData.detail || `Error al enviar a Odoo (${resEnv.status})`);
+                }
+                const prefEnv = envData.auto_enviado
+                    ? `⚡ Pedido ${envData.numero} cumplió todos los parámetros y se auto-envió a Odoo`
+                    : `Documento ${envData.numero} autorizado y enviado a Odoo`;
                 document.getElementById("docs-aviso-general").innerHTML = _docAlertaHtml(
                     "ok",
-                    `Documento ${envData.numero} autorizado y enviado a Odoo → Orden ${envData.odoo_order_name || ("#" + envData.odoo_order_id)} (precios normales + descuentos en chatter).`
+                    `${prefEnv} → Orden ${envData.odoo_order_name || ("#" + envData.odoo_order_id)} (precios normales + descuentos en chatter).`
                 );
                 cerrarEditorDocumento();
+            } else if (guardado.estado === "ENVIADO_ODOO" && guardado.auto_enviado) {
+                msg.innerHTML = _docAlertaHtml(
+                    "ok",
+                    `⚡ Pedido ${guardado.numero} cumplió todos los parámetros y se envió automáticamente a Odoo → ${guardado.odoo_order_name || ("#" + guardado.odoo_order_id)}.`
+                );
             } else {
+                const motsG = Array.isArray(guardado.motivos_retencion) ? guardado.motivos_retencion : [];
                 const estadoLbl = guardado.estado === "PENDIENTE_APROBACION"
-                    ? "en estado «Pedido pendiente por aprobación»"
+                    ? (motsG.length ? `retenido para aprobación (${motsG.join(" · ")})` : "en estado «Pedido pendiente por aprobación»")
                     : "con enlace de Preview listo para compartir";
-                msg.innerHTML = _docAlertaHtml("ok", `Documento ${guardado.numero} guardado en CxC ${estadoLbl}.`);
+                msg.innerHTML = _docAlertaHtml(guardado.estado === "PENDIENTE_APROBACION" ? "warn" : "ok", `Documento ${guardado.numero} guardado en CxC ${estadoLbl}.`);
             }
-            await loadDocumentosComerciales();
+            await (window.loadDocumentosComerciales || loadDocumentosComerciales)();
         } catch (err) {
             msg.innerHTML = _docAlertaHtml("err", err.message);
         }
@@ -7931,11 +7953,21 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(d.error || d.detail || `Error ${res.status}`);
-            aviso.innerHTML = _docAlertaHtml(
-                "ok",
-                `Convertido a Pedido ${d.numero}. Ahora figura como «Pedido pendiente por aprobación».`
-            );
-            await loadDocumentosComerciales();
+            if (d.estado === "ENVIADO_ODOO") {
+                aviso.innerHTML = _docAlertaHtml(
+                    "ok",
+                    `⚡ Pedido ${d.numero} cumplió todos los parámetros y se envió automáticamente a Odoo → ${d.odoo_order_name || ("#" + d.odoo_order_id)}.`
+                );
+            } else {
+                const mots = Array.isArray(d.motivos_retencion) && d.motivos_retencion.length
+                    ? ` Motivos de retención: ${d.motivos_retencion.join(" · ")}`
+                    : "";
+                aviso.innerHTML = _docAlertaHtml(
+                    "warn",
+                    `Convertido a Pedido ${d.numero}. Quedó retenido como «Pedido pendiente por aprobación».${mots}`
+                );
+            }
+            await (window.loadDocumentosComerciales || loadDocumentosComerciales)();
         } catch (err) {
             aviso.innerHTML = _docAlertaHtml("err", err.message);
         }
@@ -7965,7 +7997,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 "ok",
                 `Pedido ${d.numero} autorizado y enviado a Odoo → ${d.odoo_order_name || ("#" + d.odoo_order_id)} (precios normales de lista; descuentos registrados en chatter de Odoo y en CxC).`
             );
-            await loadDocumentosComerciales();
+            await (window.loadDocumentosComerciales || loadDocumentosComerciales)();
         } catch (err) {
             aviso.innerHTML = _docAlertaHtml("err", err.message);
         }
@@ -7984,7 +8016,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const d = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(d.error || d.detail || `Error ${res.status}`);
             aviso.innerHTML = _docAlertaHtml("warn", `Pedido ${d.numero} marcado como rechazado.`);
-            await loadDocumentosComerciales();
+            await (window.loadDocumentosComerciales || loadDocumentosComerciales)();
         } catch (err) {
             aviso.innerHTML = _docAlertaHtml("err", err.message);
         }
@@ -7998,13 +8030,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const fTipo = document.getElementById("docs-filtro-tipo");
         const fEstado = document.getElementById("docs-filtro-estado");
         const fQ = document.getElementById("docs-filtro-q");
+        const recargar = () => (window.loadDocumentosComerciales || loadDocumentosComerciales)();
         if (fTipo && fEstado && fQ) {
-            fTipo.addEventListener("change", loadDocumentosComerciales);
-            fEstado.addEventListener("change", loadDocumentosComerciales);
+            fTipo.addEventListener("change", recargar);
+            fEstado.addEventListener("change", recargar);
             let tDocs = null;
             fQ.addEventListener("input", () => {
                 clearTimeout(tDocs);
-                tDocs = setTimeout(loadDocumentosComerciales, 250);
+                tDocs = setTimeout(recargar, 250);
             });
         }
         const selTipoDoc = document.getElementById("doc-f-tipo");
@@ -8133,12 +8166,27 @@ document.addEventListener("DOMContentLoaded", () => {
                             const mon = document.getElementById("doc-f-moneda").value;
                             boxProd.innerHTML = items.map((p, idx) => {
                                 const pr = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
-                                return `<div data-doc-pick-prod="${idx}" style="padding:0.55rem 0.85rem; cursor:pointer; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; font-size:0.85rem;">
+                                let stockBadge = "";
+                                if (p.stock_disponible != null) {
+                                    const qty = Number(p.stock_disponible) || 0;
+                                    const qtyTxt = Number.isInteger(qty) ? String(qty) : qty.toFixed(1);
+                                    if (qty <= 0) {
+                                        stockBadge = `<span style="background:#fee2e2; color:#991b1b; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">🔴 Agotado</span>`;
+                                    } else if (qty <= 5) {
+                                        stockBadge = `<span style="background:#fef3c7; color:#92400e; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">🟡 ${qtyTxt} disp.</span>`;
+                                    } else {
+                                        stockBadge = `<span style="background:#dcfce7; color:#166534; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">🟢 ${qtyTxt} disp.</span>`;
+                                    }
+                                }
+                                return `<div data-doc-pick-prod="${idx}" style="padding:0.55rem 0.85rem; cursor:pointer; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; font-size:0.85rem;">
                                     <div>
                                         <code>${_capEsc(p.codigo || "S/C")}</code> <strong>${_capEsc(p.nombre)}</strong>
                                         <div style="font-size:0.75rem; color:#64748b;">${_capEsc(p.marca || "")} · ${Number(p.litros || 0).toFixed(2)} L</div>
                                     </div>
-                                    <strong style="color:#1e40af;">$${pr.toFixed(2)}</strong>
+                                    <div style="display:flex; align-items:center; gap:0.5rem; white-space:nowrap;">
+                                        ${stockBadge}
+                                        <strong style="color:#1e40af;">$${pr.toFixed(2)}</strong>
+                                    </div>
                                 </div>`;
                             }).join("");
                             boxProd._items = items;
