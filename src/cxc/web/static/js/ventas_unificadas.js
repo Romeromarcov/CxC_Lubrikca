@@ -51,7 +51,7 @@
         if (estado) qs.set("estado", estado);
         if (q) qs.set("q", q);
 
-        tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Cargando ventas unificadas CxC + Odoo...</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="table-empty">Cargando ventas unificadas CxC + Odoo...</td></tr>`;
         try {
             const res = await fetch(`/api/ventas/unificadas?${qs}`);
             const data = await res.json().catch(() => ({}));
@@ -68,31 +68,54 @@
             setTxt("docs-kpi-total", r.total || 0);
             setTxt("docs-kpi-cxc", r.origen_cxc || 0);
             setTxt("docs-kpi-odoo", r.origen_odoo || 0);
-            setTxt("docs-kpi-autosend", r.pedidos_auto_enviados || 0);
+            setTxt("docs-kpi-autosend", r.auto_enviados ?? r.pedidos_auto_enviados ?? 0);
             setTxt("docs-kpi-cot", r.cotizaciones_borrador || 0);
-            setTxt("docs-kpi-ped", r.pedidos_pendientes_aprobacion || 0);
-            setTxt("docs-kpi-enviados", r.enviados_odoo || 0);
+            setTxt("docs-kpi-ped", r.pendientes_aprobacion ?? r.pedidos_pendientes_aprobacion ?? 0);
+            setTxt("docs-kpi-enviados", r.total_confirmados ?? r.enviados_odoo ?? 0);
+            setTxt("docs-kpi-subtotal", `$${_monto(r.subtotal_confirmado_usd || 0)}`);
+            setTxt("docs-kpi-total-iva", `$${_monto(r.total_con_iva_confirmado_usd || 0)}`);
 
             _renderTablaUnificada(data.items || [], Boolean(data.puede_aprobar));
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">${_esc(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="table-empty">${_esc(err.message)}</td></tr>`;
         }
+    }
+
+    async function sincronizarYRecargarVentas() {
+        const aviso = document.getElementById("docs-aviso-general");
+        try {
+            const res = await fetch("/api/ventas/sincronizar-odoo", { method: "POST" });
+            if (res.ok) {
+                const st = await res.json().catch(() => ({}));
+                if (aviso && (st.ajustados || st.confirmados || st.cancelados)) {
+                    aviso.innerHTML = _alertaHtml(
+                        "ok",
+                        `Sincronización Odoo → CxC: ${st.ajustados || 0} ajustado(s), ${st.confirmados || 0} confirmado(s), ${st.cancelados || 0} cancelado(s).`,
+                    );
+                }
+            }
+        } catch (_e) { /* continuar recarga */ }
+        await loadVentasUnificadas();
     }
 
     function _renderTablaUnificada(items, puedeAprobar) {
         const tbody = document.getElementById("docs-table-body");
         if (!tbody) return;
         if (!items.length) {
-            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">No hay cotizaciones ni pedidos con los filtros actuales.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="table-empty">No hay cotizaciones ni pedidos con los filtros actuales.</td></tr>`;
             return;
         }
         tbody.innerHTML = items.map((d) => {
-            const esOdooNativo = d.origen_sistema === "odoo" || d.solo_lectura;
+            const esOdooNativo = d.origen_sistema === "odoo";
+            const bloqueadoOdoo = Boolean(d.solo_lectura || d.confirmado_odoo || d.estado === "ENVIADO_ODOO");
             const origenBadge = esOdooNativo
                 ? `<span style="display:inline-block; background:#f3e8ff; color:#6b21a8; border:1px solid #d8b4fe; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">🟣 Odoo</span>`
                 : (d.origen === "bot"
                     ? `<span style="display:inline-block; background:#dbeafe; color:#1e40af; border:1px solid #bfdbfe; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">📲 CxC Bot</span>`
                     : `<span style="display:inline-block; background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; padding:1px 6px; border-radius:99px; font-size:0.72rem; font-weight:700;">🏢 CxC Web</span>`);
+            const syncChip = d.ajustado_desde_odoo
+                ? `<div style="margin-top:2px;"><span style="font-size:0.7rem; color:#0284c7; font-weight:600;">🔄 Ajustado de Odoo</span></div>`
+                : "";
 
             const badgeTipo = d.tipo === "cotizacion"
                 ? `<span class="state-badge abierta">📄 Cotización</span>`
@@ -105,11 +128,12 @@
             let estadoHtml = `<span class="semaphore amarillo">📋 Cotización vigente</span>`;
             if (d.estado === "PENDIENTE_APROBACION") {
                 estadoHtml = `<span class="semaphore amarillo">⏳ Retenido por aprobación</span>`;
-            } else if (d.estado === "ENVIADO_ODOO") {
+            } else if (d.estado === "ENVIADO_ODOO" || d.confirmado_odoo) {
                 const refO = _esc(d.odoo_order_name || (d.odoo_order_id ? "#" + d.odoo_order_id : "Odoo"));
+                const lockIco = bloqueadoOdoo ? "🔒" : "✅";
                 estadoHtml = d.auto_enviado
                     ? `<span class="semaphore verde">⚡ Auto-enviado: ${refO}</span>`
-                    : `<span class="semaphore verde">✅ En Odoo: ${refO}</span>`;
+                    : `<span class="semaphore verde">${lockIco} Confirmado Odoo: ${refO}</span>`;
             } else if (d.estado === "RECHAZADO") {
                 estadoHtml = `<span class="semaphore rojo">${esOdooNativo ? "❌ Cancelada en Odoo" : "❌ Rechazado"}</span>`;
             } else if (d.estado === "ERROR") {
@@ -131,28 +155,31 @@
             const descSub = Number(d.total_descuentos || 0) > 0
                 ? `<div class="cap-sub" style="color:#15803d;">Desc. CxC: -$${_monto(d.total_descuentos)}</div>`
                 : "";
+            const ivaSub = Number(d.monto_iva || 0) > 0
+                ? `<div class="cap-sub">IVA: $${_monto(d.monto_iva)}</div>`
+                : "";
 
             let accionesHtml = "";
             if (esOdooNativo) {
                 const soRef = _esc(d.odoo_order_name || d.numero);
                 accionesHtml = typeof window.abrirModalDetalleOrden === "function"
                     ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.6rem; font-size:0.78rem;" onclick="abrirModalDetalleOrden('${soRef}')">👁 Ver SO</button>`
-                    : `<span class="cap-sub">Solo lectura</span>`;
+                    : `<span class="cap-sub">🔒 Solo lectura</span>`;
             } else {
-                const editable = d.estado !== "ENVIADO_ODOO";
+                const editable = !bloqueadoOdoo;
                 const btnPreview = d.preview_path
                     ? `<a href="${_esc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>`
                     : "";
                 const btnConv = (d.tipo === "cotizacion" && editable && d.estado !== "RECHAZADO")
                     ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; background:#dcfce7; color:#166534;" onclick="convertirDocumentoAPedido(${d.id})">🛒 A Pedido</button>`
                     : "";
-                const btnAprobar = (d.estado === "PENDIENTE_APROBACION" && puedeAprobar)
+                const btnAprobar = (d.estado === "PENDIENTE_APROBACION" && puedeAprobar && editable)
                     ? `<button type="button" class="btn-primary" style="padding:0.35rem 0.65rem; font-size:0.8rem; background:#16a34a;" onclick="aprobarPedidoEnCxC(${d.id})">✅ Autorizar</button>
                        <button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; color:#991b1b;" onclick="rechazarPedidoEnCxC(${d.id})">✖</button>`
                     : "";
                 accionesHtml = `
                     ${btnPreview}
-                    <button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem;" onclick="editarDocumentoPorId(${d.id})">${editable ? "✏️ Editar" : "👁 Ver"}</button>
+                    <button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem;" onclick="editarDocumentoPorId(${d.id})">${editable ? "✏️ Editar" : "🔒 Ver"}</button>
                     ${btnConv}
                     ${btnAprobar}
                 `;
@@ -163,12 +190,13 @@
                 : `${d.n_lineas} ítem(s)<div class="cap-sub">${Number(d.total_litros || 0).toFixed(2)} L</div>${avisoSinCat}`;
 
             return `<tr>
-                <td><strong>${_esc(d.numero)}</strong><div style="margin-top:2px;">${origenBadge}</div></td>
+                <td><strong>${_esc(d.numero)}</strong><div style="margin-top:2px;">${origenBadge}</div>${syncChip}</td>
                 <td>${badgeTipo}</td>
                 <td><strong>${_esc(d.cliente_nombre)}</strong><div class="cap-sub">${rolBadge}${d.rif ? " · " + _esc(d.rif) : ""}</div></td>
                 <td><strong>${_esc(d.lista_precios_nombre || d.moneda_lista || "—")}</strong></td>
                 <td>${lineasCell}</td>
-                <td><strong>$${_monto(d.total_con_iva || d.subtotal)}</strong>${!esOdooNativo ? `<div class="cap-sub">Lista: $${_monto(d.subtotal)}</div>` : ""}${descSub}${avisoMotor}</td>
+                <td><strong>$${_monto(d.subtotal || 0)}</strong>${descSub}</td>
+                <td><strong>$${_monto(d.total_con_iva || d.subtotal || 0)}</strong>${ivaSub}${avisoMotor}</td>
                 <td>${estadoHtml}${motivosHtml}${d.aprobado_por ? `<div class="cap-sub">Por: ${_esc(d.aprobado_por)}</div>` : ""}${d.error_odoo ? `<div class="cap-sub" style="color:#dc2626;">${_esc(d.error_odoo)}</div>` : ""}</td>
                 <td style="font-size:0.8rem;">${_fechaCorta(d.actualizado_en)}</td>
                 <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap; align-items:center;">${accionesHtml}</td>
@@ -235,10 +263,16 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-        // Reemplaza la recarga simple por la vista unificada CxC + Odoo
+        // Reemplaza la recarga simple por la vista consolidada CxC + Odoo
         window.loadDocumentosComerciales = loadVentasUnificadas;
         window.loadVentasUnificadas = loadVentasUnificadas;
+        window.sincronizarYRecargarVentas = sincronizarYRecargarVentas;
         window.loadPoliticaVentasConfig = loadPoliticaVentasConfig;
+
+        const pathSegV = window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0];
+        if (pathSegV === "ventas") {
+            loadVentasUnificadas();
+        }
 
         const selOrig = document.getElementById("docs-filtro-origen");
         if (selOrig) selOrig.addEventListener("change", loadVentasUnificadas);

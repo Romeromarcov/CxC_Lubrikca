@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
@@ -14,7 +16,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from cxc.bancos import conciliacion as bancos_conciliacion
 from cxc.bancos import repositorio as bancos_repo
 from cxc.capturas.modelos import CapturaInvalida
+from cxc.capturas.modelos import es_efectivo as op_es_efectivo
 from cxc.capturas.repositorio import RepoCapturasSQL
+from cxc.config import AppConfig
+from cxc.engine.equivalents import equivalente_usd_a_tasa
 from cxc.odoo.directorio import ContactoOdoo, CuentaContable
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
 from cxc.operativos.contabilidad_gastos import (
@@ -50,6 +55,7 @@ from cxc.operativos.repositorio import RepoLotesCajaChicaSQL, RepoOperativosSQL
 from cxc.operativos.servicio import ServicioOperativos
 from cxc.operativos.terceros import RepoCuentasTerceros, RepoCuentasTercerosSQL
 from cxc.permisos import tiene
+from cxc.rates import Tasas
 from cxc.web.capturas_api import _diarios_env, exigir_bot_key
 from cxc.web.directorio_api import _obtener_contactos, _obtener_cuentas, get_lector_odoo
 
@@ -540,6 +546,183 @@ def listar_diarios_generales(
 # ── Vista Unificada de Pagos (CxC + Espejo Odoo) ─────────────────────────────
 
 
+def _odoo_base_url() -> str:
+    try:
+        return (AppConfig.from_env().odoo.url or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def _url_odoo_registro(model: str | None, res_id: Any) -> str:
+    base = _odoo_base_url()
+    sid = str(res_id or "").strip()
+    if not base or not sid.isdigit():
+        return ""
+    modelo = (model or "account.payment").strip() or "account.payment"
+    return f"{base}/web#id={int(sid)}&model={modelo}&view_type=form"
+
+
+def _mapa_nombres_usuarios(repo_cxc: Any) -> dict[str, str]:
+    mapa: dict[str, str] = {}
+    if repo_cxc is None or not hasattr(repo_cxc, "all_usuarios_plataforma"):
+        return mapa
+    try:
+        filas = repo_cxc.all_usuarios_plataforma()
+    except Exception:
+        return mapa
+    for u in filas or []:
+        if not isinstance(u, dict):
+            continue
+        nombre = str(u.get("nombre") or u.get("email") or "").strip()
+        if not nombre:
+            continue
+        for k in (u.get("email"), u.get("user_id"), u.get("nombre")):
+            if k:
+                mapa[str(k).strip().lower()] = nombre
+    return mapa
+
+
+def _resolver_nombre_usuario(raw: Any, mapa: dict[str, str], default: str = "") -> str:
+    txt = str(raw or "").strip()
+    if not txt:
+        return default
+    return mapa.get(txt.lower(), txt)
+
+
+def _tasas_para_pagos(repo_cxc: Any) -> Tasas | None:
+    if repo_cxc is None:
+        return None
+    try:
+        from cxc.web.app import tasas_vigentes
+
+        return tasas_vigentes(repo_cxc)
+    except Exception:
+        try:
+            hist = (
+                repo_cxc.all_tasas_historicas() if hasattr(repo_cxc, "all_tasas_historicas") else []
+            )
+            serie = repo_cxc.all_serie_tasas() if hasattr(repo_cxc, "all_serie_tasas") else []
+            return Tasas(historicas=hist, serie=serie)
+        except Exception:
+            return None
+
+
+def _parse_fecha_pago(fecha_val: Any) -> date | None:
+    if isinstance(fecha_val, datetime):
+        return fecha_val.date()
+    if isinstance(fecha_val, date):
+        return fecha_val
+    txt = str(fecha_val or "").strip()[:10]
+    if not txt:
+        return None
+    try:
+        return date.fromisoformat(txt)
+    except ValueError:
+        return None
+
+
+def _equivalentes_pago(
+    monto: Any,
+    moneda: Any,
+    fecha_val: Any,
+    tasas: Tasas | None,
+) -> dict[str, Any]:
+    mon = str(moneda or "USD").upper().strip() or "USD"
+    try:
+        monto_dec = Decimal(str(monto)) if monto is not None else None
+    except (InvalidOperation, ValueError, TypeError):
+        monto_dec = None
+
+    f_dt = _parse_fecha_pago(fecha_val)
+    t_bcv_dec = tasas.bcv_usd(f_dt, arrastrar=True) if (tasas and f_dt) else None
+    t_bin_dec = tasas.binance(f_dt) if (tasas and f_dt) else None
+    t_eur_dec = tasas.bcv_eur(f_dt, arrastrar=True) if (tasas and f_dt) else None
+
+    t_bcv = float(t_bcv_dec) if t_bcv_dec is not None else None
+    t_bin = float(t_bin_dec) if t_bin_dec is not None else None
+    t_eur = float(t_eur_dec) if t_eur_dec is not None else None
+
+    usd_bcv = equivalente_usd_a_tasa(monto_dec, mon, t_bcv) if monto_dec is not None else None
+    usd_bin = equivalente_usd_a_tasa(monto_dec, mon, t_bin) if monto_dec is not None else None
+    usd_eur = equivalente_usd_a_tasa(monto_dec, mon, t_eur) if monto_dec is not None else None
+
+    return {
+        "moneda_original": mon,
+        "monto_original": float(monto_dec) if monto_dec is not None else None,
+        "tasa_bcv": t_bcv,
+        "tasa_binance": t_bin,
+        "tasa_bcv_eur": t_eur,
+        "monto_bcv_usd": round(usd_bcv, 2) if usd_bcv is not None else None,
+        "monto_binance_usd": round(usd_bin, 2) if usd_bin is not None else None,
+        "monto_eur_usd": round(usd_eur, 2) if usd_eur is not None else None,
+    }
+
+
+def _enriquecer_pago_item(
+    item: dict[str, Any],
+    *,
+    tasas: Tasas | None,
+    usuarios_map: dict[str, str],
+    odoo_num_map: dict[str, str],
+    odoo_url_base: str,
+    direccion: str,
+) -> dict[str, Any]:
+    eq = _equivalentes_pago(
+        item.get("monto"),
+        item.get("moneda"),
+        item.get("fecha_documento") or item.get("creado_en"),
+        tasas,
+    )
+    res_id = item.get("odoo_res_id") or item.get("odoo_pago_id")
+    sid = str(res_id).strip() if res_id is not None else ""
+    modelo = str(item.get("odoo_model") or "account.payment")
+    odoo_url = (
+        f"{odoo_url_base}/web#id={int(sid)}&model={modelo}&view_type=form"
+        if (odoo_url_base and sid.isdigit())
+        else ""
+    )
+
+    odoo_numero = str(item.get("odoo_numero") or "").strip()
+    if not odoo_numero:
+        if sid and sid in odoo_num_map:
+            odoo_numero = odoo_num_map[sid]
+        elif item.get("origen_sistema") == "odoo":
+            odoo_numero = str(item.get("numero") or "")
+        elif sid.isdigit():
+            odoo_numero = f"PAGO-{sid}"
+
+    if direccion == "enviados":
+        reg_raw = item.get("creado_por") or ("Odoo" if item.get("origen_sistema") == "odoo" else "")
+        apr_raw = (
+            item.get("aprobado_por")
+            or item.get("confirmado_cxc_por")
+            or ("Confirmado en Odoo" if item.get("origen_sistema") == "odoo" else "")
+        )
+    else:
+        reg_raw = (
+            item.get("vendedor")
+            or item.get("creado_por")
+            or ("Odoo" if item.get("origen_sistema") == "odoo" else "")
+        )
+        apr_raw = item.get("confirmado_cxc_por") or item.get("aprobado_por") or ""
+
+    item["equivalentes"] = eq
+    item["tasa_bcv"] = eq["tasa_bcv"]
+    item["tasa_binance"] = eq["tasa_binance"]
+    item["tasa_bcv_eur"] = eq["tasa_bcv_eur"]
+    item["monto_bcv_usd"] = eq["monto_bcv_usd"]
+    item["monto_binance_usd"] = eq["monto_binance_usd"]
+    item["monto_eur_usd"] = eq["monto_eur_usd"]
+    item["odoo_pago_id"] = sid or None
+    item["odoo_numero"] = odoo_numero or None
+    item["odoo_url"] = odoo_url or None
+    item["registrado_por"] = str(reg_raw or "")
+    item["registrado_por_nombre"] = _resolver_nombre_usuario(reg_raw, usuarios_map)
+    item["aprobado_o_recibido_por"] = str(apr_raw or "")
+    item["aprobado_o_recibido_por_nombre"] = _resolver_nombre_usuario(apr_raw, usuarios_map)
+    return item
+
+
 def _odoo_recibido_a_item(
     row: dict[str, str],
     clientes_map: dict[str, str],
@@ -554,10 +737,12 @@ def _odoo_recibido_a_item(
     except (TypeError, ValueError):
         monto_val = None
     metodo_nombre = metodos_map.get(mid, mid)
+    num_odoo = str(row.get("numero_odoo") or f"ODOO-{pid}")
     return {
         "id": None,
         "documento_id": None,
-        "numero": str(row.get("numero_odoo") or f"ODOO-{pid}"),
+        "numero": num_odoo,
+        "odoo_numero": num_odoo,
         "token_preview": "",
         "preview_path": "",
         "recibo_path": "",
@@ -589,6 +774,8 @@ def _odoo_recibido_a_item(
         "faltantes": [],
         "confirmado_cxc": str(row.get("recibido") or "").upper() == "TRUE",
         "confirmado_cxc_por": str(row.get("recibido_por") or ""),
+        "creado_por": str(row.get("vendedor_nombre") or row.get("creado_por") or ""),
+        "aprobado_por": str(row.get("recibido_por") or ""),
         "numero_recibo": str(row.get("numero_recibido") or ""),
         "odoo_model": "account.payment",
         "odoo_res_id": int(pid) if pid.isdigit() else None,
@@ -607,10 +794,12 @@ def _odoo_enviado_a_item(row: dict[str, Any]) -> dict[str, Any]:
     pid = str(row.get("pago_id") or "").strip()
     pid_partner = row.get("partner_odoo_id")
     fecha_iso = str(row.get("fecha_pago") or "")[:10] or None
+    num_odoo = str(row.get("numero_odoo") or f"ODOO-{pid}")
     return {
         "id": None,
         "documento_id": None,
-        "numero": str(row.get("numero_odoo") or f"ODOO-{pid}"),
+        "numero": num_odoo,
+        "odoo_numero": num_odoo,
         "token_preview": "",
         "preview_path": "",
         "recibo_path": "",
@@ -642,6 +831,8 @@ def _odoo_enviado_a_item(row: dict[str, Any]) -> dict[str, Any]:
         "faltantes": [],
         "confirmado_cxc": False,
         "confirmado_cxc_por": "",
+        "creado_por": str(row.get("creado_por") or ""),
+        "aprobado_por": str(row.get("aprobado_por") or row.get("recibido_por") or ""),
         "numero_recibo": "",
         "odoo_model": "account.payment",
         "odoo_res_id": int(pid) if pid.isdigit() else None,
@@ -699,6 +890,7 @@ def listar_pagos_unificados(
 
     repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
     items_odoo: list[dict[str, Any]] = []
+    odoo_num_map: dict[str, str] = {}
     if direccion == "recibidos":
         clientes_map = {c.cliente_id: c.nombre for c in repo_cxc.all_clientes()}
         pagos_odoo_rows = repo_cxc.all_pagos_full()
@@ -716,10 +908,15 @@ def listar_pagos_unificados(
             pid = str(r.get("pago_id") or "").strip()
             if not pid:
                 continue
+            num_od = str(r.get("numero_odoo") or "").strip()
+            if num_od:
+                odoo_num_map[pid] = num_od
             if pid in odoo_ids_en_cxc:
                 for it in items_cxc:
                     if str(it.get("odoo_res_id") or "") == pid:
                         it["en_espejo_odoo"] = True
+                        if num_od and not it.get("odoo_numero"):
+                            it["odoo_numero"] = num_od
                 continue
             items_odoo.append(_odoo_recibido_a_item(r, clientes_map, metodos_map))
     else:
@@ -731,12 +928,30 @@ def listar_pagos_unificados(
             pid = str(r.get("pago_id") or "").strip()
             if not pid:
                 continue
+            num_od = str(r.get("numero_odoo") or "").strip()
+            if num_od:
+                odoo_num_map[pid] = num_od
             if pid in odoo_ids_en_cxc:
                 for it in items_cxc:
                     if str(it.get("odoo_res_id") or "") == pid:
                         it["en_espejo_odoo"] = True
+                        if num_od and not it.get("odoo_numero"):
+                            it["odoo_numero"] = num_od
                 continue
             items_odoo.append(_odoo_enviado_a_item(r))
+
+    tasas_obj = _tasas_para_pagos(repo_cxc)
+    usuarios_map = _mapa_nombres_usuarios(repo_cxc)
+    odoo_base = _odoo_base_url()
+    for it in [*items_cxc, *items_odoo]:
+        _enriquecer_pago_item(
+            it,
+            tasas=tasas_obj,
+            usuarios_map=usuarios_map,
+            odoo_num_map=odoo_num_map,
+            odoo_url_base=odoo_base,
+            direccion=direccion,
+        )
 
     todos = items_cxc + items_odoo
     resumen = {
@@ -781,6 +996,10 @@ def listar_pagos_unificados(
                     "pedido_ref",
                     "factura_ref",
                     "odoo_ref",
+                    "odoo_numero",
+                    "odoo_pago_id",
+                    "registrado_por_nombre",
+                    "aprobado_o_recibido_por_nombre",
                     "cuenta_tercero_alias",
                 )
             )
@@ -993,18 +1212,24 @@ def listar_compras_unificadas(
     }
 
 
-@router.get("/api/compras/conciliacion-gastos")
-def listar_conciliacion_gastos(
-    servicio: ServicioOpDep,
-    cxc_session: str | None = Cookie(default=None),
+def _construir_conciliacion_sistema(
+    servicio: ServicioOperativos,
+    user: dict[str, Any],
 ) -> dict[str, Any]:
     from cxc.web.app import get_repo
 
-    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    estados_excluidos = (RECHAZADO, INCOMPLETO, BORRADOR)
     docs_g, _, _ = servicio.listar(tipo=TIPO_GASTO, limit=500, offset=0)
     docs_p, _, _ = servicio.listar(tipo=TIPO_PAGO_PROVEEDOR, limit=500, offset=0)
-    egresos_docs = [
-        d for d in [*docs_g, *docs_p] if d.estado not in (RECHAZADO, INCOMPLETO, BORRADOR)
+    docs_ing, _, _ = servicio.listar(tipo=TIPO_PAGO, limit=500, offset=0)
+
+    egresos_docs = [d for d in [*docs_g, *docs_p] if d.estado not in estados_excluidos]
+    ingresos_docs = [
+        d
+        for d in docs_ing
+        if d.estado not in estados_excluidos
+        and not op_es_efectivo(d.metodo_pago)
+        and not d.es_zelle_tercero
     ]
 
     repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
@@ -1012,57 +1237,100 @@ def listar_conciliacion_gastos(
     movs_banco: list[Any] = []
     if engine is not None:
         try:
-            movs_banco = [m for m in bancos_repo.movimientos(engine) if m.mov.neto < 0]
+            movs_banco = list(bancos_repo.movimientos(engine))
         except SQLAlchemyError:
             movs_banco = []
 
-    sin_huella = [d for d in egresos_docs if not d.conciliado_banco_huella]
-    cands_r4 = bancos_conciliacion.egresos_desde_operativos(sin_huella)
-    props = bancos_conciliacion.proponer(movs_banco, [], egresos_cxc=cands_r4) if movs_banco else []
+    sin_huella_egr = [d for d in egresos_docs if not d.conciliado_banco_huella]
+    sin_huella_ing = [d for d in ingresos_docs if not d.conciliado_banco_huella]
+    cands_r4 = bancos_conciliacion.egresos_desde_operativos(sin_huella_egr)
+    cands_r5 = bancos_conciliacion.ingresos_desde_operativos(sin_huella_ing)
+    props = (
+        bancos_conciliacion.proponer(
+            movs_banco,
+            [],
+            egresos_cxc=cands_r4,
+            ingresos_cxc=cands_r5,
+        )
+        if movs_banco
+        else []
+    )
 
     mov_por_huella = {m.mov.huella: m for m in movs_banco}
-    doc_por_id = {d.documento_id: d for d in egresos_docs}
+    doc_por_id = {d.documento_id: d for d in [*egresos_docs, *ingresos_docs]}
     sugerencias_r4: list[dict[str, Any]] = []
+    sugerencias_r5: list[dict[str, Any]] = []
     for p in props:
-        if p.regla != "R4" or not p.candidatos:
+        if p.regla not in ("R4", "R5") or not p.candidatos:
             continue
         m_cls = mov_por_huella.get(p.huella)
         d_match = doc_por_id.get(int(p.candidatos[0]))
         if m_cls is None or d_match is None:
             continue
-        sugerencias_r4.append(
-            {
-                "huella": p.huella,
-                "documento_id": d_match.documento_id,
-                "numero": d_match.numero,
-                "tipo": d_match.tipo,
-                "contraparte": d_match.contraparte_nombre,
-                "monto_doc": float(d_match.monto or 0),
-                "moneda_doc": d_match.moneda,
-                "fecha_doc": (
-                    d_match.fecha_documento.isoformat() if d_match.fecha_documento else None
-                ),
-                "referencia_doc": d_match.referencia,
-                "banco": m_cls.mov.banco,
-                "fecha_banco": m_cls.mov.fecha.isoformat(),
-                "monto_banco": float(abs(m_cls.mov.neto)),
-                "moneda_banco": m_cls.mov.moneda,
-                "referencia_banco": m_cls.mov.referencia,
-                "descripcion_banco": m_cls.mov.descripcion,
-                "puntaje": p.puntaje,
-                "motivo": p.motivo,
-            }
-        )
+        item = {
+            "regla": p.regla,
+            "direccion": "egreso" if p.regla == "R4" else "ingreso",
+            "huella": p.huella,
+            "documento_id": d_match.documento_id,
+            "numero": d_match.numero,
+            "tipo": d_match.tipo,
+            "contraparte": d_match.contraparte_nombre,
+            "monto_doc": float(d_match.monto or 0),
+            "moneda_doc": d_match.moneda,
+            "fecha_doc": (d_match.fecha_documento.isoformat() if d_match.fecha_documento else None),
+            "referencia_doc": d_match.referencia,
+            "banco": m_cls.mov.banco,
+            "fecha_banco": m_cls.mov.fecha.isoformat(),
+            "monto_banco": float(abs(m_cls.mov.neto)),
+            "moneda_banco": m_cls.mov.moneda,
+            "referencia_banco": m_cls.mov.referencia,
+            "descripcion_banco": m_cls.mov.descripcion,
+            "puntaje": p.puntaje,
+            "motivo": p.motivo,
+        }
+        if p.regla == "R4":
+            sugerencias_r4.append(item)
+        else:
+            sugerencias_r5.append(item)
 
     conciliados_cnt = sum(1 for d in egresos_docs if d.conciliado_banco_huella)
+    ing_conc_cnt = sum(1 for d in ingresos_docs if d.conciliado_banco_huella)
+    sugerencias_sistema = sorted(
+        [*sugerencias_r4, *sugerencias_r5],
+        key=lambda x: (-int(x.get("puntaje") or 0), str(x.get("fecha_banco") or "")),
+    )
     return {
         "puede_conciliar": tiene(user, PERMISO_APROBAR_COMPRAS) or tiene(user, "bancos.conciliar"),
         "total_egresos": len(egresos_docs),
         "conciliados_count": conciliados_cnt,
         "pendientes_count": len(egresos_docs) - conciliados_cnt,
+        "total_ingresos": len(ingresos_docs),
+        "ingresos_conciliados_count": ing_conc_cnt,
+        "ingresos_pendientes_count": len(ingresos_docs) - ing_conc_cnt,
         "sugerencias_r4": sugerencias_r4,
+        "sugerencias_r5": sugerencias_r5,
+        "sugerencias_sistema": sugerencias_sistema,
         "egresos": [d.a_dict() for d in egresos_docs[:200]],
+        "ingresos": [d.a_dict() for d in ingresos_docs[:200]],
     }
+
+
+@router.get("/api/compras/conciliacion-gastos")
+def listar_conciliacion_gastos(
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    return _construir_conciliacion_sistema(servicio, user)
+
+
+@router.get("/api/bancos/conciliacion/operativos-sistema")
+def listar_conciliacion_operativos_sistema(
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS, "bancos.ver", "bancos.conciliar")
+    return _construir_conciliacion_sistema(servicio, user)
 
 
 @router.post("/api/compras/conciliacion-gastos/vincular")

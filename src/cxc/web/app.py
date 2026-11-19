@@ -3225,6 +3225,25 @@ def _correr_auditoria_sobre_descuento_diaria(repo) -> None:
         print(f"Error detectando facturado por debajo (daemon): {e_debajo}", file=sys.stderr)
 
 
+def _sincronizar_docs_comerciales_espejo(repo: Any) -> dict[str, int]:
+    """Sincroniza cotizaciones/pedidos en CxC con cambios de Odoo en el espejo."""
+    engine = _inicio_engine_seguro()
+    if engine is None:
+        return {"revisados": 0, "ajustados": 0, "confirmados": 0, "cancelados": 0}
+    try:
+        from cxc.documentos.repositorio import RepoDocumentosSQL
+        from cxc.documentos.sync_odoo import sincronizar_documentos_desde_odoo
+
+        return sincronizar_documentos_desde_odoo(
+            repo,
+            RepoDocumentosSQL(engine),
+            pricelist_mapeo=get_pricelist_mapeo(repo),
+        )
+    except Exception as exc:
+        logger.warning("Sincronización espejo -> documentos CxC omitida: %s", exc)
+        return {"revisados": 0, "ajustados": 0, "confirmados": 0, "cancelados": 0}
+
+
 async def run_sync_in_background():
     """Daemon de sincronización incremental Odoo → Sheets.
 
@@ -3330,6 +3349,7 @@ async def run_sync_in_background():
                     # entero (incluido el health check de Railway), causando
                     # 502 "Application failed to respond" en el servidor.
                     await asyncio.to_thread(recalculate_all_orders)
+                await asyncio.to_thread(_sincronizar_docs_comerciales_espejo, repo)
                 await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
                 _last_daily_recalc_date = date.today()
                 _first_run = False
@@ -3366,6 +3386,7 @@ async def run_sync_in_background():
                     # esperar a que un humano vincule algo manualmente. En
                     # hilo aparte por la misma razón que arriba.
                     await asyncio.to_thread(recalculate_all_orders)
+                    await asyncio.to_thread(_sincronizar_docs_comerciales_espejo, repo)
                     await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
                     _last_daily_recalc_date = date.today()
                 elif _last_daily_recalc_date != date.today():
@@ -3381,6 +3402,7 @@ async def run_sync_in_background():
                         "FastAPI Daemon: Recálculo diario (ventanas de pago) sin cambios de sync."
                     )
                     await asyncio.to_thread(recalculate_all_orders)
+                    await asyncio.to_thread(_sincronizar_docs_comerciales_espejo, repo)
                     await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
                     _last_daily_recalc_date = date.today()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
@@ -12540,6 +12562,15 @@ def _get_tasas_promedios_sync():
         # ultima tasa conocida, no un promedio del dia.
         last_bcv = _ultima_tasa_positiva(rows, "tasa_bcv")
         last_binance = _ultima_tasa_positiva(rows, "tasa_binance")
+        last_bcv_eur = _ultima_tasa_positiva(rows, "tasa_bcv_euro")
+        if last_bcv_eur <= Decimal("0"):
+            try:
+                eur_v = tasas_vigentes(repo).bcv_eur(date.today(), arrastrar=True)
+                if eur_v is not None and eur_v > Decimal("0"):
+                    last_bcv_eur = eur_v
+            except Exception:
+                pass
+        ultima_act = str(rows[-1].get("timestamp", "")) if rows else ""
 
         def _r2(v: Decimal | None) -> float | None:
             return round(float(v), 2) if v is not None else None
@@ -12547,11 +12578,13 @@ def _get_tasas_promedios_sync():
         return {
             "fecha": today_str,
             "tasa_bcv_actual": float(last_bcv),
+            "tasa_bcv_euro": round(float(last_bcv_eur), 4) if last_bcv_eur > 0 else None,
             "tasa_binance_vigente": float(last_binance),
             "tasa_binance_manana": _r2(prom.manana),
             "tasa_binance_tarde": _r2(prom.tarde),
             "tasa_binance_diario": _r2(prom.diario),
             "diferencial_bcv_binance_pct": round(float(diferencial_pct(prom.diario, last_bcv)), 2),
+            "ultima_actualizacion": ultima_act,
             # Los dos avisos. No cambian ningun numero; dicen de donde salio.
             "ventanas_solapadas": prom.ventanas_solapadas,
             "horas_compartidas": list(prom.horas_compartidas),
@@ -12988,6 +13021,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             )
 
         cxc_pago_odoo_ids: set[str] = set()
+        cxc_pago_meta: dict[str, dict[str, str]] = {}
         try:
             engine_op = _inicio_engine_seguro()
             if engine_op is not None:
@@ -12997,14 +13031,51 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
 
                 with engine_op.connect() as _conn_op:
                     _rows_op = _conn_op.execute(
-                        _sa_select(_t_ops.c.odoo_res_id).where(
+                        _sa_select(
+                            _t_ops.c.odoo_res_id,
+                            _t_ops.c.creado_por,
+                            _t_ops.c.confirmado_cxc_por,
+                            _t_ops.c.aprobado_por,
+                        ).where(
                             _t_ops.c.tipo == "pago",
                             _t_ops.c.odoo_res_id.is_not(None),
                         )
                     ).all()
-                    cxc_pago_odoo_ids = {str(r[0]) for r in _rows_op if r[0] is not None}
+                    for r_op in _rows_op:
+                        if r_op[0] is not None:
+                            oid_str = str(r_op[0])
+                            cxc_pago_odoo_ids.add(oid_str)
+                            cxc_pago_meta[oid_str] = {
+                                "creado_por": str(r_op[1] or "").strip(),
+                                "confirmado_cxc_por": str(r_op[2] or "").strip(),
+                                "aprobado_por": str(r_op[3] or "").strip(),
+                            }
         except Exception:
             cxc_pago_odoo_ids = set()
+            cxc_pago_meta = {}
+
+        usuarios_map_pagos: dict[str, str] = {}
+        try:
+            for u_pl in repo.all_usuarios_plataforma():
+                if not isinstance(u_pl, dict):
+                    continue
+                nom_u = str(u_pl.get("nombre") or u_pl.get("email") or "").strip()
+                if not nom_u:
+                    continue
+                for ku in (u_pl.get("email"), u_pl.get("user_id"), u_pl.get("nombre")):
+                    if ku:
+                        usuarios_map_pagos[str(ku).strip().lower()] = nom_u
+        except Exception:
+            usuarios_map_pagos = {}
+
+        try:
+            _odoo_base_cob = (AppConfig.from_env().odoo.url or "").strip().rstrip("/")
+        except Exception:
+            _odoo_base_cob = ""
+
+        def _resolver_nom_cob(raw_val: Any) -> str:
+            txt = str(raw_val or "").strip()
+            return usuarios_map_pagos.get(txt.lower(), txt) if txt else ""
 
         def comun(pid: str, cliente_id: str, so_id: str | None, fecha_pago: str) -> dict[str, Any]:
             p_row = pagos_by_id.get(pid, {})
@@ -13034,6 +13105,19 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             tasa_eur = tasas_vigentes(repo).bcv_eur(fecha_dt, arrastrar=False) if fecha_dt else None
 
             reasignado = reasignados_por_pago.get(pid)
+            meta_op = cxc_pago_meta.get(str(pid), {})
+            reg_raw = meta_op.get("creado_por") or vendedor
+            rec_por_raw = (
+                meta_op.get("confirmado_cxc_por")
+                or meta_op.get("aprobado_por")
+                or p_row.get("recibido_por")
+                or ""
+            )
+            odoo_url_cob = (
+                f"{_odoo_base_cob}/web#id={int(pid)}&model=account.payment&view_type=form"
+                if (_odoo_base_cob and str(pid).isdigit())
+                else None
+            )
 
             return {
                 "metodo_pago": metodo_nombre,
@@ -13056,6 +13140,10 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 "fecha_recibido": p_row.get("fecha_recibido") or None,
                 "recibido_por": p_row.get("recibido_por") or None,
                 "origen_sistema": "cxc" if str(pid) in cxc_pago_odoo_ids else "odoo",
+                "odoo_numero_espejo": p_row.get("numero_odoo") or None,
+                "odoo_url": odoo_url_cob,
+                "registrado_por_nombre": _resolver_nom_cob(reg_raw),
+                "aprobado_o_recibido_por_nombre": _resolver_nom_cob(rec_por_raw),
             }
 
         def _monto_y_moneda_del_pago(pid: str) -> tuple[Decimal, str] | None:
@@ -18672,15 +18760,19 @@ async def bancos_conciliacion_generar(
         totales: dict[str, int] = {"nuevas": 0, "actualizadas": 0, "ya_decididas": 0}
         por_tipo: dict[str, int] = {}
         egresos_cxc: list[bancos_conciliacion.EgresoCxCCandidato] = []
+        ingresos_cxc: list[bancos_conciliacion.IngresoCxCCandidato] = []
         try:
             from cxc.operativos.repositorio import RepoOperativosSQL
 
             repo_op = RepoOperativosSQL(engine)
             docs_g, _, _ = repo_op.listar(tipo="gasto", limit=500, offset=0)
             docs_p, _, _ = repo_op.listar(tipo="pago_proveedor", limit=500, offset=0)
+            docs_ing, _, _ = repo_op.listar(tipo="pago", limit=500, offset=0)
             egresos_cxc = bancos_conciliacion.egresos_desde_operativos([*docs_g, *docs_p])
+            ingresos_cxc = bancos_conciliacion.ingresos_desde_operativos(docs_ing)
         except Exception:
             egresos_cxc = []
+            ingresos_cxc = []
 
         for b, lista in sorted(por_banco.items()):
             diario = BANCOS_DIARIOS.get(b)
@@ -18694,7 +18786,12 @@ async def bancos_conciliacion_generar(
                     min(m.mov.fecha for m in lista),
                     max(m.mov.fecha for m in lista),
                 )
-            props = bancos_conciliacion.proponer(lista, pagos, egresos_cxc=egresos_cxc)
+            props = bancos_conciliacion.proponer(
+                lista,
+                pagos,
+                egresos_cxc=egresos_cxc,
+                ingresos_cxc=ingresos_cxc,
+            )
             info = {
                 p.pago_id: {
                     "id": p.pago_id,

@@ -16,6 +16,10 @@ propusieron nada en 57 (docs/BANCOS.md, "Fase 2"):
       menores ``GAS-*`` o pagos a proveedores ``PPR-*``) del mismo monto exacto,
       moneda compatible y fecha a +-3 días, desempatando por referencia, RIF y
       nombre del comercio/proveedor.
+- R5  crédito bancario sin match R1/R2 contra ingresos reportados en CxC (pagos
+      de clientes ``PAG-*`` no efectivo / no Zelle tercero) del mismo monto exacto,
+      moneda compatible y fecha a +-3 días, desempatando por referencia, RIF y
+      nombre del cliente.
 
 Nada de esto escribe en Odoo: produce propuestas que una persona aprueba o corrige
 en la cola de revisión. Odoo se lee con ``solo_lectura``, que rechaza cualquier
@@ -30,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
+
+from cxc.capturas.modelos import es_efectivo
 
 from .diarios import DIARIOS
 from .ingesta import MovimientoClasificado
@@ -117,12 +123,26 @@ class EgresoCxCCandidato:
     rifs: frozenset[str] = frozenset()
 
 
+@dataclass(frozen=True)
+class IngresoCxCCandidato:
+    """Ingreso reportado en CxC (cobro de cliente bancario) candidato para R5."""
+
+    doc_id: int
+    numero: str
+    fecha: date
+    monto: Decimal
+    moneda: str = "VES"
+    contraparte: str = ""
+    referencia: str = ""
+    rifs: frozenset[str] = frozenset()
+
+
 def _puntaje_r4(
     m_fecha: date,
     m_ref: str,
     m_rifs: frozenset[str],
     m_desc: str,
-    e: EgresoCxCCandidato,
+    e: EgresoCxCCandidato | IngresoCxCCandidato,
 ) -> int:
     dias = abs((e.fecha - m_fecha).days)
     s = 3 if dias == 0 else (2 if dias == 1 else 1)
@@ -147,6 +167,40 @@ def _puntaje_r4(
     if any(tok in desc_up for tok in toks_nombre):
         s += 2
     return s
+
+
+def ingresos_desde_operativos(docs: Iterable[Any]) -> list[IngresoCxCCandidato]:
+    """Convierte ``DocumentoOperativo`` de cobros bancarios reportados en candidatos R5."""
+    out: list[IngresoCxCCandidato] = []
+    for d in docs:
+        tipo = str(getattr(d, "tipo", "") or "")
+        estado = str(getattr(d, "estado", "") or "")
+        if tipo != "pago":
+            continue
+        if estado in ("RECHAZADO", "INCOMPLETO", "BORRADOR"):
+            continue
+        if bool(getattr(d, "es_zelle_tercero", False)):
+            continue
+        if es_efectivo(str(getattr(d, "metodo_pago", "") or "")):
+            continue
+        monto = getattr(d, "monto", None)
+        fecha = getattr(d, "fecha_documento", None) or getattr(d, "creado_en", None)
+        if monto is None or fecha is None:
+            continue
+        fecha_d = fecha.date() if hasattr(fecha, "hour") else fecha
+        out.append(
+            IngresoCxCCandidato(
+                doc_id=int(d.documento_id),
+                numero=str(d.numero),
+                fecha=fecha_d,
+                monto=abs(Decimal(str(monto))).quantize(CENT),
+                moneda=str(getattr(d, "moneda", "VES") or "VES").upper(),
+                contraparte=str(getattr(d, "contraparte_nombre", "") or ""),
+                referencia=str(getattr(d, "referencia", "") or ""),
+                rifs=rifs(str(getattr(d, "rif", "") or "")),
+            )
+        )
+    return out
 
 
 def egresos_desde_operativos(docs: Iterable[Any]) -> list[EgresoCxCCandidato]:
@@ -192,6 +246,7 @@ def proponer(
     movs: Iterable[MovimientoClasificado],
     pagos: Iterable[PagoCandidato],
     egresos_cxc: Iterable[EgresoCxCCandidato] = (),
+    ingresos_cxc: Iterable[IngresoCxCCandidato] = (),
 ) -> list[Propuesta]:
     """Una propuesta por movimiento. Un pago se asigna a un solo movimiento (el primero
     en orden cronológico que lo gana); por eso los movimientos se recorren ordenados."""
@@ -201,8 +256,12 @@ def proponer(
     disp_egresos: dict[Decimal, list[EgresoCxCCandidato]] = {}
     for e in egresos_cxc:
         disp_egresos.setdefault(abs(e.monto).quantize(CENT), []).append(e)
+    disp_ingresos: dict[Decimal, list[IngresoCxCCandidato]] = {}
+    for ing in ingresos_cxc:
+        disp_ingresos.setdefault(abs(ing.monto).quantize(CENT), []).append(ing)
     usados: set[int] = set()
     usados_egresos: set[int] = set()
+    usados_ingresos: set[int] = set()
     out: list[Propuesta] = []
     for mc in sorted(movs, key=lambda x: (x.mov.fecha, x.mov.orden)):
         m = mc.mov
@@ -259,7 +318,7 @@ def proponer(
         # Regla R4: débito bancario contra gastos menores y pagos a proveedor en CxC
         if not entrante and disp_egresos:
             diario_b = DIARIOS.get(m.banco)
-            mon_b = str(diario_b.get("moneda") or "").upper() if diario_b else ""
+            mon_b = str(m.moneda or (diario_b.get("moneda") if diario_b else "") or "").upper()
             cands_r4 = [
                 e
                 for e in disp_egresos.get(monto_abs, [])
@@ -300,6 +359,52 @@ def proponer(
                         f"{len(punt_r4)} egresos CxC empatan con puntaje {punt_r4[0][0]}",
                         puntaje=punt_r4[0][0],
                         candidatos=[q.doc_id for _, q in punt_r4],
+                    )
+                )
+                continue
+
+        # Regla R5: crédito bancario contra ingresos reportados en CxC (cobros bancarios)
+        if entrante and disp_ingresos:
+            diario_b = DIARIOS.get(m.banco)
+            mon_b = str(m.moneda or (diario_b.get("moneda") if diario_b else "") or "").upper()
+            cands_r5 = [
+                ing
+                for ing in disp_ingresos.get(monto_abs, [])
+                if ing.doc_id not in usados_ingresos
+                and abs(ing.fecha - m.fecha) <= ventana
+                and (not mon_b or not ing.moneda or ing.moneda.upper() == mon_b)
+            ]
+            punt_r5 = sorted(
+                (
+                    (_puntaje_r4(m.fecha, m.referencia, m_rifs, m.descripcion, ing), ing)
+                    for ing in cands_r5
+                ),
+                key=lambda t: (-t[0], t[1].doc_id),
+            )
+            if punt_r5 and (len(punt_r5) == 1 or punt_r5[0][0] > punt_r5[1][0]):
+                s_i, ing = punt_r5[0]
+                usados_ingresos.add(ing.doc_id)
+                out.append(
+                    Propuesta(
+                        m.huella,
+                        PAGO,
+                        "R5",
+                        f"ingreso CxC {ing.numero} ({ing.contraparte or 'cliente'}), puntaje {s_i}",
+                        pago_nombre=ing.numero,
+                        puntaje=s_i,
+                        candidatos=[ing.doc_id],
+                    )
+                )
+                continue
+            if punt_r5:
+                out.append(
+                    Propuesta(
+                        m.huella,
+                        AMBIGUO,
+                        "R5",
+                        f"{len(punt_r5)} ingresos CxC empatan con puntaje {punt_r5[0][0]}",
+                        puntaje=punt_r5[0][0],
+                        candidatos=[q.doc_id for _, q in punt_r5],
                     )
                 )
                 continue

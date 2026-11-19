@@ -10,6 +10,11 @@ from fastapi import APIRouter, BackgroundTasks, Body, Cookie, Depends, HTTPExcep
 
 from cxc.config import AppConfig
 from cxc.documentos.repositorio import RepoDocumentosSQL
+from cxc.engine.saldos_cxp import (
+    calcular_saldos_cxp,
+    estado_cuenta_proveedor,
+    exportar_cxp_csv,
+)
 from cxc.engine.saldos_propios import (
     calcular_saldos_propios,
     comparativo_bd_vs_odoo,
@@ -18,6 +23,7 @@ from cxc.engine.saldos_propios import (
 )
 from cxc.odoo.client import OdooXmlRpcReader
 from cxc.operativos.repositorio import RepoOperativosSQL
+from cxc.operativos.terceros import RepoCuentasTercerosSQL
 from cxc.permisos import tiene
 from cxc.sync.siembra_odoo import SiembraOdooService
 
@@ -30,6 +36,7 @@ PERMISOS_VER_REPORTES = (
     "ventas",
     "pagos",
     "cobranza",
+    "compras",
 )
 PERMISOS_VER_AUDITORIA = ("auditoria", "reportes", "reporte")
 
@@ -71,7 +78,21 @@ def get_extras_reportes_bd() -> tuple[Sequence[Any], Sequence[Any]]:
     return _cargar_extras_bd()
 
 
+def get_cuentas_terceros_reportes_bd() -> Sequence[Any]:
+    from cxc.web.app import get_repo
+
+    repo: Any = get_repo()
+    engine = getattr(repo, "_engine", None)
+    if engine is None:
+        return ()
+    try:
+        return RepoCuentasTercerosSQL(engine).listar(solo_activas=False)
+    except Exception:
+        return ()
+
+
 ExtrasDep = Annotated[tuple[Sequence[Any], Sequence[Any]], Depends(get_extras_reportes_bd)]
+TercerosRepDep = Annotated[Sequence[Any], Depends(get_cuentas_terceros_reportes_bd)]
 
 
 def get_siembra_service() -> SiembraOdooService:
@@ -173,6 +194,86 @@ def descargar_saldos_propios_csv(
         content=contenido,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="saldos_bd_propia_cxc.csv"'},
+    )
+
+
+@router.get("/api/reportes/cxp-propios")
+def obtener_saldos_cxp_propios(
+    extras: ExtrasDep,
+    terceros: TercerosRepDep,
+    antiguedad: str | None = None,
+    q: str | None = None,
+    solo_con_saldo: bool = False,
+    hoy: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _docs_com, docs_op = extras
+    return calcular_saldos_cxp(
+        get_repo(),
+        docs_operativos=docs_op,
+        cuentas_terceros=terceros,
+        hoy=_parse_hoy(hoy),
+        antiguedad=antiguedad,
+        q=q,
+        solo_con_saldo=solo_con_saldo,
+    )
+
+
+@router.get("/api/reportes/cxp/estado-cuenta/{proveedor_id}")
+def obtener_estado_cuenta_cxp(
+    proveedor_id: str,
+    extras: ExtrasDep,
+    terceros: TercerosRepDep,
+    hoy: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _docs_com, docs_op = extras
+    res = estado_cuenta_proveedor(
+        get_repo(),
+        proveedor_id,
+        docs_operativos=docs_op,
+        cuentas_terceros=terceros,
+        hoy=_parse_hoy(hoy),
+    )
+    if res is None:
+        raise HTTPException(status_code=404, detail="Proveedor sin movimientos en BD propia.")
+    return res
+
+
+@router.get("/api/reportes/cxp-propios/csv")
+def descargar_saldos_cxp_csv(
+    extras: ExtrasDep,
+    terceros: TercerosRepDep,
+    antiguedad: str | None = None,
+    q: str | None = None,
+    solo_con_saldo: bool = False,
+    hoy: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> Response:
+    from cxc.web.app import get_repo
+
+    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _docs_com, docs_op = extras
+    rep = calcular_saldos_cxp(
+        get_repo(),
+        docs_operativos=docs_op,
+        cuentas_terceros=terceros,
+        hoy=_parse_hoy(hoy),
+        antiguedad=antiguedad,
+        q=q,
+        solo_con_saldo=solo_con_saldo,
+    )
+    contenido = exportar_cxp_csv(rep)
+    return Response(
+        content=contenido,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="saldos_cxp_bd_propia.csv"'},
     )
 
 
