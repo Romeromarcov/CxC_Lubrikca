@@ -41,6 +41,9 @@ from cxc.permisos import tiene
 router = APIRouter()
 
 PERMISOS_DIRECTORIO = (
+    "contactos",
+    "compras",
+    "reportes",
     "capturas.ver",
     "capturas.gestionar",
     "bots.ver",
@@ -176,14 +179,8 @@ def consultar_plan_cuentas_odoo(
     cuentas = _obtener_cuentas(lector, refresh=refresh)
     resumen = resumir_plan_cuentas(cuentas)
     propuestas = proponer_clasificacion_gastos(cuentas)
-    filtradas = filtrar_plan_cuentas(
-        cuentas, grupo=grupo, account_type=account_type, q=q
-    )
-    sugerencia = (
-        sugerir_para_concepto(concepto, cuentas)
-        if concepto and concepto.strip()
-        else None
-    )
+    filtradas = filtrar_plan_cuentas(cuentas, grupo=grupo, account_type=account_type, q=q)
+    sugerencia = sugerir_para_concepto(concepto, cuentas) if concepto and concepto.strip() else None
 
     return {
         "resumen": resumen,

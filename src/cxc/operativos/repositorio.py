@@ -242,6 +242,10 @@ class RepoOperativosSQL:
             conds.append(documentos_operativos.c.tipo == tipo)
         elif grupo == "cobranza":
             conds.append(documentos_operativos.c.tipo == "pago")
+        elif grupo == "pagos_enviados":
+            conds.append(documentos_operativos.c.tipo == "pago_proveedor")
+        elif grupo == "compras_solo":
+            conds.append(documentos_operativos.c.tipo.in_(("factura_proveedor", "gasto")))
         elif grupo == "compras":
             conds.append(documentos_operativos.c.tipo.in_(TIPOS_COMPRAS))
         return conds

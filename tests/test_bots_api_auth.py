@@ -151,12 +151,15 @@ def test_con_sesion_y_permiso_el_panel_responde(repo: RepoBotsMemoria) -> None:
 
 
 def test_pagina_bots_pide_permiso(repo: RepoBotsMemoria) -> None:
-    ventas = {"email": "v@x.test", "rol": "ventas", "permisos": efectivos("ventas")}
+    r_legado = client.get("/bots", follow_redirects=False)
+    assert r_legado.status_code == 302 and r_legado.headers["location"] == "/configuracion?tab=bots"
+
     tesoreria = {"email": "t@x.test", "rol": "tesoreria", "permisos": efectivos("tesoreria")}
     with patch("cxc.web.app.get_current_user_from_cookie", return_value=tesoreria):
-        assert client.get("/bots", follow_redirects=False).status_code == 200
-    with patch("cxc.web.app.get_current_user_from_cookie", return_value=ventas):
-        r = client.get("/bots", follow_redirects=False)
-        assert r.status_code in (302, 307) and "/bots" not in r.headers["location"]
+        r = client.get("/configuracion?tab=bots", follow_redirects=False)
+        assert r.status_code == 200 and 'id="bots-usuarios-body"' in r.text
     with patch("cxc.web.app.get_current_user_from_cookie", return_value=None):
-        assert client.get("/bots", follow_redirects=False).headers["location"] == "/login"
+        assert (
+            client.get("/configuracion?tab=bots", follow_redirects=False).headers["location"]
+            == "/login"
+        )

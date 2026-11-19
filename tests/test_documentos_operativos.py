@@ -227,6 +227,10 @@ class RepoOperativosMemoria:
             base = [d for d in base if d.tipo == tipo]
         elif grupo == "cobranza":
             base = [d for d in base if d.tipo == "pago"]
+        elif grupo == "pagos_enviados":
+            base = [d for d in base if d.tipo == "pago_proveedor"]
+        elif grupo == "compras_solo":
+            base = [d for d in base if d.tipo in ("factura_proveedor", "gasto")]
         elif grupo == "compras":
             base = [d for d in base if d.tipo != "pago"]
 

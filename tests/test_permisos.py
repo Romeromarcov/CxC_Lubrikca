@@ -24,42 +24,36 @@ def _como(usuario):
 
 # ------------------------------------------------------------------- reglas puras
 
-# Lo que cada rol podía ver ANTES de los ajustes (ROLES_PERMISOS original): la base
-# de cada rol tiene que reproducirlo, si no el despliegue le cambia el acceso a la gente.
+# Las 10 páginas canónicas (/inicio + 9 módulos) en el orden del menú.
 _PAGINAS = [
-    "dashboard",
-    "facturacion",
-    "conciliaciones",
-    "cobranza",
-    "ventas",
-    "reporte",
+    "inicio",
     "auditoria",
+    "pagos",
+    "ventas",
+    "compras",
+    "reportes",
+    "facturacion",
     "inventario",
+    "contactos",
     "configuracion",
-    "bancos",
-    "capturas",
-    "bots",
 ]
-_SIN_BANCOS = [p for p in _PAGINAS if p not in ("bancos", "capturas", "bots")]
-# Capturas Telegram y Panel de bots (nov-2026): páginas derivadas, como Bancos. Se abren con
-# capturas.ver/gestionar y bots.ver/gestionar.
-_CON_CAPTURAS = _SIN_BANCOS + ["capturas", "bots"]
+_COMUNES = [p for p in _PAGINAS if p != "compras"]
 
 
 @pytest.mark.parametrize(
     "rol,paginas",
     [
         ("admin", _PAGINAS),
-        ("auditor", [*_SIN_BANCOS, "bancos", "capturas", "bots"]),
-        ("tesoreria", _CON_CAPTURAS),
-        ("gerente_ventas", _CON_CAPTURAS),
-        ("ventas", _SIN_BANCOS),
+        ("auditor", _PAGINAS),
+        ("tesoreria", _PAGINAS),
+        ("gerente_ventas", _PAGINAS),
+        ("ventas", _COMUNES),
     ],
 )
 def test_la_base_de_cada_rol_conserva_sus_paginas(rol, paginas):
     ef = acc.efectivos(rol)
     assert [p for p in ef if "." not in p] == paginas
-    assert ef[0] == "dashboard"  # página de entrada
+    assert ef[0] == "inicio"  # página de entrada
 
 
 def test_acciones_que_antes_eran_por_rol():
@@ -78,29 +72,34 @@ def test_capturas_telegram_por_rol():
     assert acc.tiene(tesoreria, "capturas.gestionar")
     auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
     assert acc.tiene(auditor, "capturas.ver") and not acc.tiene(auditor, "capturas.gestionar")
-    ventas = acc.efectivos("ventas")
-    assert "capturas" not in ventas and "capturas.ver" not in ventas
-    # La página se abre sola al conceder una acción, y se cierra al quitarla.
-    assert "capturas" in acc.efectivos("ventas", {"capturas.ver": True})
+    ventas = {"rol": "ventas", "permisos": acc.efectivos("ventas")}
+    assert not acc.tiene(ventas, "capturas") and not acc.tiene(ventas, "capturas.ver")
+    # El submódulo de integraciones se abre al conceder una acción, y se cierra al quitarla.
+    con_cap = {"rol": "ventas", "permisos": acc.efectivos("ventas", {"capturas.ver": True})}
+    assert acc.tiene(con_cap, "capturas") and "auditoria" in con_cap["permisos"]
     sin = {"capturas.ver": False, "capturas.gestionar": False}
-    assert "capturas" not in acc.efectivos("tesoreria", sin)
+    teso_sin = {"rol": "tesoreria", "permisos": acc.efectivos("tesoreria", sin)}
+    assert not acc.tiene(teso_sin, "capturas")
 
 
 def test_conceder_cargar_bancos_abre_la_pagina_sin_dar_saldos():
     ef = acc.efectivos("tesoreria", {"bancos.cargar": True})
-    assert "bancos.cargar" in ef and "bancos" in ef
+    assert "bancos.cargar" in ef and "pagos" in ef
+    assert acc.tiene({"rol": "tesoreria", "permisos": ef}, "bancos")
     assert "bancos.ver" not in ef
 
 
 def test_quitar_todo_lo_de_bancos_cierra_la_pagina():
     ef = acc.efectivos("auditor", {"bancos.ver": False})
-    assert "bancos" not in ef
+    assert not acc.tiene({"rol": "auditor", "permisos": ef}, "bancos")
 
 
 def test_inicio_y_pagina_derivada_no_se_tocan_con_ajustes():
-    ef = acc.efectivos("ventas", {"dashboard": False, "bancos": True, "inventado": True})
-    assert ef[0] == "dashboard"
-    assert "bancos" not in ef and "inventado" not in ef
+    ef = acc.efectivos(
+        "ventas", {"inicio": False, "dashboard": False, "bancos": True, "inventado": True}
+    )
+    assert ef[0] == "inicio"
+    assert not acc.tiene({"rol": "ventas", "permisos": ef}, "bancos") and "inventado" not in ef
 
 
 def test_admin_tiene_todo_aunque_tenga_ajustes():
@@ -109,7 +108,34 @@ def test_admin_tiene_todo_aunque_tenga_ajustes():
 
 
 def test_rol_desconocido_solo_ve_el_inicio():
-    assert acc.efectivos("vendedor") == ["dashboard"]
+    assert acc.efectivos("vendedor") == ["inicio"]
+
+
+def test_alias_legados_son_retrocompatibles():
+    ventas = {"rol": "ventas", "permisos": acc.efectivos("ventas")}
+    assert acc.tiene(ventas, "dashboard")
+    assert acc.tiene(ventas, "cobranza")
+    assert acc.tiene(ventas, "reporte")
+    # Ajuste legado "cobranza": False cierra "pagos"; pero una acción hija vuelve a abrir "pagos".
+    sin_pagos = acc.efectivos("ventas", {"cobranza": False})
+    assert "pagos" not in sin_pagos
+    con_conc = acc.efectivos("ventas", {"pagos": False, "bancos.ver": True})
+    assert "pagos" in con_conc
+    # ajustes_para acepta alias legados como "reporte" -> "reportes".
+    aj = acc.ajustes_para("ventas", [p for p in acc.efectivos("ventas") if p != "reportes"])
+    assert aj == {"reportes": False}
+    esperado = [
+        "inicio",
+        "auditoria",
+        "pagos",
+        "ventas",
+        "reporte",
+        "facturacion",
+        "inventario",
+        "contactos",
+        "configuracion",
+    ]
+    assert acc.ajustes_para("ventas", esperado) == {}
 
 
 def test_ajustes_guarda_solo_la_diferencia_con_el_rol():
@@ -192,7 +218,7 @@ def test_catalogo():
     assert roles == {"admin", "gerente_ventas", "tesoreria", "auditor", "ventas"}
     por_clave = {p["clave"]: p for p in datos["permisos"]}
     assert por_clave["bancos.cargar"]["editable"]
-    assert not por_clave["dashboard"]["editable"] and not por_clave["bancos"]["editable"]
+    assert not por_clave["inicio"]["editable"] and por_clave["pagos"]["editable"]
 
 
 def test_cambiar_acceso_pasa_quien_lo_hizo():
@@ -403,9 +429,10 @@ def test_panel_de_bots_por_rol():
     assert acc.tiene(gerente, "bots.ver") and acc.tiene(gerente, "bots.gestionar")
     auditor = {"rol": "auditor", "permisos": acc.efectivos("auditor")}
     assert acc.tiene(auditor, "bots.ver") and not acc.tiene(auditor, "bots.gestionar")
-    ventas = acc.efectivos("ventas")
-    assert "bots" not in ventas and "bots.ver" not in ventas
-    # La página se abre sola al conceder una acción, y se cierra al quitarlas.
-    assert "bots" in acc.efectivos("ventas", {"bots.ver": True})
+    ventas = {"rol": "ventas", "permisos": acc.efectivos("ventas")}
+    assert not acc.tiene(ventas, "bots") and not acc.tiene(ventas, "bots.ver")
+    # El submódulo de bots se abre al conceder una acción, y se cierra al quitarlas.
+    con_bots = {"rol": "ventas", "permisos": acc.efectivos("ventas", {"bots.ver": True})}
+    assert acc.tiene(con_bots, "bots") and "configuracion" in con_bots["permisos"]
     sin = {"bots.ver": False, "bots.gestionar": False}
-    assert "bots" not in acc.efectivos("tesoreria", sin)
+    assert not acc.tiene({"rol": "tesoreria", "permisos": acc.efectivos("tesoreria", sin)}, "bots")

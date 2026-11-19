@@ -3835,7 +3835,7 @@ async def read_root(cxc_session: str | None = Cookie(default=None)):
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         return RedirectResponse(url="/login")
-    first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+    first_perm = user["permisos"][0] if user["permisos"] else "inicio"
     return RedirectResponse(url=f"/{first_perm}")
 
 
@@ -3843,7 +3843,7 @@ async def read_root(cxc_session: str | None = Cookie(default=None)):
 async def serve_login(cxc_session: str | None = Cookie(default=None)):
     user = get_current_user_from_cookie(cxc_session)
     if user:
-        first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+        first_perm = user["permisos"][0] if user["permisos"] else "inicio"
         return RedirectResponse(url=f"/{first_perm}")
     login_path = os.path.join(static_dir, "login.html")
     if not os.path.exists(login_path):
@@ -3875,8 +3875,8 @@ def render_page_or_login(page_name: str, cxc_session: str | None):
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         return RedirectResponse(url="/login")
-    if page_name not in user["permisos"] and user["rol"] != "admin":
-        first_perm = user["permisos"][0] if user["permisos"] else "reporte"
+    if not accesos.tiene(user, page_name):
+        first_perm = user["permisos"][0] if user["permisos"] else "inicio"
         return RedirectResponse(url=f"/{first_perm}")
 
     index_path = os.path.join(static_dir, "index.html")
@@ -3888,40 +3888,12 @@ def render_page_or_login(page_name: str, cxc_session: str | None):
         return f.read()
 
 
-@app.get("/facturacion", response_class=HTMLResponse)
-async def page_facturacion(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("facturacion", cxc_session)
+# --- 10 RUTAS CANÓNICAS (/inicio + 9 módulos) ---
 
 
-@app.get("/cobranza", response_class=HTMLResponse)
-async def page_cobranza(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("cobranza", cxc_session)
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def page_dashboard(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("dashboard", cxc_session)
-
-
-@app.get("/conciliaciones")
-async def page_conciliaciones():
-    """ "Conciliaciones" se unificó con "Cobranza" en una sola página.
-
-    Redirect para bookmarks/links viejos -- la tabla y sus 4 endpoints
-    de origen (sugerencias, mapa-vinculaciones, pagos-historial, cobranza)
-    fueron reemplazados por ``GET /api/cobranza/pagos``.
-    """
-    return RedirectResponse(url="/cobranza")
-
-
-@app.get("/ventas", response_class=HTMLResponse)
-async def page_ventas(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("ventas", cxc_session)
-
-
-@app.get("/reporte", response_class=HTMLResponse)
-async def page_reporte(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("reporte", cxc_session)
+@app.get("/inicio", response_class=HTMLResponse)
+async def page_inicio(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("inicio", cxc_session)
 
 
 @app.get("/auditoria", response_class=HTMLResponse)
@@ -3929,29 +3901,345 @@ async def page_auditoria(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("auditoria", cxc_session)
 
 
-@app.get("/configuracion", response_class=HTMLResponse)
-async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("configuracion", cxc_session)
+@app.get("/pagos", response_class=HTMLResponse)
+async def page_pagos(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("pagos", cxc_session)
 
 
-@app.get("/bancos", response_class=HTMLResponse)
-async def page_bancos(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("bancos", cxc_session)
+@app.get("/ventas", response_class=HTMLResponse)
+async def page_ventas(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("ventas", cxc_session)
 
 
-@app.get("/bots", response_class=HTMLResponse)
-async def page_bots(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("bots", cxc_session)
+@app.get("/compras", response_class=HTMLResponse)
+async def page_compras(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("compras", cxc_session)
 
 
-@app.get("/capturas", response_class=HTMLResponse)
-async def page_capturas(cxc_session: str | None = Cookie(default=None)):
-    return render_page_or_login("capturas", cxc_session)
+@app.get("/reportes", response_class=HTMLResponse)
+async def page_reportes(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("reportes", cxc_session)
+
+
+@app.get("/facturacion", response_class=HTMLResponse)
+async def page_facturacion(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("facturacion", cxc_session)
 
 
 @app.get("/inventario", response_class=HTMLResponse)
 async def page_inventario(cxc_session: str | None = Cookie(default=None)):
     return render_page_or_login("inventario", cxc_session)
+
+
+@app.get("/contactos", response_class=HTMLResponse)
+async def page_contactos(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("contactos", cxc_session)
+
+
+@app.get("/configuracion", response_class=HTMLResponse)
+async def page_configuracion(cxc_session: str | None = Cookie(default=None)):
+    return render_page_or_login("configuracion", cxc_session)
+
+
+# --- REDIRECCIONES 302 DE RUTAS LEGADAS (Fase 1 de reestructuración) ---
+
+
+@app.get("/dashboard")
+async def redirect_legacy_dashboard():
+    return RedirectResponse(url="/inicio", status_code=302)
+
+
+@app.get("/cobranza")
+async def redirect_legacy_cobranza():
+    return RedirectResponse(url="/pagos?tab=recibidos", status_code=302)
+
+
+@app.get("/conciliaciones")
+async def page_conciliaciones():
+    """Redirect permanente de bookmarks legados hacia el nuevo módulo de Pagos."""
+    return RedirectResponse(url="/pagos?tab=recibidos", status_code=302)
+
+
+@app.get("/bancos")
+async def redirect_legacy_bancos():
+    return RedirectResponse(url="/pagos?tab=conciliacion", status_code=302)
+
+
+@app.get("/capturas")
+async def redirect_legacy_capturas():
+    return RedirectResponse(url="/compras?tab=facturas", status_code=302)
+
+
+@app.get("/bots")
+async def redirect_legacy_bots():
+    return RedirectResponse(url="/configuracion?tab=bots", status_code=302)
+
+
+@app.get("/reporte")
+async def redirect_legacy_reporte():
+    return RedirectResponse(url="/reportes", status_code=302)
+
+
+# --- ENDPOINTS /api/inicio/* (Launchpad y Búsqueda Global) ---
+
+
+def _inicio_engine_seguro() -> Any | None:
+    try:
+        repo = get_repo()
+    except Exception:
+        return None
+    return getattr(repo, "_engine", None)
+
+
+def _contar_en_tabla(engine: Any, stmt: Any) -> int:
+    try:
+        with engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one() or 0)
+    except Exception:
+        return 0
+
+
+def _filas_en_tabla(engine: Any, stmt: Any) -> list[Any]:
+    try:
+        with engine.connect() as conn:
+            return list(conn.execute(stmt).mappings().all())
+    except Exception:
+        return []
+
+
+@app.get("/api/inicio/resumen")
+async def api_inicio_resumen():
+    """Contadores rápidos por módulo para el Launchpad /inicio y badges del menú."""
+    from sqlalchemy import func, select
+
+    from cxc.db.schema import (
+        bancos_propuestas,
+        capturas_bot,
+        documentos_comerciales,
+        documentos_operativos,
+    )
+
+    engine = _inicio_engine_seguro()
+    estados_pend_op = ("PENDIENTE_APROBACION", "INCOMPLETO", "ERROR")
+    if engine is None:
+        pagos_rec = pagos_env = compras_pend = ventas_pend = capturas_alerta = conc_pend = 0
+    else:
+        pagos_rec = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(documentos_operativos)
+            .where(
+                documentos_operativos.c.tipo == "pago",
+                documentos_operativos.c.estado.in_(estados_pend_op),
+            ),
+        )
+        pagos_env = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(documentos_operativos)
+            .where(
+                documentos_operativos.c.tipo == "pago_proveedor",
+                documentos_operativos.c.estado.in_(estados_pend_op),
+            ),
+        )
+        compras_pend = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(documentos_operativos)
+            .where(
+                documentos_operativos.c.tipo.in_(("factura_proveedor", "gasto")),
+                documentos_operativos.c.estado.in_(estados_pend_op),
+            ),
+        )
+        ventas_pend = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(documentos_comerciales)
+            .where(documentos_comerciales.c.estado == "PENDIENTE_APROBACION"),
+        )
+        capturas_alerta = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(capturas_bot)
+            .where(capturas_bot.c.estado.in_(("INCOMPLETO", "ERROR"))),
+        )
+        conc_pend = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(bancos_propuestas)
+            .where(bancos_propuestas.c.estado == "pendiente"),
+        )
+
+    return {
+        "contadores": {
+            "pagos_recibidos_pendientes": pagos_rec,
+            "pagos_enviados_pendientes": pagos_env,
+            "conciliacion_pendientes": conc_pend,
+            "compras_pendientes": compras_pend,
+            "ventas_pendientes": ventas_pend,
+            "capturas_con_alerta": capturas_alerta,
+        },
+        "modulos": {
+            "pagos": pagos_rec + pagos_env + conc_pend,
+            "ventas": ventas_pend,
+            "compras": compras_pend,
+            "auditoria": capturas_alerta,
+        },
+    }
+
+
+@app.get("/api/inicio/buscar")
+async def api_inicio_buscar(q: str = ""):
+    """Buscador global rápido (Ctrl+K) sobre documentos, órdenes, pagos y clientes locales."""
+    termino = (q or "").strip()
+    if len(termino) < 2:
+        return {"q": termino, "items": []}
+
+    from sqlalchemy import or_, select
+
+    from cxc.db.schema import (
+        clientes,
+        documentos_comerciales,
+        documentos_operativos,
+        ordenes_venta,
+    )
+
+    engine = _inicio_engine_seguro()
+    if engine is None:
+        return {"q": termino, "items": []}
+
+    patron = f"%{termino}%"
+    items: list[dict[str, str]] = []
+
+    url_operativo = {
+        "pago": "/pagos?tab=recibidos",
+        "pago_proveedor": "/pagos?tab=enviados",
+        "gasto": "/compras?tab=gastos",
+        "factura_proveedor": "/compras?tab=facturas",
+    }
+
+    for r in _filas_en_tabla(
+        engine,
+        select(
+            documentos_comerciales.c.numero,
+            documentos_comerciales.c.tipo,
+            documentos_comerciales.c.estado,
+            documentos_comerciales.c.cliente_nombre,
+            documentos_comerciales.c.rif,
+            documentos_comerciales.c.odoo_order_name,
+        )
+        .where(
+            or_(
+                documentos_comerciales.c.numero.ilike(patron),
+                documentos_comerciales.c.cliente_nombre.ilike(patron),
+                documentos_comerciales.c.rif.ilike(patron),
+                documentos_comerciales.c.odoo_order_name.ilike(patron),
+            )
+        )
+        .order_by(documentos_comerciales.c.documento_id.desc())
+        .limit(5),
+    ):
+        items.append(
+            {
+                "tipo": "Cotización / Pedido",
+                "titulo": f"{r['numero']} · {r['cliente_nombre']}",
+                "subtitulo": " · ".join(
+                    p for p in (r["rif"], r["odoo_order_name"], r["tipo"]) if p
+                ),
+                "estado": str(r["estado"] or ""),
+                "url": "/ventas",
+            }
+        )
+
+    for r in _filas_en_tabla(
+        engine,
+        select(
+            documentos_operativos.c.numero,
+            documentos_operativos.c.tipo,
+            documentos_operativos.c.estado,
+            documentos_operativos.c.contraparte_nombre,
+            documentos_operativos.c.referencia,
+            documentos_operativos.c.numero_documento,
+        )
+        .where(
+            or_(
+                documentos_operativos.c.numero.ilike(patron),
+                documentos_operativos.c.contraparte_nombre.ilike(patron),
+                documentos_operativos.c.rif.ilike(patron),
+                documentos_operativos.c.referencia.ilike(patron),
+                documentos_operativos.c.numero_documento.ilike(patron),
+            )
+        )
+        .order_by(documentos_operativos.c.documento_id.desc())
+        .limit(5),
+    ):
+        items.append(
+            {
+                "tipo": "Pago / Compra / Gasto",
+                "titulo": f"{r['numero']} · {r['contraparte_nombre'] or 'Sin contraparte'}",
+                "subtitulo": " · ".join(
+                    p for p in (r["referencia"], r["numero_documento"], r["tipo"]) if p
+                ),
+                "estado": str(r["estado"] or ""),
+                "url": url_operativo.get(str(r["tipo"] or ""), "/pagos?tab=recibidos"),
+            }
+        )
+
+    for r in _filas_en_tabla(
+        engine,
+        select(
+            ordenes_venta.c.so_id,
+            ordenes_venta.c.estado_orden,
+            clientes.c.nombre.label("cliente_nombre"),
+        )
+        .select_from(
+            ordenes_venta.outerjoin(clientes, ordenes_venta.c.cliente_id == clientes.c.cliente_id)
+        )
+        .where(
+            or_(
+                ordenes_venta.c.so_id.ilike(patron),
+                clientes.c.nombre.ilike(patron),
+            )
+        )
+        .order_by(ordenes_venta.c.fecha.desc())
+        .limit(5),
+    ):
+        items.append(
+            {
+                "tipo": "Orden de Venta",
+                "titulo": f"{r['so_id']} · {r['cliente_nombre'] or ''}".strip(" ·"),
+                "subtitulo": f"Orden Odoo · {r['estado_orden']}",
+                "estado": str(r["estado_orden"] or ""),
+                "url": "/ventas",
+            }
+        )
+
+    for r in _filas_en_tabla(
+        engine,
+        select(
+            clientes.c.cliente_id,
+            clientes.c.nombre,
+            clientes.c.vendedor_email,
+        )
+        .where(
+            or_(
+                clientes.c.nombre.ilike(patron),
+                clientes.c.cliente_id.ilike(patron),
+            )
+        )
+        .limit(5),
+    ):
+        items.append(
+            {
+                "tipo": "Contacto / Cliente",
+                "titulo": str(r["nombre"] or r["cliente_id"]),
+                "subtitulo": str(r["vendedor_email"] or f"ID {r['cliente_id']}"),
+                "estado": "Cliente",
+                "url": "/contactos",
+            }
+        )
+
+    return {"q": termino, "items": items}
 
 
 # --- AUTH & ADMIN API ENDPOINTS ---
@@ -3972,7 +4260,7 @@ async def api_auth_login(req: LoginRequest):
         )
 
         token = crear_session_token(req.email, SECRET_KEY)
-        first_perm = user_info["permisos"][0] if user_info["permisos"] else "reporte"
+        first_perm = user_info["permisos"][0] if user_info["permisos"] else "inicio"
 
         res = Response(
             content=json.dumps(
@@ -4025,8 +4313,8 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
 
         token = crear_session_token(req.email, SECRET_KEY)
         rol = u_row.get("rol", "ventas")
-        permisos = ROLES_PERMISOS.get(rol, ["reporte"])
-        first_perm = permisos[0] if permisos else "reporte"
+        permisos = ROLES_PERMISOS.get(rol, ["inicio"])
+        first_perm = permisos[0] if permisos else "inicio"
 
         res = Response(
             content=json.dumps(

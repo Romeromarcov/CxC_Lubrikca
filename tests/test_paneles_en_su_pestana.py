@@ -25,20 +25,43 @@ import pytest
 _HTML = Path(__file__).resolve().parents[1] / "src" / "cxc" / "web" / "static" / "index.html"
 
 _VOID = {
-    "br", "img", "hr", "input", "meta", "link", "source",
-    "col", "area", "base", "embed", "param", "track", "wbr",
+    "br",
+    "img",
+    "hr",
+    "input",
+    "meta",
+    "link",
+    "source",
+    "col",
+    "area",
+    "base",
+    "embed",
+    "param",
+    "track",
+    "wbr",
 }
 
-# Cada bandeja y la pestaña a la que pertenece.
+# Cada bandeja y la pestaña a la que pertenece (arquitectura /inicio + 9 módulos).
 _ESPERADO = {
-    "bandeja-en-proceso-de-pago-table-body": "tab-cobranza",
+    "bandeja-en-proceso-de-pago-table-body": "tab-pagos",
+    "op-pagos-table-body": "tab-pagos",
+    "op-pagos-enviados-table-body": "tab-pagos",
+    "bancos-mov-body": "tab-pagos",
     "bandeja1-table-body": "tab-facturacion",
-    # Auditoria consolidada (9-oct-2026): ordenes, pagos, entregas y aceptadas.
     "aud-ordenes-body": "tab-auditoria",
     "aud-pagos-body": "tab-auditoria",
     "aud-entregas-body": "tab-auditoria",
     "discrepancias-aceptadas-table-body": "tab-auditoria",
+    "clientes-auditoria-table-body": "tab-auditoria",
+    "capturas-body": "tab-auditoria",
     "ventas-table-body": "tab-ventas",
+    "docs-table-body": "tab-ventas",
+    "op-compras-table-body": "tab-compras",
+    "cta-catalogo-body": "tab-compras",
+    "reporte-cxc-cliente-table-body": "tab-reportes",
+    "diario-ventas-table-body": "tab-reportes",
+    "dir-contactos-body": "tab-contactos",
+    "bots-usuarios-body": "tab-config",
 }
 
 
@@ -87,3 +110,26 @@ def test_ninguna_bandeja_quedo_huerfana() -> None:
     """El caso exacto del bug: hijo suelto de <main>."""
     huerfanas = [t for t, p in _mapa().items() if not p.startswith("tab-")]
     assert not huerfanas, f"Bandejas fuera de toda pestaña: {huerfanas}"
+
+
+def test_html_sin_ids_duplicados_y_con_diez_pestanas() -> None:
+    import re
+    from collections import Counter
+
+    html = _HTML.read_text(encoding="utf-8")
+    ids = re.findall(r'\bid="([^"]+)"', html)
+    duplicados = {k: c for k, c in Counter(ids).items() if c > 1}
+    assert not duplicados, f"IDs duplicados en index.html: {duplicados}"
+    for esperado in (
+        "tab-inicio",
+        "tab-auditoria",
+        "tab-pagos",
+        "tab-ventas",
+        "tab-compras",
+        "tab-reportes",
+        "tab-facturacion",
+        "tab-inventario",
+        "tab-contactos",
+        "tab-config",
+    ):
+        assert f'id="{esperado}"' in html, f"Falta {esperado} en index.html"

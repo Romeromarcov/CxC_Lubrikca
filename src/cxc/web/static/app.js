@@ -50,6 +50,9 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (_e) {
             // sessionStorage no disponible (modo privado, etc.) -- no es crítico.
         }
+        if (subpage === "bots" && typeof loadBots === "function") {
+            loadBots();
+        }
     }
 
     if (configSubnavButtons.length) {
@@ -189,12 +192,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 // conoce ya estamos en Configuración y es admin, se dispara
                 // acá -- la misma condición que initCurrentPage() ya
                 // evalúa, solo que esta vez con el dato correcto.
-                if (
-                    currentUserSession.rol === "admin" &&
-                    window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0] === "configuracion"
-                ) {
+                const rutaActual = _normalizarModuloRuta(window.location.pathname);
+                if (currentUserSession.rol === "admin" && rutaActual === "configuracion") {
                     if (typeof loadAdminUsuarios === "function") loadAdminUsuarios();
                     if (typeof loadApiKeys === "function") loadApiKeys();
+                }
+                if (rutaActual === "pagos") {
+                    const subPag = document.querySelector(".pagos-subnav-btn.active")?.dataset?.pagosSubpage;
+                    if (subPag === "conciliacion" && typeof loadBancos === "function") loadBancos();
+                } else if (rutaActual === "configuracion") {
+                    const subCfg = document.querySelector(".config-subnav-btn.active")?.dataset?.configSubpage;
+                    if (subCfg === "bots" && typeof loadBots === "function") loadBots();
                 }
             }
         } catch (err) {
@@ -215,21 +223,55 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    const _LEGACY_PATH_MAP = {
+        dashboard: "inicio",
+        cobranza: "pagos",
+        conciliaciones: "pagos",
+        bancos: "pagos",
+        capturas: "compras",
+        bots: "configuracion",
+        reporte: "reportes",
+    };
+
+    function _normalizarModuloRuta(rawPath) {
+        let seg = String(rawPath || "").toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0].split("?")[0].split("#")[0].trim();
+        if (!seg || seg === "index.html") seg = "inicio";
+        return _LEGACY_PATH_MAP[seg] || seg;
+    }
+
+    function _tienePermisoUI(user, permiso) {
+        if (!user) return false;
+        if (user.rol === "admin") return true;
+        const perms = user.permisos || [];
+        return perms.includes(permiso);
+    }
+
     function filterNavbarByPermissions(user) {
         const navLinks = document.querySelectorAll(".nav-link");
-        const perms = user.permisos || ["reporte"];
+        const perms = user.permisos || ["inicio"];
         const isAdm = user.rol === "admin";
 
         navLinks.forEach(link => {
             const page = link.dataset.page;
-            const isDashboardCard = link.parentElement && link.parentElement.id === "dashboard-quick-actions";
-            
-            if (!page || page === "dashboard" || isAdm || perms.includes(page)) {
-                link.style.display = isDashboardCard ? "block" : "inline-flex";
-            } else {
-                link.style.display = "none";
-            }
+            const visible = !page || page === "inicio" || isAdm || perms.includes(page);
+            link.classList.toggle("perm-hidden", !visible);
         });
+
+        const btnConc = document.getElementById("btn-pagos-sub-conciliacion");
+        if (btnConc) {
+            const verConc = isAdm || _tienePermisoUI(user, "bancos.cargar") || _tienePermisoUI(user, "bancos.ver") || _tienePermisoUI(user, "bancos.conciliar");
+            btnConc.classList.toggle("perm-hidden", !verConc);
+        }
+        const btnAudInt = document.getElementById("btn-aud-sub-integraciones");
+        if (btnAudInt) {
+            const verInt = isAdm || _tienePermisoUI(user, "capturas.ver") || _tienePermisoUI(user, "capturas.gestionar");
+            btnAudInt.classList.toggle("perm-hidden", !verInt);
+        }
+        const btnCfgBots = document.getElementById("btn-cfg-sub-bots");
+        if (btnCfgBots) {
+            const verBots = isAdm || _tienePermisoUI(user, "bots.ver") || _tienePermisoUI(user, "bots.gestionar");
+            btnCfgBots.classList.toggle("perm-hidden", !verBots);
+        }
 
         const adminPanel = document.getElementById("admin-user-mgmt-panel");
         if (adminPanel) {
@@ -257,81 +299,135 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function applyPagosSubpage(subpage) {
+        const target = ["recibidos", "enviados", "conciliacion"].includes(subpage) ? subpage : "recibidos";
+        document.querySelectorAll("#tab-pagos [data-pagos-panel]").forEach((panel) => {
+            panel.classList.toggle("config-subpage-hidden", panel.getAttribute("data-pagos-panel") !== target);
+        });
+        document.querySelectorAll(".pagos-subnav-btn").forEach((btn) => {
+            btn.classList.toggle("active", btn.getAttribute("data-pagos-subpage") === target);
+        });
+        if (target === "recibidos") {
+            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+            if (typeof loadOperativosCobranza === "function") loadOperativosCobranza();
+        } else if (target === "enviados") {
+            if (typeof window.loadOperativosPagosEnviados === "function") window.loadOperativosPagosEnviados();
+        } else if (target === "conciliacion") {
+            if (typeof loadBancos === "function") loadBancos();
+        }
+    }
+
+    function applyComprasSubpage(subpage) {
+        const target = ["facturas", "gastos", "conciliacion", "cuentas"].includes(subpage) ? subpage : "facturas";
+        const panelFacturas = target === "facturas" || target === "gastos";
+        document.querySelectorAll("#tab-compras [data-compras-panel]").forEach((panel) => {
+            const nombre = panel.getAttribute("data-compras-panel");
+            const visible = panelFacturas ? nombre === "facturas" : nombre === target;
+            panel.classList.toggle("config-subpage-hidden", !visible);
+        });
+        const bannerGastos = document.getElementById("compras-gastos-banner");
+        if (bannerGastos) bannerGastos.classList.toggle("config-subpage-hidden", target !== "gastos");
+        document.querySelectorAll(".compras-subnav-btn").forEach((btn) => {
+            btn.classList.toggle("active", btn.getAttribute("data-compras-subpage") === target);
+        });
+        const tipoSel = document.getElementById("op-cmp-tipo");
+        if (target === "gastos" && tipoSel) {
+            tipoSel.value = "gasto";
+        } else if (target === "facturas" && tipoSel && tipoSel.value === "gasto") {
+            tipoSel.value = "";
+        }
+        if (panelFacturas) {
+            if (typeof loadOperativosCompras === "function") loadOperativosCompras();
+        } else if (target === "cuentas") {
+            if (typeof loadPlanCuentasOdoo === "function" && !_ctaCargadoUnaVez) loadPlanCuentasOdoo(false);
+        }
+    }
+
     // Page Route Initialization
     function initCurrentPage() {
-        let rawPath = window.location.pathname.toLowerCase();
-        let path = rawPath.replace(/^\/+|\/+$/g, '').split('/')[0].split('?')[0].split('#')[0].trim();
-        if (!path || path === "index.html") path = "dashboard";
+        const rawFirstSeg = window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0].trim();
+        const path = _normalizarModuloRuta(window.location.pathname);
+        const urlParams = new URLSearchParams(window.location.search || "");
+        let tabParam = (urlParams.get("tab") || "").toLowerCase();
+        if (!tabParam) {
+            if (rawFirstSeg === "bancos") tabParam = "conciliacion";
+            else if (rawFirstSeg === "bots") tabParam = "bots";
+        }
 
         const pageToTabMap = {
-            "dashboard": "tab-dashboard",
-            "facturacion": "tab-facturacion",
-            "cobranza": "tab-cobranza",
-            "ventas": "tab-ventas",
-            "reporte": "tab-reporte",
+            "inicio": "tab-inicio",
             "auditoria": "tab-auditoria",
+            "pagos": "tab-pagos",
+            "ventas": "tab-ventas",
+            "compras": "tab-compras",
+            "reportes": "tab-reportes",
+            "facturacion": "tab-facturacion",
             "inventario": "tab-inventario",
-            "bancos": "tab-bancos",
-            "capturas": "tab-capturas",
-            "bots": "tab-bots",
+            "contactos": "tab-contactos",
             "configuracion": "tab-config"
         };
 
-        const targetTabId = pageToTabMap[path] || "tab-dashboard";
+        const targetTabId = pageToTabMap[path] || "tab-inicio";
 
         // Active Link Highlight
         document.querySelectorAll(".nav-link").forEach(link => {
-            if (link.dataset.page === path) {
-                link.classList.add("active");
-            } else {
-                link.classList.remove("active");
-            }
+            link.classList.toggle("active", link.dataset.page === path);
         });
 
         // Active Tab Panel Show
-        const tabPanels = document.querySelectorAll(".tab-panel");
-        tabPanels.forEach(panel => {
-            if (panel.id === targetTabId) {
-                panel.classList.add("active");
-            } else {
-                panel.classList.remove("active");
-            }
+        document.querySelectorAll(".tab-panel").forEach(panel => {
+            panel.classList.toggle("active", panel.id === targetTabId);
         });
+
+        if (window.CxC && typeof window.CxC.onPageChange === "function") {
+            window.CxC.onPageChange(path, tabParam);
+        }
 
         // Load data for active page safely
         try {
-            if (path === "dashboard") {
+            if (path === "inicio") {
                 if (typeof loadTasasPromedios === "function") loadTasasPromedios();
-                if (typeof loadReporteDiario === "function") loadReporteDiario();
-                // Las tarjetas de saldos ahora viven en el Dashboard (movidas
-                // desde Reporte); loadReporte() las llena vía /api/reporte-saldos.
-                if (typeof loadReporte === "function") loadReporte();
+                if (window.CxC && typeof window.CxC.loadInicioResumen === "function") window.CxC.loadInicioResumen();
             } else if (path === "facturacion") {
                 if (typeof loadBandeja === "function") loadBandeja();
-            } else if (path === "cobranza") {
-                if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
-                if (typeof loadOperativosCobranza === "function") loadOperativosCobranza();
+            } else if (path === "pagos") {
+                applyPagosSubpage(tabParam || "recibidos");
+                if (typeof window.loadOperativosPagosEnviados === "function" && tabParam !== "enviados") {
+                    window.loadOperativosPagosEnviados();
+                }
             } else if (path === "ventas") {
+                if (tabParam === "documentos" || tabParam === "seguimiento") {
+                    if (typeof applyVentasSubpage === "function") applyVentasSubpage(tabParam);
+                }
                 if (typeof loadVentas === "function") loadVentas();
-            } else if (path === "reporte") {
+            } else if (path === "compras") {
+                applyComprasSubpage(tabParam || "facturas");
+            } else if (path === "reportes") {
+                if (typeof switchReporteSubtab === "function") {
+                    switchReporteSubtab(["resumen", "cliente", "vendedor"].includes(tabParam) ? tabParam : "resumen");
+                }
+                if (typeof loadTasasPromedios === "function") loadTasasPromedios();
+                if (typeof loadReporteDiario === "function") loadReporteDiario();
                 if (typeof loadReporte === "function") loadReporte();
                 if (typeof loadReporteCxcCliente === "function") loadReporteCxcCliente();
             } else if (path === "auditoria") {
+                const aSub = ["ordenes", "pagos", "entregas", "historico", "clientes", "integraciones"].includes(tabParam) ? tabParam : "ordenes";
+                if (typeof switchAuditoriaSubtab === "function") switchAuditoriaSubtab(aSub);
                 if (typeof loadBalanceComprobacion === "function") loadBalanceComprobacion();
                 if (typeof loadAuditoria === "function") loadAuditoria();
             } else if (path === "inventario") {
                 if (typeof loadInventario === "function") loadInventario();
-            } else if (path === "bancos") {
-                if (typeof loadBancos === "function") loadBancos();
-            } else if (path === "capturas") {
-                if (typeof loadCapturas === "function") loadCapturas();
-                if (typeof loadOperativosCompras === "function") loadOperativosCompras();
-            } else if (path === "bots") {
-                if (typeof loadBots === "function") loadBots();
+            } else if (path === "contactos") {
+                if (typeof loadContactosOdoo === "function") loadContactosOdoo(false);
             } else if (path === "configuracion") {
+                if (["descuentos", "usuarios", "listas", "otras", "bots", "motor"].includes(tabParam)) {
+                    applyConfigSubpage(tabParam);
+                }
                 if (typeof loadConfigData === "function") loadConfigData();
                 if (typeof loadPricelistMapeo === "function") loadPricelistMapeo();
                 if (typeof loadReglasConsolidadas === "function") loadReglasConsolidadas();
+                const subCfgAct = document.querySelector(".config-subnav-btn.active")?.dataset?.configSubpage;
+                if (subCfgAct === "bots" && typeof loadBots === "function") loadBots();
                 if (currentUserSession && currentUserSession.rol === "admin") {
                     if (typeof loadAdminUsuarios === "function") loadAdminUsuarios();
                     if (typeof loadApiKeys === "function") loadApiKeys();
@@ -429,7 +525,6 @@ document.addEventListener("DOMContentLoaded", () => {
     function _accCasillas(rol, marcados) {
         const base = _accBase(rol);
         const esAdmin = rol === "admin";
-        const hayBancos = [...marcados].some(c => c.startsWith("bancos."));
         const grupos = {};
         _accCatalogo.permisos.forEach(p => { (grupos[p.grupo] = grupos[p.grupo] || []).push(p); });
         return Object.entries(grupos).map(([grupo, ps]) => `
@@ -437,8 +532,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <legend>${_accEsc(grupo)}</legend>
                 ${ps.map(p => {
                     let on = esAdmin || marcados.has(p.clave);
-                    if (!esAdmin && p.clave === "bancos") on = hayBancos;
-                    if (p.clave === "dashboard") on = true;
+                    if (p.clave === "inicio" || p.clave === "dashboard") on = true;
                     const fijo = esAdmin || !p.editable;
                     const difiere = !esAdmin && p.editable && on !== base.has(p.clave);
                     const marca = difiere
@@ -1877,9 +1971,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 setKpiSubBalances("kpi-61-90", kpis.vencidas_61_90);
                 setKpiSubBalances("kpi-mas-90", kpis.vencidas_mas_90);
 
-                // Attach Click Handlers to Interactive KPI Cards -- las
-                // tarjetas viven en el Dashboard; un clic navega al Reporte
-                // de Saldos y filtra la tabla por cliente por esa antigüedad.
+                // Attach Click Handlers to Interactive KPI Cards -- las tarjetas
+                // viven en Reportes → Resumen; un clic abre la subpestaña Por Cliente
+                // y filtra la tabla por esa antigüedad.
                 document.querySelectorAll(".interactive-kpi").forEach(card => {
                     if (!card.dataset.listenerAttached) {
                         card.addEventListener("click", () => {
@@ -1889,11 +1983,12 @@ document.addEventListener("DOMContentLoaded", () => {
                                 selectEl.value = (selectEl.value === targetVal) ? "*" : targetVal;
                                 if (typeof applyReporteClienteFilters === "function") applyReporteClienteFilters();
                             }
-                            const currentPath = window.location.pathname.toLowerCase()
-                                .replace(/^\/+|\/+$/g, '').split('/')[0];
-                            if (currentPath !== "reporte") {
-                                history.pushState(null, "", "/reporte");
+                            const currentPath = _normalizarModuloRuta(window.location.pathname);
+                            if (currentPath !== "reportes") {
+                                history.pushState(null, "", "/reportes?tab=cliente");
                                 initCurrentPage();
+                            } else if (typeof switchReporteSubtab === "function") {
+                                switchReporteSubtab("cliente");
                             }
                         });
                         card.dataset.listenerAttached = "true";
@@ -2543,7 +2638,6 @@ document.addEventListener("DOMContentLoaded", () => {
             loadListasPrecio,
             loadPricelistMapeo,
             loadOdooProductos,
-            loadClientesAuditoria,
             loadSettingsMeta
         ];
         // Cada loader pega a un endpoint independiente y pinta su propia
@@ -2682,6 +2776,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 if (bcvLbl) bcvLbl.textContent = d.tasa_bcv_actual ? `Bs. ${d.tasa_bcv_actual.toFixed(2)}` : "-";
                 if (vigLbl) vigLbl.textContent = d.tasa_binance_vigente ? `Bs. ${d.tasa_binance_vigente.toFixed(2)}` : "-";
+                const topBcv = document.getElementById("topbar-bcv");
+                const topBin = document.getElementById("topbar-binance");
+                if (topBcv && d.tasa_bcv_actual) topBcv.textContent = `Bs. ${d.tasa_bcv_actual.toFixed(2)}`;
+                if (topBin && d.tasa_binance_vigente) topBin.textContent = `Bs. ${d.tasa_binance_vigente.toFixed(2)}`;
                 if (mLbl) mLbl.textContent = d.tasa_binance_manana ? `Bs. ${d.tasa_binance_manana.toFixed(2)}` : "N/A";
                 if (tLbl) tLbl.textContent = d.tasa_binance_tarde ? `Bs. ${d.tasa_binance_tarde.toFixed(2)}` : "N/A";
                 if (dLbl) dLbl.textContent = d.tasa_binance_diario ? `Bs. ${d.tasa_binance_diario.toFixed(2)}` : "N/A";
@@ -5358,6 +5456,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Sub-navegación de la página Auditoría (Discrepancias / Descuentos y
     // NCs / Alertas de Venta / Histórico Conforme) -- agrupa lo que antes
     // eran 7 tablas en un solo scroll largo, sin eliminar ninguna.
+    let _audClientesCargado = false;
+    let _audIntegracionesCargado = false;
+
     window.switchAuditoriaSubtab = function(name) {
         document.querySelectorAll(".subtab-btn[data-subtab]").forEach(btn => {
             btn.classList.toggle("active", btn.dataset.subtab === name);
@@ -5365,6 +5466,13 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".subtab-panel[data-subtab-panel]").forEach(panel => {
             panel.style.display = (panel.dataset.subtabPanel === name) ? "flex" : "none";
         });
+        if (name === "clientes" && !_audClientesCargado && typeof loadClientesAuditoria === "function") {
+            _audClientesCargado = true;
+            loadClientesAuditoria();
+        } else if (name === "integraciones" && !_audIntegracionesCargado && typeof loadCapturas === "function") {
+            _audIntegracionesCargado = true;
+            loadCapturas();
+        }
     };
 
     // El boton de "aceptar" que va en las SIETE bandejas de discrepancias.
@@ -6877,29 +6985,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function applyCapturasSubpage(subpage) {
-        const panels = document.querySelectorAll("#tab-capturas [data-capturas-panel]");
-        const buttons = document.querySelectorAll(".capturas-subnav-btn");
-        panels.forEach((panel) => {
-            panel.classList.toggle(
-                "config-subpage-hidden",
-                panel.getAttribute("data-capturas-panel") !== subpage
-            );
-        });
-        buttons.forEach((btn) => {
-            btn.classList.toggle("active", btn.getAttribute("data-capturas-subpage") === subpage);
-        });
-        if (subpage === "contactos" && !_dirCargadoUnaVez) {
-            loadContactosOdoo(false);
-        } else if (subpage === "cuentas" && !_ctaCargadoUnaVez) {
-            loadPlanCuentasOdoo(false);
-        } else if (subpage === "aprobacion" && typeof loadOperativosCompras === "function") {
-            loadOperativosCompras();
+        if (subpage === "contactos") {
+            window.CxC?.navigate("contactos");
+        } else if (subpage === "cuentas" || subpage === "aprobacion") {
+            window.CxC?.navigate("compras", subpage === "cuentas" ? "cuentas" : "facturas");
+        } else {
+            window.CxC?.navigate("auditoria", "integraciones");
         }
     }
 
     window.irACapturasSubpage = function(subpage) {
-        history.pushState(null, "", "/capturas");
-        initCurrentPage();
         applyCapturasSubpage(subpage);
     };
 
@@ -7259,8 +7354,9 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("bots-grid").innerHTML = "";
         }
         clearTimeout(_btTimer);
-        _btTimer = setTimeout(() => {   // se refresca solo mientras la pantalla de bots esté abierta
-            if (location.pathname.replace(/\/+$/, "") === "/bots" && !document.hidden && !_btModalBot) loadBots();
+        _btTimer = setTimeout(() => {   // se refresca solo mientras Configuración → Bots esté abierta
+            const botsVis = !document.querySelector('#tab-config [data-subpage="bots"]')?.classList.contains("config-subpage-hidden");
+            if (_normalizarModuloRuta(location.pathname) === "configuracion" && botsVis && !document.hidden && !_btModalBot) loadBots();
         }, _BT_REFRESCO_MS);
     }
     window.loadBots = loadBots;
@@ -8269,7 +8365,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tipo = (document.getElementById("op-cmp-tipo") || {}).value || "";
         const estado = (document.getElementById("op-cmp-estado") || {}).value || "";
         const q = ((document.getElementById("op-cmp-buscar") || {}).value || "").trim();
-        const qs = new URLSearchParams({ grupo: "compras", limit: "100" });
+        const qs = new URLSearchParams({ grupo: "compras_solo", limit: "100" });
         if (tipo) qs.set("tipo", tipo);
         if (estado) qs.set("estado", estado);
         if (q) qs.set("q", q);
@@ -8479,7 +8575,14 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     async function _opRefrescarTablas() {
-        await Promise.all([loadOperativosCobranza(), loadOperativosCompras()]);
+        const tareas = [loadOperativosCobranza(), loadOperativosCompras()];
+        if (typeof window.loadOperativosPagosEnviados === "function") {
+            tareas.push(window.loadOperativosPagosEnviados());
+        }
+        if (window.CxC && typeof window.CxC.loadInicioResumen === "function") {
+            tareas.push(window.CxC.loadInicioResumen());
+        }
+        await Promise.all(tareas);
     }
 
     window.aprobarOperativo = async function(id) {
@@ -8556,6 +8659,12 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     (function _initOperativosUI() {
+        document.querySelectorAll(".pagos-subnav-btn").forEach((btn) => {
+            btn.addEventListener("click", () => applyPagosSubpage(btn.getAttribute("data-pagos-subpage")));
+        });
+        document.querySelectorAll(".compras-subnav-btn").forEach((btn) => {
+            btn.addEventListener("click", () => applyComprasSubpage(btn.getAttribute("data-compras-subpage")));
+        });
         document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
             btn.addEventListener("click", () => applyCobranzaSubpage(btn.getAttribute("data-cobranza-subpage")));
         });
@@ -8660,14 +8769,35 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     })();
 
-    // SPA navigation click handling for nav links and dashboard cards
+    window.CxC = Object.assign(window.CxC || {}, {
+        esc: _capEsc,
+        monto: _capMonto,
+        estadoBadge: _opEstadoBadge,
+        alertasHtml: _opAlertasHtml,
+        navigate: (page, tab = "") => {
+            const p = _normalizarModuloRuta(page);
+            const url = tab ? `/${p}?tab=${encodeURIComponent(tab)}` : `/${p}`;
+            history.pushState(null, "", url);
+            initCurrentPage();
+        },
+        applyPagosSubpage,
+        applyComprasSubpage,
+        applyConfigSubpage,
+        switchReporteSubtab: window.switchReporteSubtab,
+        switchAuditoriaSubtab: window.switchAuditoriaSubtab,
+        getSession: () => currentUserSession,
+        puedeAprobarPagos: () => _opPuedeAprobarPagos,
+        puedeAprobarCompras: () => _opPuedeAprobarCompras,
+    });
+
+    // SPA navigation click handling for nav links and launchpad module cards
     document.querySelectorAll(".nav-link").forEach(link => {
         link.addEventListener("click", (e) => {
+            if (e.target.closest(".nav-sub-link")) return;
             const targetPage = link.dataset.page;
             if (targetPage) {
                 e.preventDefault();
-                history.pushState(null, "", "/" + targetPage);
-                initCurrentPage();
+                window.CxC.navigate(targetPage);
             }
         });
     });
