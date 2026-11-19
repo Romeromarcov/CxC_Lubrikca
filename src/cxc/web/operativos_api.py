@@ -9,20 +9,31 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
+from cxc.bancos import conciliacion as bancos_conciliacion
+from cxc.bancos import repositorio as bancos_repo
 from cxc.capturas.modelos import CapturaInvalida
 from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.odoo.directorio import ContactoOdoo, CuentaContable
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
+from cxc.operativos.contabilidad_gastos import (
+    cargar_config_gastos,
+    categorias_y_metodos_catalogo,
+    guardar_config_gastos,
+)
 from cxc.operativos.modelos import (
     BORRADOR,
     CONFIRMADO_CXC,
     ENVIADO_ODOO,
     ERROR_ODOO,
     ESTADOS_OPERATIVOS,
+    ETIQUETA_POR_TIPO,
     INCOMPLETO,
     PENDIENTE_APROBACION,
     RECHAZADO,
+    TIPO_FACTURA_PROVEEDOR,
+    TIPO_GASTO,
     TIPO_PAGO,
     TIPO_PAGO_PROVEEDOR,
     TIPOS_OPERATIVOS,
@@ -35,7 +46,7 @@ from cxc.operativos.preview_html import (
     renderizar_preview_operativo,
     renderizar_recibo_operativo,
 )
-from cxc.operativos.repositorio import RepoOperativosSQL
+from cxc.operativos.repositorio import RepoLotesCajaChicaSQL, RepoOperativosSQL
 from cxc.operativos.servicio import ServicioOperativos
 from cxc.operativos.terceros import RepoCuentasTerceros, RepoCuentasTercerosSQL
 from cxc.permisos import tiene
@@ -73,7 +84,7 @@ def _usuario_op(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
     user = get_current_user_from_cookie(cxc_session)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
-    if not any(tiene(user, p) for p in permisos):
+    if permisos and not any(tiene(user, p) for p in permisos):
         raise HTTPException(status_code=403, detail="Sin permisos para documentos operativos")
     return user
 
@@ -796,3 +807,380 @@ def listar_pagos_unificados(
         "total": len(filtrados),
         "items": pagina,
     }
+
+
+# ── Compras Unificadas (CxC + Odoo), Conciliación R4, Caja Chica y Config ─────
+
+
+def get_repo_lotes_caja_chica() -> Any:
+    from cxc.web.app import get_repo
+
+    repo: Any = get_repo()
+    return RepoLotesCajaChicaSQL(repo._engine)
+
+
+RepoLotesDep = Annotated[Any, Depends(get_repo_lotes_caja_chica)]
+
+
+def _odoo_compra_gasto_a_item(row: dict[str, Any]) -> dict[str, Any]:
+    mid = str(row.get("move_id") or "").strip()
+    pid_partner = row.get("partner_odoo_id")
+    mtype = str(row.get("move_type") or "in_invoice")
+    ref = str(row.get("referencia") or "")
+    tipo_cxc = str(row.get("tipo_cxc") or "").strip() or (
+        TIPO_GASTO
+        if (mtype == "entry" or ref.upper().startswith("S/N-GAS-"))
+        else TIPO_FACTURA_PROVEEDOR
+    )
+    fecha_iso = str(row.get("fecha_documento") or "")[:10] or None
+    es_draft = str(row.get("estado_odoo") or "").lower() == "draft"
+    return {
+        "id": None,
+        "documento_id": None,
+        "numero": str(row.get("numero_odoo") or f"MOVE-{mid}"),
+        "token_preview": "",
+        "preview_path": "",
+        "recibo_path": "",
+        "tipo": tipo_cxc,
+        "tipo_etiqueta": ETIQUETA_POR_TIPO.get(tipo_cxc, tipo_cxc),
+        "estado": BORRADOR if es_draft else "CONFIRMADO_ODOO",
+        "estado_odoo": str(row.get("estado_odoo") or "posted"),
+        "estado_pago": str(row.get("estado_pago") or ""),
+        "origen": "odoo",
+        "origen_sistema": "odoo",
+        "solo_lectura": True,
+        "captura_id": None,
+        "partner_odoo_id": int(pid_partner) if pid_partner is not None else None,
+        "contraparte_nombre": str(row.get("proveedor_nombre") or f"Proveedor #{pid_partner or ''}"),
+        "rif": str(row.get("rif") or ""),
+        "monto": float(row["monto_total"]) if row.get("monto_total") is not None else 0.0,
+        "moneda": str(row.get("moneda") or "VES"),
+        "metodo_pago": "",
+        "banco": "",
+        "diario_id": row.get("diario_id"),
+        "diario_nombre": str(row.get("diario_nombre") or ""),
+        "cuenta_contable_codigo": "",
+        "cuenta_contable_nombre": "",
+        "referencia": ref,
+        "numero_documento": ref,
+        "categoria": "",
+        "concepto": "",
+        "sin_factura": tipo_cxc == TIPO_GASTO,
+        "asiento_contable": mtype == "entry",
+        "fecha_documento": fecha_iso,
+        "notas": "",
+        "alertas": [],
+        "faltantes": [],
+        "odoo_model": "account.move",
+        "odoo_res_id": int(mid) if mid.isdigit() else None,
+        "odoo_ref": f"account.move:{mid}",
+        "en_espejo_odoo": True,
+        "creado_en": fecha_iso or "",
+        "puede_editar": False,
+        "puede_aprobar": False,
+        "puede_rechazar": False,
+    }
+
+
+@router.get("/api/compras/unificadas")
+def listar_compras_unificadas(
+    servicio: ServicioOpDep,
+    origen: str = "todos",
+    tipo: str = "",
+    estado: str | None = None,
+    q: str | None = None,
+    limit: int = 150,
+    offset: int = 0,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    if origen not in ("todos", "cxc", "odoo"):
+        raise HTTPException(status_code=422, detail="origen debe ser todos, cxc o odoo")
+    if tipo and tipo not in (TIPO_FACTURA_PROVEEDOR, TIPO_GASTO):
+        raise HTTPException(status_code=422, detail="tipo debe ser factura_proveedor o gasto")
+    if estado and estado not in (*ESTADOS_OPERATIVOS, "CONFIRMADO_ODOO"):
+        raise HTTPException(status_code=422, detail="estado inválido")
+
+    docs_cxc, _tot_cxc, _res_cxc = servicio.listar(grupo="compras_solo", limit=2000, offset=0)
+    items_cxc: list[dict[str, Any]] = []
+    odoo_moves_en_cxc: set[str] = set()
+    for d in docs_cxc:
+        item = d.a_dict()
+        item["solo_lectura"] = False
+        item["en_espejo_odoo"] = False
+        if d.odoo_res_id is not None and (not d.odoo_model or d.odoo_model == "account.move"):
+            odoo_moves_en_cxc.add(str(d.odoo_res_id))
+        items_cxc.append(item)
+
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    try:
+        rows_odoo = repo_cxc.all_compras_gastos_odoo()
+    except (NotImplementedError, AttributeError):
+        rows_odoo = []
+
+    items_odoo: list[dict[str, Any]] = []
+    for r in rows_odoo:
+        mid = str(r.get("move_id") or "").strip()
+        if not mid:
+            continue
+        if mid in odoo_moves_en_cxc:
+            for it in items_cxc:
+                if str(it.get("odoo_res_id") or "") == mid:
+                    it["en_espejo_odoo"] = True
+            continue
+        items_odoo.append(_odoo_compra_gasto_a_item(r))
+
+    todos = items_cxc + items_odoo
+    resumen = {
+        "total": len(todos),
+        "origen_cxc": len(items_cxc),
+        "origen_odoo": len(items_odoo),
+        "pendientes_aprobacion": sum(1 for x in items_cxc if x["estado"] == PENDIENTE_APROBACION),
+        "incompletos": sum(1 for x in items_cxc if x["estado"] in (INCOMPLETO, BORRADOR)),
+        "enviados_odoo": sum(1 for x in items_cxc if x["estado"] == ENVIADO_ODOO),
+        "confirmados_odoo": len(items_odoo),
+        "rechazados": sum(1 for x in items_cxc if x["estado"] == RECHAZADO),
+        "errores": sum(1 for x in items_cxc if x["estado"] == ERROR_ODOO),
+        "asientos_sin_factura": sum(1 for x in todos if x.get("asiento_contable")),
+    }
+
+    filtrados = todos
+    if origen == "cxc":
+        filtrados = [x for x in filtrados if x.get("origen_sistema") == "cxc"]
+    elif origen == "odoo":
+        filtrados = [x for x in filtrados if x.get("origen_sistema") == "odoo"]
+    if tipo:
+        filtrados = [x for x in filtrados if x.get("tipo") == tipo]
+    if estado:
+        filtrados = [x for x in filtrados if x.get("estado") == estado]
+    if q and q.strip():
+        qn = q.strip().lower()
+        filtrados = [
+            x
+            for x in filtrados
+            if any(
+                qn in str(x.get(c) or "").lower()
+                for c in (
+                    "numero",
+                    "contraparte_nombre",
+                    "rif",
+                    "referencia",
+                    "numero_documento",
+                    "concepto",
+                    "odoo_ref",
+                )
+            )
+        ]
+
+    filtrados.sort(
+        key=lambda x: (
+            str(x.get("fecha_documento") or "0000-00-00"),
+            str(x.get("creado_en") or ""),
+            int(x.get("id") or x.get("odoo_res_id") or 0),
+        ),
+        reverse=True,
+    )
+    lim = max(1, min(limit, 300))
+    off = max(0, offset)
+    return {
+        "puede_aprobar_compras": tiene(user, PERMISO_APROBAR_COMPRAS),
+        "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
+        "resumen": resumen,
+        "total": len(filtrados),
+        "items": filtrados[off : off + lim],
+    }
+
+
+@router.get("/api/compras/conciliacion-gastos")
+def listar_conciliacion_gastos(
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    docs_g, _, _ = servicio.listar(tipo=TIPO_GASTO, limit=500, offset=0)
+    docs_p, _, _ = servicio.listar(tipo=TIPO_PAGO_PROVEEDOR, limit=500, offset=0)
+    egresos_docs = [
+        d for d in [*docs_g, *docs_p] if d.estado not in (RECHAZADO, INCOMPLETO, BORRADOR)
+    ]
+
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    engine = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    movs_banco: list[Any] = []
+    if engine is not None:
+        try:
+            movs_banco = [m for m in bancos_repo.movimientos(engine) if m.mov.neto < 0]
+        except SQLAlchemyError:
+            movs_banco = []
+
+    sin_huella = [d for d in egresos_docs if not d.conciliado_banco_huella]
+    cands_r4 = bancos_conciliacion.egresos_desde_operativos(sin_huella)
+    props = bancos_conciliacion.proponer(movs_banco, [], egresos_cxc=cands_r4) if movs_banco else []
+
+    mov_por_huella = {m.mov.huella: m for m in movs_banco}
+    doc_por_id = {d.documento_id: d for d in egresos_docs}
+    sugerencias_r4: list[dict[str, Any]] = []
+    for p in props:
+        if p.regla != "R4" or not p.candidatos:
+            continue
+        m_cls = mov_por_huella.get(p.huella)
+        d_match = doc_por_id.get(int(p.candidatos[0]))
+        if m_cls is None or d_match is None:
+            continue
+        sugerencias_r4.append(
+            {
+                "huella": p.huella,
+                "documento_id": d_match.documento_id,
+                "numero": d_match.numero,
+                "tipo": d_match.tipo,
+                "contraparte": d_match.contraparte_nombre,
+                "monto_doc": float(d_match.monto or 0),
+                "moneda_doc": d_match.moneda,
+                "fecha_doc": (
+                    d_match.fecha_documento.isoformat() if d_match.fecha_documento else None
+                ),
+                "referencia_doc": d_match.referencia,
+                "banco": m_cls.mov.banco,
+                "fecha_banco": m_cls.mov.fecha.isoformat(),
+                "monto_banco": float(abs(m_cls.mov.neto)),
+                "moneda_banco": m_cls.mov.moneda,
+                "referencia_banco": m_cls.mov.referencia,
+                "descripcion_banco": m_cls.mov.descripcion,
+                "puntaje": p.puntaje,
+                "motivo": p.motivo,
+            }
+        )
+
+    conciliados_cnt = sum(1 for d in egresos_docs if d.conciliado_banco_huella)
+    return {
+        "puede_conciliar": tiene(user, PERMISO_APROBAR_COMPRAS) or tiene(user, "bancos.conciliar"),
+        "total_egresos": len(egresos_docs),
+        "conciliados_count": conciliados_cnt,
+        "pendientes_count": len(egresos_docs) - conciliados_cnt,
+        "sugerencias_r4": sugerencias_r4,
+        "egresos": [d.a_dict() for d in egresos_docs[:200]],
+    }
+
+
+@router.post("/api/compras/conciliacion-gastos/vincular")
+def vincular_gasto_banco(
+    servicio: ServicioOpDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_op(cxc_session, PERMISO_APROBAR_COMPRAS, "bancos.conciliar")
+    doc_id = body.get("documento_id")
+    if not doc_id or not str(doc_id).isdigit():
+        raise HTTPException(status_code=422, detail="documento_id inválido")
+    try:
+        doc = servicio.obtener(int(str(doc_id)))
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Documento no encontrado") from e
+    huella = str(body.get("huella") or "").strip()[:64]
+    actualizado = servicio._repo.actualizar(doc.documento_id, {"conciliado_banco_huella": huella})
+    return JSONResponse(status_code=200, content={"ok": True, "documento": actualizado.a_dict()})
+
+
+@router.get("/api/compras/lotes-caja-chica")
+def listar_lotes_caja_chica(
+    repo_lotes: RepoLotesDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    return {
+        "puede_gestionar": tiene(user, PERMISO_APROBAR_COMPRAS),
+        "items": repo_lotes.listar(limit=50),
+    }
+
+
+@router.post("/api/compras/lotes-caja-chica")
+def crear_lote_caja_chica(
+    repo_lotes: RepoLotesDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_op(cxc_session, PERMISO_APROBAR_COMPRAS)
+    raw_ids = body.get("documento_ids") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return JSONResponse(
+            status_code=422, content={"error": "Selecciona al menos un gasto menor para el lote."}
+        )
+    doc_ids = [int(x) for x in raw_ids if str(x).isdigit()]
+    if not doc_ids:
+        return JSONResponse(status_code=422, content={"error": "documento_ids inválidos."})
+    lote = repo_lotes.crear(
+        responsable=str(body.get("responsable") or _actor_op(user)),
+        moneda=str(body.get("moneda") or "USD"),
+        documento_ids=doc_ids,
+        notas=str(body.get("notas") or ""),
+        actor=_actor_op(user),
+    )
+    return JSONResponse(status_code=201, content=lote)
+
+
+@router.post("/api/compras/lotes-caja-chica/{lote_id}/cerrar")
+def cerrar_lote_caja_chica(
+    lote_id: int,
+    repo_lotes: RepoLotesDep,
+    servicio: ServicioOpDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_op(cxc_session, PERMISO_APROBAR_COMPRAS)
+    lote_actual = repo_lotes.obtener(lote_id)
+    if lote_actual is None:
+        raise HTTPException(status_code=404, detail="Lote de caja chica no encontrado")
+    contabilizar = bool(body.get("contabilizar", False))
+    enviados: list[str] = []
+    errores: list[str] = []
+    if contabilizar:
+        for g in lote_actual.get("gastos") or []:
+            gid = g.get("documento_id")
+            if gid and g.get("estado") in (PENDIENTE_APROBACION, ERROR_ODOO):
+                try:
+                    d_env = servicio.aprobar_y_enviar_a_odoo(int(gid), actor=_actor_op(user))
+                    enviados.append(d_env.numero)
+                except Exception as exc:
+                    errores.append(f"{g.get('numero', gid)}: {exc}")
+    nuevo_estado = "CONTABILIZADO" if (contabilizar and not errores and enviados) else "CERRADO"
+    cerrado = repo_lotes.cerrar(lote_id, estado=nuevo_estado)
+    return JSONResponse(
+        status_code=200,
+        content={"ok": True, "lote": cerrado, "enviados": enviados, "errores": errores},
+    )
+
+
+@router.get("/api/config/gastos-contabilidad")
+def obtener_config_gastos_contabilidad(
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    user = _usuario_op(cxc_session)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    return {
+        "config": cargar_config_gastos(repo_cxc),
+        **categorias_y_metodos_catalogo(),
+        "puede_editar": tiene(user, PERMISO_APROBAR_COMPRAS) or user.get("rol") == "admin",
+    }
+
+
+@router.post("/api/config/gastos-contabilidad")
+def guardar_config_gastos_contabilidad(
+    servicio: ServicioOpDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    from cxc.web.app import get_repo
+
+    _usuario_op(cxc_session, PERMISO_APROBAR_COMPRAS)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    try:
+        cfg = guardar_config_gastos(repo_cxc, body)
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+    return JSONResponse(status_code=200, content={"ok": True, "config": cfg})

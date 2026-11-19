@@ -116,6 +116,11 @@ class IncrementalSync:
             if hasattr(self._reader, "changed_pagos_proveedores")
             else []
         )
+        compras_gastos = (
+            self._reader.changed_compras_gastos(since)
+            if hasattr(self._reader, "changed_compras_gastos")
+            else []
+        )
 
         # SOLO tablas-espejo. Estas operaciones no tocan Vinculaciones/SerieTasas.
         self._repo.upsert_clientes(clientes)
@@ -142,6 +147,11 @@ class IncrementalSync:
             "pagos a proveedores",
             pagos_prov,
             self._repo.upsert_pagos_proveedores_odoo,
+        )
+        self._sync_opcional(
+            "compras y gastos",
+            compras_gastos,
+            self._repo.upsert_compras_gastos_odoo,
         )
 
         lineas_borradas = self.reconciliar_lineas_borradas(ordenes, lineas)

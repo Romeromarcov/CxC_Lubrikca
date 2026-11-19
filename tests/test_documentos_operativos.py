@@ -142,6 +142,9 @@ class RepoOperativosMemoria:
             confirmado_cxc_en=campos.get("confirmado_cxc_en"),
             numero_recibo=str(campos.get("numero_recibo") or ""),
             recibo_emitido_en=campos.get("recibo_emitido_en"),
+            lote_caja_chica_id=campos.get("lote_caja_chica_id"),
+            cuenta_contrapartida_id=campos.get("cuenta_contrapartida_id"),
+            conciliado_banco_huella=str(campos.get("conciliado_banco_huella") or ""),
         )
         self.filas[doc_id] = doc
         return doc
@@ -213,6 +216,13 @@ class RepoOperativosMemoria:
             "confirmado_cxc_en": campos.get("confirmado_cxc_en", d.confirmado_cxc_en),
             "numero_recibo": campos.get("numero_recibo", d.numero_recibo),
             "recibo_emitido_en": campos.get("recibo_emitido_en", d.recibo_emitido_en),
+            "lote_caja_chica_id": campos.get("lote_caja_chica_id", d.lote_caja_chica_id),
+            "cuenta_contrapartida_id": campos.get(
+                "cuenta_contrapartida_id", d.cuenta_contrapartida_id
+            ),
+            "conciliado_banco_huella": campos.get(
+                "conciliado_banco_huella", d.conciliado_banco_huella
+            ),
             "actualizado_en": datetime.now(),
         }
         nuevo = DocumentoOperativo(
@@ -376,6 +386,14 @@ CUENTAS_PRUEBA = [
             "code": "610299",
             "name": "Gastos Diversos / Refrigerios",
             "account_type": "expense",
+        }
+    ),
+    mapear_cuenta(
+        {
+            "id": 750,
+            "code": "110101",
+            "name": "Caja Chica / Banco VES",
+            "account_type": "asset_cash",
         }
     ),
 ]
@@ -640,6 +658,29 @@ def test_gasto_sin_factura_no_queda_incompleto_y_genera_ref_sn_en_odoo(
 ) -> None:
     _repo_cap, _repo_op, odoo, _ = _montar_entorno(monkeypatch)
     odoo.r["res.partner:search"] = [601]
+    odoo.r["res.company:search_read"] = [{"id": 1, "currency_id": [2, "VES"]}]
+    odoo.r["account.move:fields_get"] = {
+        **odoo.r["account.move:fields_get"],
+        "date": {},
+        "line_ids": {},
+    }
+    odoo.r["account.move.line:fields_get"] = {
+        **odoo.r["account.move.line:fields_get"],
+        "partner_id": {},
+        "currency_id": {},
+        "amount_currency": {},
+    }
+    odoo.r["account.journal:search_read"] = lambda args, _k: (
+        [{"id": 15, "name": "Operaciones Varias", "code": "MISC", "currency_id": False}]
+        if args
+        and any(
+            isinstance(d, list) and d[:2] == ["type", "="] and d[2] == "general" for d in args[0]
+        )
+        else [
+            {"id": 99, "name": "Compras USD", "code": "BUSD", "currency_id": [1, "USD"]},
+            {"id": 10, "name": "Vendor Bills", "code": "BILL", "currency_id": False},
+        ]
+    )
 
     r_ing = client.post(
         "/api/bots/capturas",
@@ -675,9 +716,13 @@ def test_gasto_sin_factura_no_queda_incompleto_y_genera_ref_sn_en_odoo(
         r_apr = client.post(f"/api/operativos/{res['documento_id']}/aprobar")
     assert r_apr.status_code == 200
     mv = odoo.creados_de("account.move")[0]
+    assert mv["move_type"] == "entry"
     assert mv["ref"] == "S/N-GAS-00001"
-    assert mv["journal_id"] == 10
-    assert mv["invoice_line_ids"][0][2]["account_id"] == 720
+    assert mv["journal_id"] == 15
+    lineas_entry = [x[2] for x in mv["line_ids"]]
+    assert len(lineas_entry) == 2
+    assert lineas_entry[0]["account_id"] == 720 and lineas_entry[0]["debit"] == 1800.0
+    assert lineas_entry[1]["account_id"] == 750 and lineas_entry[1]["credit"] == 1800.0
     assert "Gasto sin factura" in odoo.chatter[0][2]
 
 

@@ -53,8 +53,13 @@ document.addEventListener("DOMContentLoaded", () => {
         if (subpage === "bots" && typeof loadBots === "function") {
             loadBots();
         }
-        if (subpage === "tesoreria" && typeof window.loadConfigTesoreria === "function") {
-            window.loadConfigTesoreria();
+        if (subpage === "tesoreria") {
+            if (typeof window.loadConfigTesoreria === "function") {
+                window.loadConfigTesoreria();
+            }
+            if (typeof window.loadConfigGastosContabilidad === "function") {
+                window.loadConfigGastosContabilidad();
+            }
         }
         if (subpage === "motor" && typeof window.loadPoliticaVentasConfig === "function") {
             window.loadPoliticaVentasConfig();
@@ -344,6 +349,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (panelFacturas) {
             if (typeof loadOperativosCompras === "function") loadOperativosCompras();
+        } else if (target === "conciliacion") {
+            if (typeof window.loadConciliacionGastos === "function") window.loadConciliacionGastos();
         } else if (target === "cuentas") {
             if (typeof loadPlanCuentasOdoo === "function" && !_ctaCargadoUnaVez) loadPlanCuentasOdoo(false);
         }
@@ -426,7 +433,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (path === "contactos") {
                 if (typeof loadContactosOdoo === "function") loadContactosOdoo(false);
             } else if (path === "configuracion") {
-                if (["descuentos", "usuarios", "listas", "otras", "bots", "motor"].includes(tabParam)) {
+                if (["descuentos", "usuarios", "listas", "otras", "bots", "motor", "tesoreria"].includes(tabParam)) {
                     applyConfigSubpage(tabParam);
                 }
                 if (typeof loadConfigData === "function") loadConfigData();
@@ -8432,6 +8439,9 @@ document.addEventListener("DOMContentLoaded", () => {
     window.loadOperativosCobranza = loadOperativosCobranza;
 
     async function loadOperativosCompras() {
+        if (typeof window.loadComprasUnificadas === "function" && window.loadComprasUnificadas !== loadOperativosCompras) {
+            return window.loadComprasUnificadas();
+        }
         const tbody = document.getElementById("op-compras-table-body");
         const tipo = (document.getElementById("op-cmp-tipo") || {}).value || "";
         const estado = (document.getElementById("op-cmp-estado") || {}).value || "";

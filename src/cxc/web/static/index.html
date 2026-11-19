@@ -1330,7 +1330,7 @@
             <div id="compras-gastos-banner" class="card config-subpage-hidden" style="margin-bottom:1rem; border-left:4px solid #ea580c; padding:1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
                 <div>
                     <h3 style="margin:0 0 0.2rem 0; color:#9a3412;">🧾 Gastos Menores sin Factura Fiscal</h3>
-                    <p style="margin:0; font-size:0.84rem; color:#475569;">Vista filtrada en gastos menores capturados por bots o web. En la Fase 4 estos gastos generarán asientos contables directos en Odoo sin contaminar el Libro de Compras.</p>
+                    <p style="margin:0; font-size:0.84rem; color:#475569;">Vista filtrada en gastos menores capturados por bots o web. Al aprobarse generan asientos contables directos (<code>move_type='entry'</code>) en Odoo sin contaminar el Libro de Compras.</p>
                 </div>
                 <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('gasto')">➕ Registrar Gasto Menor</button>
             </div>
@@ -1339,8 +1339,8 @@
                 <section class="card" style="padding:1.5rem;">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">📄 Facturas de Proveedor y Gastos Menores</h2>
-                            <p style="color:#475569; margin:0;">Revisa los comprobantes del bot de Compras o creados aquí, valida alertas de duplicado y cuenta contable sugerida, asigna el diario (Compras VES por defecto en facturas/gastos) y autoriza su envío en borrador a Odoo.</p>
+                            <h2 style="margin:0 0 0.25rem 0;">📄 Compras y Gastos Unificados (CxC + Odoo)</h2>
+                            <p style="color:#475569; margin:0;">Vista unificada de facturas de proveedor y gastos menores nacidos en bots/web o sincronizados desde Odoo. Los gastos sin factura generan asiento contable directo (Débito 6.x / Crédito Caja o Banco).</p>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                             <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('factura_proveedor')">➕ Nueva Factura</button>
@@ -1350,13 +1350,22 @@
                     </div>
 
                     <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                        <div class="card kpi-card op-cmp-origen-kpi" data-op-origen="todos" role="button" tabindex="0"><h3>Total Compras/Gastos</h3><p id="op-cmp-n-TOTAL">—</p><span>CxC + Odoo</span></div>
+                        <div class="card kpi-card op-cmp-origen-kpi" data-op-origen="cxc" role="button" tabindex="0"><h3>Nacidos en CxC</h3><p id="op-cmp-n-ORIGEN_CXC">—</p><span>Web y bots Telegram</span></div>
+                        <div class="card kpi-card op-cmp-origen-kpi" data-op-origen="odoo" role="button" tabindex="0"><h3>Nacidos en Odoo</h3><p id="op-cmp-n-ORIGEN_ODOO">—</p><span>Espejo contable Odoo</span></div>
                         <div class="card kpi-card op-cmp-kpi" data-op-estado="PENDIENTE_APROBACION" role="button" tabindex="0"><h3>Pendientes aprobación</h3><p id="op-cmp-n-PENDIENTE_APROBACION">—</p><span>Listos para autorizar</span></div>
+                        <div class="card kpi-card" id="op-cmp-kpi-asientos" role="button" tabindex="0"><h3>Asientos sin factura</h3><p id="op-cmp-n-ASIENTOS">—</p><span>move_type='entry'</span></div>
                         <div class="card kpi-card op-cmp-kpi" data-op-estado="INCOMPLETO" role="button" tabindex="0"><h3>Incompletos</h3><p id="op-cmp-n-INCOMPLETO">—</p><span>Faltan datos</span></div>
-                        <div class="card kpi-card op-cmp-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>Enviados a Odoo</h3><p id="op-cmp-n-ENVIADO_ODOO">—</p><span>Borrador en Odoo</span></div>
+                        <div class="card kpi-card op-cmp-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>En Odoo</h3><p id="op-cmp-n-ENVIADO_ODOO">—</p><span>Enviados + Espejo Odoo</span></div>
                         <div class="card kpi-card op-cmp-kpi" data-op-estado="RECHAZADO" role="button" tabindex="0"><h3>Rechazados</h3><p id="op-cmp-n-RECHAZADO">—</p><span>No enviados a Odoo</span></div>
                     </div>
 
                     <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.85rem;">
+                        <select id="op-cmp-origen" class="filter-select" aria-label="Origen documento compras">
+                            <option value="todos">Todos los orígenes (CxC + Odoo)</option>
+                            <option value="cxc">🏢 Nacidos en CxC / Bots</option>
+                            <option value="odoo">🟣 Nacidos en Odoo</option>
+                        </select>
                         <select id="op-cmp-tipo" class="filter-select" aria-label="Tipo documento compras">
                             <option value="">Todos (Facturas Prov. y Gastos)</option>
                             <option value="factura_proveedor">🧾 Factura / Recibo de proveedor</option>
@@ -1367,10 +1376,11 @@
                             <option value="PENDIENTE_APROBACION">⏳ Pendiente por aprobación</option>
                             <option value="INCOMPLETO">⚠️ Incompleto</option>
                             <option value="ENVIADO_ODOO">✅ Enviado a Odoo</option>
+                            <option value="CONFIRMADO_ODOO">🟣 Confirmado en Odoo</option>
                             <option value="ERROR">⚠️ Con error</option>
                             <option value="RECHAZADO">❌ Rechazado</option>
                         </select>
-                        <input type="text" id="op-cmp-buscar" class="filter-select" placeholder="🔍 Buscar por FPR-/PPR-/GAS-, proveedor, RIF, factura o ref" style="cursor:text; min-width:260px; flex:1;">
+                        <input type="text" id="op-cmp-buscar" class="filter-select" placeholder="🔍 Buscar por FPR-/GAS-/MOVE, proveedor, RIF, factura o ref" style="cursor:text; min-width:260px; flex:1;">
                     </div>
                     <p id="op-cmp-resumen" style="color:#64748b; font-size:0.84rem; margin:0 0 0.5rem 0;"></p>
 
@@ -1401,12 +1411,103 @@
                 <section class="card" style="padding:1.5rem; border-left:5px solid #0284c7;">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">🔄 Conciliación de Pagos de Gastos Menores</h2>
-                            <p style="color:#475569; margin:0;">Cruza los débitos bancarios de tus estados de cuenta y rendiciones de caja chica contra los gastos menores aprobados en CxC.</p>
+                            <h2 style="margin:0 0 0.25rem 0;">🔄 Conciliación de Pagos de Gastos Menores y Caja Chica</h2>
+                            <p style="color:#475569; margin:0;">Cruza débitos bancarios contra gastos menores y pagos a proveedor en CxC (Regla R4) y agrupa gastos de efectivo en lotes de Caja Chica.</p>
                         </div>
-                        <a href="/pagos?tab=conciliacion" class="btn btn-primary nav-sub-link" data-page="pagos" data-tab="conciliacion" style="background:#2563eb; color:#fff; border-color:#2563eb; padding:0.5rem 0.95rem;">🏦 Ir a Conciliación Bancaria</a>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" class="btn-secondary" onclick="if (window.loadConciliacionGastos) window.loadConciliacionGastos();">↻ Actualizar</button>
+                            <a href="/pagos?tab=conciliacion" class="btn btn-primary nav-sub-link" data-page="pagos" data-tab="conciliacion" style="background:#2563eb; color:#fff; border-color:#2563eb; padding:0.5rem 0.95rem; text-decoration:none;">🏦 Ir a Conciliación Bancaria</a>
+                        </div>
                     </div>
-                    <p style="color:#64748b; font-size:0.86rem; margin-top:0.5rem;">Desde aquí podrás emparejar automáticamente gastos pagados por transferencia o débito contra el extracto del banco (Regla R4 en Fase 4) y marcar rendiciones de efectivo.</p>
+
+                    <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                        <div class="card kpi-card"><h3>Egresos elegibles</h3><p id="cmp-r4-total">—</p><span>Gastos y pagos prov.</span></div>
+                        <div class="card kpi-card"><h3>Conciliados con banco</h3><p id="cmp-r4-conciliados">—</p><span>Vinculados a extracto</span></div>
+                        <div class="card kpi-card"><h3>Sin conciliar</h3><p id="cmp-r4-pendientes">—</p><span>Pendientes de cruce</span></div>
+                        <div class="card kpi-card"><h3>Sugerencias Regla R4</h3><p id="cmp-r4-sugerencias">—</p><span>Coincidencias detectadas</span></div>
+                    </div>
+
+                    <h3 style="margin:0.5rem 0;">🔍 Sugerencias Automáticas Banco ↔ Egresos (Regla R4)</h3>
+                    <div class="table-wrapper" style="margin-bottom:1.5rem;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Débito Bancario</th>
+                                    <th>Monto</th>
+                                    <th>Documento CxC</th>
+                                    <th>Puntaje / Motivo</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cmp-r4-tbody">
+                                <tr><td colspan="5" class="table-empty">Cargando sugerencias R4...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3 style="margin:0.5rem 0;">🧺 Rendición de Caja Chica y Egresos CxC</h3>
+                    <form id="cmp-cajachica-form" class="cxc-form" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; margin-bottom:1rem;">
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.75rem;">
+                            <div>
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Responsable de Caja Chica</label>
+                                <input type="text" id="cmp-lote-responsable" class="filter-select" style="width:100%; cursor:text;" placeholder="Nombre del custodio o vendedor">
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Moneda del Lote</label>
+                                <select id="cmp-lote-moneda" class="filter-select" style="width:100%;">
+                                    <option value="USD">USD</option>
+                                    <option value="VES">VES</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Notas de rendición</label>
+                                <input type="text" id="cmp-lote-notas" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej. Reposición semanal Caja Chica">
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-top:0.75rem;">
+                            <button type="submit" class="btn-primary">🧺 Crear Lote con Gastos Seleccionados</button>
+                            <span id="cmp-lote-status" style="font-size:0.84rem; font-weight:600;"></span>
+                        </div>
+                    </form>
+
+                    <div class="table-wrapper" style="margin-bottom:1.25rem;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Sel.</th>
+                                    <th>Documento</th>
+                                    <th>Fecha</th>
+                                    <th>Comercio / Concepto</th>
+                                    <th>Monto</th>
+                                    <th>Conciliación Banco</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cmp-egresos-tbody">
+                                <tr><td colspan="7" class="table-empty">Cargando egresos...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 style="margin:0.5rem 0;">📋 Lotes de Caja Chica Registrados</h4>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Responsable</th>
+                                    <th>Moneda</th>
+                                    <th>Gastos</th>
+                                    <th>Total</th>
+                                    <th>Estado</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cmp-lotes-tbody">
+                                <tr><td colspan="7" class="table-empty">Cargando lotes de caja chica...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </section>
             </div>
 
@@ -3218,6 +3319,36 @@
                             </div>
                         </form>
                     </section>
+
+                    <section class="card" id="cfg-gastos-contab-card" style="padding:1.5rem;">
+                        <div class="panel-header-row" style="margin-bottom:1rem;">
+                            <div>
+                                <h2 style="margin:0 0 0.25rem 0;">📒 Contabilidad de Gastos Menores (Sin Factura)</h2>
+                                <p style="color:#475569; margin:0;">Parametriza el diario general y las cuentas contables para asientos automáticos en Odoo (<code>move_type='entry'</code>: Débito Gasto 6.x / Crédito Caja Chica o Banco), sin contaminar el Libro de Compras.</p>
+                            </div>
+                            <button type="button" class="btn-secondary" onclick="if (window.loadConfigGastosContabilidad) window.loadConfigGastosContabilidad();">↻ Actualizar</button>
+                        </div>
+                        <form id="cfg-gastos-contab-form" class="cxc-form" style="display:flex; flex-direction:column; gap:1rem;">
+                            <div style="max-width:420px;">
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Diario General Odoo por defecto (Asientos)</label>
+                                <select id="cfg-gas-diario-id" class="filter-select" style="width:100%;">
+                                    <option value="">(Primer diario General MISC en Odoo)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">🏦 Cuenta Crédito (Contrapartida Caja / Banco) por Método de Pago</h3>
+                                <div id="cfg-gas-metodos-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:0.75rem;"></div>
+                            </div>
+                            <div>
+                                <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">🧾 Cuenta Débito (Gasto 6.x) por Categoría de Gasto</h3>
+                                <div id="cfg-gas-categorias-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:0.75rem;"></div>
+                            </div>
+                            <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                                <button type="submit" id="cfg-gas-btn-guardar" class="btn-primary">💾 Guardar Contabilidad de Gastos</button>
+                                <span id="cfg-gas-status" style="font-size:0.85rem; font-weight:600;"></span>
+                            </div>
+                        </form>
+                    </section>
                 </div>
             </div>
         </div>
@@ -3680,11 +3811,12 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_4"></script>
-    <script src="/static/js/shell.js?v=20261119_4"></script>
-    <script src="/static/js/pagos_unificados.js?v=20261119_4"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_4"></script>
-    <script src="/static/js/config_tesoreria.js?v=20261119_4"></script>
-    <script src="/static/js/ventas_unificadas.js?v=20261119_4"></script>
+    <script src="/static/app.js?v=20261119_5"></script>
+    <script src="/static/js/shell.js?v=20261119_5"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261119_5"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261119_5"></script>
+    <script src="/static/js/config_tesoreria.js?v=20261119_5"></script>
+    <script src="/static/js/ventas_unificadas.js?v=20261119_5"></script>
+    <script src="/static/js/compras_unificadas.js?v=20261119_5"></script>
 </body>
 </html>

@@ -1301,6 +1301,44 @@ pagos_proveedores_odoo = Table(
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
 )
 
+# --- Espejo de Compras y Gastos en Odoo (in_invoice / in_refund / entry GAS) -----
+compras_gastos_odoo = Table(
+    "compras_gastos_odoo",
+    metadata,
+    Column("move_id", String, primary_key=True),
+    Column("numero_odoo", String, nullable=False, server_default=""),
+    Column("move_type", String, nullable=False, server_default="in_invoice"),
+    Column("tipo_cxc", String, nullable=False, server_default="factura_proveedor"),
+    Column("partner_odoo_id", Integer, nullable=True, index=True),
+    Column("proveedor_nombre", String, nullable=False, server_default=""),
+    Column("rif", String, nullable=False, server_default=""),
+    Column("monto_total", MONEY, nullable=False, server_default="0"),
+    Column("moneda", String, nullable=False, server_default="VES"),
+    Column("diario_id", Integer, nullable=True),
+    Column("diario_nombre", String, nullable=False, server_default=""),
+    Column("referencia", String, nullable=False, server_default=""),
+    Column("fecha_documento", Date, nullable=False, index=True),
+    Column("estado_odoo", String, nullable=False, server_default="posted"),
+    Column("estado_pago", String, nullable=False, server_default=""),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Lotes de Caja Chica para rendición de gastos menores (Fase 4) -------------
+lotes_caja_chica = Table(
+    "lotes_caja_chica",
+    metadata,
+    Column("lote_id", Integer, primary_key=True, autoincrement=True),
+    Column("codigo", String, nullable=False, unique=True),
+    Column("responsable", String, nullable=False, server_default=""),
+    Column("moneda", String, nullable=False, server_default="USD"),
+    Column("monto_total", MONEY, nullable=False, server_default="0"),
+    Column("estado", String, nullable=False, server_default="ABIERTO"),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("cerrado_en", DateTime(timezone=False), nullable=True),
+)
+
 # --- Documentos Operativos: Pagos recibidos, Facturas prov., Pagos prov. y Gastos (nov-2026) --
 # Flujo homologado Bot <-> CxC (Validacion + Preview + Aprobacion) <-> Odoo: cada documento
 # pasa por validacion en vivo y preview antes de ser autorizado para crearse en borrador en Odoo.
@@ -1369,6 +1407,15 @@ documentos_operativos = Table(
     Column("confirmado_cxc_en", DateTime(timezone=False), nullable=True),
     Column("numero_recibo", String, nullable=False, server_default="", index=True),
     Column("recibo_emitido_en", DateTime(timezone=False), nullable=True),
+    Column(
+        "lote_caja_chica_id",
+        Integer,
+        ForeignKey("lotes_caja_chica.lote_id"),
+        nullable=True,
+        index=True,
+    ),
+    Column("cuenta_contrapartida_id", Integer, nullable=True),
+    Column("conciliado_banco_huella", String(64), nullable=False, server_default=""),
     Column("creado_por", String, nullable=False, server_default="sistema"),
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),

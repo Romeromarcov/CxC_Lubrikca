@@ -11,7 +11,8 @@ from sqlalchemy import Engine, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from cxc.capturas.modelos import normalizar_nombre
-from cxc.db.schema import documentos_operativos
+from cxc.db.schema import documentos_operativos, lotes_caja_chica
+from cxc.decimal_utils import q2
 
 from .modelos import (
     BORRADOR,
@@ -152,6 +153,17 @@ def _a_doc(r: Any) -> DocumentoOperativo:
         confirmado_cxc_en=getattr(r, "confirmado_cxc_en", None),
         numero_recibo=str(getattr(r, "numero_recibo", "") or ""),
         recibo_emitido_en=getattr(r, "recibo_emitido_en", None),
+        lote_caja_chica_id=(
+            int(r.lote_caja_chica_id)
+            if getattr(r, "lote_caja_chica_id", None) is not None
+            else None
+        ),
+        cuenta_contrapartida_id=(
+            int(r.cuenta_contrapartida_id)
+            if getattr(r, "cuenta_contrapartida_id", None) is not None
+            else None
+        ),
+        conciliado_banco_huella=str(getattr(r, "conciliado_banco_huella", "") or ""),
     )
 
 
@@ -394,3 +406,139 @@ class RepoOperativosSQL:
             ):
                 iguales.append(c)
         return iguales[:5]
+
+
+class RepoLotesCajaChicaSQL:
+    """Persistencia SQL para rendiciones / lotes de Caja Chica (``lotes_caja_chica``)."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    @staticmethod
+    def _a_dict(r: Any, *, n_gastos: int = 0) -> dict[str, Any]:
+        return {
+            "lote_id": int(r.lote_id),
+            "codigo": str(r.codigo),
+            "responsable": str(r.responsable or ""),
+            "moneda": str(r.moneda or "USD"),
+            "monto_total": float(r.monto_total or 0),
+            "estado": str(r.estado or "ABIERTO"),
+            "notas": str(r.notas or ""),
+            "n_gastos": n_gastos,
+            "creado_por": str(r.creado_por or "sistema"),
+            "creado_en": r.creado_en.isoformat() if r.creado_en else None,
+            "cerrado_en": r.cerrado_en.isoformat() if r.cerrado_en else None,
+        }
+
+    def listar(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(lotes_caja_chica).order_by(lotes_caja_chica.c.lote_id.desc()).limit(limit)
+            ).all()
+            conteos = {
+                int(c.lote_caja_chica_id): int(c.n)
+                for c in conn.execute(
+                    select(
+                        documentos_operativos.c.lote_caja_chica_id,
+                        func.count().label("n"),
+                    )
+                    .where(documentos_operativos.c.lote_caja_chica_id.is_not(None))
+                    .group_by(documentos_operativos.c.lote_caja_chica_id)
+                ).all()
+            }
+        return [self._a_dict(r, n_gastos=conteos.get(int(r.lote_id), 0)) for r in rows]
+
+    def obtener(self, lote_id: int) -> dict[str, Any] | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(lotes_caja_chica).where(lotes_caja_chica.c.lote_id == int(lote_id))
+            ).one_or_none()
+            if row is None:
+                return None
+            docs = conn.execute(
+                select(documentos_operativos)
+                .where(documentos_operativos.c.lote_caja_chica_id == int(lote_id))
+                .order_by(documentos_operativos.c.documento_id.desc())
+            ).all()
+        d = self._a_dict(row, n_gastos=len(docs))
+        d["gastos"] = [_a_doc(g).a_dict() for g in docs]
+        return d
+
+    def _siguiente_codigo(self, conn: Any, fecha: date) -> str:
+        pref = f"CCH-{fecha.strftime('%Y%m')}-"
+        ultimo = conn.execute(
+            select(func.max(lotes_caja_chica.c.codigo)).where(
+                lotes_caja_chica.c.codigo.like(f"{pref}%")
+            )
+        ).scalar_one_or_none()
+        n = 1
+        if ultimo and str(ultimo).startswith(pref):
+            suf = str(ultimo)[len(pref) :]
+            if suf.isdigit():
+                n = int(suf) + 1
+        return f"{pref}{n:03d}"
+
+    def crear(
+        self,
+        *,
+        responsable: str,
+        moneda: str,
+        documento_ids: list[int],
+        notas: str = "",
+        actor: str = "sistema",
+    ) -> dict[str, Any]:
+        ahora = datetime.now()
+        ids_limpios = list(dict.fromkeys(int(x) for x in documento_ids if int(x) > 0))
+        with self._engine.begin() as conn:
+            total = Decimal("0")
+            if ids_limpios:
+                filas_doc = conn.execute(
+                    select(documentos_operativos).where(
+                        documentos_operativos.c.documento_id.in_(ids_limpios)
+                    )
+                ).all()
+                for fd in filas_doc:
+                    total += Decimal(str(fd.monto or 0))
+            codigo = self._siguiente_codigo(conn, ahora.date())
+            lote_row = conn.execute(
+                insert(lotes_caja_chica)
+                .values(
+                    codigo=codigo,
+                    responsable=responsable.strip(),
+                    moneda=(moneda or "USD").strip().upper(),
+                    monto_total=q2(total),
+                    estado="ABIERTO",
+                    notas=notas.strip(),
+                    creado_por=actor,
+                    creado_en=ahora,
+                )
+                .returning(lotes_caja_chica)
+            ).one()
+            lote_id = int(lote_row.lote_id)
+            if ids_limpios:
+                conn.execute(
+                    update(documentos_operativos)
+                    .where(documentos_operativos.c.documento_id.in_(ids_limpios))
+                    .values(lote_caja_chica_id=lote_id, actualizado_en=ahora)
+                )
+        return self._a_dict(lote_row, n_gastos=len(ids_limpios))
+
+    def cerrar(self, lote_id: int, *, estado: str = "CERRADO") -> dict[str, Any] | None:
+        ahora = datetime.now()
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                update(lotes_caja_chica)
+                .where(lotes_caja_chica.c.lote_id == int(lote_id))
+                .values(estado=estado, cerrado_en=ahora)
+                .returning(lotes_caja_chica)
+            ).one_or_none()
+            if row is None:
+                return None
+            n_g = int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(documentos_operativos)
+                    .where(documentos_operativos.c.lote_caja_chica_id == int(lote_id))
+                ).scalar_one()
+            )
+        return self._a_dict(row, n_gastos=n_g)

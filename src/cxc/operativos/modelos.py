@@ -171,6 +171,18 @@ def extraer_campos_canonicos(tipo: str, raw: dict[str, Any]) -> dict[str, Any]:
         if cuenta_raw not in (None, "", False) and str(cuenta_raw).isdigit()
         else None
     )
+    contra_raw = raw.get("cuenta_contrapartida_id")
+    contrapartida_id = (
+        int(str(contra_raw))
+        if contra_raw not in (None, "", False) and str(contra_raw).isdigit()
+        else None
+    )
+    lote_raw = raw.get("lote_caja_chica_id")
+    lote_id = (
+        int(str(lote_raw))
+        if lote_raw not in (None, "", False) and str(lote_raw).isdigit()
+        else None
+    )
     tercero_raw = raw.get("cuenta_tercero_id")
     tercero_id = (
         int(str(tercero_raw))
@@ -217,6 +229,9 @@ def extraer_campos_canonicos(tipo: str, raw: dict[str, Any]) -> dict[str, Any]:
         "beneficiario_tercero": (
             str(raw.get("beneficiario_tercero") or "").strip() if tipo == TIPO_PAGO else ""
         ),
+        "lote_caja_chica_id": lote_id,
+        "cuenta_contrapartida_id": contrapartida_id,
+        "conciliado_banco_huella": str(raw.get("conciliado_banco_huella") or "").strip(),
         "notas": str(raw.get("notas") or "").strip(),
     }
 
@@ -359,6 +374,9 @@ class DocumentoOperativo:
     confirmado_cxc_en: datetime | None = None
     numero_recibo: str = ""
     recibo_emitido_en: datetime | None = None
+    lote_caja_chica_id: int | None = None
+    cuenta_contrapartida_id: int | None = None
+    conciliado_banco_huella: str = ""
 
     def a_dict(self) -> dict[str, Any]:
         efectivo = es_efectivo(self.metodo_pago) and not self.es_zelle_tercero
@@ -426,6 +444,12 @@ class DocumentoOperativo:
             "numero_recibo": self.numero_recibo,
             "recibo_emitido_en": (
                 self.recibo_emitido_en.isoformat() if self.recibo_emitido_en else None
+            ),
+            "lote_caja_chica_id": self.lote_caja_chica_id,
+            "cuenta_contrapartida_id": self.cuenta_contrapartida_id,
+            "conciliado_banco_huella": self.conciliado_banco_huella,
+            "asiento_contable": (
+                self.tipo == TIPO_GASTO and (self.sin_factura or not self.numero_documento.strip())
             ),
             "aprobado_por": self.aprobado_por,
             "aprobado_en": self.aprobado_en.isoformat() if self.aprobado_en else None,

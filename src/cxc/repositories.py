@@ -150,6 +150,16 @@ class Repository(ABC):
             "all_pagos_proveedores_odoo solo está implementado en PostgresRepository."
         )
 
+    def upsert_compras_gastos_odoo(self, filas: list[dict[str, Any]]) -> None:
+        raise NotImplementedError(
+            "upsert_compras_gastos_odoo solo está implementado en PostgresRepository."
+        )
+
+    def all_compras_gastos_odoo(self) -> list[dict[str, Any]]:
+        raise NotImplementedError(
+            "all_compras_gastos_odoo solo está implementado en PostgresRepository."
+        )
+
     def upsert_facturas(self, filas: list[Factura]) -> None:
         raise NotImplementedError("upsert_facturas solo está implementado en PostgresRepository.")
 
@@ -595,6 +605,7 @@ class InMemoryRepository(Repository):
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
         self._pagos_tasa_binance_override: dict[str, dict[str, str]] = {}
         self._pagos_proveedores_odoo: dict[str, dict[str, Any]] = {}
+        self._compras_gastos_odoo: dict[str, dict[str, Any]] = {}
         self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
         self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
         self._vendedores: dict[str, dict[str, str]] = {}
@@ -987,6 +998,14 @@ class InMemoryRepository(Repository):
 
     def all_pagos_proveedores_odoo(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self._pagos_proveedores_odoo.values()]
+
+    def upsert_compras_gastos_odoo(self, filas: list[dict[str, Any]]) -> None:
+        for r in filas:
+            mid = str(r["move_id"])
+            self._compras_gastos_odoo[mid] = dict(r)
+
+    def all_compras_gastos_odoo(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._compras_gastos_odoo.values()]
 
     def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._descuentos_sistema_aprobados.values()]

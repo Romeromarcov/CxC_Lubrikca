@@ -12,6 +12,10 @@ propusieron nada en 57 (docs/BANCOS.md, "Fase 2"):
       si supera al segundo; un empate queda "ambiguo" y lo decide una persona.
 - R3  compra con tarjeta o nómina sin pago que la cierre -> la cuenta de pagos
       pendientes de ese banco.
+- R4  débito bancario sin match R1/R2 contra egresos registrados en CxC (gastos
+      menores ``GAS-*`` o pagos a proveedores ``PPR-*``) del mismo monto exacto,
+      moneda compatible y fecha a +-3 días, desempatando por referencia, RIF y
+      nombre del comercio/proveedor.
 
 Nada de esto escribe en Odoo: produce propuestas que una persona aprueba o corrige
 en la cola de revisión. Odoo se lee con ``solo_lectura``, que rechaza cualquier
@@ -89,13 +93,94 @@ def _puntaje(m_fecha: date, m_ref: str, m_rifs: frozenset[str], p: PagoCandidato
     dias = abs((p.fecha - m_fecha).days)
     s = 3 if dias == 0 else (2 if dias == 1 else 1)
     ref = _digitos(m_ref)
-    if ref and any(
-        len(x) >= 4 and ref.endswith(x) for x in re.sub(r"\D", " ", p.memo).split()
-    ):
+    if ref and any(len(x) >= 4 and ref.endswith(x) for x in re.sub(r"\D", " ", p.memo).split()):
         s += 3
     if m_rifs & p.partner_rifs:
         s += 3
     return s
+
+
+@dataclass(frozen=True)
+class EgresoCxCCandidato:
+    """Egreso registrado en CxC (gasto menor o pago a proveedor) candidato para R4."""
+
+    doc_id: int
+    numero: str
+    tipo: str  # "gasto" | "pago_proveedor"
+    fecha: date
+    monto: Decimal
+    moneda: str = "VES"
+    contraparte: str = ""
+    referencia: str = ""
+    cuenta_codigo: str = ""
+    cuenta_nombre: str = ""
+    rifs: frozenset[str] = frozenset()
+
+
+def _puntaje_r4(
+    m_fecha: date,
+    m_ref: str,
+    m_rifs: frozenset[str],
+    m_desc: str,
+    e: EgresoCxCCandidato,
+) -> int:
+    dias = abs((e.fecha - m_fecha).days)
+    s = 3 if dias == 0 else (2 if dias == 1 else 1)
+    ref_m = _digitos(m_ref)
+    ref_e = _digitos(e.referencia)
+    if (
+        ref_m
+        and ref_e
+        and (
+            ref_m == ref_e
+            or (len(ref_e) >= 4 and ref_m.endswith(ref_e))
+            or (len(ref_m) >= 4 and ref_e.endswith(ref_m))
+        )
+    ):
+        s += 3
+    if m_rifs & e.rifs:
+        s += 3
+    desc_up = (m_desc or "").upper()
+    toks_nombre = [
+        t for t in re.sub(r"[^A-Z0-9]+", " ", e.contraparte.upper()).split() if len(t) >= 4
+    ]
+    if any(tok in desc_up for tok in toks_nombre):
+        s += 2
+    return s
+
+
+def egresos_desde_operativos(docs: Iterable[Any]) -> list[EgresoCxCCandidato]:
+    """Convierte ``DocumentoOperativo`` (gastos y pagos a proveedor) en candidatos R4."""
+    out: list[EgresoCxCCandidato] = []
+    for d in docs:
+        tipo = str(getattr(d, "tipo", "") or "")
+        estado = str(getattr(d, "estado", "") or "")
+        if tipo not in ("gasto", "pago_proveedor"):
+            continue
+        if estado in ("RECHAZADO", "INCOMPLETO", "BORRADOR"):
+            continue
+        monto = getattr(d, "monto", None)
+        fecha = getattr(d, "fecha_documento", None) or getattr(d, "creado_en", None)
+        if monto is None or fecha is None:
+            continue
+        fecha_d = fecha.date() if hasattr(fecha, "hour") else fecha
+        rif_txt = str(getattr(d, "rif", "") or "")
+        out.append(
+            EgresoCxCCandidato(
+                doc_id=int(d.documento_id),
+                numero=str(d.numero),
+                tipo=tipo,
+                fecha=fecha_d,
+                monto=abs(Decimal(str(monto))).quantize(CENT),
+                moneda=str(getattr(d, "moneda", "VES") or "VES").upper(),
+                contraparte=str(getattr(d, "contraparte_nombre", "") or ""),
+                referencia=str(getattr(d, "referencia", "") or ""),
+                cuenta_codigo=str(getattr(d, "cuenta_contable_codigo", "") or ""),
+                cuenta_nombre=str(getattr(d, "cuenta_contable_nombre", "") or ""),
+                rifs=rifs(rif_txt),
+            )
+        )
+    return out
 
 
 def _pendientes(banco: str) -> str:
@@ -104,14 +189,20 @@ def _pendientes(banco: str) -> str:
 
 
 def proponer(
-    movs: Iterable[MovimientoClasificado], pagos: Iterable[PagoCandidato]
+    movs: Iterable[MovimientoClasificado],
+    pagos: Iterable[PagoCandidato],
+    egresos_cxc: Iterable[EgresoCxCCandidato] = (),
 ) -> list[Propuesta]:
     """Una propuesta por movimiento. Un pago se asigna a un solo movimiento (el primero
     en orden cronológico que lo gana); por eso los movimientos se recorren ordenados."""
     disponibles: dict[tuple[bool, Decimal], list[PagoCandidato]] = {}
     for p in pagos:
         disponibles.setdefault((p.entrante, p.monto.quantize(CENT)), []).append(p)
+    disp_egresos: dict[Decimal, list[EgresoCxCCandidato]] = {}
+    for e in egresos_cxc:
+        disp_egresos.setdefault(abs(e.monto).quantize(CENT), []).append(e)
     usados: set[int] = set()
+    usados_egresos: set[int] = set()
     out: list[Propuesta] = []
     for mc in sorted(movs, key=lambda x: (x.mov.fecha, x.mov.orden)):
         m = mc.mov
@@ -124,9 +215,10 @@ def proponer(
             continue
         entrante = m.neto > 0
         ventana = timedelta(days=VENTANA_DIAS)
+        monto_abs = abs(m.neto).quantize(CENT)
         cands = [
             p
-            for p in disponibles.get((entrante, abs(m.neto).quantize(CENT)), [])
+            for p in disponibles.get((entrante, monto_abs), [])
             if p.pago_id not in usados and abs(p.fecha - m.fecha) <= ventana
         ]
         m_rifs = rifs(m.descripcion)
@@ -150,7 +242,8 @@ def proponer(
                     candidatos=[q.pago_id for _, q in puntuados],
                 )
             )
-        elif puntuados:
+            continue
+        if puntuados:
             out.append(
                 Propuesta(
                     m.huella,
@@ -161,7 +254,57 @@ def proponer(
                     candidatos=[q.pago_id for _, q in puntuados],
                 )
             )
-        elif mc.categoria in CATEGORIAS_PENDIENTES and _pendientes(m.banco):
+            continue
+
+        # Regla R4: débito bancario contra gastos menores y pagos a proveedor en CxC
+        if not entrante and disp_egresos:
+            diario_b = DIARIOS.get(m.banco)
+            mon_b = str(diario_b.get("moneda") or "").upper() if diario_b else ""
+            cands_r4 = [
+                e
+                for e in disp_egresos.get(monto_abs, [])
+                if e.doc_id not in usados_egresos
+                and abs(e.fecha - m.fecha) <= ventana
+                and (not mon_b or not e.moneda or e.moneda.upper() == mon_b)
+            ]
+            punt_r4 = sorted(
+                (
+                    (_puntaje_r4(m.fecha, m.referencia, m_rifs, m.descripcion, e), e)
+                    for e in cands_r4
+                ),
+                key=lambda t: (-t[0], t[1].doc_id),
+            )
+            if punt_r4 and (len(punt_r4) == 1 or punt_r4[0][0] > punt_r4[1][0]):
+                s_e, e = punt_r4[0]
+                usados_egresos.add(e.doc_id)
+                cta_lbl = f"{e.cuenta_codigo} {e.cuenta_nombre}".strip() or e.numero
+                out.append(
+                    Propuesta(
+                        m.huella,
+                        CUENTA if e.tipo == "gasto" else PAGO,
+                        "R4",
+                        f"egreso CxC {e.numero} ({e.contraparte or e.tipo}), puntaje {s_e}",
+                        pago_nombre=e.numero,
+                        cuenta=cta_lbl if e.tipo == "gasto" else "",
+                        puntaje=s_e,
+                        candidatos=[e.doc_id],
+                    )
+                )
+                continue
+            if punt_r4:
+                out.append(
+                    Propuesta(
+                        m.huella,
+                        AMBIGUO,
+                        "R4",
+                        f"{len(punt_r4)} egresos CxC empatan con puntaje {punt_r4[0][0]}",
+                        puntaje=punt_r4[0][0],
+                        candidatos=[q.doc_id for _, q in punt_r4],
+                    )
+                )
+                continue
+
+        if mc.categoria in CATEGORIAS_PENDIENTES and _pendientes(m.banco):
             out.append(
                 Propuesta(
                     m.huella,
@@ -213,7 +356,14 @@ def pagos_candidatos(
         ],
         {
             "fields": [
-                "id", "name", "date", "amount", "payment_type", "memo", "partner_id", "is_matched"
+                "id",
+                "name",
+                "date",
+                "amount",
+                "payment_type",
+                "memo",
+                "partner_id",
+                "is_matched",
             ]
         },
     )
