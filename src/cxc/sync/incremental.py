@@ -39,8 +39,14 @@ class SyncResult:
     @property
     def total(self) -> int:
         return (
-            self.clientes + self.ordenes + self.lineas + self.pagos
-            + self.facturas + self.entregas + self.catalogo + self.lineas_factura
+            self.clientes
+            + self.ordenes
+            + self.lineas
+            + self.pagos
+            + self.facturas
+            + self.entregas
+            + self.catalogo
+            + self.lineas_factura
             + self.entregas_lineas
         )
 
@@ -71,8 +77,7 @@ class IncrementalSync:
             return len(filas)
         except NotImplementedError:
             logger.warning(
-                "El backend activo no soporta el espejo de %s -- se omite "
-                "para esta corrida.",
+                "El backend activo no soporta el espejo de %s -- se omite " "para esta corrida.",
                 nombre,
             )
             return 0
@@ -106,6 +111,11 @@ class IncrementalSync:
         catalogo = self._reader.changed_catalogo(since) if sync_catalogo else []
         lineas_factura = self._reader.changed_lineas_factura(since)
         entregas_lineas = self._reader.changed_entregas_lineas(since)
+        pagos_prov = (
+            self._reader.changed_pagos_proveedores(since)
+            if hasattr(self._reader, "changed_pagos_proveedores")
+            else []
+        )
 
         # SOLO tablas-espejo. Estas operaciones no tocan Vinculaciones/SerieTasas.
         self._repo.upsert_clientes(clientes)
@@ -127,6 +137,11 @@ class IncrementalSync:
         )
         entregas_lineas_sincronizadas = self._sync_opcional(
             "líneas de entrega", entregas_lineas, self._repo.upsert_entregas_lineas
+        )
+        self._sync_opcional(
+            "pagos a proveedores",
+            pagos_prov,
+            self._repo.upsert_pagos_proveedores_odoo,
         )
 
         lineas_borradas = self.reconciliar_lineas_borradas(ordenes, lineas)

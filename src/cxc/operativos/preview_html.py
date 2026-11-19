@@ -6,8 +6,11 @@ from __future__ import annotations
 import html
 from typing import Any
 
+from cxc.capturas.modelos import es_efectivo
+
 from .modelos import (
     BORRADOR,
+    CONFIRMADO_CXC,
     ENVIADO_ODOO,
     ERROR_ODOO,
     INCOMPLETO,
@@ -49,6 +52,10 @@ def renderizar_preview_operativo(doc: DocumentoOperativo) -> str:
 
     if doc.estado == ENVIADO_ODOO:
         badge_txt = f"✅ Autorizado y Enviado a Odoo ({doc.odoo_ref})"
+        badge_cls = "badge-ok"
+    elif doc.estado == CONFIRMADO_CXC:
+        rec_lbl = f" · Recibo {doc.numero_recibo}" if doc.numero_recibo else ""
+        badge_txt = f"✔️ Confirmado en CxC{rec_lbl}"
         badge_cls = "badge-ok"
     elif doc.estado == PENDIENTE_APROBACION:
         badge_txt = "⏳ Pendiente por aprobación en CxC"
@@ -114,18 +121,38 @@ def renderizar_preview_operativo(doc: DocumentoOperativo) -> str:
         ("Monto Total", f"{float(doc.monto):,.2f} {doc.moneda}" if doc.monto is not None else "—"),
     ]
     if tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR):
-        filas_detalle.extend(
-            [
-                ("Método de pago", doc.metodo_pago or "—"),
-                (
-                    "Referencia",
-                    "Efectivo (memo vacío en Odoo)"
-                    if d["es_efectivo"]
-                    else (doc.referencia or "—"),
-                ),
-                ("Banco / Diario", doc.diario_nombre or doc.banco or "Por seleccionar en CxC"),
-            ]
-        )
+        if tipo == TIPO_PAGO and doc.es_zelle_tercero:
+            zt_raw = val.get("zelle_tercero")
+            zt: dict[str, Any] = zt_raw if isinstance(zt_raw, dict) else {}
+            filas_detalle.extend(
+                [
+                    ("Modalidad", "💵 Zelle a Cuenta de Tercero (Sin tocar bancos)"),
+                    (
+                        "Cuenta / Beneficiario",
+                        doc.beneficiario_tercero or zt.get("titular") or zt.get("alias") or "—",
+                    ),
+                    (
+                        "Proveedor CxP Odoo",
+                        zt.get("proveedor_nombre") or f"#{doc.cuenta_tercero_id or '?'}",
+                    ),
+                    ("Referencia Zelle", doc.referencia or "—"),
+                ]
+            )
+        else:
+            filas_detalle.extend(
+                [
+                    ("Método de pago", doc.metodo_pago or "—"),
+                    (
+                        "Referencia",
+                        "Efectivo (memo vacío en Odoo)"
+                        if d["es_efectivo"]
+                        else (doc.referencia or "—"),
+                    ),
+                    ("Banco / Diario", doc.diario_nombre or doc.banco or "Por seleccionar en CxC"),
+                ]
+            )
+        if doc.numero_recibo:
+            filas_detalle.append(("Nº Recibo CxC", doc.numero_recibo))
         if tipo == TIPO_PAGO:
             filas_detalle.append(("Pedido / Factura", doc.pedido_ref or "—"))
         else:
@@ -381,11 +408,138 @@ def renderizar_preview_operativo(doc: DocumentoOperativo) -> str:
       {ordenes_html}
       {completar_html}
       <div class="actions no-print">
-        <button class="btn-sec" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+          <button class="btn-sec" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+          {f'<a class="btn-ok" style="text-decoration:none;" href="/recibo/{_esc(doc.token_preview)}">🧾 Ver Recibo {_esc(doc.numero_recibo)}</a>' if doc.numero_recibo else ""}
+        </div>
         <span style="font-size:0.8rem; color:#64748b;">Token: {_esc(doc.token_preview[:10])}… · CxC Lubrikca</span>
       </div>
     </div>
   </div>
   {script_js}
+</body>
+</html>"""
+
+
+def renderizar_recibo_operativo(
+    doc: DocumentoOperativo, cuenta_tercero: dict[str, Any] | None = None
+) -> str:
+    """Recibo oficial imprimible CxC-first (``REC-...`` o ``EGR-...``) para pagos confirmados."""
+    es_ingreso = doc.tipo == TIPO_PAGO
+    titulo_rec = "Recibo Oficial de Cobro" if es_ingreso else "Comprobante Oficial de Egreso"
+    rol_contraparte = "Recibido de (Cliente)" if es_ingreso else "Pagado a (Proveedor)"
+    val = doc.validacion or {}
+    equiv = val.get("equivalente_usd") if isinstance(val.get("equivalente_usd"), dict) else None
+    eq_txt = ""
+    if equiv and equiv.get("usd_bcv") is not None:
+        eq_txt = f"Ref. equivalente: ${float(equiv['usd_bcv']):,.2f} BCV (tasa {float(equiv['tasa_bcv']):,.2f})"
+
+    zt = cuenta_tercero or (
+        val.get("zelle_tercero") if isinstance(val.get("zelle_tercero"), dict) else None
+    )
+    if doc.es_zelle_tercero:
+        modalidad_txt = "Zelle a Cuenta de Tercero (Proveedor)"
+        destino_lbl = (
+            f"{doc.beneficiario_tercero or (zt or {}).get('titular') or '—'} · "
+            f"Proveedor: {(zt or {}).get('proveedor_nombre') or 'Configurado'}"
+        )
+    elif es_efectivo(doc.metodo_pago):
+        modalidad_txt = "Efectivo"
+        destino_lbl = doc.diario_nombre or doc.banco or "Caja / Custodia Efectivo CxC"
+    else:
+        modalidad_txt = doc.metodo_pago or "Transferencia / Digital"
+        destino_lbl = doc.diario_nombre or doc.banco or "—"
+
+    fecha_conf = (
+        doc.confirmado_cxc_en.isoformat()[:16].replace("T", " ")
+        if doc.confirmado_cxc_en
+        else (
+            doc.recibo_emitido_en.isoformat()[:16].replace("T", " ")
+            if doc.recibo_emitido_en
+            else "—"
+        )
+    )
+    odoo_txt = (
+        f"{doc.odoo_ref} ({doc.odoo_model})"
+        if doc.odoo_ref
+        else "Confirmado en CxC · Pendiente despacho a Odoo"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_esc(doc.numero_recibo)} · {_esc(titulo_rec)} · Lubrikca</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 1.5rem; background: #f1f5f9; color: #0f172a; }}
+    .rec-card {{ max-width: 720px; margin: 0 auto; background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 1.75rem; box-shadow: 0 8px 24px rgba(15,23,42,0.08); }}
+    .rec-head {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 1rem; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap; }}
+    .rec-brand {{ font-size: 1.25rem; font-weight: 800; color: #0f172a; }}
+    .rec-sub {{ font-size: 0.85rem; color: #475569; margin-top: 0.2rem; }}
+    .rec-num {{ text-align: right; }}
+    .rec-num .code {{ font-size: 1.2rem; font-weight: 800; color: #1d4ed8; }}
+    .rec-amt {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.95rem 1.1rem; display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }}
+    .rec-amt .val {{ font-size: 1.65rem; font-weight: 800; color: #0f172a; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-bottom: 1.25rem; }}
+    th, td {{ padding: 0.5rem; border-bottom: 1px solid #f1f5f9; text-align: left; }}
+    th {{ width: 38%; color: #475569; font-weight: 600; }}
+    .firmas {{ display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 2rem; padding-top: 1rem; }}
+    .firma-box {{ border-top: 1px solid #334155; padding-top: 0.4rem; text-align: center; font-size: 0.84rem; color: #475569; }}
+    .actions {{ margin-top: 1.25rem; display: flex; justify-content: space-between; align-items: center; }}
+    .btn {{ background: #1e3a8a; color: #fff; border: none; border-radius: 8px; padding: 0.55rem 1rem; font-weight: 700; cursor: pointer; text-decoration: none; font-size: 0.88rem; }}
+    .btn-sec {{ background: #e2e8f0; color: #0f172a; }}
+    @media print {{ body {{ background: #fff; padding: 0; }} .rec-card {{ box-shadow: none; border: none; }} .no-print {{ display: none !important; }} }}
+  </style>
+</head>
+<body>
+  <div class="rec-card">
+    <div class="rec-head">
+      <div>
+        <div class="rec-brand">Lubrikca C.A. · {_esc(titulo_rec)}</div>
+        <div class="rec-sub">Documento origen CxC: <strong>{_esc(doc.numero)}</strong> · Canal: {_esc(doc.origen)}</div>
+      </div>
+      <div class="rec-num">
+        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase;">Nº de Recibo</div>
+        <div class="code">{_esc(doc.numero_recibo)}</div>
+        <div class="rec-sub">Emitido: {_esc(fecha_conf)}</div>
+      </div>
+    </div>
+    <div class="rec-amt">
+      <div>
+        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Monto Confirmado</div>
+        <div class="val">{f"{float(doc.monto):,.2f}" if doc.monto is not None else "—"} {_esc(doc.moneda)}</div>
+        {f'<div class="rec-sub">{_esc(eq_txt)}</div>' if eq_txt else ""}
+      </div>
+      <div class="rec-sub" style="text-align:right;">
+        <div>Confirmado en CxC por:</div>
+        <strong>{_esc(doc.confirmado_cxc_por or "sistema")}</strong>
+      </div>
+    </div>
+    <table>
+      <tbody>
+        <tr><th>{_esc(rol_contraparte)}</th><td><strong>{_esc(doc.contraparte_nombre or "—")}</strong> {_esc(f"({doc.rif})" if doc.rif else "")}</td></tr>
+        <tr><th>Fecha de pago</th><td>{_esc(doc.fecha_documento.isoformat() if doc.fecha_documento else "—")}</td></tr>
+        <tr><th>Modalidad / Método</th><td>{_esc(modalidad_txt)}</td></tr>
+        <tr><th>Referencia</th><td>{_esc(doc.referencia or ("Efectivo sin referencia" if es_efectivo(doc.metodo_pago) else "—"))}</td></tr>
+        <tr><th>Diario / Destino</th><td>{_esc(destino_lbl)}</td></tr>
+        <tr><th>{"Pedido / Factura" if es_ingreso else "Factura proveedor"}</th><td>{_esc((doc.pedido_ref if es_ingreso else doc.factura_ref) or "—")}</td></tr>
+        <tr><th>Estado en Odoo</th><td>{_esc(odoo_txt)}</td></tr>
+        {f"<tr><th>Notas</th><td>{_esc(doc.notas)}</td></tr>" if doc.notas else ""}
+      </tbody>
+    </table>
+    <div class="firmas">
+      <div class="firma-box">Entregado por</div>
+      <div class="firma-box">Recibido / Conforme ({_esc(doc.confirmado_cxc_por or "CxC")})</div>
+    </div>
+    <div class="actions no-print">
+      <div style="display:flex; gap:0.5rem;">
+        <button class="btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+        <a class="btn btn-sec" href="/comprobante/{_esc(doc.token_preview)}">📋 Ver Comprobante</a>
+      </div>
+      <span class="rec-sub">CxC Lubrikca · Trazabilidad Contable</span>
+    </div>
+  </div>
 </body>
 </html>"""

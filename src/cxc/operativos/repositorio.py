@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -15,6 +15,7 @@ from cxc.db.schema import documentos_operativos
 
 from .modelos import (
     BORRADOR,
+    CONFIRMADO_CXC,
     ENVIADO_ODOO,
     ERROR_ODOO,
     INCOMPLETO,
@@ -44,9 +45,12 @@ class RepoOperativos(Protocol):
         grupo: str | None = None,
         estado: str | None = None,
         q: str | None = None,
+        es_zelle_tercero: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[DocumentoOperativo], int, dict[str, int]]: ...
+
+    def siguiente_numero_recibo(self, prefijo: str, fecha: date) -> str: ...
 
     def buscar_duplicados_referencia(
         self, tipo: str, referencia: str, *, excluir_id: int | None = None
@@ -138,6 +142,16 @@ def _a_doc(r: Any) -> DocumentoOperativo:
         creado_por=str(r.creado_por or "sistema"),
         creado_en=r.creado_en,
         actualizado_en=r.actualizado_en,
+        es_zelle_tercero=bool(getattr(r, "es_zelle_tercero", False)),
+        cuenta_tercero_id=(
+            int(r.cuenta_tercero_id) if getattr(r, "cuenta_tercero_id", None) is not None else None
+        ),
+        beneficiario_tercero=str(getattr(r, "beneficiario_tercero", "") or ""),
+        confirmado_cxc=bool(getattr(r, "confirmado_cxc", False)),
+        confirmado_cxc_por=str(getattr(r, "confirmado_cxc_por", "") or ""),
+        confirmado_cxc_en=getattr(r, "confirmado_cxc_en", None),
+        numero_recibo=str(getattr(r, "numero_recibo", "") or ""),
+        recibo_emitido_en=getattr(r, "recibo_emitido_en", None),
     )
 
 
@@ -257,17 +271,22 @@ class RepoOperativosSQL:
         grupo: str | None = None,
         estado: str | None = None,
         q: str | None = None,
+        es_zelle_tercero: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[DocumentoOperativo], int, dict[str, int]]:
         conds = self._conds_grupo(tipo, grupo)
         if estado:
             conds.append(documentos_operativos.c.estado == estado)
+        if es_zelle_tercero is not None:
+            conds.append(documentos_operativos.c.es_zelle_tercero.is_(es_zelle_tercero))
         if q and q.strip():
             patron = f"%{q.strip()}%"
             conds.append(
                 or_(
                     documentos_operativos.c.numero.ilike(patron),
+                    documentos_operativos.c.numero_recibo.ilike(patron),
+                    documentos_operativos.c.beneficiario_tercero.ilike(patron),
                     documentos_operativos.c.contraparte_nombre.ilike(patron),
                     documentos_operativos.c.rif.ilike(patron),
                     documentos_operativos.c.referencia.ilike(patron),
@@ -302,12 +321,29 @@ class RepoOperativosSQL:
         resumen = {
             "total": sum(por_estado.values()),
             "pendientes_aprobacion": por_estado.get(PENDIENTE_APROBACION, 0),
+            "confirmados_cxc": por_estado.get(CONFIRMADO_CXC, 0),
             "incompletos": por_estado.get(INCOMPLETO, 0) + por_estado.get(BORRADOR, 0),
             "enviados_odoo": por_estado.get(ENVIADO_ODOO, 0),
             "rechazados": por_estado.get(RECHAZADO, 0),
             "errores": por_estado.get(ERROR_ODOO, 0),
         }
         return [_a_doc(r) for r in rows], total, resumen
+
+    def siguiente_numero_recibo(self, prefijo: str, fecha: date) -> str:
+        """Genera correlativo diario único ``REC-YYYYMMDD-NNN`` o ``EGR-YYYYMMDD-NNN``."""
+        base = f"{prefijo.strip().upper()}-{fecha.strftime('%Y%m%d')}-"
+        with self._engine.connect() as conn:
+            ultimo = conn.execute(
+                select(func.max(documentos_operativos.c.numero_recibo)).where(
+                    documentos_operativos.c.numero_recibo.like(f"{base}%")
+                )
+            ).scalar_one_or_none()
+        n = 1
+        if ultimo and str(ultimo).startswith(base):
+            sufijo = str(ultimo)[len(base) :]
+            if sufijo.isdigit():
+                n = int(sufijo) + 1
+        return f"{base}{n:03d}"
 
     def buscar_duplicados_referencia(
         self, tipo: str, referencia: str, *, excluir_id: int | None = None

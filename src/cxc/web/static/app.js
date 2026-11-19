@@ -53,6 +53,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (subpage === "bots" && typeof loadBots === "function") {
             loadBots();
         }
+        if (subpage === "tesoreria" && typeof window.loadConfigTesoreria === "function") {
+            window.loadConfigTesoreria();
+        }
     }
 
     if (configSubnavButtons.length) {
@@ -4853,7 +4856,10 @@ document.addEventListener("DOMContentLoaded", () => {
         tbody.innerHTML = grupos.map(grupo => {
             const item = grupo[0];
             const total = grupo.length;
-            const pagoCell = `<strong>${item.pago_id}</strong>`
+            const origPill = item.origen_sistema === "cxc"
+                ? ' <span class="badge-origen-cxc" title="Registrado vía CxC / Bot">CxC</span>'
+                : ' <span class="badge-origen-odoo" title="Creado directo en Odoo">Odoo</span>';
+            const pagoCell = `<strong>${item.pago_id}</strong>${origPill}`
                 + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
                 + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} documentos -- no está duplicado">cubre ${total} ${grupo.every(g => g.so_id) ? 'órdenes' : 'documentos'}</small>` : '');
 
@@ -8206,6 +8212,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (d.estado === "ENVIADO_ODOO") {
             return `<span class="semaphore verde">✅ En Odoo (${_capEsc(d.odoo_ref || "")})</span>`;
         }
+        if (d.estado === "CONFIRMADO_ODOO") {
+            return `<span class="semaphore verde">🟣 Confirmado Odoo</span>`;
+        }
+        if (d.estado === "CONFIRMADO_CXC") {
+            return `<span class="semaphore verde badge-confirmado-cxc">✔️ Confirmado CxC</span>`;
+        }
         if (d.estado === "PENDIENTE_APROBACION") {
             return `<span class="semaphore amarillo">⏳ Pendiente aprobación</span>`;
         }
@@ -8258,9 +8270,10 @@ document.addEventListener("DOMContentLoaded", () => {
         return _opCatalogos;
     }
 
-    function _opPoblarSelectCatalogos(tipo, diarioSel, cuentaSel) {
+    function _opPoblarSelectCatalogos(tipo, diarioSel, cuentaSel, terceroSel) {
         const selD = document.getElementById("op-f-diario");
         const selC = document.getElementById("op-f-cuenta");
+        const selZt = document.getElementById("op-f-cuenta-tercero");
         if (selD) {
             const diarios = _opCatalogos.diarios_bancarios || [];
             selD.innerHTML = `<option value="">(Detección automática)</option>` + diarios.map((d) =>
@@ -8274,6 +8287,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 `<option value="${c.id}">${_capEsc(c.etiqueta || ((c.code || "") + " " + c.name))}</option>`
             ).join("");
             if (cuentaSel != null && cuentaSel !== "") selC.value = String(cuentaSel);
+        }
+        if (selZt) {
+            const ctasZt = _opCatalogos.cuentas_terceros || [];
+            selZt.innerHTML = `<option value="">Selecciona la cuenta del tercero…</option>` + ctasZt.map((c) =>
+                `<option value="${c.id}" data-titular="${_capEsc(c.titular || c.correo_telefono || c.alias)}">${_capEsc(c.alias)} — ${_capEsc(c.proveedor_nombre || ("Prov #" + c.proveedor_odoo_id))}${c.correo_telefono ? " (" + _capEsc(c.correo_telefono) + ")" : ""}</option>`
+            ).join("");
+            if (terceroSel != null && terceroSel !== "") selZt.value = String(terceroSel);
         }
         _opActualizarCamposVisibles(tipo);
     }
@@ -8298,6 +8318,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function loadOperativosCobranza() {
+        if (typeof window.loadPagosRecibidosUnificados === "function" && window.loadPagosRecibidosUnificados !== loadOperativosCobranza) {
+            return window.loadPagosRecibidosUnificados();
+        }
         const tbody = document.getElementById("op-pagos-table-body");
         const estado = (document.getElementById("op-cob-estado") || {}).value || "";
         const q = ((document.getElementById("op-cob-buscar") || {}).value || "").trim();
@@ -8436,6 +8459,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const pid = document.getElementById("op-f-partner-id").value;
         const jid = document.getElementById("op-f-diario").value;
         const cid = document.getElementById("op-f-cuenta").value;
+        const chkZt = document.getElementById("op-f-es-zelle-tercero");
+        const selZt = document.getElementById("op-f-cuenta-tercero");
+        const inpBenef = document.getElementById("op-f-beneficiario-tercero");
+        const esZt = Boolean(tipo === "pago" && chkZt && chkZt.checked);
         return {
             tipo,
             partner_odoo_id: pid ? Number(pid) : null,
@@ -8446,8 +8473,11 @@ document.addEventListener("DOMContentLoaded", () => {
             fecha_documento: document.getElementById("op-f-fecha").value || null,
             metodo_pago: document.getElementById("op-f-metodo").value.trim(),
             referencia: document.getElementById("op-f-referencia").value.trim(),
-            banco: document.getElementById("op-f-banco").value.trim(),
-            diario_id: jid ? Number(jid) : null,
+            banco: esZt ? "" : document.getElementById("op-f-banco").value.trim(),
+            diario_id: esZt ? null : (jid ? Number(jid) : null),
+            es_zelle_tercero: esZt,
+            cuenta_tercero_id: esZt && selZt && selZt.value ? Number(selZt.value) : null,
+            beneficiario_tercero: esZt && inpBenef ? inpBenef.value.trim() : "",
             pedido_ref: document.getElementById("op-f-pedido-ref").value.trim(),
             factura_ref: document.getElementById("op-f-factura-ref").value.trim(),
             numero_documento: document.getElementById("op-f-num-doc").value.trim(),
@@ -8533,24 +8563,46 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("op-f-concepto").value = d.concepto || "";
         document.getElementById("op-f-sin-factura").checked = Boolean(d.sin_factura);
         document.getElementById("op-f-notas").value = d.notas || "";
-        _opPoblarSelectCatalogos(tipo, d.diario_id, d.cuenta_contable_id);
+        const chkZt = document.getElementById("op-f-es-zelle-tercero");
+        const inpBenef = document.getElementById("op-f-beneficiario-tercero");
+        if (chkZt) chkZt.checked = Boolean(d.es_zelle_tercero);
+        if (inpBenef) inpBenef.value = d.beneficiario_tercero || "";
+        _opPoblarSelectCatalogos(tipo, d.diario_id, d.cuenta_contable_id, d.cuenta_tercero_id);
+        if (window.CxC && window.CxC.pagos && typeof window.CxC.pagos.syncZelleTerceroModalUI === "function") {
+            window.CxC.pagos.syncZelleTerceroModalUI();
+        }
         _opRenderAlertasValidacion(d.validacion || { faltantes: d.faltantes || [], alertas: d.alertas || [] });
 
         const tit = document.getElementById("op-modal-titulo");
         const sub = document.getElementById("op-modal-sub");
         if (tit) tit.textContent = d.id ? `${d.numero} · ${d.tipo_etiqueta || tipo}` : "Nuevo Documento Operativo";
-        if (sub) sub.textContent = d.id ? `Estado: ${d.estado} · Origen: ${d.origen}` : "Validación en vivo contra CxC y Odoo antes de aprobar";
+        if (sub) sub.textContent = d.id ? `Estado: ${d.estado} · Origen: ${d.origen}${d.numero_recibo ? (" · Recibo: " + d.numero_recibo) : ""}` : "Validación en vivo contra CxC y Odoo antes de aprobar";
 
         const btnPrev = document.getElementById("op-btn-preview");
         if (btnPrev) {
             if (d.preview_path) { btnPrev.href = d.preview_path; btnPrev.style.display = "inline-block"; }
             else btnPrev.style.display = "none";
         }
+        const btnRecDoc = document.getElementById("op-btn-recibo");
+        if (btnRecDoc) {
+            if (d.recibo_path && d.numero_recibo) {
+                btnRecDoc.href = d.recibo_path;
+                btnRecDoc.textContent = `🧾 Recibo ${d.numero_recibo}`;
+                btnRecDoc.style.display = "inline-block";
+            } else {
+                btnRecDoc.style.display = "none";
+            }
+        }
         const editable = !d.id || d.puede_editar;
         document.getElementById("op-btn-guardar").style.display = editable ? "inline-block" : "none";
+        const puedeCxc = Boolean(d.id && d.puede_confirmar_cxc && (d.tipo === "pago" ? _opPuedeAprobarPagos : _opPuedeAprobarCompras));
+        const btnConfCxc = document.getElementById("op-btn-confirmar-cxc");
+        if (btnConfCxc) btnConfCxc.style.display = puedeCxc ? "inline-block" : "none";
         const puedeApr = Boolean(d.id && d.puede_aprobar && (d.tipo === "pago" ? _opPuedeAprobarPagos : _opPuedeAprobarCompras));
         const puedeRec = Boolean(d.id && d.puede_rechazar && (d.tipo === "pago" ? _opPuedeAprobarPagos : _opPuedeAprobarCompras));
-        document.getElementById("op-btn-aprobar").style.display = puedeApr ? "inline-block" : "none";
+        const btnApr = document.getElementById("op-btn-aprobar");
+        btnApr.style.display = puedeApr ? "inline-block" : "none";
+        btnApr.textContent = d.es_zelle_tercero ? "📒 Crear Asiento Tercero en Odoo" : "✅ Autorizar y Enviar a Odoo";
         document.getElementById("op-btn-rechazar").style.display = puedeRec ? "inline-block" : "none";
         document.getElementById("op-modal-status").textContent = "";
     }
@@ -8668,17 +8720,11 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
             btn.addEventListener("click", () => applyCobranzaSubpage(btn.getAttribute("data-cobranza-subpage")));
         });
-        document.getElementById("op-cob-estado")?.addEventListener("change", loadOperativosCobranza);
+        document.getElementById("op-cob-estado")?.addEventListener("change", () => loadOperativosCobranza());
         let tCob = null;
         document.getElementById("op-cob-buscar")?.addEventListener("input", () => {
             clearTimeout(tCob);
-            tCob = setTimeout(loadOperativosCobranza, 280);
-        });
-        document.querySelectorAll(".op-cob-kpi").forEach((k) => {
-            k.addEventListener("click", () => {
-                const s = document.getElementById("op-cob-estado");
-                if (s) { s.value = k.dataset.opEstado || ""; loadOperativosCobranza(); }
-            });
+            tCob = setTimeout(() => loadOperativosCobranza(), 280);
         });
 
         document.getElementById("op-cmp-tipo")?.addEventListener("change", loadOperativosCompras);
@@ -8788,6 +8834,16 @@ document.addEventListener("DOMContentLoaded", () => {
         getSession: () => currentUserSession,
         puedeAprobarPagos: () => _opPuedeAprobarPagos,
         puedeAprobarCompras: () => _opPuedeAprobarCompras,
+        setPuedeAprobarPagos: (val) => { _opPuedeAprobarPagos = Boolean(val); },
+        llenarModalOperativo: _opLlenarFormulario,
+        refrescarOperativos: _opRefrescarTablas,
+        programarValidacionOperativo: _opProgramarValidacion,
+        recargarCatalogosOperativos: () => _opCargarCatalogos(true),
+        abrirModalNuevoOperativoCustom: async (defaults) => {
+            await _opCargarCatalogos(true);
+            _opLlenarFormulario(defaults || { tipo: "pago", moneda: "VES" });
+            document.getElementById("modal-operativo").style.display = "flex";
+        },
     });
 
     // SPA navigation click handling for nav links and launchpad module cards

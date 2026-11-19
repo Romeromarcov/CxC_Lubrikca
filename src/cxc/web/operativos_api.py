@@ -15,17 +15,29 @@ from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.odoo.directorio import ContactoOdoo, CuentaContable
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
 from cxc.operativos.modelos import (
+    BORRADOR,
+    CONFIRMADO_CXC,
+    ENVIADO_ODOO,
+    ERROR_ODOO,
     ESTADOS_OPERATIVOS,
+    INCOMPLETO,
+    PENDIENTE_APROBACION,
+    RECHAZADO,
     TIPO_PAGO,
+    TIPO_PAGO_PROVEEDOR,
     TIPOS_OPERATIVOS,
     OperativoEstadoInvalido,
     OperativoInvalido,
     OperativoNoEncontrado,
     OperativoYaEnviado,
 )
-from cxc.operativos.preview_html import renderizar_preview_operativo
+from cxc.operativos.preview_html import (
+    renderizar_preview_operativo,
+    renderizar_recibo_operativo,
+)
 from cxc.operativos.repositorio import RepoOperativosSQL
 from cxc.operativos.servicio import ServicioOperativos
+from cxc.operativos.terceros import RepoCuentasTerceros, RepoCuentasTercerosSQL
 from cxc.permisos import tiene
 from cxc.web.capturas_api import _diarios_env, exigir_bot_key
 from cxc.web.directorio_api import _obtener_contactos, _obtener_cuentas, get_lector_odoo
@@ -113,11 +125,24 @@ def _cuentas_seguras() -> Sequence[CuentaContable]:
         return ()
 
 
+def get_repo_terceros() -> RepoCuentasTerceros:
+    from cxc.web.app import get_repo
+
+    repo: Any = get_repo()
+    return RepoCuentasTercerosSQL(repo._engine)
+
+
 def get_servicio_operativos() -> ServicioOperativos:
+    from cxc.web.app import app as _app
     from cxc.web.app import get_repo
 
     repo: Any = get_repo()
     engine = repo._engine
+    fabrica_terceros = _app.dependency_overrides.get(get_repo_terceros, get_repo_terceros)
+    try:
+        repo_terceros: RepoCuentasTerceros | None = fabrica_terceros()
+    except Exception:
+        repo_terceros = None
     return ServicioOperativos(
         RepoOperativosSQL(engine),
         _fabrica_escritor_op,
@@ -126,10 +151,12 @@ def get_servicio_operativos() -> ServicioOperativos:
         obtener_cuentas=_cuentas_seguras,
         diarios_extra=_diarios_env(),
         repo_capturas=RepoCapturasSQL(engine),
+        repo_terceros=repo_terceros,
     )
 
 
 ServicioOpDep = Annotated[ServicioOperativos, Depends(get_servicio_operativos)]
+RepoTercerosDep = Annotated[RepoCuentasTerceros, Depends(get_repo_terceros)]
 
 
 class OperativoValidarIn(BaseModel):
@@ -140,6 +167,10 @@ class OperativoValidarIn(BaseModel):
 
 class RechazoOpIn(BaseModel):
     motivo: str = ""
+
+
+class ConfirmarCxcIn(BaseModel):
+    enviar_a_odoo: bool = False
 
 
 # ── Endpoints para Bots de Telegram (X-Bot-Key) ──────────────────────────────
@@ -191,6 +222,29 @@ def confirmar_preview_operativo(
         faltan = getattr(e, "faltan", [])
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
     return JSONResponse(status_code=200, content=doc.a_dict())
+
+
+@router.get("/recibo/{token}", response_class=HTMLResponse)
+def ver_recibo_operativo(
+    token: str,
+    servicio: ServicioOpDep,
+    repo_terceros: RepoTercerosDep,
+) -> HTMLResponse:
+    try:
+        doc = servicio.obtener_por_token(token)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Recibo no encontrado") from e
+    if not doc.numero_recibo:
+        raise HTTPException(
+            status_code=404,
+            detail="Este documento aún no ha sido confirmado en CxC ni tiene recibo emitido.",
+        )
+    cta_dict: dict[str, Any] | None = None
+    if doc.cuenta_tercero_id is not None:
+        cta = repo_terceros.obtener(doc.cuenta_tercero_id)
+        if cta is not None:
+            cta_dict = cta.a_dict()
+    return HTMLResponse(content=renderizar_recibo_operativo(doc, cta_dict))
 
 
 # ── Endpoints Web de CxC (Cobranza y Compras/Gastos) ─────────────────────────
@@ -314,6 +368,44 @@ def editar_operativo(
     return JSONResponse(status_code=200, content=actualizado.a_dict())
 
 
+@router.post("/api/operativos/{documento_id}/confirmar-cxc")
+def confirmar_operativo_en_cxc(
+    documento_id: int,
+    servicio: ServicioOpDep,
+    body: Annotated[ConfirmarCxcIn, Body(default_factory=ConfirmarCxcIn)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    try:
+        doc = servicio.obtener(documento_id)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Documento operativo no encontrado") from e
+
+    if doc.tipo == TIPO_PAGO:
+        if not (tiene(user, PERMISO_APROBAR_PAGOS) or tiene(user, "cobranza.recibo")):
+            raise HTTPException(
+                status_code=403,
+                detail="Necesitas aprobar_pagos o cobranza.recibo para confirmar en CxC.",
+            )
+    elif doc.tipo == TIPO_PAGO_PROVEEDOR:
+        _exigir_permiso_aprobacion(user, doc.tipo)
+    if body.enviar_a_odoo:
+        _exigir_permiso_aprobacion(user, doc.tipo)
+
+    try:
+        confirmado = servicio.confirmar_en_cxc(
+            documento_id, actor=_actor_op(user), enviar_a_odoo=body.enviar_a_odoo
+        )
+    except (OperativoYaEnviado, OperativoEstadoInvalido) as e:
+        return JSONResponse(status_code=409, content={"error": str(e)})
+    except (OperativoInvalido, CapturaInvalida) as e:
+        faltan = getattr(e, "faltan", [])
+        return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    return JSONResponse(status_code=200, content=confirmado.a_dict())
+
+
 @router.post("/api/operativos/{documento_id}/aprobar")
 def aprobar_y_enviar_operativo_a_odoo(
     documento_id: int,
@@ -358,3 +450,349 @@ def rechazar_operativo(
     except OperativoYaEnviado as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
     return JSONResponse(status_code=200, content=rechazado.a_dict())
+
+
+# ── Configuración de Cuentas Zelle de Terceros y Diarios Generales ───────────
+
+
+@router.get("/api/config/cuentas-terceros")
+def listar_cuentas_terceros(
+    repo_terceros: RepoTercerosDep,
+    solo_activas: bool = False,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_op(cxc_session, "pagos", "cobranza", "configuracion", PERMISO_APROBAR_PAGOS)
+    items = repo_terceros.listar(solo_activas=solo_activas)
+    return {"items": [c.a_dict() for c in items], "total": len(items)}
+
+
+@router.post("/api/config/cuentas-terceros")
+def crear_cuenta_tercero(
+    repo_terceros: RepoTercerosDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        creada = repo_terceros.crear(body, actor=_actor_op(user))
+    except OperativoInvalido as e:
+        return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
+    return JSONResponse(status_code=201, content=creada.a_dict())
+
+
+@router.put("/api/config/cuentas-terceros/{cuenta_id}")
+def editar_cuenta_tercero(
+    cuenta_id: int,
+    repo_terceros: RepoTercerosDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        actualizada = repo_terceros.actualizar(cuenta_id, body)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Cuenta de tercero no encontrada") from e
+    except OperativoInvalido as e:
+        return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
+    return JSONResponse(status_code=200, content=actualizada.a_dict())
+
+
+@router.delete("/api/config/cuentas-terceros/{cuenta_id}")
+def desactivar_cuenta_tercero(
+    cuenta_id: int,
+    repo_terceros: RepoTercerosDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        desactivada = repo_terceros.desactivar(cuenta_id)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Cuenta de tercero no encontrada") from e
+    return JSONResponse(status_code=200, content=desactivada.a_dict())
+
+
+@router.get("/api/config/diarios-generales")
+def listar_diarios_generales(
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_op(cxc_session, "configuracion", "pagos", "compras", PERMISO_APROBAR_PAGOS)
+    try:
+        escritor = servicio._fabrica()
+        if escritor is not None:
+            return {"items": escritor.diarios_generales()}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+    return {"items": []}
+
+
+# ── Vista Unificada de Pagos (CxC + Espejo Odoo) ─────────────────────────────
+
+
+def _odoo_recibido_a_item(
+    row: dict[str, str],
+    clientes_map: dict[str, str],
+    metodos_map: dict[str, str],
+) -> dict[str, Any]:
+    pid = str(row.get("pago_id") or "").strip()
+    cid = str(row.get("cliente_id") or "").strip()
+    mid = str(row.get("metodo_pago") or "").strip()
+    fecha_iso = str(row.get("fecha_pago") or "")[:10] or None
+    try:
+        monto_val: float | None = float(row.get("monto") or 0)
+    except (TypeError, ValueError):
+        monto_val = None
+    metodo_nombre = metodos_map.get(mid, mid)
+    return {
+        "id": None,
+        "documento_id": None,
+        "numero": str(row.get("numero_odoo") or f"ODOO-{pid}"),
+        "token_preview": "",
+        "preview_path": "",
+        "recibo_path": "",
+        "tipo": TIPO_PAGO,
+        "tipo_etiqueta": "Pago recibido de cliente",
+        "estado": "CONFIRMADO_ODOO",
+        "origen": "odoo",
+        "origen_sistema": "odoo",
+        "captura_id": None,
+        "partner_odoo_id": int(cid) if cid.isdigit() else None,
+        "contraparte_nombre": clientes_map.get(cid, f"Cliente #{cid}" if cid else "Cliente Odoo"),
+        "rif": "",
+        "monto": monto_val,
+        "moneda": str(row.get("moneda") or "USD"),
+        "metodo_pago": metodo_nombre,
+        "es_efectivo": "efectivo" in metodo_nombre.lower() or "cash" in metodo_nombre.lower(),
+        "es_zelle_tercero": False,
+        "cuenta_tercero_id": None,
+        "beneficiario_tercero": "",
+        "banco": "",
+        "diario_id": int(mid) if mid.isdigit() else None,
+        "diario_nombre": metodo_nombre,
+        "referencia": str(row.get("referencia") or ""),
+        "pedido_ref": "",
+        "factura_ref": "",
+        "fecha_documento": fecha_iso,
+        "notas": "",
+        "alertas": [],
+        "faltantes": [],
+        "confirmado_cxc": str(row.get("recibido") or "").upper() == "TRUE",
+        "confirmado_cxc_por": str(row.get("recibido_por") or ""),
+        "numero_recibo": str(row.get("numero_recibido") or ""),
+        "odoo_model": "account.payment",
+        "odoo_res_id": int(pid) if pid.isdigit() else None,
+        "odoo_pago_id": pid,
+        "odoo_ref": f"account.payment:{pid}",
+        "en_espejo_odoo": True,
+        "creado_en": str(row.get("fecha_pago") or ""),
+        "puede_editar": False,
+        "puede_confirmar_cxc": False,
+        "puede_aprobar": False,
+        "puede_rechazar": False,
+    }
+
+
+def _odoo_enviado_a_item(row: dict[str, Any]) -> dict[str, Any]:
+    pid = str(row.get("pago_id") or "").strip()
+    pid_partner = row.get("partner_odoo_id")
+    fecha_iso = str(row.get("fecha_pago") or "")[:10] or None
+    return {
+        "id": None,
+        "documento_id": None,
+        "numero": str(row.get("numero_odoo") or f"ODOO-{pid}"),
+        "token_preview": "",
+        "preview_path": "",
+        "recibo_path": "",
+        "tipo": TIPO_PAGO_PROVEEDOR,
+        "tipo_etiqueta": "Pago a proveedor",
+        "estado": "CONFIRMADO_ODOO",
+        "origen": "odoo",
+        "origen_sistema": "odoo",
+        "captura_id": None,
+        "partner_odoo_id": int(pid_partner) if pid_partner is not None else None,
+        "contraparte_nombre": str(row.get("proveedor_nombre") or f"Proveedor #{pid_partner or ''}"),
+        "rif": str(row.get("rif") or ""),
+        "monto": float(row["monto"]) if row.get("monto") is not None else None,
+        "moneda": str(row.get("moneda") or "USD"),
+        "metodo_pago": str(row.get("diario_nombre") or ""),
+        "es_efectivo": "efectivo" in str(row.get("diario_nombre") or "").lower(),
+        "es_zelle_tercero": False,
+        "cuenta_tercero_id": None,
+        "beneficiario_tercero": "",
+        "banco": "",
+        "diario_id": row.get("diario_id"),
+        "diario_nombre": str(row.get("diario_nombre") or ""),
+        "referencia": str(row.get("referencia") or ""),
+        "pedido_ref": "",
+        "factura_ref": "",
+        "fecha_documento": fecha_iso,
+        "notas": "",
+        "alertas": [],
+        "faltantes": [],
+        "confirmado_cxc": False,
+        "confirmado_cxc_por": "",
+        "numero_recibo": "",
+        "odoo_model": "account.payment",
+        "odoo_res_id": int(pid) if pid.isdigit() else None,
+        "odoo_pago_id": pid,
+        "odoo_ref": f"account.payment:{pid}",
+        "en_espejo_odoo": True,
+        "creado_en": fecha_iso or "",
+        "puede_editar": False,
+        "puede_confirmar_cxc": False,
+        "puede_aprobar": False,
+        "puede_rechazar": False,
+    }
+
+
+@router.get("/api/pagos/unificados")
+def listar_pagos_unificados(
+    servicio: ServicioOpDep,
+    repo_terceros: RepoTercerosDep,
+    direccion: str = "recibidos",
+    origen: str = "todos",
+    estado: str | None = None,
+    q: str | None = None,
+    limit: int = 150,
+    offset: int = 0,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    if direccion not in ("recibidos", "enviados"):
+        raise HTTPException(status_code=422, detail="direccion debe ser recibidos o enviados")
+    if origen not in ("todos", "cxc", "odoo", "zelle_tercero"):
+        raise HTTPException(
+            status_code=422, detail="origen debe ser todos, cxc, odoo o zelle_tercero"
+        )
+    if estado and estado not in (*ESTADOS_OPERATIVOS, "CONFIRMADO_ODOO"):
+        raise HTTPException(status_code=422, detail="estado inválido")
+
+    tipo_cxc = TIPO_PAGO if direccion == "recibidos" else TIPO_PAGO_PROVEEDOR
+    docs_cxc, _tot_cxc, _res_cxc = servicio.listar(tipo=tipo_cxc, limit=2000, offset=0)
+
+    terceros_map = {c.cuenta_id: c.a_dict() for c in repo_terceros.listar(solo_activas=False)}
+    items_cxc: list[dict[str, Any]] = []
+    odoo_ids_en_cxc: set[str] = set()
+    for d in docs_cxc:
+        item = d.a_dict()
+        if d.cuenta_tercero_id and d.cuenta_tercero_id in terceros_map:
+            cta = terceros_map[d.cuenta_tercero_id]
+            item["cuenta_tercero_alias"] = cta["alias"]
+            item["proveedor_tercero_nombre"] = cta["proveedor_nombre"]
+        item["en_espejo_odoo"] = False
+        if d.odoo_res_id is not None and (not d.odoo_model or d.odoo_model == "account.payment"):
+            odoo_ids_en_cxc.add(str(d.odoo_res_id))
+        items_cxc.append(item)
+
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    items_odoo: list[dict[str, Any]] = []
+    if direccion == "recibidos":
+        clientes_map = {c.cliente_id: c.nombre for c in repo_cxc.all_clientes()}
+        pagos_odoo_rows = repo_cxc.all_pagos_full()
+        metodos_map: dict[str, str] = {}
+        for mid_u in {
+            str(r.get("metodo_pago") or "").strip() for r in pagos_odoo_rows if r.get("metodo_pago")
+        }:
+            try:
+                met = repo_cxc.get_metodo_pago(mid_u)
+                if met is not None:
+                    metodos_map[mid_u] = met.nombre
+            except Exception:
+                pass
+        for r in pagos_odoo_rows:
+            pid = str(r.get("pago_id") or "").strip()
+            if not pid:
+                continue
+            if pid in odoo_ids_en_cxc:
+                for it in items_cxc:
+                    if str(it.get("odoo_res_id") or "") == pid:
+                        it["en_espejo_odoo"] = True
+                continue
+            items_odoo.append(_odoo_recibido_a_item(r, clientes_map, metodos_map))
+    else:
+        try:
+            pagos_prov = repo_cxc.all_pagos_proveedores_odoo()
+        except (NotImplementedError, AttributeError):
+            pagos_prov = []
+        for r in pagos_prov:
+            pid = str(r.get("pago_id") or "").strip()
+            if not pid:
+                continue
+            if pid in odoo_ids_en_cxc:
+                for it in items_cxc:
+                    if str(it.get("odoo_res_id") or "") == pid:
+                        it["en_espejo_odoo"] = True
+                continue
+            items_odoo.append(_odoo_enviado_a_item(r))
+
+    todos = items_cxc + items_odoo
+    resumen = {
+        "total": len(todos),
+        "origen_cxc": len(items_cxc),
+        "origen_odoo": len(items_odoo),
+        "pendientes_aprobacion": sum(1 for x in items_cxc if x["estado"] == PENDIENTE_APROBACION),
+        "confirmados_cxc": sum(1 for x in items_cxc if x["estado"] == CONFIRMADO_CXC),
+        "incompletos": sum(1 for x in items_cxc if x["estado"] in (INCOMPLETO, BORRADOR)),
+        "enviados_odoo": sum(1 for x in items_cxc if x["estado"] == ENVIADO_ODOO),
+        "confirmados_odoo": len(items_odoo),
+        "rechazados": sum(1 for x in items_cxc if x["estado"] == RECHAZADO),
+        "errores": sum(1 for x in items_cxc if x["estado"] == ERROR_ODOO),
+        "zelle_terceros": sum(1 for x in items_cxc if x.get("es_zelle_tercero")),
+    }
+
+    filtrados = todos
+    if origen == "cxc":
+        filtrados = [x for x in filtrados if x.get("origen_sistema") == "cxc"]
+    elif origen == "odoo":
+        filtrados = [x for x in filtrados if x.get("origen_sistema") == "odoo"]
+    elif origen == "zelle_tercero":
+        filtrados = [x for x in filtrados if x.get("es_zelle_tercero")]
+
+    if estado:
+        filtrados = [x for x in filtrados if x.get("estado") == estado]
+
+    if q and q.strip():
+        qn = q.strip().lower()
+        filtrados = [
+            x
+            for x in filtrados
+            if any(
+                qn in str(x.get(campo) or "").lower()
+                for campo in (
+                    "numero",
+                    "numero_recibo",
+                    "contraparte_nombre",
+                    "rif",
+                    "referencia",
+                    "beneficiario_tercero",
+                    "pedido_ref",
+                    "factura_ref",
+                    "odoo_ref",
+                    "cuenta_tercero_alias",
+                )
+            )
+        ]
+
+    filtrados.sort(
+        key=lambda x: (
+            str(x.get("fecha_documento") or "0000-00-00"),
+            str(x.get("creado_en") or ""),
+            int(x.get("id") or x.get("odoo_res_id") or 0),
+        ),
+        reverse=True,
+    )
+    lim = max(1, min(limit, 300))
+    off = max(0, offset)
+    pagina = filtrados[off : off + lim]
+    return {
+        "direccion": direccion,
+        "puede_aprobar_pagos": tiene(user, PERMISO_APROBAR_PAGOS),
+        "puede_aprobar_compras": tiene(user, PERMISO_APROBAR_COMPRAS),
+        "puede_recibo": tiene(user, "cobranza.recibo") or tiene(user, PERMISO_APROBAR_PAGOS),
+        "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
+        "resumen": resumen,
+        "total": len(filtrados),
+        "items": pagina,
+    }

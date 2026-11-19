@@ -49,6 +49,7 @@ ETIQUETA_POR_TIPO: dict[str, str] = {
 BORRADOR = "BORRADOR"
 INCOMPLETO = "INCOMPLETO"
 PENDIENTE_APROBACION = "PENDIENTE_APROBACION"
+CONFIRMADO_CXC = "CONFIRMADO_CXC"
 ENVIADO_ODOO = "ENVIADO_ODOO"
 RECHAZADO = "RECHAZADO"
 ERROR_ODOO = "ERROR"
@@ -57,6 +58,7 @@ ESTADOS_OPERATIVOS: tuple[str, ...] = (
     BORRADOR,
     INCOMPLETO,
     PENDIENTE_APROBACION,
+    CONFIRMADO_CXC,
     ENVIADO_ODOO,
     RECHAZADO,
     ERROR_ODOO,
@@ -169,6 +171,14 @@ def extraer_campos_canonicos(tipo: str, raw: dict[str, Any]) -> dict[str, Any]:
         if cuenta_raw not in (None, "", False) and str(cuenta_raw).isdigit()
         else None
     )
+    tercero_raw = raw.get("cuenta_tercero_id")
+    tercero_id = (
+        int(str(tercero_raw))
+        if tercero_raw not in (None, "", False) and str(tercero_raw).isdigit()
+        else None
+    )
+    es_zt_raw = raw.get("es_zelle_tercero")
+    es_zelle_tercero = bool(es_zt_raw) or (tercero_id is not None)
 
     return {
         "tipo": tipo,
@@ -202,6 +212,11 @@ def extraer_campos_canonicos(tipo: str, raw: dict[str, Any]) -> dict[str, Any]:
         "proveedor_telefono": str(raw.get("proveedor_telefono") or "").strip(),
         "proveedor_email": str(raw.get("proveedor_email") or "").strip(),
         "proveedor_direccion": str(raw.get("proveedor_direccion") or "").strip(),
+        "es_zelle_tercero": es_zelle_tercero if tipo == TIPO_PAGO else False,
+        "cuenta_tercero_id": tercero_id if tipo == TIPO_PAGO else None,
+        "beneficiario_tercero": (
+            str(raw.get("beneficiario_tercero") or "").strip() if tipo == TIPO_PAGO else ""
+        ),
         "notas": str(raw.get("notas") or "").strip(),
     }
 
@@ -228,8 +243,11 @@ def validar_campos_operativo(tipo: str, datos: dict[str, Any]) -> list[str]:
             faltantes.append("monto")
         if vacio(datos.get("moneda")):
             faltantes.append("moneda")
-        if not es_efectivo(datos.get("metodo_pago")) and vacio(datos.get("referencia")):
+        es_zt = bool(datos.get("es_zelle_tercero"))
+        if (es_zt or not es_efectivo(datos.get("metodo_pago"))) and vacio(datos.get("referencia")):
             faltantes.append("referencia")
+        if es_zt and not datos.get("cuenta_tercero_id"):
+            faltantes.append("cuenta_tercero (proveedor Zelle)")
         if (
             vacio(datos.get("contraparte_nombre"))
             and vacio(datos.get("rif"))
@@ -333,9 +351,17 @@ class DocumentoOperativo:
     creado_por: str
     creado_en: datetime
     actualizado_en: datetime
+    es_zelle_tercero: bool = False
+    cuenta_tercero_id: int | None = None
+    beneficiario_tercero: str = ""
+    confirmado_cxc: bool = False
+    confirmado_cxc_por: str = ""
+    confirmado_cxc_en: datetime | None = None
+    numero_recibo: str = ""
+    recibo_emitido_en: datetime | None = None
 
     def a_dict(self) -> dict[str, Any]:
-        efectivo = es_efectivo(self.metodo_pago)
+        efectivo = es_efectivo(self.metodo_pago) and not self.es_zelle_tercero
         alertas = list(self.validacion.get("alertas") or [])
         return {
             "id": self.documento_id,
@@ -343,10 +369,14 @@ class DocumentoOperativo:
             "numero": self.numero,
             "token_preview": self.token_preview,
             "preview_path": f"/comprobante/{self.token_preview}" if self.token_preview else "",
+            "recibo_path": f"/recibo/{self.token_preview}"
+            if (self.token_preview and self.numero_recibo)
+            else "",
             "tipo": self.tipo,
             "tipo_etiqueta": ETIQUETA_POR_TIPO.get(self.tipo, self.tipo),
             "estado": self.estado,
             "origen": self.origen,
+            "origen_sistema": "cxc",
             "captura_id": self.captura_id,
             "partner_odoo_id": self.partner_odoo_id,
             "contraparte_nombre": self.contraparte_nombre,
@@ -359,6 +389,9 @@ class DocumentoOperativo:
             "moneda": self.moneda,
             "metodo_pago": self.metodo_pago,
             "es_efectivo": efectivo,
+            "es_zelle_tercero": self.es_zelle_tercero,
+            "cuenta_tercero_id": self.cuenta_tercero_id,
+            "beneficiario_tercero": self.beneficiario_tercero,
             "banco": self.banco,
             "diario_id": self.diario_id,
             "diario_nombre": self.diario_nombre,
@@ -385,6 +418,15 @@ class DocumentoOperativo:
             "validacion": self.validacion,
             "alertas": alertas,
             "faltantes": list(self.faltantes),
+            "confirmado_cxc": self.confirmado_cxc,
+            "confirmado_cxc_por": self.confirmado_cxc_por,
+            "confirmado_cxc_en": (
+                self.confirmado_cxc_en.isoformat() if self.confirmado_cxc_en else None
+            ),
+            "numero_recibo": self.numero_recibo,
+            "recibo_emitido_en": (
+                self.recibo_emitido_en.isoformat() if self.recibo_emitido_en else None
+            ),
             "aprobado_por": self.aprobado_por,
             "aprobado_en": self.aprobado_en.isoformat() if self.aprobado_en else None,
             "rechazo_motivo": self.rechazo_motivo,
@@ -396,7 +438,11 @@ class DocumentoOperativo:
             "creado_en": self.creado_en.isoformat(),
             "actualizado_en": self.actualizado_en.isoformat(),
             "puede_editar": self.estado != ENVIADO_ODOO,
-            "puede_aprobar": self.estado in (PENDIENTE_APROBACION, ERROR_ODOO)
+            "puede_confirmar_cxc": self.tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR)
+            and self.estado in (PENDIENTE_APROBACION, ERROR_ODOO)
+            and not self.confirmado_cxc
+            and not self.faltantes,
+            "puede_aprobar": self.estado in (PENDIENTE_APROBACION, CONFIRMADO_CXC, ERROR_ODOO)
             and not self.faltantes,
             "puede_rechazar": self.estado not in (ENVIADO_ODOO, RECHAZADO),
         }

@@ -27,6 +27,7 @@ from cxc.repositories import Repository
 from .modelos import (
     BORRADOR,
     CATEGORIAS_GASTO,
+    CONFIRMADO_CXC,
     ENVIADO_ODOO,
     ERROR_ODOO,
     INCOMPLETO,
@@ -44,6 +45,7 @@ from .modelos import (
     extraer_campos_canonicos,
 )
 from .repositorio import RepoOperativos
+from .terceros import CuentaTercero, RepoCuentasTerceros
 from .validador import listar_diarios_bancarios, validar_documento_operativo
 
 logger = logging.getLogger("cxc.operativos.servicio")
@@ -86,6 +88,7 @@ class ServicioOperativos:
         obtener_cuentas: ProveedorCuentas | None = None,
         diarios_extra: dict[str, int] | None = None,
         repo_capturas: RepoCapturas | None = None,
+        repo_terceros: RepoCuentasTerceros | None = None,
     ) -> None:
         self._repo = repo
         self._fabrica = fabrica_escritor
@@ -94,6 +97,16 @@ class ServicioOperativos:
         self._obtener_cuentas = obtener_cuentas
         self._diarios_extra = diarios_extra or {}
         self._repo_capturas = repo_capturas
+        self._repo_terceros = repo_terceros
+
+    def _cuentas_terceros(self, *, solo_activas: bool = False) -> list[CuentaTercero]:
+        if self._repo_terceros is None:
+            return []
+        try:
+            return self._repo_terceros.listar(solo_activas=solo_activas)
+        except Exception as e:
+            logger.warning("No se pudo listar cuentas de terceros: %s", e)
+            return []
 
     def catalogos(self) -> dict[str, Any]:
         cuentas = list(_sin_cuentas(self._obtener_cuentas))
@@ -105,6 +118,7 @@ class ServicioOperativos:
         ]
         propuestas = proponer_clasificacion_gastos(cuentas) if cuentas else []
         diarios_compras: list[dict[str, Any]] = []
+        diarios_generales: list[dict[str, Any]] = []
         try:
             escritor = self._fabrica()
             if escritor is not None:
@@ -117,15 +131,18 @@ class ServicioOperativos:
                             "defecto": True,
                         }
                     )
+                diarios_generales = escritor.diarios_generales()
         except Exception:
             pass
 
         return {
             "diarios_bancarios": listar_diarios_bancarios(self._diarios_extra),
             "diarios_compras": diarios_compras,
+            "diarios_generales": diarios_generales,
             "categorias_gasto": list(CATEGORIAS_GASTO),
             "cuentas_contables": cuentas_gasto[:400],
             "propuestas_categorias": propuestas,
+            "cuentas_terceros": [c.a_dict() for c in self._cuentas_terceros(solo_activas=True)],
         }
 
     def validar_en_vivo(
@@ -144,6 +161,7 @@ class ServicioOperativos:
             contactos_odoo=contactos,
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
+            cuentas_terceros=self._cuentas_terceros(solo_activas=False),
         )
         return {
             "tipo": tipo,
@@ -227,6 +245,7 @@ class ServicioOperativos:
             contactos_odoo=contactos,
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
+            cuentas_terceros=self._cuentas_terceros(solo_activas=False),
         )
         self._aplicar_sugerencias(datos, validacion)
 
@@ -264,11 +283,18 @@ class ServicioOperativos:
         grupo: str | None = None,
         estado: str | None = None,
         q: str | None = None,
+        es_zelle_tercero: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[DocumentoOperativo], int, dict[str, int]]:
         return self._repo.listar(
-            tipo=tipo, grupo=grupo, estado=estado, q=q, limit=limit, offset=offset
+            tipo=tipo,
+            grupo=grupo,
+            estado=estado,
+            q=q,
+            es_zelle_tercero=es_zelle_tercero,
+            limit=limit,
+            offset=offset,
         )
 
     def _merge_para_edicion(
@@ -307,9 +333,17 @@ class ServicioOperativos:
             "proveedor_telefono": doc.proveedor_telefono,
             "proveedor_email": doc.proveedor_email,
             "proveedor_direccion": doc.proveedor_direccion,
+            "es_zelle_tercero": doc.es_zelle_tercero,
+            "cuenta_tercero_id": doc.cuenta_tercero_id,
+            "beneficiario_tercero": doc.beneficiario_tercero,
             "notas": doc.notas,
         }
         cambios_norm = dict(cambios)
+        if cambios_norm.get("es_zelle_tercero") is False and not cambios_norm.get(
+            "cuenta_tercero_id"
+        ):
+            cambios_norm["cuenta_tercero_id"] = None
+            cambios_norm["beneficiario_tercero"] = cambios_norm.get("beneficiario_tercero") or ""
         if "contraparte_nombre" not in cambios_norm:
             for alias in ("cliente", "proveedor", "nombre"):
                 if alias in cambios_norm and cambios_norm[alias] not in (None, ""):
@@ -338,10 +372,15 @@ class ServicioOperativos:
             "pedido_ref",
             "factura_ref",
             "orden_ref",
+            "cuenta_tercero_id",
+            "beneficiario_tercero",
             "notas",
         ):
             if k in cambios and cambios[k] in (None, ""):
                 norm_cambios[k] = None if k.endswith("_id") else ""
+        if cambios.get("es_zelle_tercero") is False and "cuenta_tercero_id" not in cambios:
+            norm_cambios["cuenta_tercero_id"] = None
+            norm_cambios["es_zelle_tercero"] = False
         if "banco" in cambios and "diario_id" not in cambios:
             norm_cambios["diario_id"] = None
             norm_cambios["diario_nombre"] = ""
@@ -369,6 +408,7 @@ class ServicioOperativos:
             contactos_odoo=contactos,
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
+            cuentas_terceros=self._cuentas_terceros(solo_activas=False),
         )
         # Si cambió cuenta_contable_id manualmente, completar código y nombre desde plan de cuentas
         if datos.get("cuenta_contable_id") and cuentas:
@@ -379,7 +419,12 @@ class ServicioOperativos:
         self._aplicar_sugerencias(datos, validacion)
 
         faltantes = list(validacion.get("faltantes") or [])
-        nuevo_estado = INCOMPLETO if faltantes else PENDIENTE_APROBACION
+        if faltantes:
+            nuevo_estado = INCOMPLETO
+        elif doc.confirmado_cxc:
+            nuevo_estado = CONFIRMADO_CXC
+        else:
+            nuevo_estado = PENDIENTE_APROBACION
         return self._repo.actualizar(
             doc.documento_id,
             {
@@ -553,6 +598,8 @@ class ServicioOperativos:
     def _enviar_pago(
         self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str, *, actor: str
     ) -> tuple[str, int, str, int, int]:
+        if doc.tipo == TIPO_PAGO and doc.es_zelle_tercero:
+            return self._enviar_zelle_tercero(doc, escritor, marca, actor=actor)
         es_cliente = doc.tipo == TIPO_PAGO
         partner_id = (
             self._resolver_cliente_pago(doc, escritor)
@@ -616,6 +663,165 @@ class ServicioOperativos:
             fecha=fecha_str,
         )
         return "account.payment", pago_id, f"account.payment:{pago_id}", partner_id, journal_id
+
+    def _tasa_bcv_para_fecha(self, fecha: Any) -> Decimal | None:
+        if self._repo_cxc is None:
+            return None
+        try:
+            ultima = self._repo_cxc.last_serie_tasa()
+            if ultima is not None and ultima.tasa_bcv > 0:
+                return Decimal(str(ultima.tasa_bcv))
+        except Exception:
+            return None
+        return None
+
+    def _enviar_zelle_tercero(
+        self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str, *, actor: str
+    ) -> tuple[str, int, str, int, int]:
+        """Registra Zelle a tercero como asiento borrador (Débito CxP / Crédito CxC).
+
+        Nunca toca diarios bancarios propios ni crea ``account.payment``.
+        """
+        if doc.cuenta_tercero_id is None or self._repo_terceros is None:
+            raise OperativoInvalido(
+                "Selecciona una cuenta Zelle de tercero configurada antes de enviar a Odoo.",
+                ["cuenta_tercero_id"],
+            )
+        cuenta = self._repo_terceros.obtener(doc.cuenta_tercero_id)
+        if cuenta is None or not cuenta.activo:
+            raise OperativoInvalido(
+                "La cuenta Zelle de tercero seleccionada no existe o está inactiva.",
+                ["cuenta_tercero_id"],
+            )
+
+        cliente_id = self._resolver_cliente_pago(doc, escritor)
+        ctas_cli = escritor.leer_cuentas_partner(cliente_id)
+        ctas_prov = escritor.leer_cuentas_partner(cuenta.proveedor_odoo_id)
+        cuenta_cxc_id = cuenta.cuenta_cxc_override_id or ctas_cli.get("receivable_id")
+        cuenta_cxp_id = cuenta.cuenta_cxp_override_id or ctas_prov.get("payable_id")
+        if cuenta_cxp_id is None:
+            prov_lbl = cuenta.proveedor_nombre or cuenta.proveedor_odoo_id
+            raise OperativoInvalido(
+                f"No pude resolver la cuenta por pagar (CxP) del proveedor {prov_lbl}. "
+                "Configura un override en Tesorería y Terceros.",
+                ["cuenta_tercero_id"],
+            )
+        if cuenta_cxc_id is None:
+            raise OperativoInvalido(
+                "No pude resolver la cuenta por cobrar (CxC) del cliente en Odoo.",
+                ["partner_odoo_id"],
+            )
+
+        journal_id = cuenta.diario_odoo_id or escritor.diario_general_por_defecto()
+        if journal_id is None:
+            raise OperativoInvalido(
+                "No hay un diario contable de operaciones varias («general») configurado en Odoo.",
+                ["diario_id"],
+            )
+
+        assert doc.monto is not None
+        fecha_str = (
+            doc.fecha_documento.isoformat()
+            if doc.fecha_documento
+            else datetime.now().date().isoformat()
+        )
+        tasa_bcv = (
+            self._tasa_bcv_para_fecha(doc.fecha_documento)
+            if str(doc.moneda or "").upper() != "VES"
+            else None
+        )
+        ref_txt = doc.referencia.strip() or doc.numero
+        marca_zt = f"ZELLE3-{doc.numero}"
+        benef_txt = (
+            doc.beneficiario_tercero or cuenta.titular or cuenta.correo_telefono or cuenta.alias
+        )
+        rec_part = f" · Recibo: {doc.numero_recibo}" if doc.numero_recibo else ""
+        partes_chatter = [
+            f"{marca_zt} · Zelle a cuenta de Tercero (Confirmado en CxC por {actor})",
+            f"Documento CxC: {doc.numero}{rec_part}",
+            f"Cliente: {doc.contraparte_nombre} (Odoo #{cliente_id})",
+            f"Cuenta Tercero: {cuenta.alias} · Beneficiario: {benef_txt}",
+            f"Proveedor contrapartida (CxP): {cuenta.proveedor_nombre or cuenta.proveedor_odoo_id}",
+            f"Monto: {doc.monto} {doc.moneda} · Ref Zelle: {ref_txt}",
+            f"Aplica a pedido: {doc.pedido_ref}" if doc.pedido_ref else "",
+            f"Notas: {doc.notas}" if doc.notas else "",
+        ]
+        nota_chatter = "\n".join(p for p in partes_chatter if p)
+        narration_txt = (
+            f"{marca} · Zelle 3ro {cuenta.alias} ref {ref_txt} "
+            f"({doc.contraparte_nombre} -> {cuenta.proveedor_nombre})"
+        )
+        move_id = escritor.crear_asiento_contable(
+            journal_id=journal_id,
+            fecha=fecha_str,
+            ref=f"ZELLE3-{ref_txt}",
+            moneda_codigo=doc.moneda or cuenta.moneda or "USD",
+            marca=marca_zt,
+            narration=narration_txt,
+            tasa_compania=tasa_bcv,
+            nota_chatter=nota_chatter,
+            lineas=[
+                {
+                    "account_id": cuenta_cxp_id,
+                    "partner_id": cuenta.proveedor_odoo_id,
+                    "name": f"Pago CxP Zelle 3ro {ref_txt} ({doc.contraparte_nombre})",
+                    "debito": doc.monto,
+                    "credito": Decimal("0"),
+                },
+                {
+                    "account_id": cuenta_cxc_id,
+                    "partner_id": cliente_id,
+                    "name": f"Cobro CxC Zelle 3ro {ref_txt} ({cuenta.alias})"
+                    + (f" · {doc.pedido_ref}" if doc.pedido_ref else ""),
+                    "debito": Decimal("0"),
+                    "credito": doc.monto,
+                },
+            ],
+        )
+        return "account.move", move_id, f"account.move:{move_id}", cliente_id, journal_id
+
+    def confirmar_en_cxc(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "",
+        enviar_a_odoo: bool = False,
+    ) -> DocumentoOperativo:
+        """Confirma primero en CxC emitiendo recibo numerado (``REC-``/``EGR-``)."""
+        doc = self.obtener(documento_id)
+        if doc.tipo not in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR):
+            raise OperativoEstadoInvalido(
+                "Solo pagos recibidos y pagos a proveedores emiten recibo de confirmación en CxC."
+            )
+        if doc.estado == ENVIADO_ODOO:
+            raise OperativoYaEnviado(f"{doc.numero} ya fue enviado a Odoo ({doc.odoo_ref}).")
+        if doc.estado == RECHAZADO:
+            raise OperativoEstadoInvalido(f"{doc.numero} está rechazado y no puede confirmarse.")
+        if doc.faltantes:
+            raise OperativoInvalido(
+                "Faltan datos obligatorios antes de confirmar en CxC: " + ", ".join(doc.faltantes),
+                list(doc.faltantes),
+            )
+        ahora = datetime.now()
+        num_recibo = doc.numero_recibo
+        if not num_recibo:
+            pref = "REC" if doc.tipo == TIPO_PAGO else "EGR"
+            num_recibo = self._repo.siguiente_numero_recibo(pref, ahora.date())
+        confirmado = self._repo.actualizar(
+            doc.documento_id,
+            {
+                "estado": CONFIRMADO_CXC,
+                "confirmado_cxc": True,
+                "confirmado_cxc_por": actor or doc.confirmado_cxc_por or "sistema",
+                "confirmado_cxc_en": doc.confirmado_cxc_en or ahora,
+                "numero_recibo": num_recibo,
+                "recibo_emitido_en": doc.recibo_emitido_en or ahora,
+                "error_odoo": "",
+            },
+        )
+        if enviar_a_odoo:
+            return self.aprobar_y_enviar_a_odoo(documento_id, actor=actor)
+        return confirmado
 
     def _enviar_documento_compra(
         self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str, *, actor: str
@@ -725,8 +931,11 @@ class ServicioOperativos:
                 + ", ".join(doc.faltantes),
                 list(doc.faltantes),
             )
-        if doc.estado not in (PENDIENTE_APROBACION, ERROR_ODOO, BORRADOR):
+        if doc.estado not in (PENDIENTE_APROBACION, CONFIRMADO_CXC, ERROR_ODOO, BORRADOR):
             raise OperativoEstadoInvalido(f"Estado inválido para aprobar: {doc.estado}")
+
+        if doc.tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR) and not doc.confirmado_cxc:
+            doc = self.confirmar_en_cxc(doc.documento_id, actor=actor, enviar_a_odoo=False)
 
         escritor = self._fabrica()
         if escritor is None:

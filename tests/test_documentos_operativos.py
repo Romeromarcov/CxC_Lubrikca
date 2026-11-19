@@ -19,6 +19,7 @@ from cxc.odoo.directorio import mapear_contacto, mapear_cuenta
 from cxc.odoo.escritura import EscritorOdoo
 from cxc.operativos.modelos import (
     BORRADOR,
+    CONFIRMADO_CXC,
     ENVIADO_ODOO,
     INCOMPLETO,
     PENDIENTE_APROBACION,
@@ -133,6 +134,14 @@ class RepoOperativosMemoria:
             creado_por=str(campos.get("creado_por") or "sistema"),
             creado_en=ahora,
             actualizado_en=ahora,
+            es_zelle_tercero=bool(campos.get("es_zelle_tercero")),
+            cuenta_tercero_id=campos.get("cuenta_tercero_id"),
+            beneficiario_tercero=str(campos.get("beneficiario_tercero") or ""),
+            confirmado_cxc=bool(campos.get("confirmado_cxc")),
+            confirmado_cxc_por=str(campos.get("confirmado_cxc_por") or ""),
+            confirmado_cxc_en=campos.get("confirmado_cxc_en"),
+            numero_recibo=str(campos.get("numero_recibo") or ""),
+            recibo_emitido_en=campos.get("recibo_emitido_en"),
         )
         self.filas[doc_id] = doc
         return doc
@@ -196,6 +205,14 @@ class RepoOperativosMemoria:
             "odoo_res_id": campos.get("odoo_res_id", d.odoo_res_id),
             "odoo_ref": campos.get("odoo_ref", d.odoo_ref),
             "error_odoo": campos.get("error_odoo", d.error_odoo),
+            "es_zelle_tercero": campos.get("es_zelle_tercero", d.es_zelle_tercero),
+            "cuenta_tercero_id": campos.get("cuenta_tercero_id", d.cuenta_tercero_id),
+            "beneficiario_tercero": campos.get("beneficiario_tercero", d.beneficiario_tercero),
+            "confirmado_cxc": campos.get("confirmado_cxc", d.confirmado_cxc),
+            "confirmado_cxc_por": campos.get("confirmado_cxc_por", d.confirmado_cxc_por),
+            "confirmado_cxc_en": campos.get("confirmado_cxc_en", d.confirmado_cxc_en),
+            "numero_recibo": campos.get("numero_recibo", d.numero_recibo),
+            "recibo_emitido_en": campos.get("recibo_emitido_en", d.recibo_emitido_en),
             "actualizado_en": datetime.now(),
         }
         nuevo = DocumentoOperativo(
@@ -219,6 +236,7 @@ class RepoOperativosMemoria:
         grupo: str | None = None,
         estado: str | None = None,
         q: str | None = None,
+        es_zelle_tercero: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[DocumentoOperativo], int, dict[str, int]]:
@@ -237,11 +255,14 @@ class RepoOperativosMemoria:
         resumen = {
             "total": len(base),
             "pendientes_aprobacion": sum(1 for d in base if d.estado == PENDIENTE_APROBACION),
+            "confirmados_cxc": sum(1 for d in base if d.estado == CONFIRMADO_CXC),
             "incompletos": sum(1 for d in base if d.estado in (INCOMPLETO, BORRADOR)),
             "enviados_odoo": sum(1 for d in base if d.estado == ENVIADO_ODOO),
             "rechazados": sum(1 for d in base if d.estado == RECHAZADO),
             "errores": sum(1 for d in base if d.estado == "ERROR"),
         }
+        if es_zelle_tercero is not None:
+            base = [d for d in base if d.es_zelle_tercero is es_zelle_tercero]
         if estado:
             base = [d for d in base if d.estado == estado]
         if q and q.strip():
@@ -251,11 +272,22 @@ class RepoOperativosMemoria:
                 for d in base
                 if qn
                 in (
-                    f"{d.numero} {d.contraparte_nombre} {d.rif} {d.referencia} "
+                    f"{d.numero} {d.numero_recibo} {d.beneficiario_tercero} "
+                    f"{d.contraparte_nombre} {d.rif} {d.referencia} "
                     f"{d.numero_documento} {d.concepto} {d.odoo_ref}"
                 ).lower()
             ]
         return base[offset : offset + limit], len(base), resumen
+
+    def siguiente_numero_recibo(self, prefijo: str, fecha: date) -> str:
+        base = f"{prefijo.strip().upper()}-{fecha.strftime('%Y%m%d')}-"
+        existentes = [
+            int(d.numero_recibo[len(base) :])
+            for d in self.filas.values()
+            if d.numero_recibo.startswith(base) and d.numero_recibo[len(base) :].isdigit()
+        ]
+        sig = (max(existentes) + 1) if existentes else 1
+        return f"{base}{sig:03d}"
 
     def buscar_duplicados_referencia(
         self, tipo: str, referencia: str, *, excluir_id: int | None = None

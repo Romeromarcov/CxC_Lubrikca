@@ -4069,11 +4069,21 @@ async def api_inicio_resumen():
             .select_from(bancos_propuestas)
             .where(bancos_propuestas.c.estado == "pendiente"),
         )
+        pagos_confirmados_cxc = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(documentos_operativos)
+            .where(
+                documentos_operativos.c.tipo.in_(("pago", "pago_proveedor")),
+                documentos_operativos.c.estado == "CONFIRMADO_CXC",
+            ),
+        )
 
     return {
         "contadores": {
             "pagos_recibidos_pendientes": pagos_rec,
             "pagos_enviados_pendientes": pagos_env,
+            "pagos_confirmados_cxc": pagos_confirmados_cxc if engine is not None else 0,
             "conciliacion_pendientes": conc_pend,
             "compras_pendientes": compras_pend,
             "ventas_pendientes": ventas_pend,
@@ -12979,6 +12989,25 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 or user["email"].strip().lower() in vendedor.lower()
             )
 
+        cxc_pago_odoo_ids: set[str] = set()
+        try:
+            engine_op = _inicio_engine_seguro()
+            if engine_op is not None:
+                from sqlalchemy import select as _sa_select
+
+                from cxc.db.schema import documentos_operativos as _t_ops
+
+                with engine_op.connect() as _conn_op:
+                    _rows_op = _conn_op.execute(
+                        _sa_select(_t_ops.c.odoo_res_id).where(
+                            _t_ops.c.tipo == "pago",
+                            _t_ops.c.odoo_res_id.is_not(None),
+                        )
+                    ).all()
+                    cxc_pago_odoo_ids = {str(r[0]) for r in _rows_op if r[0] is not None}
+        except Exception:
+            cxc_pago_odoo_ids = set()
+
         def comun(pid: str, cliente_id: str, so_id: str | None, fecha_pago: str) -> dict[str, Any]:
             p_row = pagos_by_id.get(pid, {})
             metodo_id = str(p_row.get("metodo_pago", "") or "").strip()
@@ -13028,6 +13057,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 "numero_recibido": p_row.get("numero_recibido") or None,
                 "fecha_recibido": p_row.get("fecha_recibido") or None,
                 "recibido_por": p_row.get("recibido_por") or None,
+                "origen_sistema": "cxc" if str(pid) in cxc_pago_odoo_ids else "odoo",
             }
 
         def _monto_y_moneda_del_pago(pid: str) -> tuple[Decimal, str] | None:

@@ -335,9 +335,7 @@ def map_factura_espejo(rec: dict[str, Any]) -> Factura:
     es_nota_debito = move_type == "out_debit"
     factura_origen_id = debit_origin_id or reversed_entry_id or None
     currency = rec.get("currency_id")
-    moneda = (
-        currency[1] if isinstance(currency, list | tuple) and len(currency) > 1 else "USD"
-    )
+    moneda = currency[1] if isinstance(currency, list | tuple) and len(currency) > 1 else "USD"
     fecha_raw = rec.get("invoice_date") or rec.get("date")
     # fecha NOT NULL en el espejo -- invoice_date/date casi siempre vienen
     # seteados (Odoo los defaultea a hoy), pero un draft recién creado
@@ -526,6 +524,9 @@ class OdooReader(ABC):
     def changed_entregas_lineas(self, since: datetime | None) -> list[EntregaLinea]:
         return []
 
+    def changed_pagos_proveedores(self, since: datetime | None) -> list[dict[str, Any]]:
+        return []
+
     # Barrido de borrados: ids que Odoo TODAVÍA tiene de una tabla-espejo.
     # ``None`` = este lector no sabe contestarlo (fakes de test): el barrido
     # omite la tabla en vez de asumir que Odoo la tiene vacía.
@@ -589,8 +590,14 @@ class OdooXmlRpcReader(OdooReader):
             "search_read",
             [self._delta(since)],
             {
-                "fields": ["id", "name", "user_id", "wh_iva_agent", "wh_iva_rate",
-                           "commercial_partner_id"],
+                "fields": [
+                    "id",
+                    "name",
+                    "user_id",
+                    "wh_iva_agent",
+                    "wh_iva_rate",
+                    "commercial_partner_id",
+                ],
                 "context": {"active_test": False},
             },
         )
@@ -909,9 +916,7 @@ class OdooXmlRpcReader(OdooReader):
                 resultado.setdefault(nc_id, set()).add(mv)
         return resultado
 
-    def _atribuir_por_referencia(
-        self, pendientes: list[tuple[dict[str, Any], Factura]]
-    ) -> None:
+    def _atribuir_por_referencia(self, pendientes: list[tuple[dict[str, Any], Factura]]) -> None:
         pendientes_ref = [
             (f, numeros_de_factura_en_referencia(r.get("ref"), f.numero)) for r, f in pendientes
         ]
@@ -950,8 +955,7 @@ class OdooXmlRpcReader(OdooReader):
         """
         recs = self._search_read(
             self.MODEL_PICKING,
-            self._delta(since)
-            + [["picking_type_code", "in", ["outgoing", "incoming"]]],
+            self._delta(since) + [["picking_type_code", "in", ["outgoing", "incoming"]]],
             [
                 "id",
                 "sale_id",
@@ -1076,11 +1080,7 @@ class OdooXmlRpcReader(OdooReader):
         # monto/descuento/pago por orden en vez de dejar la factura sin
         # dueño para ninguna de las dos.
         todos_los_ids_linea_venta = sorted(
-            {
-                int(sl_id)
-                for r in recs
-                for sl_id in (r.get("sale_line_ids") or [])
-            }
+            {int(sl_id) for r in recs for sl_id in (r.get("sale_line_ids") or [])}
         )
         so_por_linea_venta: dict[int, str] = {}
         if todos_los_ids_linea_venta:
@@ -1088,9 +1088,7 @@ class OdooXmlRpcReader(OdooReader):
                 "sale.order.line", todos_los_ids_linea_venta, ["id", "order_id"]
             )
             so_por_linea_venta = {
-                int(lv["id"]): so
-                for lv in lineas_venta
-                if (so := _m2o_name(lv.get("order_id")))
+                int(lv["id"]): so for lv in lineas_venta if (so := _m2o_name(lv.get("order_id")))
             }
         return [
             map_linea_factura(
@@ -1367,6 +1365,73 @@ class OdooXmlRpcReader(OdooReader):
             r["vendedor_email"] = vendedores.get(int(pid), "") if pid else ""
         return [map_pago(r) for r in recs]
 
+    def changed_pagos_proveedores(self, since: datetime | None) -> list[dict[str, Any]]:
+        """Pagos salientes a proveedores (``account.payment`` ``outbound`` confirmados)."""
+        domain = self._delta(since) + [
+            ["payment_type", "=", "outbound"],
+            ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
+        ]
+        campos_base = [
+            "id",
+            "name",
+            "partner_id",
+            "amount",
+            "currency_id",
+            "journal_id",
+            "date",
+            "is_reconciled",
+            "state",
+            "move_id",
+        ]
+        try:
+            disp = set(
+                self._execute(self.MODEL_PAGO, "fields_get", [], {"attributes": ["string"]}) or {}
+            )
+        except Exception:
+            disp = set()
+        campo_ref = next((c for c in ("memo", "payment_reference", "ref") if c in disp), None)
+        if campo_ref:
+            campos_base.append(campo_ref)
+
+        recs = self._search_read(self.MODEL_PAGO, domain, campos_base)
+        partner_ids = sorted(_ids_of(recs, "partner_id"))
+        vats: dict[int, str] = {}
+        if partner_ids:
+            partners = self._read(self.MODEL_PARTNER, partner_ids, ["id", "vat"])
+            vats = {int(p["id"]): str(p.get("vat") or "") for p in partners}
+
+        ahora = datetime.now()
+        out: list[dict[str, Any]] = []
+        for r in recs:
+            pid_str = _m2o_id(r.get("partner_id"))
+            pid_int = int(pid_str) if pid_str.isdigit() else None
+            jid_str = _m2o_id(r.get("journal_id"))
+            jid_int = int(jid_str) if jid_str.isdigit() else None
+            mid_str = _m2o_id(r.get("move_id"))
+            mid_int = int(mid_str) if mid_str.isdigit() else None
+            moneda = "USD" if _m2o_name(r.get("currency_id")).upper() == "USD" else "VES"
+            fecha_val = _to_date(r.get("date")) or ahora.date()
+            out.append(
+                {
+                    "pago_id": str(r["id"]),
+                    "numero_odoo": str(r.get("name") or f"PAGO-{r['id']}"),
+                    "partner_odoo_id": pid_int,
+                    "proveedor_nombre": _m2o_name(r.get("partner_id")),
+                    "rif": vats.get(pid_int, "") if pid_int else "",
+                    "monto": abs(_dec(r.get("amount"))),
+                    "moneda": moneda,
+                    "diario_id": jid_int,
+                    "diario_nombre": _m2o_name(r.get("journal_id")),
+                    "referencia": str(r.get(campo_ref) or "") if campo_ref else "",
+                    "fecha_pago": fecha_val,
+                    "estado_odoo": str(r.get("state") or "posted"),
+                    "reconciliado": bool(r.get("is_reconciled")),
+                    "move_id": mid_int,
+                    "actualizado_en": ahora,
+                }
+            )
+        return out
+
     def aplicaciones_conciliadas(
         self, so_names: list[str] | None = None
     ) -> list[AplicacionConciliada]:
@@ -1584,9 +1649,7 @@ class OdooXmlRpcReader(OdooReader):
         if ids_linea_venta:
             lineas_venta = self._read("sale.order.line", ids_linea_venta, ["id", "order_id"])
             so_por_linea_venta = {
-                int(lv["id"]): so
-                for lv in lineas_venta
-                if (so := _m2o_name(lv.get("order_id")))
+                int(lv["id"]): so for lv in lineas_venta if (so := _m2o_name(lv.get("order_id")))
             }
 
         subtotal_por_factura_so: dict[int, dict[str, Decimal]] = {}
