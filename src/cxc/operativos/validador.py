@@ -440,9 +440,8 @@ def validar_documento_operativo(
     else:
         if tipo == TIPO_GASTO and datos.get("sin_factura"):
             regla_odoo = (
-                "Gasto sin factura: irá al diario de compras VES por defecto "
-                "(o el diario elegido), sin impuestos, ref S/N-GAS-XXXXX y nota completa "
-                "en narration + chatter."
+                "Gasto sin factura: creará asiento contable borrador (account.move entry) "
+                "Débito Gasto 6.x / Crédito Caja Chica o Banco sin contaminar el Libro de Compras."
             )
         else:
             regla_odoo = (

@@ -348,6 +348,71 @@ class PostgresRepository(Repository):
             for r in rows
         ]
 
+    def upsert_compras_gastos_odoo(self, filas: list[dict[str, Any]]) -> None:
+        if not filas:
+            return
+        norm: list[dict[str, Any]] = []
+        ahora = datetime.now()
+        for f in filas:
+            fecha_d = f.get("fecha_documento")
+            if isinstance(fecha_d, datetime):
+                fecha_d = fecha_d.date()
+            elif isinstance(fecha_d, str):
+                fecha_d = date.fromisoformat(fecha_d[:10])
+            norm.append(
+                {
+                    "move_id": str(f["move_id"]),
+                    "numero_odoo": str(f.get("numero_odoo") or ""),
+                    "move_type": str(f.get("move_type") or "in_invoice"),
+                    "tipo_cxc": str(f.get("tipo_cxc") or "factura_proveedor"),
+                    "partner_odoo_id": f.get("partner_odoo_id"),
+                    "proveedor_nombre": str(f.get("proveedor_nombre") or ""),
+                    "rif": str(f.get("rif") or ""),
+                    "monto_total": Decimal(str(f.get("monto_total") or 0)),
+                    "moneda": str(f.get("moneda") or "VES"),
+                    "diario_id": f.get("diario_id"),
+                    "diario_nombre": str(f.get("diario_nombre") or ""),
+                    "referencia": str(f.get("referencia") or ""),
+                    "fecha_documento": fecha_d or ahora.date(),
+                    "estado_odoo": str(f.get("estado_odoo") or "posted"),
+                    "estado_pago": str(f.get("estado_pago") or ""),
+                    "actualizado_en": f.get("actualizado_en") or ahora,
+                }
+            )
+        with self._engine.begin() as conn:
+            _upsert(conn, t.compras_gastos_odoo, norm, ["move_id"])
+
+    def all_compras_gastos_odoo(self) -> list[dict[str, Any]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.compras_gastos_odoo).order_by(
+                    t.compras_gastos_odoo.c.fecha_documento.desc(),
+                    t.compras_gastos_odoo.c.move_id.desc(),
+                )
+            ).all()
+        return [
+            {
+                "move_id": str(r.move_id),
+                "numero_odoo": str(r.numero_odoo or ""),
+                "move_type": str(r.move_type or "in_invoice"),
+                "tipo_cxc": str(r.tipo_cxc or "factura_proveedor"),
+                "partner_odoo_id": (
+                    int(r.partner_odoo_id) if r.partner_odoo_id is not None else None
+                ),
+                "proveedor_nombre": str(r.proveedor_nombre or ""),
+                "rif": str(r.rif or ""),
+                "monto_total": float(r.monto_total) if r.monto_total is not None else 0.0,
+                "moneda": str(r.moneda or "VES"),
+                "diario_id": int(r.diario_id) if r.diario_id is not None else None,
+                "diario_nombre": str(r.diario_nombre or ""),
+                "referencia": str(r.referencia or ""),
+                "fecha_documento": r.fecha_documento.isoformat() if r.fecha_documento else "",
+                "estado_odoo": str(r.estado_odoo or "posted"),
+                "estado_pago": str(r.estado_pago or ""),
+            }
+            for r in rows
+        ]
+
     def upsert_facturas(self, filas: list[Factura]) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.facturas, [_factura_to_row(f) for f in filas], ["factura_id"])

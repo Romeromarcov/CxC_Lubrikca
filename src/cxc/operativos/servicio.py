@@ -24,6 +24,11 @@ from cxc.odoo.escritura import (
 )
 from cxc.repositories import Repository
 
+from .contabilidad_gastos import (
+    cargar_config_gastos,
+    resolver_cuenta_credito_gasto,
+    resolver_cuenta_debito_gasto,
+)
 from .modelos import (
     BORRADOR,
     CATEGORIAS_GASTO,
@@ -116,6 +121,11 @@ class ServicioOperativos:
             if c.grupo in ("gastos", "activo")
             and c.account_type not in ("asset_receivable", "asset_cash")
         ]
+        cuentas_contrapartida = [
+            c.a_dict()
+            for c in cuentas
+            if c.account_type == "asset_cash" or c.code.startswith(("1.1.1", "1101", "111"))
+        ]
         propuestas = proponer_clasificacion_gastos(cuentas) if cuentas else []
         diarios_compras: list[dict[str, Any]] = []
         diarios_generales: list[dict[str, Any]] = []
@@ -141,6 +151,7 @@ class ServicioOperativos:
             "diarios_generales": diarios_generales,
             "categorias_gasto": list(CATEGORIAS_GASTO),
             "cuentas_contables": cuentas_gasto[:400],
+            "cuentas_contrapartida": cuentas_contrapartida[:150],
             "propuestas_categorias": propuestas,
             "cuentas_terceros": [c.a_dict() for c in self._cuentas_terceros(solo_activas=True)],
         }
@@ -336,6 +347,9 @@ class ServicioOperativos:
             "es_zelle_tercero": doc.es_zelle_tercero,
             "cuenta_tercero_id": doc.cuenta_tercero_id,
             "beneficiario_tercero": doc.beneficiario_tercero,
+            "lote_caja_chica_id": doc.lote_caja_chica_id,
+            "cuenta_contrapartida_id": doc.cuenta_contrapartida_id,
+            "conciliado_banco_huella": doc.conciliado_banco_huella,
             "notas": doc.notas,
         }
         cambios_norm = dict(cambios)
@@ -374,6 +388,9 @@ class ServicioOperativos:
             "orden_ref",
             "cuenta_tercero_id",
             "beneficiario_tercero",
+            "lote_caja_chica_id",
+            "cuenta_contrapartida_id",
+            "conciliado_banco_huella",
             "notas",
         ):
             if k in cambios and cambios[k] in (None, ""):
@@ -823,10 +840,111 @@ class ServicioOperativos:
             return self.aprobar_y_enviar_a_odoo(documento_id, actor=actor)
         return confirmado
 
+    def _enviar_asiento_gasto_sin_factura(
+        self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str, *, actor: str
+    ) -> tuple[str, int, str, int | None, int | None]:
+        """Contabiliza un gasto menor sin factura como asiento borrador (``entry``).
+
+        Débito a la cuenta de gasto (6.x) / Crédito a caja chica o banco contrapartida,
+        sin crear ``in_invoice`` ni contaminar el Libro de Compras SENIAT.
+        """
+        cuentas = _sin_cuentas(self._obtener_cuentas)
+        cfg = cargar_config_gastos(self._repo_cxc)
+
+        cuenta_deb_id, cuenta_deb_lbl = resolver_cuenta_debito_gasto(doc, cfg, cuentas)
+        if cuenta_deb_id is None:
+            raise OperativoInvalido(
+                "Selecciona la cuenta contable de gasto (6.x) antes de contabilizar.",
+                ["cuenta_contable_id"],
+            )
+
+        cuenta_cred_id, cuenta_cred_lbl = resolver_cuenta_credito_gasto(doc, cfg, cuentas)
+        if cuenta_cred_id is None:
+            raise OperativoInvalido(
+                "Configura una cuenta contrapartida (Caja Chica o Banco) en "
+                "Tesorería o en el documento.",
+                ["cuenta_contrapartida_id"],
+            )
+
+        journal_id = cfg.get("diario_general_id") or escritor.diario_general_por_defecto()
+        if journal_id is None:
+            raise OperativoInvalido(
+                "No hay un diario contable general («Operaciones Varias») configurado en Odoo.",
+                ["diario_id"],
+            )
+
+        partner_id: int | None = None
+        if doc.partner_odoo_id or doc.contraparte_nombre or doc.rif:
+            partner_id, _ = self._resolver_o_crear_proveedor_doc(doc, escritor, marca)
+
+        assert doc.monto is not None
+        concepto = doc.concepto.strip() or (
+            f"Gasto menor en {doc.contraparte_nombre or 'Comercio'}"
+        )
+        ref_asiento = f"S/N-{doc.numero}"
+        marca_asiento = f"GASTO-{doc.numero}"
+        detalles = [
+            f"Gasto sin factura / compra menor al contado ({marca})",
+            f"Autorizado en CxC ({doc.numero}) por: {actor}",
+            f"Proveedor/Comercio: {doc.contraparte_nombre}" + (f" ({doc.rif})" if doc.rif else ""),
+            f"Categoría: {doc.categoria}" if doc.categoria else "",
+            f"Débito Gasto: {cuenta_deb_lbl}",
+            f"Crédito Contrapartida: {cuenta_cred_lbl}",
+            f"Monto total: {doc.monto} {doc.moneda}",
+            f"Método/Ref pago gasto: {doc.metodo_pago} {doc.referencia}".strip()
+            if (doc.metodo_pago or doc.referencia)
+            else "",
+            f"Notas: {doc.notas}" if doc.notas else "",
+        ]
+        narration = " · ".join(x for x in detalles if x)
+        nota_chatter = "\n".join(x for x in [marca, marca_asiento, *detalles] if x)
+        fecha_str = (
+            doc.fecha_documento.isoformat()
+            if doc.fecha_documento
+            else datetime.now().date().isoformat()
+        )
+        tasa_bcv = (
+            self._tasa_bcv_para_fecha(doc.fecha_documento)
+            if str(doc.moneda or "").upper() != "VES"
+            else None
+        )
+        lbl_pago = " ".join(
+            x for x in (doc.metodo_pago or "caja chica", doc.referencia or doc.numero) if x
+        )
+        move_id = escritor.crear_asiento_contable(
+            journal_id=int(journal_id),
+            fecha=fecha_str,
+            ref=ref_asiento,
+            moneda_codigo=doc.moneda or "VES",
+            marca=marca_asiento,
+            narration=narration,
+            tasa_compania=tasa_bcv,
+            nota_chatter=nota_chatter,
+            lineas=[
+                {
+                    "account_id": int(cuenta_deb_id),
+                    "partner_id": partner_id,
+                    "name": f"Gasto menor ({doc.categoria or 'general'}): {concepto}",
+                    "debito": doc.monto,
+                    "credito": Decimal("0"),
+                },
+                {
+                    "account_id": int(cuenta_cred_id),
+                    "partner_id": partner_id,
+                    "name": f"Contrapartida {lbl_pago}",
+                    "debito": Decimal("0"),
+                    "credito": doc.monto,
+                },
+            ],
+        )
+        return "account.move", move_id, f"account.move:{move_id}", partner_id, int(journal_id)
+
     def _enviar_documento_compra(
         self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str, *, actor: str
-    ) -> tuple[str, int, str, int, int | None]:
+    ) -> tuple[str, int, str, int | None, int | None]:
         es_gasto = doc.tipo == TIPO_GASTO
+        if es_gasto and (doc.sin_factura or not doc.numero_documento.strip()):
+            return self._enviar_asiento_gasto_sin_factura(doc, escritor, marca, actor=actor)
         partner_id, prov_creado = self._resolver_o_crear_proveedor_doc(doc, escritor, marca)
         numero = doc.numero_documento.strip()
         propio = escritor.factura_por_marca(marca)
@@ -944,6 +1062,7 @@ class ServicioOperativos:
             )
 
         marca = f"CXC-{doc.numero}"
+        pid: int | None
         jid: int | None
         try:
             if doc.tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR):

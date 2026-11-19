@@ -527,6 +527,9 @@ class OdooReader(ABC):
     def changed_pagos_proveedores(self, since: datetime | None) -> list[dict[str, Any]]:
         return []
 
+    def changed_compras_gastos(self, since: datetime | None) -> list[dict[str, Any]]:
+        return []
+
     # Barrido de borrados: ids que Odoo TODAVÍA tiene de una tabla-espejo.
     # ``None`` = este lector no sabe contestarlo (fakes de test): el barrido
     # omite la tabla en vez de asumir que Odoo la tiene vacía.
@@ -1427,6 +1430,87 @@ class OdooXmlRpcReader(OdooReader):
                     "estado_odoo": str(r.get("state") or "posted"),
                     "reconciliado": bool(r.get("is_reconciled")),
                     "move_id": mid_int,
+                    "actualizado_en": ahora,
+                }
+            )
+        return out
+
+    def changed_compras_gastos(self, since: datetime | None) -> list[dict[str, Any]]:
+        """Facturas de proveedor (``in_invoice``/``in_refund``) y asientos de gastos."""
+        delta = self._delta(since)
+        campos = [
+            "id",
+            "name",
+            "move_type",
+            "partner_id",
+            "amount_total",
+            "currency_id",
+            "journal_id",
+            "ref",
+            "invoice_date",
+            "date",
+            "state",
+            "payment_state",
+        ]
+        recs_inv = self._search_read(
+            self.MODEL_MOVE,
+            delta
+            + [
+                ["move_type", "in", ["in_invoice", "in_refund"]],
+                ["state", "in", ["draft", "posted"]],
+            ],
+            campos,
+        )
+        recs_ent = self._search_read(
+            self.MODEL_MOVE,
+            delta
+            + [
+                ["move_type", "=", "entry"],
+                ["state", "in", ["draft", "posted"]],
+                ["ref", "ilike", "S/N-GAS-"],
+            ],
+            campos,
+        )
+        por_id: dict[int, dict[str, Any]] = {}
+        for r in [*recs_inv, *recs_ent]:
+            mid = int(r["id"])
+            por_id[mid] = r
+        recs = list(por_id.values())
+        partner_ids = sorted(_ids_of(recs, "partner_id"))
+        vats: dict[int, str] = {}
+        if partner_ids:
+            partners = self._read(self.MODEL_PARTNER, partner_ids, ["id", "vat"])
+            vats = {int(p["id"]): str(p.get("vat") or "") for p in partners}
+
+        ahora = datetime.now()
+        out: list[dict[str, Any]] = []
+        for r in recs:
+            pid_str = _m2o_id(r.get("partner_id"))
+            pid_int = int(pid_str) if pid_str.isdigit() else None
+            jid_str = _m2o_id(r.get("journal_id"))
+            jid_int = int(jid_str) if jid_str.isdigit() else None
+            mtype = str(r.get("move_type") or "in_invoice")
+            ref_val = str(r.get("ref") or "")
+            es_gasto = mtype == "entry" or ref_val.upper().startswith("S/N-GAS-")
+            moneda = "USD" if _m2o_name(r.get("currency_id")).upper() == "USD" else "VES"
+            fecha_val = _to_date(r.get("invoice_date")) or _to_date(r.get("date")) or ahora.date()
+            out.append(
+                {
+                    "move_id": str(r["id"]),
+                    "numero_odoo": str(r.get("name") or f"MOVE-{r['id']}"),
+                    "move_type": mtype,
+                    "tipo_cxc": "gasto" if es_gasto else "factura_proveedor",
+                    "partner_odoo_id": pid_int,
+                    "proveedor_nombre": _m2o_name(r.get("partner_id")),
+                    "rif": vats.get(pid_int, "") if pid_int else "",
+                    "monto_total": abs(_dec(r.get("amount_total"))),
+                    "moneda": moneda,
+                    "diario_id": jid_int,
+                    "diario_nombre": _m2o_name(r.get("journal_id")),
+                    "referencia": ref_val,
+                    "fecha_documento": fecha_val,
+                    "estado_odoo": str(r.get("state") or "posted"),
+                    "estado_pago": str(r.get("payment_state") or ""),
                     "actualizado_en": ahora,
                 }
             )

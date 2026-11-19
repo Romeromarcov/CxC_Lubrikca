@@ -18673,6 +18673,17 @@ async def bancos_conciliacion_generar(
         execute = None
         totales: dict[str, int] = {"nuevas": 0, "actualizadas": 0, "ya_decididas": 0}
         por_tipo: dict[str, int] = {}
+        egresos_cxc: list[bancos_conciliacion.EgresoCxCCandidato] = []
+        try:
+            from cxc.operativos.repositorio import RepoOperativosSQL
+
+            repo_op = RepoOperativosSQL(engine)
+            docs_g, _, _ = repo_op.listar(tipo="gasto", limit=500, offset=0)
+            docs_p, _, _ = repo_op.listar(tipo="pago_proveedor", limit=500, offset=0)
+            egresos_cxc = bancos_conciliacion.egresos_desde_operativos([*docs_g, *docs_p])
+        except Exception:
+            egresos_cxc = []
+
         for b, lista in sorted(por_banco.items()):
             diario = BANCOS_DIARIOS.get(b)
             pagos: list[bancos_conciliacion.PagoCandidato] = []
@@ -18685,7 +18696,7 @@ async def bancos_conciliacion_generar(
                     min(m.mov.fecha for m in lista),
                     max(m.mov.fecha for m in lista),
                 )
-            props = bancos_conciliacion.proponer(lista, pagos)
+            props = bancos_conciliacion.proponer(lista, pagos, egresos_cxc=egresos_cxc)
             info = {
                 p.pago_id: {
                     "id": p.pago_id,
